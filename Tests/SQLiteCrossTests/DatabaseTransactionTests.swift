@@ -87,6 +87,41 @@ func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
 }
 
 @Test
+func databaseCursorsLendRowsAndDecodeValuesLazily() async throws {
+  let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let values = try await database.read { transaction in
+    var cursor = try transaction.rowCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    var values: [Int] = []
+    while var row = try cursor.next() {
+      values.append(try row.decode(Int.self))
+    }
+    return values
+  }
+
+  #expect(values == [1, 2, 3])
+  #expect(state.visitedRowCount == 3)
+
+  let decodedValues = try await database.read { transaction in
+    var cursor = try transaction.fetchCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    var values: [Int] = []
+    while let value = try cursor.next() {
+      values.append(value)
+    }
+    return values
+  }
+
+  #expect(decodedValues == [1, 2, 3])
+}
+
+@Test
 func structuredStatementsExposeTransactionCapabilities() {
   #expect(acceptsReadStatement(TestRecord.select(\.id)))
   #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))
@@ -146,6 +181,8 @@ private final class TestDatabaseDriver: DatabaseDriver, @unchecked Sendable {
 }
 
 private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
+  typealias RowCursor = TestDatabaseRowCursor
+
   let state: TestDatabaseState
 
   @_lifetime(borrow state)
@@ -153,57 +190,61 @@ private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapab
     self.state = copy state
   }
 
-  borrowing func query<S: DatabaseReadStatement>(
-    _ statement: S,
-    _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
-  ) throws {
-    for values in state.rows {
-      state.visitedRowCount += 1
-      var row = TestDatabaseRow(values: values)
-      if try body(&row) == .stop {
-        return
-      }
-    }
+  @_lifetime(borrow self)
+  borrowing func rowCursor<S: DatabaseReadStatement>(_ statement: S) throws -> TestDatabaseRowCursor
+  {
+    TestDatabaseRowCursor(state: state)
   }
 }
 
 private struct TestWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escapable {
+  typealias RowCursor = TestDatabaseRowCursor
+
   let state: TestDatabaseState
 
   @_lifetime(borrow state)
   init(state: borrowing TestDatabaseState) {
     self.state = copy state
+  }
+
+  @_lifetime(borrow self)
+  borrowing func rowCursor<S: DatabaseReadStatement>(_ statement: S) throws -> TestDatabaseRowCursor
+  {
+    TestDatabaseRowCursor(state: state)
+  }
+
+  @_lifetime(borrow self)
+  borrowing func executeRowCursor<S: DatabaseWriteStatement>(
+    _ statement: S
+  ) throws -> TestDatabaseRowCursor {
+    TestDatabaseRowCursor(state: state)
   }
 
   borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
     state.executedQueries.append(statement.query)
     return 1
   }
+}
 
-  borrowing func query<S: DatabaseReadStatement>(
-    _ statement: S,
-    _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
-  ) throws {
-    for values in state.rows {
-      state.visitedRowCount += 1
-      var row = TestDatabaseRow(values: values)
-      if try body(&row) == .stop {
-        return
-      }
-    }
+private struct TestDatabaseRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
+  typealias Row = TestDatabaseRow
+
+  let state: TestDatabaseState
+  var nextIndex = 0
+
+  @_lifetime(borrow state)
+  init(state: borrowing TestDatabaseState) {
+    self.state = copy state
   }
 
-  borrowing func execute<S: DatabaseWriteStatement>(
-    _ statement: S,
-    _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
-  ) throws {
-    for values in state.rows {
-      state.visitedRowCount += 1
-      var row = TestDatabaseRow(values: values)
-      if try body(&row) == .stop {
-        return
-      }
+  mutating func next() throws -> TestDatabaseRow? {
+    guard nextIndex < state.rows.count else {
+      return nil
     }
+    let values = state.rows[nextIndex]
+    nextIndex += 1
+    state.visitedRowCount += 1
+    return TestDatabaseRow(values: values)
   }
 }
 

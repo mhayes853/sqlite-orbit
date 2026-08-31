@@ -40,6 +40,25 @@ let reminders = try await database.read { transaction in
 }
 ```
 
+For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
+`fetchCursor` decodes the statement's statically known output while advancing:
+
+```swift
+let reminders = try await database.read { transaction in
+  var cursor = try transaction.fetchCursor(Reminder.all)
+  var reminders: [Reminder] = []
+
+  while let reminder = try cursor.next() {
+    reminders.append(reminder)
+  }
+
+  return reminders
+}
+```
+
+Cursors must be consumed inside the transaction that created them. Write transactions also expose
+`executeCursor` for statements that return rows, such as SQLite `RETURNING` statements.
+
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
 for file databases using SHA-256 and unique identifiers for in-memory databases.

@@ -48,6 +48,7 @@
   /// A read transaction lent by ``GRDBDatabaseDriver``.
   public struct GRDBReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
     public typealias Row = GRDBDatabaseRow
+    public typealias RowCursor = GRDBDatabaseRowCursor
 
     private let database: Database
 
@@ -56,17 +57,18 @@
       self.database = copy database
     }
 
-    public borrowing func query<S: DatabaseReadStatement>(
-      _ statement: S,
-      _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
-    ) throws {
-      try performGRDBQuery(statement.query, database: database, body)
+    @_lifetime(borrow self)
+    public borrowing func rowCursor<S: DatabaseReadStatement>(
+      _ statement: S
+    ) throws -> GRDBDatabaseRowCursor {
+      try makeGRDBCursor(statement.query, database: database)
     }
   }
 
   /// A write transaction lent by ``GRDBDatabaseDriver``.
   public struct GRDBWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escapable {
     public typealias Row = GRDBDatabaseRow
+    public typealias RowCursor = GRDBDatabaseRowCursor
 
     private let database: Database
 
@@ -75,18 +77,18 @@
       self.database = copy database
     }
 
-    public borrowing func query<S: DatabaseReadStatement>(
-      _ statement: S,
-      _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
-    ) throws {
-      try performGRDBQuery(statement.query, database: database, body)
+    @_lifetime(borrow self)
+    public borrowing func rowCursor<S: DatabaseReadStatement>(
+      _ statement: S
+    ) throws -> GRDBDatabaseRowCursor {
+      try makeGRDBCursor(statement.query, database: database)
     }
 
-    public borrowing func execute<S: DatabaseWriteStatement>(
-      _ statement: S,
-      _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
-    ) throws {
-      try performGRDBQuery(statement.query, database: database, body)
+    @_lifetime(borrow self)
+    public borrowing func executeRowCursor<S: DatabaseWriteStatement>(
+      _ statement: S
+    ) throws -> GRDBDatabaseRowCursor {
+      try makeGRDBCursor(statement.query, database: database)
     }
 
     @discardableResult
@@ -98,20 +100,15 @@
     }
   }
 
-  private func performGRDBQuery(
+  @_lifetime(borrow database)
+  private func makeGRDBCursor(
     _ query: QueryFragment,
-    database: borrowing Database,
-    _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
-  ) throws {
+    database: borrowing Database
+  ) throws -> GRDBDatabaseRowCursor {
     let prepared = try prepareGRDBQuery(query)
     let statement = try database.makeStatement(sql: prepared.sql)
     let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
-    while try cursor.next() != nil {
-      var databaseRow = GRDBDatabaseRow(statement: statement)
-      if try body(&databaseRow) == .stop {
-        break
-      }
-    }
+    return GRDBDatabaseRowCursor(cursor: cursor)
   }
 
   private func prepareGRDBQuery(
@@ -122,6 +119,37 @@
     return (prepared.sql, StatementArguments(values.map(\.value)))
   }
 
+  /// A transaction-scoped cursor over GRDB result rows.
+  public struct GRDBDatabaseRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
+    public typealias Row = GRDBDatabaseRow
+
+    fileprivate let cursor: GRDB.RowCursor
+
+    @_lifetime(immortal)
+    fileprivate init(
+      cursor: consuming GRDB.RowCursor
+    ) {
+      self.cursor = cursor
+    }
+
+    @_lifetime(&self)
+    public mutating func next() throws -> GRDBDatabaseRow? {
+      guard try cursor.next() != nil else { return nil }
+      return GRDBDatabaseRow(cursor: self)
+    }
+
+    public mutating func forEach(
+      _ body: (inout GRDBDatabaseRow) throws -> Void
+    ) throws {
+      let cursor = self.cursor
+      try cursor.forEach { _ in
+        let statement = cursor._statement
+        var row = GRDBDatabaseRow(statement: statement)
+        try body(&row)
+      }
+    }
+  }
+
   /// A result row lent by a GRDB transaction.
   public struct GRDBDatabaseRow: DatabaseRow, ~Copyable, ~Escapable {
     @usableFromInline
@@ -130,6 +158,11 @@
     @_lifetime(borrow statement)
     fileprivate init(statement: borrowing GRDB.Statement) {
       self.statement = statement.sqliteStatement
+    }
+
+    @_lifetime(borrow cursor)
+    fileprivate init(cursor: borrowing GRDBDatabaseRowCursor) {
+      self.statement = cursor.cursor._statement.sqliteStatement
     }
 
     @inlinable

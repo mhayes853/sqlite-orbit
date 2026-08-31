@@ -38,6 +38,38 @@
   }
 
   @Test
+  func grdbDriverExposesTransactionScopedCursors() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+
+    let readValues = try await database.read { transaction in
+      var cursor = try transaction.fetchCursor(
+        #sql("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", as: Int.self)
+      )
+      var values: [Int] = []
+      while let value = try cursor.next() {
+        values.append(value)
+      }
+      return values
+    }
+
+    let writeValues = try await database.write { transaction in
+      var cursor = try transaction.executeCursor(
+        #sql("SELECT 4 UNION ALL SELECT 5", as: Int.self)
+      )
+      var values: [Int] = []
+      while let value = try cursor.next() {
+        values.append(value)
+      }
+      return values
+    }
+
+    #expect(readValues == [1, 2, 3])
+    #expect(writeValues == [4, 5])
+  }
+
+  @Test
   func grdbDriverRoundTripsDateAndUUIDBindings() async throws {
     let database = CrossProcessDatabase(
       driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
