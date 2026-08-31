@@ -31,6 +31,7 @@ public protocol DatabaseRowCursor: ~Copyable, ~Escapable {
 }
 
 extension DatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
+  @inlinable
   public mutating func forEach(_ body: (inout Row) throws -> Void) throws {
     while var row = try next() {
       try body(&row)
@@ -52,18 +53,22 @@ public struct DatabaseQueryCursor<Base: DatabaseRowCursor, Value: QueryRepresent
 where Base: ~Copyable, Base: ~Escapable {
   public typealias Element = Value.QueryOutput
 
-  private var base: Base
+  @usableFromInline
+  internal var base: Base
 
   @_lifetime(copy base)
-  init(base: consuming Base) {
+  @usableFromInline
+  internal init(base: consuming Base) {
     self.base = base
   }
 
+  @inlinable
   public mutating func next() throws -> Value.QueryOutput? {
     guard var row = try base.next() else { return nil }
     return try row.decode(Value.self)
   }
 
+  @inlinable
   public mutating func forEach(
     _ body: (inout Value.QueryOutput) throws -> Void
   ) throws {
@@ -81,18 +86,22 @@ public struct DatabaseTupleQueryCursor<Base: DatabaseRowCursor, each Value: Quer
 where Base: ~Copyable, Base: ~Escapable {
   public typealias Element = (repeat (each Value).QueryOutput)
 
-  private var base: Base
+  @usableFromInline
+  internal var base: Base
 
   @_lifetime(copy base)
-  init(base: consuming Base) {
+  @usableFromInline
+  internal init(base: consuming Base) {
     self.base = base
   }
 
+  @inlinable
   public mutating func next() throws -> (repeat (each Value).QueryOutput)? {
     guard var row = try base.next() else { return nil }
     return try row.decode((repeat each Value).self)
   }
 
+  @inlinable
   public mutating func forEach(
     _ body: (inout (repeat (each Value).QueryOutput)) throws -> Void
   ) throws {
@@ -109,11 +118,14 @@ public struct DatabaseMapCursor<Base: DatabaseCursor, Output>:
 where Base: ~Copyable, Base: ~Escapable {
   public typealias Element = Output
 
-  private var base: Base
-  private let transform: (Base.Element) throws -> Output
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal let transform: (Base.Element) throws -> Output
 
   @_lifetime(copy base)
-  init(
+  @usableFromInline
+  internal init(
     base: consuming Base,
     transform: @escaping (Base.Element) throws -> Output
   ) {
@@ -121,11 +133,13 @@ where Base: ~Copyable, Base: ~Escapable {
     self.transform = transform
   }
 
+  @inlinable
   public mutating func next() throws -> Output? {
     guard let value = try base.next() else { return nil }
     return try transform(value)
   }
 
+  @inlinable
   public mutating func forEach(_ body: (inout Output) throws -> Void) throws {
     try base.forEach { value in
       var output = try transform(value)
@@ -140,11 +154,14 @@ public struct DatabaseFilterCursor<Base: DatabaseCursor>:
 where Base: ~Copyable, Base: ~Escapable {
   public typealias Element = Base.Element
 
-  private var base: Base
-  private let predicate: (Base.Element) throws -> Bool
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal let predicate: (Base.Element) throws -> Bool
 
   @_lifetime(copy base)
-  init(
+  @usableFromInline
+  internal init(
     base: consuming Base,
     predicate: @escaping (Base.Element) throws -> Bool
   ) {
@@ -152,6 +169,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.predicate = predicate
   }
 
+  @inlinable
   public mutating func next() throws -> Base.Element? {
     while let value = try base.next() {
       if try predicate(value) {
@@ -161,6 +179,7 @@ where Base: ~Copyable, Base: ~Escapable {
     return nil
   }
 
+  @inlinable
   public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
     try base.forEach { value in
       if try predicate(value) {
@@ -176,11 +195,14 @@ public struct DatabaseCompactMapCursor<Base: DatabaseCursor, Output>:
 where Base: ~Copyable, Base: ~Escapable {
   public typealias Element = Output
 
-  private var base: Base
-  private let transform: (Base.Element) throws -> Output?
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal let transform: (Base.Element) throws -> Output?
 
   @_lifetime(copy base)
-  init(
+  @usableFromInline
+  internal init(
     base: consuming Base,
     transform: @escaping (Base.Element) throws -> Output?
   ) {
@@ -188,6 +210,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.transform = transform
   }
 
+  @inlinable
   public mutating func next() throws -> Output? {
     while let value = try base.next() {
       if let output = try transform(value) {
@@ -197,6 +220,7 @@ where Base: ~Copyable, Base: ~Escapable {
     return nil
   }
 
+  @inlinable
   public mutating func forEach(_ body: (inout Output) throws -> Void) throws {
     try base.forEach { value in
       if var output = try transform(value) {
@@ -206,9 +230,230 @@ where Base: ~Copyable, Base: ~Escapable {
   }
 }
 
+/// A cursor that lazily skips a fixed number of values from a base cursor.
+public struct DatabaseDropFirstCursor<Base: DatabaseCursor>:
+  DatabaseCursor, ~Copyable, ~Escapable
+where Base: ~Copyable, Base: ~Escapable {
+  public typealias Element = Base.Element
+
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal var remaining: Int
+
+  @_lifetime(copy base)
+  @usableFromInline
+  internal init(base: consuming Base, count: Int) {
+    self.base = base
+    precondition(count >= 0, "Cannot drop a negative number of elements from a cursor")
+    self.remaining = count
+  }
+
+  @inlinable
+  public mutating func next() throws -> Base.Element? {
+    while remaining > 0 {
+      guard try base.next() != nil else {
+        remaining = 0
+        return nil
+      }
+      remaining -= 1
+    }
+    return try base.next()
+  }
+
+  @inlinable
+  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
+    var remaining = remaining
+    try base.forEach { value in
+      if remaining > 0 {
+        remaining -= 1
+      } else {
+        try body(&value)
+      }
+    }
+    self.remaining = remaining
+  }
+}
+
+/// A cursor that lazily skips values while a predicate succeeds.
+public struct DatabaseDropWhileCursor<Base: DatabaseCursor>:
+  DatabaseCursor, ~Copyable, ~Escapable
+where Base: ~Copyable, Base: ~Escapable {
+  public typealias Element = Base.Element
+
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal var isDropping = true
+  @usableFromInline
+  internal let predicate: (Base.Element) throws -> Bool
+
+  @_lifetime(copy base)
+  @usableFromInline
+  internal init(
+    base: consuming Base,
+    predicate: @escaping (Base.Element) throws -> Bool
+  ) {
+    self.base = base
+    self.predicate = predicate
+  }
+
+  @inlinable
+  public mutating func next() throws -> Base.Element? {
+    while isDropping {
+      guard let value = try base.next() else {
+        isDropping = false
+        return nil
+      }
+      if try predicate(value) {
+        continue
+      }
+      isDropping = false
+      return value
+    }
+    return try base.next()
+  }
+
+  @inlinable
+  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
+    var isDropping = isDropping
+    try base.forEach { value in
+      if isDropping {
+        if try predicate(value) {
+          return
+        }
+        isDropping = false
+      }
+      try body(&value)
+    }
+    self.isDropping = isDropping
+  }
+}
+
+/// A cursor that lazily limits iteration to a fixed number of values.
+public struct DatabasePrefixCursor<Base: DatabaseCursor>:
+  DatabaseCursor, ~Copyable, ~Escapable
+where Base: ~Copyable, Base: ~Escapable {
+  public typealias Element = Base.Element
+
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal var remaining: Int
+
+  @_lifetime(copy base)
+  @usableFromInline
+  internal init(base: consuming Base, count: Int) {
+    self.base = base
+    precondition(count >= 0, "Cannot take a prefix of negative length from a cursor")
+    self.remaining = count
+  }
+
+  @inlinable
+  public mutating func next() throws -> Base.Element? {
+    guard remaining > 0 else { return nil }
+    guard let value = try base.next() else {
+      remaining = 0
+      return nil
+    }
+    remaining -= 1
+    return value
+  }
+
+  @inlinable
+  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
+    while var value = try next() {
+      try body(&value)
+    }
+  }
+}
+
+/// A cursor that lazily limits iteration while a predicate succeeds.
+public struct DatabasePrefixWhileCursor<Base: DatabaseCursor>:
+  DatabaseCursor, ~Copyable, ~Escapable
+where Base: ~Copyable, Base: ~Escapable {
+  public typealias Element = Base.Element
+
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal var isFinished = false
+  @usableFromInline
+  internal let predicate: (Base.Element) throws -> Bool
+
+  @_lifetime(copy base)
+  @usableFromInline
+  internal init(
+    base: consuming Base,
+    predicate: @escaping (Base.Element) throws -> Bool
+  ) {
+    self.base = base
+    self.predicate = predicate
+  }
+
+  @inlinable
+  public mutating func next() throws -> Base.Element? {
+    guard !isFinished, let value = try base.next() else {
+      isFinished = true
+      return nil
+    }
+    guard try predicate(value) else {
+      isFinished = true
+      return nil
+    }
+    return value
+  }
+
+  @inlinable
+  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
+    while var value = try next() {
+      try body(&value)
+    }
+  }
+}
+
+/// A cursor that pairs each value with its zero-based offset.
+public struct DatabaseEnumeratedCursor<Base: DatabaseCursor>:
+  DatabaseCursor, ~Copyable, ~Escapable
+where Base: ~Copyable, Base: ~Escapable {
+  public typealias Element = (offset: Int, element: Base.Element)
+
+  @usableFromInline
+  internal var base: Base
+  @usableFromInline
+  internal var offset = 0
+
+  @_lifetime(copy base)
+  @usableFromInline
+  internal init(base: consuming Base) {
+    self.base = base
+  }
+
+  @inlinable
+  public mutating func next() throws -> (offset: Int, element: Base.Element)? {
+    guard let value = try base.next() else { return nil }
+    defer { offset += 1 }
+    return (offset: offset, element: value)
+  }
+
+  @inlinable
+  public mutating func forEach(
+    _ body: (inout (offset: Int, element: Base.Element)) throws -> Void
+  ) throws {
+    var offset = offset
+    try base.forEach { value in
+      var enumerated = (offset: offset, element: value)
+      offset += 1
+      try body(&enumerated)
+    }
+    self.offset = offset
+  }
+}
+
 extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Lazily transforms each value in this cursor.
   @_lifetime(copy self)
+  @inlinable
   public consuming func map<Output>(
     _ transform: @escaping (Element) throws -> Output
   ) -> DatabaseMapCursor<Self, Output> {
@@ -217,6 +462,7 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 
   /// Lazily filters values in this cursor.
   @_lifetime(copy self)
+  @inlinable
   public consuming func filter(
     _ predicate: @escaping (Element) throws -> Bool
   ) -> DatabaseFilterCursor<Self> {
@@ -225,9 +471,49 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 
   /// Lazily transforms values in this cursor and drops `nil` results.
   @_lifetime(copy self)
+  @inlinable
   public consuming func compactMap<Output>(
     _ transform: @escaping (Element) throws -> Output?
   ) -> DatabaseCompactMapCursor<Self, Output> {
     DatabaseCompactMapCursor(base: consume self, transform: transform)
+  }
+
+  /// Lazily drops the first `count` values from this cursor.
+  @_lifetime(copy self)
+  @inlinable
+  public consuming func dropFirst(_ count: Int) -> DatabaseDropFirstCursor<Self> {
+    DatabaseDropFirstCursor(base: consume self, count: count)
+  }
+
+  /// Lazily drops values while the predicate succeeds.
+  @_lifetime(copy self)
+  @inlinable
+  public consuming func drop(
+    while predicate: @escaping (Element) throws -> Bool
+  ) -> DatabaseDropWhileCursor<Self> {
+    DatabaseDropWhileCursor(base: consume self, predicate: predicate)
+  }
+
+  /// Lazily limits this cursor to at most `maxLength` values.
+  @_lifetime(copy self)
+  @inlinable
+  public consuming func prefix(_ maxLength: Int) -> DatabasePrefixCursor<Self> {
+    DatabasePrefixCursor(base: consume self, count: maxLength)
+  }
+
+  /// Lazily limits this cursor while the predicate succeeds.
+  @_lifetime(copy self)
+  @inlinable
+  public consuming func prefix(
+    while predicate: @escaping (Element) throws -> Bool
+  ) -> DatabasePrefixWhileCursor<Self> {
+    DatabasePrefixWhileCursor(base: consume self, predicate: predicate)
+  }
+
+  /// Lazily pairs each value with its zero-based offset.
+  @_lifetime(copy self)
+  @inlinable
+  public consuming func enumerated() -> DatabaseEnumeratedCursor<Self> {
+    DatabaseEnumeratedCursor(base: consume self)
   }
 }

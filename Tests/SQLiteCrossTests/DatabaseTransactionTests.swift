@@ -162,6 +162,100 @@ func databaseCursorsCanBeMappedFilteredAndCompactMappedLazily() async throws {
 }
 
 @Test
+func databaseCursorsSupportLazySequenceAdapters() async throws {
+  let state = TestDatabaseState(
+    rows: [[.int(1)], [.int(2)], [.int(3)], [.int(4)], [.int(5)]]
+  )
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let droppedValues = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .dropFirst(2)
+    var values: [Int] = []
+    try cursor.forEach { value in
+      values.append(value)
+    }
+    return values
+  }
+
+  #expect(droppedValues == [3, 4, 5])
+  #expect(state.visitedRowCount == 5)
+
+  state.visitedRowCount = 0
+  let firstAfterDropWhile = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .drop { $0 < 3 }
+    return try cursor.next()
+  }
+
+  #expect(firstAfterDropWhile == 3)
+  #expect(state.visitedRowCount == 3)
+
+  state.visitedRowCount = 0
+  let prefixedValues = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .prefix(2)
+    var values: [Int] = []
+    try cursor.forEach { value in
+      values.append(value)
+    }
+    return values
+  }
+
+  #expect(prefixedValues == [1, 2])
+  #expect(state.visitedRowCount == 2)
+
+  state.visitedRowCount = 0
+  let prefixedWhileValues = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .prefix { $0 < 3 }
+    var values: [Int] = []
+    try cursor.forEach { value in
+      values.append(value)
+    }
+    return values
+  }
+
+  #expect(prefixedWhileValues == [1, 2])
+  #expect(state.visitedRowCount == 3)
+
+  state.visitedRowCount = 0
+  let enumeratedValues = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .prefix(2)
+      .enumerated()
+    var offsets: [Int] = []
+    var values: [Int] = []
+    try cursor.forEach { value in
+      offsets.append(value.offset)
+      values.append(value.element)
+    }
+    return (offsets, values)
+  }
+
+  #expect(enumeratedValues.0 == [0, 1])
+  #expect(enumeratedValues.1 == [1, 2])
+  #expect(state.visitedRowCount == 2)
+}
+
+@Test
 func structuredStatementsExposeTransactionCapabilities() {
   #expect(acceptsReadStatement(TestRecord.select(\.id)))
   #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))
