@@ -1,6 +1,7 @@
 #if GRDB
   import Foundation
   import GRDB
+  import GRDBSQLite
   import StructuredQueries
 
   /// A ``DatabaseDriver`` backed by a GRDB database writer.
@@ -80,8 +81,8 @@
       let prepared = try prepare(query)
       let statement = try database.makeStatement(sql: prepared.sql)
       let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
-      while let row = try cursor.next() {
-        var databaseRow = GRDBDatabaseRow(row: row)
+      while try cursor.next() != nil {
+        var databaseRow = GRDBDatabaseRow(statement: statement)
         if try body(&databaseRow) == .stop {
           break
         }
@@ -99,25 +100,28 @@
 
   /// A result row lent by ``GRDBDatabaseTransaction``.
   public struct GRDBDatabaseRow: DatabaseRow, ~Copyable, ~Escapable {
-    private let row: GRDB.Row
+    @usableFromInline
+    let statement: SQLiteStatement
 
-    @_lifetime(borrow row)
-    fileprivate init(row: borrowing GRDB.Row) {
-      self.row = copy row
+    @_lifetime(borrow statement)
+    fileprivate init(statement: borrowing GRDB.Statement) {
+      self.statement = statement.sqliteStatement
     }
 
+    @inlinable
     public mutating func decode<Value: QueryRepresentable>(
       _ type: Value.Type
     ) throws -> Value.QueryOutput {
-      var decoder = GRDBQueryDecoder(row: row)
+      var decoder = GRDBQueryDecoder(statement: statement)
       return try Value(decoder: &decoder).queryOutput
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @inlinable
     public mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput) {
-      var decoder = GRDBQueryDecoder(row: row)
+      var decoder = GRDBQueryDecoder(statement: statement)
       return try decoder.decodeColumns((repeat each Value).self)
     }
   }
@@ -154,50 +158,83 @@
     }
   }
 
-  private struct GRDBQueryDecoder: QueryDecoder {
-    let row: GRDB.Row
-    var currentIndex = 0
+  /// Decodes Structured Queries values directly from SQLite's current result row.
+  ///
+  /// This intentionally mirrors SQLiteData's decoder so primitive reads can be inlined and avoid
+  /// allocating intermediate GRDB `DatabaseValue` instances.
+  @usableFromInline
+  struct GRDBQueryDecoder: QueryDecoder {
+    @usableFromInline
+    let statement: SQLiteStatement
 
-    mutating func decode(_ columnType: [UInt8].Type) throws -> [UInt8]? {
-      switch try currentValue() {
-      case .null:
+    @usableFromInline
+    var currentIndex: Int32 = 0
+
+    @usableFromInline
+    init(statement: SQLiteStatement) {
+      self.statement = statement
+    }
+
+    @inlinable
+    mutating func decode(
+      _ columnType: [UInt8].Type
+    ) throws(QueryDecodingError) -> [UInt8]? {
+      switch sqlite3_column_type(statement, currentIndex) {
+      case SQLITE_NULL:
         currentIndex += 1
         return nil
-      case .blob(let data):
-        currentIndex += 1
-        return Array(data)
+      case SQLITE_BLOB:
+        break
       default:
         throw QueryDecodingError.typeMismatch([UInt8].self)
       }
+      defer { currentIndex += 1 }
+      return [UInt8](
+        UnsafeRawBufferPointer(
+          start: sqlite3_column_blob(statement, currentIndex),
+          count: Int(sqlite3_column_bytes(statement, currentIndex))
+        )
+      )
     }
 
-    mutating func decode(_ columnType: Double.Type) throws -> Double? {
-      switch try currentValue() {
-      case .null:
+    @inlinable
+    mutating func decode(
+      _ columnType: Double.Type
+    ) throws(QueryDecodingError) -> Double? {
+      switch sqlite3_column_type(statement, currentIndex) {
+      case SQLITE_NULL:
         currentIndex += 1
         return nil
-      case .double(let value):
-        currentIndex += 1
-        return value
+      case SQLITE_FLOAT:
+        break
       default:
         throw QueryDecodingError.typeMismatch(Double.self)
       }
+      defer { currentIndex += 1 }
+      return sqlite3_column_double(statement, currentIndex)
     }
 
-    mutating func decode(_ columnType: Int64.Type) throws -> Int64? {
-      switch try currentValue() {
-      case .null:
+    @inlinable
+    mutating func decode(
+      _ columnType: Int64.Type
+    ) throws(QueryDecodingError) -> Int64? {
+      switch sqlite3_column_type(statement, currentIndex) {
+      case SQLITE_NULL:
         currentIndex += 1
         return nil
-      case .int64(let value):
-        currentIndex += 1
-        return value
+      case SQLITE_INTEGER:
+        break
       default:
         throw QueryDecodingError.typeMismatch(Int64.self)
       }
+      defer { currentIndex += 1 }
+      return sqlite3_column_int64(statement, currentIndex)
     }
 
-    mutating func decode(_ columnType: UInt64.Type) throws -> UInt64? {
+    @inlinable
+    mutating func decode(
+      _ columnType: UInt64.Type
+    ) throws(QueryDecodingError) -> UInt64? {
       guard let value = try decode(Int64.self) else { return nil }
       guard value >= 0 else {
         throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
@@ -205,32 +242,46 @@
       return UInt64(value)
     }
 
-    mutating func decode(_ columnType: String.Type) throws -> String? {
-      switch try currentValue() {
-      case .null:
+    @inlinable
+    mutating func decode(
+      _ columnType: String.Type
+    ) throws(QueryDecodingError) -> String? {
+      switch sqlite3_column_type(statement, currentIndex) {
+      case SQLITE_NULL:
         currentIndex += 1
         return nil
-      case .string(let value):
-        currentIndex += 1
-        return value
+      case SQLITE_TEXT:
+        break
       default:
         throw QueryDecodingError.typeMismatch(String.self)
       }
+      defer { currentIndex += 1 }
+      let text = sqlite3_column_text(statement, currentIndex)
+      let byteCount = Int(sqlite3_column_bytes(statement, currentIndex))
+      return String(
+        decoding: UnsafeBufferPointer(start: text, count: byteCount),
+        as: UTF8.self
+      )
     }
 
-    mutating func decode(_ columnType: Bool.Type) throws -> Bool? {
+    @inlinable
+    mutating func decode(
+      _ columnType: Bool.Type
+    ) throws(QueryDecodingError) -> Bool? {
       try decode(Int64.self).map { $0 != 0 }
     }
 
-    mutating func decode(_ columnType: Int.Type) throws -> Int? {
-      guard let value = try decode(Int64.self) else { return nil }
-      guard let integer = Int(exactly: value) else {
-        throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
-      }
-      return integer
+    @inlinable
+    mutating func decode(
+      _ columnType: Int.Type
+    ) throws(QueryDecodingError) -> Int? {
+      try decode(Int64.self).map(Int.init)
     }
 
-    mutating func decode(_ columnType: Date.Type) throws -> Date? {
+    @inlinable
+    mutating func decode(
+      _ columnType: Date.Type
+    ) throws(QueryDecodingError) -> Date? {
       guard let value = try decode(String.self) else { return nil }
       do {
         return try Date(sqliteCrossISO8601String: value)
@@ -239,33 +290,52 @@
       }
     }
 
-    mutating func decode(_ columnType: UUID.Type) throws -> UUID? {
-      guard let value = try decode(String.self) else { return nil }
-      guard let uuid = UUID(uuidString: value) else {
+    @inlinable
+    mutating func decode(
+      _ columnType: UUID.Type
+    ) throws(QueryDecodingError) -> UUID? {
+      switch sqlite3_column_type(statement, currentIndex) {
+      case SQLITE_NULL:
+        currentIndex += 1
+        return nil
+      case SQLITE_TEXT:
+        break
+      default:
         throw QueryDecodingError.typeMismatch(UUID.self)
+      }
+      defer { currentIndex += 1 }
+      let text = sqlite3_column_text(statement, currentIndex)
+      let byteCount = Int(sqlite3_column_bytes(statement, currentIndex))
+      let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
+      if let uuid = UUID(sqliteCrossUTF8: utf8) {
+        return uuid
+      }
+      guard let uuid = UUID(uuidString: String(decoding: utf8, as: UTF8.self)) else {
+        throw QueryDecodingError.other(InvalidDatabaseUUIDError())
       }
       return uuid
     }
-
-    private func currentValue() throws -> DatabaseValue.Storage {
-      guard currentIndex < row.count else {
-        throw QueryDecodingError.missingRequiredColumn
-      }
-      let value: DatabaseValue = row[currentIndex]
-      return value.storage
-    }
   }
 
-  private struct DatabaseIntegerOverflowError<Value: Sendable>: Error {
+  @usableFromInline
+  struct DatabaseIntegerOverflowError<Value: Sendable>: Error {
+    @usableFromInline
     let value: Value
+
+    @usableFromInline
+    init(value: Value) {
+      self.value = value
+    }
   }
 
   extension Date {
-    fileprivate var sqliteCrossISO8601String: String {
+    @usableFromInline
+    var sqliteCrossISO8601String: String {
       formatted(.iso8601.sqliteCrossCurrentTimestamp(includingFractionalSeconds: true))
     }
 
-    fileprivate init(sqliteCrossISO8601String string: String) throws {
+    @usableFromInline
+    init(sqliteCrossISO8601String string: String) throws {
       do {
         try self.init(
           string,
@@ -281,12 +351,59 @@
   }
 
   extension Date.ISO8601FormatStyle {
-    fileprivate func sqliteCrossCurrentTimestamp(
+    @usableFromInline
+    func sqliteCrossCurrentTimestamp(
       includingFractionalSeconds: Bool
     ) -> Self {
       year().month().day()
         .dateTimeSeparator(.space)
         .time(includingFractionalSeconds: includingFractionalSeconds)
     }
+  }
+
+  extension UUID {
+    @usableFromInline
+    init?(sqliteCrossUTF8 utf8: UnsafeBufferPointer<UInt8>) {
+      guard utf8.count == 36 else { return nil }
+      var raw: uuid_t = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+      let parsed = withUnsafeMutableBytes(of: &raw) { bytes in
+        var index = 0
+        for byteIndex in 0..<16 {
+          if byteIndex == 4 || byteIndex == 6 || byteIndex == 8 || byteIndex == 10 {
+            guard utf8[index] == UInt8(ascii: "-") else { return false }
+            index += 1
+          }
+          guard
+            let high = sqliteCrossHexValue(utf8[index]),
+            let low = sqliteCrossHexValue(utf8[index + 1])
+          else { return false }
+          bytes[byteIndex] = high << 4 | low
+          index += 2
+        }
+        return true
+      }
+      guard parsed else { return nil }
+      self.init(uuid: raw)
+    }
+  }
+
+  @usableFromInline
+  func sqliteCrossHexValue(_ byte: UInt8) -> UInt8? {
+    switch byte {
+    case UInt8(ascii: "0")...UInt8(ascii: "9"):
+      byte - UInt8(ascii: "0")
+    case UInt8(ascii: "a")...UInt8(ascii: "f"):
+      byte - UInt8(ascii: "a") + 10
+    case UInt8(ascii: "A")...UInt8(ascii: "F"):
+      byte - UInt8(ascii: "A") + 10
+    default:
+      nil
+    }
+  }
+
+  @usableFromInline
+  struct InvalidDatabaseUUIDError: Error {
+    @usableFromInline
+    init() {}
   }
 #endif

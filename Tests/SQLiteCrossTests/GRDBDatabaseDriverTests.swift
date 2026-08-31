@@ -1,4 +1,5 @@
 #if GRDB
+  import Foundation
   import GRDB
   import SQLiteCross
   import StructuredQueries
@@ -34,6 +35,60 @@
     #expect(projections.count == 1)
     #expect(projections[0].0 == 1)
     #expect(projections[0].1 == title)
+  }
+
+  @Test
+  func grdbDriverRoundTripsDateAndUUIDBindings() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+    let value = SpecialValue(
+      id: 1,
+      occurredAt: Date(timeIntervalSince1970: 1_725_000_000.125),
+      token: UUID(uuidString: "deadbeef-cafe-babe-0123-456789abcdef")!
+    )
+
+    try await database.write { transaction in
+      try transaction.execute(
+        #sql(
+          """
+          CREATE TABLE special_values (
+            id INTEGER PRIMARY KEY,
+            occurredAt TEXT NOT NULL,
+            token TEXT NOT NULL
+          )
+          """,
+          as: Void.self
+        )
+      )
+      try transaction.execute(SpecialValue.insert { value })
+    }
+
+    let decoded = try await database.read { transaction in
+      try transaction.fetchOne(SpecialValue.all)
+    }
+    #expect(decoded == value)
+  }
+
+  @Test
+  func grdbDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+    let timestamp = "2024-01-02 03:04:05"
+    let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
+
+    let decoded: (Date, UUID)? = try await database.read { transaction in
+      try transaction.fetchOne(
+        #sql(
+          "SELECT \(timestamp, as: String.self), \(uuid, as: String.self)",
+          as: (Date, UUID).self
+        )
+      )
+    }
+
+    #expect(decoded?.0.timeIntervalSince1970 == 1_704_164_645)
+    #expect(decoded?.1 == UUID(uuidString: uuid))
   }
 
   @Test
@@ -93,6 +148,13 @@
   private struct Item: Equatable, Sendable {
     let id: Int
     var title: String
+  }
+
+  @Table("special_values")
+  private struct SpecialValue: Equatable, Sendable {
+    let id: Int
+    var occurredAt: Date
+    var token: UUID
   }
 
   private struct ExpectedFailure: Error {}

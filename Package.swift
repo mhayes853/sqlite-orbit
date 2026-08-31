@@ -33,6 +33,11 @@ let package = Package(
           name: "GRDB",
           package: "GRDB.swift",
           condition: .when(traits: ["GRDB"])
+        ),
+        .product(
+          name: "GRDBSQLite",
+          package: "GRDB.swift",
+          condition: .when(traits: ["GRDB"])
         )
       ],
       swiftSettings: [
