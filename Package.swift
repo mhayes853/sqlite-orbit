@@ -12,21 +12,12 @@ let package = Package(
     .visionOS(.v1)
   ],
   products: [
-    .library(name: "SQLiteCross", targets: ["SQLiteCross"]),
-    .library(name: "SQLiteCrossGRDB", targets: ["SQLiteCrossGRDB"]),
-    .library(
-      name: "SQLiteCrossStructuredQueries",
-      targets: ["SQLiteCrossStructuredQueries"]
-    )
+    .library(name: "SQLiteCross", targets: ["SQLiteCross"])
   ],
   traits: [
     .trait(
-      name: "SQLiteCrossGRDB",
-      description: "Builds the GRDB local database driver adapter."
-    ),
-    .trait(
-      name: "SQLiteCrossStructuredQueries",
-      description: "Builds type-safe table region helpers for swift-structured-queries."
+      name: "GRDB",
+      description: "Builds the optional GRDB database driver."
     )
   ],
   dependencies: [
@@ -34,56 +25,35 @@ let package = Package(
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.37.0")
   ],
   targets: [
-    .target(name: "SQLiteCross"),
     .target(
-      name: "SQLiteCrossGRDB",
+      name: "SQLiteCross",
       dependencies: [
-        "SQLiteCross",
+        .product(name: "StructuredQueries", package: "swift-structured-queries"),
         .product(
           name: "GRDB",
           package: "GRDB.swift",
-          condition: .when(traits: ["SQLiteCrossGRDB"])
+          condition: .when(traits: ["GRDB"])
         )
-      ]
-    ),
-    .target(
-      name: "SQLiteCrossStructuredQueries",
-      dependencies: [
-        "SQLiteCross",
-        .product(
-          name: "StructuredQueries",
-          package: "swift-structured-queries",
-          condition: .when(traits: ["SQLiteCrossStructuredQueries"])
-        )
+      ],
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
+        .enableExperimentalFeature("SuppressedAssociatedTypes")
       ]
     ),
     .testTarget(
       name: "SQLiteCrossTests",
-      dependencies: ["SQLiteCross"]
-    ),
-    .testTarget(
-      name: "SQLiteCrossGRDBTests",
       dependencies: [
-        .target(name: "SQLiteCrossGRDB", condition: .when(traits: ["SQLiteCrossGRDB"])),
+        "SQLiteCross",
+        .product(name: "StructuredQueries", package: "swift-structured-queries"),
         .product(
           name: "GRDB",
           package: "GRDB.swift",
-          condition: .when(traits: ["SQLiteCrossGRDB"])
+          condition: .when(traits: ["GRDB"])
         )
-      ]
-    ),
-    .testTarget(
-      name: "SQLiteCrossStructuredQueriesTests",
-      dependencies: [
-        .target(
-          name: "SQLiteCrossStructuredQueries",
-          condition: .when(traits: ["SQLiteCrossStructuredQueries"])
-        ),
-        .product(
-          name: "StructuredQueries",
-          package: "swift-structured-queries",
-          condition: .when(traits: ["SQLiteCrossStructuredQueries"])
-        )
+      ],
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
+        .enableExperimentalFeature("SuppressedAssociatedTypes")
       ]
     )
   ],
