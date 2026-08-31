@@ -56,11 +56,11 @@
       self.database = copy database
     }
 
-    public borrowing func query(
-      _ query: QueryFragment,
+    public borrowing func query<S: DatabaseReadStatement>(
+      _ statement: S,
       _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
     ) throws {
-      try performGRDBQuery(query, database: database, body)
+      try performGRDBQuery(statement.query, database: database, body)
     }
   }
 
@@ -75,16 +75,23 @@
       self.database = copy database
     }
 
-    public borrowing func query(
-      _ query: QueryFragment,
+    public borrowing func query<S: DatabaseReadStatement>(
+      _ statement: S,
       _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
     ) throws {
-      try performGRDBQuery(query, database: database, body)
+      try performGRDBQuery(statement.query, database: database, body)
+    }
+
+    public borrowing func execute<S: DatabaseWriteStatement>(
+      _ statement: S,
+      _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
+    ) throws {
+      try performGRDBQuery(statement.query, database: database, body)
     }
 
     @discardableResult
-    public borrowing func execute(_ query: QueryFragment) throws -> Int {
-      let prepared = try prepareGRDBQuery(query)
+    public borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
+      let prepared = try prepareGRDBQuery(statement.query)
       let statement = try database.makeStatement(sql: prepared.sql)
       try statement.execute(arguments: prepared.arguments)
       return database.changesCount

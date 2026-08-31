@@ -7,7 +7,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> [S.QueryValue.QueryOutput]
   where S.QueryValue: QueryRepresentable {
     var values: [S.QueryValue.QueryOutput] = []
-    try query(statement.query) { row in
+    try query(statement) { row in
       values.append(try row.decode(S.QueryValue.self))
       return .next
     }
@@ -20,7 +20,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> S.QueryValue.QueryOutput?
   where S.QueryValue: QueryRepresentable {
     var value: S.QueryValue.QueryOutput?
-    try query(statement.query) { row in
+    try query(statement) { row in
       value = try row.decode(S.QueryValue.self)
       return .stop
     }
@@ -34,7 +34,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> [(repeat (each Value).QueryOutput)]
   where S.QueryValue == (repeat each Value) {
     var values: [(repeat (each Value).QueryOutput)] = []
-    try query(statement.query) { row in
+    try query(statement) { row in
       values.append(try row.decode((repeat each Value).self))
       return .next
     }
@@ -48,7 +48,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> (repeat (each Value).QueryOutput)?
   where S.QueryValue == (repeat each Value) {
     var value: (repeat (each Value).QueryOutput)?
-    try query(statement.query) { row in
+    try query(statement) { row in
       value = try row.decode((repeat each Value).self)
       return .stop
     }
@@ -61,7 +61,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> [S.From.QueryOutput]
   where S: DatabaseReadStatement, S.QueryValue == (), S.Joins == () {
     var values: [S.From.QueryOutput] = []
-    try query(statement.query) { row in
+    try query(statement) { row in
       values.append(try row.decode(S.From.self))
       return .next
     }
@@ -74,7 +74,7 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> S.From.QueryOutput?
   where S: DatabaseReadStatement, S.QueryValue == (), S.Joins == () {
     var value: S.From.QueryOutput?
-    try query(statement.asSelect().limit(1).query) { row in
+    try query(statement.asSelect().limit(1)) { row in
       value = try row.decode(S.From.self)
       return .stop
     }
@@ -89,7 +89,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> [S.QueryValue.QueryOutput]
   where S.QueryValue: QueryRepresentable {
     var values: [S.QueryValue.QueryOutput] = []
-    try query(statement.query) { row in
+    try execute(statement) { row in
       values.append(try row.decode(S.QueryValue.self))
       return .next
     }
@@ -102,7 +102,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> S.QueryValue.QueryOutput?
   where S.QueryValue: QueryRepresentable {
     var value: S.QueryValue.QueryOutput?
-    try query(statement.query) { row in
+    try execute(statement) { row in
       value = try row.decode(S.QueryValue.self)
       return .stop
     }
@@ -119,7 +119,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> [(repeat (each Value).QueryOutput)]
   where S.QueryValue == (repeat each Value) {
     var values: [(repeat (each Value).QueryOutput)] = []
-    try query(statement.query) { row in
+    try execute(statement) { row in
       values.append(try row.decode((repeat each Value).self))
       return .next
     }
@@ -136,7 +136,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> (repeat (each Value).QueryOutput)?
   where S.QueryValue == (repeat each Value) {
     var value: (repeat (each Value).QueryOutput)?
-    try query(statement.query) { row in
+    try execute(statement) { row in
       value = try row.decode((repeat each Value).self)
       return .stop
     }
@@ -148,7 +148,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
     _ statement: SQLQueryExpression<Value>
   ) throws -> [Value.QueryOutput] {
     var values: [Value.QueryOutput] = []
-    try query(statement.query) { row in
+    try execute(statement) { row in
       values.append(try row.decode(Value.self))
       return .next
     }
@@ -160,7 +160,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
     _ statement: SQLQueryExpression<Value>
   ) throws -> Value.QueryOutput? {
     var value: Value.QueryOutput?
-    try query(statement.query) { row in
+    try execute(statement) { row in
       value = try row.decode(Value.self)
       return .stop
     }
@@ -173,7 +173,7 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
     _ statement: SQLQueryExpression<(repeat each Value)>
   ) throws -> [(repeat (each Value).QueryOutput)] {
     var values: [(repeat (each Value).QueryOutput)] = []
-    try query(statement.query) { row in
+    try execute(statement) { row in
       values.append(try row.decode((repeat each Value).self))
       return .next
     }
@@ -186,17 +186,10 @@ extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
     _ statement: SQLQueryExpression<(repeat each Value)>
   ) throws -> (repeat (each Value).QueryOutput)? {
     var value: (repeat (each Value).QueryOutput)?
-    try query(statement.query) { row in
+    try execute(statement) { row in
       value = try row.decode((repeat each Value).self)
       return .stop
     }
     return value
-  }
-
-  /// Executes a Structured Queries statement and returns its affected-row count.
-  @discardableResult
-  public borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int
-  where S.QueryValue == () {
-    try execute(statement.query)
   }
 }

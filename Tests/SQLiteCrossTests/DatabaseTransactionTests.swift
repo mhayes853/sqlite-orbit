@@ -153,8 +153,8 @@ private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapab
     self.state = copy state
   }
 
-  borrowing func query(
-    _ query: QueryFragment,
+  borrowing func query<S: DatabaseReadStatement>(
+    _ statement: S,
     _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
   ) throws {
     for values in state.rows {
@@ -175,13 +175,26 @@ private struct TestWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escap
     self.state = copy state
   }
 
-  borrowing func execute(_ query: QueryFragment) throws -> Int {
-    state.executedQueries.append(query)
+  borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
+    state.executedQueries.append(statement.query)
     return 1
   }
 
-  borrowing func query(
-    _ query: QueryFragment,
+  borrowing func query<S: DatabaseReadStatement>(
+    _ statement: S,
+    _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
+  ) throws {
+    for values in state.rows {
+      state.visitedRowCount += 1
+      var row = TestDatabaseRow(values: values)
+      if try body(&row) == .stop {
+        return
+      }
+    }
+  }
+
+  borrowing func execute<S: DatabaseWriteStatement>(
+    _ statement: S,
     _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
   ) throws {
     for values in state.rows {

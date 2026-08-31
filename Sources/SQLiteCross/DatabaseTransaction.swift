@@ -28,8 +28,8 @@ public protocol DatabaseReadTransaction: ~Copyable, ~Escapable {
   associatedtype Row: ~Copyable, ~Escapable, DatabaseRow
 
   /// Executes a query and lends each result row to `body`.
-  borrowing func query(
-    _ query: QueryFragment,
+  borrowing func query<S: DatabaseReadStatement>(
+    _ statement: S,
     _ body: (inout Row) throws -> DatabaseRowIteration
   ) throws
 }
@@ -38,7 +38,13 @@ public protocol DatabaseReadTransaction: ~Copyable, ~Escapable {
 ///
 /// Write transactions can perform every read operation in addition to executing mutations.
 public protocol DatabaseWriteTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
-  /// Executes a statement and returns the number of rows changed by that statement.
+  /// Executes a write statement and lends any returned rows to `body`.
+  borrowing func execute<S: DatabaseWriteStatement>(
+    _ statement: S,
+    _ body: (inout Row) throws -> DatabaseRowIteration
+  ) throws
+
+  /// Executes a write statement and returns the number of rows changed by that statement.
   @discardableResult
-  borrowing func execute(_ query: QueryFragment) throws -> Int
+  borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int
 }
