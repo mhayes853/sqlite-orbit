@@ -256,6 +256,58 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
 }
 
 @Test
+func databaseCursorsCanCollectIntoStandardCollections() async throws {
+  let state = TestDatabaseState(rows: [[.int(1)], [.int(1)], [.int(2)], [.int(3)]])
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let values = try await database.read { transaction in
+    try transaction.fetchCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    .collect()
+  }
+
+  #expect(values == [1, 1, 2, 3])
+  #expect(state.visitedRowCount == 4)
+
+  state.visitedRowCount = 0
+  let contiguousValues = try await database.read { transaction in
+    try transaction.fetchCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    .collect(as: ContiguousArray<Int>.self)
+  }
+
+  #expect(Array(contiguousValues) == [1, 1, 2, 3])
+  #expect(state.visitedRowCount == 4)
+
+  state.visitedRowCount = 0
+  let uniqueValues = try await database.read { transaction in
+    try transaction.fetchCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    .collect(as: Set<Int>.self)
+  }
+
+  #expect(uniqueValues == Set([1, 2, 3]))
+  #expect(state.visitedRowCount == 4)
+
+  state.visitedRowCount = 0
+  let prefixValues = try await database.read { transaction in
+    try transaction.fetchCursor(
+      #sql("SELECT value FROM numbers", as: Int.self)
+    )
+    .prefix(2)
+    .collect()
+  }
+
+  #expect(prefixValues == [1, 1])
+  #expect(state.visitedRowCount == 2)
+}
+
+@Test
 func structuredStatementsExposeTransactionCapabilities() {
   #expect(acceptsReadStatement(TestRecord.select(\.id)))
   #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))

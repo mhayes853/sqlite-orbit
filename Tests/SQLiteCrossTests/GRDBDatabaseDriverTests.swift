@@ -49,6 +49,14 @@
       return transformedTitles
     }
     #expect(transformedTitles == [title.uppercased()])
+
+    let tupleValues: [(Int, String)] = try await database.read { transaction in
+      let cursor = try transaction.fetchCursor(Item.select { ($0.id, $0.title) })
+      return try cursor.collect()
+    }
+    #expect(tupleValues.count == 1)
+    #expect(tupleValues[0].0 == 1)
+    #expect(tupleValues[0].1 == title)
   }
 
   @Test

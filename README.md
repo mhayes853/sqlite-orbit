@@ -74,6 +74,18 @@ try titles.forEach { title in
 }
 ```
 
+To eagerly materialize a cursor, collect it into an array or another known collection type:
+
+```swift
+let titles = try transaction.fetchCursor(Reminder.all)
+  .filter { !$0.isCompleted }
+  .collect()
+
+let uniqueTitles = try transaction.fetchCursor(Reminder.all)
+  .map(\.title)
+  .collect(as: Set<String>.self)
+```
+
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
 for file databases using SHA-256 and unique identifiers for in-memory databases.

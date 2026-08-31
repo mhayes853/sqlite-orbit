@@ -516,4 +516,34 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func enumerated() -> DatabaseEnumeratedCursor<Self> {
     DatabaseEnumeratedCursor(base: consume self)
   }
+
+  /// Eagerly collects the remaining values into an array.
+  @inlinable
+  public consuming func collect() throws -> [Element] {
+    try collect(as: [Element].self)
+  }
+
+  /// Eagerly collects the remaining values into a range-replaceable collection.
+  @inlinable
+  public consuming func collect<C: RangeReplaceableCollection>(
+    as type: C.Type
+  ) throws -> C where C.Element == Element {
+    var collection = C()
+    try forEach { value in
+      collection.append(value)
+    }
+    return collection
+  }
+
+  /// Eagerly collects the remaining values into a set-algebra collection.
+  @inlinable
+  public consuming func collect<C: SetAlgebra>(
+    as type: C.Type
+  ) throws -> C where C.Element == Element {
+    var collection = C()
+    try forEach { value in
+      collection.insert(value)
+    }
+    return collection
+  }
 }
