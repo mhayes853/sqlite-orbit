@@ -12,13 +12,13 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
   }
 
   public func read<Result: Sendable>(
-    _ body: @Sendable (borrowing Driver.Transaction) throws -> sending Result
+    _ body: @Sendable (borrowing Driver.ReadTransaction) throws -> sending Result
   ) async throws -> sending Result {
     try await driver.read(body)
   }
 
   public func write<Result: Sendable>(
-    _ body: @Sendable (borrowing Driver.Transaction) throws -> sending Result
+    _ body: @Sendable (borrowing Driver.WriteTransaction) throws -> sending Result
   ) async throws -> sending Result {
     try await driver.write(body)
   }

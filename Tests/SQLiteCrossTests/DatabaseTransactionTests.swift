@@ -5,8 +5,11 @@ import Testing
 @testable import SQLiteCross
 
 @Test
-func databasePathIdentifiersMatchTheRustFNV1aRepresentation() {
-  #expect(DatabaseIdentifier.stable(for: "hello").rawValue == "a430d84680aabd0b")
+func databasePathIdentifiersUseSHA256() {
+  #expect(
+    DatabaseIdentifier.stable(for: "hello").rawValue
+      == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  )
 }
 
 @Test
@@ -16,8 +19,8 @@ func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
   let database = CrossProcessDatabase(driver: driver)
 
   #expect(database.id == identifier)
-  #expect(try await database.read { $0.accessKind } == .read)
-  #expect(try await database.write { $0.accessKind } == .write)
+  #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
+  #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
 }
 
 @Test
@@ -74,6 +77,43 @@ func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
   }
   #expect(first == 1)
   #expect(state.visitedRowCount == 1)
+
+  state.visitedRowCount = 0
+  let firstDuringWrite = try await database.write { transaction in
+    try transaction.fetchOne(#sql("SELECT value FROM numbers", as: Int.self))
+  }
+  #expect(firstDuringWrite == 1)
+  #expect(state.visitedRowCount == 1)
+}
+
+@Test
+func structuredStatementsExposeTransactionCapabilities() {
+  #expect(acceptsReadStatement(TestRecord.select(\.id)))
+  #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))
+  #expect(acceptsWriteStatement(TestRecord.update { $0.title = "Blob Jr." }))
+  #expect(acceptsWriteStatement(TestRecord.delete()))
+
+  let rawRead = #sql("SELECT id FROM testRecords", as: Int.self)
+  let rawWrite = #sql("DELETE FROM testRecords", as: Void.self)
+  #expect(acceptsReadStatement(rawRead))
+  #expect(acceptsWriteStatement(rawRead))
+  #expect(acceptsReadStatement(rawWrite))
+  #expect(acceptsWriteStatement(rawWrite))
+}
+
+@Test
+func writeTransactionsCanFetchReturningStatements() async throws {
+  let state = TestDatabaseState(rows: [[.int(1)], [.int(2)]])
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let values = try await database.write { transaction in
+    try transaction.fetchAll(TestReturningWriteStatement())
+  }
+
+  #expect(values == [1, 2])
+  #expect(state.visitedRowCount == 2)
 }
 
 private final class TestDatabaseDriver: DatabaseDriver, @unchecked Sendable {
@@ -89,33 +129,50 @@ private final class TestDatabaseDriver: DatabaseDriver, @unchecked Sendable {
   }
 
   func read<Result: Sendable>(
-    _ body: @Sendable (borrowing TestDatabaseTransaction) throws -> sending Result
+    _ body: @Sendable (borrowing TestReadTransaction) throws -> sending Result
   ) async throws -> sending Result {
     let state = self.state
-    let transaction = TestDatabaseTransaction(state: state, accessKind: .read)
+    let transaction = TestReadTransaction(state: state)
     return try body(transaction)
   }
 
   func write<Result: Sendable>(
-    _ body: @Sendable (borrowing TestDatabaseTransaction) throws -> sending Result
+    _ body: @Sendable (borrowing TestWriteTransaction) throws -> sending Result
   ) async throws -> sending Result {
     let state = self.state
-    let transaction = TestDatabaseTransaction(state: state, accessKind: .write)
+    let transaction = TestWriteTransaction(state: state)
     return try body(transaction)
   }
 }
 
-private struct TestDatabaseTransaction: DatabaseTransaction, ~Copyable, ~Escapable {
+private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
   let state: TestDatabaseState
-  let accessKind: DatabaseTransactionAccessKind
 
   @_lifetime(borrow state)
-  init(
-    state: borrowing TestDatabaseState,
-    accessKind: DatabaseTransactionAccessKind
-  ) {
+  init(state: borrowing TestDatabaseState) {
     self.state = copy state
-    self.accessKind = accessKind
+  }
+
+  borrowing func query(
+    _ query: QueryFragment,
+    _ body: (inout TestDatabaseRow) throws -> DatabaseRowIteration
+  ) throws {
+    for values in state.rows {
+      state.visitedRowCount += 1
+      var row = TestDatabaseRow(values: values)
+      if try body(&row) == .stop {
+        return
+      }
+    }
+  }
+}
+
+private struct TestWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escapable {
+  let state: TestDatabaseState
+
+  @_lifetime(borrow state)
+  init(state: borrowing TestDatabaseState) {
+    self.state = copy state
   }
 
   borrowing func execute(_ query: QueryFragment) throws -> Int {
@@ -135,6 +192,39 @@ private struct TestDatabaseTransaction: DatabaseTransaction, ~Copyable, ~Escapab
       }
     }
   }
+}
+
+private func acceptsReadTransaction<Transaction: DatabaseReadTransaction>(
+  _ transaction: borrowing Transaction
+) -> Bool where Transaction: ~Copyable, Transaction: ~Escapable {
+  true
+}
+
+private func acceptsWriteTransaction<Transaction: DatabaseWriteTransaction>(
+  _ transaction: borrowing Transaction
+) -> Bool where Transaction: ~Copyable, Transaction: ~Escapable {
+  true
+}
+
+private func acceptsReadStatement<S: DatabaseReadStatement>(_ statement: S) -> Bool {
+  true
+}
+
+private func acceptsWriteStatement<S: DatabaseWriteStatement>(_ statement: S) -> Bool {
+  true
+}
+
+@Table
+private struct TestRecord {
+  let id: Int
+  var title: String
+}
+
+private struct TestReturningWriteStatement: DatabaseWriteStatement {
+  typealias QueryValue = Int
+  typealias From = Never
+
+  let query: QueryFragment = "UPDATE testRecords SET title = title RETURNING id"
 }
 
 private struct TestDatabaseRow: DatabaseRow {

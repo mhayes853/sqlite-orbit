@@ -6,7 +6,8 @@
 
   /// A ``DatabaseDriver`` backed by a GRDB database writer.
   public final class GRDBDatabaseDriver: DatabaseDriver, Sendable {
-    public typealias Transaction = GRDBDatabaseTransaction
+    public typealias ReadTransaction = GRDBReadTransaction
+    public typealias WriteTransaction = GRDBWriteTransaction
 
     public let defaultIdentifier: DatabaseIdentifier
     public let writer: any DatabaseWriter
@@ -20,25 +21,19 @@
     }
 
     public func read<Result: Sendable>(
-      _ body: @Sendable (borrowing GRDBDatabaseTransaction) throws -> sending Result
+      _ body: @Sendable (borrowing GRDBReadTransaction) throws -> sending Result
     ) async throws -> sending Result {
       try await writer.read { database in
-        let transaction = GRDBDatabaseTransaction(
-          database: database,
-          accessKind: .read
-        )
+        let transaction = GRDBReadTransaction(database: database)
         return try body(transaction)
       }
     }
 
     public func write<Result: Sendable>(
-      _ body: @Sendable (borrowing GRDBDatabaseTransaction) throws -> sending Result
+      _ body: @Sendable (borrowing GRDBWriteTransaction) throws -> sending Result
     ) async throws -> sending Result {
       try await writer.write { database in
-        let transaction = GRDBDatabaseTransaction(
-          database: database,
-          accessKind: .write
-        )
+        let transaction = GRDBWriteTransaction(database: database)
         return try body(transaction)
       }
     }
@@ -50,55 +45,77 @@
     }
   }
 
-  /// A transaction lent by ``GRDBDatabaseDriver``.
-  public struct GRDBDatabaseTransaction: DatabaseTransaction, ~Copyable, ~Escapable {
+  /// A read transaction lent by ``GRDBDatabaseDriver``.
+  public struct GRDBReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
     public typealias Row = GRDBDatabaseRow
 
     private let database: Database
-    public let accessKind: DatabaseTransactionAccessKind
 
     @_lifetime(borrow database)
-    fileprivate init(
-      database: borrowing Database,
-      accessKind: DatabaseTransactionAccessKind
-    ) {
+    fileprivate init(database: borrowing Database) {
       self.database = copy database
-      self.accessKind = accessKind
-    }
-
-    @discardableResult
-    public borrowing func execute(_ query: QueryFragment) throws -> Int {
-      let prepared = try prepare(query)
-      let statement = try database.makeStatement(sql: prepared.sql)
-      try statement.execute(arguments: prepared.arguments)
-      return database.changesCount
     }
 
     public borrowing func query(
       _ query: QueryFragment,
       _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
     ) throws {
-      let prepared = try prepare(query)
-      let statement = try database.makeStatement(sql: prepared.sql)
-      let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
-      while try cursor.next() != nil {
-        var databaseRow = GRDBDatabaseRow(statement: statement)
-        if try body(&databaseRow) == .stop {
-          break
-        }
-      }
-    }
-
-    private borrowing func prepare(
-      _ query: QueryFragment
-    ) throws -> (sql: String, arguments: StatementArguments) {
-      let prepared = query.prepare { _ in "?" }
-      let values = try prepared.bindings.map(GRDBBinding.init)
-      return (prepared.sql, StatementArguments(values.map(\.value)))
+      try performGRDBQuery(query, database: database, body)
     }
   }
 
-  /// A result row lent by ``GRDBDatabaseTransaction``.
+  /// A write transaction lent by ``GRDBDatabaseDriver``.
+  public struct GRDBWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escapable {
+    public typealias Row = GRDBDatabaseRow
+
+    private let database: Database
+
+    @_lifetime(borrow database)
+    fileprivate init(database: borrowing Database) {
+      self.database = copy database
+    }
+
+    public borrowing func query(
+      _ query: QueryFragment,
+      _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
+    ) throws {
+      try performGRDBQuery(query, database: database, body)
+    }
+
+    @discardableResult
+    public borrowing func execute(_ query: QueryFragment) throws -> Int {
+      let prepared = try prepareGRDBQuery(query)
+      let statement = try database.makeStatement(sql: prepared.sql)
+      try statement.execute(arguments: prepared.arguments)
+      return database.changesCount
+    }
+  }
+
+  private func performGRDBQuery(
+    _ query: QueryFragment,
+    database: borrowing Database,
+    _ body: (inout GRDBDatabaseRow) throws -> DatabaseRowIteration
+  ) throws {
+    let prepared = try prepareGRDBQuery(query)
+    let statement = try database.makeStatement(sql: prepared.sql)
+    let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
+    while try cursor.next() != nil {
+      var databaseRow = GRDBDatabaseRow(statement: statement)
+      if try body(&databaseRow) == .stop {
+        break
+      }
+    }
+  }
+
+  private func prepareGRDBQuery(
+    _ query: QueryFragment
+  ) throws -> (sql: String, arguments: StatementArguments) {
+    let prepared = query.prepare { _ in "?" }
+    let values = try prepared.bindings.map(GRDBBinding.init)
+    return (prepared.sql, StatementArguments(values.map(\.value)))
+  }
+
+  /// A result row lent by a GRDB transaction.
   public struct GRDBDatabaseRow: DatabaseRow, ~Copyable, ~Escapable {
     @usableFromInline
     let statement: SQLiteStatement

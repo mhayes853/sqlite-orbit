@@ -1,3 +1,4 @@
+import Crypto
 import Foundation
 
 /// An identity shared by every process that opens the same SQLite database.
@@ -14,14 +15,13 @@ public struct DatabaseIdentifier: RawRepresentable, Codable, Hashable, Sendable 
   }
 
   static func stable(for path: String) -> Self {
-    var hash: UInt64 = 14_695_981_039_346_656_037
-    for byte in path.utf8 {
-      hash ^= UInt64(byte)
-      hash &*= 1_099_511_628_211
-    }
-    let hexadecimal = String(hash, radix: 16)
-    return Self(
-      rawValue: String(repeating: "0", count: 16 - hexadecimal.count) + hexadecimal
-    )
+    let digest = SHA256.hash(data: Data(path.utf8))
+    let hexadecimal =
+      digest.map { byte in
+        let component = String(byte, radix: 16)
+        return component.count == 1 ? "0" + component : component
+      }
+      .joined()
+    return Self(rawValue: hexadecimal)
   }
 }

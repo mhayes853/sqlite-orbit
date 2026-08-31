@@ -4,13 +4,13 @@
 SQLite database across multiple processes.
 
 The package currently focuses on its local transaction boundary. `DatabaseDriver` asynchronously
-lends read and write transactions, while `DatabaseTransaction` exposes low-level execution and row
-iteration. Transactions and rows are nonescapable, so a driver-owned SQLite connection cannot
-outlive its access closure.
+lends distinct `DatabaseReadTransaction` and `DatabaseWriteTransaction` values. Read transactions
+can only query, while write transactions can query and execute mutations. Transactions and rows are
+nonescapable, so a driver-owned SQLite connection cannot outlive its access closure.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer. Its statements can be executed and decoded directly by any
-`DatabaseTransaction`; the generic protocols have no dependency on GRDB types.
+read or write transaction; the generic protocols have no dependency on GRDB types.
 
 GRDB support is available in the main `SQLiteCross` product behind the `GRDB` package trait:
 
@@ -42,7 +42,7 @@ let reminders = try await database.read { transaction in
 
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
-for file databases and unique identifiers for in-memory databases.
+for file databases using SHA-256 and unique identifiers for in-memory databases.
 
 Cross-process IPC and observation are intentionally not implemented yet. They will be layered on
 after this transaction API is settled.

@@ -121,21 +121,6 @@
   }
 
   @Test
-  func grdbDriverRejectsWritesInReadTransactions() async throws {
-    let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
-    )
-
-    await #expect(throws: (any Error).self) {
-      try await database.read { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE forbidden (id INTEGER)", as: Void.self)
-        )
-      }
-    }
-  }
-
-  @Test
   func inMemoryGRDBDriversReceiveUniqueDefaultIdentifiers() throws {
     let first = GRDBDatabaseDriver(writer: try DatabaseQueue())
     let second = GRDBDatabaseDriver(writer: try DatabaseQueue())
