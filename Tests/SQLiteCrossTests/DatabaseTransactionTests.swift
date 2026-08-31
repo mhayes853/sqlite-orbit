@@ -122,6 +122,46 @@ func databaseCursorsLendRowsAndDecodeValuesLazily() async throws {
 }
 
 @Test
+func databaseCursorsCanBeMappedFilteredAndCompactMappedLazily() async throws {
+  let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let firstMappedValue = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .filter { $0 > 1 }
+      .map { $0 * 10 }
+    return try cursor.next()
+  }
+
+  #expect(firstMappedValue == 20)
+  #expect(state.visitedRowCount == 2)
+
+  state.visitedRowCount = 0
+  let compactMappedValues = try await database.read { transaction in
+    var cursor =
+      try transaction.fetchCursor(
+        #sql("SELECT value FROM numbers", as: Int.self)
+      )
+      .compactMap { value in
+        value == 2 ? "two" : nil
+      }
+    var values: [String] = []
+    try cursor.forEach { value in
+      values.append(value)
+    }
+    return values
+  }
+
+  #expect(compactMappedValues == ["two"])
+  #expect(state.visitedRowCount == 3)
+}
+
+@Test
 func structuredStatementsExposeTransactionCapabilities() {
   #expect(acceptsReadStatement(TestRecord.select(\.id)))
   #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))

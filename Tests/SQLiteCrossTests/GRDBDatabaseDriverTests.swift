@@ -35,6 +35,20 @@
     #expect(projections.count == 1)
     #expect(projections[0].0 == 1)
     #expect(projections[0].1 == title)
+
+    let transformedTitles = try await database.read { transaction in
+      let cursor = try transaction.fetchCursor(Item.select { ($0.id, $0.title) })
+      var transformedCursor =
+        cursor
+        .filter { $0.0 == 1 }
+        .map { $0.1.uppercased() }
+      var transformedTitles: [String] = []
+      try transformedCursor.forEach { title in
+        transformedTitles.append(title)
+      }
+      return transformedTitles
+    }
+    #expect(transformedTitles == [title.uppercased()])
   }
 
   @Test

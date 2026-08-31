@@ -59,6 +59,21 @@ let reminders = try await database.read { transaction in
 Cursors must be consumed inside the transaction that created them. Write transactions also expose
 `executeCursor` for statements that return rows, such as SQLite `RETURNING` statements.
 
+Typed cursors can be transformed lazily. Transformations consume their source cursor, so bind the
+result when it will be advanced or passed to `forEach`:
+
+```swift
+let source = try transaction.fetchCursor(Reminder.all)
+var titles = source
+  .filter { !$0.isCompleted }
+  .compactMap(\.title)
+  .map { $0.uppercased() }
+
+try titles.forEach { title in
+  print(title)
+}
+```
+
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
 for file databases using SHA-256 and unique identifiers for in-memory databases.
