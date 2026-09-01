@@ -96,6 +96,9 @@
 
     @discardableResult
     public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+      // A statement that builds no SQL changes nothing. Running a stand-in would leave
+      // `changesCount` reporting whatever the previous statement changed.
+      guard !query.fragment.isEmpty else { return 0 }
       let prepared = try prepareGRDBQuery(query.fragment)
       let statement = try database.cachedStatement(sql: prepared.sql)
       try statement.execute(arguments: prepared.arguments)
@@ -123,9 +126,15 @@
   private func prepareGRDBQuery(
     _ query: QueryFragment
   ) throws -> (sql: String, arguments: StatementArguments) {
-    let prepared = query.prepare { _ in "?" }
-    let values = try prepared.bindings.map(GRDBBinding.init)
-    return (prepared.sql, StatementArguments(values.map(\.value)))
+    var (sql, bindings) = query.prepare { _ in "?" }
+    if sql.isEmpty {
+      // A query builder can legitimately produce no SQL, such as `Values` with no rows. SQLite
+      // cannot prepare an empty string, so stand in a statement that selects nothing.
+      sql = "SELECT 1 WHERE 0 -- empty query"
+      bindings = []
+    }
+    let values = try bindings.map(GRDBBinding.init)
+    return (sql, StatementArguments(values.map(\.value)))
   }
 
   /// A transaction-scoped cursor over GRDB result rows.

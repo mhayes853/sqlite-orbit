@@ -201,6 +201,42 @@
     #expect(mixed[0].1 == 5)
   }
 
+  @Test
+  func statementsThatBuildNoSQLAreRunnable() async throws {
+    let database = try await seededDatabase()
+
+    // `Values` with no rows builds an empty fragment, which SQLite cannot prepare.
+    let noRows: [(Int, String)] = []
+    let empty: [(Int, String)] = try await database.read { transaction in
+      try transaction.fetchAll(
+        Values {
+          for row in noRows {
+            row
+          }
+        }
+      )
+    }
+    #expect(empty.isEmpty)
+
+    let changed = try await database.write { transaction in
+      let noReminders: [Reminder] = []
+      return try transaction.execute(
+        Reminder.insert {
+          for reminder in noReminders {
+            reminder
+          }
+        }
+      )
+    }
+    #expect(changed == 0)
+
+    // The empty write must not have disturbed the table.
+    let count = try await database.read { transaction in
+      try transaction.fetchCount(Reminder.all)
+    }
+    #expect(count == 3)
+  }
+
   @Table("lists")
   private struct List: Equatable, Sendable {
     let id: Int
