@@ -84,7 +84,21 @@ let titles = try transaction.fetchCursor(Reminder.all)
 let uniqueTitles = try transaction.fetchCursor(Reminder.all)
   .map(\.title)
   .collect(as: Set<String>.self)
+
+let incompleteCount = try transaction.fetchCursor(Reminder.all)
+  .count { !$0.isCompleted }
+
+let nextReminder = try transaction.fetchCursor(Reminder.all)
+  .first { !$0.isCompleted }
+
+let bounds = try transaction.fetchCursor(Reminder.all)
+  .map(\.priority)
+  .minMax()
 ```
+
+Terminal operations consume the remaining cursor values. Operations such as `first`, `isEmpty`,
+`contains`, and `allSatisfy` stop as soon as their result is known; reductions and `min`/`max`
+visit every remaining value. `minMax` computes both extrema in one traversal.
 
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers

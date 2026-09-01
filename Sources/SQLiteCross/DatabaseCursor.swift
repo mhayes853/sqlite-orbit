@@ -546,4 +546,181 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
     }
     return collection
   }
+
+  /// Returns whether the cursor has no remaining values.
+  @inlinable
+  public consuming func isEmpty() throws -> Bool {
+    try next() == nil
+  }
+
+  /// Returns the first remaining value, or `nil` if the cursor is empty.
+  @inlinable
+  public consuming func first() throws -> Element? {
+    try next()
+  }
+
+  /// Returns the first remaining value matching a predicate, or `nil` if no value matches.
+  @inlinable
+  public consuming func first(
+    where predicate: (Element) throws -> Bool
+  ) throws -> Element? {
+    while let value = try next() {
+      if try predicate(value) {
+        return value
+      }
+    }
+    return nil
+  }
+
+  /// Returns whether any remaining value matches a predicate.
+  @inlinable
+  public consuming func contains(
+    where predicate: (Element) throws -> Bool
+  ) throws -> Bool {
+    while let value = try next() {
+      if try predicate(value) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /// Returns whether every remaining value matches a predicate.
+  @inlinable
+  public consuming func allSatisfy(
+    _ predicate: (Element) throws -> Bool
+  ) throws -> Bool {
+    while let value = try next() {
+      if try !predicate(value) {
+        return false
+      }
+    }
+    return true
+  }
+
+  /// Returns the number of remaining values.
+  @inlinable
+  public consuming func count() throws -> Int {
+    try count { _ in true }
+  }
+
+  /// Returns the number of remaining values matching a predicate.
+  @inlinable
+  public consuming func count(
+    where predicate: (Element) throws -> Bool
+  ) throws -> Int {
+    var result = 0
+    try forEach { value in
+      if try predicate(value) {
+        result += 1
+      }
+    }
+    return result
+  }
+
+  /// Reduces the remaining values into a single result.
+  @inlinable
+  public consuming func reduce<Result>(
+    _ initialResult: Result,
+    _ nextPartialResult: (Result, Element) throws -> Result
+  ) throws -> Result {
+    var result = initialResult
+    try forEach { value in
+      result = try nextPartialResult(result, value)
+    }
+    return result
+  }
+
+  /// Reduces the remaining values into a mutable result.
+  @inlinable
+  public consuming func reduce<Result>(
+    into initialResult: Result,
+    _ updateAccumulatingResult: (inout Result, Element) throws -> Void
+  ) throws -> Result {
+    var result = initialResult
+    try forEach { value in
+      try updateAccumulatingResult(&result, value)
+    }
+    return result
+  }
+
+  /// Returns the minimum remaining value, or `nil` if the cursor is empty.
+  @inlinable
+  public consuming func min() throws -> Element? where Element: Comparable {
+    try min(by: <)
+  }
+
+  /// Returns the maximum remaining value, or `nil` if the cursor is empty.
+  @inlinable
+  public consuming func max() throws -> Element? where Element: Comparable {
+    try max(by: <)
+  }
+
+  /// Returns the minimum remaining value according to a comparison predicate.
+  @inlinable
+  public consuming func min(
+    by areInIncreasingOrder: (Element, Element) throws -> Bool
+  ) throws -> Element? {
+    var result: Element?
+    try forEach { value in
+      guard let current = result else {
+        result = value
+        return
+      }
+      if try areInIncreasingOrder(value, current) {
+        result = value
+      }
+    }
+    return result
+  }
+
+  /// Returns the maximum remaining value according to a comparison predicate.
+  @inlinable
+  public consuming func max(
+    by areInIncreasingOrder: (Element, Element) throws -> Bool
+  ) throws -> Element? {
+    var result: Element?
+    try forEach { value in
+      guard let current = result else {
+        result = value
+        return
+      }
+      if try areInIncreasingOrder(current, value) {
+        result = value
+      }
+    }
+    return result
+  }
+
+  /// Returns the minimum and maximum remaining values, or `nil` if the cursor is empty.
+  @inlinable
+  public consuming func minMax() throws -> (min: Element, max: Element)?
+  where Element: Comparable {
+    try minMax(by: <)
+  }
+
+  /// Returns the minimum and maximum remaining values according to a comparison predicate.
+  @inlinable
+  public consuming func minMax(
+    by areInIncreasingOrder: (Element, Element) throws -> Bool
+  ) throws -> (min: Element, max: Element)? {
+    var result: (min: Element, max: Element)?
+    try forEach { value in
+      guard let current = result else {
+        result = (min: value, max: value)
+        return
+      }
+
+      var minimum = current.min
+      var maximum = current.max
+      if try areInIncreasingOrder(value, minimum) {
+        minimum = value
+      }
+      if try areInIncreasingOrder(maximum, value) {
+        maximum = value
+      }
+      result = (min: minimum, max: maximum)
+    }
+    return result
+  }
 }

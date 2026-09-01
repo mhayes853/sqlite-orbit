@@ -308,6 +308,144 @@ func databaseCursorsCanCollectIntoStandardCollections() async throws {
 }
 
 @Test
+func databaseCursorsSupportTerminalAlgorithms() async throws {
+  let state = TestDatabaseState(
+    rows: [[.int(3)], [.int(1)], [.int(4)], [.int(1)], [.int(5)]]
+  )
+  let database = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: state)
+  )
+
+  let count = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).count()
+  }
+  #expect(count == 5)
+  #expect(state.visitedRowCount == 5)
+
+  state.visitedRowCount = 0
+  let oddCount = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .count { $0 % 2 == 1 }
+  }
+  #expect(oddCount == 4)
+  #expect(state.visitedRowCount == 5)
+
+  state.visitedRowCount = 0
+  let isEmpty = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).isEmpty()
+  }
+  #expect(!isEmpty)
+  #expect(state.visitedRowCount == 1)
+
+  state.visitedRowCount = 0
+  let first = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).first()
+  }
+  #expect(first == 3)
+  #expect(state.visitedRowCount == 1)
+
+  state.visitedRowCount = 0
+  let firstMatch = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .first { $0 > 3 }
+  }
+  #expect(firstMatch == 4)
+  #expect(state.visitedRowCount == 3)
+
+  state.visitedRowCount = 0
+  let containsMatch = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .contains { $0 == 4 }
+  }
+  #expect(containsMatch)
+  #expect(state.visitedRowCount == 3)
+
+  state.visitedRowCount = 0
+  let allPositive = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .allSatisfy { $0 > 0 }
+  }
+  #expect(allPositive)
+  #expect(state.visitedRowCount == 5)
+
+  let sum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .reduce(0, +)
+  }
+  #expect(sum == 14)
+
+  let collectedSum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .reduce(into: 0) { result, value in
+        result += value
+      }
+  }
+  #expect(collectedSum == 14)
+
+  let minimum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).min()
+  }
+  #expect(minimum == 1)
+
+  let maximum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).max()
+  }
+  #expect(maximum == 5)
+
+  let reverseMinimum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).min(by: >)
+  }
+  #expect(reverseMinimum == 5)
+
+  let reverseMaximum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).max(by: >)
+  }
+  #expect(reverseMaximum == 1)
+
+  state.visitedRowCount = 0
+  let minimumAndMaximum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMax()
+  }
+  #expect(minimumAndMaximum?.min == 1)
+  #expect(minimumAndMaximum?.max == 5)
+  #expect(state.visitedRowCount == 5)
+
+  let reverseMinimumAndMaximum = try await database.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMax(by: >)
+  }
+  #expect(reverseMinimumAndMaximum?.min == 5)
+  #expect(reverseMinimumAndMaximum?.max == 1)
+
+  state.visitedRowCount = 0
+  var didThrow = false
+  do {
+    _ = try await database.read { transaction in
+      try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+        .count { value in
+          if value == 4 {
+            throw TerminalAlgorithmError.stop
+          }
+          return true
+        }
+    }
+  } catch is TerminalAlgorithmError {
+    didThrow = true
+  }
+  #expect(didThrow)
+  #expect(state.visitedRowCount == 3)
+
+  let emptyState = TestDatabaseState()
+  let emptyDatabase = CrossProcessDatabase(
+    driver: TestDatabaseDriver(identifier: .unique(), state: emptyState)
+  )
+  let empty = try await emptyDatabase.read { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).isEmpty()
+  }
+  #expect(empty)
+  #expect(emptyState.visitedRowCount == 0)
+}
+
+@Test
 func structuredStatementsExposeTransactionCapabilities() {
   #expect(acceptsReadStatement(TestRecord.select(\.id)))
   #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))
@@ -465,6 +603,10 @@ private struct TestReturningWriteStatement: DatabaseWriteStatement {
   typealias From = Never
 
   let query: QueryFragment = "UPDATE testRecords SET title = title RETURNING id"
+}
+
+private enum TerminalAlgorithmError: Error {
+  case stop
 }
 
 private struct TestDatabaseRow: DatabaseRow {
