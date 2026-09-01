@@ -58,10 +58,11 @@
     }
 
     @_lifetime(borrow self)
-    public borrowing func rowCursor<S: DatabaseReadStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseReadAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
   }
 
@@ -78,23 +79,25 @@
     }
 
     @_lifetime(borrow self)
-    public borrowing func rowCursor<S: DatabaseReadStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseReadAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
 
     @_lifetime(borrow self)
-    public borrowing func executeRowCursor<S: DatabaseWriteStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseWriteAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
 
     @discardableResult
-    public borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
-      let prepared = try prepareGRDBQuery(statement.query)
-      let statement = try database.makeStatement(sql: prepared.sql)
+    public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+      let prepared = try prepareGRDBQuery(query.fragment)
+      let statement = try database.cachedStatement(sql: prepared.sql)
       try statement.execute(arguments: prepared.arguments)
       return database.changesCount
     }
@@ -103,10 +106,16 @@
   @_lifetime(borrow database)
   private func makeGRDBCursor(
     _ query: QueryFragment,
-    database: borrowing Database
+    database: borrowing Database,
+    cached: Bool
   ) throws -> GRDBDatabaseRowCursor {
     let prepared = try prepareGRDBQuery(query)
-    let statement = try database.makeStatement(sql: prepared.sql)
+    // A cached statement is shared by every cursor over the same SQL on this connection, so it is
+    // only safe for callers that consume and discard the cursor before creating another.
+    let statement =
+      cached
+      ? try database.cachedStatement(sql: prepared.sql)
+      : try database.makeStatement(sql: prepared.sql)
     let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
     return GRDBDatabaseRowCursor(cursor: cursor)
   }
