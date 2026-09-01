@@ -184,6 +184,22 @@
   }
 
   @Test
+  func fileGRDBDriversUseTheirStandardizedPathAsTheDefaultIdentifier() throws {
+    let path = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .path
+    let writer = try DatabaseQueue(path: path)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let driver = GRDBDatabaseDriver(writer: writer)
+
+    #expect(
+      driver.defaultIdentifier.rawValue
+        == URL(fileURLWithPath: path).standardizedFileURL.path
+    )
+  }
+
+  @Test
   func crossProcessDatabaseCanBeConstructedFromGRDBWriter() throws {
     let writer = try DatabaseQueue()
     let database = CrossProcessDatabase(writer: writer)

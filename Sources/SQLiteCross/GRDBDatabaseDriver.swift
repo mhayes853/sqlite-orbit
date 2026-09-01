@@ -41,7 +41,7 @@
     private static func makeDefaultIdentifier(path: String) -> DatabaseIdentifier {
       guard !path.isEmpty, path != ":memory:" else { return .unique() }
       let canonicalPath = URL(fileURLWithPath: path).standardizedFileURL.path
-      return .stable(for: canonicalPath)
+      return DatabaseIdentifier(rawValue: canonicalPath)
     }
   }
 

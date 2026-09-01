@@ -5,14 +5,6 @@ import Testing
 @testable import SQLiteCross
 
 @Test
-func databasePathIdentifiersUseSHA256() {
-  #expect(
-    DatabaseIdentifier.stable(for: "hello").rawValue
-      == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-  )
-}
-
-@Test
 func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
   let identifier = DatabaseIdentifier(rawValue: "driver-default")
   let driver = TestDatabaseDriver(identifier: identifier)

@@ -102,7 +102,7 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
-for file databases using SHA-256 and unique identifiers for in-memory databases.
+for file databases from their standardized paths and unique identifiers for in-memory databases.
 
 Cross-process IPC and observation are intentionally not implemented yet. They will be layered on
 after this transaction API is settled.
