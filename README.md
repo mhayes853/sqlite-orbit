@@ -9,8 +9,19 @@ can only query, while write transactions can query and execute mutations. Transa
 nonescapable, so a driver-owned SQLite connection cannot outlive its access closure.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
-query construction and binding layer. Its statements can be executed and decoded directly by any
-read or write transaction; the generic protocols have no dependency on GRDB types.
+query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
+needed to build statements. Statements can be executed and decoded directly by any read or write
+transaction; the generic protocols have no dependency on GRDB types.
+
+Whether a statement needs a write transaction is read off its type. A `DatabaseQuery<Access>` pairs
+a statement with the capability it requires, and can only be built from a statement that already has
+it: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
+write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
+definition, and this is checked at compile time rather than by a list of known statement types.
+Statements the query library keeps private, such as the one behind `union`, are classified too.
+
+Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
+write transactions alike, and the caller is stating which it is.
 
 GRDB support is available in the main `SQLiteCross` product behind the `GRDB` package trait:
 
@@ -39,6 +50,41 @@ let reminders = try await database.read { transaction in
   try transaction.fetchAll(Reminder.all)
 }
 ```
+
+Statements come in four shapes, and `fetchAll`, `fetchOne`, and `fetchCursor` cover all of them: a
+single projected value, a tuple of projected values, an unprojected select decoding to its table,
+and a select with joins decoding to a tuple of every table in the row.
+
+```swift
+try await database.read { transaction in
+  try transaction.fetchAll(Reminder.select(\.title))                  // [String]
+  try transaction.fetchAll(Reminder.select { ($0.id, $0.title) })      // [(Int, String)]
+  try transaction.fetchAll(Reminder.all)                               // [Reminder]
+
+  try transaction.fetchAll(                                            // [(Reminder, RemindersList)]
+    Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }
+  )
+
+  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
+  try transaction.find(Reminder.all, key: 42)  // throws DatabaseRecordNotFoundError
+}
+```
+
+Write transactions perform every read operation in addition to mutations, and can fetch the rows a
+statement returns:
+
+```swift
+let titles = try await database.write { transaction in
+  try transaction.fetchAll(
+    Reminder.update { $0.isCompleted = true }
+      .where { $0.listID.eq(listID) }
+      .returning(\.title)
+  )
+}
+```
+
+When a column does not decode, the failure is a `DatabaseColumnDecodingError` naming the column's
+index and name, the storage class actually found, and the statement's SQL.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:
@@ -99,6 +145,42 @@ let bounds = try transaction.fetchCursor(Reminder.all)
 Terminal operations consume the remaining cursor values. Operations such as `first`, `isEmpty`,
 `contains`, and `allSatisfy` stop as soon as their result is known; reductions and `min`/`max`
 visit every remaining value. `minMax` computes both extrema in one traversal.
+
+## Collations and functions
+
+Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
+`@DatabaseFunction` macros, then collected into a `DatabaseExtensions` and registered on a GRDB
+`Configuration`:
+
+```swift
+@DatabaseCollation
+func localized(_ lhs: String, _ rhs: String) -> CollationOrder {
+  CollationOrder(lhs.localizedCompare(rhs))
+}
+
+extension Collation where Self == NamedCollation {
+  static var localized: Self { Self($localized) }
+}
+
+var extensions = DatabaseExtensions()
+extensions.add(collation: $localized)
+
+var configuration = Configuration()
+configuration.register(extensions)
+
+let database = CrossProcessDatabase(
+  writer: try DatabasePool(path: databasePath, configuration: configuration)
+)
+
+let reminders = try await database.read { transaction in
+  try transaction.fetchAll(Reminder.order { $0.title.collate(.localized) })
+}
+```
+
+Register through the configuration rather than installing on a connection directly. A collation or
+function is only known to the connection it was installed on, and a `DatabasePool` opens connections
+as it needs them, so installing on one leaves queries on every other connection failing with "no
+such collation sequence".
 
 `CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
