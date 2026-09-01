@@ -1,4 +1,4 @@
-import StructuredQueries
+import StructuredQueriesSQLite
 
 extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Creates a cursor that lazily decodes each value produced by a Structured Queries statement.

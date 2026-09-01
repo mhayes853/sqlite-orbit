@@ -2,7 +2,7 @@
   import Foundation
   import GRDB
   import SQLiteCross
-  import StructuredQueries
+  import StructuredQueriesSQLite
   import Testing
 
   @Test

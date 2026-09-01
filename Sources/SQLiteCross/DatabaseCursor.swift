@@ -1,4 +1,4 @@
-public import StructuredQueries
+public import StructuredQueriesSQLite
 
 /// A single database result row whose lifetime is limited to the current cursor access.
 public protocol DatabaseRow: ~Copyable, ~Escapable {

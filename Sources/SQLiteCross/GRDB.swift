@@ -2,7 +2,7 @@
   import Foundation
   import GRDB
   import GRDBSQLite
-  import StructuredQueries
+  import StructuredQueriesSQLite
 
   /// A ``DatabaseDriver`` backed by a GRDB database writer.
   public final class GRDBDatabaseDriver: DatabaseDriver, Sendable {

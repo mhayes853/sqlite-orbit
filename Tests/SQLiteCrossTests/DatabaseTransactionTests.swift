@@ -1,5 +1,5 @@
 import Foundation
-import StructuredQueries
+import StructuredQueriesSQLite
 import Testing
 
 @testable import SQLiteCross

@@ -1,4 +1,4 @@
-public import StructuredQueries
+public import StructuredQueriesSQLite
 
 /// A Structured Queries statement that is safe to run in a read transaction.
 public protocol DatabaseReadStatement<QueryValue>: Statement {}
