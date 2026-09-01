@@ -151,26 +151,28 @@
   }
 
   /// A result row lent by a GRDB transaction.
+  ///
+  /// The row owns its decoder so that successive `decode` calls advance through the row's columns.
+  /// Each row lent by a cursor starts over at the first column.
   public struct GRDBDatabaseRow: DatabaseRow, ~Copyable, ~Escapable {
     @usableFromInline
-    let statement: SQLiteStatement
+    var decoder: GRDBQueryDecoder
 
     @_lifetime(borrow statement)
     fileprivate init(statement: borrowing GRDB.Statement) {
-      self.statement = statement.sqliteStatement
+      self.decoder = GRDBQueryDecoder(statement: statement.sqliteStatement)
     }
 
     @_lifetime(borrow cursor)
     fileprivate init(cursor: borrowing GRDBDatabaseRowCursor) {
-      self.statement = cursor.cursor._statement.sqliteStatement
+      self.decoder = GRDBQueryDecoder(statement: cursor.cursor._statement.sqliteStatement)
     }
 
     @inlinable
     public mutating func decode<Value: QueryRepresentable>(
       _ type: Value.Type
     ) throws -> Value.QueryOutput {
-      var decoder = GRDBQueryDecoder(statement: statement)
-      return try Value(decoder: &decoder).queryOutput
+      try Value(decoder: &decoder).queryOutput
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -178,8 +180,7 @@
     public mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput) {
-      var decoder = GRDBQueryDecoder(statement: statement)
-      return try decoder.decodeColumns((repeat each Value).self)
+      try decoder.decodeColumns((repeat each Value).self)
     }
   }
 
