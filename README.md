@@ -1,7 +1,7 @@
 # swift-sqlite-cross
 
-`swift-sqlite-cross` is a transaction and, eventually, observation layer for coordinating a
-SQLite database across multiple processes.
+`swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
+database across multiple processes.
 
 The package currently focuses on its local transaction boundary. `DatabaseDriver` asynchronously
 lends distinct `DatabaseReadTransaction` and `DatabaseWriteTransaction` values. Read transactions
@@ -104,5 +104,51 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 callers can override it when constructing the database. The GRDB driver derives stable identifiers
 for file databases from their standardized paths and unique identifiers for in-memory databases.
 
-Cross-process IPC and observation are intentionally not implemented yet. They will be layered on
-after this transaction API is settled.
+## Cross-process transport
+
+The package includes a public, configurable Unix-domain datagram transport. Processes that need to
+communicate must use the same coordination directory and database identifier:
+
+```swift
+let transport = try UnixDatagramDatabaseIPCTransport(
+  configuration: .init(
+    directory: coordinationDirectory,
+    backPressure: .suspend(upTo: .milliseconds(250))
+  )
+)
+
+let databaseIdentifier = DatabaseIdentifier(rawValue: "example.sqlite")
+let subscription = try transport.subscribe(to: databaseIdentifier) { message in
+  switch message {
+  case .transactionDidCommit:
+    refreshObservations()
+  @unknown default:
+    break
+  }
+}
+
+try await transport.send(
+  .transactionDidCommit(.init(databaseIdentifier: databaseIdentifier))
+)
+```
+
+Retain the `SQLiteCrossSubscription` for as long as messages should be delivered. Cancelling it, or
+releasing its final copy, removes the process's registration when it has no other subscriber for
+that database.
+
+Delivery is bounded, at-most-once, and nondurable. Each send broadcasts to the peer processes that
+are discoverable at that moment. A successful return means every discovered peer accepted the
+message into its kernel receive queue, not that its handler has already run. No unbounded
+user-space queue is used:
+
+- `.fail` attempts every peer once and reports a `DatabaseIPCPartialDeliveryError` if any queue is
+  full or another peer fails.
+- `.suspend(upTo:)` retries only backpressured peers until the shared deadline, then reports partial
+  delivery. Task cancellation also cancels the wait.
+
+Messages use a private versioned binary envelope and are decoded from `Span`; callers exchange
+`DatabaseIPCMessage` values rather than serialized `Data`. `DatabaseIPCMessage` is nonexhaustive so
+the library can add coordination messages in future versions.
+
+The transport is not yet connected to `CrossProcessDatabase`; the SQL/observation integration will
+be layered on separately.
