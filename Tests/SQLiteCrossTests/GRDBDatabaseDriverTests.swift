@@ -183,6 +183,17 @@
     #expect(CrossProcessDatabase(driver: first).id == first.defaultIdentifier)
   }
 
+  @Test
+  func crossProcessDatabaseCanBeConstructedFromGRDBWriter() throws {
+    let writer = try DatabaseQueue()
+    let database = CrossProcessDatabase(writer: writer)
+    let override = DatabaseIdentifier(rawValue: "override")
+    let overriddenDatabase = CrossProcessDatabase(writer: writer, id: override)
+
+    #expect(database.id == database.driver.defaultIdentifier)
+    #expect(overriddenDatabase.id == override)
+  }
+
   @Table
   private struct Item: Equatable, Sendable {
     let id: Int
