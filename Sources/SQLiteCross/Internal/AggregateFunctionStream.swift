@@ -4,14 +4,18 @@
 
   /// Drives an aggregate function body, which consumes its rows as a `Sequence`.
   ///
-  /// SQLite pushes rows one at a time through an `xStep` callback, but an aggregate body pulls
-  /// them with `for element in arguments`. Bridging the two means the body has to run somewhere it
-  /// can block: it runs on its own queue and blocks on ``AggregateFunctionStream`` until SQLite
+  /// SQLite pushes rows one at a time through an `xStep` callback, but an aggregate body pulls them
+  /// with `for element in arguments`. Bridging the two means the body has to run somewhere it can
+  /// block: it runs on the cooperative pool and blocks on ``AggregateFunctionStream`` until SQLite
   /// pushes the next row or signals the end of the group.
   ///
-  /// A ported copy of what swift-structured-queries does, since it does not ship the target that
-  /// holds it.
+  /// > Note: The body occupies a cooperative pool thread for as long as its aggregation runs, and
+  /// > spends most of that time blocked waiting for SQLite. Enough concurrent aggregations can
+  /// > therefore starve the pool. If that becomes a problem, give this work a custom executor
+  /// > rather than putting it back on a queue of its own.
   protocol AggregateFunctionInvocationProtocol: AnyObject {
+    /// Runs the aggregate body to completion. Called once, off the SQLite thread.
+    func run()
     func step(_ decoder: inout some QueryDecoder) throws
     func finish()
     var result: QueryBinding { get }
@@ -44,28 +48,29 @@
   {
     private let function: Function
     private let stream = AggregateFunctionStream<Function.Element>()
-    private let queue: DispatchQueue
-    private var _result: QueryBinding?
+    private let completion = AggregateFunctionCompletion()
 
     init(_ function: Function) {
       self.function = function
-      self.queue = DispatchQueue(
-        label: "co.pointfree.SQLiteCross.AggregateDatabaseFunction.\(function.name)"
-      )
-      nonisolated(unsafe) let invocation = self
-      queue.async {
-        invocation.start()
+      // Erased before capture so the task does not close over `Function`'s metatype, and retained
+      // by the task until the body returns, so the invocation outlives this initializer even though
+      // SQLite holds it only through its aggregate context.
+      nonisolated(unsafe) let invocation: any AggregateFunctionInvocationProtocol = self
+      Task.detached(priority: .userInitiated) {
+        invocation.run()
       }
     }
 
-    private func start() {
+    func run() {
+      let result: QueryBinding
       do {
-        _result = try function.invoke(stream)
+        result = try function.invoke(stream)
       } catch {
-        _result = .invalid(error)
+        result = .invalid(error)
       }
-      // The body returned without draining every row, so stop holding producers up.
+      // The body may have returned without draining every row, so stop holding producers up.
       stream.stopBuffering()
+      completion.complete(result)
     }
 
     func step(_ decoder: inout some QueryDecoder) throws {
@@ -78,7 +83,30 @@
 
     /// The aggregated result, waiting for the body to return.
     var result: QueryBinding {
-      queue.sync { _result ?? .null }
+      completion.wait()
+    }
+  }
+
+  /// Hands the body's result back to the SQLite thread that asked for it.
+  private final class AggregateFunctionCompletion {
+    private let condition = NSCondition()
+    private var result: QueryBinding?
+
+    func complete(_ result: QueryBinding) {
+      condition.withLock {
+        self.result = result
+        condition.broadcast()
+      }
+    }
+
+    /// Blocks until the body returns. Called on SQLite's own thread, never a cooperative one.
+    func wait() -> QueryBinding {
+      condition.withLock {
+        while result == nil {
+          condition.wait()
+        }
+        return result ?? .null
+      }
     }
   }
 

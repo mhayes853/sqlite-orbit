@@ -128,6 +128,100 @@
     #expect(perGroup.allSatisfy { $0.1?.isEmpty == false })
   }
 
+  @Test
+  func extensionsComposeWithTheCrossProcessConfiguration() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+      .appendingPathComponent("sqlite-cross-compose-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var extensions = DatabaseExtensions()
+    extensions.add(function: $repeated)
+
+    // GRDB appends connection setup rather than replacing it, so registering extensions keeps
+    // whatever `.crossProcess` already set up.
+    var configuration = GRDB.Configuration.crossProcess
+    configuration.register(extensions)
+
+    let database = try CrossProcessDatabase(
+      path: directory.appendingPathComponent("db.sqlite").path,
+      configuration: configuration,
+      coordination: .init(directory: directory, backPressure: .fail)
+    )
+
+    try await database.write { transaction in
+      try transaction.execute(
+        #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+      )
+      try transaction.execute(Note.insert { Note(id: 1, title: "ab") })
+    }
+
+    let repeatedTitle = try await database.read { transaction in
+      try transaction.fetchOne(Note.select { $repeated($0.title, 2) })
+    }
+    #expect(repeatedTitle == "abab")
+
+    // `.crossProcess` sets its own connection setup; it must have survived registration.
+    let trustedSchema = try await database.read { transaction in
+      try transaction.fetchOne(#sql("PRAGMA trusted_schema", as: Int.self))
+    }
+    #expect(trustedSchema == 0)
+  }
+
+  @Test
+  func manyConcurrentAggregatesMakeProgress() async throws {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+      .appendingPathComponent("sqlite-cross-concurrent-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var extensions = DatabaseExtensions()
+    extensions.add(function: $longestTitle)
+
+    var configuration = Configuration()
+    configuration.maximumReaderCount = 16
+    configuration.register(extensions)
+
+    let database = CrossProcessDatabase(
+      writer: try DatabasePool(
+        path: directory.appendingPathComponent("db.sqlite").path,
+        configuration: configuration
+      )
+    )
+
+    try await database.write { transaction in
+      try transaction.execute(
+        #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+      )
+      try transaction.execute(
+        Note.insert {
+          for index in 1...2000 {
+            Note(id: index, title: String(repeating: "x", count: index % 40 + 1))
+          }
+        }
+      )
+    }
+
+    // Each in-flight aggregation holds a cooperative pool thread while it waits on SQLite, so run
+    // far more of them at once than the pool has threads. They should queue and drain rather than
+    // deadlock.
+    try await withThrowingTaskGroup(of: Int?.self) { group in
+      for _ in 0..<128 {
+        group.addTask {
+          try await database.read { transaction in
+            try transaction.fetchOne(Note.select { $longestTitle($0.title) })??.count
+          }
+        }
+      }
+      var completed = 0
+      for try await result in group {
+        #expect(result == 40)
+        completed += 1
+      }
+      #expect(completed == 128)
+    }
+  }
+
   @Table("samples")
   private struct Sample: Equatable, Sendable {
     let id: Int
