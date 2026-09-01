@@ -17,7 +17,7 @@
       identifier: DatabaseIdentifier? = nil
     ) {
       self.writer = writer
-      self.defaultIdentifier = identifier ?? Self.makeDefaultIdentifier(path: writer.path)
+      self.defaultIdentifier = identifier ?? Self.defaultIdentifier(path: writer.path)
     }
 
     public func read<Result: Sendable>(
@@ -38,7 +38,7 @@
       }
     }
 
-    private static func makeDefaultIdentifier(path: String) -> DatabaseIdentifier {
+    static func defaultIdentifier(path: String) -> DatabaseIdentifier {
       guard !path.isEmpty, path != ":memory:" else { return .unique() }
       let canonicalPath = URL(fileURLWithPath: path).standardizedFileURL.path
       return DatabaseIdentifier(rawValue: canonicalPath)
@@ -465,12 +465,83 @@
   }
 
   extension CrossProcessDatabase where Driver == GRDBDatabaseDriver {
-    /// Creates a cross-process database backed by a GRDB database writer.
+    /// Creates a cross-process database backed by an already-opened GRDB database writer.
+    ///
+    /// The caller owns the writer, so this initializer cannot coordinate opening it or guarantee
+    /// that it is configured for multi-process access. Prefer ``init(path:configuration:id:coordination:onAnnouncementFailure:)``
+    /// for databases other processes also open, and supply `transport` here only when reusing a
+    /// writer that is already configured the same way.
     public convenience init(
       writer: any DatabaseWriter,
-      id: DatabaseIdentifier? = nil
+      id: DatabaseIdentifier? = nil,
+      transport: (any DatabaseIPCTransport)? = nil,
+      onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
     ) {
-      self.init(driver: GRDBDatabaseDriver(writer: writer), id: id)
+      self.init(
+        driver: GRDBDatabaseDriver(writer: writer),
+        id: id,
+        transport: transport,
+        onAnnouncementFailure: onAnnouncementFailure
+      )
     }
   }
+
+  extension GRDB.Configuration {
+    /// A configuration with the defaults a database shared between processes needs.
+    ///
+    /// GRDB reports `SQLITE_BUSY` immediately by default, which makes any write that overlaps
+    /// another process's write fail outright. A busy timeout lets those writes queue instead.
+    public static var crossProcess: Self {
+      var configuration = Self()
+      configuration.busyMode = .timeout(5)
+      configuration.prepareDatabase { database in
+        try database.execute(sql: "PRAGMA trusted_schema = OFF")
+      }
+      return configuration
+    }
+  }
+
+  #if canImport(Darwin) || canImport(Glibc)
+    extension CrossProcessDatabase where Driver == GRDBDatabaseDriver {
+      /// Opens the SQLite database at `path` for access from any process using the same
+      /// coordination directory.
+      ///
+      /// The database is opened as a GRDB `DatabasePool`, so it runs in WAL mode with concurrent
+      /// readers and a single writer. Opening is serialized across processes by an exclusive lock,
+      /// because moving a database into WAL mode briefly needs an exclusive lock of SQLite's own,
+      /// which processes first opening the same database would otherwise contend for. The lock does
+      /// not replace `configuration`'s busy timeout, which still covers contention the lock cannot
+      /// cover, such as the checkpoint another process takes as it closes the database.
+      ///
+      /// - Parameters:
+      ///   - path: The path of the SQLite database file.
+      ///   - configuration: The GRDB configuration used to open the database.
+      ///   - id: The identity shared by every process that opens this database. Defaults to the
+      ///     database's standardized path.
+      ///   - coordination: Describes the directory and back pressure this process uses to reach its
+      ///     peers. Processes coordinate only when they share a coordination directory.
+      ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails.
+      public convenience init(
+        path: String,
+        configuration: GRDB.Configuration = .crossProcess,
+        id: DatabaseIdentifier? = nil,
+        coordination: UnixDatagramDatabaseIPCTransport.Configuration = .default,
+        onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
+      ) throws {
+        let identifier = id ?? GRDBDatabaseDriver.defaultIdentifier(path: path)
+        let pool = try DatabaseOpenLock.withLock(
+          databaseIdentifier: identifier,
+          directory: coordination.directory
+        ) {
+          try DatabasePool(path: path, configuration: configuration)
+        }
+        self.init(
+          driver: GRDBDatabaseDriver(writer: pool, identifier: identifier),
+          id: identifier,
+          transport: try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination),
+          onAnnouncementFailure: onAnnouncementFailure
+        )
+      }
+    }
+  #endif
 #endif

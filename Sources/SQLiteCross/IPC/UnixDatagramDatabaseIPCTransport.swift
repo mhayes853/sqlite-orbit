@@ -22,13 +22,23 @@
 
     /// Configuration for a Unix-domain datagram transport endpoint.
     public struct Configuration: Hashable, Sendable {
+      /// The coordination directory used when a caller does not supply one.
+      ///
+      /// Processes coordinate only when they share this directory. Sandboxed applications must
+      /// supply a directory inside a container both processes can reach, such as an App Group.
+      public static let defaultDirectory = FileManager.default.temporaryDirectory
+        .appending(path: "swift-sqlite-cross", directoryHint: .isDirectory)
+
+      /// The configuration used by a database that does not supply one.
+      public static let `default` = Self(backPressure: .suspend(upTo: .milliseconds(250)))
+
       public var directory: URL
       public var backPressure: BackPressurePolicy
       public var maximumDatagramByteCount: Int
       public var receiveBufferByteCount: Int
 
       public init(
-        directory: URL,
+        directory: URL = Self.defaultDirectory,
         backPressure: BackPressurePolicy,
         maximumDatagramByteCount: Int = 60 * 1024,
         receiveBufferByteCount: Int = 256 * 1024
@@ -203,6 +213,32 @@
       code == ENOENT || code == ECONNREFUSED
     }
   }
+
+  extension UnixDatagramDatabaseIPCTransport {
+    /// Returns this process's transport for `configuration`, creating it on first use.
+    ///
+    /// Peers discover a process rather than an individual database, and a transport already
+    /// multiplexes every database identifier it is given, so databases configured alike share one
+    /// endpoint. The transport is released once its last caller releases it.
+    public static func shared(
+      configuration: Configuration = .default
+    ) throws -> UnixDatagramDatabaseIPCTransport {
+      try sharedTransports.withLock { transports in
+        if let transport = transports[configuration]?.transport { return transport }
+        let transport = try UnixDatagramDatabaseIPCTransport(configuration: configuration)
+        transports = transports.filter { $0.value.transport != nil }
+        transports[configuration] = WeakTransport(transport: transport)
+        return transport
+      }
+    }
+  }
+
+  private struct WeakTransport: Sendable {
+    weak var transport: UnixDatagramDatabaseIPCTransport?
+  }
+
+  private let sharedTransports =
+    Mutex<[UnixDatagramDatabaseIPCTransport.Configuration: WeakTransport]>([:])
 
   /// Describes a broadcast that reached only some currently discoverable peers.
   public struct DatabaseIPCPartialDeliveryError: Error, Hashable, Sendable {

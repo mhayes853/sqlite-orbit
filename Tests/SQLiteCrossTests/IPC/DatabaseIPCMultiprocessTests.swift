@@ -145,7 +145,7 @@
 
     try Data(String(received.withLock { $0 }).utf8).write(to: result, options: .atomic)
     _ = subscription
-    ipcProcessExit(0)
+    processTestExit(0)
   }
 
   private final class IPCProcessHarness {
@@ -230,9 +230,9 @@
       try await waitUntil { !process.isRunning }
     }
 
-    func suspend(_ process: Process) { ipcProcessSignal(process, SIGSTOP) }
-    func resume(_ process: Process) { ipcProcessSignal(process, SIGCONT) }
-    func kill(_ process: Process) { ipcProcessSignal(process, SIGKILL) }
+    func suspend(_ process: Process) { processTestSignal(process, SIGSTOP) }
+    func resume(_ process: Process) { processTestSignal(process, SIGCONT) }
+    func kill(_ process: Process) { processTestSignal(process, SIGKILL) }
 
     func cleanup() {
       for process in self.processes where process.isRunning {
@@ -266,40 +266,4 @@
     }
     return false
   }
-
-  private func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
-
-  private func waitForFile(_ url: URL, timeout: Duration = .seconds(10)) async throws {
-    try await waitUntil(timeout: timeout) { FileManager.default.fileExists(atPath: url.path) }
-  }
-
-  private func waitUntil(
-    timeout: Duration = .seconds(10),
-    _ condition: () -> Bool
-  ) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while !condition() {
-      guard clock.now < deadline else { throw IPCProcessTimeout() }
-      try await Task.sleep(for: .milliseconds(2))
-    }
-  }
-
-  private func ipcProcessSignal(_ process: Process, _ signal: Int32) {
-    #if canImport(Darwin)
-      _ = Darwin.kill(process.processIdentifier, signal)
-    #else
-      _ = Glibc.kill(process.processIdentifier, signal)
-    #endif
-  }
-
-  private func ipcProcessExit(_ status: Int32) -> Never {
-    #if canImport(Darwin)
-      Darwin.exit(status)
-    #else
-      Glibc.exit(status)
-    #endif
-  }
-
-  private struct IPCProcessTimeout: Error {}
 #endif

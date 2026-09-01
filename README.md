@@ -150,5 +150,60 @@ Messages use a private versioned binary envelope and are decoded from `Span`; ca
 `DatabaseIPCMessage` values rather than serialized `Data`. `DatabaseIPCMessage` is nonexhaustive so
 the library can add coordination messages in future versions.
 
-The transport is not yet connected to `CrossProcessDatabase`; the SQL/observation integration will
-be layered on separately.
+## Opening a database for several processes
+
+`CrossProcessDatabase(path:)` owns opening the database, which is what lets it coordinate:
+
+```swift
+let database = try CrossProcessDatabase(path: databasePath)
+```
+
+The database is opened as a GRDB `DatabasePool`, so it runs in WAL mode with concurrent readers and
+a single writer, and it uses `Configuration.crossProcess`, which gives SQLite a busy timeout. GRDB
+reports `SQLITE_BUSY` immediately by default, so without that timeout any write that overlaps
+another process's write fails outright rather than waiting its turn.
+
+Opening is serialized across every process sharing a coordination directory by an exclusive advisory
+lock, held only while the database is being opened. Moving a new database into WAL mode briefly
+needs an exclusive lock of SQLite's own, so processes that first open the same database at the same
+moment would otherwise contend for it. The lock removes that contention between opens; it does not
+replace the busy timeout, since closing a WAL database checkpoints it under an exclusive lock too,
+and closing is not something a database can hold the open lock across.
+
+Processes coordinate only when they share a coordination directory. The default lives in the
+temporary directory; sandboxed applications must supply one both processes can reach, such as an App
+Group container:
+
+```swift
+let database = try CrossProcessDatabase(
+  path: databasePath,
+  coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
+)
+```
+
+`init(writer:)` remains available for a writer you configure and open yourself. It cannot coordinate
+opening or guarantee a busy timeout, so pass a transport explicitly if that database is also opened
+elsewhere.
+
+## Announcing committed writes
+
+A database announces every write transaction it commits:
+
+```swift
+try await database.write { transaction in
+  try transaction.execute(Reminder.insert { reminder })
+}
+// Peers sharing the coordination directory have now been sent .transactionDidCommit.
+```
+
+The announcement is sent after the driver releases its write transaction, never inside it: a peer
+told about a commit must be able to read it, and holding SQLite's write lock while waiting on a
+backpressured peer would turn one stalled process into a stalled database.
+
+By the time a write commits it is already durable, so a failed announcement never fails the write.
+Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise shielded from the
+writing task's cancellation, since peers still need to learn about a commit that happened. A write
+that throws is rolled back by its driver and is not announced.
+
+Databases do not yet subscribe to their peers. Announcing is one-way for now, and receiving will
+arrive with observation, which is what gives an incoming announcement something to do.

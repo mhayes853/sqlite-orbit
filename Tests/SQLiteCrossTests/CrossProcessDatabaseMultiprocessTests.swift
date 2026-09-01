@@ -1,0 +1,272 @@
+#if GRDB && (canImport(Darwin) || canImport(Glibc))
+  import Foundation
+  import GRDB
+  @testable import SQLiteCross
+  import StructuredQueries
+  import Synchronization
+  import Testing
+
+  @Suite(.serialized)
+  struct CrossProcessDatabaseMultiprocessTests {
+    @Test
+    func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
+      let harness = try DatabaseProcessHarness(name: "open")
+      defer { harness.cleanup() }
+      let openerCount = 10
+      let openers = try (0..<openerCount).map { try harness.spawn("open", index: $0) }
+      try await harness.waitUntilReady(openerCount)
+
+      try harness.start()
+
+      for (index, opener) in openers.enumerated() {
+        try await harness.waitForSuccessfulExit(opener)
+        #expect(FileManager.default.fileExists(atPath: harness.file("opened-\(index)").path))
+      }
+      #expect(FileManager.default.fileExists(atPath: harness.databasePath))
+      let tableCount = try await harness.database()
+        .read { transaction in
+          try transaction.fetchOne(#sql("SELECT count(*) FROM sqlite_master", as: Int.self))
+        }
+      #expect(tableCount == 0)
+    }
+
+    /// Moving a new database into WAL mode needs an exclusive lock of SQLite's own, so opening is
+    /// serialized across processes rather than left to contend.
+    @Test
+    func openingWaitsWhileAnotherProcessIsOpening() async throws {
+      let harness = try DatabaseProcessHarness(name: "open-lock")
+      defer { harness.cleanup() }
+      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: harness.databasePath)
+      let directory = harness.coordination.directory
+      let opened = harness.file("opened-0")
+      let isHeld = Mutex(false)
+      let mayRelease = Mutex(false)
+
+      Thread.detachNewThread {
+        try? DatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
+          isHeld.withLock { $0 = true }
+          while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
+        }
+      }
+      try await waitUntil { isHeld.withLock { $0 } }
+      let opener = try harness.spawn("open", index: 0)
+      try await waitForFile(harness.file("ready-0"))
+      try harness.start()
+      try await Task.sleep(for: .milliseconds(100))
+
+      #expect(!FileManager.default.fileExists(atPath: opened.path))
+
+      mayRelease.withLock { $0 = true }
+      try await harness.waitForSuccessfulExit(opener)
+      #expect(FileManager.default.fileExists(atPath: opened.path))
+    }
+
+    @Test
+    func contentiousWritesFromManyProcessesAllCommit() async throws {
+      let harness = try DatabaseProcessHarness(name: "write")
+      defer { harness.cleanup() }
+      let database = try harness.database()
+      try await database.write { transaction in
+        try transaction.execute(
+          #sql(
+            """
+            CREATE TABLE writes (
+              writer_id INTEGER NOT NULL,
+              sequence INTEGER NOT NULL
+            )
+            """,
+            as: Void.self
+          )
+        )
+      }
+      let writerCount = 8
+      let writesPerWriter = 20
+      let writers = try (0..<writerCount)
+        .map {
+          try harness.spawn("write", index: $0, writeCount: writesPerWriter)
+        }
+      try await harness.waitUntilReady(writerCount)
+
+      try harness.start()
+
+      for writer in writers { try await harness.waitForSuccessfulExit(writer) }
+      let count = try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT count(*) FROM writes", as: Int.self))
+      }
+      #expect(count == writerCount * writesPerWriter)
+    }
+
+    @Test
+    func writeGivesUpWhileAnotherProcessHoldsTheWriteTransaction() async throws {
+      let harness = try DatabaseProcessHarness(name: "busy")
+      defer { harness.cleanup() }
+      try await harness.database()
+        .write { transaction in
+          try transaction.execute(
+            #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
+          )
+        }
+      let holder = try harness.spawn("hold", index: 0, holdMilliseconds: 800)
+      try await waitForFile(harness.file("held-0"))
+
+      var configuration = GRDB.Configuration.crossProcess
+      configuration.busyMode = .timeout(0.1)
+      let database = try harness.database(configuration: configuration)
+      let clock = ContinuousClock()
+      let started = clock.now
+      let error = await #expect(throws: DatabaseError.self) {
+        try await database.write { transaction in
+          try transaction.execute(
+            #sql("INSERT INTO writes (writer_id) VALUES (9999)", as: Void.self)
+          )
+        }
+      }
+      let elapsed = clock.now - started
+
+      #expect(error?.resultCode == .SQLITE_BUSY)
+      #expect(elapsed < .milliseconds(700))
+      try await harness.waitForSuccessfulExit(holder)
+    }
+  }
+
+  /// Runs one peer process of a ``CrossProcessDatabaseMultiprocessTests`` case.
+  @Test
+  func crossProcessDatabasePeer() async throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let mode = environment[DatabaseProcessEnvironment.mode] else { return }
+    func value(_ key: String) throws -> String { try #require(environment[key]) }
+    let coordination = UnixDatagramDatabaseIPCTransport.Configuration(
+      directory: URL(fileURLWithPath: try value(DatabaseProcessEnvironment.directory)),
+      backPressure: .fail
+    )
+    let path = try value(DatabaseProcessEnvironment.database)
+    let ready = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.ready))
+    let start = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.start))
+
+    switch mode {
+    case "open":
+      try touch(ready)
+      try await waitForFile(start)
+      _ = try CrossProcessDatabase(path: path, coordination: coordination)
+      try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.opened)))
+
+    case "write":
+      let database = try CrossProcessDatabase(path: path, coordination: coordination)
+      let writerID = try #require(Int(try value(DatabaseProcessEnvironment.writerID)))
+      let writeCount = try #require(Int(try value(DatabaseProcessEnvironment.writeCount)))
+      try touch(ready)
+      try await waitForFile(start)
+      for sequence in 0..<writeCount {
+        try await database.write { transaction in
+          try transaction.execute(
+            #sql(
+              """
+              INSERT INTO writes (writer_id, sequence)
+              VALUES (\(bind: writerID), \(bind: sequence))
+              """,
+              as: Void.self
+            )
+          )
+        }
+      }
+
+    case "hold":
+      let database = try CrossProcessDatabase(path: path, coordination: coordination)
+      let held = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.held))
+      let milliseconds = try #require(Int(try value(DatabaseProcessEnvironment.holdMilliseconds)))
+      try touch(ready)
+      try await database.write { transaction in
+        try transaction.execute(
+          #sql("INSERT INTO writes (writer_id) VALUES (1)", as: Void.self)
+        )
+        try touch(held)
+        Thread.sleep(forTimeInterval: Double(milliseconds) / 1000)
+      }
+
+    default:
+      Issue.record("unknown peer mode \(mode)")
+      processTestExit(1)
+    }
+    processTestExit(0)
+  }
+
+  private final class DatabaseProcessHarness {
+    private let harness: ProcessTestHarness
+
+    let databasePath: String
+
+    var coordination: UnixDatagramDatabaseIPCTransport.Configuration {
+      UnixDatagramDatabaseIPCTransport.Configuration(
+        directory: self.harness.directory,
+        backPressure: .fail
+      )
+    }
+
+    init(name: String) throws {
+      self.harness = try ProcessTestHarness(
+        helper: "crossProcessDatabasePeer",
+        environmentPrefix: DatabaseProcessEnvironment.prefix,
+        name: name
+      )
+      self.databasePath = self.harness.file("test.sqlite").path
+    }
+
+    func file(_ name: String) -> URL { self.harness.file(name) }
+
+    func database(
+      configuration: GRDB.Configuration = .crossProcess
+    ) throws -> CrossProcessDatabase<GRDBDatabaseDriver> {
+      try CrossProcessDatabase(
+        path: self.databasePath,
+        configuration: configuration,
+        coordination: self.coordination
+      )
+    }
+
+    func spawn(
+      _ mode: String,
+      index: Int,
+      writeCount: Int = 0,
+      holdMilliseconds: Int = 0
+    ) throws -> Process {
+      try self.harness.spawn([
+        "MODE": mode,
+        "DIRECTORY": self.harness.directory.path,
+        "DATABASE": self.databasePath,
+        "READY": self.harness.file("ready-\(index)").path,
+        "START": self.harness.file("start").path,
+        "HELD": self.harness.file("held-\(index)").path,
+        "OPENED": self.harness.file("opened-\(index)").path,
+        "WRITER_ID": String(index),
+        "WRITE_COUNT": String(writeCount),
+        "HOLD_MS": String(holdMilliseconds)
+      ])
+    }
+
+    func waitUntilReady(_ count: Int) async throws {
+      for index in 0..<count { try await waitForFile(self.harness.file("ready-\(index)")) }
+    }
+
+    func start() throws { try touch(self.harness.file("start")) }
+
+    func waitForSuccessfulExit(_ process: Process) async throws {
+      try await self.harness.waitForSuccessfulExit(process)
+    }
+
+    func cleanup() { self.harness.cleanup() }
+  }
+
+  private enum DatabaseProcessEnvironment {
+    static let prefix = "SQLITE_CROSS_DATABASE_HELPER_"
+    static let mode = prefix + "MODE"
+    static let directory = prefix + "DIRECTORY"
+    static let database = prefix + "DATABASE"
+    static let ready = prefix + "READY"
+    static let start = prefix + "START"
+    static let held = prefix + "HELD"
+    static let opened = prefix + "OPENED"
+    static let writerID = prefix + "WRITER_ID"
+    static let writeCount = prefix + "WRITE_COUNT"
+    static let holdMilliseconds = prefix + "HOLD_MS"
+  }
+#endif

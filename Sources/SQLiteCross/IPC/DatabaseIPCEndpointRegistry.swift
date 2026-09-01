@@ -65,7 +65,7 @@
     }
 
     func registrationKey(for databaseIdentifier: DatabaseIdentifier) -> String {
-      String(format: "%016llx", databaseIdentifier.rawValue.stableHash)
+      databaseIdentifier.coordinationKey
     }
 
     private func databaseDirectory(
