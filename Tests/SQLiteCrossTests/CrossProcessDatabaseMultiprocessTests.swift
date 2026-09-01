@@ -127,6 +127,47 @@
       #expect(elapsed < .milliseconds(700))
       try await harness.waitForSuccessfulExit(holder)
     }
+
+    @Test
+    func writeIsDeliveredToARealSubscriberInAnotherProcess() async throws {
+      // Nothing subscribes through CrossProcessDatabase itself yet, but the transport it announces
+      // through is real, so a peer that subscribes to it directly must still see the commit.
+      let harness = try DatabaseProcessHarness(name: "deliver")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen", index: 0)
+      try await waitForFile(harness.file("ready-0"))
+
+      try await harness.database()
+        .write { transaction in
+          try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+        }
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(FileManager.default.fileExists(atPath: harness.file("received-0").path))
+    }
+
+    @Test
+    func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
+      // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
+      // holder that crashes must not leave the lock stuck for whoever opens next.
+      let harness = try DatabaseProcessHarness(name: "open-lock-crash")
+      defer { harness.cleanup() }
+      let holder = try harness.spawn("hold-open-lock", index: 0)
+      try await waitForFile(harness.file("ready-0"))
+
+      harness.kill(holder)
+      try await harness.waitForExit(holder)
+
+      let databasePath = harness.databasePath
+      let coordination = harness.coordination
+      let didOpen = Mutex(false)
+      Thread.detachNewThread {
+        _ = try? CrossProcessDatabase(path: databasePath, coordination: coordination)
+        didOpen.withLock { $0 = true }
+      }
+      try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
+      #expect(FileManager.default.fileExists(atPath: harness.databasePath))
+    }
   }
 
   /// Runs one peer process of a ``CrossProcessDatabaseMultiprocessTests`` case.
@@ -183,6 +224,30 @@
         Thread.sleep(forTimeInterval: Double(milliseconds) / 1000)
       }
 
+    case "listen":
+      // `shared` caches transports weakly, so the transport itself, not just the subscription,
+      // must be kept alive for as long as the subscription should stay registered.
+      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: path)
+      let transport = try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination)
+      let receivedCount = Mutex(0)
+      let subscription = try transport.subscribe(to: identifier) { _ in
+        receivedCount.withLock { $0 += 1 }
+      }
+      try touch(ready)
+      try await waitUntil(timeout: .seconds(10)) { receivedCount.withLock { $0 } >= 1 }
+      try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.received)))
+      _ = subscription
+
+    case "hold-open-lock":
+      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: path)
+      try DatabaseOpenLock.withLock(
+        databaseIdentifier: identifier,
+        directory: coordination.directory
+      ) {
+        try touch(ready)
+        Thread.sleep(forTimeInterval: 30)
+      }
+
     default:
       Issue.record("unknown peer mode \(mode)")
       processTestExit(1)
@@ -237,6 +302,7 @@
         "START": self.harness.file("start").path,
         "HELD": self.harness.file("held-\(index)").path,
         "OPENED": self.harness.file("opened-\(index)").path,
+        "RECEIVED": self.harness.file("received-\(index)").path,
         "WRITER_ID": String(index),
         "WRITE_COUNT": String(writeCount),
         "HOLD_MS": String(holdMilliseconds)
@@ -253,6 +319,12 @@
       try await self.harness.waitForSuccessfulExit(process)
     }
 
+    func waitForExit(_ process: Process) async throws {
+      try await self.harness.waitForExit(process)
+    }
+
+    func kill(_ process: Process) { self.harness.kill(process) }
+
     func cleanup() { self.harness.cleanup() }
   }
 
@@ -265,6 +337,7 @@
     static let start = prefix + "START"
     static let held = prefix + "HELD"
     static let opened = prefix + "OPENED"
+    static let received = prefix + "RECEIVED"
     static let writerID = prefix + "WRITER_ID"
     static let writeCount = prefix + "WRITE_COUNT"
     static let holdMilliseconds = prefix + "HOLD_MS"

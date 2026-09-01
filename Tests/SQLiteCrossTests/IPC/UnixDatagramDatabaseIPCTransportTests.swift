@@ -95,6 +95,75 @@
   }
 
   @Test
+  func sharedReturnsTheSameTransportForRepeatedCallsWithTheSameConfiguration() throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let configuration = UnixDatagramDatabaseIPCTransport.Configuration(
+      directory: directory,
+      backPressure: .fail
+    )
+
+    let first = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
+    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
+
+    #expect(first === second)
+  }
+
+  @Test
+  func sharedReturnsDifferentTransportsForDifferentConfigurations() throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let fail = UnixDatagramDatabaseIPCTransport.Configuration(
+      directory: directory,
+      backPressure: .fail
+    )
+    let suspend = UnixDatagramDatabaseIPCTransport.Configuration(
+      directory: directory,
+      backPressure: .suspend(upTo: .milliseconds(1))
+    )
+
+    let first = try UnixDatagramDatabaseIPCTransport.shared(configuration: fail)
+    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: suspend)
+
+    #expect(first !== second)
+  }
+
+  @Test
+  func sharedRecreatesTheTransportOnceEveryReferenceIsReleased() throws {
+    // Peers discover a process, not a database, so every database configured alike must reuse one
+    // transport for as long as anything holds it, and get a fresh, working one once nothing does.
+    // Object identity alone would not prove this: a freed transport's address can be reused by the
+    // very next allocation. Cancelling a subscription alone would not prove it either: that empties
+    // the registration whether or not the transport behind it was actually recreated. What only a
+    // genuinely new transport produces is a new socket endpoint, generated once at construction, so
+    // this compares the endpoint a fresh subscription registers under before and after release.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let configuration = UnixDatagramDatabaseIPCTransport.Configuration(
+      directory: directory,
+      backPressure: .fail
+    )
+    let registry = try DatabaseIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let database = DatabaseIdentifier(rawValue: "shared-lifetime")
+
+    var first: UnixDatagramDatabaseIPCTransport? = try .shared(configuration: configuration)
+    var subscription: SQLiteCrossSubscription? = try first?.subscribe(to: database) { _ in }
+    let firstEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
+      .endpointName
+
+    subscription = nil
+    first = nil
+
+    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
+    let secondSubscription = try second.subscribe(to: database) { _ in }
+    let secondEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
+      .endpointName
+
+    #expect(secondEndpoint != firstEndpoint)
+    _ = secondSubscription
+  }
+
+  @Test
   func unixDatagramTransportRejectsInvalidConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
