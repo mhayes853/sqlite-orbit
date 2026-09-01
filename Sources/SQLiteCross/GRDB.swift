@@ -190,7 +190,11 @@
     public mutating func decode<Value: QueryRepresentable>(
       _ type: Value.Type
     ) throws -> Value.QueryOutput {
-      try Value(decoder: &decoder).queryOutput
+      do {
+        return try Value(decoder: &decoder).queryOutput
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -198,7 +202,11 @@
     public mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput) {
-      try decoder.decodeColumns((repeat each Value).self)
+      do {
+        return try decoder.decodeColumns((repeat each Value).self)
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
     }
   }
 
@@ -390,6 +398,83 @@
         throw QueryDecodingError.other(InvalidDatabaseUUIDError())
       }
       return uuid
+    }
+  }
+
+  extension GRDBQueryDecoder {
+    /// Restates a decoding failure in terms of the column it happened on.
+    ///
+    /// Structured Queries reports only what it was decoding, which is hard to act on when a
+    /// statement selects many columns. SQLite knows the rest: the column's name, what was actually
+    /// stored there, and the SQL that produced it.
+    @usableFromInline
+    func describe(_ error: QueryDecodingError) -> any Error {
+      switch error {
+      case .missingRequiredColumn:
+        // The decoder has already stepped past the column it found `NULL` in.
+        return DatabaseColumnDecodingError(
+          statement: statement,
+          columnIndex: currentIndex - 1,
+          reason: "to not be NULL"
+        )
+      case .typeMismatch(let columnType):
+        let storageClass = sqliteCrossStorageClassName(
+          sqlite3_column_type(statement, currentIndex)
+        )
+        return DatabaseColumnDecodingError(
+          statement: statement,
+          columnIndex: currentIndex,
+          reason: "to decode \(columnType), but found \(storageClass)"
+        )
+      case .other(let error):
+        return error
+      }
+    }
+  }
+
+  /// A decoding failure, reported against the column it happened on.
+  public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
+    /// The zero-based index of the column that failed to decode.
+    public let columnIndex: Int
+
+    /// The name SQLite reports for that column.
+    public let columnName: String
+
+    /// What was expected of the column.
+    public let reason: String
+
+    /// The SQL of the statement being decoded.
+    public let sql: String
+
+    @usableFromInline
+    init(statement: SQLiteStatement, columnIndex: Int32, reason: String) {
+      self.columnIndex = Int(columnIndex)
+      self.columnName =
+        sqlite3_column_name(statement, columnIndex)
+        .map { String(cString: $0) }
+        ?? "?"
+      self.reason = reason
+      self.sql = sqlite3_sql(statement).map { String(cString: $0) } ?? ""
+    }
+
+    public var description: String {
+      """
+      Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
+
+      \(sql)
+      """
+    }
+  }
+
+  @usableFromInline
+  func sqliteCrossStorageClassName(_ columnType: Int32) -> String {
+    switch columnType {
+    case SQLITE_BLOB: "BLOB"
+    case SQLITE_FLOAT: "REAL"
+    case SQLITE_INTEGER: "INTEGER"
+    case SQLITE_NULL: "NULL"
+    case SQLITE_TEXT: "TEXT"
+    default: "unknown"
     }
   }
 
