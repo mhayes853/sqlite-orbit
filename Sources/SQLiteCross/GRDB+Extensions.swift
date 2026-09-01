@@ -127,10 +127,8 @@
         },
         { context in
           let unmanaged = AggregateFunctionBox.invocation(for: context)
-          let invocation = unmanaged.takeUnretainedValue()
+          unmanaged.takeUnretainedValue().result.result(context)
           unmanaged.release()
-          invocation.finish()
-          invocation.result.result(context)
         },
         { box in
           guard let box else { return }
@@ -151,32 +149,31 @@
   /// Holds the aggregate function, and vends the per-aggregation invocation SQLite keys off its
   /// own context allocation.
   private final class AggregateFunctionBox {
-    let makeInvocation: () -> any AggregateFunctionInvocationProtocol
+    private let makeInvocation: () -> AggregateFunctionInvocation
 
     init(_ function: some AggregateDatabaseFunction) {
       self.makeInvocation = { AggregateFunctionInvocation(function) }
     }
 
+    /// The invocation for the aggregation `context` belongs to, creating it on first use.
     static func invocation(
       for context: OpaquePointer?
-    ) -> Unmanaged<AnyAggregateFunctionInvocation> {
-      let size = MemoryLayout<Unmanaged<AnyAggregateFunctionInvocation>>.size
+    ) -> Unmanaged<AggregateFunctionInvocation> {
+      let size = MemoryLayout<Unmanaged<AggregateFunctionInvocation>>.size
       let slot = sqlite3_aggregate_context(context, Int32(size))!
       if slot.load(as: Int.self) == 0 {
         let box = Unmanaged<AggregateFunctionBox>
           .fromOpaque(sqlite3_user_data(context))
           .takeUnretainedValue()
-        let unmanaged = Unmanaged.passRetained(
-          AnyAggregateFunctionInvocation(box.makeInvocation())
-        )
+        let unmanaged = Unmanaged.passRetained(box.makeInvocation())
         slot
-          .assumingMemoryBound(to: Unmanaged<AnyAggregateFunctionInvocation>.self)
+          .assumingMemoryBound(to: Unmanaged<AggregateFunctionInvocation>.self)
           .pointee = unmanaged
         return unmanaged
       }
       return
         slot
-        .assumingMemoryBound(to: Unmanaged<AnyAggregateFunctionInvocation>.self)
+        .assumingMemoryBound(to: Unmanaged<AggregateFunctionInvocation>.self)
         .pointee
     }
   }

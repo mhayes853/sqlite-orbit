@@ -96,7 +96,7 @@
           as: Void.self
         )
       )
-      // Well past the stream's 64-element buffer, so the aggregate body must block and resume.
+      // A large group, so the aggregation holds many rows before its body runs.
       try transaction.execute(
         Sample.insert {
           for index in 1...500 {
@@ -202,9 +202,8 @@
       )
     }
 
-    // Each in-flight aggregation holds a cooperative pool thread while it waits on SQLite, so run
-    // far more of them at once than the pool has threads. They should queue and drain rather than
-    // deadlock.
+    // Every aggregation runs on the reader thread SQLite called it from, and keeps its rows in its
+    // own aggregate context. Run many at once to hold that separation down.
     try await withThrowingTaskGroup(of: Int?.self) { group in
       for _ in 0..<128 {
         group.addTask {
