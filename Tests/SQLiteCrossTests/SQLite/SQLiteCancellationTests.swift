@@ -1,0 +1,207 @@
+#if SystemSQLite
+  import Foundation
+  import StructuredQueries
+  import Synchronization
+  import Testing
+
+  @testable import SQLiteCross
+
+  /// Counts calls through an entry point, so a test can wait for a query to actually be running
+  /// rather than racing against it.
+  private final class CallCounter: Sendable {
+    private let count = Mutex(0)
+
+    var value: Int { count.withLock { $0 } }
+
+    func record() {
+      count.withLock { $0 += 1 }
+    }
+
+    func wait(untilAtLeast target: Int) async {
+      while value < target {
+        await Task.yield()
+      }
+    }
+  }
+
+  /// Marks the query a test waits on, so counting does not depend on how many statements a read
+  /// runs around it.
+  private let endlessMarker = "RECURSIVE counter"
+
+  /// A library that reports steps of the marked query, and every interrupt.
+  private func observedLibrary(steps: CallCounter, interrupts: CallCounter) -> SQLiteLibrary {
+    let base = SQLiteLibrary.system
+    var library = base
+    library.step = { statement in
+      if let sql = base.sql(statement), String(cString: sql).contains(endlessMarker) {
+        steps.record()
+      }
+      return base.step(statement)
+    }
+    library.interrupt = { connection in
+      interrupts.record()
+      base.interrupt(connection)
+    }
+    return library
+  }
+
+  /// Starts a query that will not finish on its own, so a test decides when it ends.
+  private func endlessRead(on driver: SQLiteQueueDriver) -> Task<[Int], any Error> {
+    Task {
+      try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql(
+            """
+            WITH RECURSIVE counter(x) AS (
+              SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 2000000000
+            )
+            SELECT count(*) FROM counter
+            """,
+            as: Int.self
+          )
+        )
+      }
+    }
+  }
+
+  @Test
+  func cancellingAQueuedAccessLeavesTheRunningOneAlone() async throws {
+    let steps = CallCounter()
+    let interrupts = CallCounter()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+
+    // This access is inside `sqlite3_step` and is never cancelled.
+    let running = endlessRead(on: driver)
+    // Only the endless query is counted, so this is the moment it starts running.
+    await steps.wait(untilAtLeast: 1)
+
+    // This one is stuck behind it on the connection's queue, and is cancelled while waiting.
+    let queued = Task {
+      try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+      }
+    }
+    for _ in 0..<5000 {
+      await Task.yield()
+    }
+    queued.cancel()
+    // Give a stray interrupt time to land before ruling one out.
+    for _ in 0..<5000 {
+      await Task.yield()
+    }
+
+    // The cancelled access never owned the connection, so it must not have interrupted the query
+    // that did. Interrupting on its behalf would abort an access that was never cancelled.
+    #expect(interrupts.value == 0)
+    #expect(running.isCancelled == false)
+
+    // Cancelling the access that does own the connection stops its query, and only then.
+    running.cancel()
+    await #expect(throws: CancellationError.self) {
+      _ = try await running.value
+    }
+    #expect(interrupts.value == 1)
+
+    // The queued access was never going to run; it reports its cancellation once its turn comes.
+    await #expect(throws: CancellationError.self) {
+      _ = try await queued.value
+    }
+  }
+
+  @Test
+  func cancellingTheRunningAccessStopsItsQuery() async throws {
+    let steps = CallCounter()
+    let interrupts = CallCounter()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+
+    let running = endlessRead(on: driver)
+    await steps.wait(untilAtLeast: 1)
+    running.cancel()
+
+    // A query aborted by SQLite reports `SQLITE_INTERRUPT`, which is a cancellation and not a
+    // database failure.
+    await #expect(throws: CancellationError.self) {
+      _ = try await running.value
+    }
+
+    // The interrupted access left the connection usable, with no transaction still open.
+    try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+    let count = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+    }
+    #expect(count == [0])
+  }
+
+  @Test
+  func cancellingBeforeAnAccessStartsRunsNoQuery() async throws {
+    let steps = CallCounter()
+    let interrupts = CallCounter()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    let task = Task {
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+      }
+    }
+    task.cancel()
+    await #expect(throws: CancellationError.self) {
+      try await task.value
+    }
+
+    // The write never ran, so nothing was inserted and no statement was stepped on its behalf.
+    let rows = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+    }
+    #expect(rows == [0])
+  }
+  /// Records how many accesses were ever inside the database at the same time.
+  private final class OverlapTracker: Sendable {
+    private let state = Mutex((inFlight: 0, peak: 0))
+
+    var peak: Int { state.withLock { $0.peak } }
+
+    func enter() {
+      state.withLock { state in
+        state.inFlight += 1
+        state.peak = max(state.peak, state.inFlight)
+      }
+    }
+
+    func leave() {
+      state.withLock { $0.inFlight -= 1 }
+    }
+  }
+
+  @Test
+  func accessesOnOneConnectionNeverOverlap() async throws {
+    let driver = try SQLiteQueueDriver(path: ":memory:")
+    let overlap = OverlapTracker()
+
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for _ in 0..<50 {
+        group.addTask {
+          try await driver.read { transaction in
+            overlap.enter()
+            defer { overlap.leave() }
+            _ = try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+          }
+        }
+      }
+      try await group.waitForAll()
+    }
+
+    // One connection, one access at a time.
+    #expect(overlap.peak == 1)
+  }
+#endif

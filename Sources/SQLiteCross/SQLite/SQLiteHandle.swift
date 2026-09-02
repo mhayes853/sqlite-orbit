@@ -7,6 +7,9 @@ struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
 
+  /// Whether the connection was opened read-only, and so refuses writes on its own.
+  let isReadOnly: Bool
+
   /// The library table, owned here and lent out by pointer.
   ///
   /// Transactions, cursors, and rows are created per access and per row, so copying a table of 33
@@ -22,9 +25,11 @@ struct SQLiteHandle: ~Copyable {
   private init(
     pointer: OpaquePointer,
     libraryStorage: UnsafeMutablePointer<SQLiteLibrary>,
-    maximumCachedStatements: Int
+    maximumCachedStatements: Int,
+    isReadOnly: Bool
   ) {
     self.pointer = pointer
+    self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
     self.statements = SQLiteStatementCache(
       library: UnsafePointer(libraryStorage),
@@ -66,7 +71,8 @@ struct SQLiteHandle: ~Copyable {
     let handle = SQLiteHandle(
       pointer: pointer,
       libraryStorage: libraryStorage,
-      maximumCachedStatements: configuration.maximumCachedStatements
+      maximumCachedStatements: configuration.maximumCachedStatements,
+      isReadOnly: flags.contains(.readOnly)
     )
     try handle.configure(configuration)
     return handle
@@ -110,6 +116,24 @@ struct SQLiteHandle: ~Copyable {
   /// A read still takes a transaction so that every statement it runs sees one consistent
   /// snapshot, and rolling back is how that snapshot is released — there is nothing to commit.
   borrowing func read<Result: ~Copyable>(
+    _ body: (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result {
+    // A connection opened read-only refuses writes already. One that can write must be told not
+    // to for the duration, so that a read attempting a mutation fails rather than quietly having
+    // it discarded by the rollback below.
+    guard !isReadOnly else { return try runRead(body) }
+    try execute("PRAGMA query_only = ON")
+    do {
+      let value = try runRead(body)
+      try execute("PRAGMA query_only = OFF")
+      return value
+    } catch {
+      try? execute("PRAGMA query_only = OFF")
+      throw error
+    }
+  }
+
+  private borrowing func runRead<Result: ~Copyable>(
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
@@ -160,12 +184,16 @@ struct SQLiteHandle: ~Copyable {
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
+    // Each statement's length is passed explicitly rather than left to SQLite to measure again.
     try sql.withCString { start in
-      var next: UnsafePointer<CChar>? = start
-      while let current = next, current.pointee != 0 {
+      let end = start + sql.utf8.count
+      var next = start
+      while next < end {
         var statement: OpaquePointer?
         var tail: UnsafePointer<CChar>?
-        let code = library.pointee.prepare_v3(connection, current, -1, 0, &statement, &tail)
+        let code = library.pointee.prepare_v3(
+          connection, next, Int32(end - next), 0, &statement, &tail
+        )
         guard code == SQLiteResultCode.ok.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
         }
@@ -173,7 +201,7 @@ struct SQLiteHandle: ~Copyable {
 
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard statement != nil else { return }
-        next = tail
+        next = tail ?? end
 
         var stepCode = library.pointee.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {

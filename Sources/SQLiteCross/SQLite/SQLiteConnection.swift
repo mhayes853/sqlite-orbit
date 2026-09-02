@@ -1,32 +1,38 @@
 import Dispatch
-import Synchronization
+import Foundation
 
-/// One open connection, run on a dispatch queue of its own.
+/// One open connection, isolated to a dispatch queue of its own.
 ///
-/// Every access hops to the connection's queue, as GRDB gives each connection a queue, so a query
-/// never occupies a cooperative-pool thread and callers waiting their turn queue as jobs rather
-/// than blocking. The lock exists to satisfy the type system's ownership of the noncopyable handle;
-/// with all access on one queue it is never contended.
-final class SQLiteConnection: Sendable {
-  private let handle: Mutex<SQLiteHandle>
-  private let executor = SQLiteConnectionExecutor()
-
-  /// Aborts whatever query is running, without taking the lock.
-  ///
-  /// Taking the lock would deadlock against the very query this is meant to stop, so the pointer
-  /// and entry point are captured up front. The pointer crosses threads as an address so that this
-  /// stays `Sendable` without an unchecked conformance; it remains valid because the closure and
-  /// the handle are released together.
+/// The connection is an actor whose executor is that queue, which is how GRDB runs its own
+/// connections. Two things follow from it. A query never occupies a thread of the cooperative
+/// pool, which is a pool of a few threads that Swift expects nothing to block; a query blocks its
+/// own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
+/// cancellation and task locals propagate the way they would for any other actor, rather than
+/// having to be carried across a continuation by hand.
+///
+/// The handle is ordinary isolated state, so the connection needs no lock of its own.
+actor SQLiteConnection {
+  private var handle: SQLiteHandle
+  private let queue: DispatchQueue
+  private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
+  nonisolated var unownedExecutor: UnownedSerialExecutor {
+    executor.asUnownedSerialExecutor()
+  }
+
   init(path: String, flags: SQLiteOpenFlags, configuration: SQLiteConfiguration) throws {
-    // A handle opened here is the only owner of itself, which is what lets it be handed to the
-    // lock. One received as a parameter would already belong to the caller's task.
     let handle = try SQLiteHandle.open(path: path, flags: flags, configuration: configuration)
+    // The connection is captured as an address rather than a pointer, which is what lets this
+    // closure be shared without an unchecked conformance on `OpaquePointer`. It stays valid
+    // because the closure and the handle are released together.
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    self.handle = Mutex(handle)
+    let queue = DispatchQueue(label: "SQLiteCross.connection")
+    self.queue = queue
+    self.executor = SQLiteConnectionExecutor(queue: queue)
+    self.handle = handle
   }
 
   nonisolated(nonsending)
@@ -43,51 +49,107 @@ final class SQLiteConnection: Sendable {
     try await perform { handle in try handle.write(body) }
   }
 
-  /// Runs `work` on the connection's queue, interrupting it if the task is cancelled meanwhile.
+  /// Hops to the connection's queue and runs `work` there, cancellably.
   ///
-  /// SQLite reports an interrupted statement as `SQLITE_INTERRUPT`, which is a cancellation rather
-  /// than a database failure and is reported as one.
+  /// The cancellation handler is installed before the hop, so a task cancelled while it is still
+  /// waiting its turn is noticed. SQLite reports an interrupted statement as `SQLITE_INTERRUPT`,
+  /// which is a cancellation rather than a database failure and is reported as one.
+  nonisolated(nonsending)
   private func perform<Result: Sendable>(
     _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result
   ) async throws -> sending Result {
-    try Task.checkCancellation()
+    // The token belongs to this access alone. A cancellation that arrives while this access is
+    // still queued finds it unarmed and does nothing, rather than interrupting whichever *other*
+    // access currently owns the connection.
+    let token = SQLiteInterruptToken()
     do {
       return try await withTaskCancellationHandler {
-        try await withTaskExecutorPreference(executor) {
-          try await run(work)
-        }
+        try await run(work, token: token)
       } onCancel: {
-        interrupt()
+        token.fire()
       }
     } catch let error as SQLiteError where error.primaryCode == .interrupt {
       throw CancellationError()
     }
   }
 
-  @concurrent
+  /// Runs `work` on the connection's queue, holding the interrupt for the duration.
   private func run<Result: Sendable>(
-    _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result
-  ) async throws -> sending Result {
+    _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result,
+    token: SQLiteInterruptToken
+  ) throws -> sending Result {
+    token.arm(interrupt)
+    defer { token.disarm() }
     // Interrupting only affects a statement that is already running, so a task cancelled while it
     // waited its turn on the queue would otherwise go on to run its query in full. What remains is
     // the few microseconds between this check and the first step; closing that would take a
     // progress handler, which is not worth its cost per opcode.
     try Task.checkCancellation()
-    return try handle.withLock { handle in try work(handle) }
+    return try work(handle)
   }
 }
 
-/// A serial dispatch queue, as a task executor.
-///
-/// Being a task executor is what lets a `nonisolated(nonsending)` driver method hop here from
-/// whatever isolation called it: a `@concurrent` function honors the task's executor preference.
-final class SQLiteConnectionExecutor: TaskExecutor {
-  private let queue = DispatchQueue(label: "SQLiteCross.connection")
+/// A serial dispatch queue, as an actor's executor.
+final class SQLiteConnectionExecutor: SerialExecutor {
+  private let queue: DispatchQueue
+
+  init(queue: DispatchQueue) {
+    self.queue = queue
+  }
 
   func enqueue(_ job: consuming ExecutorJob) {
     let job = UnownedJob(job)
     queue.async {
-      job.runSynchronously(on: self.asUnownedTaskExecutor())
+      job.runSynchronously(on: self.asUnownedSerialExecutor())
     }
+  }
+
+  func asUnownedSerialExecutor() -> UnownedSerialExecutor {
+    UnownedSerialExecutor(ordinary: self)
+  }
+
+  func checkIsolated() {
+    dispatchPrecondition(condition: .onQueue(queue))
+  }
+}
+
+#if os(Linux) || os(Android) || os(Windows)
+  extension SQLiteConnectionExecutor: @unchecked Sendable {}
+#endif
+
+/// The interrupt belonging to one access, armed only while that access owns its connection.
+///
+/// Cancellation can arrive at any moment, including while an access is still queued behind another
+/// one. Interrupting then would abort whatever *other* access is running on the connection, which
+/// was never cancelled — so each access gets a token of its own, and it only fires between the
+/// moment that access takes the connection and the moment it gives it back.
+///
+/// Interrupting deliberately does not wait for the connection: taking its queue here would
+/// deadlock against the very query this is meant to stop. SQLite documents interrupting from
+/// another thread as supported.
+private final class SQLiteInterruptToken: @unchecked Sendable {
+  /// Guarded by `lock`, which is held only for the moments around arming, so it is never contended
+  /// for long.
+  private var interrupt: (@Sendable () -> Void)?
+  private let lock = NSLock()
+
+  func arm(_ interrupt: @escaping @Sendable () -> Void) {
+    lock.lock()
+    defer { lock.unlock() }
+    self.interrupt = interrupt
+  }
+
+  func disarm() {
+    lock.lock()
+    defer { lock.unlock() }
+    interrupt = nil
+  }
+
+  func fire() {
+    lock.lock()
+    let interrupt = self.interrupt
+    lock.unlock()
+    // Called outside the lock: the access it stops will take the lock on its way out.
+    interrupt?()
   }
 }

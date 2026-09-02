@@ -192,55 +192,6 @@
   }
 
   @Test
-  func cancellingAReadInterruptsTheQueryItIsRunning() async throws {
-    // Cancelling before the query starts stepping would be a no-op in SQLite, so the test waits
-    // for the step itself rather than for the task, which would race.
-    let steps = Mutex(0)
-    let base = SQLiteLibrary.system
-    var configuration = SQLiteConfiguration.default
-    configuration.library.step = { statement in
-      steps.withLock { $0 += 1 }
-      return base.step(statement)
-    }
-
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
-    try await bootstrap(driver)
-    let stepsBefore = steps.withLock { $0 }
-
-    let task = Task {
-      try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql(
-            """
-            WITH RECURSIVE counter(x) AS (
-              SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 200000000
-            )
-            SELECT count(*) FROM counter
-            """,
-            as: Int.self
-          )
-        )
-      }
-    }
-
-    // One step opens the transaction; the next is the query, and it does not return on its own.
-    while steps.withLock({ $0 }) < stepsBefore + 2 {
-      await Task.yield()
-    }
-    task.cancel()
-
-    await #expect(throws: CancellationError.self) {
-      _ = try await task.value
-    }
-
-    // The interrupted read left the connection usable.
-    let count = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
-    }
-    #expect(count == 0)
-  }
-
-  @Test
   func cancellingBeforeTheConnectionIsFreeStillCancels() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
