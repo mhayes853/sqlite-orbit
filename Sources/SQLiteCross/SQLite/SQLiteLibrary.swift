@@ -8,67 +8,72 @@ public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) ->
 /// extensions compiled in — without forking the package. ``SQLiteLibrary/system`` is available when
 /// the `SystemSQLite` trait is enabled, which it is by default.
 ///
-/// A library value is copied into every connection it opens, so it must remain valid for as long as
-/// those connections are open.
+/// Every member is a mutable closure, so a caller can interpose on one entry point while leaving
+/// the rest alone — wrapping ``prepare_v3`` to count statement preparations, or ``step`` to inject
+/// `SQLITE_BUSY`. C functions convert to these closures implicitly, so a table built from a real
+/// SQLite costs nothing beyond the call itself.
+///
+/// A connection owns one library value and lends it out by pointer, so the table is never copied
+/// onto a query's hot path.
 public struct SQLiteLibrary: Sendable {
 
   // MARK: - Connections
 
   public var open_v2:
-    @convention(c) (
+    @Sendable (
       UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
     ) -> Int32
-  public var close_v2: @convention(c) (OpaquePointer?) -> Int32
-  public var errmsg: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
-  public var extended_errcode: @convention(c) (OpaquePointer?) -> Int32
-  public var extended_result_codes: @convention(c) (OpaquePointer?, Int32) -> Int32
-  public var busy_timeout: @convention(c) (OpaquePointer?, Int32) -> Int32
+  public var close_v2: @Sendable (OpaquePointer?) -> Int32
+  public var errmsg: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
+  public var extended_errcode: @Sendable (OpaquePointer?) -> Int32
+  public var extended_result_codes: @Sendable (OpaquePointer?, Int32) -> Int32
+  public var busy_timeout: @Sendable (OpaquePointer?, Int32) -> Int32
 
   /// Interrupts the query running on a connection.
   ///
   /// This is the one entry point that is called from a thread other than the connection's own,
   /// which is what lets a cancelled task abort a long-running scan.
-  public var interrupt: @convention(c) (OpaquePointer?) -> Void
-  public var changes: @convention(c) (OpaquePointer?) -> Int32
-  public var last_insert_rowid: @convention(c) (OpaquePointer?) -> Int64
-  public var threadsafe: @convention(c) () -> Int32
-  public var libversion_number: @convention(c) () -> Int32
+  public var interrupt: @Sendable (OpaquePointer?) -> Void
+  public var changes: @Sendable (OpaquePointer?) -> Int32
+  public var last_insert_rowid: @Sendable (OpaquePointer?) -> Int64
+  public var threadsafe: @Sendable () -> Int32
+  public var libversion_number: @Sendable () -> Int32
 
   // MARK: - Statements
 
   public var prepare_v3:
-    @convention(c) (
+    @Sendable (
       OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
       UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
     ) -> Int32
-  public var step: @convention(c) (OpaquePointer?) -> Int32
-  public var reset: @convention(c) (OpaquePointer?) -> Int32
-  public var finalize: @convention(c) (OpaquePointer?) -> Int32
-  public var clear_bindings: @convention(c) (OpaquePointer?) -> Int32
-  public var stmt_readonly: @convention(c) (OpaquePointer?) -> Int32
-  public var sql: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
+  public var step: @Sendable (OpaquePointer?) -> Int32
+  public var reset: @Sendable (OpaquePointer?) -> Int32
+  public var finalize: @Sendable (OpaquePointer?) -> Int32
+  public var clear_bindings: @Sendable (OpaquePointer?) -> Int32
+  public var stmt_readonly: @Sendable (OpaquePointer?) -> Int32
+  public var sql: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
 
   // MARK: - Bindings
 
-  public var bind_parameter_count: @convention(c) (OpaquePointer?) -> Int32
-  public var bind_null: @convention(c) (OpaquePointer?, Int32) -> Int32
-  public var bind_int64: @convention(c) (OpaquePointer?, Int32, Int64) -> Int32
-  public var bind_double: @convention(c) (OpaquePointer?, Int32, Double) -> Int32
+  public var bind_parameter_count: @Sendable (OpaquePointer?) -> Int32
+  public var bind_null: @Sendable (OpaquePointer?, Int32) -> Int32
+  public var bind_int64: @Sendable (OpaquePointer?, Int32, Int64) -> Int32
+  public var bind_double: @Sendable (OpaquePointer?, Int32, Double) -> Int32
   public var bind_text:
-    @convention(c) (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32, SQLiteDestructor?) -> Int32
+    @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32, SQLiteDestructor?) -> Int32
   public var bind_blob:
-    @convention(c) (OpaquePointer?, Int32, UnsafeRawPointer?, Int32, SQLiteDestructor?) -> Int32
+    @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32, SQLiteDestructor?) -> Int32
 
   // MARK: - Columns
 
-  public var column_count: @convention(c) (OpaquePointer?) -> Int32
-  public var column_type: @convention(c) (OpaquePointer?, Int32) -> Int32
-  public var column_int64: @convention(c) (OpaquePointer?, Int32) -> Int64
-  public var column_double: @convention(c) (OpaquePointer?, Int32) -> Double
-  public var column_text: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?
-  public var column_blob: @convention(c) (OpaquePointer?, Int32) -> UnsafeRawPointer?
-  public var column_bytes: @convention(c) (OpaquePointer?, Int32) -> Int32
-  public var column_name: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
+  public var column_count: @Sendable (OpaquePointer?) -> Int32
+  public var column_type: @Sendable (OpaquePointer?, Int32) -> Int32
+  public var column_int64: @Sendable (OpaquePointer?, Int32) -> Int64
+  public var column_double: @Sendable (OpaquePointer?, Int32) -> Double
+  public var column_text: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?
+  public var column_blob: @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?
+  public var column_bytes: @Sendable (OpaquePointer?, Int32) -> Int32
+  public var column_name: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
 
   // MARK: - Custom functions
 
@@ -77,7 +82,7 @@ public struct SQLiteLibrary: Sendable {
   /// This is the entry point most often wanted by a caller who supplied their own SQLite build, so
   /// it is part of the table even though the package does not call it itself.
   public var create_function_v2:
-    @convention(c) (
+    @Sendable (
       OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
       (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
       (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
@@ -86,48 +91,48 @@ public struct SQLiteLibrary: Sendable {
     ) -> Int32
 
   public init(
-    open_v2: @escaping @convention(c) (
+    open_v2: @escaping @Sendable (
       UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
     ) -> Int32,
-    close_v2: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    errmsg: @escaping @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?,
-    extended_errcode: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    extended_result_codes: @escaping @convention(c) (OpaquePointer?, Int32) -> Int32,
-    busy_timeout: @escaping @convention(c) (OpaquePointer?, Int32) -> Int32,
-    interrupt: @escaping @convention(c) (OpaquePointer?) -> Void,
-    changes: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    last_insert_rowid: @escaping @convention(c) (OpaquePointer?) -> Int64,
-    threadsafe: @escaping @convention(c) () -> Int32,
-    libversion_number: @escaping @convention(c) () -> Int32,
-    prepare_v3: @escaping @convention(c) (
+    close_v2: @escaping @Sendable (OpaquePointer?) -> Int32,
+    errmsg: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?,
+    extended_errcode: @escaping @Sendable (OpaquePointer?) -> Int32,
+    extended_result_codes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
+    busy_timeout: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
+    interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
+    changes: @escaping @Sendable (OpaquePointer?) -> Int32,
+    last_insert_rowid: @escaping @Sendable (OpaquePointer?) -> Int64,
+    threadsafe: @escaping @Sendable () -> Int32,
+    libversion_number: @escaping @Sendable () -> Int32,
+    prepare_v3: @escaping @Sendable (
       OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
       UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
     ) -> Int32,
-    step: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    reset: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    finalize: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    clear_bindings: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    stmt_readonly: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    sql: @escaping @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?,
-    bind_parameter_count: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    bind_null: @escaping @convention(c) (OpaquePointer?, Int32) -> Int32,
-    bind_int64: @escaping @convention(c) (OpaquePointer?, Int32, Int64) -> Int32,
-    bind_double: @escaping @convention(c) (OpaquePointer?, Int32, Double) -> Int32,
-    bind_text: @escaping @convention(c) (
+    step: @escaping @Sendable (OpaquePointer?) -> Int32,
+    reset: @escaping @Sendable (OpaquePointer?) -> Int32,
+    finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
+    clear_bindings: @escaping @Sendable (OpaquePointer?) -> Int32,
+    stmt_readonly: @escaping @Sendable (OpaquePointer?) -> Int32,
+    sql: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?,
+    bind_parameter_count: @escaping @Sendable (OpaquePointer?) -> Int32,
+    bind_null: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
+    bind_int64: @escaping @Sendable (OpaquePointer?, Int32, Int64) -> Int32,
+    bind_double: @escaping @Sendable (OpaquePointer?, Int32, Double) -> Int32,
+    bind_text: @escaping @Sendable (
       OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32, SQLiteDestructor?
     ) -> Int32,
-    bind_blob: @escaping @convention(c) (
+    bind_blob: @escaping @Sendable (
       OpaquePointer?, Int32, UnsafeRawPointer?, Int32, SQLiteDestructor?
     ) -> Int32,
-    column_count: @escaping @convention(c) (OpaquePointer?) -> Int32,
-    column_type: @escaping @convention(c) (OpaquePointer?, Int32) -> Int32,
-    column_int64: @escaping @convention(c) (OpaquePointer?, Int32) -> Int64,
-    column_double: @escaping @convention(c) (OpaquePointer?, Int32) -> Double,
-    column_text: @escaping @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?,
-    column_blob: @escaping @convention(c) (OpaquePointer?, Int32) -> UnsafeRawPointer?,
-    column_bytes: @escaping @convention(c) (OpaquePointer?, Int32) -> Int32,
-    column_name: @escaping @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<CChar>?,
-    create_function_v2: @escaping @convention(c) (
+    column_count: @escaping @Sendable (OpaquePointer?) -> Int32,
+    column_type: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
+    column_int64: @escaping @Sendable (OpaquePointer?, Int32) -> Int64,
+    column_double: @escaping @Sendable (OpaquePointer?, Int32) -> Double,
+    column_text: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?,
+    column_blob: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?,
+    column_bytes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
+    column_name: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?,
+    create_function_v2: @escaping @Sendable (
       OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
       (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
       (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,

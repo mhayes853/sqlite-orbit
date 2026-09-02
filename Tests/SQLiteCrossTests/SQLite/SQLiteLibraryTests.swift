@@ -1,6 +1,7 @@
 #if SystemSQLite
   import CSQLite3
   import SQLiteCross
+  import Synchronization
   import Testing
 
   /// Checks the constants the package declares by hand against the SQLite it was linked against.
@@ -158,6 +159,53 @@
     )
     #expect(library.step(insert) == SQLiteResultCode.done.rawValue)
     #expect(library.last_insert_rowid(connection) == 2)
+  }
+
+  /// Checks that one entry point can be wrapped without disturbing the rest.
+  ///
+  /// Interposition is why the table holds Swift closures rather than C function pointers: a C
+  /// function pointer cannot capture, so a counter or a fault would have to live in global state
+  /// and could not survive tests running in parallel.
+  @Test
+  func functionTableEntryPointsCanBeInterposedPerInstance() throws {
+    let preparedSQL = Mutex<[String]>([])
+    var library = SQLiteLibrary.system
+    let base = SQLiteLibrary.system
+    library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
+      if let sql {
+        preparedSQL.withLock { $0.append(String(cString: sql)) }
+      }
+      return base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
+    }
+
+    // A second table wrapping the same system library keeps its own state.
+    let failingStep = Mutex(0)
+    var faulty = SQLiteLibrary.system
+    faulty.step = { statement in
+      failingStep.withLock { $0 += 1 }
+      return SQLiteResultCode.busy.rawValue
+    }
+
+    var connection: OpaquePointer?
+    let openFlags: SQLiteOpenFlags = [.readWrite, .create, .memory, .noMutex]
+    #expect(
+      ":memory:".withCString { library.open_v2($0, &connection, openFlags.rawValue, nil) }
+        == SQLiteResultCode.ok.rawValue
+    )
+    defer { _ = library.close_v2(connection) }
+
+    var statement: OpaquePointer?
+    #expect(
+      "SELECT 1".withCString { library.prepare_v3(connection, $0, -1, 0, &statement, nil) }
+        == SQLiteResultCode.ok.rawValue
+    )
+    defer { _ = library.finalize(statement) }
+
+    #expect(preparedSQL.withLock { $0 } == ["SELECT 1"])
+    // The unwrapped table is unaffected, and the faulty one reports its injected failure.
+    #expect(library.step(statement) == SQLiteResultCode.row.rawValue)
+    #expect(faulty.step(statement) == SQLiteResultCode.busy.rawValue)
+    #expect(failingStep.withLock { $0 } == 1)
   }
 
   /// Checks that a failure surfaces a code and a message the error type can carry.
