@@ -1,4 +1,5 @@
 #if GRDB
+  import Foundation
   import GRDB
   import SQLiteCross
   import Testing
@@ -41,5 +42,35 @@
     #expect(error?.columnIndex == 1)
     #expect(error?.columnName == "title")
     #expect(error?.reason == "to not be NULL")
+  }
+
+  @Test
+  func valueLevelFailuresAreReportedAsThemselves() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+
+    // The column has the right storage class but the wrong contents. These are not the column
+    // errors above, because the decoder already knows exactly what went wrong.
+    let uuid = await #expect(throws: (any Error).self) {
+      try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT 'not a uuid'", as: UUID.self))
+      }
+    }
+    #expect(!(uuid is DatabaseColumnDecodingError))
+
+    let date = await #expect(throws: (any Error).self) {
+      try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT 'not a date'", as: Date.self))
+      }
+    }
+    #expect(!(date is DatabaseColumnDecodingError))
+
+    let negative = await #expect(throws: (any Error).self) {
+      try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT -1", as: UInt64.self))
+      }
+    }
+    #expect(!(negative is DatabaseColumnDecodingError))
   }
 #endif
