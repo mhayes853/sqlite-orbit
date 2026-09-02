@@ -48,6 +48,52 @@
     }
   }
 
+  /// Orders text by its length in characters, so multi-byte characters tell whether the bytes
+  /// SQLite hands over were decoded as UTF-8 rather than compared byte for byte.
+  @DatabaseCollation
+  func characterCount(_ lhs: String, _ rhs: String) -> CollationOrder {
+    CollationOrder(lhs.count, rhs.count)
+  }
+
+  @Test
+  func collationsCompareTextAsUnicode() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+    try await database.driver.writer.write { db in
+      db.install(collation: $characterCount)
+    }
+
+    try await database.write { transaction in
+      try transaction.execute(
+        #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)
+      )
+      try transaction.execute(
+        Word.insert {
+          Word(id: 1, text: "日本語")
+          Word(id: 2, text: "ab")
+          Word(id: 3, text: "é")
+        }
+      )
+    }
+
+    // "日本語" is nine bytes but three characters, and "é" is two bytes but one.
+    let byCharacterCount = try await database.read { transaction in
+      try transaction.fetchAll(
+        Word.order { $0.text.collate(NamedCollation($characterCount)) }.select(\.text)
+      )
+    }
+    #expect(byCharacterCount == ["é", "ab", "日本語"])
+
+    // Equal under the collation, so a `WHERE` comparison through it matches both.
+    let sameLength = try await database.read { transaction in
+      try transaction.fetchCount(
+        Word.where { $0.text.collate(NamedCollation($characterCount)).eq("xx") }
+      )
+    }
+    #expect(sameLength == 1)
+  }
+
   @Table("words")
   private struct Word: Equatable, Sendable {
     let id: Int

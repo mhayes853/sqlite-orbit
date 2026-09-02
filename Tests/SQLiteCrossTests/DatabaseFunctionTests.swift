@@ -132,14 +132,14 @@
       [
         try transaction.fetchOne(Select($describe(1.5, [1, 2, 3], true, date, id, Int?.none))),
         // A zero-length blob has no buffer behind it, and must still decode.
-        try transaction.fetchOne(Select($describe(-0.25, [], false, date, id, Int?.some(7)))),
+        try transaction.fetchOne(Select($describe(-0.25, [], false, date, id, Int?.some(7))))
       ]
     }
 
     #expect(
       described == [
         "1.5 [1, 2, 3] true 1700000000.5 \(id.uuidString) -1",
-        "-0.25 [] false 1700000000.5 \(id.uuidString) 7",
+        "-0.25 [] false 1700000000.5 \(id.uuidString) 7"
       ]
     )
   }

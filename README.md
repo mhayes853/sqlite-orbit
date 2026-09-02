@@ -20,8 +20,9 @@ write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELE
 definition, and this is checked at compile time rather than by a list of known statement types.
 Statements the query library keeps private, such as the one behind `union`, are classified too.
 
-Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
-write transactions alike, and the caller is stating which it is.
+Raw SQL is the exception: its capability cannot be read from its type, so it is treated as a
+`SELECT`-shaped statement and accepted by read and write transactions alike. The caller is stating
+which it is.
 
 GRDB support is available in the main `SQLiteCross` product behind the `GRDB` package trait:
 

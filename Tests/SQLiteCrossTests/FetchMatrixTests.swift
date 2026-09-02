@@ -202,6 +202,40 @@
   }
 
   @Test
+  func eagerFetchesRebindTheCachedStatementEveryTime() async throws {
+    let database = try await seededDatabase()
+
+    // Eager fetches share one prepared statement per SQL string on a connection. Each fetch must
+    // start that statement over with its own bindings rather than resume where the last left off.
+    let titles = try await database.read { transaction in
+      try (10...12)
+        .map { id in
+          try transaction.fetchOne(Reminder.where { $0.id.eq(id) }.select(\.title))
+        }
+    }
+    #expect(titles == ["Milk", "Eggs", "Standup"])
+
+    let counts = try await database.read { transaction in
+      try [1, 2, 1]
+        .map { listID in
+          try transaction.fetchAll(Reminder.where { $0.listID.eq(listID) }.select(\.id)).count
+        }
+    }
+    #expect(counts == [2, 1, 2])
+
+    // The same holds for writes that return rows.
+    let inserted = try await database.write { transaction in
+      try (20...22)
+        .map { id in
+          try transaction.fetchOne(
+            Reminder.insert { Reminder(id: id, listID: 2, title: "Task \(id)") }.returning(\.id)
+          )
+        }
+    }
+    #expect(inserted == [20, 21, 22])
+  }
+
+  @Test
   func statementsThatBuildNoSQLAreRunnable() async throws {
     let database = try await seededDatabase()
 
