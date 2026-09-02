@@ -20,6 +20,7 @@
       self.defaultIdentifier = identifier ?? Self.defaultIdentifier(path: writer.path)
     }
 
+    nonisolated(nonsending)
     public func read<Result: Sendable>(
       _ body: @Sendable (borrowing GRDBReadTransaction) throws -> sending Result
     ) async throws -> sending Result {
@@ -29,6 +30,7 @@
       }
     }
 
+    nonisolated(nonsending)
     public func write<Result: Sendable>(
       _ body: @Sendable (borrowing GRDBWriteTransaction) throws -> sending Result
     ) async throws -> sending Result {

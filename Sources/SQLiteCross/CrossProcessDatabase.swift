@@ -32,6 +32,7 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
     self.onAnnouncementFailure = onAnnouncementFailure
   }
 
+  nonisolated(nonsending)
   public func read<Result: Sendable>(
     _ body: @Sendable (borrowing Driver.ReadTransaction) throws -> sending Result
   ) async throws -> sending Result {
@@ -41,6 +42,7 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
   /// Writes to the database and announces the transaction it commits.
   ///
   /// A write that throws is rolled back by its driver and is not announced.
+  nonisolated(nonsending)
   public func write<Result: Sendable>(
     _ body: @Sendable (borrowing Driver.WriteTransaction) throws -> sending Result
   ) async throws -> sending Result {

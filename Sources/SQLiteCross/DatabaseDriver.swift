@@ -6,10 +6,12 @@ public protocol DatabaseDriver: Sendable {
   /// The identifier used when a ``CrossProcessDatabase`` does not receive an explicit one.
   var defaultIdentifier: DatabaseIdentifier { get }
 
+  nonisolated(nonsending)
   func read<Result: Sendable>(
     _ body: @Sendable (borrowing ReadTransaction) throws -> sending Result
   ) async throws -> sending Result
 
+  nonisolated(nonsending)
   func write<Result: Sendable>(
     _ body: @Sendable (borrowing WriteTransaction) throws -> sending Result
   ) async throws -> sending Result
