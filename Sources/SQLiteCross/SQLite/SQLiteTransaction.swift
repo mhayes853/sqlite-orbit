@@ -166,3 +166,50 @@ func withWriteTransaction<Result: ~Copyable>(
 ) throws -> Result {
   try body(SQLiteWriteTransaction(connection: connection))
 }
+
+/// Runs `body` inside a deferred transaction and always rolls it back.
+///
+/// A read still takes a transaction so that every statement it runs sees one consistent snapshot,
+/// and rolling back is how that snapshot is released — there is nothing to commit.
+func runRead<Result: ~Copyable>(
+  on connection: borrowing SQLiteConnection,
+  _ body: (borrowing SQLiteReadTransaction) throws -> Result
+) throws -> Result {
+  try connection.execute("BEGIN DEFERRED TRANSACTION")
+  let value: Result
+  do {
+    value = try withReadTransaction(on: connection, body)
+  } catch {
+    // The body's failure is the one worth reporting, so a failing rollback does not mask it.
+    try? connection.execute("ROLLBACK")
+    throw error
+  }
+  try connection.execute("ROLLBACK")
+  return value
+}
+
+/// Runs `body` inside an immediate transaction, committing it or rolling it back.
+///
+/// The transaction is immediate rather than deferred so that a write takes SQLite's write lock up
+/// front. A deferred write would only discover a competing writer partway through, after work that
+/// then has to be thrown away.
+func runWrite<Result: ~Copyable>(
+  on connection: borrowing SQLiteConnection,
+  _ body: (borrowing SQLiteWriteTransaction) throws -> Result
+) throws -> Result {
+  try connection.execute("BEGIN IMMEDIATE TRANSACTION")
+  let value: Result
+  do {
+    value = try withWriteTransaction(on: connection, body)
+  } catch {
+    try? connection.execute("ROLLBACK")
+    throw error
+  }
+  do {
+    try connection.execute("COMMIT")
+  } catch {
+    try? connection.execute("ROLLBACK")
+    throw error
+  }
+  return value
+}
