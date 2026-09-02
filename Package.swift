@@ -15,6 +15,11 @@ let package = Package(
     .library(name: "SQLiteCross", targets: ["SQLiteCross"])
   ],
   traits: [
+    .default(enabledTraits: ["SystemSQLite"]),
+    .trait(
+      name: "SystemSQLite",
+      description: "Links the platform SQLite and vends `SQLiteLibrary.system`."
+    ),
     .trait(
       name: "GRDB",
       description: "Builds the optional GRDB database driver."
@@ -25,10 +30,24 @@ let package = Package(
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.37.0")
   ],
   targets: [
+    .systemLibrary(
+      name: "CSQLite3",
+      path: "Sources/CSQLite3",
+      pkgConfig: "sqlite3",
+      providers: [
+        .apt(["libsqlite3-dev"]),
+        .yum(["sqlite-devel"]),
+        .brew(["sqlite3"])
+      ]
+    ),
     .target(
       name: "SQLiteCross",
       dependencies: [
         .product(name: "StructuredQueries", package: "swift-structured-queries"),
+        .target(
+          name: "CSQLite3",
+          condition: .when(traits: ["SystemSQLite"])
+        ),
         .product(
           name: "GRDB",
           package: "GRDB.swift",
@@ -50,6 +69,10 @@ let package = Package(
       dependencies: [
         "SQLiteCross",
         .product(name: "StructuredQueries", package: "swift-structured-queries"),
+        .target(
+          name: "CSQLite3",
+          condition: .when(traits: ["SystemSQLite"])
+        ),
         .product(
           name: "GRDB",
           package: "GRDB.swift",
