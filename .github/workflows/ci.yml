@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Linux (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The package's own SQLite driver, which is what a caller gets by default.
+          - name: default traits
+            traits: ""
+          # Both drivers at once, which is the configuration where their entry points can collide.
+          - name: SystemSQLite and GRDB
+            traits: "--traits SystemSQLite,GRDB"
+          # The configuration that existed before the native driver, kept honest.
+          - name: GRDB only
+            traits: "--traits GRDB"
+    steps:
+      - uses: actions/checkout@v4
+
+      # `CSQLite3` is a system library target resolved through pkg-config.
+      - name: Install SQLite
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libsqlite3-dev pkg-config
+
+      - name: Test
+        run: swift test ${{ matrix.traits }}
+
+  build-without-sqlite:
+    name: Linux (no traits)
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately no SQLite installed: with every trait off the package links none, which is
+      # what lets a caller supply their own build.
+      - name: Build
+        run: swift build --disable-default-traits
