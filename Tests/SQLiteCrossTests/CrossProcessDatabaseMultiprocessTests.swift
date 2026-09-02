@@ -162,7 +162,7 @@
       let coordination = harness.coordination
       let didOpen = Mutex(false)
       Thread.detachNewThread {
-        _ = try? CrossProcessDatabase(path: databasePath, coordination: coordination)
+        _ = try? CrossProcessDatabase<GRDBDatabaseDriver>(path: databasePath, coordination: coordination)
         didOpen.withLock { $0 = true }
       }
       try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
@@ -188,11 +188,11 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try CrossProcessDatabase(path: path, coordination: coordination)
+      _ = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
       try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.opened)))
 
     case "write":
-      let database = try CrossProcessDatabase(path: path, coordination: coordination)
+      let database = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
       let writerID = try #require(Int(try value(DatabaseProcessEnvironment.writerID)))
       let writeCount = try #require(Int(try value(DatabaseProcessEnvironment.writeCount)))
       try touch(ready)
@@ -212,7 +212,7 @@
       }
 
     case "hold":
-      let database = try CrossProcessDatabase(path: path, coordination: coordination)
+      let database = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
       let held = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.held))
       let milliseconds = try #require(Int(try value(DatabaseProcessEnvironment.holdMilliseconds)))
       try touch(ready)
