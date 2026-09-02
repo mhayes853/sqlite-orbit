@@ -17,73 +17,43 @@
       self.arguments = arguments
     }
 
-    mutating func next() {
-      currentIndex = 0
-    }
-
-    private var currentValue: OpaquePointer? {
-      arguments?[Int(currentIndex)]
+    /// Steps past the current argument, returning it when its storage class is `expected`, `nil`
+    /// when it is `NULL`, and throwing otherwise.
+    private mutating func argument(
+      _ expected: Int32,
+      for columnType: Any.Type
+    ) throws(QueryDecodingError) -> OpaquePointer? {
+      precondition(argumentCount > currentIndex)
+      let value = arguments?[Int(currentIndex)]
+      switch sqlite3_value_type(value) {
+      case SQLITE_NULL:
+        currentIndex += 1
+        return nil
+      case expected:
+        currentIndex += 1
+        return value
+      default:
+        throw QueryDecodingError.typeMismatch(columnType)
+      }
     }
 
     mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
-      precondition(argumentCount > currentIndex)
-      let value = currentValue
-      switch sqlite3_value_type(value) {
-      case SQLITE_NULL:
-        currentIndex += 1
-        return nil
-      case SQLITE_BLOB:
-        defer { currentIndex += 1 }
-        guard let blob = sqlite3_value_blob(value) else { return [] }
-        return [UInt8](UnsafeRawBufferPointer(start: blob, count: Int(sqlite3_value_bytes(value))))
-      default:
-        throw QueryDecodingError.typeMismatch([UInt8].self)
-      }
+      guard let value = try argument(SQLITE_BLOB, for: columnType) else { return nil }
+      // A zero-length blob has no buffer to point at.
+      guard let blob = sqlite3_value_blob(value) else { return [] }
+      return [UInt8](UnsafeRawBufferPointer(start: blob, count: Int(sqlite3_value_bytes(value))))
     }
 
     mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-      precondition(argumentCount > currentIndex)
-      let value = currentValue
-      switch sqlite3_value_type(value) {
-      case SQLITE_NULL:
-        currentIndex += 1
-        return nil
-      case SQLITE_FLOAT:
-        defer { currentIndex += 1 }
-        return sqlite3_value_double(value)
-      default:
-        throw QueryDecodingError.typeMismatch(Double.self)
-      }
+      try argument(SQLITE_FLOAT, for: columnType).map(sqlite3_value_double)
     }
 
     mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-      precondition(argumentCount > currentIndex)
-      let value = currentValue
-      switch sqlite3_value_type(value) {
-      case SQLITE_NULL:
-        currentIndex += 1
-        return nil
-      case SQLITE_INTEGER:
-        defer { currentIndex += 1 }
-        return sqlite3_value_int64(value)
-      default:
-        throw QueryDecodingError.typeMismatch(Int64.self)
-      }
+      try argument(SQLITE_INTEGER, for: columnType).map(sqlite3_value_int64)
     }
 
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-      precondition(argumentCount > currentIndex)
-      let value = currentValue
-      switch sqlite3_value_type(value) {
-      case SQLITE_NULL:
-        currentIndex += 1
-        return nil
-      case SQLITE_TEXT:
-        defer { currentIndex += 1 }
-        return String(cString: sqlite3_value_text(value))
-      default:
-        throw QueryDecodingError.typeMismatch(String.self)
-      }
+      try argument(SQLITE_TEXT, for: columnType).map { String(cString: sqlite3_value_text($0)) }
     }
 
     mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {

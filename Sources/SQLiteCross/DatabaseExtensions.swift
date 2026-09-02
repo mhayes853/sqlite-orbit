@@ -31,9 +31,4 @@ public struct DatabaseExtensions: Sendable {
   public mutating func add(function: some AggregateDatabaseFunction & Sendable) {
     aggregateFunctions.append(function)
   }
-
-  /// Whether there is nothing to install.
-  public var isEmpty: Bool {
-    collations.isEmpty && scalarFunctions.isEmpty && aggregateFunctions.isEmpty
-  }
 }

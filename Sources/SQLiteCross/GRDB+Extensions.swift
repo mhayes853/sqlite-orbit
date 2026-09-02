@@ -23,7 +23,6 @@
     /// )
     /// ```
     public mutating func register(_ extensions: DatabaseExtensions) {
-      guard !extensions.isEmpty else { return }
       prepareDatabase { database in
         for collation in extensions.collations {
           database.install(collation: collation)
@@ -47,14 +46,9 @@
         sqliteConnection,
         collation.name,
         SQLITE_UTF8,
-        // SQLite owns the comparator for as long as the collation is registered, and hands it back
-        // on every comparison. The destructor below balances this retain.
-        Unmanaged.passRetained(DatabaseCollationBox(collation)).toOpaque(),
+        Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation),
         { box, lhsCount, lhs, rhsCount, rhs in
-          let collation = Unmanaged<DatabaseCollationBox>
-            .fromOpaque(box!)
-            .takeUnretainedValue()
-            .collation
+          let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
           switch collation.compare(
             UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
             UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
@@ -64,15 +58,10 @@
           case .descending: return 1
           }
         },
-        { box in
-          guard let box else { return }
-          Unmanaged<DatabaseCollationBox>.fromOpaque(box).release()
-        }
+        { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
       )
     }
-  }
 
-  extension Database {
     /// Installs a Swift-implemented scalar function on this connection.
     ///
     /// Prefer ``GRDB/Configuration/register(_:)``, which covers every connection a pool opens.
@@ -82,12 +71,9 @@
         function.name,
         Int32(function.argumentCount ?? -1),
         SQLITE_UTF8 | (function.isDeterministic ? SQLITE_DETERMINISTIC : 0),
-        Unmanaged.passRetained(ScalarFunctionBox(function)).toOpaque(),
+        Box.retain(function as any ScalarDatabaseFunction),
         { context, argumentCount, arguments in
-          let function = Unmanaged<ScalarFunctionBox>
-            .fromOpaque(sqlite3_user_data(context))
-            .takeUnretainedValue()
-            .function
+          let function = Box<any ScalarDatabaseFunction>.value(in: sqlite3_user_data(context))
           var decoder = SQLiteFunctionDecoder(argumentCount: argumentCount, arguments: arguments)
           do {
             try function.invoke(&decoder).result(context)
@@ -97,10 +83,7 @@
         },
         nil,
         nil,
-        { box in
-          guard let box else { return }
-          Unmanaged<ScalarFunctionBox>.fromOpaque(box).release()
-        }
+        { Box<any ScalarDatabaseFunction>.release($0) }
       )
     }
 
@@ -113,76 +96,109 @@
         function.name,
         Int32(function.argumentCount ?? -1),
         SQLITE_UTF8 | (function.isDeterministic ? SQLITE_DETERMINISTIC : 0),
-        Unmanaged.passRetained(AggregateFunctionBox(function)).toOpaque(),
+        Box.retain(function as any AggregateDatabaseFunction),
         nil,
         { context, argumentCount, arguments in
-          // SQLite allocates one slot per aggregation, so each group gets its own invocation.
-          let invocation = AggregateFunctionBox.invocation(for: context).takeUnretainedValue()
           var decoder = SQLiteFunctionDecoder(argumentCount: argumentCount, arguments: arguments)
           do {
-            try invocation.step(&decoder)
+            try AggregateFunctionInvocation.current(in: context).step(&decoder)
           } catch {
             QueryBinding.invalid(error).result(context)
           }
         },
         { context in
-          let unmanaged = AggregateFunctionBox.invocation(for: context)
-          unmanaged.takeUnretainedValue().result.result(context)
-          unmanaged.release()
+          let invocation = AggregateFunctionInvocation.current(in: context)
+          invocation.result.result(context)
+          Unmanaged.passUnretained(invocation).release()
         },
-        { box in
-          guard let box else { return }
-          Unmanaged<AggregateFunctionBox>.fromOpaque(box).release()
-        }
+        { Box<any AggregateDatabaseFunction>.release($0) }
       )
     }
   }
 
-  private final class ScalarFunctionBox {
-    let function: any ScalarDatabaseFunction
+  /// Carries a Swift value through SQLite's `void *` user data, which SQLite owns for as long as
+  /// the collation or function is registered and hands to its destructor when it is dropped.
+  private final class Box<Value> {
+    let value: Value
 
-    init(_ function: some ScalarDatabaseFunction) {
-      self.function = function
+    private init(_ value: Value) {
+      self.value = value
+    }
+
+    static func retain(_ value: Value) -> UnsafeMutableRawPointer {
+      Unmanaged.passRetained(Box(value)).toOpaque()
+    }
+
+    static func value(in pointer: UnsafeMutableRawPointer?) -> Value {
+      Unmanaged<Box>.fromOpaque(pointer!).takeUnretainedValue().value
+    }
+
+    static func release(_ pointer: UnsafeMutableRawPointer?) {
+      guard let pointer else { return }
+      Unmanaged<Box>.fromOpaque(pointer).release()
     }
   }
 
-  /// Holds the aggregate function, and vends the per-aggregation invocation SQLite keys off its
-  /// own context allocation.
-  private final class AggregateFunctionBox {
-    private let makeInvocation: () -> AggregateFunctionInvocation
-
-    init(_ function: some AggregateDatabaseFunction) {
-      self.makeInvocation = { AggregateFunctionInvocation(function) }
-    }
-
+  /// One aggregation in progress.
+  ///
+  /// SQLite pushes rows one at a time through its `xStep` callback, while an aggregate body takes
+  /// them all at once as a `Sequence`. Collecting the rows and running the body from `xFinal`
+  /// bridges the two without leaving the thread SQLite called on.
+  ///
+  /// This holds a whole group in memory. Handing the body a sequence that produced rows as SQLite
+  /// stepped would bound that, but `invoke` is synchronous and SQLite drives the loop, so it would
+  /// mean running the body on another thread and blocking it between rows. That trades memory local
+  /// to one query for a thread held for the length of every aggregation, and only pays off for
+  /// bodies that consume their sequence lazily to begin with.
+  private class AggregateFunctionInvocation {
     /// The invocation for the aggregation `context` belongs to, creating it on first use.
-    static func invocation(
-      for context: OpaquePointer?
-    ) -> Unmanaged<AggregateFunctionInvocation> {
-      let size = MemoryLayout<Unmanaged<AggregateFunctionInvocation>>.size
-      let slot = sqlite3_aggregate_context(context, Int32(size))!
-      if slot.load(as: Int.self) == 0 {
-        let box = Unmanaged<AggregateFunctionBox>
-          .fromOpaque(sqlite3_user_data(context))
-          .takeUnretainedValue()
-        let unmanaged = Unmanaged.passRetained(box.makeInvocation())
-        slot
-          .assumingMemoryBound(to: Unmanaged<AggregateFunctionInvocation>.self)
-          .pointee = unmanaged
-        return unmanaged
+    ///
+    /// SQLite allocates one slot per aggregation, so each group gets its own invocation. The slot
+    /// holds an unbalanced retain that `xFinal` releases.
+    static func current(in context: OpaquePointer?) -> AggregateFunctionInvocation {
+      let slot = sqlite3_aggregate_context(
+        context,
+        Int32(MemoryLayout<Unmanaged<AggregateFunctionInvocation>>.size)
+      )!
+      .assumingMemoryBound(to: Unmanaged<AggregateFunctionInvocation>?.self)
+      if let invocation = slot.pointee {
+        return invocation.takeUnretainedValue()
       }
-      return
-        slot
-        .assumingMemoryBound(to: Unmanaged<AggregateFunctionInvocation>.self)
-        .pointee
+      let function = Box<any AggregateDatabaseFunction>.value(in: sqlite3_user_data(context))
+      let invocation = Unmanaged.passRetained(Self.make(function))
+      slot.pointee = invocation
+      return invocation.takeUnretainedValue()
     }
-  }
 
-  private final class DatabaseCollationBox {
-    let collation: any StructuredQueriesSQLiteCore.DatabaseCollation
+    // SQLite's callbacks are not generic, so the function's element type lives in a subclass.
+    private static func make(
+      _ function: some AggregateDatabaseFunction
+    ) -> AggregateFunctionInvocation {
+      Typed(function)
+    }
 
-    init(_ collation: any StructuredQueriesSQLiteCore.DatabaseCollation) {
-      self.collation = collation
+    func step(_ decoder: inout SQLiteFunctionDecoder) throws { fatalError("abstract") }
+    var result: QueryBinding { fatalError("abstract") }
+
+    private final class Typed<Function: AggregateDatabaseFunction>: AggregateFunctionInvocation {
+      let function: Function
+      var rows: [Function.Element] = []
+
+      init(_ function: Function) {
+        self.function = function
+      }
+
+      override func step(_ decoder: inout SQLiteFunctionDecoder) throws {
+        rows.append(try function.step(&decoder))
+      }
+
+      override var result: QueryBinding {
+        do {
+          return try function.invoke(rows)
+        } catch {
+          return .invalid(error)
+        }
+      }
     }
   }
 #endif
