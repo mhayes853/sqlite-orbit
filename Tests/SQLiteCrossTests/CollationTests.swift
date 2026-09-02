@@ -16,10 +16,10 @@
 
   @Test
   func collationsAreInstalledOnEveryConnectionAPoolOpens() async throws {
-    var extensions = DatabaseExtensions()
-    extensions.add(collation: $reversedText)
+    var configuration = Configuration()
+    configuration.register(collation: $reversedText)
 
-    try await withPooledDatabase(extensions: extensions) { database in
+    try await withPooledDatabase(configuration: configuration) { database in
       try await database.write { transaction in
         try transaction.execute(
           #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)

@@ -90,11 +90,11 @@
 
   @Test
   func scalarAndAggregateFunctionsRunOnEveryConnectionAPoolOpens() async throws {
-    var extensions = DatabaseExtensions()
-    extensions.add(function: $repeated)
-    extensions.add(function: $longestTitle)
+    var configuration = Configuration()
+    configuration.register(function: $repeated)
+    configuration.register(function: $longestTitle)
 
-    try await withPooledDatabase(extensions: extensions) { database in
+    try await withPooledDatabase(configuration: configuration) { database in
       try await database.write { transaction in
         try transaction.execute(
           #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
@@ -257,13 +257,10 @@
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    var extensions = DatabaseExtensions()
-    extensions.add(function: $repeated)
-
-    // GRDB appends connection setup rather than replacing it, so registering extensions keeps
+    // GRDB appends connection setup rather than replacing it, so registering a function keeps
     // whatever `.crossProcess` already set up.
     var configuration = GRDB.Configuration.crossProcess
-    configuration.register(extensions)
+    configuration.register(function: $repeated)
 
     let database = try CrossProcessDatabase(
       path: directory.appendingPathComponent("db.sqlite").path,
@@ -292,10 +289,10 @@
 
   @Test
   func manyConcurrentAggregatesMakeProgress() async throws {
-    var extensions = DatabaseExtensions()
-    extensions.add(function: $longestTitle)
+    var configuration = Configuration()
+    configuration.register(function: $longestTitle)
 
-    try await withPooledDatabase(extensions: extensions, maximumReaderCount: 16) { database in
+    try await withPooledDatabase(configuration: configuration, maximumReaderCount: 16) { database in
       try await database.write { transaction in
         try transaction.execute(
           #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)

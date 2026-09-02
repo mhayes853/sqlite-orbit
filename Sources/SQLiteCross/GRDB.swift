@@ -2,7 +2,7 @@
   import Foundation
   import GRDB
   import GRDBSQLite
-  import StructuredQueriesSQLite
+  public import StructuredQueriesSQLite
 
   /// A ``DatabaseDriver`` backed by a GRDB database writer.
   public final class GRDBDatabaseDriver: DatabaseDriver, Sendable {
@@ -566,6 +566,132 @@
   struct InvalidDatabaseUUIDError: Error {
     @usableFromInline
     init() {}
+  }
+
+  // MARK: - Collations and functions
+
+  extension GRDB.Configuration {
+    /// Installs a Swift-implemented collating sequence on every connection opened with this
+    /// configuration.
+    ///
+    /// A collating sequence or function is only known to the connection it was installed on. A
+    /// `DatabasePool` opens connections as it needs them, so installing on one connection leaves
+    /// queries on every other connection failing with "no such collation sequence". Registering
+    /// through the configuration covers connections opened later, too.
+    ///
+    /// ```swift
+    /// var configuration = Configuration()
+    /// configuration.register(collation: $localized)
+    ///
+    /// let database = CrossProcessDatabase(
+    ///   writer: try DatabasePool(path: path, configuration: configuration)
+    /// )
+    /// ```
+    public mutating func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) {
+      prepareDatabase { database in
+        database.install(collation: collation)
+      }
+    }
+
+    /// Installs a Swift-implemented scalar function on every connection opened with this
+    /// configuration. See ``register(collation:)``.
+    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+      prepareDatabase { database in
+        database.install(function: function)
+      }
+    }
+
+    /// Installs a Swift-implemented aggregate function on every connection opened with this
+    /// configuration. See ``register(collation:)``.
+    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+      prepareDatabase { database in
+        database.install(function: function)
+      }
+    }
+  }
+
+  extension Database {
+    /// Installs a Swift-implemented collating sequence on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(collation:)``, which covers every connection a pool
+    /// opens.
+    public func install(collation: some StructuredQueriesSQLiteCore.DatabaseCollation) {
+      sqlite3_create_collation_v2(
+        sqliteConnection,
+        collation.name,
+        SQLITE_UTF8,
+        Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation),
+        { box, lhsCount, lhs, rhsCount, rhs in
+          let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
+          switch collation.compare(
+            UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
+            UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
+          ) {
+          case .ascending: return -1
+          case .same: return 0
+          case .descending: return 1
+          }
+        },
+        { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
+      )
+    }
+
+    /// Installs a Swift-implemented scalar function on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(function:)-swift.method``, which covers every
+    /// connection a pool opens.
+    public func install(function: some ScalarDatabaseFunction) {
+      sqlite3_create_function_v2(
+        sqliteConnection,
+        function.name,
+        Int32(function.argumentCount ?? -1),
+        SQLITE_UTF8 | (function.isDeterministic ? SQLITE_DETERMINISTIC : 0),
+        Box.retain(function as any ScalarDatabaseFunction),
+        { context, argumentCount, arguments in
+          let function = Box<any ScalarDatabaseFunction>.value(in: sqlite3_user_data(context))
+          var decoder = SQLiteFunctionDecoder(argumentCount: argumentCount, arguments: arguments)
+          do {
+            try function.invoke(&decoder).result(context)
+          } catch {
+            QueryBinding.invalid(error).result(context)
+          }
+        },
+        nil,
+        nil,
+        { Box<any ScalarDatabaseFunction>.release($0) }
+      )
+    }
+
+    /// Installs a Swift-implemented aggregate function on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(function:)-swift.method``, which covers every
+    /// connection a pool opens.
+    public func install(function: some AggregateDatabaseFunction) {
+      sqlite3_create_function_v2(
+        sqliteConnection,
+        function.name,
+        Int32(function.argumentCount ?? -1),
+        SQLITE_UTF8 | (function.isDeterministic ? SQLITE_DETERMINISTIC : 0),
+        Box.retain(function as any AggregateDatabaseFunction),
+        nil,
+        { context, argumentCount, arguments in
+          var decoder = SQLiteFunctionDecoder(argumentCount: argumentCount, arguments: arguments)
+          do {
+            try AggregateFunctionInvocation.current(in: context).step(&decoder)
+          } catch {
+            QueryBinding.invalid(error).result(context)
+          }
+        },
+        { context in
+          let invocation = AggregateFunctionInvocation.current(in: context)
+          invocation.result.result(context)
+          Unmanaged.passUnretained(invocation).release()
+        },
+        { Box<any AggregateDatabaseFunction>.release($0) }
+      )
+    }
   }
 
   extension CrossProcessDatabase where Driver == GRDBDatabaseDriver {

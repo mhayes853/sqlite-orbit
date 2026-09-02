@@ -20,9 +20,8 @@ write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELE
 definition, and this is checked at compile time rather than by a list of known statement types.
 Statements the query library keeps private, such as the one behind `union`, are classified too.
 
-Raw SQL is the exception: its capability cannot be read from its type, so it is treated as a
-`SELECT`-shaped statement and accepted by read and write transactions alike. The caller is stating
-which it is.
+Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
+write transactions alike, and the caller is stating which it is.
 
 GRDB support is available in the main `SQLiteCross` product behind the `GRDB` package trait:
 
@@ -150,8 +149,7 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 ## Collations and functions
 
 Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
-`@DatabaseFunction` macros, then collected into a `DatabaseExtensions` and registered on a GRDB
-`Configuration`:
+`@DatabaseFunction` macros, then registered on a GRDB `Configuration`:
 
 ```swift
 @DatabaseCollation
@@ -163,11 +161,8 @@ extension Collation where Self == NamedCollation {
   static var localized: Self { Self($localized) }
 }
 
-var extensions = DatabaseExtensions()
-extensions.add(collation: $localized)
-
 var configuration = Configuration()
-configuration.register(extensions)
+configuration.register(collation: $localized)
 
 let database = CrossProcessDatabase(
   writer: try DatabasePool(path: databasePath, configuration: configuration)

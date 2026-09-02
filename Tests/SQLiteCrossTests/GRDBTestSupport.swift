@@ -3,12 +3,12 @@
   import GRDB
   import SQLiteCross
 
-  /// Runs `body` against a file-backed pool with `extensions` registered, then deletes the file.
+  /// Runs `body` against a file-backed pool opened with `configuration`, then deletes the file.
   ///
   /// A pool opens reader connections as concurrent reads demand them, which is what shows whether
-  /// an extension reached every connection rather than only the first.
+  /// a collation or function reached every connection rather than only the first.
   func withPooledDatabase<Result>(
-    extensions: DatabaseExtensions,
+    configuration: Configuration,
     maximumReaderCount: Int = 4,
     _ body: (CrossProcessDatabase<GRDBDatabaseDriver>) async throws -> Result
   ) async throws -> Result {
@@ -17,9 +17,8 @@
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    var configuration = Configuration()
+    var configuration = configuration
     configuration.maximumReaderCount = maximumReaderCount
-    configuration.register(extensions)
     let pool = try DatabasePool(
       path: directory.appendingPathComponent("db.sqlite").path,
       configuration: configuration
