@@ -1,5 +1,5 @@
 import Foundation
-import StructuredQueries
+import StructuredQueriesSQLite
 import Testing
 
 @testable import SQLiteCross
@@ -438,18 +438,33 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
 }
 
 @Test
-func structuredStatementsExposeTransactionCapabilities() {
-  #expect(acceptsReadStatement(TestRecord.select(\.id)))
-  #expect(acceptsWriteStatement(TestRecord.insert { TestRecord(id: 1, title: "Blob") }))
-  #expect(acceptsWriteStatement(TestRecord.update { $0.title = "Blob Jr." }))
-  #expect(acceptsWriteStatement(TestRecord.delete()))
+func statementCapabilityIsReadOffTheQueryHierarchy() {
+  // Building a read query is only possible for a select-shaped statement, so a read transaction
+  // cannot be handed a mutation. Every one of these would fail to compile as a read query:
+  //   DatabaseQuery<DatabaseReadAccess>(TestRecord.delete())
+  //   DatabaseQuery<DatabaseReadAccess>(TestRecord.insert { ... })
+  let reads: [DatabaseQuery<DatabaseReadAccess>] = [
+    DatabaseQuery(TestRecord.select(\.id)),
+    DatabaseQuery(TestRecord.all),
+    DatabaseQuery(TestRecord.where { $0.id.eq(1) }),
+    // A compound select is a type the query library keeps private, so no conformance could ever
+    // name it. It is classified by its protocol, not its identity.
+    DatabaseQuery(TestRecord.select(\.id).union(TestRecord.select(\.id))),
+    DatabaseQuery(Values { (1, "one") }),
+    // Raw SQL cannot be classified from its type, so it is accepted on both sides.
+    DatabaseQuery(#sql("SELECT id FROM testRecords", as: Int.self))
+  ]
+  #expect(reads.allSatisfy { !$0.fragment.isEmpty })
 
-  let rawRead = #sql("SELECT id FROM testRecords", as: Int.self)
-  let rawWrite = #sql("DELETE FROM testRecords", as: Void.self)
-  #expect(acceptsReadStatement(rawRead))
-  #expect(acceptsWriteStatement(rawRead))
-  #expect(acceptsReadStatement(rawWrite))
-  #expect(acceptsWriteStatement(rawWrite))
+  let writes: [DatabaseQuery<DatabaseWriteAccess>] = [
+    DatabaseQuery(TestRecord.insert { TestRecord(id: 1, title: "Blob") }),
+    DatabaseQuery(TestRecord.update { $0.title = "Blob Jr." }),
+    DatabaseQuery(TestRecord.delete()),
+    // Reads are runnable in a write transaction too.
+    DatabaseQuery(TestRecord.all),
+    DatabaseQuery(#sql("DELETE FROM testRecords", as: Void.self))
+  ]
+  #expect(writes.allSatisfy { !$0.fragment.isEmpty })
 }
 
 @Test
@@ -507,9 +522,12 @@ private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapab
   }
 
   @_lifetime(borrow self)
-  borrowing func rowCursor<S: DatabaseReadStatement>(_ statement: S) throws -> TestDatabaseRowCursor
-  {
-    TestDatabaseRowCursor(state: state)
+  borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseReadAccess>,
+    cached: Bool
+  ) throws -> TestDatabaseRowCursor {
+    state.executedQueries.append(query.fragment)
+    return TestDatabaseRowCursor(state: state)
   }
 }
 
@@ -524,20 +542,25 @@ private struct TestWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escap
   }
 
   @_lifetime(borrow self)
-  borrowing func rowCursor<S: DatabaseReadStatement>(_ statement: S) throws -> TestDatabaseRowCursor
-  {
-    TestDatabaseRowCursor(state: state)
+  borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseReadAccess>,
+    cached: Bool
+  ) throws -> TestDatabaseRowCursor {
+    state.executedQueries.append(query.fragment)
+    return TestDatabaseRowCursor(state: state)
   }
 
   @_lifetime(borrow self)
-  borrowing func executeRowCursor<S: DatabaseWriteStatement>(
-    _ statement: S
+  borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseWriteAccess>,
+    cached: Bool
   ) throws -> TestDatabaseRowCursor {
-    TestDatabaseRowCursor(state: state)
+    state.executedQueries.append(query.fragment)
+    return TestDatabaseRowCursor(state: state)
   }
 
-  borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
-    state.executedQueries.append(statement.query)
+  borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+    state.executedQueries.append(query.fragment)
     return 1
   }
 }
@@ -576,21 +599,13 @@ private func acceptsWriteTransaction<Transaction: DatabaseWriteTransaction>(
   true
 }
 
-private func acceptsReadStatement<S: DatabaseReadStatement>(_ statement: S) -> Bool {
-  true
-}
-
-private func acceptsWriteStatement<S: DatabaseWriteStatement>(_ statement: S) -> Bool {
-  true
-}
-
 @Table
 private struct TestRecord {
   let id: Int
   var title: String
 }
 
-private struct TestReturningWriteStatement: DatabaseWriteStatement {
+private struct TestReturningWriteStatement: Statement {
   typealias QueryValue = Int
   typealias From = Never
 
