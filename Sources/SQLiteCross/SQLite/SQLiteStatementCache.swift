@@ -20,6 +20,21 @@ final class SQLiteStatementCache {
     self.capacity = max(0, capacity)
   }
 
+  /// Prepares a statement the cache does not own, for a caller that will finalize it itself.
+  func prepare(_ sql: String) throws -> OpaquePointer {
+    var statement: OpaquePointer?
+    let code = sql.withCString {
+      library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
+    }
+    guard code == SQLiteResultCode.ok.rawValue, let statement else {
+      if let statement {
+        _ = library.pointee.finalize(statement)
+      }
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+    }
+    return statement
+  }
+
   /// Lends the statement for `sql`, preparing one when the cache has none to give.
   ///
   /// A lent statement leaves the cache entirely, so two cursors over the same SQL each get their

@@ -2,7 +2,7 @@
   import Foundation
   import GRDB
   import SQLiteCross
-  import StructuredQueries
+  import StructuredQueriesSQLite
   import Testing
 
   @Test
@@ -197,6 +197,34 @@
       driver.defaultIdentifier.rawValue
         == URL(fileURLWithPath: path).standardizedFileURL.path
     )
+  }
+
+  @Test
+  func grdbRowDecodesColumnsSequentiallyAndRestartsOnEachRow() async throws {
+    let database = CrossProcessDatabase(
+      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+    )
+
+    let decoded: [(Int, String)] = try await database.read { transaction in
+      var cursor = try transaction.rowCursor(
+        #sql("SELECT 1, 'one' UNION ALL SELECT 2, 'two'", as: Void.self)
+      )
+      var decoded: [(Int, String)] = []
+      while var row = try cursor.next() {
+        // Two separate decodes on one row must advance through its columns rather than
+        // both reading column 0.
+        let id = try row.decode(Int.self)
+        let title = try row.decode(String.self)
+        decoded.append((id, title))
+      }
+      return decoded
+    }
+
+    #expect(decoded.count == 2)
+    #expect(decoded[0].0 == 1)
+    #expect(decoded[0].1 == "one")
+    #expect(decoded[1].0 == 2)
+    #expect(decoded[1].1 == "two")
   }
 
   @Test

@@ -27,7 +27,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.1"),
-    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.37.0")
+    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0")
   ],
   targets: [
     .systemLibrary(
@@ -43,7 +43,7 @@ let package = Package(
     .target(
       name: "SQLiteCross",
       dependencies: [
-        .product(name: "StructuredQueries", package: "swift-structured-queries"),
+        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",
           condition: .when(traits: ["SystemSQLite"])
@@ -68,7 +68,7 @@ let package = Package(
       name: "SQLiteCrossTests",
       dependencies: [
         "SQLiteCross",
-        .product(name: "StructuredQueries", package: "swift-structured-queries"),
+        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",
           condition: .when(traits: ["SystemSQLite"])

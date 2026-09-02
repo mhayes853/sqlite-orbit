@@ -23,27 +23,38 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
 
   let statements: SQLiteStatementCache
 
+  /// Whether the statement came from the cache, and so has to go back rather than be finalized.
+  let isCached: Bool
+
   @usableFromInline
   var isExhausted = false
 
-  /// Prepares and binds `query`, borrowing its statement from `statements` for as long as the
-  /// cursor lives.
+  /// Prepares and binds `query`, holding its statement for as long as the cursor lives.
+  ///
+  /// A cached statement is lent by the connection's cache and returned when the cursor goes out of
+  /// scope. An uncached one belongs to the cursor alone and is finalized there, which is what lets
+  /// two cursors over the same SQL be open at once.
   @_lifetime(borrow statements)
   init(
     _ query: QueryFragment,
+    cached: Bool,
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache
   ) throws {
     let (sql, bindings) = prepareQuery(query)
-    let statement = try statements.checkOut(sql)
+    let statement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)
       }
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
-      statements.checkIn(statement, sql: sql)
+      if cached {
+        statements.checkIn(statement, sql: sql)
+      } else {
+        _ = library.pointee.finalize(statement)
+      }
       throw error
     }
     self.library = library
@@ -51,10 +62,15 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
+    self.isCached = cached
   }
 
   deinit {
-    statements.checkIn(statement, sql: sql)
+    if isCached {
+      statements.checkIn(statement, sql: sql)
+    } else {
+      _ = library.pointee.finalize(statement)
+    }
   }
 
   @inlinable

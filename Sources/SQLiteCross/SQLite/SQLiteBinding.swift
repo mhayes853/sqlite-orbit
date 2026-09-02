@@ -76,5 +76,10 @@ private func bindText(
 /// Renders a Structured Queries fragment into SQL and the bindings it needs.
 func prepareQuery(_ query: QueryFragment) -> (sql: String, bindings: [QueryBinding]) {
   let prepared = query.prepare { _ in "?" }
+  guard !prepared.sql.isEmpty else {
+    // A query builder can legitimately produce no SQL, such as `Values` with no rows. SQLite
+    // cannot prepare an empty string, so stand in a statement that selects nothing.
+    return ("SELECT 1 WHERE 0 -- empty query", [])
+  }
   return (prepared.sql, prepared.bindings)
 }

@@ -2,7 +2,7 @@
   import Foundation
   import GRDB
   import GRDBSQLite
-  import StructuredQueries
+  public import StructuredQueriesSQLite
 
   /// A ``DatabaseDriver`` backed by a GRDB database writer.
   public final class GRDBDatabaseDriver: DatabaseDriver, Sendable {
@@ -58,10 +58,11 @@
     }
 
     @_lifetime(borrow self)
-    public borrowing func rowCursor<S: DatabaseReadStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseReadAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
   }
 
@@ -78,23 +79,28 @@
     }
 
     @_lifetime(borrow self)
-    public borrowing func rowCursor<S: DatabaseReadStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseReadAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
 
     @_lifetime(borrow self)
-    public borrowing func executeRowCursor<S: DatabaseWriteStatement>(
-      _ statement: S
+    public borrowing func rowCursor(
+      _ query: DatabaseQuery<DatabaseWriteAccess>,
+      cached: Bool
     ) throws -> GRDBDatabaseRowCursor {
-      try makeGRDBCursor(statement.query, database: database)
+      try makeGRDBCursor(query.fragment, database: database, cached: cached)
     }
 
     @discardableResult
-    public borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
-      let prepared = try prepareGRDBQuery(statement.query)
-      let statement = try database.makeStatement(sql: prepared.sql)
+    public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+      // A statement that builds no SQL changes nothing. Running a stand-in would leave
+      // `changesCount` reporting whatever the previous statement changed.
+      guard !query.fragment.isEmpty else { return 0 }
+      let prepared = try prepareGRDBQuery(query.fragment)
+      let statement = try database.cachedStatement(sql: prepared.sql)
       try statement.execute(arguments: prepared.arguments)
       return database.changesCount
     }
@@ -103,10 +109,16 @@
   @_lifetime(borrow database)
   private func makeGRDBCursor(
     _ query: QueryFragment,
-    database: borrowing Database
+    database: borrowing Database,
+    cached: Bool
   ) throws -> GRDBDatabaseRowCursor {
     let prepared = try prepareGRDBQuery(query)
-    let statement = try database.makeStatement(sql: prepared.sql)
+    // A cached statement is shared by every cursor over the same SQL on this connection, so it is
+    // only safe for callers that consume and discard the cursor before creating another.
+    let statement =
+      cached
+      ? try database.cachedStatement(sql: prepared.sql)
+      : try database.makeStatement(sql: prepared.sql)
     let cursor = try GRDB.Row.fetchCursor(statement, arguments: prepared.arguments)
     return GRDBDatabaseRowCursor(cursor: cursor)
   }
@@ -114,9 +126,15 @@
   private func prepareGRDBQuery(
     _ query: QueryFragment
   ) throws -> (sql: String, arguments: StatementArguments) {
-    let prepared = query.prepare { _ in "?" }
-    let values = try prepared.bindings.map(GRDBBinding.init)
-    return (prepared.sql, StatementArguments(values.map(\.value)))
+    var (sql, bindings) = query.prepare { _ in "?" }
+    if sql.isEmpty {
+      // A query builder can legitimately produce no SQL, such as `Values` with no rows. SQLite
+      // cannot prepare an empty string, so stand in a statement that selects nothing.
+      sql = "SELECT 1 WHERE 0 -- empty query"
+      bindings = []
+    }
+    let values = try bindings.map(GRDBBinding.init)
+    return (sql, StatementArguments(values.map(\.value)))
   }
 
   /// A transaction-scoped cursor over GRDB result rows.
@@ -151,26 +169,32 @@
   }
 
   /// A result row lent by a GRDB transaction.
+  ///
+  /// The row owns its decoder so that successive `decode` calls advance through the row's columns.
+  /// Each row lent by a cursor starts over at the first column.
   public struct GRDBDatabaseRow: DatabaseRow, ~Copyable, ~Escapable {
     @usableFromInline
-    let statement: SQLiteStatement
+    var decoder: GRDBQueryDecoder
 
     @_lifetime(borrow statement)
     fileprivate init(statement: borrowing GRDB.Statement) {
-      self.statement = statement.sqliteStatement
+      self.decoder = GRDBQueryDecoder(statement: statement.sqliteStatement)
     }
 
     @_lifetime(borrow cursor)
     fileprivate init(cursor: borrowing GRDBDatabaseRowCursor) {
-      self.statement = cursor.cursor._statement.sqliteStatement
+      self.decoder = GRDBQueryDecoder(statement: cursor.cursor._statement.sqliteStatement)
     }
 
     @inlinable
     public mutating func decode<Value: QueryRepresentable>(
       _ type: Value.Type
     ) throws -> Value.QueryOutput {
-      var decoder = GRDBQueryDecoder(statement: statement)
-      return try Value(decoder: &decoder).queryOutput
+      do {
+        return try Value(decoder: &decoder).queryOutput
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -178,8 +202,11 @@
     public mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput) {
-      var decoder = GRDBQueryDecoder(statement: statement)
-      return try decoder.decodeColumns((repeat each Value).self)
+      do {
+        return try decoder.decodeColumns((repeat each Value).self)
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
     }
   }
 
@@ -371,6 +398,154 @@
         throw QueryDecodingError.other(InvalidDatabaseUUIDError())
       }
       return uuid
+    }
+  }
+
+  extension GRDBQueryDecoder {
+    /// Restates a decoding failure in terms of the column it happened on.
+    ///
+    /// Structured Queries reports only what it was decoding, which is hard to act on when a
+    /// statement selects many columns. SQLite knows the rest: the column's name, what was actually
+    /// stored there, and the SQL that produced it.
+    @usableFromInline
+    func describe(_ error: QueryDecodingError) -> any Error {
+      switch error {
+      case .missingRequiredColumn:
+        // The decoder has already stepped past the column it found `NULL` in.
+        return DatabaseColumnDecodingError(
+          statement: statement,
+          columnIndex: currentIndex - 1,
+          reason: "to not be NULL"
+        )
+      case .typeMismatch(let columnType):
+        let storageClass = sqliteCrossStorageClassName(
+          sqlite3_column_type(statement, currentIndex)
+        )
+        return DatabaseColumnDecodingError(
+          statement: statement,
+          columnIndex: currentIndex,
+          reason: "to decode \(columnType), but found \(storageClass)"
+        )
+      case .other(let error):
+        return error
+      }
+    }
+  }
+
+  /// A decoding failure, reported against the column it happened on.
+  public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
+    /// The zero-based index of the column that failed to decode.
+    public let columnIndex: Int
+
+    /// The name SQLite reports for that column.
+    public let columnName: String
+
+    /// What was expected of the column.
+    public let reason: String
+
+    /// The SQL of the statement being decoded.
+    public let sql: String
+
+    @usableFromInline
+    init(statement: SQLiteStatement, columnIndex: Int32, reason: String) {
+      self.columnIndex = Int(columnIndex)
+      self.columnName =
+        sqlite3_column_name(statement, columnIndex)
+        .map { String(cString: $0) }
+        ?? "?"
+      self.reason = reason
+      self.sql = sqlite3_sql(statement).map { String(cString: $0) } ?? ""
+    }
+
+    public var description: String {
+      """
+      Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
+
+      \(sql)
+      """
+    }
+  }
+
+  @usableFromInline
+  func sqliteCrossStorageClassName(_ columnType: Int32) -> String {
+    switch columnType {
+    case SQLITE_BLOB: "BLOB"
+    case SQLITE_FLOAT: "REAL"
+    case SQLITE_INTEGER: "INTEGER"
+    case SQLITE_NULL: "NULL"
+    case SQLITE_TEXT: "TEXT"
+    default: "unknown"
+    }
+  }
+
+
+  // MARK: - Collations and functions
+
+  extension GRDB.Configuration {
+    /// Installs a Swift-implemented collating sequence on every connection opened with this
+    /// configuration.
+    ///
+    /// A collating sequence or function is only known to the connection it was installed on. A
+    /// `DatabasePool` opens connections as it needs them, so installing on one connection leaves
+    /// queries on every other connection failing with "no such collation sequence". Registering
+    /// through the configuration covers connections opened later, too.
+    ///
+    /// ```swift
+    /// var configuration = Configuration()
+    /// configuration.register(collation: $localized)
+    ///
+    /// let database = CrossProcessDatabase(
+    ///   writer: try DatabasePool(path: path, configuration: configuration)
+    /// )
+    /// ```
+    public mutating func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) {
+      prepareDatabase { database in
+        database.install(collation: collation)
+      }
+    }
+
+    /// Installs a Swift-implemented scalar function on every connection opened with this
+    /// configuration. See ``register(collation:)``.
+    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+      prepareDatabase { database in
+        database.install(function: function)
+      }
+    }
+
+    /// Installs a Swift-implemented aggregate function on every connection opened with this
+    /// configuration. See ``register(collation:)``.
+    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+      prepareDatabase { database in
+        database.install(function: function)
+      }
+    }
+  }
+
+  extension Database {
+    /// Installs a Swift-implemented collating sequence on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(collation:)``, which covers every connection a pool
+    /// opens.
+    public func install(collation: some StructuredQueriesSQLiteCore.DatabaseCollation) {
+      sqliteCrossInstall(collation: collation, on: sqliteConnection)
+    }
+
+    /// Installs a Swift-implemented scalar function on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(function:)-swift.method``, which covers every
+    /// connection a pool opens.
+    public func install(function: some ScalarDatabaseFunction) {
+      sqliteCrossInstall(function: function, on: sqliteConnection)
+    }
+
+    /// Installs a Swift-implemented aggregate function on this connection.
+    ///
+    /// Prefer ``GRDB/Configuration/register(function:)-swift.method``, which covers every
+    /// connection a pool opens.
+    public func install(function: some AggregateDatabaseFunction) {
+      sqliteCrossInstall(function: function, on: sqliteConnection)
     }
   }
 

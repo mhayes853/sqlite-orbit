@@ -33,10 +33,11 @@ public struct SQLiteReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapa
   }
 
   @_lifetime(borrow self)
-  public borrowing func rowCursor<S: DatabaseReadStatement>(
-    _ statement: S
+  public borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseReadAccess>,
+    cached: Bool
   ) throws -> SQLiteRowCursor {
-    try cursor(for: statement.query)
+    try cursor(for: query.fragment, cached: cached)
   }
 
   /// Runs SQL that the query builder does not model, such as schema changes.
@@ -45,8 +46,14 @@ public struct SQLiteReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapa
   }
 
   @_lifetime(borrow self)
-  borrowing func cursor(for query: QueryFragment) throws -> SQLiteRowCursor {
-    try SQLiteRowCursor(query, connection: connection, library: library, statements: statements)
+  borrowing func cursor(for query: QueryFragment, cached: Bool) throws -> SQLiteRowCursor {
+    try SQLiteRowCursor(
+      query,
+      cached: cached,
+      connection: connection,
+      library: library,
+      statements: statements
+    )
   }
 }
 
@@ -76,22 +83,24 @@ public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Esca
   }
 
   @_lifetime(borrow self)
-  public borrowing func rowCursor<S: DatabaseReadStatement>(
-    _ statement: S
+  public borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseReadAccess>,
+    cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: statement.query)
+    try base.cursor(for: query.fragment, cached: cached)
   }
 
   @_lifetime(borrow self)
-  public borrowing func executeRowCursor<S: DatabaseWriteStatement>(
-    _ statement: S
+  public borrowing func rowCursor(
+    _ query: DatabaseQuery<DatabaseWriteAccess>,
+    cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: statement.query)
+    try base.cursor(for: query.fragment, cached: cached)
   }
 
   @discardableResult
-  public borrowing func execute<S: DatabaseWriteStatement>(_ statement: S) throws -> Int {
-    var cursor = try base.cursor(for: statement.query)
+  public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+    var cursor = try base.cursor(for: query.fragment, cached: false)
     try cursor.forEach { _ in }
     return Int(base.library.pointee.changes(base.connection))
   }
