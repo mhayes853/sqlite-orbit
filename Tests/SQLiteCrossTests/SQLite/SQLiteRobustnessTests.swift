@@ -233,6 +233,196 @@
     #expect(stored == titles)
   }
 
+  /// Counts connections opened and closed, so a leak is visible rather than merely suspected.
+  private final class ConnectionCounter: Sendable {
+    private let state = Mutex((opened: 0, closed: 0))
+
+    var opened: Int { state.withLock { $0.opened } }
+    var closed: Int { state.withLock { $0.closed } }
+
+    var library: SQLiteLibrary {
+      let base = SQLiteLibrary.system
+      var library = base
+      library.open_v2 = { path, connection, flags, vfs in
+        let code = base.open_v2(path, connection, flags, vfs)
+        if code == SQLiteResultCode.ok.rawValue {
+          self.state.withLock { $0.opened += 1 }
+        }
+        return code
+      }
+      library.close_v2 = { connection in
+        self.state.withLock { $0.closed += 1 }
+        return base.close_v2(connection)
+      }
+      return library
+    }
+  }
+
+  @Test
+  func releasingAPoolClosesEveryConnectionItOpened() async throws {
+    let counter = ConnectionCounter()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = counter.library
+    configuration.readerCount = 3
+
+    let path = NSTemporaryDirectory() + "sqlite-cross-close-\(UUID().uuidString).sqlite"
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: path + suffix)
+      }
+    }
+
+    do {
+      let driver = try SQLitePoolDriver(path: path, configuration: configuration)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      #expect(counter.opened == 4)
+      #expect(counter.closed == 0)
+    }
+
+    // Nothing else holds these connections, so every one of them must have been closed. A driver
+    // that leaked them would exhaust file descriptors in any process that opens databases often.
+    while counter.closed < counter.opened {
+      await Task.yield()
+    }
+    #expect(counter.closed == counter.opened)
+  }
+
+  @Test
+  func aPoolSurvivesAStormOfCancellations() async throws {
+    let path = NSTemporaryDirectory() + "sqlite-cross-storm-\(UUID().uuidString).sqlite"
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: path + suffix)
+      }
+    }
+    var configuration = SQLiteConfiguration.default
+    configuration.readerCount = 2
+    let driver = try SQLitePoolDriver(path: path, configuration: configuration)
+    try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    // Half of these are cancelled almost immediately, most while still queued for a reader or the
+    // writer. Whatever they were holding has to come back either way.
+    await withTaskGroup(of: Void.self) { group in
+      for index in 0..<200 {
+        group.addTask {
+          let task = Task {
+            if index.isMultiple(of: 2) {
+              _ = try await driver.read { transaction in
+                try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+              }
+            } else {
+              try await driver.write { transaction in
+                try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+              }
+            }
+          }
+          if index.isMultiple(of: 3) {
+            task.cancel()
+          }
+          _ = try? await task.value
+        }
+      }
+      await group.waitForAll()
+    }
+
+    // Every reader and the writer came back, so the pool still works.
+    let count = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+    }
+    #expect(count.count == 1)
+    try await driver.write { transaction in
+      try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+    }
+  }
+
+  @Test
+  func aReaderSeesWhatAnotherConnectionCommitted() async throws {
+    let path = NSTemporaryDirectory() + "sqlite-cross-shared-\(UUID().uuidString).sqlite"
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: path + suffix)
+      }
+    }
+
+    // Two drivers on one file stand in for two processes sharing a database.
+    let writer = try SQLitePoolDriver(path: path)
+    let reader = try SQLitePoolDriver(path: path)
+    try await writer.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    for id in 1...5 {
+      try await writer.write { transaction in
+        try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+      }
+      // Each read takes a fresh snapshot, so it must see everything committed before it.
+      let count = try await reader.read { transaction in
+        try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
+      #expect(count == [id])
+    }
+  }
+
+  @Test
+  func writesFromTwoConnectionsQueueRatherThanFail() async throws {
+    let path = NSTemporaryDirectory() + "sqlite-cross-contended-\(UUID().uuidString).sqlite"
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: path + suffix)
+      }
+    }
+
+    let first = try SQLitePoolDriver(path: path)
+    let second = try SQLitePoolDriver(path: path)
+    try await first.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    // Each driver serializes its own writes, but nothing coordinates the two: they overlap in
+    // SQLite itself, and only the busy timeout keeps one from failing outright.
+    try await withThrowingTaskGroup(of: Void.self) { group in
+      for index in 0..<60 {
+        let driver = index.isMultiple(of: 2) ? first : second
+        group.addTask {
+          try await driver.write { transaction in
+            try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+          }
+        }
+      }
+      try await group.waitForAll()
+    }
+
+    let count = try await first.read { transaction in
+      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+    }
+    #expect(count == [60])
+  }
+
+  @Test
+  func decodingNullIntoANonOptionalIsReportedRatherThanCrashing() throws {
+    let handle = try openConnection()
+    try handle.execute("CREATE TABLE numbers (value INTEGER)")
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO numbers (value) VALUES (NULL)")
+    }
+
+    #expect(throws: (any Error).self) {
+      try handle.read { transaction in
+        _ = try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
+      }
+    }
+
+    // The failed decode did not leave the connection unusable.
+    let values = try handle.read { transaction in
+      try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int?.self))
+    }
+    #expect(values == [Int?.none])
+  }
+
   @Table
   private struct Item: Equatable, Sendable {
     let id: Int

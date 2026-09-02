@@ -13,7 +13,6 @@ import Foundation
 /// The handle is ordinary isolated state, so the connection needs no lock of its own.
 actor SQLiteConnection {
   private var handle: SQLiteHandle
-  private let queue: DispatchQueue
   private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
@@ -29,9 +28,9 @@ actor SQLiteConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    let queue = DispatchQueue(label: "SQLiteCross.connection")
-    self.queue = queue
-    self.executor = SQLiteConnectionExecutor(queue: queue)
+    self.executor = SQLiteConnectionExecutor(
+      queue: DispatchQueue(label: "SQLiteCross.connection")
+    )
     self.handle = handle
   }
 
