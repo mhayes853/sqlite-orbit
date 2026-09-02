@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Linux (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default traits
+            traits: ""
+          - name: GRDB
+            traits: "--traits GRDB"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SQLite
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libsqlite3-dev pkg-config
+
+      - name: Test
+        run: swift test ${{ matrix.traits }}
