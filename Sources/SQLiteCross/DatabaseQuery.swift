@@ -31,9 +31,17 @@ public struct DatabaseQuery<Access: DatabaseAccess>: Sendable {
 extension DatabaseQuery where Access == DatabaseReadAccess {
   /// Wraps a `SELECT`-shaped statement.
   ///
-  /// This covers `Select`, `Where`, `Table`, `Values`, `With` over a select, the compound selects
-  /// produced by `union`, `intersect`, and `except`, and raw SQL.
+  /// This covers `Select`, `Where`, `Table`, `Values`, `With` over a select, and the compound
+  /// selects produced by `union`, `intersect`, and `except`.
   public init(_ statement: some PartialSelectStatement) {
+    self.init(unchecked: statement.query)
+  }
+
+  /// Wraps raw SQL.
+  ///
+  /// Raw SQL is ordinary to write, but its capability cannot be established from its type, so it
+  /// is accepted by read and write transactions alike. The caller is stating that the SQL reads.
+  public init<QueryValue>(_ statement: SQLQueryExpression<QueryValue>) {
     self.init(unchecked: statement.query)
   }
 }
@@ -47,7 +55,3 @@ extension DatabaseQuery where Access == DatabaseWriteAccess {
     self.init(unchecked: statement.query)
   }
 }
-
-/// Raw SQL is ordinary to write, but its capability cannot be established from its type, so it is
-/// accepted wherever a `SELECT`-shaped statement is. The caller is stating that the SQL reads.
-extension SQLQueryExpression: @retroactive PartialSelectStatement {}

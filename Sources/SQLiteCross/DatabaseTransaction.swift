@@ -60,6 +60,15 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> RowCursor {
     try rowCursor(DatabaseQuery<DatabaseReadAccess>(statement), cached: cached)
   }
+
+  /// Creates a raw row cursor over the rows returned by raw SQL.
+  @_lifetime(borrow self)
+  public borrowing func rowCursor<QueryValue>(
+    _ statement: SQLQueryExpression<QueryValue>,
+    cached: Bool = false
+  ) throws -> RowCursor {
+    try rowCursor(DatabaseQuery<DatabaseReadAccess>(statement), cached: cached)
+  }
 }
 
 extension DatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {

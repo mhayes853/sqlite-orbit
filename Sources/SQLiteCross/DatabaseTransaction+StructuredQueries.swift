@@ -7,8 +7,8 @@ public struct DatabaseRecordNotFoundError: Error, Sendable {
 
 // Statements come in four shapes, and each needs its own decoding. A statement either projects a
 // single value, projects a tuple of values, or projects nothing at all, in which case its rows
-// decode to its `FROM` table plus whatever tables are joined to it. Raw SQL is a `SELECT`-shaped
-// statement too, so it takes the first two.
+// decode to its `FROM` table plus whatever tables are joined to it. Raw SQL takes the first two
+// shapes, but has no type in common with the select statements, so it is spelled out again.
 //
 // These are written once, on the read transaction. `DatabaseWriteTransaction` refines
 // `DatabaseReadTransaction`, so write transactions inherit all four.
@@ -56,6 +56,25 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> DatabaseTupleQueryCursor<RowCursor, S.From, repeat each J>
   where S.QueryValue == (), S.Joins == (repeat each J) {
     DatabaseTupleQueryCursor(base: try rowCursor(statement.selectStar(), cached: cached))
+  }
+
+  /// Creates a cursor that lazily decodes each value produced by raw SQL.
+  @_lifetime(borrow self)
+  public borrowing func fetchCursor<QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<QueryValue>,
+    cached: Bool = false
+  ) throws -> DatabaseQueryCursor<RowCursor, QueryValue> {
+    DatabaseQueryCursor(base: try rowCursor(statement, cached: cached))
+  }
+
+  /// Creates a cursor that lazily decodes each tuple produced by raw SQL.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  @_lifetime(borrow self)
+  public borrowing func fetchCursor<each QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<(repeat each QueryValue)>,
+    cached: Bool = false
+  ) throws -> DatabaseTupleQueryCursor<RowCursor, repeat each QueryValue> {
+    DatabaseTupleQueryCursor(base: try rowCursor(statement, cached: cached))
   }
 }
 
@@ -144,6 +163,44 @@ extension DatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> Int
   where S.QueryValue == (), S.Joins == () {
     try fetchOne(statement.asSelect().count()) ?? 0
+  }
+
+  /// Fetches every value produced by raw SQL.
+  public borrowing func fetchAll<QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<QueryValue>
+  ) throws -> [QueryValue.QueryOutput] {
+    try fetchCursor(statement, cached: true).collect()
+  }
+
+  /// Fetches the first value produced by raw SQL.
+  public borrowing func fetchOne<QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<QueryValue>
+  ) throws -> QueryValue.QueryOutput? {
+    try fetchCursor(statement, cached: true).first()
+  }
+
+  /// Fetches every tuple produced by raw SQL.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  public borrowing func fetchAll<each QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<(repeat each QueryValue)>
+  ) throws -> [(repeat (each QueryValue).QueryOutput)] {
+    var values: [(repeat (each QueryValue).QueryOutput)] = []
+    var cursor = DatabaseTupleQueryCursor<RowCursor, repeat each QueryValue>(
+      base: try rowCursor(statement, cached: true)
+    )
+    try cursor.forEach { values.append($0) }
+    return values
+  }
+
+  /// Fetches the first tuple produced by raw SQL.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  public borrowing func fetchOne<each QueryValue: QueryRepresentable>(
+    _ statement: SQLQueryExpression<(repeat each QueryValue)>
+  ) throws -> (repeat (each QueryValue).QueryOutput)? {
+    var cursor = DatabaseTupleQueryCursor<RowCursor, repeat each QueryValue>(
+      base: try rowCursor(statement, cached: true)
+    )
+    return try cursor.next()
   }
 
   /// Fetches the row with the given primary key.
