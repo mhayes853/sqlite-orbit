@@ -7,9 +7,7 @@
   @testable import SQLiteCross
 
   private func makeQueueDriver() throws -> SQLiteQueueDriver {
-    let driver = try SQLiteQueueDriver(path: ":memory:")
-    try driver.readSynchronously { _ in }
-    return driver
+    try SQLiteQueueDriver(path: ":memory:")
   }
 
   private func bootstrap(_ driver: SQLiteQueueDriver) async throws {
@@ -133,17 +131,30 @@
   }
 
   @Test
-  func queueDriverReadsWithoutAnAsynchronousContext() async throws {
+  @MainActor
+  func accessesRunOffTheCallersThread() async throws {
+    let driver = try makeQueueDriver()
+
+    // The driver method runs on the caller's isolation, here the main actor, but the query itself
+    // hops to the connection's own queue rather than running the main thread.
+    let ranOnMainThread = try await driver.read { _ in Thread.isMainThread }
+    #expect(ranOnMainThread == false)
+  }
+
+  @Test
+  func writesAndReadsSeeEachOtherInOrder() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
-    try await driver.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "sync") })
-    }
 
-    let titles = try driver.readSynchronously { transaction in
-      try transaction.fetchAll(Item.select(\.title))
+    for id in 1...20 {
+      try await driver.write { transaction in
+        try transaction.execute(Item.insert { Item(id: id, title: "ordered") })
+      }
+      let count = try await driver.read { transaction in
+        try transaction.fetchAll(Item.all).count
+      }
+      #expect(count == id)
     }
-    #expect(titles == ["sync"])
   }
 
   @Test

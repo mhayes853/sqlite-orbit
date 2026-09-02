@@ -19,7 +19,7 @@ extension DatabaseIdentifier {
   ///
   /// In-memory databases are private to the connection that opened them, so no two of them are the
   /// same database and each gets a unique identity instead.
-  static func forDatabase(path: String) -> Self {
+  public static func forDatabase(path: String) -> Self {
     guard !path.isEmpty, path != ":memory:" else { return .unique() }
     return Self(rawValue: URL(fileURLWithPath: path).standardizedFileURL.path)
   }

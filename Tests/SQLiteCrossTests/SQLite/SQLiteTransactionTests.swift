@@ -8,8 +8,8 @@
 
   private func openTestConnection(
     configuration: SQLiteConfiguration = .default
-  ) throws -> SQLiteConnection {
-    let connection = try SQLiteConnection.open(
+  ) throws -> SQLiteHandle {
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
@@ -31,12 +31,12 @@
   func transactionExecutesStatementsAndDecodesTables() throws {
     let connection = try openTestConnection()
 
-    let changed = try withWriteTransaction(on: connection) { transaction in
+    let changed = try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
     }
     #expect(changed == 1)
 
-    let items = try withReadTransaction(on: connection) { transaction in
+    let items = try connection.read { transaction in
       try transaction.fetchAll(Item.all.order { $0.id })
     }
     #expect(items == [Item(id: 1, title: "Blob's reminder")])
@@ -45,11 +45,11 @@
   @Test
   func transactionDecodesTupleProjections() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 7, title: "projected") })
     }
 
-    let projections = try withReadTransaction(on: connection) { transaction in
+    let projections = try connection.read { transaction in
       try transaction.fetchAll(Item.select { ($0.id, $0.title) })
     }
     #expect(projections.count == 1)
@@ -60,13 +60,13 @@
   @Test
   func cursorsAdvanceLazilyAndStopWhenExhausted() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       for id in 1...3 {
         try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
       }
     }
 
-    try withReadTransaction(on: connection) { transaction in
+    try connection.read { transaction in
       var cursor = try transaction.fetchCursor(Item.all.order { $0.id })
       var titles: [String] = []
       while let item = try cursor.next() {
@@ -81,18 +81,18 @@
   @Test
   func writeCursorsReturnRowsFromReturningClauses() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "before") })
     }
 
-    let updated = try withWriteTransaction(on: connection) { transaction in
+    let updated = try connection.write { transaction in
       try transaction.fetchAll(
         #sql("UPDATE items SET title = 'after' RETURNING id", as: Int.self)
       )
     }
     #expect(updated == [1])
 
-    let titles = try withReadTransaction(on: connection) { transaction in
+    let titles = try connection.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
     }
     #expect(titles == ["after"])
@@ -101,13 +101,13 @@
   @Test
   func executeReportsTheNumberOfChangedRows() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       for id in 1...3 {
         try transaction.execute(Item.insert { Item(id: id, title: "row") })
       }
     }
 
-    let changed = try withWriteTransaction(on: connection) { transaction in
+    let changed = try connection.write { transaction in
       try transaction.execute(Item.update { $0.title = "changed" })
     }
     #expect(changed == 3)
@@ -119,13 +119,13 @@
     let occurredAt = Date(timeIntervalSince1970: 1_234_567_890)
     let token = UUID()
 
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(
         SpecialValue.insert { SpecialValue(id: 1, occurredAt: occurredAt, token: token) }
       )
     }
 
-    let values = try withReadTransaction(on: connection) { transaction in
+    let values = try connection.read { transaction in
       try transaction.fetchAll(SpecialValue.all)
     }
     #expect(values.count == 1)
@@ -148,7 +148,7 @@
     )
 
     let payload: [UInt8] = [0x00, 0x01, 0xfe, 0xff]
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(
         #sql(
           """
@@ -160,7 +160,7 @@
       )
     }
 
-    try withReadTransaction(on: connection) { transaction in
+    try connection.read { transaction in
       let amounts = try transaction.fetchAll(#sql("SELECT amount FROM primitives", as: Double.self))
       #expect(amounts == [2.5])
       let flags = try transaction.fetchAll(#sql("SELECT flag FROM primitives", as: Bool.self))
@@ -182,7 +182,7 @@
     try connection.execute("CREATE TABLE blobs (payload BLOB)")
 
     let empty: [UInt8] = []
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(
         #sql(
           "INSERT INTO blobs (payload) VALUES (\(empty, as: [UInt8].self))",
@@ -191,7 +191,7 @@
       )
     }
 
-    try withReadTransaction(on: connection) { transaction in
+    try connection.read { transaction in
       let types = try transaction.fetchAll(
         #sql("SELECT typeof(payload) FROM blobs", as: String.self)
       )
@@ -207,21 +207,20 @@
     let base = SQLiteLibrary.system
     var configuration = SQLiteConfiguration.default
     configuration.library = base
+    // Only the fetches count; the transaction's own BEGIN and ROLLBACK are prepared uncached.
     configuration.library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
-      let code = base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
-      if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
+      if let sql, String(cString: sql).hasPrefix("SELECT") {
         counters.withLock { $0 += 1 }
       }
-      return code
+      return base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
     }
 
     let connection = try openTestConnection(configuration: configuration)
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "cached") })
     }
-    let afterSetup = counters.withLock { $0 }
 
-    try withReadTransaction(on: connection) { transaction in
+    try connection.read { transaction in
       for _ in 0..<10 {
         _ = try transaction.fetchAll(Item.all)
       }
@@ -229,17 +228,17 @@
 
     // Ten identical fetches, one parse: each cursor returned its statement when it went out of
     // scope, and the next fetch found it waiting.
-    #expect(counters.withLock { $0 } == afterSetup + 1)
+    #expect(counters.withLock { $0 } == 1)
   }
 
   @Test
   func transactionsExposeTheRawConnectionAndItsLibrary() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "raw") })
     }
 
-    let count = try withReadTransaction(on: connection) { transaction -> Int64 in
+    let count = try connection.read { transaction -> Int64 in
       // Exactly what a caller with their own SQLite build would do.
       let library = transaction.sqlite
       var statement: OpaquePointer?
@@ -257,12 +256,12 @@
   @Test
   func decodingReportsATypeMismatchRatherThanReturningGarbage() throws {
     let connection = try openTestConnection()
-    try withWriteTransaction(on: connection) { transaction in
+    try connection.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "text") })
     }
 
     #expect(throws: (any Error).self) {
-      try withReadTransaction(on: connection) { transaction in
+      try connection.read { transaction in
         _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
       }
     }

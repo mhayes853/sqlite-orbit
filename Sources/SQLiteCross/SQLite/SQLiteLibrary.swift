@@ -1,4 +1,4 @@
-/// The destructor SQLite calls to release a bound text or blob value.
+/// The destructor SQLite calls to release a value or context it was handed.
 public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
 /// A table of the SQLite entry points ``SQLiteCross`` needs.
@@ -59,10 +59,15 @@ public struct SQLiteLibrary: Sendable {
   public var bind_null: @Sendable (OpaquePointer?, Int32) -> Int32
   public var bind_int64: @Sendable (OpaquePointer?, Int32, Int64) -> Int32
   public var bind_double: @Sendable (OpaquePointer?, Int32, Double) -> Int32
-  public var bind_text:
-    @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32, SQLiteDestructor?) -> Int32
-  public var bind_blob:
-    @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32, SQLiteDestructor?) -> Int32
+  /// Binds a copy of the text at a pointer, which need only stay valid for the call.
+  ///
+  /// SQLite's own `sqlite3_bind_text` takes a destructor to say whether it may borrow the bytes.
+  /// The table does not: the buffers this package binds live only for the call, so its entry point
+  /// always copies, which is `SQLITE_TRANSIENT` in a build's own terms.
+  public var bind_text: @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32
+
+  /// Binds a copy of the bytes at a pointer, which need only stay valid for the call.
+  public var bind_blob: @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
 
   // MARK: - Columns
 
@@ -118,12 +123,8 @@ public struct SQLiteLibrary: Sendable {
     bind_null: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
     bind_int64: @escaping @Sendable (OpaquePointer?, Int32, Int64) -> Int32,
     bind_double: @escaping @Sendable (OpaquePointer?, Int32, Double) -> Int32,
-    bind_text: @escaping @Sendable (
-      OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32, SQLiteDestructor?
-    ) -> Int32,
-    bind_blob: @escaping @Sendable (
-      OpaquePointer?, Int32, UnsafeRawPointer?, Int32, SQLiteDestructor?
-    ) -> Int32,
+    bind_text: @escaping @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32,
+    bind_blob: @escaping @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32,
     column_count: @escaping @Sendable (OpaquePointer?) -> Int32,
     column_type: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
     column_int64: @escaping @Sendable (OpaquePointer?, Int32) -> Int64,
@@ -176,10 +177,3 @@ public struct SQLiteLibrary: Sendable {
   }
 }
 
-extension SQLiteLibrary {
-  /// The destructor that tells SQLite to copy a bound value rather than borrow it.
-  ///
-  /// SQLite spells this as the value `-1` cast to a destructor, which is not something a C header
-  /// import can express as a constant.
-  public static let transientDestructor = unsafeBitCast(-1, to: SQLiteDestructor.self)
-}

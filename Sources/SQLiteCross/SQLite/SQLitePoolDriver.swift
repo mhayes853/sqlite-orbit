@@ -15,18 +15,17 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// A ``DatabaseDriver`` that runs reads concurrently against a pool of connections while
 /// serializing writes through one.
 ///
-/// The database runs in WAL mode, which is what lets readers keep working while a write is in
-/// flight. Writes queue on an actor, so a hundred tasks writing at once suspend in turn rather than
-/// occupying a hundred threads.
+/// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
+/// queued behind it, so a read issued after a write observes it. The database runs in WAL mode so
+/// that other processes' readers are never blocked by this one's writer.
 public final class SQLitePoolDriver: DatabaseDriver, Sendable {
   public typealias ReadTransaction = SQLiteReadTransaction
   public typealias WriteTransaction = SQLiteWriteTransaction
 
   public let defaultIdentifier: DatabaseIdentifier
 
-  private let writer: SQLiteConnectionActor
-  private let readers: SQLiteReaderPool
-  private let synchronousReader: SQLiteConnectionStorage
+  private let writer: SQLiteConnection
+  private let scheduler: SQLitePoolScheduler
 
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
   ///
@@ -45,36 +44,29 @@ public final class SQLitePoolDriver: DatabaseDriver, Sendable {
     guard !path.isEmpty, path != ":memory:", !path.hasPrefix("file::memory:") else {
       throw SQLitePoolUnavailableError(path: path)
     }
-    let resolvedIdentifier = identifier ?? .forDatabase(path: path)
+    let identifier = identifier ?? .forDatabase(path: path)
 
     // Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes
     // opening it at the same moment would otherwise contend for it.
-    let connections = try Self.withOpenLock(
-      identifier: resolvedIdentifier,
+    let (writer, readers) = try Self.withOpenLock(
+      identifier: identifier,
       directory: coordinationDirectory
     ) {
       try Self.openConnections(path: path, configuration: configuration)
     }
 
-    self.defaultIdentifier = resolvedIdentifier
-    self.writer = SQLiteConnectionActor(storage: connections.writer)
-    self.synchronousReader = connections.synchronousReader
-    self.readers = SQLiteReaderPool(
-      readers: connections.readers.map(SQLiteConnectionActor.init(storage:))
-    )
+    self.defaultIdentifier = identifier
+    self.writer = writer
+    self.scheduler = SQLitePoolScheduler(readers: readers)
   }
 
   private static func openConnections(
     path: String,
     configuration: SQLiteConfiguration
-  ) throws -> (
-    writer: SQLiteConnectionStorage,
-    readers: [SQLiteConnectionStorage],
-    synchronousReader: SQLiteConnectionStorage
-  ) {
+  ) throws -> (writer: SQLiteConnection, readers: [SQLiteConnection]) {
     var writerConfiguration = configuration
     writerConfiguration.setupSQL.append("PRAGMA journal_mode = WAL")
-    let writer = try SQLiteConnectionStorage(
+    let writer = try SQLiteConnection(
       path: path,
       flags: [.readWrite, .create, .noMutex],
       configuration: writerConfiguration
@@ -84,18 +76,14 @@ public final class SQLitePoolDriver: DatabaseDriver, Sendable {
     // the raw connection into an error rather than a surprise.
     var readerConfiguration = configuration
     readerConfiguration.setupSQL.append("PRAGMA query_only = ON")
-    func openReader() throws -> SQLiteConnectionStorage {
-      try SQLiteConnectionStorage(
+    let readers = try (0..<max(1, configuration.readerCount)).map { _ in
+      try SQLiteConnection(
         path: path,
         flags: [.readOnly, .noMutex],
         configuration: readerConfiguration
       )
     }
-
-    let readers = try (0..<max(1, configuration.readerCount)).map { _ in try openReader() }
-    // Synchronous reads cannot enter an actor, so they get a connection of their own rather than
-    // blocking either the pool or, worse, the single writer.
-    return (writer, readers, try openReader())
+    return (writer, readers)
   }
 
   private static func withOpenLock<Result>(
@@ -118,44 +106,34 @@ public final class SQLitePoolDriver: DatabaseDriver, Sendable {
   public func read<Result: Sendable>(
     _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
   ) async throws -> sending Result {
-    let reader = try await readers.acquire()
-    let result: Result
+    let reader = try await scheduler.acquireReader()
+    // Giving the reader back is awaited rather than deferred to a task: a reader that comes back
+    // late is a reader the next caller waits for while it is already free.
+    let value: Result
     do {
-      result = try await withInterruptOnCancellation(reader.storage) {
-        try await reader.read(body)
-      }
+      value = try await reader.read(body)
     } catch {
-      // Returning the reader is awaited rather than deferred to a task: a reader that comes back
-      // late is a reader the next caller waits for while it is already free.
-      await readers.release(reader)
+      await scheduler.releaseReader(reader)
       throw error
     }
-    await readers.release(reader)
-    return result
+    await scheduler.releaseReader(reader)
+    return value
   }
 
   nonisolated(nonsending)
   public func write<Result: Sendable>(
     _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
   ) async throws -> sending Result {
-    try await withInterruptOnCancellation(writer.storage) {
-      try await writer.write(body)
+    try await scheduler.acquireWriter()
+    let value: Result
+    do {
+      value = try await writer.write(body)
+    } catch {
+      await scheduler.releaseWriter()
+      throw error
     }
-  }
-
-  /// Reads without an asynchronous context, blocking the calling thread.
-  ///
-  /// This uses a connection reserved for it, so it neither takes a reader out of the pool nor waits
-  /// on the writer. Prefer ``read(_:)``, which suspends instead of blocking.
-  ///
-  /// There is deliberately no synchronous counterpart for writing: a database has one writer, and
-  /// blocking a thread on it is the easiest way to stall every other writer behind it.
-  public func readSynchronously<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-  ) throws -> sending Result {
-    try synchronousReader.connection.withLock { connection in
-      try runRead(on: connection, body)
-    }
+    await scheduler.releaseWriter()
+    return value
   }
 }
 

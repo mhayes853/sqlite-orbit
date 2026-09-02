@@ -1,14 +1,12 @@
-import Foundation
-
 /// The settings a native SQLite driver applies to every connection it opens.
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
   public var library: SQLiteLibrary
 
-  /// The number of reader connections a pool opens.
+  /// The number of reader connections a pool opens, and so how many reads can run at once.
   ///
-  /// Readers run their queries on the cooperative thread pool, so this also bounds how much of
-  /// that pool a busy database can occupy.
+  /// Each connection runs on a dispatch queue of its own, so this bounds threads rather than any
+  /// share of the cooperative pool.
   public var readerCount: Int
 
   /// How long SQLite waits for a lock another connection or process holds before reporting
@@ -32,7 +30,7 @@ public struct SQLiteConfiguration: Sendable {
 
   public init(
     library: SQLiteLibrary,
-    readerCount: Int = SQLiteConfiguration.automaticReaderCount,
+    readerCount: Int = 5,
     busyTimeout: Duration = .seconds(5),
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
@@ -46,12 +44,6 @@ public struct SQLiteConfiguration: Sendable {
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
-  }
-
-  /// Half the machine's processors, which keeps readers from crowding out the rest of the
-  /// cooperative pool.
-  public static var automaticReaderCount: Int {
-    max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
   }
 
   /// The busy timeout in the milliseconds SQLite expects.

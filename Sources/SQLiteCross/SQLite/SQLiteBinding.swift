@@ -3,8 +3,6 @@ import StructuredQueries
 
 /// Binds one Structured Queries value to a prepared statement.
 ///
-/// Text and blob bindings are copied by SQLite rather than borrowed, because the Swift buffer they
-/// come from only lives for the duration of the call.
 func bind(
   _ binding: QueryBinding,
   to statement: OpaquePointer,
@@ -19,28 +17,16 @@ func bind(
       guard let baseAddress = buffer.baseAddress else {
         var empty: UInt8 = 0
         return withUnsafeBytes(of: &empty) {
-          library.pointee.bind_blob(
-            statement,
-            index,
-            $0.baseAddress,
-            0,
-            SQLiteLibrary.transientDestructor
-          )
+          library.pointee.bind_blob(statement, index, $0.baseAddress, 0)
         }
       }
-      return library.pointee.bind_blob(
-        statement,
-        index,
-        baseAddress,
-        Int32(buffer.count),
-        SQLiteLibrary.transientDestructor
-      )
+      return library.pointee.bind_blob(statement, index, baseAddress, Int32(buffer.count))
     }
   case .bool(let bool):
     code = library.pointee.bind_int64(statement, index, bool ? 1 : 0)
   case .date(let date):
     code = date.sqliteCrossISO8601String.withCString {
-      library.pointee.bind_text(statement, index, $0, -1, SQLiteLibrary.transientDestructor)
+      library.pointee.bind_text(statement, index, $0, -1)
     }
   case .double(let double):
     code = library.pointee.bind_double(statement, index, double)
@@ -50,7 +36,7 @@ func bind(
     code = library.pointee.bind_null(statement, index)
   case .text(let string):
     code = string.withCString {
-      library.pointee.bind_text(statement, index, $0, -1, SQLiteLibrary.transientDestructor)
+      library.pointee.bind_text(statement, index, $0, -1)
     }
   case .uint(let integer):
     guard integer <= UInt64(Int64.max) else {
@@ -59,7 +45,7 @@ func bind(
     code = library.pointee.bind_int64(statement, index, Int64(integer))
   case .uuid(let uuid):
     code = uuid.uuidString.lowercased().withCString {
-      library.pointee.bind_text(statement, index, $0, -1, SQLiteLibrary.transientDestructor)
+      library.pointee.bind_text(statement, index, $0, -1)
     }
   case .invalid(let error):
     throw error.underlyingError

@@ -32,16 +32,16 @@ let reminders = try await database.read { transaction in
 
 Two drivers back it:
 
-- `SQLitePoolDriver` runs the database in WAL mode with one writer and a fixed set of readers, so
-  reads keep working against the pre-write snapshot while a write is in flight. Waiting for a reader
-  suspends on an actor rather than blocking a thread.
+- `SQLitePoolDriver` runs the database in WAL mode with one writer and a fixed set of readers.
+  Reads run alongside one another; a write waits for the reads in flight and holds off the reads
+  queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
+  a thread.
 - `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for an
   in-memory database, which is private to the connection that opened it and so cannot be pooled at
   all.
 
-Both offer `readSynchronously` for callers with no `await` available, such as work during
-application launch. Neither offers a synchronous write: a database has exactly one writer, and
-blocking a thread on it is the easiest way to stall every other writer behind it.
+Each connection runs on a dispatch queue of its own, as GRDB's do, so a query never occupies a
+cooperative-pool thread.
 
 ## Using your own SQLite build
 

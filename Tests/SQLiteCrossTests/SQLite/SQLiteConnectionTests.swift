@@ -35,11 +35,11 @@
 
   /// Reads a single integer, using the library table directly so the test does not depend on the
   /// cursor types that do not exist yet.
-  private func scalar(_ connection: borrowing SQLiteConnection, _ sql: String) throws -> Int64 {
+  private func scalar(_ connection: borrowing SQLiteHandle, _ sql: String) throws -> Int64 {
     let library = connection.library
     var statement: OpaquePointer?
     let code = sql.withCString {
-      library.pointee.prepare_v3(connection.handle, $0, -1, 0, &statement, nil)
+      library.pointee.prepare_v3(connection.pointer, $0, -1, 0, &statement, nil)
     }
     try #require(code == SQLiteResultCode.ok.rawValue)
     defer { _ = library.pointee.finalize(statement) }
@@ -53,7 +53,7 @@
 
   @Test
   func connectionOpensExecutesAndReportsMutations() throws {
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: .default
@@ -74,7 +74,7 @@
 
   @Test
   func connectionAppliesItsConfiguredPragmas() throws {
-    let enabled = try SQLiteConnection.open(
+    let enabled = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: .default
@@ -85,7 +85,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.isForeignKeysEnabled = false
     configuration.setupSQL = ["PRAGMA application_id = 42"]
-    let disabled = try SQLiteConnection.open(
+    let disabled = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
@@ -96,7 +96,7 @@
 
   @Test
   func connectionEnforcesForeignKeysWhenConfigured() throws {
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: .default
@@ -119,7 +119,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
 
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
@@ -142,7 +142,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
 
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
@@ -166,7 +166,7 @@
     configuration.library = countingLibrary(counters)
     configuration.maximumCachedStatements = 1
 
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
@@ -189,7 +189,7 @@
     configuration.library = countingLibrary(counters)
 
     do {
-      let connection = try SQLiteConnection.open(
+      let connection = try SQLiteHandle.open(
         path: ":memory:",
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: configuration
@@ -210,13 +210,13 @@
   func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
     let path = NSTemporaryDirectory() + "sqlite-cross-missing-\(UUID().uuidString)/db.sqlite"
     #expect(throws: SQLiteError.self) {
-      _ = try SQLiteConnection.open(path: path, flags: [.readWrite], configuration: .default)
+      _ = try SQLiteHandle.open(path: path, flags: [.readWrite], configuration: .default)
     }
   }
 
   @Test
   func executeReportsTheFailingSQL() throws {
-    let connection = try SQLiteConnection.open(
+    let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: .default
@@ -234,7 +234,7 @@
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     do {
-      let connection = try SQLiteConnection.open(
+      let connection = try SQLiteHandle.open(
         path: path,
         flags: [.readWrite, .create, .noMutex],
         configuration: .default
@@ -247,7 +247,7 @@
       )
     }
 
-    let reopened = try SQLiteConnection.open(
+    let reopened = try SQLiteHandle.open(
       path: path,
       flags: [.readOnly, .noMutex],
       configuration: .default

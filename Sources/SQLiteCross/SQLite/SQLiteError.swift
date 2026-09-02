@@ -19,6 +19,22 @@ public struct SQLiteError: Error, Hashable, Sendable {
   public var primaryCode: SQLiteResultCode {
     code.primary
   }
+
+  /// The error `connection` is currently reporting, after a call returned `code`.
+  @usableFromInline
+  static func reported(
+    by library: borrowing SQLiteLibrary,
+    on connection: OpaquePointer?,
+    code: Int32,
+    sql: String?
+  ) -> SQLiteError {
+    let message = library.errmsg(connection).map { String(cString: $0) }
+    // `extended_errcode` carries the same failure with more detail, but only when it is still
+    // describing the failure we were handed.
+    let extended = library.extended_errcode(connection)
+    let resolved = (extended & 0xff) == (code & 0xff) ? extended : code
+    return SQLiteError(code: SQLiteResultCode(rawValue: resolved), message: message, sql: sql)
+  }
 }
 
 extension SQLiteError: CustomStringConvertible {

@@ -183,53 +183,150 @@
     #expect(count == 0)
   }
 
-  @Test
-  func poolDriverReadsWithoutAnAsynchronousContext() async throws {
-    let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
-    try await bootstrap(driver)
-    try await driver.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "sync") })
+  /// Holds an access open until released, so a test can arrange overlaps deliberately.
+  private final class Gate: Sendable {
+    private let entered = Mutex(0)
+    private let released = Mutex(false)
+
+    var enteredCount: Int { entered.withLock { $0 } }
+
+    func hold() {
+      entered.withLock { $0 += 1 }
+      while !released.withLock({ $0 }) {}
     }
 
-    let titles = try driver.readSynchronously { transaction in
-      try transaction.fetchAll(Item.select(\.title))
+    func waitUntilEntered(_ count: Int) async {
+      while enteredCount < count {
+        await Task.yield()
+      }
     }
-    #expect(titles == ["sync"])
+
+    func release() {
+      released.withLock { $0 = true }
+    }
   }
 
   @Test
-  func readersKeepWorkingWhileAWriteIsInFlight() async throws {
+  func readsRunAlongsideOneAnother() async throws {
+    let database = TemporaryDatabase()
+    var configuration = SQLiteConfiguration.default
+    configuration.readerCount = 2
+    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let gate = Gate()
+
+    let reads = (0..<2).map { _ in
+      Task { try await driver.read { _ in gate.hold() } }
+    }
+    // Both reads are inside the database at once; a serialized pool would never get here.
+    await gate.waitUntilEntered(2)
+    gate.release()
+    for read in reads {
+      try await read.value
+    }
+  }
+
+  @Test
+  func readsIssuedDuringAWriteWaitForItToCommit() async throws {
     let database = TemporaryDatabase()
     let driver = try SQLitePoolDriver(path: database.path)
     try await bootstrap(driver)
-    let writing = Mutex(false)
-    let release = Mutex(false)
+    let gate = Gate()
 
     let write = Task {
       try await driver.write { transaction in
         _ = try transaction.execute(Item.insert { Item(id: 1, title: "in flight") })
-        writing.withLock { $0 = true }
-        while !release.withLock({ $0 }) {}
+        gate.hold()
       }
     }
-    while !writing.withLock({ $0 }) {
-      await Task.yield()
-    }
+    await gate.waitUntilEntered(1)
 
-    // WAL is what makes this possible: the reader sees the pre-write snapshot rather than waiting.
-    let duringWrite = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
+    let read = Task {
+      try await driver.read { transaction in
+        try transaction.fetchAll(Item.all).count
+      }
     }
-    #expect(duringWrite == 0)
-
-    release.withLock { $0 = true }
+    // The read is queued behind the write, so it cannot have run yet.
+    await Task.yield()
+    gate.release()
     try await write.value
 
-    let afterWrite = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
+    // And when it does run, it sees what the write committed.
+    #expect(try await read.value == 1)
+  }
+
+  @Test
+  func aWriteWaitsForTheReadsInFlight() async throws {
+    let database = TemporaryDatabase()
+    let driver = try SQLitePoolDriver(path: database.path)
+    try await bootstrap(driver)
+    let gate = Gate()
+    let wrote = Mutex(false)
+
+    let read = Task { try await driver.read { _ in gate.hold() } }
+    await gate.waitUntilEntered(1)
+
+    let write = Task {
+      try await driver.write { transaction in
+        wrote.withLock { $0 = true }
+        _ = try transaction.execute(Item.insert { Item(id: 1, title: "after read") })
+      }
     }
-    #expect(afterWrite == 1)
+    for _ in 0..<100 {
+      await Task.yield()
+    }
+    #expect(wrote.withLock { $0 } == false)
+
+    gate.release()
+    try await read.value
+    try await write.value
+    #expect(wrote.withLock { $0 })
+  }
+
+  @Test
+  func cancellingAQueuedWriteLetsTheRequestsBehindItRun() async throws {
+    let database = TemporaryDatabase()
+    let driver = try SQLitePoolDriver(path: database.path)
+    try await bootstrap(driver)
+    let gate = Gate()
+
+    let read = Task { try await driver.read { _ in gate.hold() } }
+    await gate.waitUntilEntered(1)
+
+    let write = Task {
+      try await driver.write { transaction in
+        _ = try transaction.execute(Item.insert { Item(id: 1, title: "never") })
+      }
+    }
+    let trailingRead = Task {
+      try await driver.read { transaction in
+        try transaction.fetchAll(Item.all).count
+      }
+    }
+    for _ in 0..<100 {
+      await Task.yield()
+    }
+    write.cancel()
+    await #expect(throws: CancellationError.self) {
+      try await write.value
+    }
+
+    // The trailing read was queued behind the write and is released by its cancellation, rather
+    // than waiting on a write that will never run.
+    gate.release()
+    try await read.value
+    #expect(try await trailingRead.value == 0)
+  }
+
+  @Test
+  @MainActor
+  func poolAccessesRunOffTheCallersThread() async throws {
+    let database = TemporaryDatabase()
+    let driver = try SQLitePoolDriver(path: database.path)
+
+    let readOnMain = try await driver.read { _ in Thread.isMainThread }
+    let wroteOnMain = try await driver.write { _ in Thread.isMainThread }
+    #expect(readOnMain == false)
+    #expect(wroteOnMain == false)
   }
 
   @Table

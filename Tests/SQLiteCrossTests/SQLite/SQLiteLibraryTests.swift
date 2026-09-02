@@ -52,10 +52,6 @@
     #expect(SQLiteFunctionFlags.deterministic.rawValue == SQLITE_DETERMINISTIC)
     #expect(SQLiteFunctionFlags.directOnly.rawValue == SQLITE_DIRECTONLY)
     #expect(SQLiteFunctionFlags.innocuous.rawValue == SQLITE_INNOCUOUS)
-
-    // `SQLITE_TRANSIENT` is a cast macro, so Swift does not import it. SQLite documents the
-    // value as -1 reinterpreted as a destructor, which is what is checked here.
-    #expect(unsafeBitCast(SQLiteLibrary.transientDestructor, to: Int.self) == -1)
   }
 
   /// Drives a query end to end through nothing but the function table.
@@ -142,7 +138,7 @@
     #expect(library.bind_parameter_count(insert) == 1)
     #expect(
       "Blob".withCString {
-        library.bind_text(insert, 1, $0, -1, SQLiteLibrary.transientDestructor)
+        library.bind_text(insert, 1, $0, -1)
       } == SQLiteResultCode.ok.rawValue
     )
     #expect(library.step(insert) == SQLiteResultCode.done.rawValue)
@@ -154,7 +150,7 @@
     #expect(library.clear_bindings(insert) == SQLiteResultCode.ok.rawValue)
     #expect(
       "Blob Jr".withCString {
-        library.bind_text(insert, 1, $0, -1, SQLiteLibrary.transientDestructor)
+        library.bind_text(insert, 1, $0, -1)
       } == SQLiteResultCode.ok.rawValue
     )
     #expect(library.step(insert) == SQLiteResultCode.done.rawValue)

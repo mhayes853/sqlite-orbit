@@ -3,10 +3,9 @@
 /// Structured Queries builds the same SQL text on every call, so preparing it once and resetting it
 /// afterward is the difference between one parse per query and one parse per execution.
 ///
-/// The cache is confined to its connection's isolation domain — an actor, or the lock guarding a
-/// synchronous read — so it needs no locking of its own. It also has no `deinit`: it borrows its
-/// owner's library table by pointer, and that allocation is released by ``SQLiteConnection`` right
-/// after it calls ``finalizeAll()``.
+/// The cache is confined to its connection's queue, so it needs no locking of its own. It also has
+/// no `deinit`: it borrows its owner's library table by pointer, and that allocation is released by
+/// ``SQLiteHandle`` right after it calls ``finalizeAll()``.
 final class SQLiteStatementCache {
   private let library: UnsafePointer<SQLiteLibrary>
   private let connection: OpaquePointer
@@ -38,7 +37,7 @@ final class SQLiteStatementCache {
       if let statement {
         _ = library.pointee.finalize(statement)
       }
-      throw sqliteError(library.pointee, connection: connection, code: code, sql: sql)
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
     }
     return statement
   }
