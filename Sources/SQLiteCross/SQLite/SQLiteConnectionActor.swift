@@ -46,7 +46,9 @@ final class SQLiteConnectionStorage: Sendable {
 /// which is what lets many tasks queue against a single writer without starving the cooperative
 /// pool.
 actor SQLiteConnectionActor {
-  private let storage: SQLiteConnectionStorage
+  /// Readable without entering the actor, which is what lets a cancellation interrupt the very
+  /// query the actor is busy running.
+  let storage: SQLiteConnectionStorage
 
   init(storage: SQLiteConnectionStorage) {
     self.storage = storage
