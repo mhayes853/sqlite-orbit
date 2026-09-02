@@ -119,34 +119,8 @@ struct SQLiteConnection: ~Copyable {
   }
 
   /// Runs every statement in `sql`, discarding any rows they produce.
-  ///
-  /// This is the path for schema changes and pragmas, so it accepts several statements at once and
-  /// deliberately does not use the statement cache.
   borrowing func execute(_ sql: String) throws {
-    try sql.withCString { start in
-      var next: UnsafePointer<CChar>? = start
-      while let current = next, current.pointee != 0 {
-        var statement: OpaquePointer?
-        var tail: UnsafePointer<CChar>?
-        let code = libraryStorage.pointee.prepare_v3(handle, current, -1, 0, &statement, &tail)
-        guard code == SQLiteResultCode.ok.rawValue else {
-          throw sqliteError(libraryStorage.pointee, connection: handle, code: code, sql: sql)
-        }
-        defer { _ = libraryStorage.pointee.finalize(statement) }
-
-        // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
-        guard statement != nil else { return }
-        next = tail
-
-        var stepCode = libraryStorage.pointee.step(statement)
-        while stepCode == SQLiteResultCode.row.rawValue {
-          stepCode = libraryStorage.pointee.step(statement)
-        }
-        guard stepCode == SQLiteResultCode.done.rawValue else {
-          throw sqliteError(libraryStorage.pointee, connection: handle, code: stepCode, sql: sql)
-        }
-      }
-    }
+    try executeBatch(sql, connection: handle, library: library)
   }
 
   /// The number of rows changed by the most recent statement.
@@ -165,5 +139,41 @@ struct SQLiteConnection: ~Copyable {
   /// that has already started.
   borrowing func interrupt() {
     libraryStorage.pointee.interrupt(handle)
+  }
+}
+
+/// Runs every statement in `sql`, discarding any rows they produce.
+///
+/// This is the path for schema changes and pragmas, so it accepts several statements at once and
+/// deliberately does not use the statement cache: cached statements are keyed by their whole SQL
+/// text, which a multi-statement batch is not.
+func executeBatch(
+  _ sql: String,
+  connection: OpaquePointer,
+  library: UnsafePointer<SQLiteLibrary>
+) throws {
+  try sql.withCString { start in
+    var next: UnsafePointer<CChar>? = start
+    while let current = next, current.pointee != 0 {
+      var statement: OpaquePointer?
+      var tail: UnsafePointer<CChar>?
+      let code = library.pointee.prepare_v3(connection, current, -1, 0, &statement, &tail)
+      guard code == SQLiteResultCode.ok.rawValue else {
+        throw sqliteError(library.pointee, connection: connection, code: code, sql: sql)
+      }
+      defer { _ = library.pointee.finalize(statement) }
+
+      // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
+      guard statement != nil else { return }
+      next = tail
+
+      var stepCode = library.pointee.step(statement)
+      while stepCode == SQLiteResultCode.row.rawValue {
+        stepCode = library.pointee.step(statement)
+      }
+      guard stepCode == SQLiteResultCode.done.rawValue else {
+        throw sqliteError(library.pointee, connection: connection, code: stepCode, sql: sql)
+      }
+    }
   }
 }
