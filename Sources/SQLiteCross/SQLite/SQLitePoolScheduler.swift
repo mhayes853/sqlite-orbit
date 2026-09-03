@@ -1,100 +1,254 @@
+import Dispatch
+import Foundation
+
 /// Decides which of a pool's accesses may run: any number of reads, or exactly one write.
 ///
 /// Requests are granted in the order they arrive. A write waits for the reads already running,
 /// and reads that arrive behind a queued write wait for it to commit, so a read issued after a
-/// write observes that write. Waiting suspends rather than blocks, which is why this is an actor
-/// and not a lock around a free list.
-actor SQLitePoolScheduler {
-  private enum Request {
-    case read(CheckedContinuation<SQLiteConnection, any Error>)
-    case write(CheckedContinuation<Void, any Error>)
-  }
-
-  /// Every reader the pool owns, minus the ones currently lent out.
-  private var idleReaders: [SQLiteConnection]
-  private let readerCount: Int
-  private var isWriting = false
-  private var waiting: [(id: Int, request: Request)] = []
-  private var nextRequestID = 0
+/// write observes that write.
+///
+/// Waiters come in two kinds. An asynchronous caller suspends on a continuation; a blocking caller
+/// parks on a semaphore. Both stand in one arrival-ordered line, which is why this is a lock and
+/// not an actor: a blocking caller has no way to await an actor, and giving the two kinds separate
+/// lines would lose the ordering guarantee between them.
+final class SQLitePoolScheduler: Sendable {
+  /// Every mutable field lives here rather than in the waiters, so that holding this one lock is
+  /// the whole of the scheduler's synchronization.
+  private let state: Lock<State>
 
   init(readers: [SQLiteConnection]) {
-    self.idleReaders = readers
-    self.readerCount = readers.count
+    self.state = Lock(State(idleReaders: readers, readerCount: readers.count))
   }
 
-  /// Whether any reader is lent out.
-  private var hasActiveReaders: Bool {
-    idleReaders.count < readerCount
+  private struct State {
+    var idleReaders: [SQLiteConnection]
+    let readerCount: Int
+    var isWriting = false
+    var waiting: [Waiter] = []
+
+    /// Outcomes for requests granted before their caller was ready to receive them.
+    var settled: [Int: Result<SQLiteConnection?, any Error>] = [:]
+
+    /// The threads currently inside a blocking access, so that a nested one can be reported.
+    var blockingHolders: Set<ObjectIdentifier> = []
+
+    var nextRequestID = 0
+
+    /// Whether any reader is lent out.
+    var hasActiveReaders: Bool { idleReaders.count < readerCount }
+
+    mutating func claimRequestID() -> Int {
+      nextRequestID += 1
+      return nextRequestID
+    }
   }
+
+  /// One caller's place in line, and how to wake it once its request is granted.
+  private struct Waiter {
+    let id: Int
+    let isRead: Bool
+    var wake: Wake
+
+    enum Wake {
+      /// A blocking caller, parked on a semaphore of its own.
+      case blocking(DispatchSemaphore)
+      /// An asynchronous caller, whose continuation may not have been installed yet.
+      case asynchronous(CheckedContinuation<SQLiteConnection?, any Error>?)
+    }
+  }
+
+  private enum Admission {
+    /// The request ran straight through, holding the reader it was lent or the writer it reserved.
+    case granted(SQLiteConnection?)
+    case queued(id: Int, semaphore: DispatchSemaphore?)
+  }
+
+  // MARK: - Acquiring
 
   /// Lends a reader once no write is running or queued ahead, and one is free.
   func acquireReader() async throws -> SQLiteConnection {
     try Task.checkCancellation()
-    if waiting.isEmpty, !isWriting, let reader = idleReaders.popLast() {
-      return reader
+    switch join(isRead: true, isBlocking: false) {
+    case .granted(let reader): return reader!
+    case .queued(let id, _): return try await suspend(untilGranted: id)!
     }
-    return try await wait { .read($0) }
-  }
-
-  func releaseReader(_ reader: SQLiteConnection) {
-    idleReaders.append(reader)
-    grant()
   }
 
   /// Waits until no read or write is running, then reserves the writer.
   func acquireWriter() async throws {
     try Task.checkCancellation()
-    if waiting.isEmpty, !isWriting, !hasActiveReaders {
-      isWriting = true
-      return
+    guard case .queued(let id, _) = join(isRead: false, isBlocking: false) else { return }
+    _ = try await suspend(untilGranted: id)
+  }
+
+  /// Lends a reader on the calling thread, blocking it until the request is granted.
+  func acquireReaderBlocking() -> SQLiteConnection {
+    switch join(isRead: true, isBlocking: true) {
+    case .granted(let reader): reader!
+    case .queued(let id, let semaphore): park(on: semaphore!, until: id)!
     }
-    try await wait { .write($0) }
+  }
+
+  /// Reserves the writer on the calling thread, blocking it until the request is granted.
+  func acquireWriterBlocking() {
+    if case .queued(let id, let semaphore) = join(isRead: false, isBlocking: true) {
+      _ = park(on: semaphore!, until: id)
+    }
+  }
+
+  /// Joins the line, or reports that the request could run without waiting at all.
+  ///
+  /// Deciding and joining happen in one lock hold, so a request cannot be overtaken between
+  /// finding the line empty and standing in it. That is what keeps arrival order honest.
+  private func join(isRead: Bool, isBlocking: Bool) -> Admission {
+    let holder = isBlocking ? Self.currentThread : nil
+    return state.withLock { state in
+      if let holder {
+        precondition(
+          !state.blockingHolders.contains(holder),
+          """
+          A blocking database access cannot be nested inside another one on the same database: \
+          the inner access waits for a connection the outer access still holds, so neither can \
+          ever finish. Use the transaction already in hand rather than opening a second one.
+          """
+        )
+        state.blockingHolders.insert(holder)
+      }
+      if state.waiting.isEmpty, !state.isWriting {
+        if isRead {
+          if let reader = state.idleReaders.popLast() { return .granted(reader) }
+        } else if !state.hasActiveReaders {
+          state.isWriting = true
+          return .granted(nil)
+        }
+      }
+      let semaphore = isBlocking ? DispatchSemaphore(value: 0) : nil
+      let id = state.claimRequestID()
+      let wake: Waiter.Wake = semaphore.map { .blocking($0) } ?? .asynchronous(nil)
+      state.waiting.append(Waiter(id: id, isRead: isRead, wake: wake))
+      return .queued(id: id, semaphore: semaphore)
+    }
+  }
+
+  private func suspend(untilGranted id: Int) async throws -> SQLiteConnection? {
+    try await withTaskCancellationHandler {
+      try await withCheckedThrowingContinuation { continuation in
+        install(continuation, for: id)
+      }
+    } onCancel: {
+      cancel(id)
+    }
+  }
+
+  private func park(on semaphore: DispatchSemaphore, until id: Int) -> SQLiteConnection? {
+    semaphore.wait()
+    return state.withLock { state in
+      // A blocking request carries no task, so a grant is the only thing that can settle it.
+      guard case .success(let reader) = state.settled.removeValue(forKey: id) else {
+        preconditionFailure("A blocking pool request was settled by something other than a grant.")
+      }
+      return reader
+    }
+  }
+
+  /// The identity of the calling thread, used only to report a nested blocking access.
+  private static var currentThread: ObjectIdentifier {
+    ObjectIdentifier(Thread.current)
+  }
+
+  // MARK: - Releasing
+
+  func releaseReader(_ reader: SQLiteConnection) {
+    release(.reader(reader), blockingHolder: nil)
+  }
+
+  func releaseReaderBlocking(_ reader: SQLiteConnection) {
+    release(.reader(reader), blockingHolder: Self.currentThread)
   }
 
   func releaseWriter() {
-    isWriting = false
-    grant()
+    release(.writer, blockingHolder: nil)
   }
 
-  private func wait<Value>(
-    _ request: (CheckedContinuation<Value, any Error>) -> Request
-  ) async throws -> Value {
-    nextRequestID += 1
-    let id = nextRequestID
-    return try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
-        waiting.append((id, request(continuation)))
+  func releaseWriterBlocking() {
+    release(.writer, blockingHolder: Self.currentThread)
+  }
+
+  private enum Released {
+    case reader(SQLiteConnection)
+    case writer
+  }
+
+  private func release(_ released: Released, blockingHolder: ObjectIdentifier?) {
+    state.withLock { state in
+      switch released {
+      case .reader(let reader): state.idleReaders.append(reader)
+      case .writer: state.isWriting = false
       }
-    } onCancel: {
-      Task { await self.cancel(id) }
+      if let blockingHolder { state.blockingHolders.remove(blockingHolder) }
+      Self.grant(&state)
     }
   }
 
+  // MARK: - Granting
+
   /// Grants requests from the head of the line for as long as they can run.
-  private func grant() {
-    while let next = waiting.first {
-      switch next.request {
-      case .read(let continuation):
-        guard !isWriting, let reader = idleReaders.popLast() else { return }
-        waiting.removeFirst()
-        continuation.resume(returning: reader)
-      case .write(let continuation):
-        guard !isWriting, !hasActiveReaders else { return }
-        isWriting = true
-        waiting.removeFirst()
-        continuation.resume()
+  private static func grant(_ state: inout State) {
+    while let next = state.waiting.first {
+      if next.isRead {
+        guard !state.isWriting, let reader = state.idleReaders.popLast() else { return }
+        state.waiting.removeFirst()
+        settle(&state, next, with: .success(reader))
+      } else {
+        guard !state.isWriting, !state.hasActiveReaders else { return }
+        state.isWriting = true
+        state.waiting.removeFirst()
+        settle(&state, next, with: .success(nil))
+      }
+    }
+  }
+
+  /// Settles a request and wakes whoever is waiting on it.
+  ///
+  /// Waking happens while the lock is held. Neither signalling a semaphore nor resuming a
+  /// continuation runs caller code on this thread, so neither can re-enter the scheduler.
+  private static func settle(
+    _ state: inout State,
+    _ waiter: Waiter,
+    with outcome: Result<SQLiteConnection?, any Error>
+  ) {
+    switch waiter.wake {
+    case .blocking(let semaphore):
+      state.settled[waiter.id] = outcome
+      semaphore.signal()
+    case .asynchronous(let continuation?):
+      continuation.resume(with: outcome)
+    case .asynchronous(nil):
+      // The grant arrived before the continuation did; `install` finds it waiting here.
+      state.settled[waiter.id] = outcome
+    }
+  }
+
+  private func install(
+    _ continuation: CheckedContinuation<SQLiteConnection?, any Error>,
+    for id: Int
+  ) {
+    state.withLock { state in
+      if let outcome = state.settled.removeValue(forKey: id) {
+        continuation.resume(with: outcome)
+      } else if let index = state.waiting.firstIndex(where: { $0.id == id }) {
+        state.waiting[index].wake = .asynchronous(continuation)
       }
     }
   }
 
   private func cancel(_ id: Int) {
-    // A request that was granted before its cancellation arrived is no longer here.
-    guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
-    switch waiting.remove(at: index).request {
-    case .read(let continuation): continuation.resume(throwing: CancellationError())
-    case .write(let continuation): continuation.resume(throwing: CancellationError())
+    state.withLock { state in
+      // A request that was granted before its cancellation arrived is no longer here.
+      guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return }
+      Self.settle(&state, state.waiting.remove(at: index), with: .failure(CancellationError()))
+      // Whatever was queued behind the cancelled request may now be able to run.
+      Self.grant(&state)
     }
-    // Whatever was queued behind the cancelled request may now be able to run.
-    grant()
   }
 }
