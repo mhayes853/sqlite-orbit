@@ -306,4 +306,19 @@
     )
     #expect(installs.withLock { $0 } == 1)
   }
+
+  @Test(
+    arguments: [
+      (Duration.seconds(5), Int32(5000)),
+      (.milliseconds(250), 250),
+      (.zero, 0),
+      (.seconds(-1), 0),
+      (.seconds(Int64.max), .max),
+    ]
+  )
+  func aBusyTimeoutSaturatesRatherThanOverflowing(timeout: Duration, milliseconds: Int32) {
+    var configuration = SQLiteConfiguration.default
+    configuration.busyTimeout = timeout
+    #expect(configuration.busyTimeoutMilliseconds == milliseconds)
+  }
 #endif

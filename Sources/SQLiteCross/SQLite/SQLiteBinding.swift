@@ -2,7 +2,6 @@ import Foundation
 import StructuredQueries
 
 /// Binds one Structured Queries value to a prepared statement.
-///
 func bind(
   _ binding: QueryBinding,
   to statement: OpaquePointer,

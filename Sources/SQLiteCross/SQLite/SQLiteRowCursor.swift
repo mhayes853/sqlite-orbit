@@ -9,6 +9,12 @@ import StructuredQueries
 public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
   public typealias Row = SQLiteRow
 
+  /// The connection's library table, borrowed rather than copied.
+  ///
+  /// A cursor is created per query and a row per row, and ``SQLiteLibrary`` is a table of closures
+  /// — copying it into each of them would put hundreds of bytes and as many retains on the hottest
+  /// path in the package. Borrowing is sound because a cursor is nonescapable and so cannot
+  /// outlive the ``SQLiteHandle`` that owns the allocation.
   @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 

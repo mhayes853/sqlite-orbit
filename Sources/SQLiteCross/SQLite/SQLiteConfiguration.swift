@@ -52,8 +52,13 @@ public struct SQLiteConfiguration: Sendable {
   }
 
   /// The busy timeout in the milliseconds SQLite expects.
+  ///
+  /// SQLite takes a signed millisecond count and treats anything at or below zero as "do not
+  /// wait", so a duration outside that range saturates rather than overflowing into it.
   var busyTimeoutMilliseconds: Int32 {
     let components = busyTimeout.components
+    guard components.seconds > 0 || components.attoseconds > 0 else { return 0 }
+    guard components.seconds < Int64(Int32.max) / 1000 else { return .max }
     let milliseconds =
       components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
     return Int32(clamping: milliseconds)

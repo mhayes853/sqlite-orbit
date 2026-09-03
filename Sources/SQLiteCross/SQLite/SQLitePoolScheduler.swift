@@ -1,5 +1,3 @@
-import Foundation
-
 /// Decides which of a pool's accesses may run: any number of reads, or exactly one write.
 ///
 /// Requests are granted in the order they arrive. A write waits for the reads already running,
@@ -12,20 +10,27 @@ actor SQLitePoolScheduler {
     case write(CheckedContinuation<Void, any Error>)
   }
 
+  /// Every reader the pool owns, minus the ones currently lent out.
   private var idleReaders: [SQLiteConnection]
-  private var activeReaders = 0
+  private let readerCount: Int
   private var isWriting = false
-  private var waiting: [(id: UUID, request: Request)] = []
+  private var waiting: [(id: Int, request: Request)] = []
+  private var nextRequestID = 0
 
   init(readers: [SQLiteConnection]) {
     self.idleReaders = readers
+    self.readerCount = readers.count
+  }
+
+  /// Whether any reader is lent out.
+  private var hasActiveReaders: Bool {
+    idleReaders.count < readerCount
   }
 
   /// Lends a reader once no write is running or queued ahead, and one is free.
   func acquireReader() async throws -> SQLiteConnection {
     try Task.checkCancellation()
     if waiting.isEmpty, !isWriting, let reader = idleReaders.popLast() {
-      activeReaders += 1
       return reader
     }
     return try await wait { .read($0) }
@@ -33,14 +38,13 @@ actor SQLitePoolScheduler {
 
   func releaseReader(_ reader: SQLiteConnection) {
     idleReaders.append(reader)
-    activeReaders -= 1
     grant()
   }
 
   /// Waits until no read or write is running, then reserves the writer.
   func acquireWriter() async throws {
     try Task.checkCancellation()
-    if waiting.isEmpty, !isWriting, activeReaders == 0 {
+    if waiting.isEmpty, !isWriting, !hasActiveReaders {
       isWriting = true
       return
     }
@@ -55,7 +59,8 @@ actor SQLitePoolScheduler {
   private func wait<Value>(
     _ request: (CheckedContinuation<Value, any Error>) -> Request
   ) async throws -> Value {
-    let id = UUID()
+    nextRequestID += 1
+    let id = nextRequestID
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         waiting.append((id, request(continuation)))
@@ -71,11 +76,10 @@ actor SQLitePoolScheduler {
       switch next.request {
       case .read(let continuation):
         guard !isWriting, let reader = idleReaders.popLast() else { return }
-        activeReaders += 1
         waiting.removeFirst()
         continuation.resume(returning: reader)
       case .write(let continuation):
-        guard !isWriting, activeReaders == 0 else { return }
+        guard !isWriting, !hasActiveReaders else { return }
         isWriting = true
         waiting.removeFirst()
         continuation.resume()
@@ -83,7 +87,7 @@ actor SQLitePoolScheduler {
     }
   }
 
-  private func cancel(_ id: UUID) {
+  private func cancel(_ id: Int) {
     // A request that was granted before its cancellation arrived is no longer here.
     guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
     switch waiting.remove(at: index).request {
