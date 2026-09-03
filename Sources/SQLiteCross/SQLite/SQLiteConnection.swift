@@ -1,5 +1,4 @@
 import Dispatch
-import Foundation
 
 /// One open connection, isolated to a dispatch queue of its own.
 ///
@@ -104,24 +103,20 @@ final class SQLiteConnectionExecutor: SerialExecutor {
 /// Interrupting deliberately does not wait for the connection: taking its queue here would
 /// deadlock against the very query this is meant to stop. SQLite documents interrupting from
 /// another thread as supported.
-private final class SQLiteInterruptToken: @unchecked Sendable {
-  /// Guarded by `lock`, which is held only for the moments around arming, so it is never contended
-  /// for long.
-  private var interrupt: (@Sendable () -> Void)?
-  private let lock = NSLock()
+private final class SQLiteInterruptToken: Sendable {
+  /// The lock is held only for the moments around arming, so it is never contended for long.
+  private let interrupt = Lock<(@Sendable () -> Void)?>(nil)
 
   func arm(_ interrupt: @escaping @Sendable () -> Void) {
-    lock.withLock { self.interrupt = interrupt }
+    self.interrupt.withLock { $0 = interrupt }
   }
 
   func disarm() {
-    lock.withLock { interrupt = nil }
+    interrupt.withLock { $0 = nil }
   }
 
   func fire() {
-    lock.withLock {
-      // Invoke while holding the lock so `disarm` cannot let the next access begin first.
-      interrupt?()
-    }
+    // Invoke while holding the lock so `disarm` cannot let the next access begin first.
+    interrupt.withLock { $0?() }
   }
 }
