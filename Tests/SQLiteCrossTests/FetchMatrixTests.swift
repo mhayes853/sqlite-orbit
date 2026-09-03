@@ -1,11 +1,10 @@
-#if GRDB
-  import GRDB
+#if SystemSQLite
   import SQLiteCross
   import Testing
 
-  private func seededDatabase() async throws -> CrossProcessDatabase<GRDBDatabaseDriver> {
+  private func seededDatabase() async throws -> CrossProcessDatabase<SQLiteQueueDriver> {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
     try await database.write { transaction in
       try transaction.execute(

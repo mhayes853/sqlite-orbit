@@ -1,8 +1,8 @@
-#if GRDB
+#if SystemSQLite
   import Foundation
-  import GRDB
-  import SQLiteCross
   import Testing
+
+  @testable import SQLiteCross
 
   @DatabaseFunction(isDeterministic: true)
   func repeated(_ text: String, _ count: Int) -> String {
@@ -61,18 +61,17 @@
     }
   }
 
-  private func seededNotes() async throws -> CrossProcessDatabase<GRDBDatabaseDriver> {
+  private func seededNotes() async throws -> CrossProcessDatabase<SQLiteQueueDriver> {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $repeated)
+    configuration.register(function: $longestTitle)
+    configuration.register(function: $rowCount)
+    configuration.register(function: $describe)
+    configuration.register(function: FailingFunction())
+    configuration.register(function: FailingTotalFunction())
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
-    try await database.driver.writer.write { db in
-      db.install(function: $repeated)
-      db.install(function: $longestTitle)
-      db.install(function: $rowCount)
-      db.install(function: $describe)
-      db.install(function: FailingFunction())
-      db.install(function: FailingTotalFunction())
-    }
     try await database.write { transaction in
       try transaction.execute(
         #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
@@ -90,7 +89,7 @@
 
   @Test
   func scalarAndAggregateFunctionsRunOnEveryConnectionAPoolOpens() async throws {
-    var configuration = Configuration()
+    var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
     configuration.register(function: $longestTitle)
 
@@ -149,14 +148,14 @@
     let database = try await seededNotes()
 
     // The body threw.
-    let scalar = await #expect(throws: DatabaseError.self) {
+    let scalar = await #expect(throws: SQLiteError.self) {
       try await database.read { transaction in
         try transaction.fetchOne(#sql("SELECT failing(1)", as: Int.self))
       }
     }
     #expect(scalar?.message?.contains("FunctionFailure") == true)
 
-    let aggregate = await #expect(throws: DatabaseError.self) {
+    let aggregate = await #expect(throws: SQLiteError.self) {
       try await database.read { transaction in
         try transaction.fetchOne(#sql("SELECT failingTotal(id) FROM notes", as: Int.self))
       }
@@ -165,12 +164,12 @@
 
     // An argument that does not decode fails before the body runs, on both the scalar path and
     // the aggregate's per-row step.
-    await #expect(throws: DatabaseError.self) {
+    await #expect(throws: SQLiteError.self) {
       try await database.read { transaction in
         try transaction.fetchOne(#sql("SELECT \(quote: "repeated")('x', 'y')", as: String.self))
       }
     }
-    await #expect(throws: DatabaseError.self) {
+    await #expect(throws: SQLiteError.self) {
       try await database.read { transaction in
         try transaction.fetchOne(
           #sql("SELECT \(quote: "rowCount")(\(Note.columns.title)) FROM \(Note.self)", as: Int.self)
@@ -181,12 +180,11 @@
 
   @Test
   func aggregatesSpanManyRowsAndManyGroups() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $longestTitle)
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
-    try await database.driver.writer.write { db in
-      db.install(function: $longestTitle)
-    }
 
     try await database.write { transaction in
       try transaction.execute(
@@ -257,12 +255,11 @@
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: directory) }
 
-    // GRDB appends connection setup rather than replacing it, so registering a function keeps
-    // whatever `.crossProcess` already set up.
-    var configuration = GRDB.Configuration.crossProcess
+    // Function registration composes with the native cross-process defaults.
+    var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
 
-    let database = try CrossProcessDatabase(
+    let database = try SQLiteCrossDatabase(
       path: directory.appendingPathComponent("db.sqlite").path,
       configuration: configuration,
       coordination: .init(directory: directory, backPressure: .fail)
@@ -280,7 +277,7 @@
     }
     #expect(repeatedTitle == "abab")
 
-    // `.crossProcess` sets its own connection setup; it must have survived registration.
+    // The native defaults must have survived registration.
     let trustedSchema = try await database.read { transaction in
       try transaction.fetchOne(#sql("PRAGMA trusted_schema", as: Int.self))
     }
@@ -289,7 +286,7 @@
 
   @Test
   func manyConcurrentAggregatesMakeProgress() async throws {
-    var configuration = Configuration()
+    var configuration = SQLiteConfiguration.default
     configuration.register(function: $longestTitle)
 
     try await withPooledDatabase(configuration: configuration, maximumReaderCount: 16) { database in
@@ -314,6 +311,33 @@
       #expect(lengths.count == 128)
       #expect(lengths.allSatisfy { $0 == 40 })
     }
+  }
+
+  @Test
+  func typedFunctionsRejectAnIncompatibleSQLiteCallbackABI() {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $repeated)
+    configuration.library.supportsTypedCallbacks = false
+
+    #expect(throws: SQLiteTypedCallbacksUnavailableError.self) {
+      _ = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    }
+  }
+
+  @Test
+  func functionsAreAvailableToConnectionSetupSQL() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $repeated)
+    configuration.setupSQL = [
+      "CREATE TABLE configured (value TEXT NOT NULL)",
+      "INSERT INTO configured VALUES (repeated('ab', 2))",
+    ]
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+
+    let values = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT value FROM configured", as: String.self))
+    }
+    #expect(values == ["abab"])
   }
 
   @Table("samples")

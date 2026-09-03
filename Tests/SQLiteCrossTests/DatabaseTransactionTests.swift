@@ -4,41 +4,35 @@ import Testing
 
 @testable import SQLiteCross
 
-@Test
-func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
-  let identifier = DatabaseIdentifier(rawValue: "driver-default")
-  let driver = TestDatabaseDriver(identifier: identifier)
-  let database = CrossProcessDatabase(driver: driver)
+#if SystemSQLite
+  @Test
+  func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
+    let identifier = DatabaseIdentifier(rawValue: "native-default")
+    let driver = try SQLiteQueueDriver(path: ":memory:", identifier: identifier)
+    let database = CrossProcessDatabase(driver: driver)
 
-  #expect(database.id == identifier)
-  #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
-  #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
-}
+    #expect(database.id == identifier)
+    #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
+    #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
+  }
 
-@Test
-func crossProcessDatabaseCanOverrideItsIdentifier() {
-  let driver = TestDatabaseDriver(
-    identifier: DatabaseIdentifier(rawValue: "driver-default")
-  )
-  let override = DatabaseIdentifier(rawValue: "application-defined")
+  @Test
+  func crossProcessDatabaseCanOverrideItsIdentifier() {
+    let driver = try! SQLiteQueueDriver(path: ":memory:")
+    let override = DatabaseIdentifier(rawValue: "application-defined")
 
-  let database = CrossProcessDatabase(driver: driver, id: override)
+    let database = CrossProcessDatabase(driver: driver, id: override)
 
-  #expect(database.id == override)
-}
+    #expect(database.id == override)
+  }
+#endif
 
 @Test
 func structuredQueryExecutionPreservesBindings() async throws {
   let state = TestDatabaseState()
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(
-      identifier: .unique(),
-      state: state
-    )
-  )
   let title = "Blob's reminder"
 
-  let changedRowCount = try await database.write { transaction in
+  let changedRowCount = try withTestWrite(state) { transaction in
     try transaction.execute(
       #sql("INSERT INTO reminders (title) VALUES (\(title, as: String.self))", as: Void.self)
     )
@@ -53,25 +47,22 @@ func structuredQueryExecutionPreservesBindings() async throws {
 @Test
 func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
   let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
 
-  let values = try await database.read { transaction in
+  let values = try withTestRead(state) { transaction in
     try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
   }
   #expect(values == [1, 2, 3])
   #expect(state.visitedRowCount == 3)
 
   state.visitedRowCount = 0
-  let first = try await database.read { transaction in
+  let first = try withTestRead(state) { transaction in
     try transaction.fetchOne(#sql("SELECT value FROM numbers", as: Int.self))
   }
   #expect(first == 1)
   #expect(state.visitedRowCount == 1)
 
   state.visitedRowCount = 0
-  let firstDuringWrite = try await database.write { transaction in
+  let firstDuringWrite = try withTestWrite(state) { transaction in
     try transaction.fetchOne(#sql("SELECT value FROM numbers", as: Int.self))
   }
   #expect(firstDuringWrite == 1)
@@ -81,11 +72,8 @@ func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
 @Test
 func databaseCursorsLendRowsAndDecodeValuesLazily() async throws {
   let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
 
-  let values = try await database.read { transaction in
+  let values = try withTestRead(state) { transaction in
     var cursor = try transaction.rowCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -99,7 +87,7 @@ func databaseCursorsLendRowsAndDecodeValuesLazily() async throws {
   #expect(values == [1, 2, 3])
   #expect(state.visitedRowCount == 3)
 
-  let decodedValues = try await database.read { transaction in
+  let decodedValues = try withTestRead(state) { transaction in
     var cursor = try transaction.fetchCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -116,11 +104,8 @@ func databaseCursorsLendRowsAndDecodeValuesLazily() async throws {
 @Test
 func databaseCursorsCanBeMappedFilteredAndCompactMappedLazily() async throws {
   let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
 
-  let firstMappedValue = try await database.read { transaction in
+  let firstMappedValue = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -134,7 +119,7 @@ func databaseCursorsCanBeMappedFilteredAndCompactMappedLazily() async throws {
   #expect(state.visitedRowCount == 2)
 
   state.visitedRowCount = 0
-  let compactMappedValues = try await database.read { transaction in
+  let compactMappedValues = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -158,11 +143,7 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
   let state = TestDatabaseState(
     rows: [[.int(1)], [.int(2)], [.int(3)], [.int(4)], [.int(5)]]
   )
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
-
-  let droppedValues = try await database.read { transaction in
+  let droppedValues = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -179,7 +160,7 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
   #expect(state.visitedRowCount == 5)
 
   state.visitedRowCount = 0
-  let firstAfterDropWhile = try await database.read { transaction in
+  let firstAfterDropWhile = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -192,7 +173,7 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
   #expect(state.visitedRowCount == 3)
 
   state.visitedRowCount = 0
-  let prefixedValues = try await database.read { transaction in
+  let prefixedValues = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -209,7 +190,7 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
   #expect(state.visitedRowCount == 2)
 
   state.visitedRowCount = 0
-  let prefixedWhileValues = try await database.read { transaction in
+  let prefixedWhileValues = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -226,7 +207,7 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
   #expect(state.visitedRowCount == 3)
 
   state.visitedRowCount = 0
-  let enumeratedValues = try await database.read { transaction in
+  let enumeratedValues = try withTestRead(state) { transaction in
     var cursor =
       try transaction.fetchCursor(
         #sql("SELECT value FROM numbers", as: Int.self)
@@ -250,11 +231,8 @@ func databaseCursorsSupportLazySequenceAdapters() async throws {
 @Test
 func databaseCursorsCanCollectIntoStandardCollections() async throws {
   let state = TestDatabaseState(rows: [[.int(1)], [.int(1)], [.int(2)], [.int(3)]])
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
 
-  let values = try await database.read { transaction in
+  let values = try withTestRead(state) { transaction in
     try transaction.fetchCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -265,7 +243,7 @@ func databaseCursorsCanCollectIntoStandardCollections() async throws {
   #expect(state.visitedRowCount == 4)
 
   state.visitedRowCount = 0
-  let contiguousValues = try await database.read { transaction in
+  let contiguousValues = try withTestRead(state) { transaction in
     try transaction.fetchCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -276,7 +254,7 @@ func databaseCursorsCanCollectIntoStandardCollections() async throws {
   #expect(state.visitedRowCount == 4)
 
   state.visitedRowCount = 0
-  let uniqueValues = try await database.read { transaction in
+  let uniqueValues = try withTestRead(state) { transaction in
     try transaction.fetchCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -287,7 +265,7 @@ func databaseCursorsCanCollectIntoStandardCollections() async throws {
   #expect(state.visitedRowCount == 4)
 
   state.visitedRowCount = 0
-  let prefixValues = try await database.read { transaction in
+  let prefixValues = try withTestRead(state) { transaction in
     try transaction.fetchCursor(
       #sql("SELECT value FROM numbers", as: Int.self)
     )
@@ -304,18 +282,14 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   let state = TestDatabaseState(
     rows: [[.int(3)], [.int(1)], [.int(4)], [.int(1)], [.int(5)]]
   )
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
-
-  let count = try await database.read { transaction in
+  let count = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).count()
   }
   #expect(count == 5)
   #expect(state.visitedRowCount == 5)
 
   state.visitedRowCount = 0
-  let oddCount = try await database.read { transaction in
+  let oddCount = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .count { $0 % 2 == 1 }
   }
@@ -323,21 +297,21 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(state.visitedRowCount == 5)
 
   state.visitedRowCount = 0
-  let isEmpty = try await database.read { transaction in
+  let isEmpty = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).isEmpty()
   }
   #expect(!isEmpty)
   #expect(state.visitedRowCount == 1)
 
   state.visitedRowCount = 0
-  let first = try await database.read { transaction in
+  let first = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).first()
   }
   #expect(first == 3)
   #expect(state.visitedRowCount == 1)
 
   state.visitedRowCount = 0
-  let firstMatch = try await database.read { transaction in
+  let firstMatch = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .first { $0 > 3 }
   }
@@ -345,7 +319,7 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(state.visitedRowCount == 3)
 
   state.visitedRowCount = 0
-  let containsMatch = try await database.read { transaction in
+  let containsMatch = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .contains { $0 == 4 }
   }
@@ -353,20 +327,20 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(state.visitedRowCount == 3)
 
   state.visitedRowCount = 0
-  let allPositive = try await database.read { transaction in
+  let allPositive = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .allSatisfy { $0 > 0 }
   }
   #expect(allPositive)
   #expect(state.visitedRowCount == 5)
 
-  let sum = try await database.read { transaction in
+  let sum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .reduce(0, +)
   }
   #expect(sum == 14)
 
-  let collectedSum = try await database.read { transaction in
+  let collectedSum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
       .reduce(into: 0) { result, value in
         result += value
@@ -374,35 +348,35 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   }
   #expect(collectedSum == 14)
 
-  let minimum = try await database.read { transaction in
+  let minimum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).min()
   }
   #expect(minimum == 1)
 
-  let maximum = try await database.read { transaction in
+  let maximum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).max()
   }
   #expect(maximum == 5)
 
-  let reverseMinimum = try await database.read { transaction in
+  let reverseMinimum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).min(by: >)
   }
   #expect(reverseMinimum == 5)
 
-  let reverseMaximum = try await database.read { transaction in
+  let reverseMaximum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).max(by: >)
   }
   #expect(reverseMaximum == 1)
 
   state.visitedRowCount = 0
-  let minimumAndMaximum = try await database.read { transaction in
+  let minimumAndMaximum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMax()
   }
   #expect(minimumAndMaximum?.min == 1)
   #expect(minimumAndMaximum?.max == 5)
   #expect(state.visitedRowCount == 5)
 
-  let reverseMinimumAndMaximum = try await database.read { transaction in
+  let reverseMinimumAndMaximum = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMax(by: >)
   }
   #expect(reverseMinimumAndMaximum?.min == 5)
@@ -411,7 +385,7 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   state.visitedRowCount = 0
   var didThrow = false
   do {
-    _ = try await database.read { transaction in
+    _ = try withTestRead(state) { transaction in
       try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
         .count { value in
           if value == 4 {
@@ -427,10 +401,7 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(state.visitedRowCount == 3)
 
   let emptyState = TestDatabaseState()
-  let emptyDatabase = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: emptyState)
-  )
-  let empty = try await emptyDatabase.read { transaction in
+  let empty = try withTestRead(emptyState) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).isEmpty()
   }
   #expect(empty)
@@ -470,11 +441,8 @@ func statementCapabilityIsReadOffTheQueryHierarchy() {
 @Test
 func writeTransactionsCanFetchReturningStatements() async throws {
   let state = TestDatabaseState(rows: [[.int(1)], [.int(2)]])
-  let database = CrossProcessDatabase(
-    driver: TestDatabaseDriver(identifier: .unique(), state: state)
-  )
 
-  let values = try await database.write { transaction in
+  let values = try withTestWrite(state) { transaction in
     try transaction.fetchAll(TestReturningWriteStatement())
   }
 
@@ -482,33 +450,18 @@ func writeTransactionsCanFetchReturningStatements() async throws {
   #expect(state.visitedRowCount == 2)
 }
 
-private final class TestDatabaseDriver: DatabaseDriver, @unchecked Sendable {
-  let defaultIdentifier: DatabaseIdentifier
-  let state: TestDatabaseState
+private func withTestRead<Result>(
+  _ state: TestDatabaseState,
+  _ body: (borrowing TestReadTransaction) throws -> Result
+) rethrows -> Result {
+  try body(TestReadTransaction(state: state))
+}
 
-  init(
-    identifier: DatabaseIdentifier,
-    state: TestDatabaseState = TestDatabaseState()
-  ) {
-    self.defaultIdentifier = identifier
-    self.state = state
-  }
-
-  func read<Result: Sendable>(
-    _ body: @Sendable (borrowing TestReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
-    let state = self.state
-    let transaction = TestReadTransaction(state: state)
-    return try body(transaction)
-  }
-
-  func write<Result: Sendable>(
-    _ body: @Sendable (borrowing TestWriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
-    let state = self.state
-    let transaction = TestWriteTransaction(state: state)
-    return try body(transaction)
-  }
+private func withTestWrite<Result>(
+  _ state: TestDatabaseState,
+  _ body: (borrowing TestWriteTransaction) throws -> Result
+) rethrows -> Result {
+  try body(TestWriteTransaction(state: state))
 }
 
 private struct TestReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {

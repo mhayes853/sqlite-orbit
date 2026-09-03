@@ -3,9 +3,9 @@
 /// A database announces every write it commits so that processes sharing the same SQLite file can
 /// react to each other's work. It does not yet subscribe to its peers; observation will be layered
 /// on without changing the driver-facing transaction model.
-public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, Sendable {
+public final class CrossProcessDatabase<Writer: SQLiteDatabaseWriter>: Identifiable, Sendable {
   public let id: DatabaseIdentifier
-  public let driver: Driver
+  public let driver: Writer
 
   private let transport: (any DatabaseIPCTransport)?
   private let onAnnouncementFailure: (@Sendable (any Error) -> Void)?
@@ -21,7 +21,7 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
   ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails. The
   ///     write has already committed by then, so the failure is never surfaced to its caller.
   public init(
-    driver: Driver,
+    driver: Writer,
     id: DatabaseIdentifier? = nil,
     transport: (any DatabaseIPCTransport)? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
@@ -33,8 +33,8 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
   }
 
   public func read<Result: Sendable>(
-    _ body: @Sendable (borrowing Driver.ReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) async throws -> Result {
     try await driver.read(body)
   }
 
@@ -42,8 +42,8 @@ public final class CrossProcessDatabase<Driver: DatabaseDriver>: Identifiable, S
   ///
   /// A write that throws is rolled back by its driver and is not announced.
   public func write<Result: Sendable>(
-    _ body: @Sendable (borrowing Driver.WriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
     let result = try await driver.write(body)
     await announceCommittedTransaction()
     return result

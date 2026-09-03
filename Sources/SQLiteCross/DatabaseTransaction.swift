@@ -8,8 +8,9 @@ public enum DatabaseRowIteration: Sendable {
 
 /// The low-level operations available inside a read transaction.
 ///
-/// Transactions are noncopyable and nonescapable so a driver can safely lend a connection whose
-/// lifetime is bounded by a ``DatabaseDriver/read(_:)`` or ``DatabaseDriver/write(_:)`` call.
+/// Transactions are noncopyable and nonescapable so a database can safely lend a connection whose
+/// lifetime is bounded by a ``SQLiteDatabaseReader/read(_:)`` or ``SQLiteDatabaseWriter/write(_:)``
+/// call.
 public protocol DatabaseReadTransaction: ~Copyable, ~Escapable {
   associatedtype Row: ~Copyable, ~Escapable, DatabaseRow
   associatedtype RowCursor: ~Copyable, ~Escapable, DatabaseRowCursor where RowCursor.Row == Row

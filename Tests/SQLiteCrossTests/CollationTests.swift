@@ -1,5 +1,4 @@
-#if GRDB
-  import GRDB
+#if SystemSQLite
   import SQLiteCross
   import Testing
 
@@ -16,7 +15,7 @@
 
   @Test
   func collationsAreInstalledOnEveryConnectionAPoolOpens() async throws {
-    var configuration = Configuration()
+    var configuration = SQLiteConfiguration.default
     configuration.register(collation: $reversedText)
 
     try await withPooledDatabase(configuration: configuration) { database in
@@ -57,12 +56,11 @@
 
   @Test
   func collationsCompareTextAsUnicode() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(collation: $characterCount)
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
-    try await database.driver.writer.write { db in
-      db.install(collation: $characterCount)
-    }
 
     try await database.write { transaction in
       try transaction.execute(

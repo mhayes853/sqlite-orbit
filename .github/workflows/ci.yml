@@ -18,13 +18,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The linked system SQLite, which is what a caller gets by default.
           - name: default traits
             traits: ""
-          - name: GRDB
-            traits: "--traits GRDB"
     steps:
       - uses: actions/checkout@v4
 
+      # `CSQLite3` is a system library target resolved through pkg-config.
       - name: Install SQLite
         run: |
           apt-get update
@@ -32,3 +32,15 @@ jobs:
 
       - name: Test
         run: swift test ${{ matrix.traits }}
+
+  build-without-sqlite:
+    name: Linux (no traits)
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    steps:
+      - uses: actions/checkout@v4
+
+      # Deliberately no SQLite installed: with every trait off the package links none, which is
+      # what lets a caller supply their own build.
+      - name: Build
+        run: swift build --disable-default-traits

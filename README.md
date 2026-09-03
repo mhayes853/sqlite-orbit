@@ -3,15 +3,16 @@
 `swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
-The package currently focuses on its local transaction boundary. `DatabaseDriver` asynchronously
-lends distinct `DatabaseReadTransaction` and `DatabaseWriteTransaction` values. Read transactions
+The package currently focuses on its local transaction boundary. `SQLiteDatabaseReader` and
+`SQLiteDatabaseWriter` define the asynchronous boundary around the native SQLite implementation,
+which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction` values. Read transactions
 can only query, while write transactions can query and execute mutations. Transactions and rows are
-nonescapable, so a driver-owned SQLite connection cannot outlive its access closure.
+nonescapable, so a database-owned SQLite connection cannot outlive its access closure.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
 needed to build statements. Statements can be executed and decoded directly by any read or write
-transaction; the generic protocols have no dependency on GRDB types.
+transaction.
 
 Whether a statement needs a write transaction is read off its type. A `DatabaseQuery<Access>` pairs
 a statement with the capability it requires, and can only be built from a statement that already has
@@ -23,24 +24,14 @@ Statements the query library keeps private, such as the one behind `union`, are 
 Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
 write transactions alike, and the caller is stating which it is.
 
-GRDB support is available in the main `SQLiteCross` product behind the `GRDB` package trait:
+## Drivers
+
+The package ships its own SQLite driver, which is the default and needs no third-party dependency:
 
 ```swift
-.package(
-  url: "https://github.com/your-org/swift-sqlite-cross",
-  from: "0.1.0",
-  traits: ["GRDB"]
-)
-```
-
-```swift
-import GRDB
 import SQLiteCross
 
-let queue = try DatabaseQueue(path: databasePath)
-let database = CrossProcessDatabase(
-  driver: GRDBDatabaseDriver(writer: queue)
-)
+let database = try SQLiteCrossDatabase(path: databasePath)
 
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -48,6 +39,64 @@ try await database.write { transaction in
 
 let reminders = try await database.read { transaction in
   try transaction.fetchAll(Reminder.all)
+}
+```
+
+Two drivers back it:
+
+- `SQLitePoolDriver` runs the database in WAL mode with one writer and a fixed set of readers.
+  Reads run alongside one another; a write waits for the reads in flight and holds off the reads
+  queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
+  a thread.
+- `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for an
+  in-memory database, which is private to the connection that opened it and so cannot be pooled at
+  all.
+
+Each connection runs on a dispatch queue of its own, so a query never occupies a cooperative-pool
+thread.
+
+## Using your own SQLite build
+
+The core module imports no SQLite header. Every call goes through `SQLiteLibrary`, a struct of
+closures bound to SQLite's entry points, so the package can drive a build it was never linked
+against — SQLCipher, a custom amalgamation, or one with extensions compiled in:
+
+```swift
+var library = SQLiteLibrary.system
+library.open_v2 = myBuild.open_v2
+// ...or build the whole table from your own module's symbols.
+
+var configuration = SQLiteConfiguration(library: library)
+let database = try SQLiteCrossDatabase(path: databasePath, configuration: configuration)
+```
+
+`SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
+it links no SQLite at all, leaving the library entirely to you:
+
+```swift
+.package(
+  url: "https://github.com/your-org/swift-sqlite-cross",
+  from: "0.1.0",
+  traits: []
+)
+```
+
+Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
+the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
+under contention.
+
+A transaction also exposes the raw connection and the library it belongs to, for work the package
+does not model:
+
+```swift
+try await database.read { transaction in
+  let library = transaction.sqlite
+  var statement: OpaquePointer?
+  _ = "SELECT 1".withCString {
+    library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+  }
+  defer { _ = library.finalize(statement) }
+  // ...
 }
 ```
 
@@ -149,7 +198,7 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 ## Collations and functions
 
 Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
-`@DatabaseFunction` macros, then registered on a GRDB `Configuration`:
+`@DatabaseFunction` macros, then registered on a `SQLiteConfiguration`:
 
 ```swift
 @DatabaseCollation
@@ -161,11 +210,12 @@ extension Collation where Self == NamedCollation {
   static var localized: Self { Self($localized) }
 }
 
-var configuration = Configuration()
+var configuration = SQLiteConfiguration.default
 configuration.register(collation: $localized)
 
-let database = CrossProcessDatabase(
-  writer: try DatabasePool(path: databasePath, configuration: configuration)
+let database = try SQLiteCrossDatabase(
+  path: databasePath,
+  configuration: configuration
 )
 
 let reminders = try await database.read { transaction in
@@ -174,13 +224,17 @@ let reminders = try await database.read { transaction in
 ```
 
 Register through the configuration rather than installing on a connection directly. A collation or
-function is only known to the connection it was installed on, and a `DatabasePool` opens connections
-as it needs them, so installing on one leaves queries on every other connection failing with "no
-such collation sequence".
+function is only known to the connection it was installed on. The native pool owns several
+connections, so installing on one directly would leave queries on every other connection failing
+with "no such collation sequence".
 
-`CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
-callers can override it when constructing the database. The GRDB driver derives stable identifiers
-for file databases from their standardized paths and unique identifiers for in-memory databases.
+These typed registration helpers are available with `SystemSQLite`, because their static C
+callbacks must use the same SQLite ABI as the connection. With a fully caller-supplied SQLite
+build, register callbacks through that build's API using the transaction's raw connection instead.
+
+`CrossProcessDatabase` is `Identifiable`. Its native writer supplies the default database
+identifier, and callers can override it when constructing the database. File databases derive a
+stable identifier from their standardized paths; in-memory databases receive unique identifiers.
 
 ## Cross-process transport
 
@@ -230,16 +284,15 @@ the library can add coordination messages in future versions.
 
 ## Opening a database for several processes
 
-`CrossProcessDatabase(path:)` owns opening the database, which is what lets it coordinate:
+`SQLiteCrossDatabase(path:)` owns opening the database, which is what lets it coordinate:
 
 ```swift
-let database = try CrossProcessDatabase(path: databasePath)
+let database = try SQLiteCrossDatabase(path: databasePath)
 ```
 
-The database is opened as a GRDB `DatabasePool`, so it runs in WAL mode with concurrent readers and
-a single writer, and it uses `Configuration.crossProcess`, which gives SQLite a busy timeout. GRDB
-reports `SQLITE_BUSY` immediately by default, so without that timeout any write that overlaps
-another process's write fails outright rather than waiting its turn.
+The database is opened by `SQLitePoolDriver`, so it runs in WAL mode with concurrent readers and a
+single writer, and every connection gets a busy timeout. Without one, a write that overlaps another
+process's write fails outright rather than waiting its turn.
 
 Opening is serialized across every process sharing a coordination directory by an exclusive advisory
 lock, held only while the database is being opened. Moving a new database into WAL mode briefly
@@ -253,14 +306,17 @@ temporary directory; sandboxed applications must supply one both processes can r
 Group container:
 
 ```swift
-let database = try CrossProcessDatabase(
+let database = try SQLiteCrossDatabase(
   path: databasePath,
   coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
 )
 ```
 
-`init(writer:)` remains available for a writer you configure and open yourself. It cannot coordinate
-opening or guarantee a busy timeout, so pass a transport explicitly if that database is also opened
+In-memory databases cannot be shared between processes, or pooled, so `SQLitePoolDriver` rejects
+them; use `SQLiteQueueDriver` for those.
+
+Constructing a driver yourself remains available for a database you configure and open on your own.
+That cannot coordinate opening, so pass a transport explicitly if the database is also opened
 elsewhere.
 
 ## Announcing committed writes

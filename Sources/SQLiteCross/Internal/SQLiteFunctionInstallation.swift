@@ -1,14 +1,12 @@
-#if GRDB
-  // The SQLite C API is reached through GRDB's module, but nothing here depends on GRDB itself:
-  // every installer takes a bare `sqlite3 *` and a Structured Queries type.
-  import GRDBSQLite
+#if SystemSQLite
+  import CSQLite3
   import StructuredQueriesSQLite
 
   /// Installs a Swift-implemented collating sequence on `connection`.
   func sqliteCrossInstall(
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation,
     on connection: OpaquePointer?
-  ) {
+  ) -> Int32 {
     sqlite3_create_collation_v2(
       connection,
       collation.name,
@@ -33,7 +31,7 @@
   func sqliteCrossInstall(
     function: some ScalarDatabaseFunction,
     on connection: OpaquePointer?
-  ) {
+  ) -> Int32 {
     sqlite3_create_function_v2(
       connection,
       function.name,
@@ -59,7 +57,7 @@
   func sqliteCrossInstall(
     function: some AggregateDatabaseFunction,
     on connection: OpaquePointer?
-  ) {
+  ) -> Int32 {
     sqlite3_create_function_v2(
       connection,
       function.name,
