@@ -18,7 +18,7 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
 /// queued behind it, so a read issued after a write observes it. The database runs in WAL mode so
 /// that other processes' readers are never blocked by this one's writer.
-public final class SQLitePoolDriver: SQLiteDatabaseWriter, Sendable {
+public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let writer: SQLiteConnection

@@ -4,15 +4,13 @@ import Foundation
 /// One open connection, isolated to a dispatch queue of its own.
 ///
 /// The connection is an actor whose executor is that queue. Two things follow from it. A query
-/// never occupies a thread of the cooperative
-/// pool, which is a pool of a few threads that Swift expects nothing to block; a query blocks its
-/// own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
-/// cancellation and task locals propagate the way they would for any other actor, rather than
-/// having to be carried across a continuation by hand.
+/// never occupies a thread of the cooperative pool, which Swift expects nothing to block; a query
+/// blocks its own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
+/// cancellation and task locals propagate without being carried across a continuation by hand.
 ///
 /// The handle is ordinary isolated state, so the connection needs no lock of its own.
 actor SQLiteConnection {
-  private var handle: SQLiteHandle
+  private let handle: SQLiteHandle
   private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
@@ -100,10 +98,8 @@ final class SQLiteConnectionExecutor: SerialExecutor {
 
 /// The interrupt belonging to one access, armed only while that access owns its connection.
 ///
-/// Cancellation can arrive at any moment, including while an access is still queued behind another
-/// one. Interrupting then would abort whatever *other* access is running on the connection, which
-/// was never cancelled — so each access gets a token of its own, and it only fires between the
-/// moment that access takes the connection and the moment it gives it back.
+/// A cancellation handler can race with the end of its operation. Holding the lock while firing
+/// prevents a delayed interrupt from reaching the next access after this token is disarmed.
 ///
 /// Interrupting deliberately does not wait for the connection: taking its queue here would
 /// deadlock against the very query this is meant to stop. SQLite documents interrupting from
@@ -115,23 +111,17 @@ private final class SQLiteInterruptToken: @unchecked Sendable {
   private let lock = NSLock()
 
   func arm(_ interrupt: @escaping @Sendable () -> Void) {
-    lock.lock()
-    defer { lock.unlock() }
-    self.interrupt = interrupt
+    lock.withLock { self.interrupt = interrupt }
   }
 
   func disarm() {
-    lock.lock()
-    defer { lock.unlock() }
-    interrupt = nil
+    lock.withLock { interrupt = nil }
   }
 
   func fire() {
-    lock.lock()
-    // Invoke while holding the lock so `disarm` cannot return and let the next access begin before
-    // this interrupt reaches SQLite. Otherwise a cancellation delayed at exactly this point could
-    // interrupt the access after the one it belongs to.
-    interrupt?()
-    lock.unlock()
+    lock.withLock {
+      // Invoke while holding the lock so `disarm` cannot let the next access begin first.
+      interrupt?()
+    }
   }
 }

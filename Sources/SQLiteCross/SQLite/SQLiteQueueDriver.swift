@@ -4,7 +4,7 @@
 /// database, which is private to the connection that opened it and so cannot be pooled at all, or a
 /// small file database where one connection is plenty. ``SQLitePoolDriver`` is the choice when
 /// reads should run concurrently.
-public final class SQLiteQueueDriver: SQLiteDatabaseWriter, Sendable {
+public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let connection: SQLiteConnection
