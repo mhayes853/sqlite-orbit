@@ -34,60 +34,39 @@ actor SQLiteConnection {
     self.handle = handle
   }
 
-  nonisolated(nonsending)
-    func read<Result: Sendable>(
-      _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-    ) async throws -> sending Result
-  {
+  func read<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) async throws -> Result {
     try await perform { handle in try handle.read(body) }
   }
 
-  nonisolated(nonsending)
-    func write<Result: Sendable>(
-      _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
-    ) async throws -> sending Result
-  {
+  func write<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
     try await perform { handle in try handle.write(body) }
   }
 
-  /// Hops to the connection's queue and runs `work` there, cancellably.
+  /// Runs `work` on the connection's queue, holding the interrupt for the duration.
   ///
-  /// The cancellation handler is installed before the hop, so a task cancelled while it is still
-  /// waiting its turn is noticed. SQLite reports an interrupted statement as `SQLITE_INTERRUPT`,
-  /// which is a cancellation rather than a database failure and is reported as one.
-  nonisolated(nonsending)
-    private func perform<Result: Sendable>(
-      _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result
-    ) async throws -> sending Result
-  {
-    // The token belongs to this access alone. A cancellation that arrives while this access is
-    // still queued finds it unarmed and does nothing, rather than interrupting whichever *other*
-    // access currently owns the connection.
+  /// The token belongs to this access alone, so cancellation cannot interrupt another access that
+  /// currently owns the connection. SQLite reports `SQLITE_INTERRUPT` as task cancellation.
+  private func perform<Result: Sendable>(
+    _ work: sending (borrowing SQLiteHandle) throws -> Result
+  ) async throws -> Result {
     let token = SQLiteInterruptToken()
     do {
       return try await withTaskCancellationHandler {
-        try await run(work, token: token)
+        token.arm(interrupt)
+        defer { token.disarm() }
+        // A task may have been cancelled while waiting to enter the actor.
+        try Task.checkCancellation()
+        return try work(handle)
       } onCancel: {
         token.fire()
       }
     } catch let error as SQLiteError where error.primaryCode == .interrupt {
       throw CancellationError()
     }
-  }
-
-  /// Runs `work` on the connection's queue, holding the interrupt for the duration.
-  private func run<Result: Sendable>(
-    _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result,
-    token: SQLiteInterruptToken
-  ) throws -> sending Result {
-    token.arm(interrupt)
-    defer { token.disarm() }
-    // Interrupting only affects a statement that is already running, so a task cancelled while it
-    // waited its turn on the queue would otherwise go on to run its query in full. What remains is
-    // the few microseconds between this check and the first step; closing that would take a
-    // progress handler, which is not worth its cost per opcode.
-    try Task.checkCancellation()
-    return try work(handle)
   }
 }
 

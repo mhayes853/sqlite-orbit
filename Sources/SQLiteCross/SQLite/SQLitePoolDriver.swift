@@ -99,10 +99,9 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter, Sendable {
     #endif
   }
 
-  nonisolated(nonsending)
   public func read<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) async throws -> Result {
     let reader = try await scheduler.acquireReader()
     // Giving the reader back is awaited rather than deferred to a task: a reader that comes back
     // late is a reader the next caller waits for while it is already free.
@@ -117,10 +116,9 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter, Sendable {
     return value
   }
 
-  nonisolated(nonsending)
   public func write<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
     try await scheduler.acquireWriter()
     let value: Result
     do {

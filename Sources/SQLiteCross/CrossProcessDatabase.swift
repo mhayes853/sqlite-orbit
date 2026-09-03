@@ -32,20 +32,18 @@ public final class CrossProcessDatabase<Writer: SQLiteDatabaseWriter>: Identifia
     self.onAnnouncementFailure = onAnnouncementFailure
   }
 
-  nonisolated(nonsending)
   public func read<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) async throws -> Result {
     try await driver.read(body)
   }
 
   /// Writes to the database and announces the transaction it commits.
   ///
   /// A write that throws is rolled back by its driver and is not announced.
-  nonisolated(nonsending)
   public func write<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
     let result = try await driver.write(body)
     await announceCommittedTransaction()
     return result

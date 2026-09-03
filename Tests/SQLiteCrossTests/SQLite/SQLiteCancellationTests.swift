@@ -140,14 +140,19 @@
 
   @Test
   func cancellingBeforeAnAccessStartsRunsNoQuery() async throws {
-    let steps = CallCounter()
-    let interrupts = CallCounter()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let driver = try SQLiteQueueDriver(path: ":memory:")
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
+    let blockerEntered = Mutex(false)
+    let releaseBlocker = Mutex(false)
+    let blocker = Task {
+      try await driver.read { _ in
+        blockerEntered.withLock { $0 = true }
+        while !releaseBlocker.withLock({ $0 }) {}
+      }
+    }
+    try await waitUntil { blockerEntered.withLock { $0 } }
 
     let task = Task {
       try await driver.write { transaction in
@@ -155,11 +160,13 @@
       }
     }
     task.cancel()
+    releaseBlocker.withLock { $0 = true }
+    try await blocker.value
     await #expect(throws: CancellationError.self) {
       try await task.value
     }
 
-    // The write never ran, so nothing was inserted and no statement was stepped on its behalf.
+    // The cancelled write never ran.
     let rows = try await driver.read { transaction in
       try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
     }

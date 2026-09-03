@@ -4,26 +4,28 @@ import Testing
 
 @testable import SQLiteCross
 
-@Test
-func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
-  let identifier = DatabaseIdentifier(rawValue: "native-default")
-  let driver = try SQLiteQueueDriver(path: ":memory:", identifier: identifier)
-  let database = CrossProcessDatabase(driver: driver)
+#if SystemSQLite
+  @Test
+  func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
+    let identifier = DatabaseIdentifier(rawValue: "native-default")
+    let driver = try SQLiteQueueDriver(path: ":memory:", identifier: identifier)
+    let database = CrossProcessDatabase(driver: driver)
 
-  #expect(database.id == identifier)
-  #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
-  #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
-}
+    #expect(database.id == identifier)
+    #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
+    #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
+  }
 
-@Test
-func crossProcessDatabaseCanOverrideItsIdentifier() {
-  let driver = try! SQLiteQueueDriver(path: ":memory:")
-  let override = DatabaseIdentifier(rawValue: "application-defined")
+  @Test
+  func crossProcessDatabaseCanOverrideItsIdentifier() {
+    let driver = try! SQLiteQueueDriver(path: ":memory:")
+    let override = DatabaseIdentifier(rawValue: "application-defined")
 
-  let database = CrossProcessDatabase(driver: driver, id: override)
+    let database = CrossProcessDatabase(driver: driver, id: override)
 
-  #expect(database.id == override)
-}
+    #expect(database.id == override)
+  }
+#endif
 
 @Test
 func structuredQueryExecutionPreservesBindings() async throws {

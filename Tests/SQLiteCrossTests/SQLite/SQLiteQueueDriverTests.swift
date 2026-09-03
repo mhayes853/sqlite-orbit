@@ -35,6 +35,23 @@
   }
 
   @Test
+  func accessClosuresNeedNotBeSendable() async throws {
+    final class Capture {
+      var value = 0
+    }
+
+    let driver = try makeQueueDriver()
+    let capture = Capture()
+    let value = try await driver.write { transaction in
+      capture.value = 42
+      try transaction.execute("CREATE TABLE marker (value INTEGER)")
+      return capture.value
+    }
+
+    #expect(value == 42)
+  }
+
+  @Test
   func queueDriverCommitsAcrossSeparateWrites() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)

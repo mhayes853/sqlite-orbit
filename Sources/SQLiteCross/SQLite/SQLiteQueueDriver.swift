@@ -23,17 +23,15 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter, Sendable {
     self.defaultIdentifier = identifier ?? .forDatabase(path: path)
   }
 
-  nonisolated(nonsending)
   public func read<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) async throws -> Result {
     try await connection.read(body)
   }
 
-  nonisolated(nonsending)
   public func write<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
     try await connection.write(body)
   }
 }
