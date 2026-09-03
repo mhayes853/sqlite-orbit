@@ -480,11 +480,9 @@
     var configuration = SQLiteConfiguration.default
     configuration.library.step = { statement in
       let sql = base.sql(statement).map { String(cString: $0) }
-      let fires = sql == "ROLLBACK" && isArmed.withLock { armed in
-        defer { armed = false }
-        return armed
-      }
-      return fires ? SQLiteResultCode.interrupt.rawValue : base.step(statement)
+      guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else { return base.step(statement) }
+      isArmed.withLock { $0 = false }
+      return SQLiteResultCode.interrupt.rawValue
     }
     let handle = try openConnection(configuration: configuration)
 

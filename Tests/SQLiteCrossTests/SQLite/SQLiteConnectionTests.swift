@@ -210,7 +210,11 @@
   func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
     let path = NSTemporaryDirectory() + "sqlite-cross-missing-\(UUID().uuidString)/db.sqlite"
     #expect(throws: SQLiteError.self) {
-      _ = try SQLiteHandle.open(path: DatabasePath(path), flags: [.readWrite], configuration: .default)
+      _ = try SQLiteHandle.open(
+        path: DatabasePath(path),
+        flags: [.readWrite],
+        configuration: .default
+      )
     }
   }
 
@@ -313,7 +317,7 @@
       (.milliseconds(250), 250),
       (.zero, 0),
       (.seconds(-1), 0),
-      (.seconds(Int64.max), .max),
+      (.seconds(Int64.max), .max)
     ]
   )
   func aBusyTimeoutSaturatesRatherThanOverflowing(timeout: Duration, milliseconds: Int32) {
