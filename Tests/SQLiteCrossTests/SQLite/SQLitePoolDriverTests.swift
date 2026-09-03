@@ -206,6 +206,16 @@
     }
   }
 
+  private final class RequestCounter: Sendable {
+    private let count = Mutex(0)
+
+    var value: Int { count.withLock { $0 } }
+
+    func increment() {
+      count.withLock { $0 += 1 }
+    }
+  }
+
   @Test
   func readsRunAlongsideOneAnother() async throws {
     let database = TemporaryDatabase()
@@ -214,9 +224,10 @@
     let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
     let gate = Gate()
 
-    let reads = (0..<2).map { _ in
-      Task { try await driver.read { _ in gate.hold() } }
-    }
+    let reads = (0..<2)
+      .map { _ in
+        Task { try await driver.read { _ in gate.hold() } }
+      }
     // Both reads are inside the database at once; a serialized pool would never get here.
     await gate.waitUntilEntered(2)
     gate.release()
@@ -280,6 +291,54 @@
     try await read.value
     try await write.value
     #expect(wrote.withLock { $0 })
+  }
+
+  @Test
+  func aQueuedWriterRunsBeforeLaterReadersUnderReadPressure() async throws {
+    let database = TemporaryDatabase()
+    var configuration = SQLiteConfiguration.default
+    configuration.readerCount = 2
+    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    try await bootstrap(driver)
+    let gate = Gate()
+
+    let blockingReads = (0..<2)
+      .map { _ in
+        Task { try await driver.read { _ in gate.hold() } }
+      }
+    await gate.waitUntilEntered(2)
+
+    let writerRequested = Mutex(false)
+    let writer = Task {
+      writerRequested.withLock { $0 = true }
+      try await driver.write { transaction in
+        try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
+      }
+    }
+    while !writerRequested.withLock({ $0 }) { await Task.yield() }
+    for _ in 0..<100 { await Task.yield() }
+
+    // Keep read pressure behind the writer. Every one of these must observe its commit; granting
+    // any of them first would allow a steady read stream to starve the writer indefinitely.
+    let trailingRequested = RequestCounter()
+    let trailingReads = (0..<32)
+      .map { _ in
+        Task {
+          trailingRequested.increment()
+          return try await driver.read { transaction in
+            try transaction.fetchAll(Item.all).count
+          }
+        }
+      }
+    while trailingRequested.value < trailingReads.count { await Task.yield() }
+    for _ in 0..<100 { await Task.yield() }
+
+    gate.release()
+    for read in blockingReads { try await read.value }
+    _ = try await writer.value
+    for read in trailingReads {
+      #expect(try await read.value == 1)
+    }
   }
 
   @Test

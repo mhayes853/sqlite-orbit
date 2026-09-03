@@ -3,15 +3,16 @@
 `swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
-The package currently focuses on its local transaction boundary. `DatabaseDriver` asynchronously
-lends distinct `DatabaseReadTransaction` and `DatabaseWriteTransaction` values. Read transactions
+The package currently focuses on its local transaction boundary. `SQLiteDatabaseReader` and
+`SQLiteDatabaseWriter` define the asynchronous boundary around the native SQLite implementation,
+which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction` values. Read transactions
 can only query, while write transactions can query and execute mutations. Transactions and rows are
-nonescapable, so a driver-owned SQLite connection cannot outlive its access closure.
+nonescapable, so a database-owned SQLite connection cannot outlive its access closure.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
 needed to build statements. Statements can be executed and decoded directly by any read or write
-transaction; the generic protocols have no dependency on GRDB types.
+transaction.
 
 Whether a statement needs a write transaction is read off its type. A `DatabaseQuery<Access>` pairs
 a statement with the capability it requires, and can only be built from a statement that already has
@@ -51,8 +52,8 @@ Two drivers back it:
   in-memory database, which is private to the connection that opened it and so cannot be pooled at
   all.
 
-Each connection runs on a dispatch queue of its own, as GRDB's do, so a query never occupies a
-cooperative-pool thread.
+Each connection runs on a dispatch queue of its own, so a query never occupies a cooperative-pool
+thread.
 
 ## Using your own SQLite build
 
@@ -98,30 +99,6 @@ try await database.read { transaction in
   // ...
 }
 ```
-
-## GRDB
-
-GRDB remains available as an optional driver behind the `GRDB` package trait:
-
-```swift
-.package(
-  url: "https://github.com/your-org/swift-sqlite-cross",
-  from: "0.1.0",
-  traits: ["GRDB"]
-)
-```
-
-```swift
-import GRDB
-import SQLiteCross
-
-let queue = try DatabaseQueue(path: databasePath)
-let database = CrossProcessDatabase(driver: GRDBDatabaseDriver(writer: queue))
-```
-
-Both drivers offer an `init(path:)`, so with both traits enabled there is nothing for the compiler
-to infer the driver from. Name the database type to say which one you meant: `SQLiteCrossDatabase`
-for the native driver, or `CrossProcessDatabase<GRDBDatabaseDriver>` for GRDB.
 
 Statements come in four shapes, and `fetchAll`, `fetchOne`, and `fetchCursor` cover all of them: a
 single projected value, a tuple of projected values, an unprojected select decoding to its table,
@@ -221,7 +198,7 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 ## Collations and functions
 
 Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
-`@DatabaseFunction` macros, then registered on a GRDB `Configuration`:
+`@DatabaseFunction` macros, then registered on a `SQLiteConfiguration`:
 
 ```swift
 @DatabaseCollation
@@ -233,11 +210,12 @@ extension Collation where Self == NamedCollation {
   static var localized: Self { Self($localized) }
 }
 
-var configuration = Configuration()
+var configuration = SQLiteConfiguration.default
 configuration.register(collation: $localized)
 
-let database = CrossProcessDatabase(
-  writer: try DatabasePool(path: databasePath, configuration: configuration)
+let database = try SQLiteCrossDatabase(
+  path: databasePath,
+  configuration: configuration
 )
 
 let reminders = try await database.read { transaction in
@@ -246,13 +224,13 @@ let reminders = try await database.read { transaction in
 ```
 
 Register through the configuration rather than installing on a connection directly. A collation or
-function is only known to the connection it was installed on, and a `DatabasePool` opens connections
-as it needs them, so installing on one leaves queries on every other connection failing with "no
-such collation sequence".
+function is only known to the connection it was installed on. The native pool owns several
+connections, so installing on one directly would leave queries on every other connection failing
+with "no such collation sequence".
 
-`CrossProcessDatabase` is `Identifiable`. A driver supplies its default database identifier, and
-callers can override it when constructing the database. The GRDB driver derives stable identifiers
-for file databases from their standardized paths and unique identifiers for in-memory databases.
+`CrossProcessDatabase` is `Identifiable`. Its native writer supplies the default database
+identifier, and callers can override it when constructing the database. File databases derive a
+stable identifier from their standardized paths; in-memory databases receive unique identifiers.
 
 ## Cross-process transport
 

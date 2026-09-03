@@ -340,6 +340,47 @@
   }
 
   @Test
+  func cancelledWritesNeverCommitWithoutReturningSuccess() async throws {
+    let path = NSTemporaryDirectory() + "sqlite-cross-cancelled-commits-\(UUID().uuidString).sqlite"
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: path + suffix)
+      }
+    }
+    let driver = try SQLitePoolDriver(path: path)
+    try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    let writes = (1...300)
+      .map { id in
+        Task {
+          try await driver.write { transaction in
+            try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+            return id
+          }
+        }
+      }
+    for (offset, write) in writes.enumerated() where offset.isMultiple(of: 2) {
+      write.cancel()
+    }
+
+    var successfulIDs: [Int] = []
+    for write in writes {
+      if let id = try? await write.value {
+        successfulIDs.append(id)
+      }
+    }
+    let storedIDs = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
+    }
+
+    // Cancellation may win or lose a race with a fast write, but a committed transaction must
+    // always be reported as successful and a failed one must leave no row behind.
+    #expect(storedIDs == successfulIDs.sorted())
+  }
+
+  @Test
   func aReaderSeesWhatAnotherConnectionCommitted() async throws {
     let path = NSTemporaryDirectory() + "sqlite-cross-shared-\(UUID().uuidString).sqlite"
     defer {

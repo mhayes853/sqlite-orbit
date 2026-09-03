@@ -96,10 +96,9 @@ public struct SQLiteLibrary: Sendable {
     ) -> Int32
 
   public init(
-    open_v2:
-      @escaping @Sendable (
-        UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
-      ) -> Int32,
+    open_v2: @escaping @Sendable (
+      UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
+    ) -> Int32,
     close_v2: @escaping @Sendable (OpaquePointer?) -> Int32,
     errmsg: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?,
     extended_errcode: @escaping @Sendable (OpaquePointer?) -> Int32,
@@ -110,11 +109,10 @@ public struct SQLiteLibrary: Sendable {
     last_insert_rowid: @escaping @Sendable (OpaquePointer?) -> Int64,
     threadsafe: @escaping @Sendable () -> Int32,
     libversion_number: @escaping @Sendable () -> Int32,
-    prepare_v3:
-      @escaping @Sendable (
-        OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
-        UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
-      ) -> Int32,
+    prepare_v3: @escaping @Sendable (
+      OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
+      UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
+    ) -> Int32,
     step: @escaping @Sendable (OpaquePointer?) -> Int32,
     reset: @escaping @Sendable (OpaquePointer?) -> Int32,
     finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
@@ -135,14 +133,13 @@ public struct SQLiteLibrary: Sendable {
     column_blob: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?,
     column_bytes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
     column_name: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?,
-    create_function_v2:
-      @escaping @Sendable (
-        OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
-        (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-        (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-        (@convention(c) (OpaquePointer?) -> Void)?,
-        SQLiteDestructor?
-      ) -> Int32
+    create_function_v2: @escaping @Sendable (
+      OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
+      (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+      (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+      (@convention(c) (OpaquePointer?) -> Void)?,
+      SQLiteDestructor?
+    ) -> Int32
   ) {
     self.open_v2 = open_v2
     self.close_v2 = close_v2

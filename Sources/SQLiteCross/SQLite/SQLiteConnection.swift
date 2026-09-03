@@ -35,16 +35,18 @@ actor SQLiteConnection {
   }
 
   nonisolated(nonsending)
-  func read<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    func read<Result: Sendable>(
+      _ body: @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
+    ) async throws -> sending Result
+  {
     try await perform { handle in try handle.read(body) }
   }
 
   nonisolated(nonsending)
-  func write<Result: Sendable>(
-    _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
-  ) async throws -> sending Result {
+    func write<Result: Sendable>(
+      _ body: @Sendable (borrowing SQLiteWriteTransaction) throws -> sending Result
+    ) async throws -> sending Result
+  {
     try await perform { handle in try handle.write(body) }
   }
 
@@ -54,9 +56,10 @@ actor SQLiteConnection {
   /// waiting its turn is noticed. SQLite reports an interrupted statement as `SQLITE_INTERRUPT`,
   /// which is a cancellation rather than a database failure and is reported as one.
   nonisolated(nonsending)
-  private func perform<Result: Sendable>(
-    _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result
-  ) async throws -> sending Result {
+    private func perform<Result: Sendable>(
+      _ work: @Sendable (borrowing SQLiteHandle) throws -> sending Result
+    ) async throws -> sending Result
+  {
     // The token belongs to this access alone. A cancellation that arrives while this access is
     // still queued finds it unarmed and does nothing, rather than interrupting whichever *other*
     // access currently owns the connection.
@@ -146,9 +149,10 @@ private final class SQLiteInterruptToken: @unchecked Sendable {
 
   func fire() {
     lock.lock()
-    let interrupt = self.interrupt
-    lock.unlock()
-    // Called outside the lock: the access it stops will take the lock on its way out.
+    // Invoke while holding the lock so `disarm` cannot return and let the next access begin before
+    // this interrupt reaches SQLite. Otherwise a cancellation delayed at exactly this point could
+    // interrupt the access after the one it belongs to.
     interrupt?()
+    lock.unlock()
   }
 }

@@ -165,6 +165,110 @@
     }
     #expect(rows == [0])
   }
+
+  /// Coordinates the narrow race between a completed access disarming its token and a delayed
+  /// cancellation delivering `sqlite3_interrupt`.
+  private final class DelayedInterruptProbe: Sendable {
+    private struct State {
+      var firstStepEntered = false
+      var mayFinishFirstStep = false
+      var firstQueryFinished = false
+      var interruptEntered = false
+      var mayDeliverInterrupt = false
+      var secondAccessEntered = false
+    }
+
+    private let state = Mutex(State())
+
+    var firstStepEntered: Bool { state.withLock { $0.firstStepEntered } }
+    var firstQueryFinished: Bool { state.withLock { $0.firstQueryFinished } }
+    var interruptEntered: Bool { state.withLock { $0.interruptEntered } }
+    var secondAccessEntered: Bool { state.withLock { $0.secondAccessEntered } }
+
+    func enterFirstStep() {
+      state.withLock { $0.firstStepEntered = true }
+      while !state.withLock({ $0.mayFinishFirstStep }) {}
+    }
+
+    func finishFirstQuery() {
+      state.withLock { $0.firstQueryFinished = true }
+    }
+
+    func releaseFirstStep() {
+      state.withLock { $0.mayFinishFirstStep = true }
+    }
+
+    func delayInterrupt() {
+      state.withLock { $0.interruptEntered = true }
+      while !state.withLock({ $0.mayDeliverInterrupt }) {}
+    }
+
+    func deliverInterrupt() {
+      state.withLock { $0.mayDeliverInterrupt = true }
+    }
+
+    func enterSecondAccess() {
+      state.withLock { $0.secondAccessEntered = true }
+    }
+  }
+
+  @Test
+  func aDelayedCancellationCannotInterruptTheNextAccess() async throws {
+    let probe = DelayedInterruptProbe()
+    let base = SQLiteLibrary.system
+    var library = base
+    library.step = { statement in
+      let sql = base.sql(statement).map(String.init(cString:)) ?? ""
+      if sql.contains("first cancellation target") {
+        probe.enterFirstStep()
+        let code = base.step(statement)
+        if code == SQLiteResultCode.done.rawValue {
+          probe.finishFirstQuery()
+        }
+        return code
+      }
+      return base.step(statement)
+    }
+    library.interrupt = { connection in
+      probe.delayInterrupt()
+      base.interrupt(connection)
+    }
+
+    var configuration = SQLiteConfiguration.default
+    configuration.library = library
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let first = Task {
+      try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT 1 -- first cancellation target", as: Int.self)
+        )
+      }
+    }
+    try await waitUntil { probe.firstStepEntered }
+
+    // `cancel()` runs the cancellation handler synchronously, so use a dedicated thread while the
+    // injected interrupt deliberately waits.
+    Thread.detachNewThread { first.cancel() }
+    try await waitUntil { probe.interruptEntered }
+
+    let second = Task {
+      try await driver.read { transaction in
+        probe.enterSecondAccess()
+        return try transaction.fetchAll(#sql("SELECT 2", as: Int.self))
+      }
+    }
+
+    probe.releaseFirstStep()
+    try await waitUntil { probe.firstQueryFinished }
+    for _ in 0..<1_000 { await Task.yield() }
+
+    // The first access cannot release the connection while its interrupt is still in flight.
+    #expect(!probe.secondAccessEntered)
+    probe.deliverInterrupt()
+    _ = try? await first.value
+    #expect(try await second.value == [2])
+  }
+
   /// Records how many accesses were ever inside the database at the same time.
   private final class OverlapTracker: Sendable {
     private let state = Mutex((inFlight: 0, peak: 0))

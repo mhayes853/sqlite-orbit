@@ -7,8 +7,8 @@
 
   /// Compares decoding a large scan through the native pool and queue implementations.
   ///
-  /// Both reach SQLite through an injectable table of closures; this keeps a benchmark covering
-  /// the native scan path after the GRDB adapter's removal.
+  /// Both reach SQLite through an injectable table of closures, keeping the native scan path under
+  /// measurement for both local scheduling strategies.
   ///
   /// Timing is not an assertion. The test only runs when asked, so that a loaded machine cannot
   /// fail the suite.
