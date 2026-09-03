@@ -409,6 +409,116 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
 }
 
 @Test
+func databaseCursorsSelectTopKValues() async throws {
+  let state = TestDatabaseState(
+    rows: [[.int(3)], [.int(1)], [.int(4)], [.int(1)], [.int(5)]]
+  )
+
+  state.visitedRowCount = 0
+  let topTwo = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(2)
+  }
+  #expect(topTwo == [5, 4])
+  #expect(state.visitedRowCount == 5)
+
+  let topNone = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(0)
+  }
+  #expect(topNone.isEmpty)
+
+  let topBeyondCount = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(10)
+  }
+  #expect(topBeyondCount == [5, 4, 3, 1, 1])
+
+  let reverseTopTwo = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(2, by: >)
+  }
+  #expect(reverseTopTwo == [1, 1])
+
+  // Ranks even values above odd ones, so the two "largest" are 4 and then 5.
+  let topTwoEvenFirst = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+      .topK(2) { ($0 % 2 == 0 ? 1 : 0, $0) < ($1 % 2 == 0 ? 1 : 0, $1) }
+  }
+  #expect(topTwoEvenFirst == [4, 5])
+
+  state.visitedRowCount = 0
+  let extremes = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(2)
+  }
+  #expect(extremes.min == [1, 1])
+  #expect(extremes.max == [5, 4])
+  #expect(state.visitedRowCount == 5)
+
+  let reverseExtremes = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(2, by: >)
+  }
+  #expect(reverseExtremes.min == [5, 4])
+  #expect(reverseExtremes.max == [1, 1])
+
+  let overlappingExtremes = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(10)
+  }
+  #expect(overlappingExtremes.min == [1, 1, 3, 4, 5])
+  #expect(overlappingExtremes.max == [5, 4, 3, 1, 1])
+
+  let noExtremes = try withTestRead(state) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(0)
+  }
+  #expect(noExtremes.min.isEmpty)
+  #expect(noExtremes.max.isEmpty)
+
+  let emptyState = TestDatabaseState()
+  let emptyTop = try withTestRead(emptyState) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(3)
+  }
+  #expect(emptyTop.isEmpty)
+
+  let emptyExtremes = try withTestRead(emptyState) { transaction in
+    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(3)
+  }
+  #expect(emptyExtremes.min.isEmpty)
+  #expect(emptyExtremes.max.isEmpty)
+
+  // The heap has to agree with a full sort for every `k`, on inputs in arbitrary order.
+  var generator = SystemRandomNumberGenerator()
+  for _ in 0..<20 {
+    let values = (0..<25).map { _ in Int.random(in: -1000...1000, using: &generator) }
+    let shuffledState = TestDatabaseState(rows: values.map { [.int(Int64($0))] })
+    let sorted = values.sorted()
+    for k in 0...(values.count + 2) {
+      let top = try withTestRead(shuffledState) { transaction in
+        try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(k)
+      }
+      #expect(top == sorted.suffix(k).reversed())
+
+      let extremes = try withTestRead(shuffledState) { transaction in
+        try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(k)
+      }
+      #expect(extremes.min == Array(sorted.prefix(k)))
+      #expect(extremes.max == sorted.suffix(k).reversed())
+    }
+  }
+
+  var didThrow = false
+  do {
+    _ = try withTestRead(state) { transaction in
+      try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
+        .topK(2) { lhs, rhs in
+          if lhs == 5 || rhs == 5 {
+            throw TerminalAlgorithmError.stop
+          }
+          return lhs < rhs
+        }
+    }
+  } catch is TerminalAlgorithmError {
+    didThrow = true
+  }
+  #expect(didThrow)
+}
+
+@Test
 func statementCapabilityIsReadOffTheQueryHierarchy() {
   // Building a read query is only possible for a select-shaped statement, so a read transaction
   // cannot be handed a mutation. Every one of these would fail to compile as a read query:

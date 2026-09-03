@@ -723,4 +723,72 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
     }
     return result
   }
+
+  /// Returns the `k` largest remaining values, ordered from largest to smallest.
+  ///
+  /// Fewer than `k` values are returned when the cursor holds fewer than `k` values.
+  @inlinable
+  public consuming func topK(_ k: Int) throws -> [Element] where Element: Comparable {
+    try topK(k, by: <)
+  }
+
+  /// Returns the `k` largest remaining values according to a comparison predicate, ordered from
+  /// largest to smallest.
+  ///
+  /// Fewer than `k` values are returned when the cursor holds fewer than `k` values.
+  @inlinable
+  public consuming func topK(
+    _ k: Int,
+    by areInIncreasingOrder: (Element, Element) throws -> Bool
+  ) throws -> [Element] {
+    precondition(k >= 0, "Cannot take a negative number of top elements from a cursor")
+    guard k > 0 else { return [] }
+
+    // A heap rooted at the smallest kept value: the root is what a larger newcomer displaces.
+    var heap = DatabaseCursorHeap<Element>(capacity: k)
+    try forEach { value in
+      try heap.insert(value, by: areInIncreasingOrder)
+    }
+    return try heap.drain(by: areInIncreasingOrder)
+  }
+
+  /// Returns the `k` smallest and the `k` largest remaining values.
+  ///
+  /// The `min` values are ordered from smallest to largest and the `max` values from largest to
+  /// smallest. Both groups draw from the same values, so they overlap when the cursor holds fewer
+  /// than `2 * k` values.
+  @inlinable
+  public consuming func minMaxK(
+    _ k: Int
+  ) throws -> (min: [Element], max: [Element]) where Element: Comparable {
+    try minMaxK(k, by: <)
+  }
+
+  /// Returns the `k` smallest and the `k` largest remaining values according to a comparison
+  /// predicate.
+  ///
+  /// The `min` values are ordered from smallest to largest and the `max` values from largest to
+  /// smallest. Both groups draw from the same values, so they overlap when the cursor holds fewer
+  /// than `2 * k` values.
+  @inlinable
+  public consuming func minMaxK(
+    _ k: Int,
+    by areInIncreasingOrder: (Element, Element) throws -> Bool
+  ) throws -> (min: [Element], max: [Element]) {
+    precondition(k >= 0, "Cannot take a negative number of extreme elements from a cursor")
+    guard k > 0 else { return (min: [], max: []) }
+
+    // The smallest values are kept by a heap rooted at the largest of them, so its ordering is the
+    // reverse of the one the largest values use.
+    var minimums = DatabaseCursorHeap<Element>(capacity: k)
+    var maximums = DatabaseCursorHeap<Element>(capacity: k)
+    try forEach { value in
+      try minimums.insert(value, by: { try areInIncreasingOrder($1, $0) })
+      try maximums.insert(value, by: areInIncreasingOrder)
+    }
+    return (
+      min: try minimums.drain(by: { try areInIncreasingOrder($1, $0) }),
+      max: try maximums.drain(by: areInIncreasingOrder)
+    )
+  }
 }
