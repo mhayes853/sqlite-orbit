@@ -469,4 +469,38 @@
     let id: Int
     var title: String
   }
+
+  /// A cancellation interrupts whichever statement is running, and the interrupt stays armed
+  /// through the one that ends the transaction. Leaving that transaction open would fail the next
+  /// access on the connection rather than this one.
+  @Test
+  func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
+    let base = SQLiteLibrary.system
+    let isArmed = Mutex(true)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.step = { statement in
+      let sql = base.sql(statement).map { String(cString: $0) }
+      let fires = sql == "ROLLBACK" && isArmed.withLock { armed in
+        defer { armed = false }
+        return armed
+      }
+      return fires ? SQLiteResultCode.interrupt.rawValue : base.step(statement)
+    }
+    let handle = try openConnection(configuration: configuration)
+
+    // The read's own rollback is interrupted, and that failure is reported...
+    #expect(throws: SQLiteError.self) {
+      try handle.read { _ in }
+    }
+
+    // ...but it left no transaction behind for the next access to trip over.
+    #expect(isArmed.withLock { !$0 })
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'after')")
+    }
+    let titles = try handle.read { transaction in
+      try transaction.fetchAll(#sql("SELECT title FROM items", as: String.self))
+    }
+    #expect(titles == ["after"])
+  }
 #endif

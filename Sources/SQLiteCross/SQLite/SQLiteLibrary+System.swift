@@ -18,6 +18,7 @@
         interrupt: sqlite3_interrupt,
         changes: sqlite3_changes,
         last_insert_rowid: sqlite3_last_insert_rowid,
+        get_autocommit: sqlite3_get_autocommit,
         threadsafe: sqlite3_threadsafe,
         libversion_number: sqlite3_libversion_number,
         prepare_v3: sqlite3_prepare_v3,

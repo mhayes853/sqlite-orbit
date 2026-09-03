@@ -160,10 +160,10 @@ struct SQLiteHandle: ~Copyable {
       value = try body(SQLiteReadTransaction(handle: self))
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
-      try? execute("ROLLBACK")
+      rollbackIgnoringFailure()
       throw error
     }
-    try execute("ROLLBACK")
+    try endTransaction(with: "ROLLBACK")
     return value
   }
 
@@ -180,16 +180,34 @@ struct SQLiteHandle: ~Copyable {
     do {
       value = try body(SQLiteWriteTransaction(handle: self))
     } catch {
-      try? execute("ROLLBACK")
+      rollbackIgnoringFailure()
       throw error
     }
-    do {
-      try execute("COMMIT")
-    } catch {
-      try? execute("ROLLBACK")
-      throw error
-    }
+    try endTransaction(with: "COMMIT")
     return value
+  }
+
+  /// Ends the open transaction with `sql`, leaving none open when that statement itself fails.
+  ///
+  /// Cancellation interrupts whichever statement is running, and the window it is armed for
+  /// includes this one. A `COMMIT` can also fail on its own, having taken no effect. Either way an
+  /// abandoned transaction would fail the *next* access on this connection — "cannot start a
+  /// transaction within a transaction" — rather than the one that caused it, so the connection is
+  /// asked whether one is still open and rolled back when it is.
+  private borrowing func endTransaction(with sql: String) throws {
+    do {
+      try execute(sql)
+    } catch {
+      if libraryStorage.pointee.get_autocommit(pointer) == 0 {
+        try? execute("ROLLBACK")
+      }
+      throw error
+    }
+  }
+
+  /// Rolls back on a path that already has a failure to report, so this one cannot be raised.
+  private borrowing func rollbackIgnoringFailure() {
+    try? endTransaction(with: "ROLLBACK")
   }
 
   /// Runs every statement in `sql` on `connection`, discarding any rows they produce.

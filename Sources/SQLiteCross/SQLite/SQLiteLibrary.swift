@@ -51,6 +51,12 @@ public struct SQLiteLibrary: Sendable {
   public var interrupt: @Sendable (OpaquePointer?) -> Void
   public var changes: @Sendable (OpaquePointer?) -> Int32
   public var last_insert_rowid: @Sendable (OpaquePointer?) -> Int64
+
+  /// Whether the connection is in autocommit mode, and so has no transaction open.
+  ///
+  /// A statement can fail partway through ending a transaction, and this is the only way to ask
+  /// the connection whether one is still open rather than guess from the failure.
+  public var get_autocommit: @Sendable (OpaquePointer?) -> Int32
   public var threadsafe: @Sendable () -> Int32
   public var libversion_number: @Sendable () -> Int32
 
@@ -122,6 +128,7 @@ public struct SQLiteLibrary: Sendable {
     interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
     changes: @escaping @Sendable (OpaquePointer?) -> Int32,
     last_insert_rowid: @escaping @Sendable (OpaquePointer?) -> Int64,
+    get_autocommit: @escaping @Sendable (OpaquePointer?) -> Int32,
     threadsafe: @escaping @Sendable () -> Int32,
     libversion_number: @escaping @Sendable () -> Int32,
     prepare_v3: @escaping @Sendable (
@@ -165,6 +172,7 @@ public struct SQLiteLibrary: Sendable {
     self.interrupt = interrupt
     self.changes = changes
     self.last_insert_rowid = last_insert_rowid
+    self.get_autocommit = get_autocommit
     self.threadsafe = threadsafe
     self.libversion_number = libversion_number
     self.prepare_v3 = prepare_v3
