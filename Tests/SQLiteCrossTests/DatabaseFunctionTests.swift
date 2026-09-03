@@ -260,7 +260,7 @@
     configuration.register(function: $repeated)
 
     let database = try SQLiteCrossDatabase(
-      path: directory.appendingPathComponent("db.sqlite").path,
+      path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration,
       coordination: .init(directory: directory, backPressure: .fail)
     )

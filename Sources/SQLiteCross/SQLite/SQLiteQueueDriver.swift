@@ -9,9 +9,9 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
 
   private let connection: SQLiteConnection
 
-  /// Opens a database at `path`, or an in-memory database when `path` is `":memory:"`.
+  /// Opens the database at `path`, creating it when it does not exist.
   public init(
-    path: String,
+    path: DatabasePath,
     configuration: SQLiteConfiguration,
     identifier: DatabaseIdentifier? = nil
   ) throws {
@@ -40,7 +40,7 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
   extension SQLiteQueueDriver {
     /// Opens a database using the SQLite this package was linked against.
     public convenience init(
-      path: String,
+      path: DatabasePath,
       identifier: DatabaseIdentifier? = nil
     ) throws {
       try self.init(path: path, configuration: .default, identifier: identifier)

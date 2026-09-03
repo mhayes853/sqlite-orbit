@@ -98,11 +98,11 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try SQLiteCrossDatabase(path: path, coordination: coordination)
+      _ = try SQLiteCrossDatabase(path: DatabasePath(path), coordination: coordination)
       try touch(URL(fileURLWithPath: try value(NativePeerEnvironment.opened)))
 
     case "write":
-      let database = try SQLiteCrossDatabase(path: path, coordination: coordination)
+      let database = try SQLiteCrossDatabase(path: DatabasePath(path), coordination: coordination)
       let writerID = try #require(Int(try value(NativePeerEnvironment.writerID)))
       let writeCount = try #require(Int(try value(NativePeerEnvironment.writeCount)))
       try touch(ready)
@@ -151,7 +151,7 @@
     func file(_ name: String) -> URL { self.harness.file(name) }
 
     func database() throws -> SQLiteCrossDatabase {
-      try SQLiteCrossDatabase(path: self.databasePath, coordination: self.coordination)
+      try SQLiteCrossDatabase(path: DatabasePath(self.databasePath), coordination: self.coordination)
     }
 
     func spawn(_ mode: String, index: Int, writeCount: Int = 0) throws -> Process {

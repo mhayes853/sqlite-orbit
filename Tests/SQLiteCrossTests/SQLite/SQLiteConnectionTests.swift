@@ -210,7 +210,7 @@
   func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
     let path = NSTemporaryDirectory() + "sqlite-cross-missing-\(UUID().uuidString)/db.sqlite"
     #expect(throws: SQLiteError.self) {
-      _ = try SQLiteHandle.open(path: path, flags: [.readWrite], configuration: .default)
+      _ = try SQLiteHandle.open(path: DatabasePath(path), flags: [.readWrite], configuration: .default)
     }
   }
 
@@ -235,7 +235,7 @@
 
     do {
       let connection = try SQLiteHandle.open(
-        path: path,
+        path: DatabasePath(path),
         flags: [.readWrite, .create, .noMutex],
         configuration: .default
       )
@@ -248,7 +248,7 @@
     }
 
     let reopened = try SQLiteHandle.open(
-      path: path,
+      path: DatabasePath(path),
       flags: [.readOnly, .noMutex],
       configuration: .default
     )

@@ -48,12 +48,25 @@ Two drivers back it:
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
   queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
   a thread.
-- `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for an
-  in-memory database, which is private to the connection that opened it and so cannot be pooled at
-  all.
+- `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for a
+  `DatabasePath.memory` or `.temporary` database, which is private to the connection that opened it
+  and so cannot be pooled at all.
 
 Each connection runs on a dispatch queue of its own, so a query never occupies a cooperative-pool
 thread.
+
+A driver is opened with a `DatabasePath` rather than a string, so the databases that no second
+connection can reach are named outright:
+
+```swift
+let onDisk = DatabasePath.file(url)         // or DatabasePath("/path/to/db.sqlite")
+let inMemory = DatabasePath.memory          // ":memory:"
+let scratch = DatabasePath.temporary        // ""
+```
+
+A file path resolves to an absolute path, so the same database is the same `DatabasePath` however
+it was spelled. String literals convert, so `try SQLiteQueueDriver(path: ":memory:")` still reads
+the way it always did.
 
 ## Using your own SQLite build
 
@@ -234,7 +247,8 @@ build, register callbacks through that build's API using the transaction's raw c
 
 `CrossProcessDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
-stable identifier from their standardized paths; in-memory databases receive unique identifiers.
+stable identifier from their absolute paths; a database private to its connection is not the same
+database as any other, so each one receives a unique identifier.
 
 ## Cross-process transport
 

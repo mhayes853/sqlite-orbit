@@ -44,7 +44,7 @@ struct SQLiteHandle: ~Copyable {
   /// partially initialized and then thrown away. That turns out to be the better shape anyway: once
   /// the handle exists, a failed `configure` is cleaned up by its own `deinit`.
   static func open(
-    path: String,
+    path: DatabasePath,
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration
   ) throws -> SQLiteHandle {
@@ -52,7 +52,7 @@ struct SQLiteHandle: ~Copyable {
     libraryStorage.initialize(to: configuration.library)
 
     var pointer: OpaquePointer?
-    let code = path.withCString {
+    let code = path.sqlitePath.withCString {
       libraryStorage.pointee.open_v2($0, &pointer, flags.rawValue, nil)
     }
     guard code == SQLiteResultCode.ok.rawValue, let pointer else {

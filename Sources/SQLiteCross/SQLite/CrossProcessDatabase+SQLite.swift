@@ -20,7 +20,7 @@
     ///     peers. Processes coordinate only when they share a coordination directory.
     ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails.
     public convenience init(
-      path: String,
+      path: DatabasePath,
       configuration: SQLiteConfiguration = .default,
       id: DatabaseIdentifier? = nil,
       coordination: UnixDatagramDatabaseIPCTransport.Configuration = .default,

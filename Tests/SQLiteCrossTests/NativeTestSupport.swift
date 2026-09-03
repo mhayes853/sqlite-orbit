@@ -19,7 +19,7 @@
     var configuration = configuration
     configuration.readerCount = maximumReaderCount
     let pool = try SQLitePoolDriver(
-      path: directory.appendingPathComponent("db.sqlite").path,
+      path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration
     )
     return try await body(CrossProcessDatabase(driver: pool))

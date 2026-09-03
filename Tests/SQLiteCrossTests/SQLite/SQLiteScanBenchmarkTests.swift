@@ -27,7 +27,7 @@
     }
     let rowCount = 200_000
 
-    let pool = try SQLitePoolDriver(path: path)
+    let pool = try SQLitePoolDriver(path: DatabasePath(path))
     try await pool.write { transaction in
       try transaction.execute(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
@@ -39,7 +39,7 @@
       }
     }
 
-    let queue = try SQLiteQueueDriver(path: path)
+    let queue = try SQLiteQueueDriver(path: DatabasePath(path))
 
     func measure(_ name: String, _ body: () async throws -> Int) async rethrows {
       var best = Duration.seconds(1_000)

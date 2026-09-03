@@ -35,7 +35,7 @@
     func openingWaitsWhileAnotherProcessIsOpening() async throws {
       let harness = try DatabaseProcessHarness(name: "open-lock")
       defer { harness.cleanup() }
-      let identifier = DatabaseIdentifier.forDatabase(path: harness.databasePath)
+      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(harness.databasePath))
       let directory = harness.coordination.directory
       let opened = harness.file("opened-0")
       let isHeld = Mutex(false)
@@ -161,7 +161,7 @@
       let coordination = harness.coordination
       let didOpen = Mutex(false)
       Thread.detachNewThread {
-        _ = try? SQLiteCrossDatabase(path: databasePath, coordination: coordination)
+        _ = try? SQLiteCrossDatabase(path: DatabasePath(databasePath), coordination: coordination)
         didOpen.withLock { $0 = true }
       }
       try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
@@ -187,11 +187,11 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try SQLiteCrossDatabase(path: path, coordination: coordination)
+      _ = try SQLiteCrossDatabase(path: DatabasePath(path), coordination: coordination)
       try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.opened)))
 
     case "write":
-      let database = try SQLiteCrossDatabase(path: path, coordination: coordination)
+      let database = try SQLiteCrossDatabase(path: DatabasePath(path), coordination: coordination)
       let writerID = try #require(Int(try value(DatabaseProcessEnvironment.writerID)))
       let writeCount = try #require(Int(try value(DatabaseProcessEnvironment.writeCount)))
       try touch(ready)
@@ -211,7 +211,7 @@
       }
 
     case "hold":
-      let database = try SQLiteCrossDatabase(path: path, coordination: coordination)
+      let database = try SQLiteCrossDatabase(path: DatabasePath(path), coordination: coordination)
       let held = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.held))
       let milliseconds = try #require(Int(try value(DatabaseProcessEnvironment.holdMilliseconds)))
       try touch(ready)
@@ -226,7 +226,7 @@
     case "listen":
       // `shared` caches transports weakly, so the transport itself, not just the subscription,
       // must be kept alive for as long as the subscription should stay registered.
-      let identifier = DatabaseIdentifier.forDatabase(path: path)
+      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(path))
       let transport = try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination)
       let receivedCount = Mutex(0)
       let subscription = try transport.subscribe(to: identifier) { _ in
@@ -238,7 +238,7 @@
       _ = subscription
 
     case "hold-open-lock":
-      let identifier = DatabaseIdentifier.forDatabase(path: path)
+      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(path))
       try DatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: coordination.directory
@@ -281,7 +281,7 @@
       configuration: SQLiteConfiguration = .default
     ) throws -> SQLiteCrossDatabase {
       try SQLiteCrossDatabase(
-        path: self.databasePath,
+        path: DatabasePath(self.databasePath),
         configuration: configuration,
         coordination: self.coordination
       )

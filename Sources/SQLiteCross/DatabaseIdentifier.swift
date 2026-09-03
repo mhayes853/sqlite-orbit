@@ -17,10 +17,10 @@ public struct DatabaseIdentifier: RawRepresentable, Codable, Hashable, Sendable 
 extension DatabaseIdentifier {
   /// The identity a file database shares with every process that opens the same path.
   ///
-  /// In-memory databases are private to the connection that opened them, so no two of them are the
-  /// same database and each gets a unique identity instead.
-  public static func forDatabase(path: String) -> Self {
-    guard !path.isEmpty, path != ":memory:" else { return .unique() }
-    return Self(rawValue: URL(fileURLWithPath: path).standardizedFileURL.path)
+  /// A database private to the connection that opened it is not the same database as any other, so
+  /// each one gets a unique identity instead.
+  public static func forDatabase(path: DatabasePath) -> Self {
+    guard let url = path.fileURL else { return .unique() }
+    return Self(rawValue: url.path)
   }
 }

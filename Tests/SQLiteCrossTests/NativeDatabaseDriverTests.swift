@@ -189,7 +189,7 @@
       .path
     defer { try? FileManager.default.removeItem(atPath: path) }
 
-    let driver = try SQLiteQueueDriver(path: path)
+    let driver = try SQLiteQueueDriver(path: DatabasePath(path))
 
     #expect(
       driver.defaultIdentifier.rawValue

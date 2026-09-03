@@ -2,11 +2,11 @@ import Foundation
 
 /// Reported when a database cannot be pooled.
 public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
-  public let path: String
+  public let path: DatabasePath
 
   public var description: String {
     """
-    An in-memory database is private to the connection that opened it, so a pool's readers would \
+    A database private to the connection that opened it cannot be pooled: a pool's readers would \
     each see a different, empty database. Use SQLiteQueueDriver for "\(path)".
     """
   }
@@ -27,18 +27,18 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
   ///
   /// - Parameters:
-  ///   - path: The database file. In-memory databases cannot be pooled.
+  ///   - path: The database file. A database private to its connection cannot be pooled.
   ///   - configuration: The settings applied to every connection.
   ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
   ///   - coordinationDirectory: Where the advisory lock that serializes opening lives. Processes
   ///     coordinate only when they share it.
   public init(
-    path: String,
+    path: DatabasePath,
     configuration: SQLiteConfiguration,
     identifier: DatabaseIdentifier? = nil,
     coordinationDirectory: URL? = nil
   ) throws {
-    guard !path.isEmpty, path != ":memory:", !path.hasPrefix("file::memory:") else {
+    guard !path.isPrivateToConnection else {
       throw SQLitePoolUnavailableError(path: path)
     }
     let identifier = identifier ?? .forDatabase(path: path)
@@ -58,7 +58,7 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   }
 
   private static func openConnections(
-    path: String,
+    path: DatabasePath,
     configuration: SQLiteConfiguration
   ) throws -> (writer: SQLiteConnection, readers: [SQLiteConnection]) {
     var writerConfiguration = configuration
@@ -136,7 +136,7 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   extension SQLitePoolDriver {
     /// Opens a pooled database using the SQLite this package was linked against.
     public convenience init(
-      path: String,
+      path: DatabasePath,
       identifier: DatabaseIdentifier? = nil,
       coordinationDirectory: URL? = nil
     ) throws {

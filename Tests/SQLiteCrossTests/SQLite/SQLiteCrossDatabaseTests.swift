@@ -8,7 +8,7 @@
   func namedDatabaseTypeResolvesItsDriver() throws {
     let path = NSTemporaryDirectory() + "ambig-\(UUID().uuidString).sqlite"
     defer { try? FileManager.default.removeItem(atPath: path) }
-    let database = try SQLiteCrossDatabase(path: path)
+    let database = try SQLiteCrossDatabase(path: DatabasePath(path))
     #expect(database.id.rawValue.hasSuffix(".sqlite"))
   }
 #endif

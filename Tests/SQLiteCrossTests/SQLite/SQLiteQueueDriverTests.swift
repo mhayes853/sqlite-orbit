@@ -179,7 +179,7 @@
     let path = NSTemporaryDirectory() + "sqlite-cross-\(UUID().uuidString).sqlite"
     defer { try? FileManager.default.removeItem(atPath: path) }
 
-    let driver = try SQLiteQueueDriver(path: path)
+    let driver = try SQLiteQueueDriver(path: DatabasePath(path))
     #expect(driver.defaultIdentifier.rawValue.hasSuffix(".sqlite"))
 
     // An in-memory database is private to its connection, so no two of them are the same database.
@@ -194,14 +194,14 @@
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     do {
-      let driver = try SQLiteQueueDriver(path: path)
+      let driver = try SQLiteQueueDriver(path: DatabasePath(path))
       try await bootstrap(driver)
       try await driver.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
       }
     }
 
-    let reopened = try SQLiteQueueDriver(path: path)
+    let reopened = try SQLiteQueueDriver(path: DatabasePath(path))
     let items = try await reopened.read { transaction in
       try transaction.fetchAll(Item.all)
     }

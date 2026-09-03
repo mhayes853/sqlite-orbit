@@ -7,15 +7,17 @@
   @testable import SQLiteCross
 
   private struct TemporaryDatabase: ~Copyable {
-    let path: String
+    let path: DatabasePath
 
     init() {
-      self.path = NSTemporaryDirectory() + "sqlite-cross-pool-\(UUID().uuidString).sqlite"
+      self.path = DatabasePath(
+        NSTemporaryDirectory() + "sqlite-cross-pool-\(UUID().uuidString).sqlite"
+      )
     }
 
     deinit {
       for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
+        try? FileManager.default.removeItem(atPath: path.sqlitePath + suffix)
       }
     }
   }
@@ -45,10 +47,10 @@
     #expect(items == [Item(id: 1, title: "Blob's reminder")])
   }
 
-  @Test
-  func poolDriverRejectsDatabasesItCannotPool() {
+  @Test(arguments: [DatabasePath.memory, .temporary, ":memory:", ""])
+  func poolDriverRejectsDatabasesItCannotPool(path: DatabasePath) {
     #expect(throws: SQLitePoolUnavailableError.self) {
-      _ = try SQLitePoolDriver(path: ":memory:")
+      _ = try SQLitePoolDriver(path: path)
     }
   }
 
