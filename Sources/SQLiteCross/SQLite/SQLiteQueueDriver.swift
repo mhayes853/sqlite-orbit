@@ -1,13 +1,10 @@
-/// A ``DatabaseDriver`` that serializes every access through a single connection.
+/// A ``SQLiteDatabaseWriter`` that serializes every access through a single connection.
 ///
 /// This is the driver for a database that does not benefit from concurrent readers: an in-memory
 /// database, which is private to the connection that opened it and so cannot be pooled at all, or a
 /// small file database where one connection is plenty. ``SQLitePoolDriver`` is the choice when
 /// reads should run concurrently.
-public final class SQLiteQueueDriver: DatabaseDriver, Sendable {
-  public typealias ReadTransaction = SQLiteReadTransaction
-  public typealias WriteTransaction = SQLiteWriteTransaction
-
+public final class SQLiteQueueDriver: SQLiteDatabaseWriter, Sendable {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let connection: SQLiteConnection

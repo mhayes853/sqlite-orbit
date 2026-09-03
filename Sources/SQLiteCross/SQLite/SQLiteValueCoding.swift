@@ -2,8 +2,7 @@ import Foundation
 
 // How values that SQLite has no native type for are spelled in the database.
 //
-// These live outside any driver so the native and GRDB drivers cannot disagree about how a `Date`
-// or a `UUID` round-trips. A database written by one must be readable by the other.
+// These centralize how native connections represent a `Date` or UUID.
 
 @usableFromInline
 struct DatabaseIntegerOverflowError<Value: Sendable>: Error {

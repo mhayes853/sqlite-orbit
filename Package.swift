@@ -19,14 +19,9 @@ let package = Package(
     .trait(
       name: "SystemSQLite",
       description: "Links the platform SQLite and vends `SQLiteLibrary.system`."
-    ),
-    .trait(
-      name: "GRDB",
-      description: "Builds the optional GRDB database driver."
     )
   ],
   dependencies: [
-    .package(url: "https://github.com/groue/GRDB.swift", from: "7.11.1"),
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0")
   ],
   targets: [
@@ -47,16 +42,6 @@ let package = Package(
         .target(
           name: "CSQLite3",
           condition: .when(traits: ["SystemSQLite"])
-        ),
-        .product(
-          name: "GRDB",
-          package: "GRDB.swift",
-          condition: .when(traits: ["GRDB"])
-        ),
-        .product(
-          name: "GRDBSQLite",
-          package: "GRDB.swift",
-          condition: .when(traits: ["GRDB"])
         )
       ],
       swiftSettings: [
@@ -72,11 +57,6 @@ let package = Package(
         .target(
           name: "CSQLite3",
           condition: .when(traits: ["SystemSQLite"])
-        ),
-        .product(
-          name: "GRDB",
-          package: "GRDB.swift",
-          condition: .when(traits: ["GRDB"])
         )
       ],
       swiftSettings: [

@@ -3,8 +3,8 @@ import Foundation
 
 /// One open connection, isolated to a dispatch queue of its own.
 ///
-/// The connection is an actor whose executor is that queue, which is how GRDB runs its own
-/// connections. Two things follow from it. A query never occupies a thread of the cooperative
+/// The connection is an actor whose executor is that queue. Two things follow from it. A query
+/// never occupies a thread of the cooperative
 /// pool, which is a pool of a few threads that Swift expects nothing to block; a query blocks its
 /// own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
 /// cancellation and task locals propagate the way they would for any other actor, rather than

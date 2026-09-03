@@ -18,15 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The package's own SQLite driver, which is what a caller gets by default.
+          # The linked system SQLite, which is what a caller gets by default.
           - name: default traits
             traits: ""
-          # Both drivers at once, which is the configuration where their entry points can collide.
-          - name: SystemSQLite and GRDB
-            traits: "--traits SystemSQLite,GRDB"
-          # The configuration that existed before the native driver, kept honest.
-          - name: GRDB only
-            traits: "--traits GRDB"
     steps:
       - uses: actions/checkout@v4
 

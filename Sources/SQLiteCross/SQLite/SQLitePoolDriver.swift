@@ -12,16 +12,13 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
   }
 }
 
-/// A ``DatabaseDriver`` that runs reads concurrently against a pool of connections while
+/// A ``SQLiteDatabaseWriter`` that runs reads concurrently against a pool of connections while
 /// serializing writes through one.
 ///
 /// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
 /// queued behind it, so a read issued after a write observes it. The database runs in WAL mode so
 /// that other processes' readers are never blocked by this one's writer.
-public final class SQLitePoolDriver: DatabaseDriver, Sendable {
-  public typealias ReadTransaction = SQLiteReadTransaction
-  public typealias WriteTransaction = SQLiteWriteTransaction
-
+public final class SQLitePoolDriver: SQLiteDatabaseWriter, Sendable {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let writer: SQLiteConnection

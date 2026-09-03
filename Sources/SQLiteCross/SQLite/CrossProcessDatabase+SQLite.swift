@@ -1,7 +1,7 @@
 #if SystemSQLite && (canImport(Darwin) || canImport(Glibc))
   import Foundation
 
-  extension CrossProcessDatabase where Driver == SQLitePoolDriver {
+  extension CrossProcessDatabase where Writer == SQLitePoolDriver {
     /// Opens the SQLite database at `path` for access from any process using the same coordination
     /// directory.
     ///
@@ -46,8 +46,6 @@
   /// This is the default: it needs no third-party dependency, and it is the one that can be pointed
   /// at a SQLite build of your choosing.
   ///
-  /// Prefer this spelling to `CrossProcessDatabase(path:)`. Both drivers offer an `init(path:)`, so
-  /// with the `GRDB` trait also enabled there is nothing for the compiler to infer the driver from;
-  /// naming the database type says which one you meant.
+  /// This spelling names both the cross-process coordination layer and its native pooled storage.
   public typealias SQLiteCrossDatabase = CrossProcessDatabase<SQLitePoolDriver>
 #endif
