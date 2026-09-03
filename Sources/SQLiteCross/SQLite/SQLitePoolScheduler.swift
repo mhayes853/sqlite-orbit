@@ -57,6 +57,24 @@ final class SQLitePoolScheduler: Sendable {
     }
   }
 
+  /// A grant decided under the lock and delivered once it has been released.
+  ///
+  /// Neither signalling a semaphore nor resuming a continuation runs caller code on this thread,
+  /// so waking under the lock would be safe here. It is done outside anyway: nothing about this
+  /// scheduler should depend on that staying true of code it wakes.
+  private struct Wakeup {
+    let wake: Waiter.Wake
+    let outcome: Result<SQLiteConnection?, any Error>
+
+    func deliver() {
+      switch wake {
+      case .blocking(let semaphore): semaphore.signal()
+      case .asynchronous(let continuation?): continuation.resume(with: outcome)
+      case .asynchronous(nil): break  // `install` collects this one itself.
+      }
+    }
+  }
+
   private enum Admission {
     /// The request ran straight through, holding the reader it was lent or the writer it reserved.
     case granted(SQLiteConnection?)
@@ -180,75 +198,77 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private func release(_ released: Released, blockingHolder: ObjectIdentifier?) {
-    state.withLock { state in
+    let wakeups = state.withLock { state -> [Wakeup] in
       switch released {
       case .reader(let reader): state.idleReaders.append(reader)
       case .writer: state.isWriting = false
       }
       if let blockingHolder { state.blockingHolders.remove(blockingHolder) }
-      Self.grant(&state)
+      return Self.grant(&state)
     }
+    for wakeup in wakeups { wakeup.deliver() }
   }
 
   // MARK: - Granting
 
   /// Grants requests from the head of the line for as long as they can run.
-  private static func grant(_ state: inout State) {
+  private static func grant(_ state: inout State) -> [Wakeup] {
+    var wakeups: [Wakeup] = []
     while let next = state.waiting.first {
       if next.isRead {
-        guard !state.isWriting, let reader = state.idleReaders.popLast() else { return }
+        guard !state.isWriting, let reader = state.idleReaders.popLast() else { break }
         state.waiting.removeFirst()
-        settle(&state, next, with: .success(reader))
+        wakeups.append(settle(&state, next, with: .success(reader)))
       } else {
-        guard !state.isWriting, !state.hasActiveReaders else { return }
+        guard !state.isWriting, !state.hasActiveReaders else { break }
         state.isWriting = true
         state.waiting.removeFirst()
-        settle(&state, next, with: .success(nil))
+        wakeups.append(settle(&state, next, with: .success(nil)))
       }
     }
+    return wakeups
   }
 
-  /// Settles a request and wakes whoever is waiting on it.
-  ///
-  /// Waking happens while the lock is held. Neither signalling a semaphore nor resuming a
-  /// continuation runs caller code on this thread, so neither can re-enter the scheduler.
+  /// Settles a request, leaving the waking to be done once the lock is released.
   private static func settle(
     _ state: inout State,
     _ waiter: Waiter,
     with outcome: Result<SQLiteConnection?, any Error>
-  ) {
+  ) -> Wakeup {
     switch waiter.wake {
-    case .blocking(let semaphore):
-      state.settled[waiter.id] = outcome
-      semaphore.signal()
-    case .asynchronous(let continuation?):
-      continuation.resume(with: outcome)
-    case .asynchronous(nil):
-      // The grant arrived before the continuation did; `install` finds it waiting here.
+    case .asynchronous(.some):
+      break  // Resumed with the outcome directly.
+    case .blocking, .asynchronous(.none):
+      // A blocking caller reads this after its semaphore is signalled. An asynchronous one whose
+      // grant arrived before its continuation did finds it here when it installs.
       state.settled[waiter.id] = outcome
     }
+    return Wakeup(wake: waiter.wake, outcome: outcome)
   }
 
   private func install(
     _ continuation: CheckedContinuation<SQLiteConnection?, any Error>,
     for id: Int
   ) {
-    state.withLock { state in
-      if let outcome = state.settled.removeValue(forKey: id) {
-        continuation.resume(with: outcome)
-      } else if let index = state.waiting.firstIndex(where: { $0.id == id }) {
+    let granted = state.withLock { state -> Result<SQLiteConnection?, any Error>? in
+      if let outcome = state.settled.removeValue(forKey: id) { return outcome }
+      if let index = state.waiting.firstIndex(where: { $0.id == id }) {
         state.waiting[index].wake = .asynchronous(continuation)
       }
+      return nil
     }
+    if let granted { continuation.resume(with: granted) }
   }
 
   private func cancel(_ id: Int) {
-    state.withLock { state in
+    let wakeups = state.withLock { state -> [Wakeup] in
       // A request that was granted before its cancellation arrived is no longer here.
-      guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return }
-      Self.settle(&state, state.waiting.remove(at: index), with: .failure(CancellationError()))
+      guard let index = state.waiting.firstIndex(where: { $0.id == id }) else { return [] }
+      let waiter = state.waiting.remove(at: index)
       // Whatever was queued behind the cancelled request may now be able to run.
-      Self.grant(&state)
+      return [Self.settle(&state, waiter, with: .failure(CancellationError()))]
+        + Self.grant(&state)
     }
+    for wakeup in wakeups { wakeup.deliver() }
   }
 }
