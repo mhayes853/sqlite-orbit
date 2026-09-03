@@ -91,8 +91,9 @@ struct SQLiteHandle: ~Copyable {
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     try execute("PRAGMA trusted_schema = \(configuration.isTrustedSchemaEnabled ? "ON" : "OFF")")
-    for sql in configuration.setupSQL {
-      try execute(sql)
+    guard configuration.connectionSetups.isEmpty || configuration.library.supportsTypedCallbacks
+    else {
+      throw SQLiteTypedCallbacksUnavailableError()
     }
     for setup in configuration.connectionSetups {
       let code = setup.install(pointer)
@@ -104,6 +105,9 @@ struct SQLiteHandle: ~Copyable {
           sql: nil
         )
       }
+    }
+    for sql in configuration.setupSQL {
+      try execute(sql)
     }
   }
 

@@ -1,7 +1,8 @@
 #if SystemSQLite
   import Foundation
-  import SQLiteCross
   import Testing
+
+  @testable import SQLiteCross
 
   @DatabaseFunction(isDeterministic: true)
   func repeated(_ text: String, _ count: Int) -> String {
@@ -310,6 +311,33 @@
       #expect(lengths.count == 128)
       #expect(lengths.allSatisfy { $0 == 40 })
     }
+  }
+
+  @Test
+  func typedFunctionsRejectAnIncompatibleSQLiteCallbackABI() {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $repeated)
+    configuration.library.supportsTypedCallbacks = false
+
+    #expect(throws: SQLiteTypedCallbacksUnavailableError.self) {
+      _ = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    }
+  }
+
+  @Test
+  func functionsAreAvailableToConnectionSetupSQL() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: $repeated)
+    configuration.setupSQL = [
+      "CREATE TABLE configured (value TEXT NOT NULL)",
+      "INSERT INTO configured VALUES (repeated('ab', 2))",
+    ]
+    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+
+    let values = try await driver.read { transaction in
+      try transaction.fetchAll(#sql("SELECT value FROM configured", as: String.self))
+    }
+    #expect(values == ["abab"])
   }
 
   @Table("samples")

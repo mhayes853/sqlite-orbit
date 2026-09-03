@@ -228,6 +228,10 @@ function is only known to the connection it was installed on. The native pool ow
 connections, so installing on one directly would leave queries on every other connection failing
 with "no such collation sequence".
 
+These typed registration helpers are available with `SystemSQLite`, because their static C
+callbacks must use the same SQLite ABI as the connection. With a fully caller-supplied SQLite
+build, register callbacks through that build's API using the transaction's raw connection instead.
+
 `CrossProcessDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their standardized paths; in-memory databases receive unique identifiers.

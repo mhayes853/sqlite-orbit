@@ -17,6 +17,10 @@ public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) ->
 /// onto a query's hot path.
 public struct SQLiteLibrary: Sendable {
 
+  /// Whether Swift callback registration can use the linked SQLite callback ABI with connections
+  /// opened through this table. Preserved when individual entry points are interposed.
+  var supportsTypedCallbacks = false
+
   // MARK: - Connections
 
   public var open_v2:

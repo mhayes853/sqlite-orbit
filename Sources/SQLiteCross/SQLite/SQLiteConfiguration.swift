@@ -59,6 +59,19 @@ public struct SQLiteConfiguration: Sendable {
   }
 }
 
+/// Typed Swift callback registration was requested for a SQLite library whose callback ABI is not
+/// supplied by this package.
+public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertible, Sendable {
+  public init() {}
+
+  public var description: String {
+    """
+    Typed Swift collations and functions require SQLiteLibrary.system. Register callbacks through \
+    the custom SQLite build directly instead.
+    """
+  }
+}
+
 final class SQLiteConnectionSetup: Sendable {
   let install: @Sendable (OpaquePointer) -> Int32
 
