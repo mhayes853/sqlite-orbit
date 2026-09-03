@@ -34,10 +34,11 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch([UInt8].self)
     }
     defer { currentIndex += 1 }
+    // SQLite asks for the value before its size: reading the size can convert the value, and a
+    // pointer taken before that conversion is the one it invalidates.
+    guard let bytes = library.pointee.column_blob(statement, currentIndex) else { return [] }
     let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
-    guard byteCount > 0, let bytes = library.pointee.column_blob(statement, currentIndex) else {
-      return []
-    }
+    guard byteCount > 0 else { return [] }
     return [UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount))
   }
 
@@ -92,10 +93,10 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch(String.self)
     }
     defer { currentIndex += 1 }
+    // The value is read before its size, which is the order SQLite documents as safe.
+    guard let text = library.pointee.column_text(statement, currentIndex) else { return "" }
     let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
-    guard byteCount > 0, let text = library.pointee.column_text(statement, currentIndex) else {
-      return ""
-    }
+    guard byteCount > 0 else { return "" }
     return String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
   }
 
@@ -106,7 +107,13 @@ struct SQLiteRowDecoder: QueryDecoder {
 
   @inlinable
   mutating func decode(_ columnType: Int.Type) throws(QueryDecodingError) -> Int? {
-    try decode(Int64.self).map(Int.init)
+    guard let value = try decode(Int64.self) else { return nil }
+    // `Int` is 32 bits wide on arm64_32, which is every Apple Watch this package supports, so a
+    // rowid past two billion would trap rather than be reported.
+    guard let value = Int(exactly: value) else {
+      throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
+    }
+    return value
   }
 
   @inlinable
@@ -131,10 +138,10 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch(UUID.self)
     }
     defer { currentIndex += 1 }
-    let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
     guard let text = library.pointee.column_text(statement, currentIndex) else {
       throw QueryDecodingError.other(InvalidDatabaseUUIDError())
     }
+    let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
     let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
     if let uuid = UUID(sqliteCrossUTF8: utf8) {
       return uuid

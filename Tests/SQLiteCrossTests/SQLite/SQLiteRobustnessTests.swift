@@ -501,4 +501,31 @@
     }
     #expect(titles == ["after"])
   }
+
+  /// `Int` is 32 bits wide on arm64_32, so this value does not fit there and used to trap on the
+  /// way out of the decoder. It still decodes wherever `Int` is 64 bits, which is where this runs.
+  @Test
+  func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
+    let handle = try openConnection()
+    try handle.execute("CREATE TABLE numbers (value INTEGER)")
+    try handle.write { transaction in
+      try transaction.execute(
+        #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
+      )
+    }
+
+    let asInt64 = try handle.read { transaction in
+      try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int64.self))
+    }
+    #expect(asInt64 == [Int64.max])
+
+    let asInt = try handle.read { transaction in
+      try Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
+    }
+    if Int.bitWidth == 64 {
+      #expect(try asInt.get() == [Int(Int64.max)])
+    } else {
+      #expect(throws: DatabaseIntegerOverflowError<Int64>.self) { try asInt.get() }
+    }
+  }
 #endif
