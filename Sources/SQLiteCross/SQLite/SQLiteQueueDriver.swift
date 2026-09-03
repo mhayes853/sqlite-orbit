@@ -34,6 +34,20 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
   ) async throws -> Result {
     try await connection.write(body)
   }
+
+  /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
+  public func readBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result {
+    try connection.readBlocking(body)
+  }
+
+  /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
+  public func writeBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    try connection.writeBlocking(body)
+  }
 }
 
 #if SystemSQLite

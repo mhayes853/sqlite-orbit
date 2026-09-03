@@ -41,6 +41,35 @@ actor SQLiteConnection {
     try await perform { handle in try handle.write(body) }
   }
 
+  /// Runs `body` on the connection's queue, blocking the calling thread until it finishes.
+  ///
+  /// This is `nonisolated` because a blocking caller has no way to enter the actor. It reaches
+  /// isolated state through the executor's queue instead, which is the same mutual exclusion the
+  /// actor itself runs on, so the isolation is real rather than assumed.
+  nonisolated func readBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result {
+    try performBlocking { handle in try handle.read(body) }
+  }
+
+  nonisolated func writeBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    try performBlocking { handle in try handle.write(body) }
+  }
+
+  /// A blocking access carries no task, so there is no cancellation to arm the interrupt for.
+  private nonisolated func performBlocking<Result: Sendable>(
+    _ work: sending (borrowing SQLiteHandle) throws -> Result
+  ) throws -> Result {
+    nonisolated(unsafe) let work = work
+    return try executor.sync {
+      try self.assumeIsolated { connection in
+        try work(connection.handle)
+      }
+    }
+  }
+
   /// Runs `work` on the connection's queue, holding the interrupt for the duration.
   ///
   /// The token belongs to this access alone, so cancellation cannot interrupt another access that
@@ -69,6 +98,10 @@ actor SQLiteConnection {
 final class SQLiteConnectionExecutor: SerialExecutor {
   private let queue: DispatchQueue
 
+  /// Marks each connection queue with the executor that owns it, so a blocking access can tell
+  /// whether it is already on the queue it is about to wait for.
+  private static let owner = DispatchSpecificKey<ObjectIdentifier>()
+
   init(path: DatabasePath) {
     // The queue is labelled with the database it serves, because a stack of blocked threads is
     // most of what a hang report of this package will show.
@@ -76,6 +109,20 @@ final class SQLiteConnectionExecutor: SerialExecutor {
       label: "SQLiteCross.connection(\(path))",
       autoreleaseFrequency: .workItem
     )
+    queue.setSpecific(key: Self.owner, value: ObjectIdentifier(self))
+  }
+
+  /// Runs `body` on the queue, blocking the caller until it finishes.
+  func sync<Result>(_ body: () throws -> Result) rethrows -> Result {
+    precondition(
+      DispatchQueue.getSpecific(key: Self.owner) != ObjectIdentifier(self),
+      """
+      A blocking database access cannot be nested inside another one on the same connection: \
+      the inner access would wait for the outer one to release a connection it still holds. \
+      Use the transaction already in hand rather than opening a second one.
+      """
+    )
+    return try queue.sync(execute: body)
   }
 
   func enqueue(_ job: consuming ExecutorJob) {

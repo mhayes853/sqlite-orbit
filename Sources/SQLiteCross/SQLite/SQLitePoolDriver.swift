@@ -103,32 +103,40 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
     let reader = try await scheduler.acquireReader()
-    // Giving the reader back is awaited rather than deferred to a task: a reader that comes back
-    // late is a reader the next caller waits for while it is already free.
-    let value: Result
-    do {
-      value = try await reader.read(body)
-    } catch {
-      await scheduler.releaseReader(reader)
-      throw error
-    }
-    await scheduler.releaseReader(reader)
-    return value
+    defer { scheduler.releaseReader(reader) }
+    return try await reader.read(body)
+  }
+
+  /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
+  ///   starves the very machinery the rest of the pool runs on.
+  public func readBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result {
+    let reader = scheduler.acquireReaderBlocking()
+    defer { scheduler.releaseReaderBlocking(reader) }
+    return try reader.readBlocking(body)
   }
 
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
     try await scheduler.acquireWriter()
-    let value: Result
-    do {
-      value = try await writer.write(body)
-    } catch {
-      await scheduler.releaseWriter()
-      throw error
-    }
-    await scheduler.releaseWriter()
-    return value
+    defer { scheduler.releaseWriter() }
+    return try await writer.write(body)
+  }
+
+  /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
+  ///   starves the very machinery the rest of the pool runs on.
+  public func writeBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    scheduler.acquireWriterBlocking()
+    defer { scheduler.releaseWriterBlocking() }
+    return try writer.writeBlocking(body)
   }
 }
 
