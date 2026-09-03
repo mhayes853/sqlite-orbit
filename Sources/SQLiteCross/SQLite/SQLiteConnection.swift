@@ -25,9 +25,7 @@ actor SQLiteConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    self.executor = SQLiteConnectionExecutor(
-      queue: DispatchQueue(label: "SQLiteCross.connection")
-    )
+    self.executor = SQLiteConnectionExecutor(path: path)
     self.handle = handle
   }
 
@@ -71,13 +69,24 @@ actor SQLiteConnection {
 final class SQLiteConnectionExecutor: SerialExecutor {
   private let queue: DispatchQueue
 
-  init(queue: DispatchQueue) {
-    self.queue = queue
+  init(path: DatabasePath) {
+    // The queue is labelled with the database it serves, because a stack of blocked threads is
+    // most of what a hang report of this package will show.
+    self.queue = DispatchQueue(
+      label: "SQLiteCross.connection(\(path))",
+      autoreleaseFrequency: .workItem
+    )
   }
 
   func enqueue(_ job: consuming ExecutorJob) {
+    // The job's priority is handed to dispatch rather than dropped. Without it every query would
+    // run at the queue's own QoS, so a read a user is waiting on would be served no sooner than a
+    // background one, and the thread running it would not be raised to match. Dispatch also
+    // resolves the inversion this leaves behind: a high-priority block enqueued behind a
+    // low-priority one raises the queue until it drains.
+    let qos = Self.dispatchQoS(for: job.priority)
     let job = UnownedJob(job)
-    queue.async {
+    queue.async(qos: qos) {
       job.runSynchronously(on: self.asUnownedSerialExecutor())
     }
   }
@@ -88,6 +97,19 @@ final class SQLiteConnectionExecutor: SerialExecutor {
 
   func checkIsolated() {
     dispatchPrecondition(condition: .onQueue(queue))
+  }
+
+  /// The dispatch QoS closest to a job's priority.
+  ///
+  /// `TaskPriority` and `DispatchQoS` name the same four bands, but the priorities in between are
+  /// a caller's business, so each one rounds down to the band it belongs to. A job with no
+  /// priority of its own is left to inherit the queue's.
+  private static func dispatchQoS(for priority: JobPriority) -> DispatchQoS {
+    guard let priority = TaskPriority(priority) else { return .unspecified }
+    if priority >= .high { return .userInitiated }
+    if priority >= .medium { return .default }
+    if priority >= .low { return .utility }
+    return .background
   }
 }
 
