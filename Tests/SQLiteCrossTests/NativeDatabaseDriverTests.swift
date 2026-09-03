@@ -7,8 +7,8 @@
   @Test
   func nativeDriverExecutesStructuredQueriesAndDecodesTables() async throws {
     let queue = try SQLiteQueueDriver(path: ":memory:")
-    let database = CrossProcessDatabase(
-      driver: queue
+    let database = InterprocessDatabase(
+      writer: queue
     )
     let title = "Blob's reminder"
 
@@ -60,8 +60,8 @@
 
   @Test
   func nativeDriverExposesTransactionScopedCursors() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let readValues = try await database.read { transaction in
@@ -92,8 +92,8 @@
 
   @Test
   func nativeDriverRoundTripsDateAndUUIDBindings() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
     let value = SpecialValue(
       id: 1,
@@ -125,8 +125,8 @@
 
   @Test
   func nativeDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
     let timestamp = "2024-01-02 03:04:05"
     let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
@@ -146,8 +146,8 @@
 
   @Test
   func nativeDriverRollsBackThrownWrites() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
     _ = try await database.write { transaction in
       try transaction.execute(
@@ -179,7 +179,7 @@
     let second = try SQLiteQueueDriver(path: ":memory:")
 
     #expect(first.defaultIdentifier != second.defaultIdentifier)
-    #expect(CrossProcessDatabase(driver: first).id == first.defaultIdentifier)
+    #expect(InterprocessDatabase(writer: first).id == first.defaultIdentifier)
   }
 
   @Test
@@ -199,8 +199,8 @@
 
   @Test
   func nativeRowDecodesColumnsSequentiallyAndRestartsOnEachRow() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let decoded: [(Int, String)] = try await database.read { transaction in
@@ -226,13 +226,13 @@
   }
 
   @Test
-  func crossProcessDatabaseCanBeConstructedFromNativeWriter() throws {
+  func interprocessDatabaseCanBeConstructedFromNativeWriter() throws {
     let writer = try SQLiteQueueDriver(path: ":memory:")
-    let database = CrossProcessDatabase(driver: writer)
+    let database = InterprocessDatabase(writer: writer)
     let override = DatabaseIdentifier(rawValue: "override")
-    let overriddenDatabase = CrossProcessDatabase(driver: writer, id: override)
+    let overriddenDatabase = InterprocessDatabase(writer: writer, id: override)
 
-    #expect(database.id == database.driver.defaultIdentifier)
+    #expect(database.id == database.writer.defaultIdentifier)
     #expect(overriddenDatabase.id == override)
   }
 

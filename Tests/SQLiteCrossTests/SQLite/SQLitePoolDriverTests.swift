@@ -35,13 +35,13 @@
     let database = TemporaryDatabase()
     let driver = try SQLitePoolDriver(path: database.path)
     try await bootstrap(driver)
-    let crossProcess = CrossProcessDatabase(driver: driver)
+    let interprocess = InterprocessDatabase(writer: driver)
 
-    try await crossProcess.write { transaction in
+    try await interprocess.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
     }
 
-    let items = try await crossProcess.read { transaction in
+    let items = try await interprocess.read { transaction in
       try transaction.fetchAll(Item.all.order { $0.id })
     }
     #expect(items == [Item(id: 1, title: "Blob's reminder")])

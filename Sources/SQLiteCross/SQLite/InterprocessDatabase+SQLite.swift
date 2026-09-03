@@ -1,7 +1,7 @@
 #if SystemSQLite && (canImport(Darwin) || canImport(Glibc))
   import Foundation
 
-  extension CrossProcessDatabase where Writer == SQLitePoolDriver {
+  extension InterprocessDatabase where Writer == SQLitePoolDriver {
     /// Opens the SQLite database at `path` for access from any process using the same coordination
     /// directory.
     ///
@@ -28,7 +28,7 @@
     ) throws {
       let identifier = id ?? .forDatabase(path: path)
       self.init(
-        driver: try SQLitePoolDriver(
+        writer: try SQLitePoolDriver(
           path: path,
           configuration: configuration,
           identifier: identifier,
@@ -47,5 +47,5 @@
   /// at a SQLite build of your choosing.
   ///
   /// This spelling names both the cross-process coordination layer and its native pooled storage.
-  public typealias SQLiteCrossDatabase = CrossProcessDatabase<SQLitePoolDriver>
+  public typealias SQLiteCrossDatabase = InterprocessDatabase<SQLitePoolDriver>
 #endif

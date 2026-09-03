@@ -6,10 +6,10 @@ import Testing
 
 #if SystemSQLite
   @Test
-  func crossProcessDatabaseUsesTheDriversDefaultIdentifier() async throws {
+  func interprocessDatabaseUsesTheDriversDefaultIdentifier() async throws {
     let identifier = DatabaseIdentifier(rawValue: "native-default")
     let driver = try SQLiteQueueDriver(path: ":memory:", identifier: identifier)
-    let database = CrossProcessDatabase(driver: driver)
+    let database = InterprocessDatabase(writer: driver)
 
     #expect(database.id == identifier)
     #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
@@ -17,11 +17,11 @@ import Testing
   }
 
   @Test
-  func crossProcessDatabaseCanOverrideItsIdentifier() {
+  func interprocessDatabaseCanOverrideItsIdentifier() {
     let driver = try! SQLiteQueueDriver(path: ":memory:")
     let override = DatabaseIdentifier(rawValue: "application-defined")
 
-    let database = CrossProcessDatabase(driver: driver, id: override)
+    let database = InterprocessDatabase(writer: driver, id: override)
 
     #expect(database.id == override)
   }

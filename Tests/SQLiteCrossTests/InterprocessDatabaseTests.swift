@@ -6,7 +6,7 @@
   import Testing
 
   @Suite
-  struct CrossProcessDatabaseAnnouncementTests {
+  struct InterprocessDatabaseAnnouncementTests {
     @Test
     func writeAnnouncesTheTransactionItCommits() async throws {
       let identifier = DatabaseIdentifier(rawValue: "announced")
@@ -102,10 +102,10 @@
     failure: (any Error)? = nil,
     delay: Duration? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
-  ) throws -> (CrossProcessDatabase<SQLiteQueueDriver>, RecordingDatabaseIPCTransport) {
+  ) throws -> (InterprocessDatabase<SQLiteQueueDriver>, RecordingDatabaseIPCTransport) {
     let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:"),
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:"),
       id: id,
       transport: transport,
       onAnnouncementFailure: onAnnouncementFailure

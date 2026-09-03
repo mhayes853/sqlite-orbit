@@ -245,7 +245,7 @@ These typed registration helpers are available with `SystemSQLite`, because thei
 callbacks must use the same SQLite ABI as the connection. With a fully caller-supplied SQLite
 build, register callbacks through that build's API using the transaction's raw connection instead.
 
-`CrossProcessDatabase` is `Identifiable`. Its native writer supplies the default database
+`InterprocessDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
@@ -326,8 +326,8 @@ let database = try SQLiteCrossDatabase(
 )
 ```
 
-In-memory databases cannot be shared between processes, or pooled, so `SQLitePoolDriver` rejects
-them; use `SQLiteQueueDriver` for those.
+A database private to its connection cannot be shared between processes, or pooled, so
+`SQLitePoolDriver` rejects one; use `SQLiteQueueDriver` for those.
 
 Constructing a driver yourself remains available for a database you configure and open on your own.
 That cannot coordinate opening, so pass a transport explicitly if the database is also opened

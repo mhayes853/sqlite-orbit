@@ -6,8 +6,8 @@
 
   @Test
   func sqliteQueryLayerIsReachableThroughSQLiteCrossAlone() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     try await database.write { transaction in

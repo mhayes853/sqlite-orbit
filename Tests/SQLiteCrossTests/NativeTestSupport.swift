@@ -22,7 +22,7 @@
       path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration
     )
-    return try await body(CrossProcessDatabase(driver: pool))
+    return try await body(InterprocessDatabase(writer: pool))
   }
 
   /// Runs `body` on `count` concurrent reads and returns their results.

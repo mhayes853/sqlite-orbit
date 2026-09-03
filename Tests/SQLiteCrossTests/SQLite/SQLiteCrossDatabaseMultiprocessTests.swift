@@ -81,7 +81,7 @@
   /// The peer role, selected by the environment. It returns immediately in the parent process,
   /// where no role is set.
   @Test
-  func nativeCrossProcessDatabasePeer() async throws {
+  func nativeInterprocessDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard let mode = environment[NativePeerEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
@@ -141,7 +141,7 @@
 
     init(name: String) throws {
       self.harness = try ProcessTestHarness(
-        helper: "nativeCrossProcessDatabasePeer",
+        helper: "nativeInterprocessDatabasePeer",
         environmentPrefix: NativePeerEnvironment.prefix,
         name: name
       )

@@ -10,7 +10,7 @@ public protocol SQLiteDatabaseReader: Sendable {
 
 /// A native SQLite database that lends read and write transactions.
 public protocol SQLiteDatabaseWriter: SQLiteDatabaseReader {
-  /// The identifier used when a ``CrossProcessDatabase`` does not receive an explicit one.
+  /// The identifier used when an ``InterprocessDatabase`` does not receive an explicit one.
   var defaultIdentifier: DatabaseIdentifier { get }
 
   func write<Result: Sendable>(

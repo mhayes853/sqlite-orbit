@@ -58,8 +58,8 @@
   func collationsCompareTextAsUnicode() async throws {
     var configuration = SQLiteConfiguration.default
     configuration.register(collation: $characterCount)
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
 
     try await database.write { transaction in

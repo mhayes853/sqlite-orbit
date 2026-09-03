@@ -2,9 +2,9 @@
   import SQLiteCross
   import Testing
 
-  private func seededDatabase() async throws -> CrossProcessDatabase<SQLiteQueueDriver> {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+  private func seededDatabase() async throws -> InterprocessDatabase<SQLiteQueueDriver> {
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
     try await database.write { transaction in
       try transaction.execute(

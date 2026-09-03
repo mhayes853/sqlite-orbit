@@ -5,8 +5,8 @@
 
   @Test
   func typeMismatchesNameTheColumnAndWhatWasStored() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
@@ -26,8 +26,8 @@
 
   @Test
   func missingRequiredColumnsNameTheColumnThatWasNull() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
@@ -45,8 +45,8 @@
 
   @Test
   func valueLevelFailuresAreReportedAsThemselves() async throws {
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:")
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:")
     )
 
     // The column has the right storage class but the wrong contents. These are not the column

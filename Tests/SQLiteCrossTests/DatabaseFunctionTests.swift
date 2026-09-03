@@ -61,7 +61,7 @@
     }
   }
 
-  private func seededNotes() async throws -> CrossProcessDatabase<SQLiteQueueDriver> {
+  private func seededNotes() async throws -> InterprocessDatabase<SQLiteQueueDriver> {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
     configuration.register(function: $longestTitle)
@@ -69,8 +69,8 @@
     configuration.register(function: $describe)
     configuration.register(function: FailingFunction())
     configuration.register(function: FailingTotalFunction())
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
     try await database.write { transaction in
       try transaction.execute(
@@ -182,8 +182,8 @@
   func aggregatesSpanManyRowsAndManyGroups() async throws {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $longestTitle)
-    let database = CrossProcessDatabase(
-      driver: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let database = InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
     )
 
     try await database.write { transaction in

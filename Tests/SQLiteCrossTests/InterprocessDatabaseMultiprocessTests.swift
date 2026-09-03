@@ -6,7 +6,7 @@
   import Testing
 
   @Suite(.serialized)
-  struct CrossProcessDatabaseMultiprocessTests {
+  struct InterprocessDatabaseMultiprocessTests {
     @Test
     func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
       let harness = try DatabaseProcessHarness(name: "open")
@@ -129,7 +129,7 @@
 
     @Test
     func writeIsDeliveredToARealSubscriberInAnotherProcess() async throws {
-      // Nothing subscribes through CrossProcessDatabase itself yet, but the transport it announces
+      // Nothing subscribes through InterprocessDatabase itself yet, but the transport it announces
       // through is real, so a peer that subscribes to it directly must still see the commit.
       let harness = try DatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
@@ -169,9 +169,9 @@
     }
   }
 
-  /// Runs one peer process of a ``CrossProcessDatabaseMultiprocessTests`` case.
+  /// Runs one peer process of a ``InterprocessDatabaseMultiprocessTests`` case.
   @Test
-  func crossProcessDatabasePeer() async throws {
+  func interprocessDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard let mode = environment[DatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
@@ -268,7 +268,7 @@
 
     init(name: String) throws {
       self.harness = try ProcessTestHarness(
-        helper: "crossProcessDatabasePeer",
+        helper: "interprocessDatabasePeer",
         environmentPrefix: DatabaseProcessEnvironment.prefix,
         name: name
       )

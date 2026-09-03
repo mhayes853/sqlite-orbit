@@ -2,10 +2,10 @@
 ///
 /// A database announces every write it commits so that processes sharing the same SQLite file can
 /// react to each other's work. It does not yet subscribe to its peers; observation will be layered
-/// on without changing the driver-facing transaction model.
-public final class CrossProcessDatabase<Writer: SQLiteDatabaseWriter>: Identifiable, Sendable {
+/// on without changing the writer-facing transaction model.
+public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>: Identifiable, Sendable {
   public let id: DatabaseIdentifier
-  public let driver: Writer
+  public let writer: Writer
 
   private let transport: (any DatabaseIPCTransport)?
   private let onAnnouncementFailure: (@Sendable (any Error) -> Void)?
@@ -13,21 +13,21 @@ public final class CrossProcessDatabase<Writer: SQLiteDatabaseWriter>: Identifia
   /// Creates a database that announces its committed writes through `transport`.
   ///
   /// - Parameters:
-  ///   - driver: The driver that lends read and write transactions.
+  ///   - writer: The driver that lends read and write transactions.
   ///   - id: The identity shared by every process that opens this database. Defaults to the
-  ///     driver's own identifier.
+  ///     writer's own identifier.
   ///   - transport: The transport used to announce committed writes. A `nil` transport confines the
   ///     database to the current process.
   ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails. The
   ///     write has already committed by then, so the failure is never surfaced to its caller.
   public init(
-    driver: Writer,
+    writer: Writer,
     id: DatabaseIdentifier? = nil,
     transport: (any DatabaseIPCTransport)? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
   ) {
-    self.driver = driver
-    self.id = id ?? driver.defaultIdentifier
+    self.writer = writer
+    self.id = id ?? writer.defaultIdentifier
     self.transport = transport
     self.onAnnouncementFailure = onAnnouncementFailure
   }
@@ -35,21 +35,21 @@ public final class CrossProcessDatabase<Writer: SQLiteDatabaseWriter>: Identifia
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await driver.read(body)
+    try await writer.read(body)
   }
 
   /// Writes to the database and announces the transaction it commits.
   ///
-  /// A write that throws is rolled back by its driver and is not announced.
+  /// A write that throws is rolled back by its writer and is not announced.
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    let result = try await driver.write(body)
+    let result = try await writer.write(body)
     await announceCommittedTransaction()
     return result
   }
 
-  /// Announces a committed write once the driver has released its write transaction.
+  /// Announces a committed write once the writer has released its write transaction.
   ///
   /// Announcing outside the transaction matters: a peer that is told about a commit must be able to
   /// read it, and holding SQLite's write lock while waiting on a backpressured peer would turn one
