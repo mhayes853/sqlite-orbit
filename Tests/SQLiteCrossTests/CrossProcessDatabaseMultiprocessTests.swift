@@ -1,6 +1,5 @@
-#if GRDB && (canImport(Darwin) || canImport(Glibc))
+#if SystemSQLite && (canImport(Darwin) || canImport(Glibc))
   import Foundation
-  import GRDB
   @testable import SQLiteCross
   import StructuredQueries
   import Synchronization
@@ -36,7 +35,7 @@
     func openingWaitsWhileAnotherProcessIsOpening() async throws {
       let harness = try DatabaseProcessHarness(name: "open-lock")
       defer { harness.cleanup() }
-      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: harness.databasePath)
+      let identifier = DatabaseIdentifier.forDatabase(path: harness.databasePath)
       let directory = harness.coordination.directory
       let opened = harness.file("opened-0")
       let isHeld = Mutex(false)
@@ -109,12 +108,12 @@
       let holder = try harness.spawn("hold", index: 0, holdMilliseconds: 800)
       try await waitForFile(harness.file("held-0"))
 
-      var configuration = GRDB.Configuration.crossProcess
-      configuration.busyMode = .timeout(0.1)
+      var configuration = SQLiteConfiguration.default
+      configuration.busyTimeout = .milliseconds(100)
       let database = try harness.database(configuration: configuration)
       let clock = ContinuousClock()
       let started = clock.now
-      let error = await #expect(throws: DatabaseError.self) {
+      let error = await #expect(throws: SQLiteError.self) {
         try await database.write { transaction in
           try transaction.execute(
             #sql("INSERT INTO writes (writer_id) VALUES (9999)", as: Void.self)
@@ -123,7 +122,7 @@
       }
       let elapsed = clock.now - started
 
-      #expect(error?.resultCode == .SQLITE_BUSY)
+      #expect(error?.primaryCode == .busy)
       #expect(elapsed < .milliseconds(700))
       try await harness.waitForSuccessfulExit(holder)
     }
@@ -162,7 +161,7 @@
       let coordination = harness.coordination
       let didOpen = Mutex(false)
       Thread.detachNewThread {
-        _ = try? CrossProcessDatabase<GRDBDatabaseDriver>(path: databasePath, coordination: coordination)
+        _ = try? SQLiteCrossDatabase(path: databasePath, coordination: coordination)
         didOpen.withLock { $0 = true }
       }
       try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
@@ -188,11 +187,11 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
+      _ = try SQLiteCrossDatabase(path: path, coordination: coordination)
       try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.opened)))
 
     case "write":
-      let database = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
+      let database = try SQLiteCrossDatabase(path: path, coordination: coordination)
       let writerID = try #require(Int(try value(DatabaseProcessEnvironment.writerID)))
       let writeCount = try #require(Int(try value(DatabaseProcessEnvironment.writeCount)))
       try touch(ready)
@@ -212,7 +211,7 @@
       }
 
     case "hold":
-      let database = try CrossProcessDatabase<GRDBDatabaseDriver>(path: path, coordination: coordination)
+      let database = try SQLiteCrossDatabase(path: path, coordination: coordination)
       let held = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.held))
       let milliseconds = try #require(Int(try value(DatabaseProcessEnvironment.holdMilliseconds)))
       try touch(ready)
@@ -227,7 +226,7 @@
     case "listen":
       // `shared` caches transports weakly, so the transport itself, not just the subscription,
       // must be kept alive for as long as the subscription should stay registered.
-      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: path)
+      let identifier = DatabaseIdentifier.forDatabase(path: path)
       let transport = try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination)
       let receivedCount = Mutex(0)
       let subscription = try transport.subscribe(to: identifier) { _ in
@@ -239,7 +238,7 @@
       _ = subscription
 
     case "hold-open-lock":
-      let identifier = GRDBDatabaseDriver.defaultIdentifier(path: path)
+      let identifier = DatabaseIdentifier.forDatabase(path: path)
       try DatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: coordination.directory
@@ -279,9 +278,9 @@
     func file(_ name: String) -> URL { self.harness.file(name) }
 
     func database(
-      configuration: GRDB.Configuration = .crossProcess
-    ) throws -> CrossProcessDatabase<GRDBDatabaseDriver> {
-      try CrossProcessDatabase(
+      configuration: SQLiteConfiguration = .default
+    ) throws -> SQLiteCrossDatabase {
+      try SQLiteCrossDatabase(
         path: self.databasePath,
         configuration: configuration,
         coordination: self.coordination

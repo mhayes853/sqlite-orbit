@@ -100,6 +100,9 @@ public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Esca
 
   @discardableResult
   public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+    // A statement that builds no SQL changes nothing. Running the empty-query stand-in would leave
+    // `changes` reporting whatever the previous statement changed.
+    guard !query.fragment.isEmpty else { return 0 }
     var cursor = try base.cursor(for: query.fragment, cached: false)
     try cursor.forEach { _ in }
     return Int(base.library.pointee.changes(base.connection))

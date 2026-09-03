@@ -1,13 +1,12 @@
-#if GRDB
+#if SystemSQLite
   import Foundation
-  import GRDB
   import SQLiteCross
   import Testing
 
   @Test
   func typeMismatchesNameTheColumnAndWhatWasStored() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
@@ -28,7 +27,7 @@
   @Test
   func missingRequiredColumnsNameTheColumnThatWasNull() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
@@ -47,7 +46,7 @@
   @Test
   func valueLevelFailuresAreReportedAsThemselves() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     // The column has the right storage class but the wrong contents. These are not the column

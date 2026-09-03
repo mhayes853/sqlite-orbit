@@ -145,3 +145,72 @@ struct SQLiteRowDecoder: QueryDecoder {
     return uuid
   }
 }
+
+extension SQLiteRowDecoder {
+  /// Restates a decoding failure in terms of the column it happened on.
+  @usableFromInline
+  func describe(_ error: QueryDecodingError) -> any Error {
+    switch error {
+    case .missingRequiredColumn:
+      return DatabaseColumnDecodingError(
+        library: library,
+        statement: statement,
+        columnIndex: currentIndex - 1,
+        reason: "to not be NULL"
+      )
+    case .typeMismatch(let columnType):
+      return DatabaseColumnDecodingError(
+        library: library,
+        statement: statement,
+        columnIndex: currentIndex,
+        reason:
+          "to decode \(columnType), but found "
+          + sqliteCrossStorageClassName(library.pointee.column_type(statement, currentIndex))
+      )
+    case .other(let error):
+      return error
+    }
+  }
+}
+
+/// A decoding failure, reported against the column it happened on.
+public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
+  public let columnIndex: Int
+  public let columnName: String
+  public let reason: String
+  public let sql: String
+
+  @usableFromInline
+  init(
+    library: UnsafePointer<SQLiteLibrary>,
+    statement: OpaquePointer,
+    columnIndex: Int32,
+    reason: String
+  ) {
+    self.columnIndex = Int(columnIndex)
+    self.columnName =
+      library.pointee.column_name(statement, columnIndex).map(String.init(cString:)) ?? "?"
+    self.reason = reason
+    self.sql = library.pointee.sql(statement).map(String.init(cString:)) ?? ""
+  }
+
+  public var description: String {
+    """
+    Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
+
+    \(sql)
+    """
+  }
+}
+
+@usableFromInline
+func sqliteCrossStorageClassName(_ columnType: Int32) -> String {
+  switch SQLiteColumnType(rawValue: columnType) {
+  case .blob: "BLOB"
+  case .float: "REAL"
+  case .integer: "INTEGER"
+  case .null: "NULL"
+  case .text: "TEXT"
+  default: "unknown"
+  }
+}

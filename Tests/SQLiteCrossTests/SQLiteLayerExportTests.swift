@@ -1,14 +1,13 @@
 // Deliberately imports only 'SQLiteCross': this asserts that the SQLite query-building layer is
 // re-exported, and covers a 'RETURNING' statement, which lives in StructuredQueriesSQLiteCore.
-#if GRDB
-  import GRDB
+#if SystemSQLite
   import SQLiteCross
   import Testing
 
   @Test
   func sqliteQueryLayerIsReachableThroughSQLiteCrossAlone() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     try await database.write { transaction in

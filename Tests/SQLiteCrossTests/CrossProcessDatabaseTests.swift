@@ -1,6 +1,5 @@
-#if GRDB
+#if SystemSQLite
   import Foundation
-  import GRDB
   import SQLiteCross
   import StructuredQueries
   import Synchronization
@@ -103,10 +102,10 @@
     failure: (any Error)? = nil,
     delay: Duration? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
-  ) throws -> (CrossProcessDatabase<GRDBDatabaseDriver>, RecordingDatabaseIPCTransport) {
+  ) throws -> (CrossProcessDatabase<SQLiteQueueDriver>, RecordingDatabaseIPCTransport) {
     let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
-    let database = try CrossProcessDatabase(
-      writer: DatabaseQueue(),
+    let database = CrossProcessDatabase(
+      driver: try SQLiteQueueDriver(path: ":memory:"),
       id: id,
       transport: transport,
       onAnnouncementFailure: onAnnouncementFailure

@@ -1,6 +1,6 @@
-#if GRDB
+#if SystemSQLite
   import Foundation
-  import GRDBSQLite
+  import CSQLite3
   import StructuredQueriesSQLite
 
   /// Decodes a database function's arguments.

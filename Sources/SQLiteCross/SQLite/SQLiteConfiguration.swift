@@ -28,6 +28,9 @@ public struct SQLiteConfiguration: Sendable {
   /// SQL run on every connection once it has been configured.
   public var setupSQL: [String]
 
+  /// Native callbacks installed on every connection.
+  var connectionSetups: [SQLiteConnectionSetup]
+
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
@@ -44,6 +47,7 @@ public struct SQLiteConfiguration: Sendable {
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
+    self.connectionSetups = []
   }
 
   /// The busy timeout in the milliseconds SQLite expects.
@@ -55,11 +59,44 @@ public struct SQLiteConfiguration: Sendable {
   }
 }
 
+final class SQLiteConnectionSetup: Sendable {
+  let install: @Sendable (OpaquePointer) -> Int32
+
+  init(install: @escaping @Sendable (OpaquePointer) -> Int32) {
+    self.install = install
+  }
+}
+
 #if SystemSQLite
+  import StructuredQueriesSQLite
+
   extension SQLiteConfiguration {
     /// The default configuration, running against the SQLite this package was linked against.
     public static var `default`: Self {
       Self(library: .system)
+    }
+
+    /// Registers a collating sequence on every connection opened with this configuration.
+    public mutating func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) {
+      connectionSetups.append(
+        SQLiteConnectionSetup { sqliteCrossInstall(collation: collation, on: $0) }
+      )
+    }
+
+    /// Registers a scalar function on every connection opened with this configuration.
+    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+      connectionSetups.append(
+        SQLiteConnectionSetup { sqliteCrossInstall(function: function, on: $0) }
+      )
+    }
+
+    /// Registers an aggregate function on every connection opened with this configuration.
+    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+      connectionSetups.append(
+        SQLiteConnectionSetup { sqliteCrossInstall(function: function, on: $0) }
+      )
     }
   }
 #endif

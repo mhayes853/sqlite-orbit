@@ -1,15 +1,14 @@
-#if SystemSQLite && GRDB
+#if SystemSQLite
   import Foundation
-  import GRDB
   import StructuredQueries
   import Testing
 
   @testable import SQLiteCross
 
-  /// Compares decoding a large scan through the native driver against GRDB.
+  /// Compares decoding a large scan through the native pool and queue implementations.
   ///
-  /// The native driver reaches SQLite through a table of closures rather than direct calls, which
-  /// buys the ability to run against an injected build. This measures what that costs.
+  /// Both reach SQLite through an injectable table of closures; this keeps a benchmark covering
+  /// the native scan path after the GRDB adapter's removal.
   ///
   /// Timing is not an assertion. The test only runs when asked, so that a loaded machine cannot
   /// fail the suite.
@@ -19,7 +18,7 @@
       "set SQLITE_CROSS_BENCHMARK to run"
     )
   )
-  func scanningComparesWithGRDB() async throws {
+  func scanningComparesNativePoolAndQueue() async throws {
     let path = NSTemporaryDirectory() + "sqlite-cross-bench-\(UUID().uuidString).sqlite"
     defer {
       for suffix in ["", "-wal", "-shm"] {
@@ -28,8 +27,8 @@
     }
     let rowCount = 200_000
 
-    let native = try SQLitePoolDriver(path: path)
-    try await native.write { transaction in
+    let pool = try SQLitePoolDriver(path: path)
+    try await pool.write { transaction in
       try transaction.execute(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
       )
@@ -40,9 +39,7 @@
       }
     }
 
-    let grdb = GRDBDatabaseDriver(
-      writer: try DatabasePool(path: path, configuration: .crossProcess)
-    )
+    let queue = try SQLiteQueueDriver(path: path)
 
     func measure(_ name: String, _ body: () async throws -> Int) async rethrows {
       var best = Duration.seconds(1_000)
@@ -57,13 +54,13 @@
       print("BENCH \(name): \(best)")
     }
 
-    try await measure("native") {
-      try await native.read { transaction in
+    try await measure("pool") {
+      try await pool.read { transaction in
         try transaction.fetchAll(Item.all).count
       }
     }
-    try await measure("grdb") {
-      try await grdb.read { transaction in
+    try await measure("queue") {
+      try await queue.read { transaction in
         try transaction.fetchAll(Item.all).count
       }
     }

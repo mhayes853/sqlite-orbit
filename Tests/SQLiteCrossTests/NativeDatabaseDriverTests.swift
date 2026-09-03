@@ -1,15 +1,14 @@
-#if GRDB
+#if SystemSQLite
   import Foundation
-  import GRDB
   import SQLiteCross
   import StructuredQueriesSQLite
   import Testing
 
   @Test
-  func grdbDriverExecutesStructuredQueriesAndDecodesTables() async throws {
-    let queue = try DatabaseQueue()
+  func nativeDriverExecutesStructuredQueriesAndDecodesTables() async throws {
+    let queue = try SQLiteQueueDriver(path: ":memory:")
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: queue)
+      driver: queue
     )
     let title = "Blob's reminder"
 
@@ -60,9 +59,9 @@
   }
 
   @Test
-  func grdbDriverExposesTransactionScopedCursors() async throws {
+  func nativeDriverExposesTransactionScopedCursors() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let readValues = try await database.read { transaction in
@@ -92,9 +91,9 @@
   }
 
   @Test
-  func grdbDriverRoundTripsDateAndUUIDBindings() async throws {
+  func nativeDriverRoundTripsDateAndUUIDBindings() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
     let value = SpecialValue(
       id: 1,
@@ -125,9 +124,9 @@
   }
 
   @Test
-  func grdbDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
+  func nativeDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
     let timestamp = "2024-01-02 03:04:05"
     let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
@@ -146,9 +145,9 @@
   }
 
   @Test
-  func grdbDriverRollsBackThrownWrites() async throws {
+  func nativeDriverRollsBackThrownWrites() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
     _ = try await database.write { transaction in
       try transaction.execute(
@@ -175,23 +174,22 @@
   }
 
   @Test
-  func inMemoryGRDBDriversReceiveUniqueDefaultIdentifiers() throws {
-    let first = GRDBDatabaseDriver(writer: try DatabaseQueue())
-    let second = GRDBDatabaseDriver(writer: try DatabaseQueue())
+  func inMemoryNativeDriversReceiveUniqueDefaultIdentifiers() throws {
+    let first = try SQLiteQueueDriver(path: ":memory:")
+    let second = try SQLiteQueueDriver(path: ":memory:")
 
     #expect(first.defaultIdentifier != second.defaultIdentifier)
     #expect(CrossProcessDatabase(driver: first).id == first.defaultIdentifier)
   }
 
   @Test
-  func fileGRDBDriversUseTheirStandardizedPathAsTheDefaultIdentifier() throws {
+  func fileNativeDriversUseTheirStandardizedPathAsTheDefaultIdentifier() throws {
     let path = FileManager.default.temporaryDirectory
       .appendingPathComponent(UUID().uuidString)
       .path
-    let writer = try DatabaseQueue(path: path)
     defer { try? FileManager.default.removeItem(atPath: path) }
 
-    let driver = GRDBDatabaseDriver(writer: writer)
+    let driver = try SQLiteQueueDriver(path: path)
 
     #expect(
       driver.defaultIdentifier.rawValue
@@ -200,9 +198,9 @@
   }
 
   @Test
-  func grdbRowDecodesColumnsSequentiallyAndRestartsOnEachRow() async throws {
+  func nativeRowDecodesColumnsSequentiallyAndRestartsOnEachRow() async throws {
     let database = CrossProcessDatabase(
-      driver: GRDBDatabaseDriver(writer: try DatabaseQueue())
+      driver: try SQLiteQueueDriver(path: ":memory:")
     )
 
     let decoded: [(Int, String)] = try await database.read { transaction in
@@ -228,11 +226,11 @@
   }
 
   @Test
-  func crossProcessDatabaseCanBeConstructedFromGRDBWriter() throws {
-    let writer = try DatabaseQueue()
-    let database = CrossProcessDatabase(writer: writer)
+  func crossProcessDatabaseCanBeConstructedFromNativeWriter() throws {
+    let writer = try SQLiteQueueDriver(path: ":memory:")
+    let database = CrossProcessDatabase(driver: writer)
     let override = DatabaseIdentifier(rawValue: "override")
-    let overriddenDatabase = CrossProcessDatabase(writer: writer, id: override)
+    let overriddenDatabase = CrossProcessDatabase(driver: writer, id: override)
 
     #expect(database.id == database.driver.defaultIdentifier)
     #expect(overriddenDatabase.id == override)

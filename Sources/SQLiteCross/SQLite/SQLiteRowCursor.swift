@@ -94,24 +94,23 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
 /// One result row, valid only until its cursor advances.
 public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
   @usableFromInline
-  let library: UnsafePointer<SQLiteLibrary>
-
-  @usableFromInline
-  let statement: OpaquePointer
+  var decoder: SQLiteRowDecoder
 
   @usableFromInline
   @_lifetime(borrow cursor)
   init(cursor: borrowing SQLiteRowCursor) {
-    self.library = cursor.library
-    self.statement = cursor.statement
+    self.decoder = SQLiteRowDecoder(library: cursor.library, statement: cursor.statement)
   }
 
   @inlinable
   public mutating func decode<Value: QueryRepresentable>(
     _ type: Value.Type
   ) throws -> Value.QueryOutput {
-    var decoder = SQLiteRowDecoder(library: library, statement: statement)
-    return try Value(decoder: &decoder).queryOutput
+    do {
+      return try Value(decoder: &decoder).queryOutput
+    } catch let error as QueryDecodingError {
+      throw decoder.describe(error)
+    }
   }
 
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -119,7 +118,10 @@ public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
   public mutating func decode<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
   ) throws -> (repeat (each Value).QueryOutput) {
-    var decoder = SQLiteRowDecoder(library: library, statement: statement)
-    return try decoder.decodeColumns((repeat each Value).self)
+    do {
+      return try decoder.decodeColumns((repeat each Value).self)
+    } catch let error as QueryDecodingError {
+      throw decoder.describe(error)
+    }
   }
 }
