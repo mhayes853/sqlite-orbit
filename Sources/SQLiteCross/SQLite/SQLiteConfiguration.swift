@@ -82,36 +82,27 @@ public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertib
 ///
 /// This is the escape hatch for registering what the package does not model — an authorizer, an
 /// update hook, a virtual table module. The closure is handed the `sqlite3 *` once the connection
-/// has been configured and returns a SQLite result code; anything but `SQLITE_OK` fails the open.
+/// has been configured, along with the ``SQLiteLibrary`` that connection was opened through, and
+/// returns a SQLite result code. Being handed the library is what lets a setup call the same build
+/// the connection belongs to, and lets one that cannot refuse the connection outright.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
 public struct SQLiteConnectionSetup: Sendable {
-  public let install: @Sendable (OpaquePointer) -> Int32
+  private let install: @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32
 
-  /// Whether the setup calls SQLite through the linked callback ABI rather than through the
-  /// configuration's own ``SQLiteConfiguration/library``.
+  public init(install: @escaping @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32) {
+    self.install = install
+  }
+
+  /// Installs the setup on `connection`, which was opened through `library`.
   ///
-  /// Only the typed registrations below do, which is why they are the only ones a custom SQLite
-  /// build has to reject. A setup written by a caller calls whichever build it was given.
-  let usesLinkedCallbackABI: Bool
-
-  public init(install: @escaping @Sendable (OpaquePointer) -> Int32) {
-    self.install = install
-    self.usesLinkedCallbackABI = false
-  }
-
-  private init(
-    install: @escaping @Sendable (OpaquePointer) -> Int32,
-    usesLinkedCallbackABI: Bool
-  ) {
-    self.install = install
-    self.usesLinkedCallbackABI = usesLinkedCallbackABI
-  }
-
-  static func linkedCallbackABI(
-    _ install: @escaping @Sendable (OpaquePointer) -> Int32
-  ) -> Self {
-    Self(install: install, usesLinkedCallbackABI: true)
+  /// - Throws: Whatever the setup threw, or a ``SQLiteError`` when it reported a result code other
+  ///   than `SQLITE_OK`. Either fails the open that ran it.
+  public func callAsFunction(_ connection: OpaquePointer, library: SQLiteLibrary) throws {
+    let code = try install(connection, library)
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: library, on: connection, code: code, sql: nil)
+    }
   }
 }
 
@@ -129,22 +120,41 @@ public struct SQLiteConnectionSetup: Sendable {
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
       connectionSetups.append(
-        .linkedCallbackABI { sqliteCrossInstall(collation: collation, on: $0) }
+        SQLiteConnectionSetup { connection, library in
+          try Self.requireLinkedCallbackABI(of: library)
+          return sqliteCrossInstall(collation: collation, on: connection)
+        }
       )
     }
 
     /// Registers a scalar function on every connection opened with this configuration.
     public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
       connectionSetups.append(
-        .linkedCallbackABI { sqliteCrossInstall(function: function, on: $0) }
+        SQLiteConnectionSetup { connection, library in
+          try Self.requireLinkedCallbackABI(of: library)
+          return sqliteCrossInstall(function: function, on: connection)
+        }
       )
     }
 
     /// Registers an aggregate function on every connection opened with this configuration.
     public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
       connectionSetups.append(
-        .linkedCallbackABI { sqliteCrossInstall(function: function, on: $0) }
+        SQLiteConnectionSetup { connection, library in
+          try Self.requireLinkedCallbackABI(of: library)
+          return sqliteCrossInstall(function: function, on: connection)
+        }
       )
+    }
+
+    /// Refuses a connection whose SQLite is not the one these registrations compile against.
+    ///
+    /// A typed registration installs static C callbacks that reach for the linked SQLite's value,
+    /// result, and context entry points directly rather than through `library`. Handing those
+    /// callbacks a value belonging to another build would be reading one SQLite's memory with
+    /// another's layout, so the connection is refused instead.
+    private static func requireLinkedCallbackABI(of library: SQLiteLibrary) throws {
+      guard library.supportsTypedCallbacks else { throw SQLiteTypedCallbacksUnavailableError() }
     }
   }
 #endif

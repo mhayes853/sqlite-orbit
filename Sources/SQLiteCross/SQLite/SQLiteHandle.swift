@@ -91,23 +91,10 @@ struct SQLiteHandle: ~Copyable {
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     try execute("PRAGMA trusted_schema = \(configuration.isTrustedSchemaEnabled ? "ON" : "OFF")")
-    // A setup the caller wrote calls whichever SQLite it was handed, so only the package's own
-    // typed registrations are held to the linked build.
-    guard configuration.library.supportsTypedCallbacks
-      || !configuration.connectionSetups.contains(where: \.usesLinkedCallbackABI)
-    else {
-      throw SQLiteTypedCallbacksUnavailableError()
-    }
+    // A setup is handed the library this connection was opened through, so whether it can run
+    // against that build is its own question to answer rather than one asked on its behalf here.
     for setup in configuration.connectionSetups {
-      let code = setup.install(pointer)
-      guard code == SQLiteResultCode.ok.rawValue else {
-        throw SQLiteError.reported(
-          by: libraryStorage.pointee,
-          on: pointer,
-          code: code,
-          sql: nil
-        )
-      }
+      try setup(pointer, library: libraryStorage.pointee)
     }
     for sql in configuration.setupSQL {
       try execute(sql)

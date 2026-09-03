@@ -264,7 +264,7 @@
     let installs = Mutex(0)
     var configuration = SQLiteConfiguration.default
     configuration.connectionSetups = [
-      SQLiteConnectionSetup { _ in
+      SQLiteConnectionSetup { _, _ in
         installs.withLock { $0 += 1 }
         return SQLiteResultCode.ok.rawValue
       }
@@ -278,7 +278,7 @@
     #expect(installs.withLock { $0 } == 1)
 
     configuration.connectionSetups.append(
-      SQLiteConnectionSetup { _ in SQLiteResultCode.error.rawValue }
+      SQLiteConnectionSetup { _, _ in SQLiteResultCode.error.rawValue }
     )
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteHandle.open(
@@ -289,16 +289,33 @@
     }
   }
 
-  /// A setup written by a caller calls whichever SQLite it was handed, so it is none of the
-  /// package's business whether that build shares the linked callback ABI.
   @Test
-  func callerSuppliedConnectionSetupsRunAgainstAnIncompatibleCallbackABI() throws {
-    let installs = Mutex(0)
+  func aConnectionSetupThatThrowsFailsTheOpenWithItsOwnError() {
+    struct SetupError: Error {}
+    var configuration = SQLiteConfiguration.default
+    configuration.connectionSetups = [SQLiteConnectionSetup { _, _ in throw SetupError() }]
+
+    #expect(throws: SetupError.self) {
+      _ = try SQLiteHandle.open(
+        path: ":memory:",
+        flags: [.readWrite, .create, .memory, .noMutex],
+        configuration: configuration
+      )
+    }
+  }
+
+  /// A setup is handed the library its connection was opened through, so it calls the build it was
+  /// given rather than whichever one this package was linked against — which is also why the
+  /// linked callback ABI is none of its business.
+  @Test
+  func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
+    let seenVersion = Mutex<Int32?>(nil)
     var configuration = SQLiteConfiguration.default
     configuration.library.supportsTypedCallbacks = false
+    configuration.library.libversion_number = { 123_456 }
     configuration.connectionSetups = [
-      SQLiteConnectionSetup { _ in
-        installs.withLock { $0 += 1 }
+      SQLiteConnectionSetup { _, library in
+        seenVersion.withLock { $0 = library.libversion_number() }
         return SQLiteResultCode.ok.rawValue
       }
     ]
@@ -308,7 +325,7 @@
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
     )
-    #expect(installs.withLock { $0 } == 1)
+    #expect(seenVersion.withLock { $0 } == 123_456)
   }
 
   @Test(
