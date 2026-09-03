@@ -91,7 +91,10 @@ struct SQLiteHandle: ~Copyable {
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     try execute("PRAGMA trusted_schema = \(configuration.isTrustedSchemaEnabled ? "ON" : "OFF")")
-    guard configuration.connectionSetups.isEmpty || configuration.library.supportsTypedCallbacks
+    // A setup the caller wrote calls whichever SQLite it was handed, so only the package's own
+    // typed registrations are held to the linked build.
+    guard configuration.library.supportsTypedCallbacks
+      || !configuration.connectionSetups.contains(where: \.usesLinkedCallbackABI)
     else {
       throw SQLiteTypedCallbacksUnavailableError()
     }

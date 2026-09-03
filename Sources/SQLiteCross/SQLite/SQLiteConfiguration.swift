@@ -29,7 +29,7 @@ public struct SQLiteConfiguration: Sendable {
   public var setupSQL: [String]
 
   /// Native callbacks installed on every connection.
-  var connectionSetups: [SQLiteConnectionSetup]
+  public var connectionSetups: [SQLiteConnectionSetup]
 
   public init(
     library: SQLiteLibrary,
@@ -38,7 +38,8 @@ public struct SQLiteConfiguration: Sendable {
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
-    setupSQL: [String] = []
+    setupSQL: [String] = [],
+    connectionSetups: [SQLiteConnectionSetup] = []
   ) {
     self.library = library
     self.readerCount = readerCount
@@ -47,7 +48,7 @@ public struct SQLiteConfiguration: Sendable {
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
-    self.connectionSetups = []
+    self.connectionSetups = connectionSetups
   }
 
   /// The busy timeout in the milliseconds SQLite expects.
@@ -72,11 +73,40 @@ public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertib
   }
 }
 
-final class SQLiteConnectionSetup: Sendable {
-  let install: @Sendable (OpaquePointer) -> Int32
+/// A native callback installed on every connection a configuration opens.
+///
+/// This is the escape hatch for registering what the package does not model — an authorizer, an
+/// update hook, a virtual table module. The closure is handed the `sqlite3 *` once the connection
+/// has been configured and returns a SQLite result code; anything but `SQLITE_OK` fails the open.
+///
+/// A setup runs on the connection's own queue, before any transaction can reach it.
+public struct SQLiteConnectionSetup: Sendable {
+  public let install: @Sendable (OpaquePointer) -> Int32
 
-  init(install: @escaping @Sendable (OpaquePointer) -> Int32) {
+  /// Whether the setup calls SQLite through the linked callback ABI rather than through the
+  /// configuration's own ``SQLiteConfiguration/library``.
+  ///
+  /// Only the typed registrations below do, which is why they are the only ones a custom SQLite
+  /// build has to reject. A setup written by a caller calls whichever build it was given.
+  let usesLinkedCallbackABI: Bool
+
+  public init(install: @escaping @Sendable (OpaquePointer) -> Int32) {
     self.install = install
+    self.usesLinkedCallbackABI = false
+  }
+
+  private init(
+    install: @escaping @Sendable (OpaquePointer) -> Int32,
+    usesLinkedCallbackABI: Bool
+  ) {
+    self.install = install
+    self.usesLinkedCallbackABI = usesLinkedCallbackABI
+  }
+
+  static func linkedCallbackABI(
+    _ install: @escaping @Sendable (OpaquePointer) -> Int32
+  ) -> Self {
+    Self(install: install, usesLinkedCallbackABI: true)
   }
 }
 
@@ -94,21 +124,21 @@ final class SQLiteConnectionSetup: Sendable {
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
       connectionSetups.append(
-        SQLiteConnectionSetup { sqliteCrossInstall(collation: collation, on: $0) }
+        .linkedCallbackABI { sqliteCrossInstall(collation: collation, on: $0) }
       )
     }
 
     /// Registers a scalar function on every connection opened with this configuration.
     public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
       connectionSetups.append(
-        SQLiteConnectionSetup { sqliteCrossInstall(function: function, on: $0) }
+        .linkedCallbackABI { sqliteCrossInstall(function: function, on: $0) }
       )
     }
 
     /// Registers an aggregate function on every connection opened with this configuration.
     public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
       connectionSetups.append(
-        SQLiteConnectionSetup { sqliteCrossInstall(function: function, on: $0) }
+        .linkedCallbackABI { sqliteCrossInstall(function: function, on: $0) }
       )
     }
   }

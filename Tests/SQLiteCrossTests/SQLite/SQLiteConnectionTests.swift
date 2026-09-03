@@ -254,4 +254,56 @@
     )
     #expect(try scalar(reopened, "SELECT count(*) FROM items") == 1)
   }
+
+  @Test
+  func connectionSetupsRunOnEveryConnectionAndCanFailTheOpen() throws {
+    let installs = Mutex(0)
+    var configuration = SQLiteConfiguration.default
+    configuration.connectionSetups = [
+      SQLiteConnectionSetup { _ in
+        installs.withLock { $0 += 1 }
+        return SQLiteResultCode.ok.rawValue
+      }
+    ]
+
+    _ = try SQLiteHandle.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: configuration
+    )
+    #expect(installs.withLock { $0 } == 1)
+
+    configuration.connectionSetups.append(
+      SQLiteConnectionSetup { _ in SQLiteResultCode.error.rawValue }
+    )
+    #expect(throws: SQLiteError.self) {
+      _ = try SQLiteHandle.open(
+        path: ":memory:",
+        flags: [.readWrite, .create, .memory, .noMutex],
+        configuration: configuration
+      )
+    }
+  }
+
+  /// A setup written by a caller calls whichever SQLite it was handed, so it is none of the
+  /// package's business whether that build shares the linked callback ABI.
+  @Test
+  func callerSuppliedConnectionSetupsRunAgainstAnIncompatibleCallbackABI() throws {
+    let installs = Mutex(0)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.supportsTypedCallbacks = false
+    configuration.connectionSetups = [
+      SQLiteConnectionSetup { _ in
+        installs.withLock { $0 += 1 }
+        return SQLiteResultCode.ok.rawValue
+      }
+    ]
+
+    _ = try SQLiteHandle.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: configuration
+    )
+    #expect(installs.withLock { $0 } == 1)
+  }
 #endif

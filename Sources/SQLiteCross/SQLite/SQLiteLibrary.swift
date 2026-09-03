@@ -1,6 +1,17 @@
 /// The destructor SQLite calls to release a value or context it was handed.
 public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
+extension SQLiteLibrary {
+  /// SQLite's `SQLITE_TRANSIENT`: the destructor that tells SQLite to copy the bytes it was handed
+  /// rather than borrow them.
+  ///
+  /// SQLite spells this as a cast macro, which Swift does not import, so a caller building a table
+  /// against their own SQLite build has no way to name it. It is documented as `-1` reinterpreted
+  /// as a destructor, and is what ``SQLiteLibrary/bind_text`` and ``SQLiteLibrary/bind_blob`` must
+  /// pass: the buffers this package binds live only for the call.
+  public static let transientDestructor = unsafeBitCast(-1, to: SQLiteDestructor.self)
+}
+
 /// A table of the SQLite entry points ``SQLiteCross`` needs.
 ///
 /// The package calls SQLite only through this table, and the core module imports no SQLite header,

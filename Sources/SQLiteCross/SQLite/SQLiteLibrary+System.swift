@@ -1,10 +1,6 @@
 #if SystemSQLite
   import CSQLite3
 
-  /// `SQLITE_TRANSIENT` is a cast macro, which Swift does not import; SQLite documents it as `-1`
-  /// reinterpreted as a destructor.
-  private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-
   extension SQLiteLibrary {
     /// The SQLite that this package was linked against.
     ///
@@ -35,8 +31,8 @@
         bind_null: sqlite3_bind_null,
         bind_int64: sqlite3_bind_int64,
         bind_double: sqlite3_bind_double,
-        bind_text: { sqlite3_bind_text($0, $1, $2, $3, SQLITE_TRANSIENT) },
-        bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, SQLITE_TRANSIENT) },
+        bind_text: { sqlite3_bind_text($0, $1, $2, $3, Self.transientDestructor) },
+        bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, Self.transientDestructor) },
         column_count: sqlite3_column_count,
         column_type: sqlite3_column_type,
         column_int64: sqlite3_column_int64,
