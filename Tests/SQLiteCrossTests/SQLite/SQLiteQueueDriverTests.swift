@@ -240,6 +240,30 @@
     }
   }
 
+  /// SQLite reads the empty path as a database it creates for one connection and deletes when that
+  /// connection closes, which is what ``DatabasePath/temporary`` names. It is a real mode, and the
+  /// third thing SQLite does with a path string, so `DatabasePath("")` has somewhere to land.
+  @Test
+  func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
+    let driver = try SQLiteQueueDriver(path: .temporary)
+    try await bootstrap(driver)
+    try await driver.write { transaction in
+      try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
+    }
+    let items = try await driver.read { transaction in
+      try transaction.fetchAll(Item.all)
+    }
+    #expect(items == [Item(id: 1, title: "scratch")])
+
+    // No file names it, so a second driver opens a different, empty database of its own.
+    #expect(DatabasePath.temporary.fileURL == nil)
+    let other = try SQLiteQueueDriver(path: .temporary)
+    #expect(other.defaultIdentifier != driver.defaultIdentifier)
+    await #expect(throws: SQLiteError.self) {
+      try await other.read { try $0.fetchCount(Item.all) }
+    }
+  }
+
   @Table
   private struct Item: Equatable, Sendable {
     let id: Int
