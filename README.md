@@ -283,6 +283,16 @@ for try await change in reminders.changes(in: database) {
 }
 ```
 
+Both sequences start observing when iteration begins, and buffer every element a slow consumer has
+not taken yet. Pass a `bufferingPolicy` to bound that buffer, which lets a slow loop skip ahead to
+the current state of the database rather than working through every intermediate one:
+
+```swift
+for try await change in reminders.changes(in: database, bufferingPolicy: .bufferingNewest(1)) {
+  await render(change)
+}
+```
+
 The callback API is the primitive beneath both asynchronous sequences:
 
 ```swift
@@ -308,6 +318,23 @@ let titles = reminders
 `filter` and `compactMap` suppress individual values without ending the observation. A thrown
 operator error ends it. Operators run in their written order, and every emitted change keeps the
 source metadata of the fetched value. `removeDuplicates(by:)` accepts a custom comparison.
+
+`handleEvents` traces what an observation is doing without changing what it produces, which is the
+way to check that a chain is not fetching more often than it needs to:
+
+```swift
+let traced = reminders.handleEvents(
+  willFetch: { fetchCount.withLock { $0 += 1 } },
+  didReceiveValue: { logger.debug("\($0.count) reminders") }
+)
+```
+
+`didReceiveValue` observes values at that operator's position in the chain, so an upstream `filter`
+or `removeDuplicates` hides the values it suppressed. The remaining callbacks belong to the runtime
+that subscribers share, not to any one subscriber: `willStart` runs for the fetch the first
+subscriber triggers, and `didCancel` runs once the last subscriber goes away. Since a local write
+is fetched inside its own transaction, `willFetch` precedes the `databaseDidChange` for that write;
+every other fetch follows the commit that prompted it.
 
 Callback delivery is scheduled with Swift concurrency. The default `.async()` scheduler uses the
 cooperative executor; `.async(on:)` targets an actor, and `.mainActor` is the main-actor spelling.
