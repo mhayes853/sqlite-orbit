@@ -283,6 +283,16 @@ for try await change in reminders.changes(in: database) {
 }
 ```
 
+Both sequences start observing when iteration begins, and buffer only the newest element while a
+consumer is busy, so a slow loop skips ahead to the current state of the database. Pass a
+`bufferingPolicy` to keep more:
+
+```swift
+for try await change in reminders.changes(in: database, bufferingPolicy: .unbounded) {
+  await log(change)
+}
+```
+
 The callback API is the primitive beneath both asynchronous sequences:
 
 ```swift

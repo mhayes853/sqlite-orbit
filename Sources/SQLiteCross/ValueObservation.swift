@@ -328,42 +328,34 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   }
 
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
+  ///
+  /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
+  /// survive when the observation produces them faster than the sequence is consumed; by default
+  /// only the newest element is kept.
   public func changes<Database: SQLiteObservableDatabase>(
-    in database: Database
-  ) -> AsyncThrowingStream<ValueObservationChange<Value>, any Error> {
-    let holder = ValueObservationSubscriptionHolder()
-    return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-      do {
-        let subscription = try subscribe(
-          to: database,
-          onError: { continuation.finish(throwing: $0) },
-          onChange: { continuation.yield($0) }
-        )
-        holder.store(subscription)
-      } catch {
-        continuation.finish(throwing: error)
-      }
-      continuation.onTermination = { _ in holder.cancel() }
+    in database: Database,
+    bufferingPolicy: ValueObservationBufferingPolicy = .bufferingNewest(1)
+  ) -> ValueObservationSequence<ValueObservationChange<Value>> {
+    ValueObservationSequence(bufferingPolicy: bufferingPolicy) { onError, onChange in
+      try subscribe(to: database, onError: onError, onChange: onChange)
     }
   }
 
   /// Returns an asynchronous sequence of observed values without their source metadata.
+  ///
+  /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
+  /// survive when the observation produces them faster than the sequence is consumed; by default
+  /// only the newest element is kept.
   public func values<Database: SQLiteObservableDatabase>(
-    in database: Database
-  ) -> AsyncThrowingStream<Value, any Error> {
-    let holder = ValueObservationSubscriptionHolder()
-    return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
-      do {
-        let subscription = try subscribe(
-          to: database,
-          onError: { continuation.finish(throwing: $0) },
-          onChange: { continuation.yield($0.value) }
-        )
-        holder.store(subscription)
-      } catch {
-        continuation.finish(throwing: error)
-      }
-      continuation.onTermination = { _ in holder.cancel() }
+    in database: Database,
+    bufferingPolicy: ValueObservationBufferingPolicy = .bufferingNewest(1)
+  ) -> ValueObservationSequence<Value> {
+    ValueObservationSequence(bufferingPolicy: bufferingPolicy) { onError, onValue in
+      try subscribe(
+        to: database,
+        onError: onError,
+        onChange: { onValue($0.value) }
+      )
     }
   }
 }
@@ -835,33 +827,6 @@ private final class WeakValueObservationObserver<Value: Sendable>: DatabaseTrans
 
   func databaseDidRollback() {
     runtime()?.databaseDidRollback()
-  }
-}
-
-private final class ValueObservationSubscriptionHolder: Sendable {
-  private struct State: Sendable {
-    var subscription: SQLiteCrossSubscription?
-    var isCancelled = false
-  }
-
-  private let state = Lock(State())
-
-  func store(_ subscription: SQLiteCrossSubscription) {
-    let cancelImmediately = state.withLock { state in
-      if state.isCancelled { return true }
-      state.subscription = subscription
-      return false
-    }
-    if cancelImmediately { subscription.cancel() }
-  }
-
-  func cancel() {
-    let subscription = state.withLock { state in
-      state.isCancelled = true
-      defer { state.subscription = nil }
-      return state.subscription
-    }
-    subscription?.cancel()
   }
 }
 

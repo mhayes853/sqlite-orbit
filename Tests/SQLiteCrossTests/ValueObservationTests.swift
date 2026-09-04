@@ -628,6 +628,64 @@
     }
 
     @Test
+    func unboundedBufferingPolicyKeepsEveryPendingChange() async throws {
+      let driver = try await itemsDatabase()
+      let changes = itemCountObservation().changes(in: driver, bufferingPolicy: .unbounded)
+      var iterator = changes.makeAsyncIterator()
+      #expect(try await iterator.next()?.value == 0)
+
+      for id in 1...3 {
+        try await driver.write { transaction in
+          try transaction.execute(
+            #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
+          )
+        }
+      }
+
+      #expect(try await iterator.next()?.value == 1)
+      #expect(try await iterator.next()?.value == 2)
+      #expect(try await iterator.next()?.value == 3)
+    }
+
+    @Test
+    func bufferingModifierOverridesTheSequencePolicy() async throws {
+      let driver = try await itemsDatabase()
+      let values = itemCountObservation().values(in: driver).buffering(.unbounded)
+      var iterator = values.makeAsyncIterator()
+      #expect(try await iterator.next() == 0)
+
+      for id in 1...2 {
+        try await driver.write { transaction in
+          try transaction.execute(
+            #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
+          )
+        }
+      }
+
+      #expect(try await iterator.next() == 1)
+      #expect(try await iterator.next() == 2)
+    }
+
+    @Test
+    func theSequenceStartsObservingWhenIterationBegins() async throws {
+      let driver = try await itemsDatabase()
+      let fetchCount = Mutex(0)
+      let values = ValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .values(in: driver)
+
+      try await Task.sleep(for: .milliseconds(20))
+      #expect(fetchCount.withLock { $0 } == 0)
+
+      var iterator = values.makeAsyncIterator()
+      #expect(try await iterator.next() == 0)
+      #expect(fetchCount.withLock { $0 } == 1)
+    }
+
+    @Test
     func fetchErrorTerminatesTheAsyncSequence() async throws {
       let driver = try SQLiteQueueDriver(path: .memory)
       let values = itemCountObservation().values(in: driver)
