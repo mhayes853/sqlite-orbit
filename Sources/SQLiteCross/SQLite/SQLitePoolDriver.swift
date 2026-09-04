@@ -18,11 +18,12 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
 /// queued behind it, so a read issued after a write observes it. The database runs in WAL mode so
 /// that other processes' readers are never blocked by this one's writer.
-public final class SQLitePoolDriver: SQLiteDatabaseWriter {
+public final class SQLitePoolDriver: SQLiteObservableDatabase {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let writer: SQLiteConnection
   private let scheduler: SQLitePoolScheduler
+  private let transactionObservers = DatabaseTransactionObservers()
 
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
   ///
@@ -73,13 +74,14 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
     // the raw connection into an error rather than a surprise.
     var readerConfiguration = configuration
     readerConfiguration.setupSQL.append("PRAGMA query_only = ON")
-    let readers = try (0..<max(1, configuration.readerCount)).map { _ in
-      try SQLiteConnection(
-        path: path,
-        flags: [.readOnly, .noMutex],
-        configuration: readerConfiguration
-      )
-    }
+    let readers = try (0..<max(1, configuration.readerCount))
+      .map { _ in
+        try SQLiteConnection(
+          path: path,
+          flags: [.readOnly, .noMutex],
+          configuration: readerConfiguration
+        )
+      }
     return (writer, readers)
   }
 
@@ -124,7 +126,7 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   ) async throws -> Result {
     try await scheduler.acquireWriter()
     defer { scheduler.releaseWriter() }
-    return try await writer.write(body)
+    return try await writer.write(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -136,7 +138,13 @@ public final class SQLitePoolDriver: SQLiteDatabaseWriter {
   ) throws -> Result {
     scheduler.acquireWriterBlocking()
     defer { scheduler.releaseWriterBlocking() }
-    return try writer.writeBlocking(body)
+    return try writer.writeBlocking(observers: transactionObservers, body)
+  }
+
+  public func subscribe(
+    transactionObserver: any DatabaseTransactionObserver
+  ) throws -> SQLiteCrossSubscription {
+    transactionObservers.subscribe(transactionObserver)
   }
 }
 

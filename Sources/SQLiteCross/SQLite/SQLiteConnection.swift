@@ -36,9 +36,10 @@ actor SQLiteConnection {
   }
 
   func write<Result: Sendable>(
+    observers: DatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.write(body) }
+    try await perform { handle in try handle.write(observers: observers, body) }
   }
 
   /// Runs `body` on the connection's queue, blocking the calling thread until it finishes.
@@ -53,9 +54,10 @@ actor SQLiteConnection {
   }
 
   nonisolated func writeBlocking<Result: Sendable>(
+    observers: DatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try performBlocking { handle in try handle.write(body) }
+    try performBlocking { handle in try handle.write(observers: observers, body) }
   }
 
   /// A blocking access carries no task, so there is no cancellation to arm the interrupt for.

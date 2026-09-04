@@ -3,11 +3,12 @@
 `swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
-The package currently focuses on its local transaction boundary. `SQLiteDatabaseReader` and
-`SQLiteDatabaseWriter` define the asynchronous boundary around the native SQLite implementation,
-which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction` values. Read transactions
-can only query, while write transactions can query and execute mutations. Transactions and rows are
-nonescapable, so a database-owned SQLite connection cannot outlive its access closure.
+`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the asynchronous boundary around the native
+SQLite implementation, which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction`
+values. Read transactions can only query, while write transactions can query and execute mutations.
+Transactions and rows are nonescapable, so a database-owned SQLite connection cannot outlive its
+access closure. `ValueObservation` builds callback and asynchronous-sequence observation on that
+transaction boundary, both within one process and across cooperating processes.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
@@ -250,6 +251,71 @@ identifier, and callers can override it when constructing the database. File dat
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
+## Observation
+
+`SQLiteQueueDriver`, `SQLitePoolDriver`, and `InterprocessDatabase` are observable databases. A
+value observation fetches an initial value, then fetches again after every committed write:
+
+```swift
+let reminders = ValueObservation.tracking { transaction in
+  try transaction.fetchAll(Reminder.all)
+}
+
+for try await reminders in reminders.values(in: database) {
+  render(reminders)
+}
+```
+
+Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
+source; a committed transaction reports whether it came from this process or another one:
+
+```swift
+for try await change in reminders.changes(in: database) {
+  switch change.source {
+  case .initial:
+    initialize(with: change.value)
+  case .transaction(.local):
+    updateFromLocalWrite(change.value)
+  case .transaction(.external):
+    updateFromExternalWrite(change.value)
+  }
+}
+```
+
+The callback API is the primitive beneath both asynchronous sequences:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  onError: report,
+  onChange: { change in render(change.value) }
+)
+```
+
+Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
+subscribers to the same observation and database share one fetch. `removeDuplicates()` suppresses
+consecutive equal values; `removeDuplicates(by:)` accepts a custom comparison.
+
+Use `filterTransactions(_:)` to avoid fetching for irrelevant commit notifications. The commit's
+origin identifies whether the sender was this process or another one; the initial value is always
+fetched:
+
+```swift
+let remoteReminders = reminders.filterTransactions { commit in
+  commit.origin == .external
+}
+```
+
+Local observations fetch their pending value through the write transaction and publish it only
+after SQLite commits. A rollback, including a failed `COMMIT`, discards that value. External commit
+announcements trigger a fresh read instead. Fetch failures end the callback subscription or
+throwing asynchronous sequence; they never roll back the write whose final state was being fetched.
+
+For transaction lifecycle events that do not produce a value, register a
+`DatabaseTransactionObserver` directly with any `SQLiteObservableDatabase`. Its `databaseWillCommit`
+hook receives a read-only view of the pending transaction and may throw to abort the write;
+`databaseDidCommit` identifies the transaction's local or external origin.
+
 ## Cross-process transport
 
 The package includes a public, configurable Unix-domain datagram transport. Processes that need to
@@ -353,5 +419,5 @@ Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise 
 writing task's cancellation, since peers still need to learn about a commit that happened. A write
 that throws is rolled back by its driver and is not announced.
 
-Databases do not yet subscribe to their peers. Announcing is one-way for now, and receiving will
-arrive with observation, which is what gives an incoming announcement something to do.
+An observed `InterprocessDatabase` also subscribes to its peers. Incoming announcements are exposed
+as external transaction events and cause active value observations to refetch.

@@ -1,0 +1,557 @@
+/// Why a value observation fetched a value.
+public enum ValueObservationSource: Hashable, Sendable {
+  /// The fetch that establishes an observation's initial value.
+  case initial
+
+  /// A fetch associated with a committed transaction.
+  case transaction(DatabaseTransactionOrigin)
+}
+
+/// A value emitted by an observation, together with the event that prompted its fetch.
+public struct ValueObservationChange<Value: Sendable>: Sendable {
+  public let value: Value
+  public let source: ValueObservationSource
+
+  public init(value: Value, source: ValueObservationSource) {
+    self.value = value
+    self.source = source
+  }
+}
+
+extension ValueObservationChange: Equatable where Value: Equatable {}
+extension ValueObservationChange: Hashable where Value: Hashable {}
+
+/// A query that is fetched initially and again whenever the observed database changes.
+public struct ValueObservation<Value: Sendable>: Sendable {
+  private let definition: ValueObservationDefinition<Value>
+
+  private init(
+    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
+    duplicatePredicate: (@Sendable (Value, Value) -> Bool)? = nil,
+    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool = { _ in true }
+  ) {
+    self.definition = ValueObservationDefinition(
+      fetch: fetch,
+      duplicatePredicate: duplicatePredicate,
+      shouldFetch: shouldFetch
+    )
+  }
+
+  /// Creates an observation whose value is produced by `fetch`.
+  public static func tracking(
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    Self(fetch: fetch)
+  }
+
+  /// Suppresses a value when `predicate` considers it equal to the preceding emitted value.
+  public func removeDuplicates(
+    by predicate: @escaping @Sendable (Value, Value) -> Bool
+  ) -> Self {
+    Self(
+      fetch: definition.fetch,
+      duplicatePredicate: predicate,
+      shouldFetch: definition.shouldFetch
+    )
+  }
+
+  /// Skips fetching after committed transactions for which `predicate` returns `false`.
+  ///
+  /// The initial value is always fetched. Inspect ``DatabaseCommit/origin`` to distinguish a
+  /// notification sent by this process from one sent by another process.
+  public func filterTransactions(
+    _ predicate: @escaping @Sendable (DatabaseCommit) -> Bool
+  ) -> Self {
+    let previousPredicate = definition.shouldFetch
+    return Self(
+      fetch: definition.fetch,
+      duplicatePredicate: definition.duplicatePredicate,
+      shouldFetch: { previousPredicate($0) && predicate($0) }
+    )
+  }
+
+  /// Starts this observation and delivers its changes through callbacks.
+  ///
+  /// The initial fetch begins after the transaction observer is registered, so a commit cannot
+  /// fall into a gap between fetching and listening. Callbacks are serialized and delivered
+  /// asynchronously. A fetch error calls `onError` and ends this subscription.
+  @discardableResult
+  public func subscribe<Database: SQLiteObservableDatabase>(
+    to database: Database,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
+  ) throws -> SQLiteCrossSubscription {
+    let runtime = try definition.runtime(for: database)
+    let subscription = runtime.addSubscriber(onError: onError, onChange: onChange)
+    runtime.fetchInitialValueIfNeeded()
+    return subscription
+  }
+
+  /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
+  public func changes<Database: SQLiteObservableDatabase>(
+    in database: Database
+  ) -> AsyncThrowingStream<ValueObservationChange<Value>, any Error> {
+    let holder = ValueObservationSubscriptionHolder()
+    return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+      do {
+        let subscription = try subscribe(
+          to: database,
+          onError: { continuation.finish(throwing: $0) },
+          onChange: { continuation.yield($0) }
+        )
+        holder.store(subscription)
+      } catch {
+        continuation.finish(throwing: error)
+      }
+      continuation.onTermination = { _ in holder.cancel() }
+    }
+  }
+
+  /// Returns an asynchronous sequence of observed values without their source metadata.
+  public func values<Database: SQLiteObservableDatabase>(
+    in database: Database
+  ) -> AsyncThrowingStream<Value, any Error> {
+    let holder = ValueObservationSubscriptionHolder()
+    return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+      do {
+        let subscription = try subscribe(
+          to: database,
+          onError: { continuation.finish(throwing: $0) },
+          onChange: { continuation.yield($0.value) }
+        )
+        holder.store(subscription)
+      } catch {
+        continuation.finish(throwing: error)
+      }
+      continuation.onTermination = { _ in holder.cancel() }
+    }
+  }
+}
+
+extension ValueObservation where Value: Equatable {
+  /// Suppresses consecutive equal values.
+  public func removeDuplicates() -> Self {
+    removeDuplicates(by: ==)
+  }
+}
+
+private final class ValueObservationDefinition<Value: Sendable>: Sendable {
+  let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  let duplicatePredicate: (@Sendable (Value, Value) -> Bool)?
+  let shouldFetch: @Sendable (DatabaseCommit) -> Bool
+
+  private struct WeakRuntime: Sendable {
+    let value: @Sendable () -> ValueObservationRuntime<Value>?
+
+    init(_ value: ValueObservationRuntime<Value>) {
+      self.value = { [weak value] in value }
+    }
+  }
+
+  private let runtimes = Lock<[ObjectIdentifier: WeakRuntime]>([:])
+
+  init(
+    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
+    duplicatePredicate: (@Sendable (Value, Value) -> Bool)?,
+    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool
+  ) {
+    self.fetch = fetch
+    self.duplicatePredicate = duplicatePredicate
+    self.shouldFetch = shouldFetch
+  }
+
+  func runtime<Database: SQLiteObservableDatabase>(
+    for database: Database
+  ) throws -> ValueObservationRuntime<Value> {
+    let identifier = ObjectIdentifier(database)
+    if let existing = activeRuntime(for: identifier) { return existing }
+
+    let candidate = ValueObservationRuntime(
+      database: database,
+      fetch: fetch,
+      duplicatePredicate: duplicatePredicate,
+      shouldFetch: shouldFetch
+    )
+    try candidate.install(on: database)
+
+    let selected = runtimes.withLock { runtimes in
+      if let existing = runtimes[identifier]?.value(), existing.isActive {
+        return existing
+      }
+      runtimes[identifier] = WeakRuntime(candidate)
+      return candidate
+    }
+    if selected !== candidate { candidate.stop() }
+    return selected
+  }
+
+  private func activeRuntime(
+    for identifier: ObjectIdentifier
+  ) -> ValueObservationRuntime<Value>? {
+    runtimes.withLock { runtimes in
+      guard let runtime = runtimes[identifier]?.value(), runtime.isActive else {
+        runtimes.removeValue(forKey: identifier)
+        return nil
+      }
+      return runtime
+    }
+  }
+}
+
+private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactionObserver {
+  private enum PendingLocal: Sendable {
+    case fetched(Result<Value, any Error>)
+    case skipped
+  }
+
+  private struct Subscriber: Sendable {
+    let onError: @Sendable (any Error) -> Void
+    let onChange: @Sendable (ValueObservationChange<Value>) -> Void
+  }
+
+  private enum SubscriberRegistration: Sendable {
+    case active(UInt64, ValueObservationChange<Value>?)
+    case failed(any Error)
+  }
+
+  private struct State: Sendable {
+    var nextSubscriberIdentifier: UInt64 = 0
+    var subscribers = [UInt64: Subscriber]()
+    var latest: ValueObservationChange<Value>?
+    var pendingLocal: PendingLocal?
+    var revision: UInt64 = 0
+    var readIsRequired = false
+    var readIsInFlight = false
+    var requiredReadSource = ValueObservationSource.initial
+    var publications = [Publication]()
+    var isDelivering = false
+    var terminalError: (any Error)?
+    var isStopped = false
+  }
+
+  private struct ReadRequest: Sendable {
+    let revision: UInt64
+    let source: ValueObservationSource
+  }
+
+  private enum Publication: Sendable {
+    case change(ValueObservationChange<Value>, [Subscriber])
+    case failure(any Error, [Subscriber])
+  }
+
+  private let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  private let read: @Sendable () async -> Result<Value, any Error>
+  private let duplicatePredicate: (@Sendable (Value, Value) -> Bool)?
+  private let shouldFetch: @Sendable (DatabaseCommit) -> Bool
+  private let state = Lock(State())
+  private let transactionSubscription = Lock<SQLiteCrossSubscription?>(nil)
+
+  init<Database: SQLiteObservableDatabase>(
+    database: Database,
+    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
+    duplicatePredicate: (@Sendable (Value, Value) -> Bool)?,
+    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool
+  ) {
+    self.fetch = fetch
+    self.duplicatePredicate = duplicatePredicate
+    self.shouldFetch = shouldFetch
+    self.read = {
+      do {
+        let value = try await database.read { transaction in
+          try fetch(transaction)
+        }
+        return .success(value)
+      } catch {
+        return .failure(error)
+      }
+    }
+  }
+
+  func install<Database: SQLiteObservableDatabase>(on database: Database) throws {
+    let observer = WeakValueObservationObserver(runtime: self)
+    let subscription = try database.subscribe(transactionObserver: observer)
+    transactionSubscription.withLock { $0 = subscription }
+  }
+
+  var isActive: Bool {
+    state.withLock { !$0.isStopped }
+  }
+
+  func addSubscriber(
+    onError: @escaping @Sendable (any Error) -> Void,
+    onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
+  ) -> SQLiteCrossSubscription {
+    let subscriber = Subscriber(onError: onError, onChange: onChange)
+    let registration = state.withLock { state -> SubscriberRegistration in
+      if let error = state.terminalError { return .failed(error) }
+      precondition(!state.isStopped, "cannot subscribe to a discarded observation runtime")
+      let identifier = state.nextSubscriberIdentifier
+      state.nextSubscriberIdentifier &+= 1
+      state.subscribers[identifier] = subscriber
+      return .active(identifier, state.latest)
+    }
+    switch registration {
+    case .active(let identifier, let latest):
+      if let latest {
+        deliver(.change(latest, [subscriber]))
+      }
+      return SQLiteCrossSubscription { [self] in removeSubscriber(identifier) }
+    case .failed(let error):
+      deliver(.failure(error, [subscriber]))
+      return SQLiteCrossSubscription {}
+    }
+  }
+
+  func fetchInitialValueIfNeeded() {
+    let request = state.withLock { state -> ReadRequest? in
+      guard
+        !state.isStopped,
+        state.latest == nil,
+        !state.readIsInFlight,
+        !state.readIsRequired
+      else { return nil }
+      state.readIsRequired = true
+      state.requiredReadSource = .initial
+      return takeReadRequestIfPossible(state: &state)
+    }
+    start(request)
+  }
+
+  func databaseWillCommit(
+    _ transaction: borrowing SQLiteReadTransaction
+  ) throws {
+    let commit = DatabaseCommit(origin: .local)
+    guard shouldFetch(commit) else {
+      state.withLock { state in
+        guard !state.isStopped else { return }
+        state.pendingLocal = .skipped
+      }
+      return
+    }
+    let result = Result { try fetch(transaction) }
+    state.withLock { state in
+      guard !state.isStopped else { return }
+      state.pendingLocal = .fetched(result)
+    }
+  }
+
+  func databaseDidCommit(_ commit: DatabaseCommit) {
+    switch commit.origin {
+    case .local:
+      let pending = state.withLock { $0.pendingLocal.take() }
+      switch pending {
+      case .skipped:
+        return
+      case .fetched(let result):
+        publishLocal(result)
+        return
+      case nil:
+        guard shouldFetch(commit) else { return }
+        requestRead(source: .transaction(.local))
+        return
+      }
+
+    case .external:
+      guard shouldFetch(commit) else { return }
+      requestRead(source: .transaction(.external))
+    }
+  }
+
+  private func publishLocal(_ result: Result<Value, any Error>) {
+    let publication = state.withLock { state -> Publication? in
+      guard !state.isStopped else { return nil }
+      state.revision &+= 1
+      // The fetch inside this transaction includes every commit visible before this one, so it
+      // also satisfies an older external invalidation whose read has not completed yet.
+      state.readIsRequired = false
+      return accept(result, source: .transaction(.local), state: &state)
+    }
+    if let publication { deliver(publication) }
+  }
+
+  func databaseDidRollback() {
+    state.withLock { $0.pendingLocal = nil }
+  }
+
+  private func requestRead(source: ValueObservationSource) {
+    let request = state.withLock { state -> ReadRequest? in
+      guard !state.isStopped else { return nil }
+      state.revision &+= 1
+      state.readIsRequired = true
+      state.requiredReadSource = source
+      return takeReadRequestIfPossible(state: &state)
+    }
+    start(request)
+  }
+
+  private func takeReadRequestIfPossible(state: inout State) -> ReadRequest? {
+    guard state.readIsRequired, !state.readIsInFlight else { return nil }
+    state.readIsRequired = false
+    state.readIsInFlight = true
+    return ReadRequest(revision: state.revision, source: state.requiredReadSource)
+  }
+
+  private func start(_ request: ReadRequest?) {
+    guard let request else { return }
+    Task { [weak self] in
+      guard let self else { return }
+      let result = await read()
+      completeRead(result, request: request)
+    }
+  }
+
+  private func completeRead(
+    _ result: Result<Value, any Error>,
+    request: ReadRequest
+  ) {
+    let completed = state.withLock { state -> (Publication?, ReadRequest?) in
+      guard !state.isStopped else { return (nil, nil) }
+      state.readIsInFlight = false
+      let publication =
+        request.revision == state.revision
+        ? accept(result, source: request.source, state: &state)
+        : nil
+      return (publication, takeReadRequestIfPossible(state: &state))
+    }
+    if let publication = completed.0 { deliver(publication) }
+    start(completed.1)
+  }
+
+  private func accept(
+    _ result: Result<Value, any Error>,
+    source: ValueObservationSource,
+    state: inout State
+  ) -> Publication? {
+    switch result {
+    case .success(let value):
+      if let latest = state.latest, let duplicatePredicate,
+        duplicatePredicate(latest.value, value)
+      {
+        return nil
+      }
+      let change = ValueObservationChange(value: value, source: source)
+      state.latest = change
+      return .change(change, Array(state.subscribers.values))
+
+    case .failure(let error):
+      state.isStopped = true
+      state.terminalError = error
+      let subscribers = Array(state.subscribers.values)
+      state.subscribers.removeAll()
+      return .failure(error, subscribers)
+    }
+  }
+
+  private func deliver(_ publication: Publication) {
+    if case .failure = publication {
+      stopObservingTransactions()
+    }
+    let shouldStartDelivery = state.withLock { state in
+      state.publications.append(publication)
+      guard !state.isDelivering else { return false }
+      state.isDelivering = true
+      return true
+    }
+    guard shouldStartDelivery else { return }
+    Task { [weak self] in self?.deliverPublications() }
+  }
+
+  private func deliverPublications() {
+    while let publication = state.withLock({ state -> Publication? in
+      guard !state.publications.isEmpty else {
+        state.isDelivering = false
+        return nil
+      }
+      return state.publications.removeFirst()
+    }) {
+      switch publication {
+      case .change(let change, let subscribers):
+        for subscriber in subscribers {
+          subscriber.onChange(change)
+        }
+      case .failure(let error, let subscribers):
+        for subscriber in subscribers {
+          subscriber.onError(error)
+        }
+      }
+    }
+  }
+
+  private func removeSubscriber(_ identifier: UInt64) {
+    _ = state.withLock { $0.subscribers.removeValue(forKey: identifier) }
+  }
+
+  func stop() {
+    let shouldStop = state.withLock { state in
+      guard !state.isStopped else { return false }
+      state.isStopped = true
+      state.subscribers.removeAll()
+      return true
+    }
+    if shouldStop { stopObservingTransactions() }
+  }
+
+  private func stopObservingTransactions() {
+    let subscription = transactionSubscription.withLock { subscription in
+      defer { subscription = nil }
+      return subscription
+    }
+    subscription?.cancel()
+  }
+}
+
+private final class WeakValueObservationObserver<Value: Sendable>: DatabaseTransactionObserver {
+  private let runtime: @Sendable () -> ValueObservationRuntime<Value>?
+
+  init(runtime: ValueObservationRuntime<Value>) {
+    self.runtime = { [weak runtime] in runtime }
+  }
+
+  func databaseWillCommit(
+    _ transaction: borrowing SQLiteReadTransaction
+  ) throws {
+    try runtime()?.databaseWillCommit(transaction)
+  }
+
+  func databaseDidCommit(_ commit: DatabaseCommit) {
+    runtime()?.databaseDidCommit(commit)
+  }
+
+  func databaseDidRollback() {
+    runtime()?.databaseDidRollback()
+  }
+}
+
+private final class ValueObservationSubscriptionHolder: Sendable {
+  private struct State: Sendable {
+    var subscription: SQLiteCrossSubscription?
+    var isCancelled = false
+  }
+
+  private let state = Lock(State())
+
+  func store(_ subscription: SQLiteCrossSubscription) {
+    let cancelImmediately = state.withLock { state in
+      if state.isCancelled { return true }
+      state.subscription = subscription
+      return false
+    }
+    if cancelImmediately { subscription.cancel() }
+  }
+
+  func cancel() {
+    let subscription = state.withLock { state in
+      state.isCancelled = true
+      defer { state.subscription = nil }
+      return state.subscription
+    }
+    subscription?.cancel()
+  }
+}
+
+extension Optional {
+  fileprivate mutating func take() -> Wrapped? {
+    defer { self = nil }
+    return self
+  }
+}
