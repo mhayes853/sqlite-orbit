@@ -31,9 +31,9 @@ extension ValueObservationBufferingPolicy {
 /// elements with each other.
 ///
 /// An element that arrives while the consumer is busy is buffered according to a
-/// ``ValueObservationBufferingPolicy``. The default policy keeps only the newest element, so a slow
-/// consumer skips ahead to the current state of the database instead of replaying every
-/// intermediate one.
+/// ``ValueObservationBufferingPolicy``. Elements are buffered without bound by default, so a slow
+/// consumer still sees every one of them; buffer the newest element only to have it skip ahead to
+/// the current state of the database instead.
 public struct ValueObservationSequence<Element: Sendable>: AsyncSequence, Sendable {
   public typealias Failure = any Error
 

@@ -37,6 +37,50 @@ private enum ValueObservationPrevious<Value: Sendable>: Sendable {
 private struct ValueObservationReducer<Value: Sendable>: Sendable {
   let reduce: @Sendable (any Sendable) throws -> ValueObservationReduction<Value>
   let transactionNeedsFetch: @Sendable (DatabaseCommit) -> Bool
+  var events = ValueObservationEvents()
+}
+
+/// One `handleEvents` operator's callbacks.
+private struct ValueObservationEventHandler: Sendable {
+  let willStart: (@Sendable () -> Void)?
+  let willFetch: (@Sendable () -> Void)?
+  let databaseDidChange: (@Sendable () -> Void)?
+  let didFail: (@Sendable (any Error) -> Void)?
+  let didCancel: (@Sendable () -> Void)?
+}
+
+/// The lifecycle callbacks a chain of operators installed, in the order they were written.
+///
+/// These are the events the runtime raises for itself rather than for one value, so unlike
+/// ``ValueObservationReducer/reduce`` they cannot live at a single position in the chain.
+private struct ValueObservationEvents: Sendable {
+  private var handlers = [ValueObservationEventHandler]()
+
+  func appending(_ handler: ValueObservationEventHandler) -> Self {
+    var events = self
+    events.handlers.append(handler)
+    return events
+  }
+
+  func willStart() {
+    for handler in handlers { handler.willStart?() }
+  }
+
+  func willFetch() {
+    for handler in handlers { handler.willFetch?() }
+  }
+
+  func databaseDidChange() {
+    for handler in handlers { handler.databaseDidChange?() }
+  }
+
+  func didFail(_ error: any Error) {
+    for handler in handlers { handler.didFail?(error) }
+  }
+
+  func didCancel() {
+    for handler in handlers { handler.didCancel?() }
+  }
 }
 
 /// A query that is fetched initially and again whenever the observed database changes.
@@ -93,7 +137,8 @@ public struct ValueObservation<Value: Sendable>: Sendable {
               return .skip
             }
           },
-          transactionNeedsFetch: upstream.transactionNeedsFetch
+          transactionNeedsFetch: upstream.transactionNeedsFetch,
+          events: upstream.events
         )
       }
     )
@@ -119,7 +164,8 @@ public struct ValueObservation<Value: Sendable>: Sendable {
               return .skip
             }
           },
-          transactionNeedsFetch: upstream.transactionNeedsFetch
+          transactionNeedsFetch: upstream.transactionNeedsFetch,
+          events: upstream.events
         )
       }
     )
@@ -145,7 +191,8 @@ public struct ValueObservation<Value: Sendable>: Sendable {
               return .skip
             }
           },
-          transactionNeedsFetch: upstream.transactionNeedsFetch
+          transactionNeedsFetch: upstream.transactionNeedsFetch,
+          events: upstream.events
         )
       }
     )
@@ -181,7 +228,8 @@ public struct ValueObservation<Value: Sendable>: Sendable {
               return .skip
             }
           },
-          transactionNeedsFetch: upstream.transactionNeedsFetch
+          transactionNeedsFetch: upstream.transactionNeedsFetch,
+          events: upstream.events
         )
       }
     )
@@ -234,7 +282,59 @@ public struct ValueObservation<Value: Sendable>: Sendable {
               }
             }
             return predicate(commit, previousValue)
-          }
+          },
+          events: upstream.events
+        )
+      }
+    )
+  }
+
+  /// Returns an observation that runs the given callbacks as it works.
+  ///
+  /// The callbacks are for tracing an observation, not for reacting to its values: they run
+  /// wherever the observation happens to be working, including inside a write transaction for
+  /// `willFetch`, so they should do as little as possible. `didReceiveValue` sees values at this
+  /// operator's position in the chain, so a value an upstream ``filter(_:)`` or
+  /// ``removeDuplicates()`` suppressed never reaches it.
+  ///
+  /// Subscribers to one observation and database share a single runtime, and these are that
+  /// runtime's events rather than any one subscriber's. `willStart` runs for the fetch that the
+  /// first subscriber triggers, and `didCancel` runs when the last subscriber goes away; a
+  /// subscriber that joins or leaves in between raises neither.
+  ///
+  /// The order of `willFetch` and `databaseDidChange` depends on where the write came from. A
+  /// local write is fetched inside its transaction, before the commit that the observation
+  /// reports, so `willFetch` precedes `databaseDidChange`. Every other fetch follows the commit
+  /// that prompted it.
+  public func handleEvents(
+    willStart: (@Sendable () -> Void)? = nil,
+    willFetch: (@Sendable () -> Void)? = nil,
+    databaseDidChange: (@Sendable () -> Void)? = nil,
+    didReceiveValue: (@Sendable (Value) -> Void)? = nil,
+    didFail: (@Sendable (any Error) -> Void)? = nil,
+    didCancel: (@Sendable () -> Void)? = nil
+  ) -> Self {
+    let definition = self.definition
+    return Self(
+      fetch: definition.fetch,
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        return ValueObservationReducer(
+          reduce: { payload in
+            let reduction = try upstream.reduce(payload)
+            if case .emit(let value) = reduction { didReceiveValue?(value) }
+            return reduction
+          },
+          transactionNeedsFetch: upstream.transactionNeedsFetch,
+          events: upstream.events.appending(
+            ValueObservationEventHandler(
+              willStart: willStart,
+              willFetch: willFetch,
+              databaseDidChange: databaseDidChange,
+              didFail: didFail,
+              didCancel: didCancel
+            )
+          )
         )
       }
     )
@@ -331,10 +431,10 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   ///
   /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
   /// survive when the observation produces them faster than the sequence is consumed; by default
-  /// only the newest element is kept.
+  /// every one of them is kept.
   public func changes<Database: SQLiteObservableDatabase>(
     in database: Database,
-    bufferingPolicy: ValueObservationBufferingPolicy = .bufferingNewest(1)
+    bufferingPolicy: ValueObservationBufferingPolicy = .unbounded
   ) -> ValueObservationSequence<ValueObservationChange<Value>> {
     ValueObservationSequence(bufferingPolicy: bufferingPolicy) { onError, onChange in
       try subscribe(to: database, onError: onError, onChange: onChange)
@@ -345,10 +445,10 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   ///
   /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
   /// survive when the observation produces them faster than the sequence is consumed; by default
-  /// only the newest element is kept.
+  /// every one of them is kept.
   public func values<Database: SQLiteObservableDatabase>(
     in database: Database,
-    bufferingPolicy: ValueObservationBufferingPolicy = .bufferingNewest(1)
+    bufferingPolicy: ValueObservationBufferingPolicy = .unbounded
   ) -> ValueObservationSequence<Value> {
     ValueObservationSequence(bufferingPolicy: bufferingPolicy) { onError, onValue in
       try subscribe(
@@ -458,6 +558,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private struct State: Sendable {
+    var didStart = false
     var nextSubscriberIdentifier: UInt64 = 0
     var subscribers = [UInt64: Subscriber]()
     var latest: ValueObservationChange<Value>?
@@ -487,6 +588,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   private let read: @Sendable () async -> Result<any Sendable, any Error>
   private let readBlocking: @Sendable () -> Result<any Sendable, any Error>
   private let reducer: ValueObservationReducer<Value>
+  private var events: ValueObservationEvents { reducer.events }
   private let state = Lock(State())
   private let transactionSubscription = Lock<SQLiteCrossSubscription?>(nil)
 
@@ -558,31 +660,34 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   func fetchInitialValueIfNeeded() {
-    let request = state.withLock { state -> ReadRequest? in
+    let started = state.withLock { state -> (request: ReadRequest?, didStart: Bool) in
       guard
         !state.isStopped,
         !state.initialFetchCompleted,
         !state.readIsInFlight,
         !state.readIsRequired
-      else { return nil }
+      else { return (nil, false) }
       state.readIsRequired = true
       state.requiredReadSource = .initial
-      return takeReadRequestIfPossible(state: &state)
+      return (takeReadRequestIfPossible(state: &state), takeDidStart(state: &state))
     }
-    start(request)
+    if started.didStart { events.willStart() }
+    start(started.request)
   }
 
   func fetchInitialValueImmediatelyIfNeeded(
     isolation: isolated (any Actor)?
   ) {
-    let shouldFetch = state.withLock { state in
-      guard !state.isStopped, !state.initialFetchCompleted else { return false }
+    let started = state.withLock { state -> (shouldFetch: Bool, didStart: Bool) in
+      guard !state.isStopped, !state.initialFetchCompleted else { return (false, false) }
       // Discard an older asynchronous fetch if one is already in flight.
       state.revision &+= 1
-      return true
+      return (true, takeDidStart(state: &state))
     }
-    guard shouldFetch else { return }
+    guard started.shouldFetch else { return }
 
+    if started.didStart { events.willStart() }
+    events.willFetch()
     let result = readBlocking()
     let completion = state.withLock { state -> (deliver: Bool, stop: Bool) in
       guard !state.isStopped, !state.initialFetchCompleted,
@@ -607,6 +712,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       }
       return
     }
+    events.willFetch()
     let result = Result { try fetch(transaction) }
     state.withLock { state in
       guard !state.isStopped else { return }
@@ -622,16 +728,19 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       case .skipped:
         return
       case .fetched(let result):
+        events.databaseDidChange()
         publishLocal(result)
         return
       case nil:
         guard transactionNeedsFetch(commit) else { return }
+        events.databaseDidChange()
         requestRead(source: .transaction(.local))
         return
       }
 
     case .external:
       guard transactionNeedsFetch(commit) else { return }
+      events.databaseDidChange()
       requestRead(source: .transaction(.external))
     }
   }
@@ -667,6 +776,12 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     start(request)
   }
 
+  private func takeDidStart(state: inout State) -> Bool {
+    guard !state.didStart else { return false }
+    state.didStart = true
+    return true
+  }
+
   private func takeReadRequestIfPossible(state: inout State) -> ReadRequest? {
     guard
       !state.isStopped,
@@ -682,6 +797,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     guard let request else { return }
     Task { [weak self] in
       guard let self else { return }
+      events.willFetch()
       let result = await read()
       completeRead(result, request: request)
     }
@@ -778,6 +894,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
           subscriber.receive(change, from: isolation)
         }
       case .failure(let error, let subscribers):
+        events.didFail(error)
         for subscriber in subscribers {
           subscriber.receive(error, from: isolation)
         }
@@ -786,7 +903,11 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private func removeSubscriber(_ identifier: UInt64) {
-    _ = state.withLock { $0.subscribers.removeValue(forKey: identifier) }
+    let didCancel = state.withLock { state in
+      guard state.subscribers.removeValue(forKey: identifier) != nil else { return false }
+      return state.subscribers.isEmpty && !state.isStopped
+    }
+    if didCancel { events.didCancel() }
   }
 
   func stop() {

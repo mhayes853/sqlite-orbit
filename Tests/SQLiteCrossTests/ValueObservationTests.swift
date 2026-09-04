@@ -628,9 +628,9 @@
     }
 
     @Test
-    func unboundedBufferingPolicyKeepsEveryPendingChange() async throws {
+    func theSequencesBufferEveryPendingChangeByDefault() async throws {
       let driver = try await itemsDatabase()
-      let changes = itemCountObservation().changes(in: driver, bufferingPolicy: .unbounded)
+      let changes = itemCountObservation().changes(in: driver)
       var iterator = changes.makeAsyncIterator()
       #expect(try await iterator.next()?.value == 0)
 
@@ -650,7 +650,9 @@
     @Test
     func bufferingModifierOverridesTheSequencePolicy() async throws {
       let driver = try await itemsDatabase()
-      let values = itemCountObservation().values(in: driver).buffering(.unbounded)
+      let values = itemCountObservation()
+        .values(in: driver, bufferingPolicy: .bufferingNewest(1))
+        .buffering(.unbounded)
       var iterator = values.makeAsyncIterator()
       #expect(try await iterator.next() == 0)
 
@@ -683,6 +685,113 @@
       var iterator = values.makeAsyncIterator()
       #expect(try await iterator.next() == 0)
       #expect(fetchCount.withLock { $0 } == 1)
+    }
+
+    @Test
+    func handleEventsReportsTheRuntimeLifecycle() async throws {
+      let driver = try await itemsDatabase()
+      let events = Mutex([String]())
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .handleEvents(
+          willStart: { events.withLock { $0.append("willStart") } },
+          willFetch: { events.withLock { $0.append("willFetch") } },
+          databaseDidChange: { events.withLock { $0.append("databaseDidChange") } },
+          didReceiveValue: { value in events.withLock { $0.append("didReceiveValue(\(value))") } },
+          didFail: { _ in events.withLock { $0.append("didFail") } },
+          didCancel: { events.withLock { $0.append("didCancel") } }
+        )
+        .subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try await recorder.waitForChangeCount(1)
+      #expect(events.withLock { $0 } == ["willStart", "willFetch", "didReceiveValue(0)"])
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+      // A local write is fetched inside its own transaction, so its fetch precedes the commit.
+      #expect(
+        events.withLock { $0 } == [
+          "willStart",
+          "willFetch",
+          "didReceiveValue(0)",
+          "willFetch",
+          "databaseDidChange",
+          "didReceiveValue(1)"
+        ]
+      )
+
+      subscription.cancel()
+      #expect(events.withLock { $0 }.last == "didCancel")
+    }
+
+    @Test
+    func handleEventsSkipsFetchesTheObservationDoesNotMake() async throws {
+      let driver = try await itemsDatabase()
+      let events = Mutex([String]())
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .filterTransactions { _ in false }
+        .handleEvents(
+          willFetch: { events.withLock { $0.append("willFetch") } },
+          databaseDidChange: { events.withLock { $0.append("databaseDidChange") } }
+        )
+        .subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try await recorder.waitForChangeCount(1)
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(events.withLock { $0 } == ["willFetch"])
+      #expect(recorder.changes.map(\.value) == [0])
+      _ = subscription
+    }
+
+    @Test
+    func handleEventsSurvivesDownstreamOperators() async throws {
+      let driver = try await itemsDatabase()
+      let values = Mutex([Int]())
+      let recorder = ObservationRecorder<String>()
+      let subscription = try itemCountObservation()
+        .handleEvents(didReceiveValue: { value in values.withLock { $0.append(value) } })
+        .map { "count=\($0)" }
+        .subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try await recorder.waitForChangeCount(1)
+
+      // The operator sees the value at its own position in the chain, before `map` runs.
+      #expect(values.withLock { $0 } == [0])
+      #expect(recorder.changes.map(\.value) == ["count=0"])
+      _ = subscription
+    }
+
+    @Test
+    func handleEventsReportsAFetchFailure() async throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      let failures = Mutex(0)
+      let values = itemCountObservation()
+        .handleEvents(didFail: { _ in failures.withLock { $0 += 1 } })
+        .values(in: driver)
+      var iterator = values.makeAsyncIterator()
+
+      await #expect(throws: (any Error).self) {
+        _ = try await iterator.next()
+      }
+      #expect(failures.withLock { $0 } == 1)
     }
 
     @Test
