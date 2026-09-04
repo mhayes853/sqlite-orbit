@@ -294,8 +294,20 @@ let subscription = try reminders.subscribe(
 ```
 
 Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
-subscribers to the same observation and database share one fetch. `removeDuplicates()` suppresses
-consecutive equal values; `removeDuplicates(by:)` accepts a custom comparison.
+subscribers to the same observation and database share one fetch. Observations support ordered,
+non-terminal transformations after each database fetch has ended:
+
+```swift
+let titles = reminders
+  .filter { !$0.isEmpty }
+  .compactMap { $0.first?.title }
+  .map { $0.uppercased() }
+  .removeDuplicates()
+```
+
+`filter` and `compactMap` suppress individual values without ending the observation. A thrown
+operator error ends it. Operators run in their written order, and every emitted change keeps the
+source metadata of the fetched value. `removeDuplicates(by:)` accepts a custom comparison.
 
 Callback delivery is scheduled with Swift concurrency. The default `.async()` scheduler uses the
 cooperative executor; `.async(on:)` targets an actor, and `.mainActor` is the main-actor spelling.
@@ -336,6 +348,16 @@ fetched:
 ```swift
 let remoteReminders = reminders.filterTransactions { commit in
   commit.origin == .external
+}
+```
+
+The predicate can also inspect the latest value accepted at that point in the operator chain. It is
+`nil` until the first value is produced there, and values suppressed by an earlier operator do not
+replace it:
+
+```swift
+let staleReminders = reminders.filterTransactions { commit, previousValue in
+  commit.origin == .external || previousValue?.contains(where: \.isStale) == true
 }
 ```
 

@@ -303,6 +303,42 @@
     }
 
     @Test
+    func transactionFilterReceivesThePreviousAcceptedValue() async throws {
+      let driver = try await itemsDatabase()
+      let previousValues = Mutex([Int?]())
+      let fetchCount = Mutex(0)
+      let observation = ValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .removeDuplicates(by: { _, _ in true })
+        .filterTransactions { _, previousValue in
+          previousValues.withLock { $0.append(previousValue) }
+          return true
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+      }
+
+      #expect(previousValues.withLock { $0 } == [0, 0])
+      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(recorder.changes.map(\.value) == [0])
+      _ = subscription
+    }
+
+    @Test
     func interprocessObservationSeesSiblingHandleWriteAsLocal() async throws {
       let directory = FileManager.default.temporaryDirectory
         .appending(component: UUID().uuidString, directoryHint: .isDirectory)
@@ -420,6 +456,175 @@
       }
 
       #expect(try await iterator.next()?.value == 1)
+    }
+
+    @Test
+    func mapTransformsValuesAndPreservesTheirSources() throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let recorder = ObservationRecorder<String>()
+      let subscription = try itemCountObservation()
+        .map { "count=\($0)" }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(recorder.changes.map(\.value) == ["count=0", "count=1"])
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func filterSuppressesValuesWithoutRepeatingTheSharedInitialFetch() throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let fetchCount = Mutex(0)
+      let observation = ValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .filter { $0 > 0 }
+      let first = ObservationRecorder<Int>()
+      let second = ObservationRecorder<Int>()
+      let subscriptions = try [
+        observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: first.record(error:),
+          onChange: first.record(change:)
+        ),
+        observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: second.record(error:),
+          onChange: second.record(change:)
+        )
+      ]
+
+      #expect(first.changes.isEmpty)
+      #expect(second.changes.isEmpty)
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(first.changes.map(\.value) == [1])
+      #expect(second.changes.map(\.value) == [1])
+      #expect(first.changes.map(\.source) == [.transaction(.local)])
+      #expect(fetchCount.withLock { $0 } == 2)
+      _ = subscriptions
+    }
+
+    @Test
+    func compactMapSuppressesNilAndTransformsNonNilValues() throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let recorder = ObservationRecorder<String>()
+      let subscription = try ValueObservation<Int?>
+        .tracking { transaction in
+          let count = try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+          return count == 0 ? nil : count
+        }
+        .compactMap { $0.map { "count=\($0)" } }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      #expect(recorder.changes.isEmpty)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(recorder.changes.map(\.value) == ["count=1"])
+      #expect(recorder.changes.map(\.source) == [.transaction(.local)])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func operatorsRunInTheirWrittenOrder() throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let transformCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .removeDuplicates(by: { _, _ in true })
+        .map { value in
+          transformCount.withLock { $0 += 1 }
+          return value
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(recorder.changes.map(\.value) == [0])
+      #expect(transformCount.withLock { $0 } == 1)
+      _ = subscription
+    }
+
+    @Test
+    func throwingTransformEndsObservationAfterTheWriteCommits() throws {
+      struct TransformError: Error {}
+
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .map { value in
+          if value > 0 { throw TransformError() }
+          return value
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+      }
+      let count = try driver.readBlocking { transaction in
+        try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+      }
+
+      #expect(count == 2)
+      #expect(recorder.changes.map(\.value) == [0])
+      #expect(recorder.errors.count == 1)
+      _ = subscription
     }
 
     @Test

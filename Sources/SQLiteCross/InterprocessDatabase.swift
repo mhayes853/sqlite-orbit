@@ -58,7 +58,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
   ) async throws -> Result {
     let result = try await writer.write(body)
     reportLocalCommit()
-    await Task { [self] in await announceCommittedTransaction() }.value
+    await Task { await self.announceCommittedTransaction() }.value
     return result
   }
 
@@ -71,7 +71,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
   ) throws -> Result {
     let result = try writer.writeBlocking(body)
     reportLocalCommit()
-    Task { [self] in await announceCommittedTransaction() }
+    Task { await self.announceCommittedTransaction() }
     return result
   }
 

@@ -21,19 +21,35 @@ public struct ValueObservationChange<Value: Sendable>: Sendable {
 extension ValueObservationChange: Equatable where Value: Equatable {}
 extension ValueObservationChange: Hashable where Value: Hashable {}
 
+private typealias ValueObservationFetch =
+  @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable
+
+private enum ValueObservationReduction<Value: Sendable>: Sendable {
+  case emit(Value)
+  case skip
+}
+
+private enum ValueObservationPrevious<Value: Sendable>: Sendable {
+  case none
+  case value(Value)
+}
+
+private struct ValueObservationReducer<Value: Sendable>: Sendable {
+  let reduce: @Sendable (any Sendable) throws -> ValueObservationReduction<Value>
+  let transactionNeedsFetch: @Sendable (DatabaseCommit) -> Bool
+}
+
 /// A query that is fetched initially and again whenever the observed database changes.
 public struct ValueObservation<Value: Sendable>: Sendable {
   private let definition: ValueObservationDefinition<Value>
 
   private init(
-    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
-    duplicatePredicate: (@Sendable (Value, Value) -> Bool)? = nil,
-    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool = { _ in true }
+    fetch: @escaping ValueObservationFetch,
+    makeReducer: @escaping @Sendable () -> ValueObservationReducer<Value>
   ) {
     self.definition = ValueObservationDefinition(
       fetch: fetch,
-      duplicatePredicate: duplicatePredicate,
-      shouldFetch: shouldFetch
+      makeReducer: makeReducer
     )
   }
 
@@ -41,17 +57,133 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   public static func tracking(
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
-    Self(fetch: fetch)
+    Self(
+      fetch: fetch,
+      makeReducer: {
+        ValueObservationReducer(
+          reduce: { payload in
+            guard let value = payload as? Value else {
+              preconditionFailure("invalid value observation payload")
+            }
+            return .emit(value)
+          },
+          transactionNeedsFetch: { _ in true }
+        )
+      }
+    )
+  }
+
+  /// Transforms each value produced by this observation.
+  ///
+  /// The transform runs after the database access has ended. A thrown error ends the observation.
+  public func map<Output: Sendable>(
+    _ transform: @escaping @Sendable (Value) throws -> Output
+  ) -> ValueObservation<Output> {
+    let definition = self.definition
+    return ValueObservation<Output>(
+      fetch: definition.fetch,
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        return ValueObservationReducer<Output>(
+          reduce: { payload in
+            switch try upstream.reduce(payload) {
+            case .emit(let value):
+              return .emit(try transform(value))
+            case .skip:
+              return .skip
+            }
+          },
+          transactionNeedsFetch: upstream.transactionNeedsFetch
+        )
+      }
+    )
+  }
+
+  /// Produces only the values that satisfy `predicate`.
+  ///
+  /// The predicate runs after the database access has ended. A thrown error ends the observation.
+  public func filter(
+    _ predicate: @escaping @Sendable (Value) throws -> Bool
+  ) -> Self {
+    let definition = self.definition
+    return Self(
+      fetch: definition.fetch,
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        return ValueObservationReducer(
+          reduce: { payload in
+            switch try upstream.reduce(payload) {
+            case .emit(let value):
+              return try predicate(value) ? .emit(value) : .skip
+            case .skip:
+              return .skip
+            }
+          },
+          transactionNeedsFetch: upstream.transactionNeedsFetch
+        )
+      }
+    )
+  }
+
+  /// Transforms each value and suppresses `nil` results.
+  ///
+  /// The transform runs after the database access has ended. A thrown error ends the observation.
+  public func compactMap<Output: Sendable>(
+    _ transform: @escaping @Sendable (Value) throws -> Output?
+  ) -> ValueObservation<Output> {
+    let definition = self.definition
+    return ValueObservation<Output>(
+      fetch: definition.fetch,
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        return ValueObservationReducer<Output>(
+          reduce: { payload in
+            switch try upstream.reduce(payload) {
+            case .emit(let value):
+              return try transform(value).map(ValueObservationReduction.emit) ?? .skip
+            case .skip:
+              return .skip
+            }
+          },
+          transactionNeedsFetch: upstream.transactionNeedsFetch
+        )
+      }
+    )
   }
 
   /// Suppresses a value when `predicate` considers it equal to the preceding emitted value.
   public func removeDuplicates(
     by predicate: @escaping @Sendable (Value, Value) -> Bool
   ) -> Self {
-    Self(
+    let definition = self.definition
+    return Self(
       fetch: definition.fetch,
-      duplicatePredicate: predicate,
-      shouldFetch: definition.shouldFetch
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        let previous = Lock<ValueObservationPrevious<Value>>(.none)
+        return ValueObservationReducer(
+          reduce: { payload in
+            switch try upstream.reduce(payload) {
+            case .emit(let value):
+              let isDuplicate = previous.withLock { previous in
+                switch previous {
+                case .none:
+                  previous = .value(value)
+                  return false
+                case .value(let previousValue):
+                  guard !predicate(previousValue, value) else { return true }
+                  previous = .value(value)
+                  return false
+                }
+              }
+              return isDuplicate ? .skip : .emit(value)
+            case .skip:
+              return .skip
+            }
+          },
+          transactionNeedsFetch: upstream.transactionNeedsFetch
+        )
+      }
     )
   }
 
@@ -62,11 +194,49 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   public func filterTransactions(
     _ predicate: @escaping @Sendable (DatabaseCommit) -> Bool
   ) -> Self {
-    let previousPredicate = definition.shouldFetch
+    filterTransactions { commit, _ in predicate(commit) }
+  }
+
+  /// Skips fetching after committed transactions for which `predicate` returns `false`.
+  ///
+  /// `previousValue` is the latest value accepted for delivery, or `nil` before the observation
+  /// produces its first value. A value suppressed by `removeDuplicates` does not replace it. The
+  /// initial value is always fetched.
+  public func filterTransactions(
+    _ predicate:
+      @escaping @Sendable (
+        _ commit: DatabaseCommit,
+        _ previousValue: Value?
+      ) -> Bool
+  ) -> Self {
+    let definition = self.definition
     return Self(
       fetch: definition.fetch,
-      duplicatePredicate: definition.duplicatePredicate,
-      shouldFetch: { previousPredicate($0) && predicate($0) }
+      makeReducer: {
+        let upstream = definition.makeReducer()
+        let previous = Lock<ValueObservationPrevious<Value>>(.none)
+        return ValueObservationReducer(
+          reduce: { payload in
+            let reduction = try upstream.reduce(payload)
+            if case .emit(let value) = reduction {
+              previous.withLock { $0 = .value(value) }
+            }
+            return reduction
+          },
+          transactionNeedsFetch: { commit in
+            guard upstream.transactionNeedsFetch(commit) else { return false }
+            let previousValue = previous.withLock { previous -> Value? in
+              switch previous {
+              case .none:
+                nil
+              case .value(let value):
+                value
+              }
+            }
+            return predicate(commit, previousValue)
+          }
+        )
+      }
     )
   }
 
@@ -206,9 +376,8 @@ extension ValueObservation where Value: Equatable {
 }
 
 private final class ValueObservationDefinition<Value: Sendable>: Sendable {
-  let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
-  let duplicatePredicate: (@Sendable (Value, Value) -> Bool)?
-  let shouldFetch: @Sendable (DatabaseCommit) -> Bool
+  let fetch: ValueObservationFetch
+  let makeReducer: @Sendable () -> ValueObservationReducer<Value>
 
   private struct WeakRuntime: Sendable {
     let value: @Sendable () -> ValueObservationRuntime<Value>?
@@ -221,13 +390,11 @@ private final class ValueObservationDefinition<Value: Sendable>: Sendable {
   private let runtimes = Lock<[ObjectIdentifier: WeakRuntime]>([:])
 
   init(
-    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
-    duplicatePredicate: (@Sendable (Value, Value) -> Bool)?,
-    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool
+    fetch: @escaping ValueObservationFetch,
+    makeReducer: @escaping @Sendable () -> ValueObservationReducer<Value>
   ) {
     self.fetch = fetch
-    self.duplicatePredicate = duplicatePredicate
-    self.shouldFetch = shouldFetch
+    self.makeReducer = makeReducer
   }
 
   func runtime<Database: SQLiteObservableDatabase>(
@@ -239,8 +406,7 @@ private final class ValueObservationDefinition<Value: Sendable>: Sendable {
     let candidate = ValueObservationRuntime(
       database: database,
       fetch: fetch,
-      duplicatePredicate: duplicatePredicate,
-      shouldFetch: shouldFetch
+      reducer: makeReducer()
     )
     try candidate.install(on: database)
 
@@ -270,7 +436,7 @@ private final class ValueObservationDefinition<Value: Sendable>: Sendable {
 
 private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactionObserver {
   private enum PendingLocal: Sendable {
-    case fetched(Result<Value, any Error>)
+    case fetched(Result<any Sendable, any Error>)
     case skipped
   }
 
@@ -303,6 +469,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     var nextSubscriberIdentifier: UInt64 = 0
     var subscribers = [UInt64: Subscriber]()
     var latest: ValueObservationChange<Value>?
+    var initialFetchCompleted = false
     var pendingLocal: PendingLocal?
     var revision: UInt64 = 0
     var readIsRequired = false
@@ -324,23 +491,20 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     case failure(any Error, [Subscriber])
   }
 
-  private let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
-  private let read: @Sendable () async -> Result<Value, any Error>
-  private let readBlocking: @Sendable () -> Result<Value, any Error>
-  private let duplicatePredicate: (@Sendable (Value, Value) -> Bool)?
-  private let shouldFetch: @Sendable (DatabaseCommit) -> Bool
+  private let fetch: ValueObservationFetch
+  private let read: @Sendable () async -> Result<any Sendable, any Error>
+  private let readBlocking: @Sendable () -> Result<any Sendable, any Error>
+  private let reducer: ValueObservationReducer<Value>
   private let state = Lock(State())
   private let transactionSubscription = Lock<SQLiteCrossSubscription?>(nil)
 
   init<Database: SQLiteObservableDatabase>(
     database: Database,
-    fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value,
-    duplicatePredicate: (@Sendable (Value, Value) -> Bool)?,
-    shouldFetch: @escaping @Sendable (DatabaseCommit) -> Bool
+    fetch: @escaping ValueObservationFetch,
+    reducer: ValueObservationReducer<Value>
   ) {
     self.fetch = fetch
-    self.duplicatePredicate = duplicatePredicate
-    self.shouldFetch = shouldFetch
+    self.reducer = reducer
     self.read = {
       do {
         let value = try await database.read { transaction in
@@ -405,7 +569,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     let request = state.withLock { state -> ReadRequest? in
       guard
         !state.isStopped,
-        state.latest == nil,
+        !state.initialFetchCompleted,
         !state.readIsInFlight,
         !state.readIsRequired
       else { return nil }
@@ -420,7 +584,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     isolation: isolated (any Actor)?
   ) {
     let shouldFetch = state.withLock { state in
-      guard !state.isStopped, state.latest == nil else { return false }
+      guard !state.isStopped, !state.initialFetchCompleted else { return false }
       // Discard an older asynchronous fetch if one is already in flight.
       state.revision &+= 1
       return true
@@ -429,7 +593,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
 
     let result = readBlocking()
     let completion = state.withLock { state -> (deliver: Bool, stop: Bool) in
-      guard !state.isStopped, state.latest == nil,
+      guard !state.isStopped, !state.initialFetchCompleted,
         let publication = accept(result, source: .initial, state: &state)
       else { return (false, false) }
       let shouldStop = if case .failure = publication { true } else { false }
@@ -444,7 +608,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     _ transaction: borrowing SQLiteReadTransaction
   ) throws {
     let commit = DatabaseCommit(origin: .local)
-    guard shouldFetch(commit) else {
+    guard transactionNeedsFetch(commit) else {
       state.withLock { state in
         guard !state.isStopped else { return }
         state.pendingLocal = .skipped
@@ -469,18 +633,22 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
         publishLocal(result)
         return
       case nil:
-        guard shouldFetch(commit) else { return }
+        guard transactionNeedsFetch(commit) else { return }
         requestRead(source: .transaction(.local))
         return
       }
 
     case .external:
-      guard shouldFetch(commit) else { return }
+      guard transactionNeedsFetch(commit) else { return }
       requestRead(source: .transaction(.external))
     }
   }
 
-  private func publishLocal(_ result: Result<Value, any Error>) {
+  private func transactionNeedsFetch(_ commit: DatabaseCommit) -> Bool {
+    reducer.transactionNeedsFetch(commit)
+  }
+
+  private func publishLocal(_ result: Result<any Sendable, any Error>) {
     let publication = state.withLock { state -> Publication? in
       guard !state.isStopped else { return nil }
       state.revision &+= 1
@@ -528,7 +696,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private func completeRead(
-    _ result: Result<Value, any Error>,
+    _ result: Result<any Sendable, any Error>,
     request: ReadRequest
   ) {
     let completed = state.withLock { state -> (Publication?, ReadRequest?) in
@@ -545,15 +713,20 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private func accept(
-    _ result: Result<Value, any Error>,
+    _ result: Result<any Sendable, any Error>,
     source: ValueObservationSource,
     state: inout State
   ) -> Publication? {
+    state.initialFetchCompleted = true
     switch result {
-    case .success(let value):
-      if let latest = state.latest, let duplicatePredicate,
-        duplicatePredicate(latest.value, value)
-      {
+    case .success(let payload):
+      let reduction: ValueObservationReduction<Value>
+      do {
+        reduction = try reducer.reduce(payload)
+      } catch {
+        return fail(error, state: &state)
+      }
+      guard case .emit(let value) = reduction else {
         return nil
       }
       let change = ValueObservationChange(value: value, source: source)
@@ -561,12 +734,19 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       return .change(change, Array(state.subscribers.values))
 
     case .failure(let error):
-      state.isStopped = true
-      state.terminalError = error
-      let subscribers = Array(state.subscribers.values)
-      state.subscribers.removeAll()
-      return .failure(error, subscribers)
+      return fail(error, state: &state)
     }
+  }
+
+  private func fail(
+    _ error: any Error,
+    state: inout State
+  ) -> Publication {
+    state.isStopped = true
+    state.terminalError = error
+    let subscribers = Array(state.subscribers.values)
+    state.subscribers.removeAll()
+    return .failure(error, subscribers)
   }
 
   private func deliver(_ publication: Publication) {
