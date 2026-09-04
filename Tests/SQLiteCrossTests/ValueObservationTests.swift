@@ -32,6 +32,116 @@
     }
 
     @Test
+    func immediateSchedulerDeliversInitialValueBeforeSubscribeReturns() async throws {
+      let driver = try await itemsDatabase()
+      let recorder = ObservationRecorder<Int>()
+
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      #expect(recorder.changes.map(\.value) == [0])
+      #expect(recorder.changes.map(\.source) == [.initial])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func immediateSchedulerIntroducesNoBoundaryForCommittedValues() throws {
+      let driver = try SQLiteQueueDriver(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      _ = subscription
+    }
+
+    @Test
+    func immediateSchedulerWorksThroughInterprocessDatabase() async throws {
+      let driver = try await itemsDatabase()
+      let database = InterprocessDatabase(writer: driver)
+      let recorder = ObservationRecorder<Int>()
+
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: database,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      #expect(recorder.changes.map(\.value) == [0])
+      _ = subscription
+    }
+
+    @MainActor
+    @Test
+    func mainActorSchedulerIsImmediateWhenStartedOnMainActor() async throws {
+      let driver = try await itemsDatabase()
+      let recorder = MainActorObservationRecorder<Int>()
+
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: driver,
+          scheduling: .mainActor,
+          onError: { @MainActor error in
+            recorder.errors.append(String(describing: error))
+          },
+          onChange: { @MainActor change in
+            recorder.changes.append(change)
+          }
+        )
+
+      #expect(recorder.changes.map(\.value) == [0])
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func mainActorSchedulerDefersWhenStartedOutsideMainActor() async throws {
+      let driver = try await itemsDatabase()
+      let recorder = ObservationRecorder<Int>()
+
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: driver,
+          scheduling: .mainActor,
+          isolation: nil,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      #expect(recorder.changes.isEmpty)
+      try await recorder.waitForChangeCount(1)
+      #expect(recorder.changes.map(\.value) == [0])
+      _ = subscription
+    }
+
+    @Test
     func rolledBackWriteDoesNotEmitItsStagedValue() async throws {
       struct Abort: Error {}
 
@@ -358,6 +468,21 @@
     func record(error: any Error) {
       state.withLock { $0.errors.append(String(describing: error)) }
     }
+
+    func waitForChangeCount(_ count: Int) async throws {
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(2))
+      while changes.count < count {
+        guard clock.now < deadline else { throw ObservationTestTimeout() }
+        try await Task.sleep(for: .milliseconds(2))
+      }
+    }
+  }
+
+  @MainActor
+  private final class MainActorObservationRecorder<Value: Sendable> {
+    var changes = [ValueObservationChange<Value>]()
+    var errors = [String]()
 
     func waitForChangeCount(_ count: Int) async throws {
       let clock = ContinuousClock()

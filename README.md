@@ -3,12 +3,13 @@
 `swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
-`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the asynchronous boundary around the native
-SQLite implementation, which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction`
-values. Read transactions can only query, while write transactions can query and execute mutations.
-Transactions and rows are nonescapable, so a database-owned SQLite connection cannot outlive its
-access closure. `ValueObservation` builds callback and asynchronous-sequence observation on that
-transaction boundary, both within one process and across cooperating processes.
+`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
+around the native SQLite implementation, which lends distinct `SQLiteReadTransaction` and
+`SQLiteWriteTransaction` values. Read transactions can only query, while write transactions can
+query and execute mutations. Transactions and rows are nonescapable, so a database-owned SQLite
+connection cannot outlive its access closure. `ValueObservation` builds callback and
+asynchronous-sequence observation on that transaction boundary, both within one process and across
+cooperating processes.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
@@ -295,6 +296,38 @@ let subscription = try reminders.subscribe(
 Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
 subscribers to the same observation and database share one fetch. `removeDuplicates()` suppresses
 consecutive equal values; `removeDuplicates(by:)` accepts a custom comparison.
+
+Callback delivery is scheduled with Swift concurrency. The default `.async()` scheduler uses the
+cooperative executor; `.async(on:)` targets an actor, and `.mainActor` is the main-actor spelling.
+An actor scheduler delivers immediately when subscription already starts on that actor, including
+its initial value. Starting elsewhere preserves callback order across the asynchronous hop.
+`.immediate` introduces no scheduling boundary and performs the initial read before `subscribe`
+returns:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  scheduling: .mainActor,
+  onError: { @MainActor error in report(error) },
+  onChange: { @MainActor change in render(change.value) }
+)
+```
+
+On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in a `Transaction` or
+an `Animation` without importing a second package product:
+
+```swift
+let scheduler = MainActorValueObservationScheduler.mainActor.animation(.default)
+let subscription = try reminders.subscribe(
+  to: database,
+  scheduling: scheduler,
+  onError: { @MainActor error in report(error) },
+  onChange: { @MainActor change in render(change.value) }
+)
+```
+
+When the initial value is immediate, it is delivered directly and does not enter the SwiftUI
+transaction; only scheduled callbacks do.
 
 Use `filterTransactions(_:)` to avoid fetching for irrelevant commit notifications. The commit's
 origin identifies whether the sender was this process or another one; the initial value is always

@@ -44,6 +44,12 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
     try await writer.read(body)
   }
 
+  public func readBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result {
+    try writer.readBlocking(body)
+  }
+
   /// Writes to the database and announces the transaction it commits.
   ///
   /// A write that throws is rolled back by its writer and is not announced.
@@ -51,14 +57,30 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
     let result = try await writer.write(body)
-    if let observableWriter = writer as? any SQLiteObservableDatabase {
-      InterprocessDatabaseObservationHub.shared.didCommit(
-        databaseIdentifier: id,
-        writerIdentifier: ObjectIdentifier(observableWriter)
-      )
-    }
-    await announceCommittedTransaction()
+    reportLocalCommit()
+    await Task { [self] in await announceCommittedTransaction() }.value
     return result
+  }
+
+  /// Writes to the database synchronously and announces the transaction it commits.
+  ///
+  /// The durable write completes before this method returns. Since IPC transports are
+  /// asynchronous, its announcement continues in an independent task.
+  public func writeBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    let result = try writer.writeBlocking(body)
+    reportLocalCommit()
+    Task { [self] in await announceCommittedTransaction() }
+    return result
+  }
+
+  private func reportLocalCommit() {
+    guard let observableWriter = writer as? any SQLiteObservableDatabase else { return }
+    InterprocessDatabaseObservationHub.shared.didCommit(
+      databaseIdentifier: id,
+      writerIdentifier: ObjectIdentifier(observableWriter)
+    )
   }
 
   /// Announces a committed write once the writer has released its write transaction.
@@ -68,7 +90,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
   /// stalled process into a stalled database.
   ///
   /// The transaction is already durable, so a failed announcement never fails the write. The
-  /// broadcast also runs in its own unstructured `Task` rather than being awaited directly: awaiting
+  /// caller runs the broadcast in an unstructured `Task` rather than awaiting it directly: awaiting
   /// `transport.send` in-line would run it under the caller's own cancellation, so cancelling the
   /// write (e.g. its owning `Task`) could cut the announcement short even though peers still need to
   /// learn about a commit that already happened. A separate `Task` starts uncancelled, so it always
@@ -79,7 +101,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
       DatabaseTransactionDidCommit(databaseIdentifier: id)
     )
     do {
-      try await Task { try await transport.send(message) }.value
+      try await transport.send(message)
     } catch {
       onAnnouncementFailure?(error)
     }

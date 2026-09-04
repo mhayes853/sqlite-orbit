@@ -70,20 +70,90 @@ public struct ValueObservation<Value: Sendable>: Sendable {
     )
   }
 
-  /// Starts this observation and delivers its changes through callbacks.
-  ///
-  /// The initial fetch begins after the transaction observer is registered, so a commit cannot
-  /// fall into a gap between fetching and listening. Callbacks are serialized and delivered
-  /// asynchronously. A fetch error calls `onError` and ends this subscription.
+  /// Starts this observation and delivers its changes through callbacks using an asynchronous
+  /// scheduler.
   @discardableResult
   public func subscribe<Database: SQLiteObservableDatabase>(
     to database: Database,
+    isolation: isolated (any Actor)? = #isolation,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
+  ) throws -> SQLiteCrossSubscription {
+    try subscribe(
+      to: database,
+      scheduling: AsyncValueObservationScheduler.async(),
+      isolation: isolation,
+      onError: onError,
+      onChange: onChange
+    )
+  }
+
+  /// Starts this observation and delivers its changes through `scheduler`.
+  ///
+  /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
+  /// a gap between fetching and listening. A fetch error calls `onError` and ends the subscription.
+  /// A scheduler that requests an immediate initial value makes this method perform a blocking read.
+  @discardableResult
+  public func subscribe<Database: SQLiteObservableDatabase, Scheduler: ValueObservationScheduler>(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)? = #isolation,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
+  ) throws -> SQLiteCrossSubscription {
+    try subscribeImplementation(
+      to: database,
+      scheduling: scheduler,
+      isolation: isolation,
+      onError: onError,
+      onChange: onChange
+    )
+  }
+
+  /// Starts this observation with callbacks isolated to the main actor.
+  @MainActor
+  @discardableResult
+  public func subscribe<
+    Database: SQLiteObservableDatabase,
+    Scheduler: ValueObservationMainActorScheduler
+  >(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    onError: @escaping @MainActor @Sendable (any Error) -> Void,
+    onChange: @escaping @MainActor @Sendable (ValueObservationChange<Value>) -> Void
+  ) throws -> SQLiteCrossSubscription {
+    try subscribeImplementation(
+      to: database,
+      scheduling: scheduler,
+      isolation: MainActor.shared,
+      onError: { error in
+        MainActor.assumeIsolated { onError(error) }
+      },
+      onChange: { change in
+        MainActor.assumeIsolated { onChange(change) }
+      }
+    )
+  }
+
+  private func subscribeImplementation<Database: SQLiteObservableDatabase>(
+    to database: Database,
+    scheduling scheduler: any ValueObservationScheduler,
+    isolation: isolated (any Actor)?,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
   ) throws -> SQLiteCrossSubscription {
     let runtime = try definition.runtime(for: database)
-    let subscription = runtime.addSubscriber(onError: onError, onChange: onChange)
-    runtime.fetchInitialValueIfNeeded()
+    let subscription = runtime.addSubscriber(
+      scheduling: scheduler,
+      isolation: isolation,
+      onError: onError,
+      onChange: onChange
+    )
+    if scheduler.immediateInitialValue(from: isolation) {
+      runtime.fetchInitialValueImmediatelyIfNeeded(isolation: isolation)
+    } else {
+      runtime.fetchInitialValueIfNeeded()
+    }
     return subscription
   }
 
@@ -205,8 +275,23 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private struct Subscriber: Sendable {
+    let scheduler: any ValueObservationScheduler
     let onError: @Sendable (any Error) -> Void
     let onChange: @Sendable (ValueObservationChange<Value>) -> Void
+
+    func receive(
+      _ change: ValueObservationChange<Value>,
+      from isolation: isolated (any Actor)?
+    ) {
+      scheduler.schedule(from: isolation) { onChange(change) }
+    }
+
+    func receive(
+      _ error: any Error,
+      from isolation: isolated (any Actor)?
+    ) {
+      scheduler.schedule(from: isolation) { onError(error) }
+    }
   }
 
   private enum SubscriberRegistration: Sendable {
@@ -241,6 +326,7 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
 
   private let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   private let read: @Sendable () async -> Result<Value, any Error>
+  private let readBlocking: @Sendable () -> Result<Value, any Error>
   private let duplicatePredicate: (@Sendable (Value, Value) -> Bool)?
   private let shouldFetch: @Sendable (DatabaseCommit) -> Bool
   private let state = Lock(State())
@@ -265,6 +351,13 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
         return .failure(error)
       }
     }
+    self.readBlocking = {
+      Result {
+        try database.readBlocking { transaction in
+          try fetch(transaction)
+        }
+      }
+    }
   }
 
   func install<Database: SQLiteObservableDatabase>(on database: Database) throws {
@@ -277,11 +370,17 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     state.withLock { !$0.isStopped }
   }
 
-  func addSubscriber(
+  func addSubscriber<Scheduler: ValueObservationScheduler>(
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)?,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (ValueObservationChange<Value>) -> Void
   ) -> SQLiteCrossSubscription {
-    let subscriber = Subscriber(onError: onError, onChange: onChange)
+    let subscriber = Subscriber(
+      scheduler: scheduler,
+      onError: onError,
+      onChange: onChange
+    )
     let registration = state.withLock { state -> SubscriberRegistration in
       if let error = state.terminalError { return .failed(error) }
       precondition(!state.isStopped, "cannot subscribe to a discarded observation runtime")
@@ -293,11 +392,11 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     switch registration {
     case .active(let identifier, let latest):
       if let latest {
-        deliver(.change(latest, [subscriber]))
+        subscriber.receive(latest, from: isolation)
       }
       return SQLiteCrossSubscription { [self] in removeSubscriber(identifier) }
     case .failed(let error):
-      deliver(.failure(error, [subscriber]))
+      subscriber.receive(error, from: isolation)
       return SQLiteCrossSubscription {}
     }
   }
@@ -315,6 +414,30 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       return takeReadRequestIfPossible(state: &state)
     }
     start(request)
+  }
+
+  func fetchInitialValueImmediatelyIfNeeded(
+    isolation: isolated (any Actor)?
+  ) {
+    let shouldFetch = state.withLock { state in
+      guard !state.isStopped, state.latest == nil else { return false }
+      // Discard an older asynchronous fetch if one is already in flight.
+      state.revision &+= 1
+      return true
+    }
+    guard shouldFetch else { return }
+
+    let result = readBlocking()
+    let completion = state.withLock { state -> (deliver: Bool, stop: Bool) in
+      guard !state.isStopped, state.latest == nil,
+        let publication = accept(result, source: .initial, state: &state)
+      else { return (false, false) }
+      let shouldStop = if case .failure = publication { true } else { false }
+      return (enqueue(publication, state: &state), shouldStop)
+    }
+
+    if completion.stop { stopObservingTransactions() }
+    if completion.deliver { deliverPublications(from: isolation) }
   }
 
   func databaseWillCommit(
@@ -385,7 +508,11 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   }
 
   private func takeReadRequestIfPossible(state: inout State) -> ReadRequest? {
-    guard state.readIsRequired, !state.readIsInFlight else { return nil }
+    guard
+      !state.isStopped,
+      state.readIsRequired,
+      !state.readIsInFlight
+    else { return nil }
     state.readIsRequired = false
     state.readIsInFlight = true
     return ReadRequest(revision: state.revision, source: state.requiredReadSource)
@@ -447,16 +574,25 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       stopObservingTransactions()
     }
     let shouldStartDelivery = state.withLock { state in
-      state.publications.append(publication)
-      guard !state.isDelivering else { return false }
-      state.isDelivering = true
-      return true
+      enqueue(publication, state: &state)
     }
     guard shouldStartDelivery else { return }
-    Task { [weak self] in self?.deliverPublications() }
+    deliverPublications(from: nil)
   }
 
-  private func deliverPublications() {
+  private func enqueue(
+    _ publication: Publication,
+    state: inout State
+  ) -> Bool {
+    state.publications.append(publication)
+    guard !state.isDelivering else { return false }
+    state.isDelivering = true
+    return true
+  }
+
+  private func deliverPublications(
+    from isolation: isolated (any Actor)?
+  ) {
     while let publication = state.withLock({ state -> Publication? in
       guard !state.publications.isEmpty else {
         state.isDelivering = false
@@ -467,11 +603,11 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
       switch publication {
       case .change(let change, let subscribers):
         for subscriber in subscribers {
-          subscriber.onChange(change)
+          subscriber.receive(change, from: isolation)
         }
       case .failure(let error, let subscribers):
         for subscriber in subscribers {
-          subscriber.onError(error)
+          subscriber.receive(error, from: isolation)
         }
       }
     }
