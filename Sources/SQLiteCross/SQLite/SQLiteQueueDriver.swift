@@ -4,10 +4,11 @@
 /// database, which is private to the connection that opened it and so cannot be pooled at all, or a
 /// small file database where one connection is plenty. ``SQLitePoolDriver`` is the choice when
 /// reads should run concurrently.
-public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
+public final class SQLiteQueueDriver: SQLiteObservableDatabase {
   public let defaultIdentifier: DatabaseIdentifier
 
   private let connection: SQLiteConnection
+  private let transactionObservers = DatabaseTransactionObservers()
 
   /// Opens the database at `path`, creating it when it does not exist.
   public init(
@@ -32,7 +33,7 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await connection.write(body)
+    try await connection.write(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -46,7 +47,13 @@ public final class SQLiteQueueDriver: SQLiteDatabaseWriter {
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try connection.writeBlocking(body)
+    try connection.writeBlocking(observers: transactionObservers, body)
+  }
+
+  public func subscribe(
+    transactionObserver: any DatabaseTransactionObserver
+  ) throws -> SQLiteCrossSubscription {
+    transactionObservers.subscribe(transactionObserver)
   }
 }
 

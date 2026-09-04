@@ -3,11 +3,13 @@
 `swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
-The package currently focuses on its local transaction boundary. `SQLiteDatabaseReader` and
-`SQLiteDatabaseWriter` define the asynchronous boundary around the native SQLite implementation,
-which lends distinct `SQLiteReadTransaction` and `SQLiteWriteTransaction` values. Read transactions
-can only query, while write transactions can query and execute mutations. Transactions and rows are
-nonescapable, so a database-owned SQLite connection cannot outlive its access closure.
+`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
+around the native SQLite implementation, which lends distinct `SQLiteReadTransaction` and
+`SQLiteWriteTransaction` values. Read transactions can only query, while write transactions can
+query and execute mutations. Transactions and rows are nonescapable, so a database-owned SQLite
+connection cannot outlive its access closure. `ValueObservation` builds callback and
+asynchronous-sequence observation on that transaction boundary, both within one process and across
+cooperating processes.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
 query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
@@ -250,6 +252,125 @@ identifier, and callers can override it when constructing the database. File dat
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
+## Observation
+
+`SQLiteQueueDriver`, `SQLitePoolDriver`, and `InterprocessDatabase` are observable databases. A
+value observation fetches an initial value, then fetches again after every committed write:
+
+```swift
+let reminders = ValueObservation.tracking { transaction in
+  try transaction.fetchAll(Reminder.all)
+}
+
+for try await reminders in reminders.values(in: database) {
+  render(reminders)
+}
+```
+
+Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
+source; a committed transaction reports whether it came from this process or another one:
+
+```swift
+for try await change in reminders.changes(in: database) {
+  switch change.source {
+  case .initial:
+    initialize(with: change.value)
+  case .transaction(.local):
+    updateFromLocalWrite(change.value)
+  case .transaction(.external):
+    updateFromExternalWrite(change.value)
+  }
+}
+```
+
+The callback API is the primitive beneath both asynchronous sequences:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  onError: report,
+  onChange: { change in render(change.value) }
+)
+```
+
+Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
+subscribers to the same observation and database share one fetch. Observations support ordered,
+non-terminal transformations after each database fetch has ended:
+
+```swift
+let titles = reminders
+  .filter { !$0.isEmpty }
+  .compactMap { $0.first?.title }
+  .map { $0.uppercased() }
+  .removeDuplicates()
+```
+
+`filter` and `compactMap` suppress individual values without ending the observation. A thrown
+operator error ends it. Operators run in their written order, and every emitted change keeps the
+source metadata of the fetched value. `removeDuplicates(by:)` accepts a custom comparison.
+
+Callback delivery is scheduled with Swift concurrency. The default `.async()` scheduler uses the
+cooperative executor; `.async(on:)` targets an actor, and `.mainActor` is the main-actor spelling.
+An actor scheduler delivers immediately when subscription already starts on that actor, including
+its initial value. Starting elsewhere preserves callback order across the asynchronous hop.
+`.immediate` introduces no scheduling boundary and performs the initial read before `subscribe`
+returns:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  scheduling: .mainActor,
+  onError: { @MainActor error in report(error) },
+  onChange: { @MainActor change in render(change.value) }
+)
+```
+
+On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in a `Transaction` or
+an `Animation` without importing a second package product:
+
+```swift
+let scheduler = MainActorValueObservationScheduler.mainActor.animation(.default)
+let subscription = try reminders.subscribe(
+  to: database,
+  scheduling: scheduler,
+  onError: { @MainActor error in report(error) },
+  onChange: { @MainActor change in render(change.value) }
+)
+```
+
+When the initial value is immediate, it is delivered directly and does not enter the SwiftUI
+transaction; only scheduled callbacks do.
+
+Use `filterTransactions(_:)` to avoid fetching for irrelevant commit notifications. The commit's
+origin identifies whether the sender was this process or another one; the initial value is always
+fetched:
+
+```swift
+let remoteReminders = reminders.filterTransactions { commit in
+  commit.origin == .external
+}
+```
+
+The predicate can also inspect the latest value accepted at that point in the operator chain. It is
+`nil` until the first value is produced there, and values suppressed by an earlier operator do not
+replace it:
+
+```swift
+let staleReminders = reminders.filterTransactions { commit, previousValue in
+  commit.origin == .external || previousValue?.contains(where: \.isStale) == true
+}
+```
+
+Local observations fetch their pending value through the write transaction and publish it only
+after SQLite commits. A rollback, including a failed `COMMIT`, discards that value. External commit
+announcements trigger a fresh read instead. Fetch failures end the callback subscription or
+throwing asynchronous sequence; they never roll back the write whose final state was being fetched.
+
+For transaction lifecycle events that do not produce a value, register a
+`DatabaseTransactionObserver` directly with any `SQLiteObservableDatabase`. Its `databaseWillCommit`
+hook receives a read-only view of the pending transaction and may throw to abort the write;
+`databaseDidCommit` identifies the transaction's local or external origin.
+
 ## Cross-process transport
 
 The package includes a public, configurable Unix-domain datagram transport. Processes that need to
@@ -353,5 +474,5 @@ Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise 
 writing task's cancellation, since peers still need to learn about a commit that happened. A write
 that throws is rolled back by its driver and is not announced.
 
-Databases do not yet subscribe to their peers. Announcing is one-way for now, and receiving will
-arrive with observation, which is what gives an incoming announcement something to do.
+An observed `InterprocessDatabase` also subscribes to its peers. Incoming announcements are exposed
+as external transaction events and cause active value observations to refetch.

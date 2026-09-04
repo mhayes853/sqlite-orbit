@@ -6,6 +6,11 @@ public protocol SQLiteDatabaseReader: Sendable {
   func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result
+
+  /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
+  func readBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+  ) throws -> Result
 }
 
 /// A native SQLite database that lends read and write transactions.
@@ -16,4 +21,9 @@ public protocol SQLiteDatabaseWriter: SQLiteDatabaseReader {
   func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result
+
+  /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
+  func writeBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result
 }

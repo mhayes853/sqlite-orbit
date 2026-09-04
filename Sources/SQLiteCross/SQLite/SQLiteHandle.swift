@@ -58,7 +58,10 @@ struct SQLiteHandle: ~Copyable {
     guard code == SQLiteResultCode.ok.rawValue, let pointer else {
       // SQLite hands back a connection even for most failed opens, and it is the caller's to close.
       let error = SQLiteError.reported(
-        by: libraryStorage.pointee, on: pointer, code: code, sql: nil
+        by: libraryStorage.pointee,
+        on: pointer,
+        code: code,
+        sql: nil
       )
       if let pointer {
         _ = libraryStorage.pointee.close_v2(pointer)
@@ -160,18 +163,21 @@ struct SQLiteHandle: ~Copyable {
   /// up front. A deferred write would only discover a competing writer partway through, after work
   /// that then has to be thrown away.
   borrowing func write<Result: ~Copyable>(
+    observers: DatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN IMMEDIATE TRANSACTION")
-    let value: Result
     do {
-      value = try body(SQLiteWriteTransaction(handle: self))
+      let value = try body(SQLiteWriteTransaction(handle: self))
+      try observers?.willCommit(SQLiteReadTransaction(handle: self))
+      try endTransaction(with: "COMMIT")
+      observers?.didCommit(origin: .local)
+      return value
     } catch {
       rollbackIgnoringFailure()
+      observers?.didRollback()
       throw error
     }
-    try endTransaction(with: "COMMIT")
-    return value
   }
 
   /// Ends the open transaction with `sql`, leaving none open when that statement itself fails.
@@ -215,7 +221,12 @@ struct SQLiteHandle: ~Copyable {
         var statement: OpaquePointer?
         var tail: UnsafePointer<CChar>?
         let code = library.pointee.prepare_v3(
-          connection, next, Int32(end - next), 0, &statement, &tail
+          connection,
+          next,
+          Int32(end - next),
+          0,
+          &statement,
+          &tail
         )
         guard code == SQLiteResultCode.ok.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)

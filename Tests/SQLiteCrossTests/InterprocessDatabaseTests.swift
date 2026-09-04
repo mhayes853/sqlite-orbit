@@ -22,6 +22,21 @@
     }
 
     @Test
+    func blockingWriteAnnouncesTheTransactionItCommits() async throws {
+      let identifier = DatabaseIdentifier(rawValue: "blocking-announcement")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+
+      try database.writeBlocking { transaction in
+        try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+      }
+      try await waitUntil { transport.messages.count == 1 }
+
+      #expect(
+        transport.messages == [.transactionDidCommit(.init(databaseIdentifier: identifier))]
+      )
+    }
+
+    @Test
     func readIsNotAnnounced() async throws {
       let (database, transport) = try makeAnnouncingDatabase()
 
