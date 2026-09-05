@@ -176,7 +176,7 @@
 
   @Test
   func queueDriverDerivesItsIdentifierFromThePath() throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath()
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     let driver = try SQLiteQueueDriver(path: DatabasePath(path))
@@ -190,7 +190,7 @@
 
   @Test
   func queueDriverPersistsToAFileAcrossDrivers() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath()
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     do {

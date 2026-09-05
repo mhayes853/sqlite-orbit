@@ -19,7 +19,7 @@
     )
   )
   func scanningComparesNativePoolAndQueue() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-bench-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("bench")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)

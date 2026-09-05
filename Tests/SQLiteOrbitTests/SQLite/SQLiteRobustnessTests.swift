@@ -265,7 +265,7 @@
     configuration.library = counter.library
     configuration.readerCount = 3
 
-    let path = NSTemporaryDirectory() + "sqlite-orbit-close-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("close")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)
@@ -291,7 +291,7 @@
 
   @Test
   func aPoolSurvivesAStormOfCancellations() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-storm-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("storm")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)
@@ -341,7 +341,7 @@
 
   @Test
   func cancelledWritesNeverCommitWithoutReturningSuccess() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-cancelled-commits-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("cancelled-commits")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)
@@ -382,7 +382,7 @@
 
   @Test
   func aReaderSeesWhatAnotherConnectionCommitted() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-shared-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("shared")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)
@@ -410,7 +410,7 @@
 
   @Test
   func writesFromTwoConnectionsQueueRatherThanFail() async throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-contended-\(UUID().uuidString).sqlite"
+    let path = temporaryDatabasePath("contended")
     defer {
       for suffix in ["", "-wal", "-shm"] {
         try? FileManager.default.removeItem(atPath: path + suffix)

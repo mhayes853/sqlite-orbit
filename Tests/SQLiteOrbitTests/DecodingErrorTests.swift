@@ -5,9 +5,7 @@
 
   @Test
   func typeMismatchesNameTheColumnAndWhatWasStored() async throws {
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:")
-    )
+    let database = try inMemoryDatabase()
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
       try await database.read { transaction in
@@ -26,9 +24,7 @@
 
   @Test
   func missingRequiredColumnsNameTheColumnThatWasNull() async throws {
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:")
-    )
+    let database = try inMemoryDatabase()
 
     let error = await #expect(throws: DatabaseColumnDecodingError.self) {
       try await database.read { transaction in
@@ -45,9 +41,7 @@
 
   @Test
   func valueLevelFailuresAreReportedAsThemselves() async throws {
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:")
-    )
+    let database = try inMemoryDatabase()
 
     // The column has the right storage class but the wrong contents. These are not the column
     // errors above, because the decoder already knows exactly what went wrong.

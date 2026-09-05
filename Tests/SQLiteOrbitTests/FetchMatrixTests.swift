@@ -3,9 +3,7 @@
   import Testing
 
   private func seededDatabase() async throws -> InterprocessDatabase<SQLiteQueueDriver> {
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:")
-    )
+    let database = try inMemoryDatabase()
     try await database.write { transaction in
       try transaction.execute(
         #sql(

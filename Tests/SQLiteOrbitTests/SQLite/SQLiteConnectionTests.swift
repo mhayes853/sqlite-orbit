@@ -47,12 +47,8 @@
     return library.pointee.column_int64(statement, 0)
   }
 
-  private func temporaryDatabasePath() -> String {
-    NSTemporaryDirectory() + "sqlite-orbit-\(UUID().uuidString).sqlite"
-  }
-
   @Test
-  func connectionOpensExecutesAndReportsMutations() throws {
+  func connectionOpensAndExecutesStatements() throws {
     let connection = try SQLiteHandle.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
@@ -67,8 +63,6 @@
       """
     )
 
-    #expect(connection.changes() == 1)
-    #expect(connection.lastInsertRowID() == 2)
     #expect(try scalar(connection, "SELECT count(*) FROM items") == 2)
   }
 
@@ -208,7 +202,7 @@
 
   @Test
   func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
-    let path = NSTemporaryDirectory() + "sqlite-orbit-missing-\(UUID().uuidString)/db.sqlite"
+    let path = temporaryDatabasePath("missing") + "/db.sqlite"
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteHandle.open(
         path: DatabasePath(path),

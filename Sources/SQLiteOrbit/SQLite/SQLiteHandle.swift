@@ -109,16 +109,6 @@ struct SQLiteHandle: ~Copyable {
     try Self.execute(sql, on: pointer, library: library)
   }
 
-  /// The number of rows changed by the most recent statement.
-  borrowing func changes() -> Int {
-    Int(libraryStorage.pointee.changes(pointer))
-  }
-
-  /// The rowid of the most recent successful insert.
-  borrowing func lastInsertRowID() -> Int64 {
-    libraryStorage.pointee.last_insert_rowid(pointer)
-  }
-
   /// Runs `body` inside a deferred transaction and always rolls it back.
   ///
   /// A read still takes a transaction so that every statement it runs sees one consistent

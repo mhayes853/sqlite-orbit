@@ -1,9 +1,22 @@
 import Foundation
 
 /// Reported when a database cannot be pooled.
+///
+/// Thrown by ``SQLitePoolDriver/init(path:configuration:identifier:coordinationDirectory:)`` for a
+/// database that is private to the connection that opens it.
+///
+/// ```swift
+/// do {
+///   _ = try SQLitePoolDriver(path: .memory)
+/// } catch let error as SQLitePoolUnavailableError {
+///   print(error.path)
+/// }
+/// ```
 public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
+  /// The path that cannot be pooled.
   public let path: DatabasePath
 
+  /// Explains why the path cannot be pooled and which driver to use instead.
   public var description: String {
     """
     A database private to the connection that opened it cannot be pooled: a pool's readers would \
@@ -18,7 +31,16 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
 /// queued behind it, so a read issued after a write observes it. The database runs in WAL mode so
 /// that other processes' readers are never blocked by this one's writer.
+///
+/// ```swift
+/// let driver = try SQLitePoolDriver(path: .file(url))
+/// try await driver.write { transaction in
+///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+/// }
+/// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
+/// ```
 public final class SQLitePoolDriver: SQLiteObservableDatabase {
+  /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: DatabaseIdentifier
 
   private let writer: SQLiteConnection
@@ -33,6 +55,8 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
   ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
   ///   - coordinationDirectory: Where the advisory lock that serializes opening lives. Processes
   ///     coordinate only when they share it.
+  /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
+  ///   ``SQLiteError`` when a connection cannot be opened or configured.
   public init(
     path: DatabasePath,
     configuration: SQLiteConfiguration,
@@ -101,6 +125,15 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
     #endif
   }
 
+  /// Runs `body` in a read transaction on one of the pool's readers.
+  ///
+  /// The read waits for any write that is running or already queued, so it observes every write
+  /// issued before it.
+  ///
+  /// - Parameter body: Receives the transaction.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled while waiting or running.
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
@@ -113,6 +146,10 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
   ///
   /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
   ///   starves the very machinery the rest of the pool runs on.
+  ///
+  /// - Parameter body: Receives the transaction.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
@@ -121,6 +158,15 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
     return try reader.readBlocking(body)
   }
 
+  /// Runs `body` in a write transaction on the pool's single writer.
+  ///
+  /// The write waits for the reads already in flight, and holds off the reads queued behind it
+  /// until it commits.
+  ///
+  /// - Parameter body: Receives the transaction.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled while waiting or running.
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
@@ -133,6 +179,10 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
   ///
   /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
   ///   starves the very machinery the rest of the pool runs on.
+  ///
+  /// - Parameter body: Receives the transaction.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
@@ -141,6 +191,10 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
     return try writer.writeBlocking(observers: transactionObservers, body)
   }
 
+  /// Registers an observer of the transactions this driver commits.
+  ///
+  /// - Parameter transactionObserver: Receives each commit and rollback.
+  /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
     transactionObserver: any DatabaseTransactionObserver
   ) throws -> OrbitSubscription {
@@ -151,6 +205,17 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
 #if SystemSQLite
   extension SQLitePoolDriver {
     /// Opens a pooled database using the SQLite this package was linked against.
+    ///
+    /// ```swift
+    /// let driver = try SQLitePoolDriver(path: .file(url))
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - path: The database file. A database private to its connection cannot be pooled.
+    ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
+    ///   - coordinationDirectory: Where the advisory lock that serializes opening lives.
+    /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
+    ///   ``SQLiteError`` when a connection cannot be opened.
     public convenience init(
       path: DatabasePath,
       identifier: DatabaseIdentifier? = nil,

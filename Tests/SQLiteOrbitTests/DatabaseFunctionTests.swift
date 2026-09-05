@@ -47,6 +47,21 @@
     }
   }
 
+  /// Registered without a fixed argument count, so SQLite accepts any arity for it.
+  private struct VariadicSumFunction: ScalarDatabaseFunction {
+    typealias Input = Int
+    typealias Output = Int
+    var name: String { "variadicSum" }
+    var argumentCount: Int? { nil }
+    var isDeterministic: Bool { true }
+    func invoke(_ decoder: inout some QueryDecoder) throws -> QueryBinding {
+      // Always asks for two arguments, however many the call actually supplied.
+      let lhs = try decoder.decode(Int.self) ?? 0
+      let rhs = try decoder.decode(Int.self) ?? 0
+      return .int(Int64(lhs + rhs))
+    }
+  }
+
   private struct FailingTotalFunction: AggregateDatabaseFunction {
     typealias Input = Int
     typealias Output = Int
@@ -68,6 +83,7 @@
     configuration.register(function: $rowCount)
     configuration.register(function: $describe)
     configuration.register(function: FailingFunction())
+    configuration.register(function: VariadicSumFunction())
     configuration.register(function: FailingTotalFunction())
     let database = InterprocessDatabase(
       writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
@@ -141,6 +157,48 @@
         "-0.25 [] false 1700000000.5 \(id.uuidString) 7"
       ]
     )
+  }
+
+  /// A zero-length text argument has no buffer behind it on some SQLite builds, so decoding one
+  /// must not read through a null pointer.
+  @Test
+  func functionArgumentsDecodeEmptyTextAndBlobs() async throws {
+    let database = try await seededNotes()
+    let date = Date(timeIntervalSince1970: 0)
+    let id = UUID()
+
+    let values = try await database.read { transaction in
+      (
+        try transaction.fetchOne(Select($repeated("", 3))),
+        try transaction.fetchOne(Select($describe(0, [], true, date, id, Int?.none))),
+        try transaction.fetchOne(
+          #sql("SELECT longestTitle(x) FROM (SELECT '' AS x)", as: String?.self)
+        )
+      )
+    }
+
+    #expect(values.0 == "")
+    #expect(values.1 == "0.0 [] true 0.0 \(id.uuidString) -1")
+    #expect(values.2 == "")
+  }
+
+  /// A variadic function that reads past the arguments it was given reports the shortfall instead
+  /// of trapping, which would take the whole process down with it.
+  @Test
+  func aFunctionAskedForAnArgumentItWasNotGivenReportsIt() async throws {
+    let database = try await seededNotes()
+
+    let sum = try await database.read { transaction in
+      try transaction.fetchOne(#sql("SELECT variadicSum(2, 3)", as: Int.self))
+    }
+    #expect(sum == 5)
+
+    let error = await #expect(throws: SQLiteError.self) {
+      try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT variadicSum(2)", as: Int.self))
+      }
+    }
+    #expect(error?.message?.contains("without an argument at index 1") == true)
   }
 
   @Test
@@ -330,7 +388,7 @@
     configuration.register(function: $repeated)
     configuration.setupSQL = [
       "CREATE TABLE configured (value TEXT NOT NULL)",
-      "INSERT INTO configured VALUES (repeated('ab', 2))",
+      "INSERT INTO configured VALUES (repeated('ab', 2))"
     ]
     let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
 

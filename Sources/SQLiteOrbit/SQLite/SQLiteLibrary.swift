@@ -1,4 +1,8 @@
 /// The destructor SQLite calls to release a value or context it was handed.
+///
+/// ```swift
+/// _ = sqlite3_bind_text(statement, 1, bytes, count, SQLiteLibrary.transientDestructor)
+/// ```
 public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
 extension SQLiteLibrary {
@@ -26,6 +30,18 @@ extension SQLiteLibrary {
 ///
 /// A connection owns one library value and lends it out by pointer, so the table is never copied
 /// onto a query's hot path.
+///
+/// ```swift
+/// var library = SQLiteLibrary.system
+/// library.step = { statement in
+///   preparedSteps.withLock { $0 += 1 }
+///   return SQLiteLibrary.system.step(statement)
+/// }
+/// let driver = try SQLiteQueueDriver(
+///   path: ":memory:",
+///   configuration: SQLiteConfiguration(library: library)
+/// )
+/// ```
 public struct SQLiteLibrary: Sendable {
 
   /// Whether Swift callback registration can use the linked SQLite callback ABI with connections
@@ -34,14 +50,21 @@ public struct SQLiteLibrary: Sendable {
 
   // MARK: - Connections
 
+  /// Opens a connection: `sqlite3_open_v2`.
   public var open_v2:
     @Sendable (
       UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
     ) -> Int32
+  /// Closes a connection once its statements are finalized: `sqlite3_close_v2`.
   public var close_v2: @Sendable (OpaquePointer?) -> Int32
+  /// The connection's current error message: `sqlite3_errmsg`.
   public var errmsg: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
+  /// The connection's current extended result code: `sqlite3_extended_errcode`.
   public var extended_errcode: @Sendable (OpaquePointer?) -> Int32
+  /// Turns extended result codes on or off: `sqlite3_extended_result_codes`.
   public var extended_result_codes: @Sendable (OpaquePointer?, Int32) -> Int32
+  /// Sets how long a locked connection waits before reporting `SQLITE_BUSY`:
+  /// `sqlite3_busy_timeout`.
   public var busy_timeout: @Sendable (OpaquePointer?, Int32) -> Int32
 
   /// Interrupts the query running on a connection.
@@ -49,7 +72,9 @@ public struct SQLiteLibrary: Sendable {
   /// This is the one entry point that is called from a thread other than the connection's own,
   /// which is what lets a cancelled task abort a long-running scan.
   public var interrupt: @Sendable (OpaquePointer?) -> Void
+  /// Rows changed by the most recent statement: `sqlite3_changes`.
   public var changes: @Sendable (OpaquePointer?) -> Int32
+  /// The rowid of the most recent successful insert: `sqlite3_last_insert_rowid`.
   public var last_insert_rowid: @Sendable (OpaquePointer?) -> Int64
 
   /// Whether the connection is in autocommit mode, and so has no transaction open.
@@ -57,28 +82,41 @@ public struct SQLiteLibrary: Sendable {
   /// A statement can fail partway through ending a transaction, and this is the only way to ask
   /// the connection whether one is still open rather than guess from the failure.
   public var get_autocommit: @Sendable (OpaquePointer?) -> Int32
+  /// The threading mode SQLite was compiled with: `sqlite3_threadsafe`.
   public var threadsafe: @Sendable () -> Int32
+  /// The library's version as a number: `sqlite3_libversion_number`.
   public var libversion_number: @Sendable () -> Int32
 
   // MARK: - Statements
 
+  /// Compiles one statement and reports where it stopped: `sqlite3_prepare_v3`.
   public var prepare_v3:
     @Sendable (
       OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
       UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
     ) -> Int32
+  /// Advances a statement to its next row or to completion: `sqlite3_step`.
   public var step: @Sendable (OpaquePointer?) -> Int32
+  /// Rewinds a statement so it can run again, keeping its bindings: `sqlite3_reset`.
   public var reset: @Sendable (OpaquePointer?) -> Int32
+  /// Destroys a statement: `sqlite3_finalize`.
   public var finalize: @Sendable (OpaquePointer?) -> Int32
+  /// Clears a statement's parameter bindings: `sqlite3_clear_bindings`.
   public var clear_bindings: @Sendable (OpaquePointer?) -> Int32
+  /// Whether a statement only reads: `sqlite3_stmt_readonly`.
   public var stmt_readonly: @Sendable (OpaquePointer?) -> Int32
+  /// The SQL a statement was prepared from: `sqlite3_sql`.
   public var sql: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
 
   // MARK: - Bindings
 
+  /// How many parameters a statement has: `sqlite3_bind_parameter_count`.
   public var bind_parameter_count: @Sendable (OpaquePointer?) -> Int32
+  /// Binds SQL NULL: `sqlite3_bind_null`.
   public var bind_null: @Sendable (OpaquePointer?, Int32) -> Int32
+  /// Binds a 64-bit integer: `sqlite3_bind_int64`.
   public var bind_int64: @Sendable (OpaquePointer?, Int32, Int64) -> Int32
+  /// Binds a floating-point value: `sqlite3_bind_double`.
   public var bind_double: @Sendable (OpaquePointer?, Int32, Double) -> Int32
   /// Binds a copy of the text at a pointer, which need only stay valid for the call.
   ///
@@ -92,13 +130,21 @@ public struct SQLiteLibrary: Sendable {
 
   // MARK: - Columns
 
+  /// How many columns a result row has: `sqlite3_column_count`.
   public var column_count: @Sendable (OpaquePointer?) -> Int32
+  /// A column's storage class, one of ``SQLiteColumnType``: `sqlite3_column_type`.
   public var column_type: @Sendable (OpaquePointer?, Int32) -> Int32
+  /// Reads a column as a 64-bit integer: `sqlite3_column_int64`.
   public var column_int64: @Sendable (OpaquePointer?, Int32) -> Int64
+  /// Reads a column as a floating-point value: `sqlite3_column_double`.
   public var column_double: @Sendable (OpaquePointer?, Int32) -> Double
+  /// Reads a column as UTF-8 text: `sqlite3_column_text`.
   public var column_text: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?
+  /// Reads a column as bytes: `sqlite3_column_blob`.
   public var column_blob: @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?
+  /// The byte count of the text or blob just read: `sqlite3_column_bytes`.
   public var column_bytes: @Sendable (OpaquePointer?, Int32) -> Int32
+  /// A column's name: `sqlite3_column_name`.
   public var column_name: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
 
   // MARK: - Custom functions
@@ -116,10 +162,27 @@ public struct SQLiteLibrary: Sendable {
       SQLiteDestructor?
     ) -> Int32
 
+  /// Creates a table from a SQLite build's entry points.
+  ///
+  /// Each parameter is the correspondingly named `sqlite3_*` function. `bind_text` and `bind_blob`
+  /// must copy the bytes they are handed — pass ``transientDestructor`` to the build's own
+  /// `sqlite3_bind_text` and `sqlite3_bind_blob` — because the buffers this package binds live
+  /// only for the call.
+  ///
+  /// ```swift
+  /// let library = SQLiteLibrary(
+  ///   open_v2: myBuild_open_v2,
+  ///   // ...
+  ///   bind_text: { myBuild_bind_text($0, $1, $2, $3, SQLiteLibrary.transientDestructor) },
+  ///   bind_blob: { myBuild_bind_blob($0, $1, $2, $3, SQLiteLibrary.transientDestructor) },
+  ///   // ...
+  /// )
+  /// ```
   public init(
-    open_v2: @escaping @Sendable (
-      UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
-    ) -> Int32,
+    open_v2:
+      @escaping @Sendable (
+        UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
+      ) -> Int32,
     close_v2: @escaping @Sendable (OpaquePointer?) -> Int32,
     errmsg: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?,
     extended_errcode: @escaping @Sendable (OpaquePointer?) -> Int32,
@@ -131,10 +194,11 @@ public struct SQLiteLibrary: Sendable {
     get_autocommit: @escaping @Sendable (OpaquePointer?) -> Int32,
     threadsafe: @escaping @Sendable () -> Int32,
     libversion_number: @escaping @Sendable () -> Int32,
-    prepare_v3: @escaping @Sendable (
-      OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
-      UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
-    ) -> Int32,
+    prepare_v3:
+      @escaping @Sendable (
+        OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
+        UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
+      ) -> Int32,
     step: @escaping @Sendable (OpaquePointer?) -> Int32,
     reset: @escaping @Sendable (OpaquePointer?) -> Int32,
     finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
@@ -155,13 +219,14 @@ public struct SQLiteLibrary: Sendable {
     column_blob: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?,
     column_bytes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
     column_name: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?,
-    create_function_v2: @escaping @Sendable (
-      OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
-      (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-      (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-      (@convention(c) (OpaquePointer?) -> Void)?,
-      SQLiteDestructor?
-    ) -> Int32
+    create_function_v2:
+      @escaping @Sendable (
+        OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
+        (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+        (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+        (@convention(c) (OpaquePointer?) -> Void)?,
+        SQLiteDestructor?
+      ) -> Int32
   ) {
     self.open_v2 = open_v2
     self.close_v2 = close_v2

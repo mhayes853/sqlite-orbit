@@ -19,11 +19,18 @@
 
     /// Steps past the current argument, returning it when its storage class is `expected`, `nil`
     /// when it is `NULL`, and throwing otherwise.
+    ///
+    /// A function registered without a fixed argument count is called with whatever arity the SQL
+    /// used, so asking for an argument SQLite did not pass is reported rather than trapped.
     private mutating func argument(
       _ expected: Int32,
       for columnType: Any.Type
     ) throws(QueryDecodingError) -> OpaquePointer? {
-      precondition(argumentCount > currentIndex)
+      guard currentIndex < argumentCount else {
+        throw QueryDecodingError.other(
+          MissingDatabaseFunctionArgumentError(index: Int(currentIndex))
+        )
+      }
       let value = arguments?[Int(currentIndex)]
       switch sqlite3_value_type(value) {
       case SQLITE_NULL:
@@ -53,7 +60,9 @@
     }
 
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-      try argument(SQLITE_TEXT, for: columnType).map { String(cString: sqlite3_value_text($0)) }
+      // A zero-length text value has no buffer behind it, which is not the same as SQL NULL.
+      try argument(SQLITE_TEXT, for: columnType)
+        .map { sqlite3_value_text($0).map(String.init(cString:)) ?? "" }
     }
 
     mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
@@ -61,7 +70,12 @@
     }
 
     mutating func decode(_ columnType: Int.Type) throws(QueryDecodingError) -> Int? {
-      try decode(Int64.self).map(Int.init)
+      guard let value = try decode(Int64.self) else { return nil }
+      // `Int` is 32 bits wide on arm64_32, so a wider value is reported rather than trapped.
+      guard let value = Int(exactly: value) else {
+        throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
+      }
+      return value
     }
 
     mutating func decode(_ columnType: UInt64.Type) throws(QueryDecodingError) -> UInt64? {
@@ -87,6 +101,15 @@
         throw QueryDecodingError.other(InvalidDatabaseUUIDError())
       }
       return uuid
+    }
+  }
+
+  /// A database function asked for an argument its caller did not pass.
+  struct MissingDatabaseFunctionArgumentError: Error, CustomStringConvertible {
+    let index: Int
+
+    var description: String {
+      "The database function was called without an argument at index \(index)."
     }
   }
 

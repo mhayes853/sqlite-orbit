@@ -11,7 +11,7 @@
 
     init() {
       self.path = DatabasePath(
-        NSTemporaryDirectory() + "sqlite-orbit-pool-\(UUID().uuidString).sqlite"
+        temporaryDatabasePath("pool")
       )
     }
 

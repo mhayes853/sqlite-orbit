@@ -21,11 +21,6 @@ internal struct DatabaseCursorHeap<Element> {
     storage.count >= capacity
   }
 
-  @inlinable
-  internal var root: Element? {
-    storage.first
-  }
-
   /// Offers a value to the heap, evicting the root when the heap is already full.
   @inlinable
   internal mutating func insert(

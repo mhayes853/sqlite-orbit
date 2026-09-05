@@ -181,10 +181,30 @@ extension SQLiteRowDecoder {
 }
 
 /// A decoding failure, reported against the column it happened on.
+///
+/// SQLite is untyped enough that a schema change or a hand-written `SELECT` can quietly hand a
+/// column back in the wrong storage class. This names which column it was.
+///
+/// ```swift
+/// do {
+///   _ = try await database.read { transaction in
+///     try transaction.fetchAll(#sql("SELECT id, title FROM reminders", as: (Int, Int).self))
+///   }
+/// } catch let error as DatabaseColumnDecodingError {
+///   print(error.columnIndex, error.columnName, error.reason)
+/// }
+/// ```
 public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
+  /// The zero-based position of the column in the result row.
   public let columnIndex: Int
+
+  /// The column's name, or `"?"` when SQLite had none for it.
   public let columnName: String
+
+  /// What the decoder expected, phrased to follow "Expected column N (name) ".
   public let reason: String
+
+  /// The SQL of the statement that produced the row.
   public let sql: String
 
   @usableFromInline
@@ -201,6 +221,7 @@ public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
     self.sql = library.pointee.sql(statement).map(String.init(cString:)) ?? ""
   }
 
+  /// The column, its name, what was expected of it, and the SQL that produced it.
   public var description: String {
     """
     Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).

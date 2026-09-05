@@ -1,13 +1,38 @@
 public import StructuredQueriesSQLite
 
 /// A single database result row whose lifetime is limited to the current cursor access.
+///
+/// A row is a view onto the statement's current position, so each `decode` reads the next column
+/// along rather than re-reading the first. Advancing the cursor invalidates the row it lent, which
+/// is why a row is noncopyable and nonescapable.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.rowCursor(#sql("SELECT id, title FROM reminders", as: Void.self))
+///   while var row = try cursor.next() {
+///     let id = try row.decode(Int.self)
+///     let title = try row.decode(String.self)
+///     print(id, title)
+///   }
+/// }
+/// ```
 public protocol DatabaseRow: ~Copyable, ~Escapable {
-  /// Decodes a Structured Queries value from this row.
+  /// Decodes the next column of this row as a Structured Queries value.
+  ///
+  /// - Parameter type: The value to decode.
+  /// - Returns: The decoded value.
+  /// - Throws: ``DatabaseColumnDecodingError`` when the column's storage class or contents cannot
+  ///   produce `type`.
   mutating func decode<Value: QueryRepresentable>(
     _ type: Value.Type
   ) throws -> Value.QueryOutput
 
-  /// Decodes a tuple of Structured Queries values from this row.
+  /// Decodes the next columns of this row as a tuple of Structured Queries values.
+  ///
+  /// - Parameter type: The tuple of values to decode, one column each.
+  /// - Returns: The decoded values.
+  /// - Throws: ``DatabaseColumnDecodingError`` when a column's storage class or contents cannot
+  ///   produce its value.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   mutating func decode<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
@@ -19,18 +44,38 @@ public protocol DatabaseRow: ~Copyable, ~Escapable {
 /// Cursors are tied to the transaction that created them. They must be consumed before the
 /// transaction access operation returns, and the current row must not be retained after advancing
 /// the cursor.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.rowCursor(#sql("SELECT title FROM reminders", as: Void.self))
+///   try cursor.forEach { row in
+///     print(try row.decode(String.self))
+///   }
+/// }
+/// ```
 public protocol DatabaseRowCursor: ~Copyable, ~Escapable {
+  /// The row this cursor lends.
   associatedtype Row: ~Copyable, ~Escapable, DatabaseRow
 
   /// Advances the cursor and lends the next row, or returns `nil` when exhausted.
+  ///
+  /// - Returns: The next row, valid only until the cursor advances again.
+  /// - Throws: A ``SQLiteError`` when the statement fails while producing the row.
   @_lifetime(&self)
   mutating func next() throws -> Row?
 
   /// Calls `body` for every remaining row in the cursor.
+  ///
+  /// - Parameter body: Receives each row in turn.
+  /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
   mutating func forEach(_ body: (inout Row) throws -> Void) throws
 }
 
 extension DatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
+  /// Calls `body` for every remaining row in the cursor.
+  ///
+  /// - Parameter body: Receives each row in turn.
+  /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
   @inlinable
   public mutating func forEach(_ body: (inout Row) throws -> Void) throws {
     while var row = try next() {
@@ -40,17 +85,68 @@ extension DatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
 }
 
 /// A cursor over decoded values returned by a database statement.
+///
+/// Rows are decoded and produced one at a time, so a query whose results do not fit in memory can
+/// still be walked. The lazy adapters below — ``map(_:)``, ``filter(_:)``, ``prefix(_:)`` and the
+/// rest — compose without materializing anything, and the terminal operations such as
+/// ``collect()`` and ``count()`` consume the cursor.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.fetchCursor(Reminder.all)
+///     .filter { !$0.isCompleted }
+///     .map(\.title)
+///   return try cursor.collect()
+/// }
+/// ```
 public protocol DatabaseCursor<Element>: ~Copyable, ~Escapable {
+  /// The value this cursor produces for each row.
   associatedtype Element
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
+  ///
+  /// - Returns: The next value, or `nil` once every row has been produced.
+  /// - Throws: A ``SQLiteError`` when the statement fails, or a decoding error for a row that
+  ///   cannot produce ``Element``.
   mutating func next() throws -> Element?
+
+  /// Calls `body` for every remaining value in the cursor.
+  ///
+  /// - Parameter body: Receives each value in turn.
+  /// - Throws: Whatever `body` throws, or whatever ``next()`` throws.
   mutating func forEach(_ body: (inout Element) throws -> Void) throws
 }
 
+extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
+  /// Calls `body` for every remaining value in the cursor.
+  ///
+  /// - Parameter body: Receives each value in turn.
+  /// - Throws: Whatever `body` throws, or whatever ``next()`` throws.
+  @inlinable
+  public mutating func forEach(_ body: (inout Element) throws -> Void) throws {
+    while var value = try next() {
+      try body(&value)
+    }
+  }
+}
+
 /// A cursor that decodes each raw row into one Structured Queries value.
+///
+/// This is what ``DatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement that
+/// projects a single value, so it is rarely named directly.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor: DatabaseQueryCursor = try transaction.fetchCursor(Reminder.all)
+///   while let reminder = try cursor.next() {
+///     print(reminder.title)
+///   }
+/// }
+/// ```
 public struct DatabaseQueryCursor<Base: DatabaseRowCursor, Value: QueryRepresentable>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Value.QueryOutput
 
   @usableFromInline
@@ -62,28 +158,32 @@ where Base: ~Copyable, Base: ~Escapable {
     self.base = base
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Value.QueryOutput? {
     guard var row = try base.next() else { return nil }
     return try row.decode(Value.self)
   }
-
-  @inlinable
-  public mutating func forEach(
-    _ body: (inout Value.QueryOutput) throws -> Void
-  ) throws {
-    try base.forEach { row in
-      var value = try row.decode(Value.self)
-      try body(&value)
-    }
-  }
 }
 
 /// A cursor that decodes each raw row into a tuple of Structured Queries values.
+///
+/// This is what ``DatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement that
+/// projects several values, so it is rarely named directly.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.fetchCursor(Reminder.select { ($0.id, $0.title) })
+///   while let (id, title) = try cursor.next() {
+///     print(id, title)
+///   }
+/// }
+/// ```
 @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
 public struct DatabaseTupleQueryCursor<Base: DatabaseRowCursor, each Value: QueryRepresentable>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = (repeat (each Value).QueryOutput)
 
   @usableFromInline
@@ -95,27 +195,25 @@ where Base: ~Copyable, Base: ~Escapable {
     self.base = base
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> (repeat (each Value).QueryOutput)? {
     guard var row = try base.next() else { return nil }
     return try row.decode((repeat each Value).self)
   }
-
-  @inlinable
-  public mutating func forEach(
-    _ body: (inout (repeat (each Value).QueryOutput)) throws -> Void
-  ) throws {
-    try base.forEach { row in
-      var value = try row.decode((repeat each Value).self)
-      try body(&value)
-    }
-  }
 }
 
 /// A cursor that lazily transforms each value from a base cursor.
+///
+/// Created by ``DatabaseCursor/map(_:)``.
+///
+/// ```swift
+/// var titles = try transaction.fetchCursor(Reminder.all).map(\.title)
+/// ```
 public struct DatabaseMapCursor<Base: DatabaseCursor, Output>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Output
 
   @usableFromInline
@@ -133,25 +231,25 @@ where Base: ~Copyable, Base: ~Escapable {
     self.transform = transform
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Output? {
     guard let value = try base.next() else { return nil }
     return try transform(value)
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Output) throws -> Void) throws {
-    try base.forEach { value in
-      var output = try transform(value)
-      try body(&output)
-    }
-  }
 }
 
 /// A cursor that lazily filters values from a base cursor.
+///
+/// Created by ``DatabaseCursor/filter(_:)``.
+///
+/// ```swift
+/// var pending = try transaction.fetchCursor(Reminder.all).filter { !$0.isCompleted }
+/// ```
 public struct DatabaseFilterCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Base.Element
 
   @usableFromInline
@@ -169,6 +267,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.predicate = predicate
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Base.Element? {
     while let value = try base.next() {
@@ -178,21 +277,19 @@ where Base: ~Copyable, Base: ~Escapable {
     }
     return nil
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
-    try base.forEach { value in
-      if try predicate(value) {
-        try body(&value)
-      }
-    }
-  }
 }
 
 /// A cursor that lazily transforms and drops `nil` values from a base cursor.
+///
+/// Created by ``DatabaseCursor/compactMap(_:)``.
+///
+/// ```swift
+/// var ids = try transaction.fetchCursor(Reminder.all).compactMap { Int($0.title) }
+/// ```
 public struct DatabaseCompactMapCursor<Base: DatabaseCursor, Output>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Output
 
   @usableFromInline
@@ -210,6 +307,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.transform = transform
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Output? {
     while let value = try base.next() {
@@ -219,21 +317,19 @@ where Base: ~Copyable, Base: ~Escapable {
     }
     return nil
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Output) throws -> Void) throws {
-    try base.forEach { value in
-      if var output = try transform(value) {
-        try body(&output)
-      }
-    }
-  }
 }
 
 /// A cursor that lazily skips a fixed number of values from a base cursor.
+///
+/// Created by ``DatabaseCursor/dropFirst(_:)``.
+///
+/// ```swift
+/// var afterTheFirstTen = try transaction.fetchCursor(Reminder.all).dropFirst(10)
+/// ```
 public struct DatabaseDropFirstCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Base.Element
 
   @usableFromInline
@@ -249,6 +345,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.remaining = count
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Base.Element? {
     while remaining > 0 {
@@ -260,25 +357,20 @@ where Base: ~Copyable, Base: ~Escapable {
     }
     return try base.next()
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
-    var remaining = remaining
-    try base.forEach { value in
-      if remaining > 0 {
-        remaining -= 1
-      } else {
-        try body(&value)
-      }
-    }
-    self.remaining = remaining
-  }
 }
 
 /// A cursor that lazily skips values while a predicate succeeds.
+///
+/// Created by ``DatabaseCursor/drop(while:)``.
+///
+/// ```swift
+/// var fromTheFirstPending = try transaction.fetchCursor(Reminder.all)
+///   .drop(while: \.isCompleted)
+/// ```
 public struct DatabaseDropWhileCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Base.Element
 
   @usableFromInline
@@ -298,6 +390,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.predicate = predicate
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Base.Element? {
     while isDropping {
@@ -313,27 +406,19 @@ where Base: ~Copyable, Base: ~Escapable {
     }
     return try base.next()
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
-    var isDropping = isDropping
-    try base.forEach { value in
-      if isDropping {
-        if try predicate(value) {
-          return
-        }
-        isDropping = false
-      }
-      try body(&value)
-    }
-    self.isDropping = isDropping
-  }
 }
 
 /// A cursor that lazily limits iteration to a fixed number of values.
+///
+/// Created by ``DatabaseCursor/prefix(_:)``.
+///
+/// ```swift
+/// var firstTen = try transaction.fetchCursor(Reminder.all).prefix(10)
+/// ```
 public struct DatabasePrefixCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Base.Element
 
   @usableFromInline
@@ -349,6 +434,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.remaining = count
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Base.Element? {
     guard remaining > 0 else { return nil }
@@ -359,19 +445,20 @@ where Base: ~Copyable, Base: ~Escapable {
     remaining -= 1
     return value
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
-    while var value = try next() {
-      try body(&value)
-    }
-  }
 }
 
 /// A cursor that lazily limits iteration while a predicate succeeds.
+///
+/// Created by ``DatabaseCursor/prefix(while:)``.
+///
+/// ```swift
+/// var leadingCompleted = try transaction.fetchCursor(Reminder.all)
+///   .prefix(while: \.isCompleted)
+/// ```
 public struct DatabasePrefixWhileCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = Base.Element
 
   @usableFromInline
@@ -391,6 +478,7 @@ where Base: ~Copyable, Base: ~Escapable {
     self.predicate = predicate
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> Base.Element? {
     guard !isFinished, let value = try base.next() else {
@@ -403,19 +491,22 @@ where Base: ~Copyable, Base: ~Escapable {
     }
     return value
   }
-
-  @inlinable
-  public mutating func forEach(_ body: (inout Base.Element) throws -> Void) throws {
-    while var value = try next() {
-      try body(&value)
-    }
-  }
 }
 
 /// A cursor that pairs each value with its zero-based offset.
+///
+/// Created by ``DatabaseCursor/enumerated()``.
+///
+/// ```swift
+/// var numbered = try transaction.fetchCursor(Reminder.all).enumerated()
+/// while let (offset, reminder) = try numbered.next() {
+///   print(offset, reminder.title)
+/// }
+/// ```
 public struct DatabaseEnumeratedCursor<Base: DatabaseCursor>:
   DatabaseCursor, ~Copyable, ~Escapable
 where Base: ~Copyable, Base: ~Escapable {
+  /// The value this cursor produces for each row.
   public typealias Element = (offset: Int, element: Base.Element)
 
   @usableFromInline
@@ -429,29 +520,28 @@ where Base: ~Copyable, Base: ~Escapable {
     self.base = base
   }
 
+  /// Advances the cursor and returns the next value, or `nil` when exhausted.
   @inlinable
   public mutating func next() throws -> (offset: Int, element: Base.Element)? {
     guard let value = try base.next() else { return nil }
     defer { offset += 1 }
     return (offset: offset, element: value)
   }
-
-  @inlinable
-  public mutating func forEach(
-    _ body: (inout (offset: Int, element: Base.Element)) throws -> Void
-  ) throws {
-    var offset = offset
-    try base.forEach { value in
-      var enumerated = (offset: offset, element: value)
-      offset += 1
-      try body(&enumerated)
-    }
-    self.offset = offset
-  }
 }
 
 extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Lazily transforms each value in this cursor.
+  ///
+  /// Nothing is read from the database until the returned cursor is advanced.
+  ///
+  /// ```swift
+  /// var titles = try transaction.fetchCursor(Reminder.all).map(\.title)
+  /// let uppercased = try titles.map { $0.uppercased() }.collect()
+  /// ```
+  ///
+  /// - Parameter transform: Produces the value the returned cursor yields for each value of this
+  ///   one.
+  /// - Returns: A cursor over the transformed values.
   @_lifetime(copy self)
   @inlinable
   public consuming func map<Output>(
@@ -461,6 +551,13 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily filters values in this cursor.
+  ///
+  /// ```swift
+  /// var pending = try transaction.fetchCursor(Reminder.all).filter { !$0.isCompleted }
+  /// ```
+  ///
+  /// - Parameter predicate: Answers whether a value is kept.
+  /// - Returns: A cursor over the values `predicate` accepted.
   @_lifetime(copy self)
   @inlinable
   public consuming func filter(
@@ -470,6 +567,13 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily transforms values in this cursor and drops `nil` results.
+  ///
+  /// ```swift
+  /// var dueDates = try transaction.fetchCursor(Reminder.all).compactMap(\.dueDate)
+  /// ```
+  ///
+  /// - Parameter transform: Produces a value to yield, or `nil` to skip this one.
+  /// - Returns: A cursor over the non-`nil` transformed values.
   @_lifetime(copy self)
   @inlinable
   public consuming func compactMap<Output>(
@@ -479,6 +583,9 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily drops the first `count` values from this cursor.
+  ///
+  /// - Parameter count: How many values to skip. Must not be negative.
+  /// - Returns: A cursor over the values after the first `count`.
   @_lifetime(copy self)
   @inlinable
   public consuming func dropFirst(_ count: Int) -> DatabaseDropFirstCursor<Self> {
@@ -486,6 +593,17 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily drops values while the predicate succeeds.
+  ///
+  /// Once a value fails `predicate`, that value and every value after it are yielded, whether or
+  /// not they would have passed.
+  ///
+  /// ```swift
+  /// var fromTheFirstPending = try transaction.fetchCursor(Reminder.all)
+  ///   .drop(while: \.isCompleted)
+  /// ```
+  ///
+  /// - Parameter predicate: Answers whether a leading value is still being dropped.
+  /// - Returns: A cursor beginning at the first value `predicate` rejected.
   @_lifetime(copy self)
   @inlinable
   public consuming func drop(
@@ -495,6 +613,9 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily limits this cursor to at most `maxLength` values.
+  ///
+  /// - Parameter maxLength: The greatest number of values to yield. Must not be negative.
+  /// - Returns: A cursor over at most `maxLength` values.
   @_lifetime(copy self)
   @inlinable
   public consuming func prefix(_ maxLength: Int) -> DatabasePrefixCursor<Self> {
@@ -502,6 +623,11 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily limits this cursor while the predicate succeeds.
+  ///
+  /// The cursor ends at the first value `predicate` rejects, which is not yielded.
+  ///
+  /// - Parameter predicate: Answers whether iteration continues.
+  /// - Returns: A cursor over the leading values `predicate` accepted.
   @_lifetime(copy self)
   @inlinable
   public consuming func prefix(
@@ -511,6 +637,15 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Lazily pairs each value with its zero-based offset.
+  ///
+  /// ```swift
+  /// var numbered = try transaction.fetchCursor(Reminder.all).enumerated()
+  /// while let (offset, reminder) = try numbered.next() {
+  ///   print(offset, reminder.title)
+  /// }
+  /// ```
+  ///
+  /// - Returns: A cursor over `(offset:element:)` pairs.
   @_lifetime(copy self)
   @inlinable
   public consuming func enumerated() -> DatabaseEnumeratedCursor<Self> {
@@ -518,12 +653,30 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Eagerly collects the remaining values into an array.
+  ///
+  /// ```swift
+  /// let titles = try await database.read { transaction in
+  ///   var cursor = try transaction.fetchCursor(Reminder.select(\.title))
+  ///   return try cursor.collect()
+  /// }
+  /// ```
+  ///
+  /// - Returns: Every remaining value, in the order the statement produced it.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func collect() throws -> [Element] {
     try collect(as: [Element].self)
   }
 
   /// Eagerly collects the remaining values into a range-replaceable collection.
+  ///
+  /// ```swift
+  /// let titles = try cursor.collect(as: ContiguousArray<String>.self)
+  /// ```
+  ///
+  /// - Parameter type: The collection to build.
+  /// - Returns: Every remaining value, in the order the statement produced it.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func collect<C: RangeReplaceableCollection>(
     as type: C.Type
@@ -536,6 +689,14 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Eagerly collects the remaining values into a set-algebra collection.
+  ///
+  /// ```swift
+  /// let distinctTitles = try cursor.collect(as: Set<String>.self)
+  /// ```
+  ///
+  /// - Parameter type: The collection to build.
+  /// - Returns: Every remaining value, with duplicates merged by the collection.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func collect<C: SetAlgebra>(
     as type: C.Type
@@ -548,18 +709,32 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns whether the cursor has no remaining values.
+  ///
+  /// - Returns: `true` when the statement produced no further row.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func isEmpty() throws -> Bool {
     try next() == nil
   }
 
   /// Returns the first remaining value, or `nil` if the cursor is empty.
+  ///
+  /// Only one row is read, so this is the cheap way to ask for a single result.
+  ///
+  /// - Returns: The next value, or `nil`.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func first() throws -> Element? {
     try next()
   }
 
   /// Returns the first remaining value matching a predicate, or `nil` if no value matches.
+  ///
+  /// Iteration stops at the first match, so the rest of the statement is never stepped.
+  ///
+  /// - Parameter predicate: Answers whether a value is the one being looked for.
+  /// - Returns: The first matching value, or `nil`.
+  /// - Throws: Whatever `predicate` or ``next()`` throws.
   @inlinable
   public consuming func first(
     where predicate: (Element) throws -> Bool
@@ -573,6 +748,10 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns whether any remaining value matches a predicate.
+  ///
+  /// - Parameter predicate: Answers whether a value counts as a match.
+  /// - Returns: `true` as soon as a value matches.
+  /// - Throws: Whatever `predicate` or ``next()`` throws.
   @inlinable
   public consuming func contains(
     where predicate: (Element) throws -> Bool
@@ -586,6 +765,10 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns whether every remaining value matches a predicate.
+  ///
+  /// - Parameter predicate: Answers whether a value is acceptable.
+  /// - Returns: `false` as soon as a value fails, and `true` for an empty cursor.
+  /// - Throws: Whatever `predicate` or ``next()`` throws.
   @inlinable
   public consuming func allSatisfy(
     _ predicate: (Element) throws -> Bool
@@ -599,12 +782,22 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns the number of remaining values.
+  ///
+  /// Every row is stepped and decoded. `SELECT count(*)` is the cheaper question to ask the
+  /// database when only the count is wanted; see ``DatabaseReadTransaction/fetchCount(_:)``.
+  ///
+  /// - Returns: How many values remained.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func count() throws -> Int {
     try count { _ in true }
   }
 
   /// Returns the number of remaining values matching a predicate.
+  ///
+  /// - Parameter predicate: Answers whether a value is counted.
+  /// - Returns: How many remaining values matched.
+  /// - Throws: Whatever `predicate` or ``next()`` throws.
   @inlinable
   public consuming func count(
     where predicate: (Element) throws -> Bool
@@ -619,6 +812,16 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Reduces the remaining values into a single result.
+  ///
+  /// ```swift
+  /// let totalTitleLength = try cursor.reduce(0) { $0 + $1.title.count }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - initialResult: The value the reduction starts from.
+  ///   - nextPartialResult: Combines the running result with the next value.
+  /// - Returns: The final result.
+  /// - Throws: Whatever `nextPartialResult` or ``next()`` throws.
   @inlinable
   public consuming func reduce<Result>(
     _ initialResult: Result,
@@ -632,6 +835,16 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Reduces the remaining values into a mutable result.
+  ///
+  /// ```swift
+  /// let byID = try cursor.reduce(into: [Int: Reminder]()) { $0[$1.id] = $1 }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - initialResult: The value the reduction starts from.
+  ///   - updateAccumulatingResult: Folds the next value into the running result.
+  /// - Returns: The final result.
+  /// - Throws: Whatever `updateAccumulatingResult` or ``next()`` throws.
   @inlinable
   public consuming func reduce<Result>(
     into initialResult: Result,
@@ -645,18 +858,28 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns the minimum remaining value, or `nil` if the cursor is empty.
+  ///
+  /// - Returns: The smallest remaining value, or `nil`.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func min() throws -> Element? where Element: Comparable {
     try min(by: <)
   }
 
   /// Returns the maximum remaining value, or `nil` if the cursor is empty.
+  ///
+  /// - Returns: The largest remaining value, or `nil`.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func max() throws -> Element? where Element: Comparable {
     try max(by: <)
   }
 
   /// Returns the minimum remaining value according to a comparison predicate.
+  ///
+  /// - Parameter areInIncreasingOrder: Answers whether its first argument sorts before its second.
+  /// - Returns: The smallest remaining value, or `nil` when the cursor is empty.
+  /// - Throws: Whatever `areInIncreasingOrder` or ``next()`` throws.
   @inlinable
   public consuming func min(
     by areInIncreasingOrder: (Element, Element) throws -> Bool
@@ -675,6 +898,10 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns the maximum remaining value according to a comparison predicate.
+  ///
+  /// - Parameter areInIncreasingOrder: Answers whether its first argument sorts before its second.
+  /// - Returns: The largest remaining value, or `nil` when the cursor is empty.
+  /// - Throws: Whatever `areInIncreasingOrder` or ``next()`` throws.
   @inlinable
   public consuming func max(
     by areInIncreasingOrder: (Element, Element) throws -> Bool
@@ -693,6 +920,16 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns the minimum and maximum remaining values, or `nil` if the cursor is empty.
+  ///
+  /// One pass answers both, which is the point: a cursor cannot be walked twice.
+  ///
+  /// ```swift
+  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// let bounds = try cursor.minMax()
+  /// ```
+  ///
+  /// - Returns: The smallest and largest remaining values, or `nil`.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func minMax() throws -> (min: Element, max: Element)?
   where Element: Comparable {
@@ -700,6 +937,10 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   }
 
   /// Returns the minimum and maximum remaining values according to a comparison predicate.
+  ///
+  /// - Parameter areInIncreasingOrder: Answers whether its first argument sorts before its second.
+  /// - Returns: The smallest and largest remaining values, or `nil` when the cursor is empty.
+  /// - Throws: Whatever `areInIncreasingOrder` or ``next()`` throws.
   @inlinable
   public consuming func minMax(
     by areInIncreasingOrder: (Element, Element) throws -> Bool
@@ -726,7 +967,17 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 
   /// Returns the `k` largest remaining values, ordered from largest to smallest.
   ///
-  /// Fewer than `k` values are returned when the cursor holds fewer than `k` values.
+  /// Fewer than `k` values are returned when the cursor holds fewer than `k` values. Only `k`
+  /// values are ever held at once, so this scales to a result set that would not fit in memory.
+  ///
+  /// ```swift
+  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// let highestIDs = try cursor.topK(3)
+  /// ```
+  ///
+  /// - Parameter k: How many values to keep. Must not be negative.
+  /// - Returns: The `k` largest values, largest first.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func topK(_ k: Int) throws -> [Element] where Element: Comparable {
     try topK(k, by: <)
@@ -736,6 +987,12 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// largest to smallest.
   ///
   /// Fewer than `k` values are returned when the cursor holds fewer than `k` values.
+  ///
+  /// - Parameters:
+  ///   - k: How many values to keep. Must not be negative.
+  ///   - areInIncreasingOrder: Answers whether its first argument sorts before its second.
+  /// - Returns: The `k` largest values, largest first.
+  /// - Throws: Whatever `areInIncreasingOrder` or ``next()`` throws.
   @inlinable
   public consuming func topK(
     _ k: Int,
@@ -757,6 +1014,15 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// The `min` values are ordered from smallest to largest and the `max` values from largest to
   /// smallest. Both groups draw from the same values, so they overlap when the cursor holds fewer
   /// than `2 * k` values.
+  ///
+  /// ```swift
+  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// let (lowest, highest) = try cursor.minMaxK(3)
+  /// ```
+  ///
+  /// - Parameter k: How many values to keep at each end. Must not be negative.
+  /// - Returns: The `k` smallest and the `k` largest values.
+  /// - Throws: Whatever ``next()`` throws.
   @inlinable
   public consuming func minMaxK(
     _ k: Int
@@ -770,6 +1036,12 @@ extension DatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// The `min` values are ordered from smallest to largest and the `max` values from largest to
   /// smallest. Both groups draw from the same values, so they overlap when the cursor holds fewer
   /// than `2 * k` values.
+  ///
+  /// - Parameters:
+  ///   - k: How many values to keep at each end. Must not be negative.
+  ///   - areInIncreasingOrder: Answers whether its first argument sorts before its second.
+  /// - Returns: The `k` smallest and the `k` largest values.
+  /// - Throws: Whatever `areInIncreasingOrder` or ``next()`` throws.
   @inlinable
   public consuming func minMaxK(
     _ k: Int,

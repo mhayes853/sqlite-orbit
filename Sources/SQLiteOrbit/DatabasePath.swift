@@ -7,6 +7,12 @@ import Foundation
 /// connection — or a second process — to reach. Naming those outright is what lets a pool refuse a
 /// database its readers could never see, and lets an identifier be unique when it has to be,
 /// without either of them testing a string for the same special values.
+///
+/// ```swift
+/// let onDisk = DatabasePath.file(URL.documentsDirectory.appending(path: "reminders.sqlite"))
+/// let driver = try SQLiteQueueDriver(path: onDisk)
+/// let scratch = try SQLiteQueueDriver(path: .memory)
+/// ```
 public struct DatabasePath: Hashable, Sendable {
   private enum Storage: Hashable, Sendable {
     case memory
@@ -28,6 +34,9 @@ public struct DatabasePath: Hashable, Sendable {
   public static let temporary = Self(storage: .temporary)
 
   /// The database file at `url`.
+  ///
+  /// - Parameter url: A file URL. It is standardized, so two spellings of one file compare equal.
+  /// - Returns: The path naming that file.
   public static func file(_ url: URL) -> Self {
     Self(storage: .file(url.standardizedFileURL.path))
   }
@@ -37,6 +46,8 @@ public struct DatabasePath: Hashable, Sendable {
   ///
   /// A relative path is resolved against the current directory, so the same database is the same
   /// `DatabasePath` however it was spelled.
+  ///
+  /// - Parameter path: The path SQLite would be handed.
   public init(_ path: String) {
     switch path {
     case ":memory:": self = .memory
@@ -73,12 +84,20 @@ public struct DatabasePath: Hashable, Sendable {
 }
 
 extension DatabasePath: ExpressibleByStringLiteral {
+  /// Reads a string literal the way ``init(_:)`` does, so `":memory:"` names an in-memory database.
+  ///
+  /// ```swift
+  /// let driver = try SQLiteQueueDriver(path: ":memory:")
+  /// ```
+  ///
+  /// - Parameter value: The path SQLite would be handed.
   public init(stringLiteral value: String) {
     self.init(value)
   }
 }
 
 extension DatabasePath: CustomStringConvertible {
+  /// The path SQLite is handed, which is also how a connection queue is labelled.
   public var description: String {
     sqlitePath
   }

@@ -1,4 +1,17 @@
 /// An error reported by SQLite.
+///
+/// Every failure the engine surfaces from a statement is one of these, carrying the code SQLite
+/// returned, the message it had for the connection, and the SQL that was running.
+///
+/// ```swift
+/// do {
+///   try await database.write { transaction in
+///     try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///   }
+/// } catch let error as SQLiteError where error.primaryCode == .constraint {
+///   print(error.message ?? "")
+/// }
+/// ```
 public struct SQLiteError: Error, Hashable, Sendable {
   /// The extended result code, which carries the primary code in its low byte.
   public let code: SQLiteResultCode
@@ -9,6 +22,12 @@ public struct SQLiteError: Error, Hashable, Sendable {
   /// The SQL being prepared or run when the failure was reported.
   public let sql: String?
 
+  /// Creates an error describing a SQLite failure.
+  ///
+  /// - Parameters:
+  ///   - code: The result code SQLite returned.
+  ///   - message: The message SQLite associated with the connection, when there was one.
+  ///   - sql: The SQL that was running.
   public init(code: SQLiteResultCode, message: String? = nil, sql: String? = nil) {
     self.code = code
     self.message = message
@@ -38,6 +57,7 @@ public struct SQLiteError: Error, Hashable, Sendable {
 }
 
 extension SQLiteError: CustomStringConvertible {
+  /// The code, SQLite's message, and the SQL that was running.
   public var description: String {
     var description = "SQLite error \(code.rawValue)"
     if let message {

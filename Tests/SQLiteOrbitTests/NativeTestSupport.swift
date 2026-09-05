@@ -2,6 +2,20 @@
   import Foundation
   import SQLiteOrbit
 
+  /// A unique path in the temporary directory, for a test that needs a real database file.
+  func temporaryDatabasePath(_ label: String = "db") -> String {
+    NSTemporaryDirectory() + "sqlite-orbit-\(label)-\(UUID().uuidString).sqlite"
+  }
+
+  /// The in-memory, single-connection database most tests here want.
+  func inMemoryDatabase(
+    configuration: SQLiteConfiguration = .default
+  ) throws -> InterprocessDatabase<SQLiteQueueDriver> {
+    InterprocessDatabase(
+      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    )
+  }
+
   /// Runs `body` against a file-backed pool opened with `configuration`, then deletes the file.
   ///
   /// A pool opens reader connections as concurrent reads demand them, which is what shows whether

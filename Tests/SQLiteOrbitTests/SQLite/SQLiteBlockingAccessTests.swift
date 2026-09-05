@@ -11,7 +11,7 @@
     let path: DatabasePath
     init() {
       self.path = DatabasePath(
-        NSTemporaryDirectory() + "sqlite-orbit-blocking-\(UUID().uuidString).sqlite"
+        temporaryDatabasePath("blocking")
       )
     }
     deinit {

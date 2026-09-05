@@ -6,7 +6,18 @@ import StructuredQueries
 /// of scope. That is only safe because the cursor is nonescapable: it cannot outlive the
 /// transaction that created it, so a cached statement can never be lent twice or survive its
 /// connection.
+///
+/// This is the ``DatabaseRowCursor`` the native drivers lend; it is created by
+/// ``DatabaseReadTransaction/rowCursor(_:cached:)`` rather than directly.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor: SQLiteRowCursor = try transaction.rowCursor(Reminder.select(\.title))
+///   try cursor.forEach { print(try $0.decode(String.self)) }
+/// }
+/// ```
 public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
+  /// The row this cursor lends.
   public typealias Row = SQLiteRow
 
   /// The connection's library table, borrowed rather than copied.
@@ -79,6 +90,13 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
     }
   }
 
+  /// Steps the statement and lends the row it produced, or returns `nil` once it is done.
+  ///
+  /// The returned row is only valid until the cursor advances again. A statement that fails
+  /// leaves the cursor exhausted, so the failure is reported once.
+  ///
+  /// - Returns: The next row, or `nil` when the statement has no more.
+  /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
   @inlinable
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
@@ -98,6 +116,20 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
 }
 
 /// One result row, valid only until its cursor advances.
+///
+/// Each `decode` reads the next column of the row, so decoding a row's columns is a walk from
+/// left to right rather than a set of random accesses.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.rowCursor(
+///     #sql("SELECT id, title FROM reminders", as: Void.self)
+///   )
+///   while var row: SQLiteRow = try cursor.next() {
+///     print(try row.decode(Int.self), try row.decode(String.self))
+///   }
+/// }
+/// ```
 public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
   @usableFromInline
   var decoder: SQLiteRowDecoder
@@ -108,6 +140,12 @@ public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
     self.decoder = SQLiteRowDecoder(library: cursor.library, statement: cursor.statement)
   }
 
+  /// Decodes the next column of this row.
+  ///
+  /// - Parameter type: The value to decode.
+  /// - Returns: The decoded value.
+  /// - Throws: ``DatabaseColumnDecodingError`` naming the column when its storage class or
+  ///   contents cannot produce `type`.
   @inlinable
   public mutating func decode<Value: QueryRepresentable>(
     _ type: Value.Type
@@ -119,6 +157,11 @@ public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
     }
   }
 
+  /// Decodes the next columns of this row as a tuple, one column per value.
+  ///
+  /// - Parameter type: The tuple of values to decode.
+  /// - Returns: The decoded values.
+  /// - Throws: ``DatabaseColumnDecodingError`` naming the column that could not be decoded.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   @inlinable
   public mutating func decode<each Value: QueryRepresentable>(

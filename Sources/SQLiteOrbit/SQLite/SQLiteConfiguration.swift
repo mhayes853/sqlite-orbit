@@ -1,4 +1,15 @@
 /// The settings a native SQLite driver applies to every connection it opens.
+///
+/// A configuration is applied once per connection, before any transaction can reach it, so a
+/// collation or function registered here is present on every connection a pool opens.
+///
+/// ```swift
+/// var configuration = SQLiteConfiguration.default
+/// configuration.readerCount = 8
+/// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
+/// configuration.register(function: $repeated)
+/// let driver = try SQLitePoolDriver(path: .file(url), configuration: configuration)
+/// ```
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
   public var library: SQLiteLibrary
@@ -31,6 +42,17 @@ public struct SQLiteConfiguration: Sendable {
   /// Native callbacks installed on every connection.
   public var connectionSetups: [SQLiteConnectionSetup]
 
+  /// Creates a configuration for connections opened against `library`.
+  ///
+  /// - Parameters:
+  ///   - library: The SQLite build the driver runs against.
+  ///   - readerCount: How many reader connections a pool opens.
+  ///   - busyTimeout: How long SQLite waits for a lock before reporting `SQLITE_BUSY`.
+  ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
+  ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
+  ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
+  ///   - setupSQL: SQL run on every connection once it has been configured.
+  ///   - connectionSetups: Native callbacks installed on every connection.
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
@@ -67,9 +89,21 @@ public struct SQLiteConfiguration: Sendable {
 
 /// Typed Swift callback registration was requested for a SQLite library whose callback ABI is not
 /// supplied by this package.
+///
+/// Thrown when a connection is opened with a configuration that registered a typed collation or
+/// function against a ``SQLiteLibrary`` other than ``SQLiteLibrary/system``.
+///
+/// ```swift
+/// var configuration = SQLiteConfiguration(library: myCustomBuild)
+/// configuration.register(function: $repeated)
+/// // Throws `SQLiteTypedCallbacksUnavailableError` when the connection is opened.
+/// _ = try? SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+/// ```
 public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertible, Sendable {
+  /// Creates the error.
   public init() {}
 
+  /// Explains that typed callbacks need ``SQLiteLibrary/system``.
   public var description: String {
     """
     Typed Swift collations and functions require SQLiteLibrary.system. Register callbacks through \
@@ -87,15 +121,31 @@ public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertib
 /// the connection belongs to, and lets one that cannot refuse the connection outright.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
+///
+/// ```swift
+/// var configuration = SQLiteConfiguration.default
+/// configuration.connectionSetups.append(
+///   SQLiteConnectionSetup { connection, library in
+///     library.busy_timeout(connection, 10_000)
+///   }
+/// )
+/// ```
 public struct SQLiteConnectionSetup: Sendable {
   private let install: @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32
 
+  /// Creates a setup from a closure run on every connection.
+  ///
+  /// - Parameter install: Receives the `sqlite3 *` and the library it was opened through, and
+  ///   returns a SQLite result code. Anything other than `SQLITE_OK` fails the open.
   public init(install: @escaping @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32) {
     self.install = install
   }
 
   /// Installs the setup on `connection`, which was opened through `library`.
   ///
+  /// - Parameters:
+  ///   - connection: The `sqlite3 *` to install on.
+  ///   - library: The SQLite build that connection was opened through.
   /// - Throws: Whatever the setup threw, or a ``SQLiteError`` when it reported a result code other
   ///   than `SQLITE_OK`. Either fails the open that ran it.
   public func callAsFunction(_ connection: OpaquePointer, library: SQLiteLibrary) throws {
@@ -111,50 +161,76 @@ public struct SQLiteConnectionSetup: Sendable {
 
   extension SQLiteConfiguration {
     /// The default configuration, running against the SQLite this package was linked against.
+    ///
+    /// ```swift
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.isForeignKeysEnabled = false
+    /// ```
     public static var `default`: Self {
       Self(library: .system)
     }
 
     /// Registers a collating sequence on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(collation: CaseInsensitiveCollation())
+    /// ```
+    ///
+    /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
     public mutating func register(
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
-      connectionSetups.append(
-        SQLiteConnectionSetup { connection, library in
-          try Self.requireLinkedCallbackABI(of: library)
-          return orbitInstall(collation: collation, on: connection)
-        }
-      )
+      registerTyped { orbitInstall(collation: collation, on: $0) }
     }
 
     /// Registers a scalar function on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// @DatabaseFunction(isDeterministic: true)
+    /// func repeated(_ text: String, _ count: Int) -> String {
+    ///   String(repeating: text, count: count)
+    /// }
+    ///
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(function: $repeated)
+    /// ```
+    ///
+    /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-      connectionSetups.append(
-        SQLiteConnectionSetup { connection, library in
-          try Self.requireLinkedCallbackABI(of: library)
-          return orbitInstall(function: function, on: connection)
-        }
-      )
+      registerTyped { orbitInstall(function: function, on: $0) }
     }
 
     /// Registers an aggregate function on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(function: $longestTitle)
+    /// ```
+    ///
+    /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-      connectionSetups.append(
-        SQLiteConnectionSetup { connection, library in
-          try Self.requireLinkedCallbackABI(of: library)
-          return orbitInstall(function: function, on: connection)
-        }
-      )
+      registerTyped { orbitInstall(function: function, on: $0) }
     }
 
-    /// Refuses a connection whose SQLite is not the one these registrations compile against.
+    /// Adds a setup that installs static C callbacks, refusing any connection whose SQLite is not
+    /// the one those callbacks compile against.
     ///
-    /// A typed registration installs static C callbacks that reach for the linked SQLite's value,
-    /// result, and context entry points directly rather than through `library`. Handing those
-    /// callbacks a value belonging to another build would be reading one SQLite's memory with
-    /// another's layout, so the connection is refused instead.
-    private static func requireLinkedCallbackABI(of library: SQLiteLibrary) throws {
-      guard library.supportsTypedCallbacks else { throw SQLiteTypedCallbacksUnavailableError() }
+    /// A typed registration installs callbacks that reach for the linked SQLite's value, result,
+    /// and context entry points directly rather than through `library`. Handing those callbacks a
+    /// value belonging to another build would be reading one SQLite's memory with another's
+    /// layout, so the connection is refused instead.
+    private mutating func registerTyped(
+      _ install: @escaping @Sendable (OpaquePointer) -> Int32
+    ) {
+      connectionSetups.append(
+        SQLiteConnectionSetup { connection, library in
+          guard library.supportsTypedCallbacks else {
+            throw SQLiteTypedCallbacksUnavailableError()
+          }
+          return install(connection)
+        }
+      )
     }
   }
 #endif

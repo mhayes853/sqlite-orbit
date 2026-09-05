@@ -54,6 +54,20 @@
     #expect(SQLiteFunctionFlags.innocuous.rawValue == SQLITE_INNOCUOUS)
   }
 
+  /// SQLite qualifies some successes with extended bits, and those are still successes.
+  @Test
+  func resultCodesReportSuccessThroughTheirExtendedBits() {
+    #expect(SQLiteResultCode.ok.isSuccess)
+    #expect(SQLiteResultCode.row.isSuccess)
+    #expect(SQLiteResultCode.done.isSuccess)
+    // `SQLITE_OK_LOAD_PERMANENTLY` is 256; `SQLITE_BUSY_SNAPSHOT` is 517.
+    #expect(SQLiteResultCode(rawValue: 256).isSuccess)
+    #expect(SQLiteResultCode(rawValue: 256).primary == .ok)
+    #expect(!SQLiteResultCode.busy.isSuccess)
+    #expect(!SQLiteResultCode(rawValue: 517).isSuccess)
+    #expect(SQLiteResultCode(rawValue: 517).primary == .busy)
+  }
+
   /// Drives a query end to end through nothing but the function table.
   ///
   /// No wrapper types exist yet, which is the point: this proves the package can reach SQLite
@@ -74,9 +88,10 @@
 
     var statement: OpaquePointer?
     #expect(
-      "SELECT 1, 'hello', 2.5, NULL".withCString {
-        library.prepare_v3(connection, $0, -1, 0, &statement, nil)
-      } == SQLiteResultCode.ok.rawValue
+      "SELECT 1, 'hello', 2.5, NULL"
+        .withCString {
+          library.prepare_v3(connection, $0, -1, 0, &statement, nil)
+        } == SQLiteResultCode.ok.rawValue
     )
     defer { _ = library.finalize(statement) }
 
@@ -128,18 +143,27 @@
 
     var insert: OpaquePointer?
     #expect(
-      "INSERT INTO items (title) VALUES (?)".withCString {
-        library.prepare_v3(connection, $0, -1, SQLitePrepareFlags.persistent.rawValue, &insert, nil)
-      } == SQLiteResultCode.ok.rawValue
+      "INSERT INTO items (title) VALUES (?)"
+        .withCString {
+          library.prepare_v3(
+            connection,
+            $0,
+            -1,
+            SQLitePrepareFlags.persistent.rawValue,
+            &insert,
+            nil
+          )
+        } == SQLiteResultCode.ok.rawValue
     )
     defer { _ = library.finalize(insert) }
 
     #expect(library.stmt_readonly(insert) == 0)
     #expect(library.bind_parameter_count(insert) == 1)
     #expect(
-      "Blob".withCString {
-        library.bind_text(insert, 1, $0, -1)
-      } == SQLiteResultCode.ok.rawValue
+      "Blob"
+        .withCString {
+          library.bind_text(insert, 1, $0, -1)
+        } == SQLiteResultCode.ok.rawValue
     )
     #expect(library.step(insert) == SQLiteResultCode.done.rawValue)
     #expect(library.changes(connection) == 1)
@@ -149,9 +173,10 @@
     #expect(library.reset(insert) == SQLiteResultCode.ok.rawValue)
     #expect(library.clear_bindings(insert) == SQLiteResultCode.ok.rawValue)
     #expect(
-      "Blob Jr".withCString {
-        library.bind_text(insert, 1, $0, -1)
-      } == SQLiteResultCode.ok.rawValue
+      "Blob Jr"
+        .withCString {
+          library.bind_text(insert, 1, $0, -1)
+        } == SQLiteResultCode.ok.rawValue
     )
     #expect(library.step(insert) == SQLiteResultCode.done.rawValue)
     #expect(library.last_insert_rowid(connection) == 2)
@@ -218,9 +243,10 @@
     #expect(library.extended_result_codes(connection, 1) == SQLiteResultCode.ok.rawValue)
 
     var statement: OpaquePointer?
-    let code = "SELECT * FROM missing".withCString {
-      library.prepare_v3(connection, $0, -1, 0, &statement, nil)
-    }
+    let code = "SELECT * FROM missing"
+      .withCString {
+        library.prepare_v3(connection, $0, -1, 0, &statement, nil)
+      }
     #expect(SQLiteResultCode(rawValue: code).primary == .error)
 
     let message = String(cString: try #require(library.errmsg(connection)))

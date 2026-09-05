@@ -6,9 +6,7 @@
 
   @Test
   func sqliteQueryLayerIsReachableThroughSQLiteOrbitAlone() async throws {
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:")
-    )
+    let database = try inMemoryDatabase()
 
     try await database.write { transaction in
       _ = try transaction.execute(

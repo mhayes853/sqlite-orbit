@@ -1,9 +1,42 @@
 #if canImport(Darwin) || canImport(Glibc)
+  import Dispatch
   import Foundation
   import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
+
+  /// Holds the open lock for `databaseIdentifier` on a thread of its own until `release` is called.
+  ///
+  /// The holder parks on a semaphore rather than polling, so the test never trades correctness for
+  /// a sleep interval.
+  private final class OpenLockHolder: Sendable {
+    private let acquired = DispatchSemaphore(value: 0)
+    private let mayRelease = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+
+    init(
+      _ databaseIdentifier: DatabaseIdentifier,
+      in directory: URL,
+      onRelease: @escaping @Sendable () -> Void = {}
+    ) {
+      Thread.detachNewThread {
+        try? DatabaseOpenLock.withLock(databaseIdentifier: databaseIdentifier, directory: directory)
+        {
+          self.acquired.signal()
+          self.mayRelease.wait()
+          onRelease()
+        }
+        self.released.signal()
+      }
+      acquired.wait()
+    }
+
+    func release() {
+      mayRelease.signal()
+      released.wait()
+    }
+  }
 
   private func makeTempDirectory() throws -> URL {
     let directory = FileManager.default.temporaryDirectory
@@ -18,20 +51,10 @@
     defer { try? FileManager.default.removeItem(at: directory) }
     let databaseIdentifier = DatabaseIdentifier(rawValue: "open-lock")
     let order = Mutex([String]())
-    let isHeld = Mutex(false)
-    let mayRelease = Mutex(false)
 
-    Thread.detachNewThread {
-      try? DatabaseOpenLock.withLock(
-        databaseIdentifier: databaseIdentifier,
-        directory: directory
-      ) {
-        isHeld.withLock { $0 = true }
-        while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
-        order.withLock { $0.append("first") }
-      }
+    let holder = OpenLockHolder(databaseIdentifier, in: directory) {
+      order.withLock { $0.append("first") }
     }
-    try await waitUntil { isHeld.withLock { $0 } }
 
     let didAcquireSecond = Mutex(false)
     Thread.detachNewThread {
@@ -43,32 +66,23 @@
         didAcquireSecond.withLock { $0 = true }
       }
     }
+
+    // The second acquisition cannot be observed to *not* happen without giving it a chance to.
     try await Task.sleep(for: .milliseconds(50))
     #expect(order.withLock { $0 }.isEmpty)
 
-    mayRelease.withLock { $0 = true }
+    holder.release()
     try await waitUntil { didAcquireSecond.withLock { $0 } }
     #expect(order.withLock { $0 } == ["first", "second"])
   }
 
   @Test
-  func openLockDoesNotBlockDifferentDatabases() async throws {
+  func openLockDoesNotBlockDifferentDatabases() throws {
     let directory = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
-    let isHeld = Mutex(false)
-    let mayRelease = Mutex(false)
 
-    Thread.detachNewThread {
-      try? DatabaseOpenLock.withLock(
-        databaseIdentifier: DatabaseIdentifier(rawValue: "one"),
-        directory: directory
-      ) {
-        isHeld.withLock { $0 = true }
-        while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
-      }
-    }
-    try await waitUntil { isHeld.withLock { $0 } }
-    defer { mayRelease.withLock { $0 = true } }
+    let holder = OpenLockHolder(DatabaseIdentifier(rawValue: "one"), in: directory)
+    defer { holder.release() }
 
     let didAcquire = try DatabaseOpenLock.withLock(
       databaseIdentifier: DatabaseIdentifier(rawValue: "two"),
