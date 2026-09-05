@@ -1,27 +1,45 @@
-# swift-sqlite-cross
+# sqlite-orbit
 
-`swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
-database across multiple processes.
+`sqlite-orbit` is a SQLite application framework for Swift: typed transactions, lazy cursors,
+value observation, and cross-process coordination, so several processes can share one database
+and react to each other's writes.
 
-`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
+```swift
+import SQLiteOrbit
+
+let database = try OrbitDatabase(path: databasePath)
+
+try await database.write { transaction in
+  try transaction.execute(Reminder.insert { reminder })
+}
+
+for try await reminders in OrbitValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
+  .values(in: database)
+{
+  render(reminders)
+}
+```
+
+`OrbitDatabaseReader` and `OrbitDatabaseWriter` define the synchronous and asynchronous boundaries
 around the native SQLite implementation, which lends distinct `SQLiteReadTransaction` and
 `SQLiteWriteTransaction` values. Read transactions can only query, while write transactions can
 query and execute mutations. Transactions and rows are nonescapable, so a database-owned SQLite
-connection cannot outlive its access closure. `ValueObservation` builds callback and
+connection cannot outlive its access closure. `OrbitValueObservation` builds callback and
 asynchronous-sequence observation on that transaction boundary, both within one process and across
 cooperating processes.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
-query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
+query construction and binding layer, and `import SQLiteOrbit` re-exports it, so no second import is
 needed to build statements. Statements can be executed and decoded directly by any read or write
 transaction.
 
-Whether a statement needs a write transaction is read off its type. A `DatabaseQuery<Access>` pairs
-a statement with the capability it requires, and can only be built from a statement that already has
-it: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
-write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
-definition, and this is checked at compile time rather than by a list of known statement types.
-Statements the query library keeps private, such as the one behind `union`, are classified too.
+Whether a statement needs a write transaction is read off its type. An `OrbitDatabaseQuery<Access>`
+pairs a statement with the capability it requires, and can only be built from a statement that
+already has it: every `SELECT`-shaped statement can become a read query, and any statement at all
+can become a write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or
+trigger definition, and this is checked at compile time rather than by a list of known statement
+types. Statements the query library keeps private, such as the one behind `union`, are classified
+too.
 
 Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
 write transactions alike, and the caller is stating which it is.
@@ -31,9 +49,9 @@ write transactions alike, and the caller is stating which it is.
 The package ships its own SQLite driver, which is the default and needs no third-party dependency:
 
 ```swift
-import SQLiteCross
+import SQLiteOrbit
 
-let database = try SQLiteCrossDatabase(path: databasePath)
+let database = try OrbitDatabase(path: databasePath)
 
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -46,28 +64,28 @@ let reminders = try await database.read { transaction in
 
 Two drivers back it:
 
-- `SQLitePoolDriver` runs the database in WAL mode with one writer and a fixed set of readers.
+- `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
-  queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
-  a thread.
-- `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for a
-  `DatabasePath.memory` or `.temporary` database, which is private to the connection that opened it
-  and so cannot be pooled at all.
+  queued behind it, so a read issued after a write observes it. Waiting suspends rather than
+  blocking a thread.
+- `SQLiteQueue` serializes every access through a single connection. This is the driver for an
+  `OrbitDatabasePath.memory` or `.temporary` database, which is private to the connection that
+  opened it and so cannot be pooled at all.
 
 Each connection runs on a dispatch queue of its own, so a query never occupies a cooperative-pool
 thread.
 
-A driver is opened with a `DatabasePath` rather than a string, so the databases that no second
+A driver is opened with an `OrbitDatabasePath` rather than a string, so the databases that no second
 connection can reach are named outright:
 
 ```swift
-let onDisk = DatabasePath.file(url)         // or DatabasePath("/path/to/db.sqlite")
-let inMemory = DatabasePath.memory          // ":memory:"
-let scratch = DatabasePath.temporary        // ""
+let onDisk = OrbitDatabasePath.file(url)         // or OrbitDatabasePath("/path/to/db.sqlite")
+let inMemory = OrbitDatabasePath.memory          // ":memory:"
+let scratch = OrbitDatabasePath.temporary        // ""
 ```
 
-A file path resolves to an absolute path, so the same database is the same `DatabasePath` however
-it was spelled. String literals convert, so `try SQLiteQueueDriver(path: ":memory:")` still reads
+A file path resolves to an absolute path, so the same database is the same `OrbitDatabasePath`
+however it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
 the way it always did.
 
 ## Using your own SQLite build
@@ -82,7 +100,7 @@ library.open_v2 = myBuild.open_v2
 // ...or build the whole table from your own module's symbols.
 
 var configuration = SQLiteConfiguration(library: library)
-let database = try SQLiteCrossDatabase(path: databasePath, configuration: configuration)
+let database = try OrbitDatabase(path: databasePath, configuration: configuration)
 ```
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
@@ -90,9 +108,23 @@ it links no SQLite at all, leaving the library entirely to you:
 
 ```swift
 .package(
-  url: "https://github.com/your-org/swift-sqlite-cross",
+  url: "https://github.com/your-org/sqlite-orbit",
   from: "0.1.0",
   traits: []
+)
+```
+
+The `SQLCipher` trait links SQLCipher instead and vends `SQLiteLibrary.sqlCipher`. It is mutually
+exclusive with `SystemSQLite`: SQLCipher is a fork of SQLite and exports the same `sqlite3_*`
+symbols, so enabling both would link two builds under one set of names and leave the link order to
+decide which one every call reaches. Naming any trait leaves the defaults out, which is what makes
+the two exclusive in practice:
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["SQLCipher"]
 )
 ```
 
@@ -130,7 +162,7 @@ try await database.read { transaction in
   )
 
   try transaction.fetchCount(Reminder.where { !$0.isCompleted })
-  try transaction.find(Reminder.all, key: 42)  // throws DatabaseRecordNotFoundError
+  try transaction.find(Reminder.all, key: 42)  // throws OrbitDatabaseRecordNotFoundError
 }
 ```
 
@@ -147,8 +179,8 @@ let titles = try await database.write { transaction in
 }
 ```
 
-When a column does not decode, the failure is a `DatabaseColumnDecodingError` naming the column's
-index and name, the storage class actually found, and the statement's SQL.
+When a column does not decode, the failure is an `OrbitDatabaseColumnDecodingError` naming the
+column's index and name, the storage class actually found, and the statement's SQL.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:
@@ -210,6 +242,67 @@ Terminal operations consume the remaining cursor values. Operations such as `fir
 `contains`, and `allSatisfy` stop as soon as their result is known; reductions and `min`/`max`
 visit every remaining value. `minMax` computes both extrema in one traversal.
 
+## Encrypted databases
+
+With the `SQLCipher` trait enabled, an encrypted database needs only a key:
+
+```swift
+let database = try OrbitDatabase(
+  path: databasePath,
+  configuration: .sqlCipher(key: .passphrase(secret))
+)
+```
+
+A build with a codec adds `sqlite3_key_v2` and `sqlite3_rekey_v2`, which stock SQLite does not
+have. `SQLiteConfiguration.sqlCipher(key:)` pairs the key with a library that has them, so there is
+nothing to get wrong. Supplying your own build with a codec means filling the same two entry points
+in yourself:
+
+```swift
+var library = myCipherBuild
+library.encryption = SQLiteLibrary.Encryption(
+  key_v2: sqlite3_key_v2,
+  rekey_v2: sqlite3_rekey_v2
+)
+
+var configuration = SQLiteConfiguration(library: library)
+configuration.key = .passphrase(secret)
+
+let database = try OrbitDatabase(path: databasePath, configuration: configuration)
+```
+
+The key is applied before every other thing a connection does — before the first statement, and
+before anything reads the file — so nothing can precede it and find the database unreadable. Every
+connection a pool opens is keyed, not only its writer.
+
+`SQLiteKey` is handed to the build as bytes rather than run as `PRAGMA key`, so the key is never
+prepared, never cached, and never carried by the `sql` of the error a wrong key produces. It holds
+its own copy of the material and wipes it when the last reference goes away, and it prints as
+`SQLiteKey(redacted)` so that logging a configuration cannot spill it. That wiping limits how long
+the key sits in freed memory rather than guaranteeing anything about the process, and it cannot
+reach material you hold: the `String` a passphrase was read from stays yours to manage.
+
+`withUnsafeBytes` lends the key out for work the package does not model — calling a build's
+`sqlite3_rekey_v2` from a `SQLiteConnectionSetup`, or keying a database brought in with `ATTACH`:
+
+```swift
+configuration.connectionSetups.append(
+  SQLiteConnectionSetup { connection, library in
+    key.withUnsafeBytes { bytes in
+      library.encryption!.rekey_v2(connection, "main", bytes.baseAddress, Int32(bytes.count))
+    }
+  }
+)
+```
+
+Setting a key on a library with no `encryption` fails the open with
+`SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no
+codec, so that is a fact about the build rather than a claim about it.
+
+A codec accepts any key and only reports a wrong one once something reads the file, so a keyed
+connection reads the schema while it is being configured. A wrong key fails the open rather than
+the first query the caller happens to run.
+
 ## Collations and functions
 
 Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
@@ -228,7 +321,7 @@ extension Collation where Self == NamedCollation {
 var configuration = SQLiteConfiguration.default
 configuration.register(collation: $localized)
 
-let database = try SQLiteCrossDatabase(
+let database = try OrbitDatabase(
   path: databasePath,
   configuration: configuration
 )
@@ -243,22 +336,23 @@ function is only known to the connection it was installed on. The native pool ow
 connections, so installing on one directly would leave queries on every other connection failing
 with "no such collation sequence".
 
-These typed registration helpers are available with `SystemSQLite`, because their static C
-callbacks must use the same SQLite ABI as the connection. With a fully caller-supplied SQLite
-build, register callbacks through that build's API using the transaction's raw connection instead.
+These helpers work against any SQLite build. A collation's comparator is handed its own user data
+directly, and a function's callbacks read their arguments and write their results through the same
+`SQLiteLibrary` the connection was opened with, so a caller-supplied build drives them exactly as
+the linked one does.
 
-`InterprocessDatabase` is `Identifiable`. Its native writer supplies the default database
+`OrbitDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
 ## Observation
 
-`SQLiteQueueDriver`, `SQLitePoolDriver`, and `InterprocessDatabase` are observable databases. A
+`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A
 value observation fetches an initial value, then fetches again after every committed write:
 
 ```swift
-let reminders = ValueObservation.tracking { transaction in
+let reminders = OrbitValueObservation.tracking { transaction in
   try transaction.fetchAll(Reminder.all)
 }
 
@@ -303,7 +397,7 @@ let subscription = try reminders.subscribe(
 )
 ```
 
-Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
+Retain the returned `OrbitSubscription` for as long as changes should be delivered. Multiple
 subscribers to the same observation and database share one fetch. Observations support ordered,
 non-terminal transformations after each database fetch has ended:
 
@@ -356,7 +450,7 @@ On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in 
 an `Animation` without importing a second package product:
 
 ```swift
-let scheduler = MainActorValueObservationScheduler.mainActor.animation(.default)
+let scheduler = OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
 let subscription = try reminders.subscribe(
   to: database,
   scheduling: scheduler,
@@ -393,10 +487,10 @@ after SQLite commits. A rollback, including a failed `COMMIT`, discards that val
 announcements trigger a fresh read instead. Fetch failures end the callback subscription or
 throwing asynchronous sequence; they never roll back the write whose final state was being fetched.
 
-For transaction lifecycle events that do not produce a value, register a
-`DatabaseTransactionObserver` directly with any `SQLiteObservableDatabase`. Its `databaseWillCommit`
-hook receives a read-only view of the pending transaction and may throw to abort the write;
-`databaseDidCommit` identifies the transaction's local or external origin.
+For transaction lifecycle events that do not produce a value, register an
+`OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
+`databaseWillCommit` hook receives a read-only view of the pending transaction and may throw to
+abort the write; `databaseDidCommit` identifies the transaction's local or external origin.
 
 ## Cross-process transport
 
@@ -404,14 +498,14 @@ The package includes a public, configurable Unix-domain datagram transport. Proc
 communicate must use the same coordination directory and database identifier:
 
 ```swift
-let transport = try UnixDatagramDatabaseIPCTransport(
+let transport = try UnixDatagramIPCTransport(
   configuration: .init(
     directory: coordinationDirectory,
     backPressure: .suspend(upTo: .milliseconds(250))
   )
 )
 
-let databaseIdentifier = DatabaseIdentifier(rawValue: "example.sqlite")
+let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "example.sqlite")
 let subscription = try transport.subscribe(to: databaseIdentifier) { message in
   switch message {
   case .transactionDidCommit:
@@ -426,7 +520,7 @@ try await transport.send(
 )
 ```
 
-Retain the `SQLiteCrossSubscription` for as long as messages should be delivered. Cancelling it, or
+Retain the `OrbitSubscription` for as long as messages should be delivered. Cancelling it, or
 releasing its final copy, removes the process's registration when it has no other subscriber for
 that database.
 
@@ -435,24 +529,24 @@ are discoverable at that moment. A successful return means every discovered peer
 message into its kernel receive queue, not that its handler has already run. No unbounded
 user-space queue is used:
 
-- `.fail` attempts every peer once and reports a `DatabaseIPCPartialDeliveryError` if any queue is
+- `.fail` attempts every peer once and reports an `OrbitIPCPartialDeliveryError` if any queue is
   full or another peer fails.
 - `.suspend(upTo:)` retries only backpressured peers until the shared deadline, then reports partial
   delivery. Task cancellation also cancels the wait.
 
 Messages use a private versioned binary envelope and are decoded from `Span`; callers exchange
-`DatabaseIPCMessage` values rather than serialized `Data`. `DatabaseIPCMessage` is nonexhaustive so
+`OrbitIPCMessage` values rather than serialized `Data`. `OrbitIPCMessage` is nonexhaustive so
 the library can add coordination messages in future versions.
 
 ## Opening a database for several processes
 
-`SQLiteCrossDatabase(path:)` owns opening the database, which is what lets it coordinate:
+`OrbitDatabase(path:)` owns opening the database, which is what lets it coordinate:
 
 ```swift
-let database = try SQLiteCrossDatabase(path: databasePath)
+let database = try OrbitDatabase(path: databasePath)
 ```
 
-The database is opened by `SQLitePoolDriver`, so it runs in WAL mode with concurrent readers and a
+The database is opened by `SQLitePool`, so it runs in WAL mode with concurrent readers and a
 single writer, and every connection gets a busy timeout. Without one, a write that overlaps another
 process's write fails outright rather than waiting its turn.
 
@@ -468,14 +562,14 @@ temporary directory; sandboxed applications must supply one both processes can r
 Group container:
 
 ```swift
-let database = try SQLiteCrossDatabase(
+let database = try OrbitDatabase(
   path: databasePath,
   coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
 )
 ```
 
 A database private to its connection cannot be shared between processes, or pooled, so
-`SQLitePoolDriver` rejects one; use `SQLiteQueueDriver` for those.
+`SQLitePool` rejects one; use `SQLiteQueue` for those.
 
 Constructing a driver yourself remains available for a database you configure and open on your own.
 That cannot coordinate opening, so pass a transport explicitly if the database is also opened
@@ -501,5 +595,5 @@ Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise 
 writing task's cancellation, since peers still need to learn about a commit that happened. A write
 that throws is rolled back by its driver and is not announced.
 
-An observed `InterprocessDatabase` also subscribes to its peers. Incoming announcements are exposed
+An observed `OrbitDatabase` also subscribes to its peers. Incoming announcements are exposed
 as external transaction events and cause active value observations to refetch.

@@ -21,6 +21,10 @@ jobs:
           # The linked system SQLite, which is what a caller gets by default.
           - name: default traits
             traits: ""
+          # SQLCipher in place of the platform SQLite. The two are mutually exclusive, so this
+          # also covers the package building with `SystemSQLite` off.
+          - name: SQLCipher
+            traits: "--traits SQLCipher"
     steps:
       - uses: actions/checkout@v4
 
