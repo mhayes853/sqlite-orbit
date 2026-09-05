@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-  name: "swift-sqlite-cross",
+  name: "sqlite-orbit",
   platforms: [
     .macOS(.v13),
     .iOS(.v16),
@@ -12,7 +12,7 @@ let package = Package(
     .visionOS(.v1)
   ],
   products: [
-    .library(name: "SQLiteCross", targets: ["SQLiteCross"])
+    .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"])
   ],
   traits: [
     .default(enabledTraits: ["SystemSQLite"]),
@@ -36,7 +36,7 @@ let package = Package(
       ]
     ),
     .target(
-      name: "SQLiteCross",
+      name: "SQLiteOrbit",
       dependencies: [
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
@@ -50,9 +50,9 @@ let package = Package(
       ]
     ),
     .testTarget(
-      name: "SQLiteCrossTests",
+      name: "SQLiteOrbitTests",
       dependencies: [
-        "SQLiteCross",
+        "SQLiteOrbit",
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",

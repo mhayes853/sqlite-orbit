@@ -1,6 +1,6 @@
-# swift-sqlite-cross
+# sqlite-orbit
 
-`swift-sqlite-cross` is a transaction and observation foundation for coordinating a SQLite
+`sqlite-orbit` is a transaction and observation foundation for coordinating a SQLite
 database across multiple processes.
 
 `SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
@@ -12,7 +12,7 @@ asynchronous-sequence observation on that transaction boundary, both within one 
 cooperating processes.
 
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
-query construction and binding layer, and `import SQLiteCross` re-exports it, so no second import is
+query construction and binding layer, and `import SQLiteOrbit` re-exports it, so no second import is
 needed to build statements. Statements can be executed and decoded directly by any read or write
 transaction.
 
@@ -31,9 +31,9 @@ write transactions alike, and the caller is stating which it is.
 The package ships its own SQLite driver, which is the default and needs no third-party dependency:
 
 ```swift
-import SQLiteCross
+import SQLiteOrbit
 
-let database = try SQLiteCrossDatabase(path: databasePath)
+let database = try OrbitDatabase(path: databasePath)
 
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -82,7 +82,7 @@ library.open_v2 = myBuild.open_v2
 // ...or build the whole table from your own module's symbols.
 
 var configuration = SQLiteConfiguration(library: library)
-let database = try SQLiteCrossDatabase(path: databasePath, configuration: configuration)
+let database = try OrbitDatabase(path: databasePath, configuration: configuration)
 ```
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
@@ -90,7 +90,7 @@ it links no SQLite at all, leaving the library entirely to you:
 
 ```swift
 .package(
-  url: "https://github.com/your-org/swift-sqlite-cross",
+  url: "https://github.com/your-org/sqlite-orbit",
   from: "0.1.0",
   traits: []
 )
@@ -228,7 +228,7 @@ extension Collation where Self == NamedCollation {
 var configuration = SQLiteConfiguration.default
 configuration.register(collation: $localized)
 
-let database = try SQLiteCrossDatabase(
+let database = try OrbitDatabase(
   path: databasePath,
   configuration: configuration
 )
@@ -303,7 +303,7 @@ let subscription = try reminders.subscribe(
 )
 ```
 
-Retain the returned `SQLiteCrossSubscription` for as long as changes should be delivered. Multiple
+Retain the returned `OrbitSubscription` for as long as changes should be delivered. Multiple
 subscribers to the same observation and database share one fetch. Observations support ordered,
 non-terminal transformations after each database fetch has ended:
 
@@ -426,7 +426,7 @@ try await transport.send(
 )
 ```
 
-Retain the `SQLiteCrossSubscription` for as long as messages should be delivered. Cancelling it, or
+Retain the `OrbitSubscription` for as long as messages should be delivered. Cancelling it, or
 releasing its final copy, removes the process's registration when it has no other subscriber for
 that database.
 
@@ -446,10 +446,10 @@ the library can add coordination messages in future versions.
 
 ## Opening a database for several processes
 
-`SQLiteCrossDatabase(path:)` owns opening the database, which is what lets it coordinate:
+`OrbitDatabase(path:)` owns opening the database, which is what lets it coordinate:
 
 ```swift
-let database = try SQLiteCrossDatabase(path: databasePath)
+let database = try OrbitDatabase(path: databasePath)
 ```
 
 The database is opened by `SQLitePoolDriver`, so it runs in WAL mode with concurrent readers and a
@@ -468,7 +468,7 @@ temporary directory; sandboxed applications must supply one both processes can r
 Group container:
 
 ```swift
-let database = try SQLiteCrossDatabase(
+let database = try OrbitDatabase(
   path: databasePath,
   coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
 )
