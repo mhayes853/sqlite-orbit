@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import SQLiteOrbit
   import Testing
 

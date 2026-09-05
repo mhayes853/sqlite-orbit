@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import StructuredQueries
   import Synchronization
@@ -25,7 +25,7 @@
   private let endlessMarker = "RECURSIVE counter"
 
   private func observedLibrary(steps: CallCounter, interrupts: CallCounter) -> SQLiteLibrary {
-    let base = SQLiteLibrary.system
+    let base = builtInTestLibrary
     var library = base
     library.step = { statement in
       if let sql = base.sql(statement), String(cString: sql).contains(endlessMarker) {
@@ -214,7 +214,7 @@
   @Test
   func aDelayedCancellationCannotInterruptTheNextAccess() async throws {
     let probe = DelayedInterruptProbe()
-    let base = SQLiteLibrary.system
+    let base = builtInTestLibrary
     var library = base
     library.step = { statement in
       let sql = base.sql(statement).map(String.init(cString:)) ?? ""

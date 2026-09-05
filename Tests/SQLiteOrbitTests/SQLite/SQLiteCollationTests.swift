@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import SQLiteOrbit
   import Synchronization
   import Testing
@@ -103,8 +103,14 @@
     var configuration = SQLiteConfiguration.default
     configuration.library.create_collation_v2 = { connection, name, flags, box, compare, destroy in
       registrations.withLock { $0 += 1 }
-      return SQLiteLibrary.system
-        .create_collation_v2(connection, name, flags, box, compare, destroy)
+      return builtInTestLibrary.create_collation_v2(
+        connection,
+        name,
+        flags,
+        box,
+        compare,
+        destroy
+      )
     }
     configuration.register(collation: $reversedText)
 

@@ -180,7 +180,7 @@ extension SQLiteConfiguration {
   }
 }
 
-#if SystemSQLite
+#if BuiltInSQLite
   extension SQLiteConfiguration {
     /// The default configuration, running against the SQLite this package was linked against.
     ///
@@ -189,7 +189,7 @@ extension SQLiteConfiguration {
     /// configuration.isForeignKeysEnabled = false
     /// ```
     public static var `default`: Self {
-      Self(library: .system)
+      Self(library: .builtIn)
     }
   }
 #endif

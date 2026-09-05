@@ -46,7 +46,10 @@ let package = Package(
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
-        .enableExperimentalFeature("SuppressedAssociatedTypes")
+        .enableExperimentalFeature("SuppressedAssociatedTypes"),
+        // Every trait that links a SQLite of its own defines this, so that code needing only
+        // "some build is available" does not have to name each one.
+        .define("BuiltInSQLite", .when(traits: ["SystemSQLite"]))
       ]
     ),
     .testTarget(
@@ -61,7 +64,10 @@ let package = Package(
       ],
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
-        .enableExperimentalFeature("SuppressedAssociatedTypes")
+        .enableExperimentalFeature("SuppressedAssociatedTypes"),
+        // Every trait that links a SQLite of its own defines this, so that code needing only
+        // "some build is available" does not have to name each one.
+        .define("BuiltInSQLite", .when(traits: ["SystemSQLite"]))
       ]
     )
   ],

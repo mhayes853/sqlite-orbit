@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import StructuredQueries
   import Synchronization
@@ -204,7 +204,7 @@
   @Test
   func cursorsGiveTheirStatementBackToTheCache() throws {
     let counters = Mutex(0)
-    let base = SQLiteLibrary.system
+    let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
     // Only the fetches count; the transaction's own BEGIN and ROLLBACK are prepared uncached.

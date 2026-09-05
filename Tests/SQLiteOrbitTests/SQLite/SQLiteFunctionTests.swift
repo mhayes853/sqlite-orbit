@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import Synchronization
   import Testing
@@ -379,15 +379,15 @@
     var configuration = SQLiteConfiguration.default
     configuration.library.user_data = { context in
       userData.withLock { $0 += 1 }
-      return SQLiteLibrary.system.user_data(context)
+      return builtInTestLibrary.user_data(context)
     }
     configuration.library.value_text = { value in
       readArguments.withLock { $0 += 1 }
-      return SQLiteLibrary.system.value_text(value)
+      return builtInTestLibrary.value_text(value)
     }
     configuration.library.result_text = { context, text, count in
       writtenResults.withLock { $0 += 1 }
-      SQLiteLibrary.system.result_text(context, text, count)
+      builtInTestLibrary.result_text(context, text, count)
     }
     configuration.register(function: $repeated)
 
@@ -408,7 +408,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.library.aggregate_context = { context, size in
       aggregateContexts.withLock { $0 += 1 }
-      return SQLiteLibrary.system.aggregate_context(context, size)
+      return builtInTestLibrary.aggregate_context(context, size)
     }
     configuration.register(function: $longestTitle)
 

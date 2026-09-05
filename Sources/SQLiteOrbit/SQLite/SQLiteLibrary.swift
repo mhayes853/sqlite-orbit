@@ -418,3 +418,14 @@ public struct SQLiteLibrary: Sendable {
     )
   }
 #endif
+
+#if BuiltInSQLite
+  extension SQLiteLibrary {
+    // The build a default configuration runs against, whichever trait supplied it.
+    static var builtIn: Self {
+      #if SystemSQLite
+        .system
+      #endif
+    }
+  }
+#endif

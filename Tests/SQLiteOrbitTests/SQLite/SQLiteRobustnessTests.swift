@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import StructuredQueries
   import Synchronization
@@ -240,7 +240,7 @@
     var closed: Int { state.withLock { $0.closed } }
 
     var library: SQLiteLibrary {
-      let base = SQLiteLibrary.system
+      let base = builtInTestLibrary
       var library = base
       library.open_v2 = { path, connection, flags, vfs in
         let code = base.open_v2(path, connection, flags, vfs)
@@ -471,7 +471,7 @@
 
   @Test
   func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
-    let base = SQLiteLibrary.system
+    let base = builtInTestLibrary
     let isArmed = Mutex(true)
     var configuration = SQLiteConfiguration.default
     configuration.library.step = { statement in

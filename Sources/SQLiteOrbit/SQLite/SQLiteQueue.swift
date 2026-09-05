@@ -111,7 +111,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   }
 }
 
-#if SystemSQLite
+#if BuiltInSQLite
   extension SQLiteQueue {
     /// Opens a database using the SQLite this package was linked against.
     ///

@@ -1,4 +1,4 @@
-#if SystemSQLite && (canImport(Darwin) || canImport(Glibc))
+#if BuiltInSQLite && (canImport(Darwin) || canImport(Glibc))
   import Foundation
   @testable import SQLiteOrbit
   import StructuredQueries
