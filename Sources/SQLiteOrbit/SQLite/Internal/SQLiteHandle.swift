@@ -108,6 +108,9 @@ struct SQLiteHandle: ~Copyable {
     guard code == SQLiteResultCode.ok.rawValue else {
       throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
     }
+    // A codec accepts any key and only reports a wrong one when something reads the file. Reading
+    // the schema here is what turns that into a failed open rather than a failed first query.
+    try execute("SELECT count(*) FROM sqlite_schema")
   }
 
   borrowing func execute(_ sql: String) throws {

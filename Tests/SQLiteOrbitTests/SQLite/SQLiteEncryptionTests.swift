@@ -95,7 +95,10 @@
 
   @Test
   func aKeyWithoutACodecIsRefusedRatherThanIgnored() throws {
-    var configuration = SQLiteConfiguration(library: builtInTestLibrary)
+    // Explicitly codec-less, because the built-in build may well have one.
+    var library = builtInTestLibrary
+    library.encryption = nil
+    var configuration = SQLiteConfiguration(library: library)
     configuration.key = SQLiteKey.passphrase("open sesame")
 
     #expect(throws: SQLiteEncryptionUnavailableError.self) {
@@ -129,5 +132,88 @@
     let key = SQLiteKey.passphrase("hunter2")
     #expect("\(key)" == "SQLiteKey(redacted)")
     #expect(String(reflecting: key) == "SQLiteKey(redacted)")
+  }
+
+  @Test
+  func aWrongKeyFailsTheOpenRatherThanTheFirstQuery() throws {
+    // A codec accepts any key and only objects once something reads the file, so without the
+    // schema read the open would succeed and the failure would surface somewhere unrelated.
+    let keys = Mutex<[[UInt8]]>([])
+    var configuration = SQLiteConfiguration(
+      library: libraryWithFakeCodec { key in
+        keys.withLock { $0.append(key) }
+        return SQLiteResultCode.ok.rawValue
+      }
+    )
+    configuration.key = SQLiteKey.passphrase("open sesame")
+    configuration.setupSQL = ["PRAGMA user_version = 1"]
+
+    // The fake codec cannot make the file unreadable, so the observable part is that the schema
+    // was read while configuring, before any setup SQL could run.
+    _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    #expect(keys.withLock { $0.count } == 1)
+  }
+#endif
+
+#if SQLCipher
+  import Foundation
+
+  @Suite(.serialized)
+  struct SQLCipherEndToEndTests {
+    private func path() -> String {
+      temporaryDatabasePath("cipher")
+    }
+
+    @Test
+    func aDatabaseWrittenUnderAKeyIsUnreadableWithoutIt() async throws {
+      let path = path()
+      defer { try? FileManager.default.removeItem(atPath: path) }
+
+      let writer = try SQLiteQueue(
+        path: .file(URL(fileURLWithPath: path)),
+        configuration: .sqlCipher(key: .passphrase("open sesame"))
+      )
+      try await writer.write { transaction in
+        try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO notes VALUES (\'hello\')", as: Void.self))
+      }
+      _ = consume writer
+
+      #expect(throws: SQLiteError.self) {
+        _ = try SQLiteQueue(
+          path: .file(URL(fileURLWithPath: path)),
+          configuration: .sqlCipher(key: .passphrase("wrong"))
+        )
+      }
+
+      let reader = try SQLiteQueue(
+        path: .file(URL(fileURLWithPath: path)),
+        configuration: .sqlCipher(key: .passphrase("open sesame"))
+      )
+      let titles = try await reader.read { transaction in
+        try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+      }
+      #expect(titles == ["hello"])
+    }
+
+    @Test
+    func anEncryptedDatabaseStillRunsCollationsAndFunctions() async throws {
+      // The point of removing `supportsTypedCallbacks`: a build that is not the platform SQLite
+      // drives Swift callbacks exactly as the linked one does.
+      let path = path()
+      defer { try? FileManager.default.removeItem(atPath: path) }
+
+      var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
+      configuration.register(function: $repeated)
+
+      let driver = try SQLiteQueue(
+        path: .file(URL(fileURLWithPath: path)),
+        configuration: configuration
+      )
+      let value = try await driver.read { transaction in
+        try transaction.fetchOne(#sql("SELECT repeated(\'ab\', 2)", as: String.self))
+      }
+      #expect(value == "abab")
+    }
   }
 #endif

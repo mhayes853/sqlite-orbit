@@ -203,3 +203,25 @@ extension SQLiteConfiguration {
     }
   }
 #endif
+
+#if SQLCipher
+  extension SQLiteConfiguration {
+    /// A configuration that opens a database encrypted under `key`.
+    ///
+    /// ``SQLiteLibrary/sqlCipher`` carries a codec, so the key cannot be refused the way one set
+    /// against a build without one would be.
+    ///
+    /// ```swift
+    /// let database = try OrbitDatabase(
+    ///   path: .file(url),
+    ///   configuration: .sqlCipher(key: .passphrase(secret))
+    /// )
+    /// ```
+    ///
+    /// - Parameter key: The key the database is unlocked with.
+    /// - Returns: A configuration running against ``SQLiteLibrary/sqlCipher``.
+    public static func sqlCipher(key: SQLiteKey) -> Self {
+      Self(library: .sqlCipher, key: key)
+    }
+  }
+#endif

@@ -7,6 +7,8 @@
   var builtInTestLibrary: SQLiteLibrary {
     #if SystemSQLite
       .system
+    #elseif SQLCipher
+      .sqlCipher
     #endif
   }
 

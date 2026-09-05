@@ -12,7 +12,7 @@
 // The binding is taken once per transaction rather than per step, so it costs nothing on the paths
 // that matter.
 enum SQLiteCurrentLibrary {
-  private nonisolated(unsafe) static let key: pthread_key_t = {
+  private static let key: pthread_key_t = {
     var key = pthread_key_t()
     let code = pthread_key_create(&key, nil)
     precondition(code == 0, "Could not create the thread key a SQLite callback finds its build by.")
