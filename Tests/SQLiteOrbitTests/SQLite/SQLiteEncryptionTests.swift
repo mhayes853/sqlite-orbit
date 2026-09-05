@@ -136,6 +136,17 @@
   }
 
   @Test
+  func aKeyLendsItsBytesForWorkThePackageDoesNotModel() {
+    // Rekeying and keying an ATTACHed database both go through the build directly, so the key has
+    // to be reachable rather than only handable to a configuration.
+    let passphrase = SQLiteKey.passphrase("öpen sesame")
+    #expect(passphrase.withUnsafeBytes { Array($0) } == Array("öpen sesame".utf8))
+
+    let raw = SQLiteKey.raw([0x00, 0xFF, 0x00])
+    #expect(raw.withUnsafeBytes { Array($0) } == [0x00, 0xFF, 0x00])
+  }
+
+  @Test
   func aKeyDoesNotPrintItself() {
     let key = SQLiteKey.passphrase("hunter2")
     #expect("\(key)" == "SQLiteKey(redacted)")

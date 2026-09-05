@@ -278,8 +278,22 @@ connection a pool opens is keyed, not only its writer.
 `SQLiteKey` is handed to the build as bytes rather than run as `PRAGMA key`, so the key is never
 prepared, never cached, and never carried by the `sql` of the error a wrong key produces. It holds
 its own copy of the material and wipes it when the last reference goes away, and it prints as
-`SQLiteKey(redacted)` so that logging a configuration cannot spill it. A passphrase cannot wipe the
-`String` it was read from, which stays the caller's to manage.
+`SQLiteKey(redacted)` so that logging a configuration cannot spill it. That wiping limits how long
+the key sits in freed memory rather than guaranteeing anything about the process, and it cannot
+reach material you hold: the `String` a passphrase was read from stays yours to manage.
+
+`withUnsafeBytes` lends the key out for work the package does not model — calling a build's
+`sqlite3_rekey_v2` from a `SQLiteConnectionSetup`, or keying a database brought in with `ATTACH`:
+
+```swift
+configuration.connectionSetups.append(
+  SQLiteConnectionSetup { connection, library in
+    key.withUnsafeBytes { bytes in
+      library.encryption!.rekey_v2(connection, "main", bytes.baseAddress, Int32(bytes.count))
+    }
+  }
+)
+```
 
 Setting a key on a library with no `encryption` fails the open with
 `SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no

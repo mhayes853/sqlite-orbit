@@ -4,6 +4,10 @@
   import Glibc
 #endif
 
+// `memset` named indirectly. See `SQLiteKey.Storage.deinit`.
+private nonisolated(unsafe) let orbitEraseBytes:
+  @convention(c) (UnsafeMutableRawPointer, Int32, Int) -> UnsafeMutableRawPointer? = memset
+
 /// The key a build with a codec — SQLCipher, say — unlocks a database with.
 ///
 /// The key is handed to the build's `sqlite3_key_v2` as bytes rather than run as `PRAGMA key`, so
@@ -16,8 +20,10 @@
 /// let database = try OrbitDatabase(path: .file(url), configuration: configuration)
 /// ```
 ///
-/// The bytes this value holds are wiped when the last copy of it goes away. A passphrase built
-/// from a `String` cannot wipe the string it was read from, which is the caller's to manage.
+/// The bytes this value holds are wiped when the last copy of it goes away. That limits how long
+/// the key sits in freed memory; it is not a guarantee about the process, which may still have it
+/// in a swap file or a core dump. Nor can it reach material the caller holds: the `String` a
+/// passphrase was read from, or the array handed to ``raw(_:)``, stay theirs to manage.
 public struct SQLiteKey: Sendable {
   private let storage: Storage
 
@@ -25,17 +31,39 @@ public struct SQLiteKey: Sendable {
   ///
   /// - Parameter passphrase: The passphrase, taken as its UTF-8 bytes.
   public static func passphrase(_ passphrase: String) -> Self {
-    Self(storage: Storage(Array(passphrase.utf8)))
+    let utf8 = passphrase.utf8
+    return Self(
+      storage: Storage(byteCount: utf8.count) { buffer in
+        // Copied a byte at a time rather than through an array, which would stage the passphrase
+        // in an allocation that is freed without being wiped.
+        for (index, byte) in utf8.enumerated() { buffer[index] = byte }
+      }
+    )
   }
 
   /// A key the caller derived, handed to the build as-is.
   ///
   /// - Parameter bytes: The raw key material.
   public static func raw(_ bytes: [UInt8]) -> Self {
-    Self(storage: Storage(bytes))
+    Self(
+      storage: Storage(byteCount: bytes.count) { buffer in
+        bytes.withUnsafeBytes { buffer.copyMemory(from: $0) }
+      }
+    )
   }
 
-  func withUnsafeBytes<Result>(
+  /// Calls `body` with the key's bytes.
+  ///
+  /// This is how a caller reaches the material for work the package does not model — calling a
+  /// build's `sqlite3_rekey_v2` from a ``SQLiteConnectionSetup``, or keying a database brought in
+  /// with `ATTACH`.
+  ///
+  /// The buffer is only valid for the call. Copying it out puts the key somewhere this type cannot
+  /// wipe.
+  ///
+  /// - Parameter body: Receives the key's bytes.
+  /// - Returns: Whatever `body` returned.
+  public func withUnsafeBytes<Result: ~Copyable>(
     _ body: (UnsafeRawBufferPointer) throws -> Result
   ) rethrows -> Result {
     try body(UnsafeRawBufferPointer(storage.buffer))
@@ -44,22 +72,17 @@ public struct SQLiteKey: Sendable {
   private final class Storage: @unchecked Sendable {
     let buffer: UnsafeMutableRawBufferPointer
 
-    init(_ bytes: [UInt8]) {
-      buffer = .allocate(byteCount: bytes.count, alignment: 1)
-      bytes.withUnsafeBytes { buffer.copyMemory(from: $0) }
+    init(byteCount: Int, fill: (UnsafeMutableRawBufferPointer) -> Void) {
+      buffer = .allocate(byteCount: byteCount, alignment: 1)
+      fill(buffer)
     }
 
     deinit {
-      // Wiped through the platform's explicit erase, which the optimizer may not drop the way it
-      // may drop a plain store to memory that is about to be freed.
+      // Reached through a function pointer so the compiler cannot see that it is writing to memory
+      // about to be freed, and so cannot drop the store as dead. A plain assignment of zeroes here
+      // is exactly the store an optimizer is free to remove.
       if let base = buffer.baseAddress, buffer.count > 0 {
-        #if canImport(Darwin)
-          memset_s(base, buffer.count, 0, buffer.count)
-        #elseif canImport(Glibc)
-          explicit_bzero(base, buffer.count)
-        #else
-          base.initializeMemory(as: UInt8.self, repeating: 0, count: buffer.count)
-        #endif
+        _ = orbitEraseBytes(base, 0, buffer.count)
       }
       buffer.deallocate()
     }
