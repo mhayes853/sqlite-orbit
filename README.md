@@ -228,6 +228,39 @@ Terminal operations consume the remaining cursor values. Operations such as `fir
 `contains`, and `allSatisfy` stop as soon as their result is known; reductions and `min`/`max`
 visit every remaining value. `minMax` computes both extrema in one traversal.
 
+## Encrypted databases
+
+A build with a codec — SQLCipher, or an amalgamation compiled with one — adds `sqlite3_key_v2` and
+`sqlite3_rekey_v2`, which stock SQLite does not have. Those go on the library as
+`SQLiteLibrary.Encryption`, and the key itself goes on the configuration:
+
+```swift
+var library = myCipherBuild
+library.encryption = SQLiteLibrary.Encryption(
+  key_v2: sqlite3_key_v2,
+  rekey_v2: sqlite3_rekey_v2
+)
+
+var configuration = SQLiteConfiguration(library: library)
+configuration.key = .passphrase(secret)
+
+let database = try OrbitDatabase(path: databasePath, configuration: configuration)
+```
+
+The key is applied before every other thing a connection does — before the first statement, and
+before anything reads the file — so nothing can precede it and find the database unreadable. Every
+connection a pool opens is keyed, not only its writer.
+
+`SQLiteKey` is handed to the build as bytes rather than run as `PRAGMA key`, so the key is never
+prepared, never cached, and never carried by the `sql` of the error a wrong key produces. It holds
+its own copy of the material and wipes it when the last reference goes away, and it prints as
+`SQLiteKey(redacted)` so that logging a configuration cannot spill it. A passphrase cannot wipe the
+`String` it was read from, which stays the caller's to manage.
+
+Setting a key on a library with no `encryption` fails the open with
+`SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no
+codec, so that is a fact about the build rather than a claim about it.
+
 ## Collations and functions
 
 Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and

@@ -16,6 +16,13 @@ public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
   public var library: SQLiteLibrary
 
+  /// The key a database encrypted by a build with a codec is unlocked with.
+  ///
+  /// Applied before anything else a connection does, so no statement and no read of the file can
+  /// precede it. Setting it for a ``SQLiteLibrary`` without ``SQLiteLibrary/encryption`` fails the
+  /// open with ``SQLiteEncryptionUnavailableError``.
+  public var key: SQLiteKey?
+
   /// The number of reader connections a pool opens, and so how many reads can run at once.
   ///
   /// Each connection runs on a dispatch queue of its own, so this bounds threads rather than any
@@ -55,6 +62,7 @@ public struct SQLiteConfiguration: Sendable {
   ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
   ///   - setupSQL: SQL run on every connection once it has been configured.
   ///   - connectionSetups: Native callbacks installed on every connection.
+  ///   - key: The key an encrypted database is unlocked with.
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
@@ -63,9 +71,11 @@ public struct SQLiteConfiguration: Sendable {
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
     setupSQL: [String] = [],
-    connectionSetups: [SQLiteConnectionSetup] = []
+    connectionSetups: [SQLiteConnectionSetup] = [],
+    key: SQLiteKey? = nil
   ) {
     self.library = library
+    self.key = key
     self.readerCount = readerCount
     self.busyTimeout = busyTimeout
     self.isForeignKeysEnabled = isForeignKeysEnabled

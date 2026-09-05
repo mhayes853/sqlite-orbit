@@ -75,6 +75,9 @@ struct SQLiteHandle: ~Copyable {
   private borrowing func configure(_ configuration: SQLiteConfiguration) throws {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    // An encrypted database is unreadable until it is keyed, so this comes before every other
+    // thing the connection does rather than merely before the first statement.
+    try unlock(with: configuration.key)
     _ = libraryStorage.pointee.extended_result_codes(pointer, 1)
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
@@ -86,6 +89,24 @@ struct SQLiteHandle: ~Copyable {
     }
     for sql in configuration.setupSQL {
       try execute(sql)
+    }
+  }
+
+  private borrowing func unlock(with key: SQLiteKey?) throws {
+    guard let key else { return }
+    guard let encryption = libraryStorage.pointee.encryption else {
+      throw SQLiteEncryptionUnavailableError()
+    }
+    // The key is passed as bytes, so it never reaches a statement and never lands in the `sql` of
+    // the error a wrong key produces.
+    let code = key.withUnsafeBytes { bytes in
+      "main"
+        .withCString { name in
+          encryption.key_v2(pointer, name, bytes.baseAddress, Int32(bytes.count))
+        }
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
     }
   }
 

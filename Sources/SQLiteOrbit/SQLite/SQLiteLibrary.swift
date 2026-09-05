@@ -182,6 +182,42 @@ public struct SQLiteLibrary: Sendable {
       SQLiteDestructor?
     ) -> Int32
 
+  // MARK: - Encryption
+
+  /// The entry points a build with a codec adds, or `nil` for one without.
+  ///
+  /// Stock SQLite has no `sqlite3_key_v2`, so this is optional in a way the rest of the table is
+  /// not: its absence is a fact about the build rather than a claim about it. Both entry points
+  /// travel together, so a table cannot offer a key without the means to change it.
+  public struct Encryption: Sendable {
+    /// Unlocks a database: `sqlite3_key_v2`.
+    public var key_v2:
+      @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
+    /// Re-encrypts a database under a new key: `sqlite3_rekey_v2`.
+    public var rekey_v2:
+      @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
+
+    /// Creates the entry points from a build's own codec functions.
+    ///
+    /// - Parameters:
+    ///   - key_v2: The build's `sqlite3_key_v2`.
+    ///   - rekey_v2: The build's `sqlite3_rekey_v2`.
+    public init(
+      key_v2:
+        @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
+        Int32,
+      rekey_v2:
+        @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
+        Int32
+    ) {
+      self.key_v2 = key_v2
+      self.rekey_v2 = rekey_v2
+    }
+  }
+
+  /// The codec entry points, when the build has one.
+  public var encryption: Encryption?
+
   // MARK: - Callbacks
 
   /// The user data a function or collation was registered with: `sqlite3_user_data`.
@@ -304,7 +340,8 @@ public struct SQLiteLibrary: Sendable {
     result_double: @escaping @Sendable (OpaquePointer?, Double) -> Void,
     result_text: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
     result_blob: @escaping @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void,
-    result_error: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+    result_error: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
+    encryption: Encryption? = nil
   ) {
     self.open_v2 = open_v2
     self.close_v2 = close_v2
@@ -355,6 +392,7 @@ public struct SQLiteLibrary: Sendable {
     self.result_text = result_text
     self.result_blob = result_blob
     self.result_error = result_error
+    self.encryption = encryption
   }
 }
 
