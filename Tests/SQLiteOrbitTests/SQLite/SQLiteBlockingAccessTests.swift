@@ -8,9 +8,9 @@
   @testable import SQLiteOrbit
 
   private struct BlockingTestDatabase: ~Copyable {
-    let path: DatabasePath
+    let path: OrbitDatabasePath
     init() {
-      self.path = DatabasePath(
+      self.path = OrbitDatabasePath(
         temporaryDatabasePath("blocking")
       )
     }

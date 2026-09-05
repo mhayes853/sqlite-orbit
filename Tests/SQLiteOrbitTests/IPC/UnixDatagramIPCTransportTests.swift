@@ -12,7 +12,7 @@
     let receiver = try ipcTransport(directory)
     let senderMessages = IPCMessageRecorder()
     let receiverMessages = IPCMessageRecorder()
-    let database = DatabaseIdentifier(rawValue: "example")
+    let database = OrbitDatabaseIdentifier(rawValue: "example")
     let subscriptions = try [
       sender.subscribe(to: database, onMessage: senderMessages.append),
       receiver.subscribe(to: database, onMessage: receiverMessages.append)
@@ -35,7 +35,7 @@
     let sender = try ipcTransport(directory)
     let receivers = try (0..<8).map { _ in try ipcTransport(directory) }
     let recorders = receivers.map { _ in IPCMessageRecorder() }
-    let database = DatabaseIdentifier(rawValue: "broadcast")
+    let database = OrbitDatabaseIdentifier(rawValue: "broadcast")
     let subscriptions = try zip(receivers, recorders)
       .map {
         try $0.subscribe(to: database, onMessage: $1.append)
@@ -57,7 +57,7 @@
     let sender = try ipcTransport(directory)
     let receiver = try ipcTransport(directory)
     let recorder = IPCMessageRecorder()
-    let observed = DatabaseIdentifier(rawValue: "observed")
+    let observed = OrbitDatabaseIdentifier(rawValue: "observed")
     let subscription = try receiver.subscribe(to: observed, onMessage: recorder.append)
 
     try await sender.send(commit(.init(rawValue: "other")))
@@ -75,9 +75,9 @@
     let sender = try ipcTransport(directory)
     let receiver = try ipcTransport(directory)
     let recorder = IPCMessageRecorder()
-    let database = DatabaseIdentifier(rawValue: "malformed")
+    let database = OrbitDatabaseIdentifier(rawValue: "malformed")
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
-    let registry = try DatabaseIPCEndpointRegistry(directory: directory, endpointName: "malformed")
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "malformed")
     let socket = try UnixDatagramSocket(
       path: registry.socketPath,
       receiveBufferByteCount: 65_535
@@ -142,8 +142,8 @@
       directory: directory,
       backPressure: .fail
     )
-    let registry = try DatabaseIPCEndpointRegistry(directory: directory, endpointName: "observer")
-    let database = DatabaseIdentifier(rawValue: "shared-lifetime")
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let database = OrbitDatabaseIdentifier(rawValue: "shared-lifetime")
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
     var subscription: OrbitSubscription? = try first?.subscribe(to: database) { _ in }

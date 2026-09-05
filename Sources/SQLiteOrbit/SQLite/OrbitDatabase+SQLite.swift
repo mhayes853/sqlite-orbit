@@ -23,7 +23,7 @@
     /// ```swift
     /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
     ///
-    /// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
+    /// let database = try OrbitDatabase(path: OrbitDatabasePath("reminders.sqlite"))
     /// try await database.write { transaction in
     ///   try #sql("CREATE TABLE IF NOT EXISTS reminders (...)", as: Void.self).execute(transaction)
     /// }
@@ -32,9 +32,9 @@
     /// - Throws: A ``SQLiteError`` if the database cannot be opened, or a transport error if this
     ///   process cannot join the coordination directory.
     public convenience init(
-      path: DatabasePath,
+      path: OrbitDatabasePath,
       configuration: SQLiteConfiguration = .default,
-      id: DatabaseIdentifier? = nil,
+      id: OrbitDatabaseIdentifier? = nil,
       coordination: UnixDatagramIPCTransport.Configuration = .default,
       onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
     ) throws {

@@ -205,7 +205,7 @@
     let path = temporaryDatabasePath("missing") + "/db.sqlite"
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteHandle.open(
-        path: DatabasePath(path),
+        path: OrbitDatabasePath(path),
         flags: [.readWrite],
         configuration: .default
       )
@@ -233,7 +233,7 @@
 
     do {
       let connection = try SQLiteHandle.open(
-        path: DatabasePath(path),
+        path: OrbitDatabasePath(path),
         flags: [.readWrite, .create, .noMutex],
         configuration: .default
       )
@@ -246,7 +246,7 @@
     }
 
     let reopened = try SQLiteHandle.open(
-      path: DatabasePath(path),
+      path: OrbitDatabasePath(path),
       flags: [.readOnly, .noMutex],
       configuration: .default
     )

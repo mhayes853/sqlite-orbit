@@ -76,7 +76,7 @@ struct SQLiteRowDecoder: QueryDecoder {
   mutating func decode(_ columnType: UInt64.Type) throws(QueryDecodingError) -> UInt64? {
     guard let value = try decode(Int64.self) else { return nil }
     guard value >= 0 else {
-      throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
+      throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
     }
     return UInt64(value)
   }
@@ -111,7 +111,7 @@ struct SQLiteRowDecoder: QueryDecoder {
     // `Int` is 32 bits wide on arm64_32, which is every Apple Watch this package supports, so a
     // rowid past two billion would trap rather than be reported.
     guard let value = Int(exactly: value) else {
-      throw QueryDecodingError.other(DatabaseIntegerOverflowError(value: value))
+      throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
     }
     return value
   }
@@ -139,7 +139,7 @@ struct SQLiteRowDecoder: QueryDecoder {
     }
     defer { currentIndex += 1 }
     guard let text = library.pointee.column_text(statement, currentIndex) else {
-      throw QueryDecodingError.other(InvalidDatabaseUUIDError())
+      throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
     }
     let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
     let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
@@ -147,7 +147,7 @@ struct SQLiteRowDecoder: QueryDecoder {
       return uuid
     }
     guard let uuid = UUID(uuidString: String(decoding: utf8, as: UTF8.self)) else {
-      throw QueryDecodingError.other(InvalidDatabaseUUIDError())
+      throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
     }
     return uuid
   }
@@ -159,14 +159,14 @@ extension SQLiteRowDecoder {
   func describe(_ error: QueryDecodingError) -> any Error {
     switch error {
     case .missingRequiredColumn:
-      return DatabaseColumnDecodingError(
+      return OrbitDatabaseColumnDecodingError(
         library: library,
         statement: statement,
         columnIndex: currentIndex - 1,
         reason: "to not be NULL"
       )
     case .typeMismatch(let columnType):
-      return DatabaseColumnDecodingError(
+      return OrbitDatabaseColumnDecodingError(
         library: library,
         statement: statement,
         columnIndex: currentIndex,
@@ -190,11 +190,11 @@ extension SQLiteRowDecoder {
 ///   _ = try await database.read { transaction in
 ///     try transaction.fetchAll(#sql("SELECT id, title FROM reminders", as: (Int, Int).self))
 ///   }
-/// } catch let error as DatabaseColumnDecodingError {
+/// } catch let error as OrbitDatabaseColumnDecodingError {
 ///   print(error.columnIndex, error.columnName, error.reason)
 /// }
 /// ```
-public struct DatabaseColumnDecodingError: Error, CustomStringConvertible {
+public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
   /// The zero-based position of the column in the result row.
   public let columnIndex: Int
 

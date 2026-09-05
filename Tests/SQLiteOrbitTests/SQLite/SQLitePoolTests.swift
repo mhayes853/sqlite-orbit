@@ -7,10 +7,10 @@
   @testable import SQLiteOrbit
 
   private struct TemporaryDatabase: ~Copyable {
-    let path: DatabasePath
+    let path: OrbitDatabasePath
 
     init() {
-      self.path = DatabasePath(
+      self.path = OrbitDatabasePath(
         temporaryDatabasePath("pool")
       )
     }
@@ -47,8 +47,8 @@
     #expect(items == [Item(id: 1, title: "Blob's reminder")])
   }
 
-  @Test(arguments: [DatabasePath.memory, .temporary, ":memory:", ""])
-  func poolRejectsDatabasesItCannotPool(path: DatabasePath) {
+  @Test(arguments: [OrbitDatabasePath.memory, .temporary, ":memory:", ""])
+  func poolRejectsDatabasesItCannotPool(path: OrbitDatabasePath) {
     #expect(throws: SQLitePoolUnavailableError.self) {
       _ = try SQLitePool(path: path)
     }

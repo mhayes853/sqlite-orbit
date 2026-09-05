@@ -179,7 +179,7 @@
     let path = temporaryDatabasePath()
     defer { try? FileManager.default.removeItem(atPath: path) }
 
-    let driver = try SQLiteQueue(path: DatabasePath(path))
+    let driver = try SQLiteQueue(path: OrbitDatabasePath(path))
     #expect(driver.defaultIdentifier.rawValue.hasSuffix(".sqlite"))
 
     // An in-memory database is private to its connection, so no two of them are the same database.
@@ -194,14 +194,14 @@
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     do {
-      let driver = try SQLiteQueue(path: DatabasePath(path))
+      let driver = try SQLiteQueue(path: OrbitDatabasePath(path))
       try await bootstrap(driver)
       try await driver.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
       }
     }
 
-    let reopened = try SQLiteQueue(path: DatabasePath(path))
+    let reopened = try SQLiteQueue(path: OrbitDatabasePath(path))
     let items = try await reopened.read { transaction in
       try transaction.fetchAll(Item.all)
     }
@@ -241,8 +241,9 @@
   }
 
   /// SQLite reads the empty path as a database it creates for one connection and deletes when that
-  /// connection closes, which is what ``DatabasePath/temporary`` names. It is a real mode, and the
-  /// third thing SQLite does with a path string, so `DatabasePath("")` has somewhere to land.
+  /// connection closes, which is what ``OrbitDatabasePath/temporary`` names. It is a real mode, and
+  /// the third thing SQLite does with a path string, so `OrbitDatabasePath("")` has somewhere to
+  /// land.
   @Test
   func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
     let driver = try SQLiteQueue(path: .temporary)
@@ -256,7 +257,7 @@
     #expect(items == [Item(id: 1, title: "scratch")])
 
     // No file names it, so a second driver opens a different, empty database of its own.
-    #expect(DatabasePath.temporary.fileURL == nil)
+    #expect(OrbitDatabasePath.temporary.fileURL == nil)
     let other = try SQLiteQueue(path: .temporary)
     #expect(other.defaultIdentifier != driver.defaultIdentifier)
     await #expect(throws: SQLiteError.self) {

@@ -9,7 +9,7 @@
   struct OrbitDatabaseMultiprocessTests {
     @Test
     func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
-      let harness = try DatabaseProcessHarness(name: "open")
+      let harness = try OrbitDatabaseProcessHarness(name: "open")
       defer { harness.cleanup() }
       let openerCount = 10
       let openers = try (0..<openerCount).map { try harness.spawn("open", index: $0) }
@@ -39,16 +39,18 @@
     /// serialized across processes rather than left to contend.
     @Test
     func openingWaitsWhileAnotherProcessIsOpening() async throws {
-      let harness = try DatabaseProcessHarness(name: "open-lock")
+      let harness = try OrbitDatabaseProcessHarness(name: "open-lock")
       defer { harness.cleanup() }
-      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(harness.databasePath))
+      let identifier = OrbitDatabaseIdentifier.forDatabase(
+        path: OrbitDatabasePath(harness.databasePath)
+      )
       let directory = harness.coordination.directory
       let opened = harness.file("opened-0")
       let isHeld = Mutex(false)
       let mayRelease = Mutex(false)
 
       Thread.detachNewThread {
-        try? DatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
+        try? OrbitDatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
           isHeld.withLock { $0 = true }
           while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
         }
@@ -68,7 +70,7 @@
 
     @Test
     func contentiousWritesFromManyProcessesAllCommit() async throws {
-      let harness = try DatabaseProcessHarness(name: "write")
+      let harness = try OrbitDatabaseProcessHarness(name: "write")
       defer { harness.cleanup() }
       let database = try harness.database()
       try await database.write { transaction in
@@ -103,7 +105,7 @@
 
     @Test
     func writeGivesUpWhileAnotherProcessHoldsTheWriteTransaction() async throws {
-      let harness = try DatabaseProcessHarness(name: "busy")
+      let harness = try OrbitDatabaseProcessHarness(name: "busy")
       defer { harness.cleanup() }
       try await harness.database()
         .write { transaction in
@@ -137,7 +139,7 @@
     func writeIsDeliveredToARealSubscriberInAnotherProcess() async throws {
       // Nothing subscribes through OrbitDatabase itself yet, but the transport it announces
       // through is real, so a peer that subscribes to it directly must still see the commit.
-      let harness = try DatabaseProcessHarness(name: "deliver")
+      let harness = try OrbitDatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
       let listener = try harness.spawn("listen", index: 0)
       try await waitForFile(harness.file("ready-0"))
@@ -155,7 +157,7 @@
     func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
       // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
       // holder that crashes must not leave the lock stuck for whoever opens next.
-      let harness = try DatabaseProcessHarness(name: "open-lock-crash")
+      let harness = try OrbitDatabaseProcessHarness(name: "open-lock-crash")
       defer { harness.cleanup() }
       let holder = try harness.spawn("hold-open-lock", index: 0)
       try await waitForFile(harness.file("ready-0"))
@@ -167,7 +169,7 @@
       let coordination = harness.coordination
       let didOpen = Mutex(false)
       Thread.detachNewThread {
-        _ = try? OrbitDatabase(path: DatabasePath(databasePath), coordination: coordination)
+        _ = try? OrbitDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
         didOpen.withLock { $0 = true }
       }
       try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
@@ -175,31 +177,31 @@
     }
   }
 
-  /// Runs one peer process of a ``OrbitDatabaseMultiprocessTests`` case.
+  /// Runs one peer process of an ``OrbitDatabaseMultiprocessTests`` case.
   @Test
   func orbitDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment
-    guard let mode = environment[DatabaseProcessEnvironment.mode] else { return }
+    guard let mode = environment[OrbitDatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
     let coordination = UnixDatagramIPCTransport.Configuration(
-      directory: URL(fileURLWithPath: try value(DatabaseProcessEnvironment.directory)),
+      directory: URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.directory)),
       backPressure: .fail
     )
-    let path = try value(DatabaseProcessEnvironment.database)
-    let ready = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.ready))
-    let start = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.start))
+    let path = try value(OrbitDatabaseProcessEnvironment.database)
+    let ready = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.ready))
+    let start = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.start))
 
     switch mode {
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try OrbitDatabase(path: DatabasePath(path), coordination: coordination)
-      try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.opened)))
+      _ = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.opened)))
 
     case "write":
-      let database = try OrbitDatabase(path: DatabasePath(path), coordination: coordination)
-      let writerID = try #require(Int(try value(DatabaseProcessEnvironment.writerID)))
-      let writeCount = try #require(Int(try value(DatabaseProcessEnvironment.writeCount)))
+      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      let writerID = try #require(Int(try value(OrbitDatabaseProcessEnvironment.writerID)))
+      let writeCount = try #require(Int(try value(OrbitDatabaseProcessEnvironment.writeCount)))
       try touch(ready)
       try await waitForFile(start)
       for sequence in 0..<writeCount {
@@ -217,9 +219,11 @@
       }
 
     case "hold":
-      let database = try OrbitDatabase(path: DatabasePath(path), coordination: coordination)
-      let held = URL(fileURLWithPath: try value(DatabaseProcessEnvironment.held))
-      let milliseconds = try #require(Int(try value(DatabaseProcessEnvironment.holdMilliseconds)))
+      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      let held = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.held))
+      let milliseconds = try #require(
+        Int(try value(OrbitDatabaseProcessEnvironment.holdMilliseconds))
+      )
       try touch(ready)
       try await database.write { transaction in
         try transaction.execute(
@@ -232,7 +236,7 @@
     case "listen":
       // `shared` caches transports weakly, so the transport itself, not just the subscription,
       // must be kept alive for as long as the subscription should stay registered.
-      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(path))
+      let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(path))
       let transport = try UnixDatagramIPCTransport.shared(configuration: coordination)
       let receivedCount = Mutex(0)
       let subscription = try transport.subscribe(to: identifier) { _ in
@@ -240,12 +244,12 @@
       }
       try touch(ready)
       try await waitUntil(timeout: .seconds(10)) { receivedCount.withLock { $0 } >= 1 }
-      try touch(URL(fileURLWithPath: try value(DatabaseProcessEnvironment.received)))
+      try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.received)))
       _ = subscription
 
     case "hold-open-lock":
-      let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(path))
-      try DatabaseOpenLock.withLock(
+      let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(path))
+      try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: coordination.directory
       ) {
@@ -260,7 +264,7 @@
     processTestExit(0)
   }
 
-  private final class DatabaseProcessHarness {
+  private final class OrbitDatabaseProcessHarness {
     private let harness: ProcessTestHarness
 
     let databasePath: String
@@ -275,7 +279,7 @@
     init(name: String) throws {
       self.harness = try ProcessTestHarness(
         helper: "orbitDatabasePeer",
-        environmentPrefix: DatabaseProcessEnvironment.prefix,
+        environmentPrefix: OrbitDatabaseProcessEnvironment.prefix,
         name: name
       )
       self.databasePath = self.harness.file("test.sqlite").path
@@ -287,7 +291,7 @@
       configuration: SQLiteConfiguration = .default
     ) throws -> OrbitDatabase<SQLitePool> {
       try OrbitDatabase(
-        path: DatabasePath(self.databasePath),
+        path: OrbitDatabasePath(self.databasePath),
         configuration: configuration,
         coordination: self.coordination
       )
@@ -333,7 +337,7 @@
     func cleanup() { self.harness.cleanup() }
   }
 
-  private enum DatabaseProcessEnvironment {
+  private enum OrbitDatabaseProcessEnvironment {
     static let prefix = "SQLITE_ORBIT_DATABASE_HELPER_"
     static let mode = prefix + "MODE"
     static let directory = prefix + "DIRECTORY"

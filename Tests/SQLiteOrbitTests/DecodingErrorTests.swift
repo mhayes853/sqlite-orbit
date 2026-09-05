@@ -7,7 +7,7 @@
   func typeMismatchesNameTheColumnAndWhatWasStored() async throws {
     let database = try inMemoryDatabase()
 
-    let error = await #expect(throws: DatabaseColumnDecodingError.self) {
+    let error = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
       try await database.read { transaction in
         try transaction.fetchAll(
           #sql("SELECT 1 AS id, 'not a number' AS quantity", as: (Int, Int).self)
@@ -26,7 +26,7 @@
   func missingRequiredColumnsNameTheColumnThatWasNull() async throws {
     let database = try inMemoryDatabase()
 
-    let error = await #expect(throws: DatabaseColumnDecodingError.self) {
+    let error = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
       try await database.read { transaction in
         try transaction.fetchAll(
           #sql("SELECT 1 AS id, NULL AS title", as: (Int, String).self)
@@ -50,20 +50,20 @@
         try transaction.fetchOne(#sql("SELECT 'not a uuid'", as: UUID.self))
       }
     }
-    #expect(!(uuid is DatabaseColumnDecodingError))
+    #expect(!(uuid is OrbitDatabaseColumnDecodingError))
 
     let date = await #expect(throws: (any Error).self) {
       try await database.read { transaction in
         try transaction.fetchOne(#sql("SELECT 'not a date'", as: Date.self))
       }
     }
-    #expect(!(date is DatabaseColumnDecodingError))
+    #expect(!(date is OrbitDatabaseColumnDecodingError))
 
     let negative = await #expect(throws: (any Error).self) {
       try await database.read { transaction in
         try transaction.fetchOne(#sql("SELECT -1", as: UInt64.self))
       }
     }
-    #expect(!(negative is DatabaseColumnDecodingError))
+    #expect(!(negative is OrbitDatabaseColumnDecodingError))
   }
 #endif

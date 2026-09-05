@@ -11,26 +11,26 @@
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
 ///
-/// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
+/// let database = try OrbitDatabase(path: OrbitDatabasePath("reminders.sqlite"))
 /// try await database.write { transaction in
 ///   try Reminder.insert { Reminder.Draft(title: "Buy milk") }.execute(transaction)
 /// }
 /// ```
-public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
+public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   Identifiable,
-  SQLiteDatabaseWriter,
+  OrbitDatabaseWriter,
   Sendable
 {
   /// The identity shared by every process that opens this database.
-  public let id: DatabaseIdentifier
+  public let id: OrbitDatabaseIdentifier
 
   /// The driver that lends this database its read and write transactions.
   public let writer: Writer
 
   /// The identifier this database uses when one is not supplied, which is ``id``.
-  public var defaultIdentifier: DatabaseIdentifier { id }
+  public var defaultIdentifier: OrbitDatabaseIdentifier { id }
 
-  private let transport: (any DatabaseIPCTransport)?
+  private let transport: (any OrbitIPCTransport)?
   private let onAnnouncementFailure: (@Sendable (any Error) -> Void)?
 
   /// Creates a database that announces its committed writes through `transport`.
@@ -47,14 +47,14 @@ public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
   /// ```swift
   /// let database = OrbitDatabase(
   ///   writer: try SQLiteQueue(path: .memory),
-  ///   id: DatabaseIdentifier(rawValue: "reminders"),
+  ///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
   ///   transport: InMemoryIPCTransport(network: network)
   /// )
   /// ```
   public init(
     writer: Writer,
-    id: DatabaseIdentifier? = nil,
-    transport: (any DatabaseIPCTransport)? = nil,
+    id: OrbitDatabaseIdentifier? = nil,
+    transport: (any OrbitIPCTransport)? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
   ) {
     self.writer = writer
@@ -143,7 +143,7 @@ public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
   }
 
   private func reportLocalCommit() {
-    guard let observableWriter = writer as? any SQLiteObservableDatabase else { return }
+    guard let observableWriter = writer as? any OrbitObservableDatabase else { return }
     OrbitDatabaseObservationHub.shared.didCommit(
       databaseIdentifier: id,
       writerIdentifier: ObjectIdentifier(observableWriter)
@@ -159,8 +159,8 @@ public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
   /// already happened. The transaction is durable by then, so a failed announcement never fails it.
   private func announceCommittedTransaction() async {
     guard let transport else { return }
-    let message = DatabaseIPCMessage.transactionDidCommit(
-      DatabaseTransactionDidCommit(databaseIdentifier: id)
+    let message = OrbitIPCMessage.transactionDidCommit(
+      OrbitDatabaseTransactionDidCommit(databaseIdentifier: id)
     )
     do {
       try await transport.send(message)
@@ -170,14 +170,14 @@ public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
   }
 }
 
-extension OrbitDatabase: SQLiteObservableDatabase where Writer: SQLiteObservableDatabase {
+extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDatabase {
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///
   /// The observer sees three sources of commits as one stream: this handle's own writes, writes by
   /// another handle on the same database in this process (both reported as
-  /// ``DatabaseTransactionOrigin/local``), and writes announced by another process (reported as
-  /// ``DatabaseTransactionOrigin/external``).
+  /// ``OrbitDatabaseTransactionOrigin/local``), and writes announced by another process (reported
+  /// as ``OrbitDatabaseTransactionOrigin/external``).
   ///
   /// ```swift
   /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
@@ -187,14 +187,14 @@ extension OrbitDatabase: SQLiteObservableDatabase where Writer: SQLiteObservable
   /// - Returns: A subscription that unregisters the observer from every source when cancelled.
   /// - Throws: An error if the writer or the transport refuses the registration.
   public func subscribe(
-    transactionObserver: any DatabaseTransactionObserver
+    transactionObserver: any OrbitDatabaseTransactionObserver
   ) throws -> OrbitSubscription {
     let local = try writer.subscribe(transactionObserver: transactionObserver)
     let sameProcess = OrbitDatabaseObservationHub.shared.subscribe(
       to: id,
       writerIdentifier: ObjectIdentifier(writer)
     ) {
-      transactionObserver.databaseDidCommit(DatabaseCommit(origin: .local))
+      transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .local))
     }
     guard let transport else {
       return OrbitSubscription {
@@ -206,7 +206,7 @@ extension OrbitDatabase: SQLiteObservableDatabase where Writer: SQLiteObservable
     do {
       let external = try transport.subscribe(to: id) { message in
         guard case .transactionDidCommit = message else { return }
-        transactionObserver.databaseDidCommit(DatabaseCommit(origin: .external))
+        transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .external))
       }
       return OrbitSubscription {
         local.cancel()
@@ -232,10 +232,10 @@ private final class OrbitDatabaseObservationHub: Sendable {
     let onCommit: @Sendable () -> Void
   }
 
-  private let registrations = Lock(KeyedHandlerRegistry<DatabaseIdentifier, Registration>())
+  private let registrations = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, Registration>())
 
   func subscribe(
-    to databaseIdentifier: DatabaseIdentifier,
+    to databaseIdentifier: OrbitDatabaseIdentifier,
     writerIdentifier: ObjectIdentifier,
     onCommit: @escaping @Sendable () -> Void
   ) -> OrbitSubscription {
@@ -252,7 +252,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
   }
 
   func didCommit(
-    databaseIdentifier: DatabaseIdentifier,
+    databaseIdentifier: OrbitDatabaseIdentifier,
     writerIdentifier: ObjectIdentifier
   ) {
     let callbacks = registrations.withLock { registrations in

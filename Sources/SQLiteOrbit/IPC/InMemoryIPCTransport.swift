@@ -12,13 +12,13 @@ import Synchronization
 /// let network = InMemoryIPCTransport.Network()
 /// let database = OrbitDatabase(
 ///   writer: try SQLiteQueue(path: .memory),
-///   id: DatabaseIdentifier(rawValue: "reminders"),
+///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
 ///   transport: InMemoryIPCTransport(network: network)
 /// )
 /// let peer = InMemoryIPCTransport(network: network)
 /// let subscription = try peer.subscribe(to: database.id) { _ in refresh() }
 /// ```
-public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
+public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// The medium that peer transports discover each other and exchange messages through.
   ///
   /// Construct one `Network` per simulated set of coordinating processes and hand it to every
@@ -33,19 +33,23 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
   public final class Network: Sendable {
     fileprivate let state = Mutex(State())
     fileprivate struct State {
-      var endpoints: [DatabaseIdentifier: [ObjectIdentifier: Endpoint]] = [:]
+      var endpoints: [OrbitDatabaseIdentifier: [ObjectIdentifier: Endpoint]] = [:]
     }
 
     /// Creates an empty network.
     public init() {}
 
-    fileprivate func register(_ endpoint: Endpoint, for databaseIdentifier: DatabaseIdentifier) {
+    fileprivate func register(_ endpoint: Endpoint, for databaseIdentifier: OrbitDatabaseIdentifier)
+    {
       self.state.withLock {
         $0.endpoints[databaseIdentifier, default: [:]][ObjectIdentifier(endpoint)] = endpoint
       }
     }
 
-    fileprivate func unregister(_ endpoint: Endpoint, for databaseIdentifier: DatabaseIdentifier) {
+    fileprivate func unregister(
+      _ endpoint: Endpoint,
+      for databaseIdentifier: OrbitDatabaseIdentifier
+    ) {
       self.state.withLock {
         $0.endpoints[databaseIdentifier]?.removeValue(forKey: ObjectIdentifier(endpoint))
         if $0.endpoints[databaseIdentifier]?.isEmpty == true {
@@ -55,7 +59,7 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
     }
 
     fileprivate func peers(
-      for databaseIdentifier: DatabaseIdentifier,
+      for databaseIdentifier: OrbitDatabaseIdentifier,
       excluding endpoint: Endpoint
     ) -> [Endpoint] {
       self.state.withLock {
@@ -95,8 +99,8 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
   ///   - onMessage: Receives each message concerning that database.
   /// - Returns: A subscription that stops delivery when cancelled or released.
   public func subscribe(
-    to databaseIdentifier: DatabaseIdentifier,
-    onMessage: @escaping @Sendable (DatabaseIPCMessage) -> Void
+    to databaseIdentifier: OrbitDatabaseIdentifier,
+    onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
   ) throws -> OrbitSubscription {
     let endpoint = self.endpoint
     let network = self.network
@@ -124,7 +128,7 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
   /// ```
   ///
   /// - Parameter message: The message to broadcast.
-  public func send(_ message: DatabaseIPCMessage) async throws {
+  public func send(_ message: OrbitIPCMessage) async throws {
     let peers = self.network.peers(for: message.databaseIdentifier, excluding: self.endpoint)
     for peer in peers {
       peer.deliver(message)
@@ -135,15 +139,15 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
 /// One process's worth of local subscriptions, keyed the way a Unix-domain peer's would be.
 private final class Endpoint: Sendable {
   private let handlers = Mutex(
-    KeyedHandlerRegistry<DatabaseIdentifier, @Sendable (DatabaseIPCMessage) -> Void>()
+    KeyedHandlerRegistry<OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void>()
   )
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
   // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Mutex(())
 
   func add(
-    databaseIdentifier: DatabaseIdentifier,
-    handler: @escaping @Sendable (DatabaseIPCMessage) -> Void,
+    databaseIdentifier: OrbitDatabaseIdentifier,
+    handler: @escaping @Sendable (OrbitIPCMessage) -> Void,
     network: InMemoryIPCTransport.Network
   ) -> UInt64 {
     let added = self.handlers.withLock { $0.insert(handler, for: databaseIdentifier) }
@@ -153,14 +157,14 @@ private final class Endpoint: Sendable {
 
   func remove(
     identifier: UInt64,
-    databaseIdentifier: DatabaseIdentifier,
+    databaseIdentifier: OrbitDatabaseIdentifier,
     network: InMemoryIPCTransport.Network
   ) {
     let becameEmpty = self.handlers.withLock { $0.remove(identifier, for: databaseIdentifier) }
     if becameEmpty { network.unregister(self, for: databaseIdentifier) }
   }
 
-  func deliver(_ message: DatabaseIPCMessage) {
+  func deliver(_ message: OrbitIPCMessage) {
     let callbacks = self.handlers.withLock { $0.handlers(for: message.databaseIdentifier) }
     guard !callbacks.isEmpty else { return }
     self.deliveryLock.withLock { _ in

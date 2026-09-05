@@ -9,7 +9,7 @@
   struct OrbitDatabaseAnnouncementTests {
     @Test
     func writeAnnouncesTheTransactionItCommits() async throws {
-      let identifier = DatabaseIdentifier(rawValue: "announced")
+      let identifier = OrbitDatabaseIdentifier(rawValue: "announced")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
 
       try await database.write { transaction in
@@ -23,7 +23,7 @@
 
     @Test
     func blockingWriteAnnouncesTheTransactionItCommits() async throws {
-      let identifier = DatabaseIdentifier(rawValue: "blocking-announcement")
+      let identifier = OrbitDatabaseIdentifier(rawValue: "blocking-announcement")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
 
       try database.writeBlocking { transaction in
@@ -113,7 +113,7 @@
   }
 
   private func makeAnnouncingDatabase(
-    id: DatabaseIdentifier? = nil,
+    id: OrbitDatabaseIdentifier? = nil,
     failure: (any Error)? = nil,
     delay: Duration? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
@@ -132,9 +132,9 @@
   private struct AnnouncementFailure: Error {}
 
   /// Records what a database announces without reaching another process.
-  private final class RecordingDatabaseIPCTransport: DatabaseIPCTransport, Sendable {
+  private final class RecordingDatabaseIPCTransport: OrbitIPCTransport, Sendable {
     private struct State {
-      var messages = [DatabaseIPCMessage]()
+      var messages = [OrbitIPCMessage]()
       var didBeginSending = false
     }
 
@@ -142,7 +142,7 @@
     private let failure: (any Error)?
     private let delay: Duration?
 
-    var messages: [DatabaseIPCMessage] { self.state.withLock { $0.messages } }
+    var messages: [OrbitIPCMessage] { self.state.withLock { $0.messages } }
     var didBeginSending: Bool { self.state.withLock { $0.didBeginSending } }
 
     init(failure: (any Error)? = nil, delay: Duration? = nil) {
@@ -151,13 +151,13 @@
     }
 
     func subscribe(
-      to databaseIdentifier: DatabaseIdentifier,
-      onMessage: @escaping @Sendable (DatabaseIPCMessage) -> Void
+      to databaseIdentifier: OrbitDatabaseIdentifier,
+      onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitSubscription {
       OrbitSubscription {}
     }
 
-    func send(_ message: DatabaseIPCMessage) async throws {
+    func send(_ message: OrbitIPCMessage) async throws {
       self.state.withLock { $0.didBeginSending = true }
       if let delay = self.delay { try await Task.sleep(for: delay) }
       self.state.withLock { $0.messages.append(message) }

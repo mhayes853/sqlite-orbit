@@ -7,8 +7,8 @@ import StructuredQueries
 /// transaction that created it, so a cached statement can never be lent twice or survive its
 /// connection.
 ///
-/// This is the ``DatabaseRowCursor`` the native drivers lend; it is created by
-/// ``DatabaseReadTransaction/rowCursor(_:cached:)`` rather than directly.
+/// This is the ``OrbitDatabaseRowCursor`` the native drivers lend; it is created by
+/// ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)`` rather than directly.
 ///
 /// ```swift
 /// try await database.read { transaction in
@@ -16,7 +16,7 @@ import StructuredQueries
 ///   try cursor.forEach { print(try $0.decode(String.self)) }
 /// }
 /// ```
-public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
+public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// The row this cursor lends.
   public typealias Row = SQLiteRow
 
@@ -130,7 +130,7 @@ public struct SQLiteRowCursor: DatabaseRowCursor, ~Copyable, ~Escapable {
 ///   }
 /// }
 /// ```
-public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
+public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   @usableFromInline
   var decoder: SQLiteRowDecoder
 
@@ -144,7 +144,7 @@ public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
   ///
   /// - Parameter type: The value to decode.
   /// - Returns: The decoded value.
-  /// - Throws: ``DatabaseColumnDecodingError`` naming the column when its storage class or
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its storage class or
   ///   contents cannot produce `type`.
   @inlinable
   public mutating func decode<Value: QueryRepresentable>(
@@ -161,7 +161,7 @@ public struct SQLiteRow: DatabaseRow, ~Copyable, ~Escapable {
   ///
   /// - Parameter type: The tuple of values to decode.
   /// - Returns: The decoded values.
-  /// - Throws: ``DatabaseColumnDecodingError`` naming the column that could not be decoded.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column that could not be decoded.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   @inlinable
   public mutating func decode<each Value: QueryRepresentable>(

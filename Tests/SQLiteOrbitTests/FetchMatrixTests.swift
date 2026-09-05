@@ -123,7 +123,7 @@
     }
     #expect(found == Reminder(id: 11, listID: 1, title: "Eggs"))
 
-    await #expect(throws: DatabaseRecordNotFoundError.self) {
+    await #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
       try await database.read { transaction in
         try transaction.find(Reminder.all, key: 99)
       }

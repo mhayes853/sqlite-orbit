@@ -1,4 +1,4 @@
-/// A ``SQLiteDatabaseWriter`` that serializes every access through a single connection.
+/// An ``OrbitDatabaseWriter`` that serializes every access through a single connection.
 ///
 /// This is the driver for a database that does not benefit from concurrent readers: an in-memory
 /// database, which is private to the connection that opened it and so cannot be pooled at all, or a
@@ -19,12 +19,12 @@
 /// }
 /// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
 /// ```
-public final class SQLiteQueue: SQLiteObservableDatabase {
+public final class SQLiteQueue: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
-  public let defaultIdentifier: DatabaseIdentifier
+  public let defaultIdentifier: OrbitDatabaseIdentifier
 
   private let connection: SQLiteConnection
-  private let transactionObservers = DatabaseTransactionObservers()
+  private let transactionObservers = OrbitDatabaseTransactionObservers()
 
   /// Opens the database at `path`, creating it when it does not exist.
   ///
@@ -35,9 +35,9 @@ public final class SQLiteQueue: SQLiteObservableDatabase {
   ///     or a unique identity for a database private to its connection.
   /// - Throws: A ``SQLiteError`` when the database cannot be opened or configured.
   public init(
-    path: DatabasePath,
+    path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
-    identifier: DatabaseIdentifier? = nil
+    identifier: OrbitDatabaseIdentifier? = nil
   ) throws {
     self.connection = try SQLiteConnection(
       path: path,
@@ -105,7 +105,7 @@ public final class SQLiteQueue: SQLiteObservableDatabase {
   /// - Parameter transactionObserver: Receives each commit and rollback.
   /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
-    transactionObserver: any DatabaseTransactionObserver
+    transactionObserver: any OrbitDatabaseTransactionObserver
   ) throws -> OrbitSubscription {
     transactionObservers.subscribe(transactionObserver)
   }
@@ -124,8 +124,8 @@ public final class SQLiteQueue: SQLiteObservableDatabase {
     ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
     /// - Throws: A ``SQLiteError`` when the database cannot be opened or configured.
     public convenience init(
-      path: DatabasePath,
-      identifier: DatabaseIdentifier? = nil
+      path: OrbitDatabasePath,
+      identifier: OrbitDatabaseIdentifier? = nil
     ) throws {
       try self.init(path: path, configuration: .default, identifier: identifier)
     }

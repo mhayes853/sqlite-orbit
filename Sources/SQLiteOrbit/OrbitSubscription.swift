@@ -7,7 +7,7 @@ import Synchronization
 /// value returned by a `subscribe` method is what keeps the registration alive.
 ///
 /// ```swift
-/// let subscription = try ValueObservation
+/// let subscription = try OrbitValueObservation
 ///   .tracking { try $0.fetchCount(Reminder.all) }
 ///   .subscribe(to: database, onError: log) { change in counts.append(change.value) }
 /// // ...
@@ -19,7 +19,7 @@ public struct OrbitSubscription: Sendable {
   /// Creates a subscription that invokes `onCancel` when cancelled.
   ///
   /// ```swift
-  /// func subscribe(to identifier: DatabaseIdentifier) -> OrbitSubscription {
+  /// func subscribe(to identifier: OrbitDatabaseIdentifier) -> OrbitSubscription {
   ///   let token = register(identifier)
   ///   return OrbitSubscription { unregister(token) }
   /// }

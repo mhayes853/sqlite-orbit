@@ -13,18 +13,18 @@ try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
 
-for try await reminders in ValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
+for try await reminders in OrbitValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
   .values(in: database)
 {
   render(reminders)
 }
 ```
 
-`SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
+`OrbitDatabaseReader` and `OrbitDatabaseWriter` define the synchronous and asynchronous boundaries
 around the native SQLite implementation, which lends distinct `SQLiteReadTransaction` and
 `SQLiteWriteTransaction` values. Read transactions can only query, while write transactions can
 query and execute mutations. Transactions and rows are nonescapable, so a database-owned SQLite
-connection cannot outlive its access closure. `ValueObservation` builds callback and
+connection cannot outlive its access closure. `OrbitValueObservation` builds callback and
 asynchronous-sequence observation on that transaction boundary, both within one process and across
 cooperating processes.
 
@@ -33,12 +33,13 @@ query construction and binding layer, and `import SQLiteOrbit` re-exports it, so
 needed to build statements. Statements can be executed and decoded directly by any read or write
 transaction.
 
-Whether a statement needs a write transaction is read off its type. A `DatabaseQuery<Access>` pairs
-a statement with the capability it requires, and can only be built from a statement that already has
-it: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
-write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
-definition, and this is checked at compile time rather than by a list of known statement types.
-Statements the query library keeps private, such as the one behind `union`, are classified too.
+Whether a statement needs a write transaction is read off its type. An `OrbitDatabaseQuery<Access>`
+pairs a statement with the capability it requires, and can only be built from a statement that
+already has it: every `SELECT`-shaped statement can become a read query, and any statement at all
+can become a write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or
+trigger definition, and this is checked at compile time rather than by a list of known statement
+types. Statements the query library keeps private, such as the one behind `union`, are classified
+too.
 
 Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
 write transactions alike, and the caller is stating which it is.
@@ -65,26 +66,26 @@ Two drivers back it:
 
 - `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
-  queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
-  a thread.
-- `SQLiteQueue` serializes every access through a single connection. This is the driver for a
-  `DatabasePath.memory` or `.temporary` database, which is private to the connection that opened it
-  and so cannot be pooled at all.
+  queued behind it, so a read issued after a write observes it. Waiting suspends rather than
+  blocking a thread.
+- `SQLiteQueue` serializes every access through a single connection. This is the driver for an
+  `OrbitDatabasePath.memory` or `.temporary` database, which is private to the connection that
+  opened it and so cannot be pooled at all.
 
 Each connection runs on a dispatch queue of its own, so a query never occupies a cooperative-pool
 thread.
 
-A driver is opened with a `DatabasePath` rather than a string, so the databases that no second
+A driver is opened with an `OrbitDatabasePath` rather than a string, so the databases that no second
 connection can reach are named outright:
 
 ```swift
-let onDisk = DatabasePath.file(url)         // or DatabasePath("/path/to/db.sqlite")
-let inMemory = DatabasePath.memory          // ":memory:"
-let scratch = DatabasePath.temporary        // ""
+let onDisk = OrbitDatabasePath.file(url)         // or OrbitDatabasePath("/path/to/db.sqlite")
+let inMemory = OrbitDatabasePath.memory          // ":memory:"
+let scratch = OrbitDatabasePath.temporary        // ""
 ```
 
-A file path resolves to an absolute path, so the same database is the same `DatabasePath` however
-it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
+A file path resolves to an absolute path, so the same database is the same `OrbitDatabasePath`
+however it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
 the way it always did.
 
 ## Using your own SQLite build
@@ -147,7 +148,7 @@ try await database.read { transaction in
   )
 
   try transaction.fetchCount(Reminder.where { !$0.isCompleted })
-  try transaction.find(Reminder.all, key: 42)  // throws DatabaseRecordNotFoundError
+  try transaction.find(Reminder.all, key: 42)  // throws OrbitDatabaseRecordNotFoundError
 }
 ```
 
@@ -164,8 +165,8 @@ let titles = try await database.write { transaction in
 }
 ```
 
-When a column does not decode, the failure is a `DatabaseColumnDecodingError` naming the column's
-index and name, the storage class actually found, and the statement's SQL.
+When a column does not decode, the failure is an `OrbitDatabaseColumnDecodingError` naming the
+column's index and name, the storage class actually found, and the statement's SQL.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:
@@ -275,7 +276,7 @@ database as any other, so each one receives a unique identifier.
 value observation fetches an initial value, then fetches again after every committed write:
 
 ```swift
-let reminders = ValueObservation.tracking { transaction in
+let reminders = OrbitValueObservation.tracking { transaction in
   try transaction.fetchAll(Reminder.all)
 }
 
@@ -373,7 +374,7 @@ On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in 
 an `Animation` without importing a second package product:
 
 ```swift
-let scheduler = MainActorValueObservationScheduler.mainActor.animation(.default)
+let scheduler = OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
 let subscription = try reminders.subscribe(
   to: database,
   scheduling: scheduler,
@@ -410,10 +411,10 @@ after SQLite commits. A rollback, including a failed `COMMIT`, discards that val
 announcements trigger a fresh read instead. Fetch failures end the callback subscription or
 throwing asynchronous sequence; they never roll back the write whose final state was being fetched.
 
-For transaction lifecycle events that do not produce a value, register a
-`DatabaseTransactionObserver` directly with any `SQLiteObservableDatabase`. Its `databaseWillCommit`
-hook receives a read-only view of the pending transaction and may throw to abort the write;
-`databaseDidCommit` identifies the transaction's local or external origin.
+For transaction lifecycle events that do not produce a value, register an
+`OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
+`databaseWillCommit` hook receives a read-only view of the pending transaction and may throw to
+abort the write; `databaseDidCommit` identifies the transaction's local or external origin.
 
 ## Cross-process transport
 
@@ -428,7 +429,7 @@ let transport = try UnixDatagramIPCTransport(
   )
 )
 
-let databaseIdentifier = DatabaseIdentifier(rawValue: "example.sqlite")
+let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "example.sqlite")
 let subscription = try transport.subscribe(to: databaseIdentifier) { message in
   switch message {
   case .transactionDidCommit:
@@ -452,13 +453,13 @@ are discoverable at that moment. A successful return means every discovered peer
 message into its kernel receive queue, not that its handler has already run. No unbounded
 user-space queue is used:
 
-- `.fail` attempts every peer once and reports a `DatabaseIPCPartialDeliveryError` if any queue is
+- `.fail` attempts every peer once and reports an `OrbitIPCPartialDeliveryError` if any queue is
   full or another peer fails.
 - `.suspend(upTo:)` retries only backpressured peers until the shared deadline, then reports partial
   delivery. Task cancellation also cancels the wait.
 
 Messages use a private versioned binary envelope and are decoded from `Span`; callers exchange
-`DatabaseIPCMessage` values rather than serialized `Data`. `DatabaseIPCMessage` is nonexhaustive so
+`OrbitIPCMessage` values rather than serialized `Data`. `OrbitIPCMessage` is nonexhaustive so
 the library can add coordination messages in future versions.
 
 ## Opening a database for several processes

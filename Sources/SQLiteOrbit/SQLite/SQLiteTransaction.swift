@@ -10,7 +10,7 @@ import StructuredQueries
 ///   try transaction.fetchAll(Reminder.select(\.title))
 /// }
 /// ```
-public struct SQLiteReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapable {
+public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
   /// The row this transaction's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -50,7 +50,7 @@ public struct SQLiteReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapa
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
-    _ query: DatabaseQuery<DatabaseReadAccess>,
+    _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
     try cursor(for: query.fragment, cached: cached)
@@ -93,7 +93,7 @@ public struct SQLiteReadTransaction: DatabaseReadTransaction, ~Copyable, ~Escapa
 ///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
 /// }
 /// ```
-public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Escapable {
+public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~Escapable {
   /// The row this transaction's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -126,7 +126,7 @@ public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Esca
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
-    _ query: DatabaseQuery<DatabaseReadAccess>,
+    _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
     try base.cursor(for: query.fragment, cached: cached)
@@ -141,7 +141,7 @@ public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Esca
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
-    _ query: DatabaseQuery<DatabaseWriteAccess>,
+    _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
     try base.cursor(for: query.fragment, cached: cached)
@@ -154,7 +154,8 @@ public struct SQLiteWriteTransaction: DatabaseWriteTransaction, ~Copyable, ~Esca
   ///   no SQL at all.
   /// - Throws: A ``SQLiteError`` when the statement fails.
   @discardableResult
-  public borrowing func execute(_ query: DatabaseQuery<DatabaseWriteAccess>) throws -> Int {
+  public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws -> Int
+  {
     // A statement that builds no SQL changes nothing. Running the empty-query stand-in would leave
     // `changes` reporting whatever the previous statement changed.
     guard !query.fragment.isEmpty else { return 0 }

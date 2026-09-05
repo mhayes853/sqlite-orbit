@@ -175,7 +175,7 @@
     try handle.execute("CREATE TABLE numbers (value INTEGER)")
 
     // SQLite stores signed 64-bit integers, so this cannot be represented.
-    #expect(throws: DatabaseIntegerOverflowError<UInt64>.self) {
+    #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
       try handle.write { transaction in
         try transaction.execute(
           #sql(
@@ -273,7 +273,7 @@
     }
 
     do {
-      let driver = try SQLitePool(path: DatabasePath(path), configuration: configuration)
+      let driver = try SQLitePool(path: OrbitDatabasePath(path), configuration: configuration)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -299,7 +299,7 @@
     }
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 2
-    let driver = try SQLitePool(path: DatabasePath(path), configuration: configuration)
+    let driver = try SQLitePool(path: OrbitDatabasePath(path), configuration: configuration)
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -347,7 +347,7 @@
         try? FileManager.default.removeItem(atPath: path + suffix)
       }
     }
-    let driver = try SQLitePool(path: DatabasePath(path))
+    let driver = try SQLitePool(path: OrbitDatabasePath(path))
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -390,8 +390,8 @@
     }
 
     // Two drivers on one file stand in for two processes sharing a database.
-    let writer = try SQLitePool(path: DatabasePath(path))
-    let reader = try SQLitePool(path: DatabasePath(path))
+    let writer = try SQLitePool(path: OrbitDatabasePath(path))
+    let reader = try SQLitePool(path: OrbitDatabasePath(path))
     try await writer.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -417,8 +417,8 @@
       }
     }
 
-    let first = try SQLitePool(path: DatabasePath(path))
-    let second = try SQLitePool(path: DatabasePath(path))
+    let first = try SQLitePool(path: OrbitDatabasePath(path))
+    let second = try SQLitePool(path: OrbitDatabasePath(path))
     try await first.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -525,7 +525,7 @@
     if Int.bitWidth == 64 {
       #expect(try asInt.get() == [Int(Int64.max)])
     } else {
-      #expect(throws: DatabaseIntegerOverflowError<Int64>.self) { try asInt.get() }
+      #expect(throws: OrbitDatabaseIntegerOverflowError<Int64>.self) { try asInt.get() }
     }
   }
 #endif

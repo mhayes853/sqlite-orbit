@@ -14,7 +14,7 @@ import Foundation
 /// ```
 public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
   /// The path that cannot be pooled.
-  public let path: DatabasePath
+  public let path: OrbitDatabasePath
 
   /// Explains why the path cannot be pooled and which driver to use instead.
   public var description: String {
@@ -25,7 +25,7 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
   }
 }
 
-/// A ``SQLiteDatabaseWriter`` that runs reads concurrently against a pool of connections while
+/// An ``OrbitDatabaseWriter`` that runs reads concurrently against a pool of connections while
 /// serializing writes through one.
 ///
 /// Reads run alongside one another. A write waits for the reads in flight and holds off the reads
@@ -39,13 +39,13 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// }
 /// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
 /// ```
-public final class SQLitePool: SQLiteObservableDatabase {
+public final class SQLitePool: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
-  public let defaultIdentifier: DatabaseIdentifier
+  public let defaultIdentifier: OrbitDatabaseIdentifier
 
   private let writer: SQLiteConnection
   private let scheduler: SQLitePoolScheduler
-  private let transactionObservers = DatabaseTransactionObservers()
+  private let transactionObservers = OrbitDatabaseTransactionObservers()
 
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
   ///
@@ -58,9 +58,9 @@ public final class SQLitePool: SQLiteObservableDatabase {
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
   ///   ``SQLiteError`` when a connection cannot be opened or configured.
   public init(
-    path: DatabasePath,
+    path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
-    identifier: DatabaseIdentifier? = nil,
+    identifier: OrbitDatabaseIdentifier? = nil,
     coordinationDirectory: URL? = nil
   ) throws {
     guard !path.isPrivateToConnection else {
@@ -83,7 +83,7 @@ public final class SQLitePool: SQLiteObservableDatabase {
   }
 
   private static func openConnections(
-    path: DatabasePath,
+    path: OrbitDatabasePath,
     configuration: SQLiteConfiguration
   ) throws -> (writer: SQLiteConnection, readers: [SQLiteConnection]) {
     var writerConfiguration = configuration
@@ -110,12 +110,12 @@ public final class SQLitePool: SQLiteObservableDatabase {
   }
 
   private static func withOpenLock<Result>(
-    identifier: DatabaseIdentifier,
+    identifier: OrbitDatabaseIdentifier,
     directory: URL?,
     _ body: () throws -> Result
   ) throws -> Result {
     #if canImport(Darwin) || canImport(Glibc)
-      return try DatabaseOpenLock.withLock(
+      return try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: directory ?? UnixDatagramIPCTransport.Configuration.defaultDirectory,
         body
@@ -196,7 +196,7 @@ public final class SQLitePool: SQLiteObservableDatabase {
   /// - Parameter transactionObserver: Receives each commit and rollback.
   /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
-    transactionObserver: any DatabaseTransactionObserver
+    transactionObserver: any OrbitDatabaseTransactionObserver
   ) throws -> OrbitSubscription {
     transactionObservers.subscribe(transactionObserver)
   }
@@ -217,8 +217,8 @@ public final class SQLitePool: SQLiteObservableDatabase {
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened.
     public convenience init(
-      path: DatabasePath,
-      identifier: DatabaseIdentifier? = nil,
+      path: OrbitDatabasePath,
+      identifier: OrbitDatabaseIdentifier? = nil,
       coordinationDirectory: URL? = nil
     ) throws {
       try self.init(

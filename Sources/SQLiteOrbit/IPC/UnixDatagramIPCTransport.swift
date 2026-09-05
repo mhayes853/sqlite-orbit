@@ -19,12 +19,12 @@
   /// let transport = try UnixDatagramIPCTransport.shared()
   /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
   /// ```
-  public final class UnixDatagramIPCTransport: DatabaseIPCTransport, Sendable {
+  public final class UnixDatagramIPCTransport: OrbitIPCTransport, Sendable {
     /// Controls how a sender responds when a peer's bounded receive queue is full.
     ///
     /// A datagram socket's receive queue is finite, so a peer that stops draining it eventually
     /// refuses new messages. Nothing is ever dropped silently: the send either waits for room or
-    /// throws ``DatabaseIPCPartialDeliveryError``.
+    /// throws ``OrbitIPCPartialDeliveryError``.
     ///
     /// ```swift
     /// let coordination = UnixDatagramIPCTransport.Configuration(
@@ -52,7 +52,7 @@
     ///   backPressure: .suspend(upTo: .milliseconds(250))
     /// )
     /// let database = try OrbitDatabase(
-    ///   path: DatabasePath("reminders.sqlite"), coordination: coordination
+    ///   path: OrbitDatabasePath("reminders.sqlite"), coordination: coordination
     /// )
     /// ```
     public struct Configuration: Hashable, Sendable {
@@ -106,9 +106,9 @@
     }
 
     private let configuration: Configuration
-    private let registry: DatabaseIPCEndpointRegistry
+    private let registry: OrbitIPCEndpointRegistry
     private let socket: UnixDatagramSocket
-    private let handlers: DatabaseIPCHandlers
+    private let handlers: OrbitIPCHandlers
     private let receiver: Mutex<DispatchSourceRead?>
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
@@ -123,18 +123,18 @@
     ///
     /// - Parameter configuration: Describes the coordination directory, back pressure, and buffer
     ///   sizes for this endpoint.
-    /// - Throws: A ``DatabaseIPCSystemError`` if the configuration is invalid or the socket cannot
+    /// - Throws: An ``OrbitIPCSystemError`` if the configuration is invalid or the socket cannot
     ///   be created and bound.
     public init(configuration: Configuration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
       else {
-        throw DatabaseIPCSystemError(operation: "invalid transport configuration", code: EINVAL)
+        throw OrbitIPCSystemError(operation: "invalid transport configuration", code: EINVAL)
       }
       if case .suspend(upTo: let duration) = configuration.backPressure {
         guard duration >= .zero else {
-          throw DatabaseIPCSystemError(operation: "negative back pressure duration", code: EINVAL)
+          throw OrbitIPCSystemError(operation: "negative back pressure duration", code: EINVAL)
         }
       }
 
@@ -142,7 +142,7 @@
         .lowercased()
         .replacingOccurrences(of: "-", with: "")
         .prefix(16)
-      let registry = try DatabaseIPCEndpointRegistry(
+      let registry = try OrbitIPCEndpointRegistry(
         directory: configuration.directory,
         endpointName: String(endpointName)
       )
@@ -150,7 +150,7 @@
         path: registry.socketPath,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
-      let handlers = DatabaseIPCHandlers(registry: registry)
+      let handlers = OrbitIPCHandlers(registry: registry)
       let receiver = DispatchSource.makeReadSource(
         fileDescriptor: socket.descriptor,
         queue: DispatchQueue(label: "SQLiteOrbit.UnixDatagramReceiver")
@@ -161,7 +161,7 @@
         ) {
           guard bytes.count <= configuration.maximumDatagramByteCount,
             let message = try? bytes.withUnsafeBufferPointer({
-              try DatabaseIPCWireProtocol.decode(Span(_unsafeElements: $0))
+              try OrbitIPCWireProtocol.decode(Span(_unsafeElements: $0))
             })
           else { continue }
           handlers.receive(message)
@@ -198,11 +198,11 @@
     ///   - databaseIdentifier: The database whose messages to receive.
     ///   - onMessage: Receives each message concerning that database.
     /// - Returns: A subscription that stops delivery when cancelled or released.
-    /// - Throws: A ``DatabaseIPCSystemError`` if the transport is closed or the coordination
+    /// - Throws: An ``OrbitIPCSystemError`` if the transport is closed or the coordination
     ///   directory cannot be written to.
     public func subscribe(
-      to databaseIdentifier: DatabaseIdentifier,
-      onMessage: @escaping @Sendable (DatabaseIPCMessage) -> Void
+      to databaseIdentifier: OrbitDatabaseIdentifier,
+      onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitSubscription {
       let identifier = try self.handlers.add(
         databaseIdentifier: databaseIdentifier,
@@ -224,12 +224,12 @@
     /// ```
     ///
     /// - Parameter message: The message to broadcast.
-    /// - Throws: ``DatabaseIPCPartialDeliveryError`` when a live peer did not accept the message,
-    ///   or a ``DatabaseIPCSystemError`` if the message cannot be encoded or sent at all.
-    public func send(_ message: DatabaseIPCMessage) async throws {
-      let bytes = try DatabaseIPCWireProtocol.encode(message)
+    /// - Throws: ``OrbitIPCPartialDeliveryError`` when a live peer did not accept the message,
+    ///   or an ``OrbitIPCSystemError`` if the message cannot be encoded or sent at all.
+    public func send(_ message: OrbitIPCMessage) async throws {
+      let bytes = try OrbitIPCWireProtocol.encode(message)
       guard bytes.count <= self.configuration.maximumDatagramByteCount else {
-        throw DatabaseIPCSystemError(operation: "datagram is too large", code: EMSGSIZE)
+        throw OrbitIPCSystemError(operation: "datagram is too large", code: EMSGSIZE)
       }
       let peers = try self.registry.peers(databaseIdentifier: message.databaseIdentifier)
         .filter { $0.endpointName != self.registry.endpointName }
@@ -250,7 +250,7 @@
       }
 
       guard result.failed == 0 else {
-        throw DatabaseIPCPartialDeliveryError(
+        throw OrbitIPCPartialDeliveryError(
           discoveredPeerCount: peers.count,
           deliveredPeerCount: result.delivered,
           failedPeerCount: result.failed
@@ -260,10 +260,10 @@
 
     private func attempt(
       _ bytes: [UInt8],
-      to peers: [DatabaseIPCPeer],
-      databaseIdentifier: DatabaseIdentifier
-    ) -> (delivered: Int, failed: Int, pending: [DatabaseIPCPeer]) {
-      var result = (delivered: 0, failed: 0, pending: [DatabaseIPCPeer]())
+      to peers: [OrbitIPCPeer],
+      databaseIdentifier: OrbitDatabaseIdentifier
+    ) -> (delivered: Int, failed: Int, pending: [OrbitIPCPeer]) {
+      var result = (delivered: 0, failed: 0, pending: [OrbitIPCPeer]())
       for peer in peers {
         do {
           if try self.socket.send(bytes, to: peer.socketPath) {
@@ -271,7 +271,7 @@
           } else {
             result.pending.append(peer)
           }
-        } catch let error as DatabaseIPCSystemError where Self.isStaleEndpointError(error.code) {
+        } catch let error as OrbitIPCSystemError where Self.isStaleEndpointError(error.code) {
           try? self.registry.remove(peer, databaseIdentifier: databaseIdentifier)
         } catch {
           result.failed += 1
@@ -282,8 +282,8 @@
 
     private func retry(
       _ bytes: [UInt8],
-      to peers: [DatabaseIPCPeer],
-      databaseIdentifier: DatabaseIdentifier,
+      to peers: [OrbitIPCPeer],
+      databaseIdentifier: OrbitDatabaseIdentifier,
       upTo duration: Duration
     ) async throws -> (delivered: Int, failed: Int) {
       let clock = ContinuousClock()
@@ -327,7 +327,7 @@
     /// - Parameter configuration: Describes the endpoint. Callers passing equal configurations
     ///   share one transport.
     /// - Returns: This process's transport for `configuration`.
-    /// - Throws: A ``DatabaseIPCSystemError`` if a new transport is needed and cannot be created.
+    /// - Throws: An ``OrbitIPCSystemError`` if a new transport is needed and cannot be created.
     public static func shared(
       configuration: Configuration = .default
     ) throws -> UnixDatagramIPCTransport {
@@ -356,11 +356,11 @@
   /// ```swift
   /// do {
   ///   try await transport.send(message)
-  /// } catch let error as DatabaseIPCPartialDeliveryError {
+  /// } catch let error as OrbitIPCPartialDeliveryError {
   ///   logger.warning("reached \(error.deliveredPeerCount) of \(error.discoveredPeerCount) peers")
   /// }
   /// ```
-  public struct DatabaseIPCPartialDeliveryError: Error, Hashable, Sendable {
+  public struct OrbitIPCPartialDeliveryError: Error, Hashable, Sendable {
     /// How many peers the coordination directory advertised for the message's database.
     public let discoveredPeerCount: Int
 
@@ -392,28 +392,28 @@
   ///
   /// Peers discover a registration key rather than a database identifier, so a key stays registered
   /// for as long as any handler under it is subscribed.
-  private final class DatabaseIPCHandlers: Sendable {
+  private final class OrbitIPCHandlers: Sendable {
     private struct State: Sendable {
       var handlers = KeyedHandlerRegistry<
-        DatabaseIdentifier, @Sendable (DatabaseIPCMessage) -> Void
+        OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void
       >()
       var isShutdown = false
     }
 
-    private let registry: DatabaseIPCEndpointRegistry
+    private let registry: OrbitIPCEndpointRegistry
     private let state = Mutex(State())
 
-    init(registry: DatabaseIPCEndpointRegistry) {
+    init(registry: OrbitIPCEndpointRegistry) {
       self.registry = registry
     }
 
     func add(
-      databaseIdentifier: DatabaseIdentifier,
-      handler: @escaping @Sendable (DatabaseIPCMessage) -> Void
+      databaseIdentifier: OrbitDatabaseIdentifier,
+      handler: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> UInt64 {
       try self.state.withLock { state in
         guard !state.isShutdown else {
-          throw DatabaseIPCSystemError(operation: "transport is closed", code: EBADF)
+          throw OrbitIPCSystemError(operation: "transport is closed", code: EBADF)
         }
         if !state.handlers.contains(databaseIdentifier),
           !self.isRegistered(databaseIdentifier, in: state)
@@ -424,7 +424,7 @@
       }
     }
 
-    func remove(identifier: UInt64, databaseIdentifier: DatabaseIdentifier) {
+    func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
       self.state.withLock { state in
         guard state.handlers.remove(identifier, for: databaseIdentifier),
           !self.isRegistered(databaseIdentifier, in: state)
@@ -433,7 +433,7 @@
       }
     }
 
-    func receive(_ message: DatabaseIPCMessage) {
+    func receive(_ message: OrbitIPCMessage) {
       let callbacks = self.state.withLock { $0.handlers.handlers(for: message.databaseIdentifier) }
       for callback in callbacks {
         callback(message)
@@ -441,7 +441,7 @@
     }
 
     func shutdown() {
-      let databaseIdentifiers = self.state.withLock { state -> [DatabaseIdentifier] in
+      let databaseIdentifiers = self.state.withLock { state -> [OrbitDatabaseIdentifier] in
         guard !state.isShutdown else { return [] }
         state.isShutdown = true
         return state.handlers.removeAll()
@@ -457,7 +457,7 @@
     /// Whether a handler other than the ones for `databaseIdentifier` keeps its registration key
     /// discoverable.
     private func isRegistered(
-      _ databaseIdentifier: DatabaseIdentifier,
+      _ databaseIdentifier: OrbitDatabaseIdentifier,
       in state: State
     ) -> Bool {
       let key = self.registry.registrationKey(for: databaseIdentifier)

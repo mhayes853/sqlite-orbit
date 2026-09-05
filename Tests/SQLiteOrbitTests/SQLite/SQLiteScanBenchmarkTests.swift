@@ -27,7 +27,7 @@
     }
     let rowCount = 200_000
 
-    let pool = try SQLitePool(path: DatabasePath(path))
+    let pool = try SQLitePool(path: OrbitDatabasePath(path))
     try await pool.write { transaction in
       try transaction.execute(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
@@ -39,7 +39,7 @@
       }
     }
 
-    let queue = try SQLiteQueue(path: DatabasePath(path))
+    let queue = try SQLiteQueue(path: OrbitDatabasePath(path))
 
     func measure(_ name: String, _ body: () async throws -> Int) async rethrows {
       var best = Duration.seconds(1_000)
