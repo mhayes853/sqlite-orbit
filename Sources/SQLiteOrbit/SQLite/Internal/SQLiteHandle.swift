@@ -73,6 +73,8 @@ struct SQLiteHandle: ~Copyable {
   }
 
   private borrowing func configure(_ configuration: SQLiteConfiguration) throws {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     _ = libraryStorage.pointee.extended_result_codes(pointer, 1)
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
@@ -88,12 +90,16 @@ struct SQLiteHandle: ~Copyable {
   }
 
   borrowing func execute(_ sql: String) throws {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try Self.execute(sql, on: pointer, library: library)
   }
 
   borrowing func read<Result: ~Copyable>(
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than quietly having
     // it discarded by the rollback below.
@@ -129,6 +135,8 @@ struct SQLiteHandle: ~Copyable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     do {
       let value = try body(SQLiteWriteTransaction(handle: self))

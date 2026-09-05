@@ -299,7 +299,6 @@
   func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
     let seenVersion = Mutex<Int32?>(nil)
     var configuration = SQLiteConfiguration.default
-    configuration.library.supportsTypedCallbacks = false
     configuration.library.libversion_number = { 123_456 }
     configuration.connectionSetups = [
       SQLiteConnectionSetup { _, library in

@@ -9,6 +9,15 @@
 /// ```
 public typealias SQLiteDestructor = @convention(c) (UnsafeMutableRawPointer?) -> Void
 
+/// The comparator SQLite calls to order two values under a collating sequence.
+///
+/// It is handed the pointer the collation was registered with, then each side as a length and a
+/// buffer, and returns the usual negative, zero, or positive ordering.
+public typealias SQLiteComparator =
+  @convention(c) (
+    UnsafeMutableRawPointer?, Int32, UnsafeRawPointer?, Int32, UnsafeRawPointer?
+  ) -> Int32
+
 extension SQLiteLibrary {
   /// SQLite's `SQLITE_TRANSIENT`: the destructor that tells SQLite to copy the bytes it was handed
   /// rather than borrow them.
@@ -26,6 +35,10 @@ extension SQLiteLibrary {
 /// so a caller can supply any build of SQLite — SQLCipher, a custom amalgamation, or one with
 /// extensions compiled in — without forking the package. ``SQLiteLibrary/system`` is available when
 /// the `SystemSQLite` trait is enabled, which it is by default.
+///
+/// Collations and functions registered through ``SQLiteConfiguration`` run through this table too.
+/// Their callbacks read arguments and write results through the build that invoked them, so they
+/// need no cooperation from the SQLite this package happens to be linked against.
 ///
 /// Every member is a mutable closure, so a caller can interpose on one entry point while leaving
 /// the rest alone — wrapping ``prepare_v3`` to count statement preparations, or ``step`` to inject
@@ -47,22 +60,6 @@ extension SQLiteLibrary {
 /// )
 /// ```
 public struct SQLiteLibrary: Sendable {
-
-  /// Whether this table's connections may be handed the static C callbacks that
-  /// ``SQLiteConfiguration/register(function:)-(some ScalarDatabaseFunction & Sendable)`` and its
-  /// siblings install.
-  ///
-  /// Those callbacks read values, results, and contexts through the SQLite this package was linked
-  /// against rather than through this table, so handing one a value belonging to another build
-  /// would read one SQLite's memory with another's layout. ``system`` is the only table this
-  /// package can vouch for, so it is the only one that sets this; every other table refuses typed
-  /// registration with ``SQLiteTypedCallbacksUnavailableError``. Interposing individual entry
-  /// points preserves the flag, because an interposed `system` is still the linked SQLite.
-  ///
-  /// Set this only for a table whose `sqlite3_*` functions come from the very build this package
-  /// linked against — a differently named export of the same library, for instance. Setting it for
-  /// a genuinely separate build is undefined behavior.
-  public var supportsTypedCallbacks = false
 
   // MARK: - Connections
 
@@ -178,6 +175,52 @@ public struct SQLiteLibrary: Sendable {
       SQLiteDestructor?
     ) -> Int32
 
+  /// Registers a collating sequence: `sqlite3_create_collation_v2`.
+  public var create_collation_v2:
+    @Sendable (
+      OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?, SQLiteComparator?,
+      SQLiteDestructor?
+    ) -> Int32
+
+  // MARK: - Callbacks
+
+  /// The user data a function or collation was registered with: `sqlite3_user_data`.
+  ///
+  /// A C callback captures nothing, so this is the only way one can reach the Swift value standing
+  /// behind the function it is running.
+  public var user_data: @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?
+  /// An aggregate's per-invocation state, allocated on first use: `sqlite3_aggregate_context`.
+  public var aggregate_context: @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?
+
+  /// An argument's storage class, one of ``SQLiteColumnType``: `sqlite3_value_type`.
+  public var value_type: @Sendable (OpaquePointer?) -> Int32
+  /// Reads an argument as a 64-bit integer: `sqlite3_value_int64`.
+  public var value_int64: @Sendable (OpaquePointer?) -> Int64
+  /// Reads an argument as a floating-point value: `sqlite3_value_double`.
+  public var value_double: @Sendable (OpaquePointer?) -> Double
+  /// Reads an argument as UTF-8 text: `sqlite3_value_text`.
+  public var value_text: @Sendable (OpaquePointer?) -> UnsafePointer<UInt8>?
+  /// Reads an argument as bytes: `sqlite3_value_blob`.
+  public var value_blob: @Sendable (OpaquePointer?) -> UnsafeRawPointer?
+  /// The byte count of the text or blob just read: `sqlite3_value_bytes`.
+  public var value_bytes: @Sendable (OpaquePointer?) -> Int32
+
+  /// Returns SQL NULL from a function: `sqlite3_result_null`.
+  public var result_null: @Sendable (OpaquePointer?) -> Void
+  /// Returns a 64-bit integer: `sqlite3_result_int64`.
+  public var result_int64: @Sendable (OpaquePointer?, Int64) -> Void
+  /// Returns a floating-point value: `sqlite3_result_double`.
+  public var result_double: @Sendable (OpaquePointer?, Double) -> Void
+  /// Returns a copy of the text at a pointer, which need only stay valid for the call.
+  ///
+  /// As with ``bind_text``, the table's entry point always copies, because the buffers a function
+  /// returns live only for the call.
+  public var result_text: @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+  /// Returns a copy of the bytes at a pointer, which need only stay valid for the call.
+  public var result_blob: @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void
+  /// Fails the function with a message: `sqlite3_result_error`.
+  public var result_error: @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+
   /// Creates a table from a SQLite build's entry points.
   ///
   /// Each parameter is the correspondingly named `sqlite3_*` function. `bind_text` and `bind_blob`
@@ -242,7 +285,26 @@ public struct SQLiteLibrary: Sendable {
         (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
         (@convention(c) (OpaquePointer?) -> Void)?,
         SQLiteDestructor?
-      ) -> Int32
+      ) -> Int32,
+    create_collation_v2:
+      @escaping @Sendable (
+        OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?, SQLiteComparator?,
+        SQLiteDestructor?
+      ) -> Int32,
+    user_data: @escaping @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?,
+    aggregate_context: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?,
+    value_type: @escaping @Sendable (OpaquePointer?) -> Int32,
+    value_int64: @escaping @Sendable (OpaquePointer?) -> Int64,
+    value_double: @escaping @Sendable (OpaquePointer?) -> Double,
+    value_text: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<UInt8>?,
+    value_blob: @escaping @Sendable (OpaquePointer?) -> UnsafeRawPointer?,
+    value_bytes: @escaping @Sendable (OpaquePointer?) -> Int32,
+    result_null: @escaping @Sendable (OpaquePointer?) -> Void,
+    result_int64: @escaping @Sendable (OpaquePointer?, Int64) -> Void,
+    result_double: @escaping @Sendable (OpaquePointer?, Double) -> Void,
+    result_text: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
+    result_blob: @escaping @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void,
+    result_error: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
   ) {
     self.open_v2 = open_v2
     self.close_v2 = close_v2
@@ -278,6 +340,21 @@ public struct SQLiteLibrary: Sendable {
     self.column_bytes = column_bytes
     self.column_name = column_name
     self.create_function_v2 = create_function_v2
+    self.create_collation_v2 = create_collation_v2
+    self.user_data = user_data
+    self.aggregate_context = aggregate_context
+    self.value_type = value_type
+    self.value_int64 = value_int64
+    self.value_double = value_double
+    self.value_text = value_text
+    self.value_blob = value_blob
+    self.value_bytes = value_bytes
+    self.result_null = result_null
+    self.result_int64 = result_int64
+    self.result_double = result_double
+    self.result_text = result_text
+    self.result_blob = result_blob
+    self.result_error = result_error
   }
 }
 
@@ -288,45 +365,56 @@ public struct SQLiteLibrary: Sendable {
     /// This is the default for every driver. Supplying a different value is how a caller runs
     /// against their own SQLite build without forking the package; this declaration doubles as the
     /// template for writing one.
-    public static let system: Self = {
-      var library = Self(
-        open_v2: sqlite3_open_v2,
-        close_v2: sqlite3_close_v2,
-        errmsg: sqlite3_errmsg,
-        extended_errcode: sqlite3_extended_errcode,
-        extended_result_codes: sqlite3_extended_result_codes,
-        busy_timeout: sqlite3_busy_timeout,
-        interrupt: sqlite3_interrupt,
-        changes: sqlite3_changes,
-        last_insert_rowid: sqlite3_last_insert_rowid,
-        get_autocommit: sqlite3_get_autocommit,
-        threadsafe: sqlite3_threadsafe,
-        libversion_number: sqlite3_libversion_number,
-        prepare_v3: sqlite3_prepare_v3,
-        step: sqlite3_step,
-        reset: sqlite3_reset,
-        finalize: sqlite3_finalize,
-        clear_bindings: sqlite3_clear_bindings,
-        stmt_readonly: sqlite3_stmt_readonly,
-        sql: sqlite3_sql,
-        bind_parameter_count: sqlite3_bind_parameter_count,
-        bind_null: sqlite3_bind_null,
-        bind_int64: sqlite3_bind_int64,
-        bind_double: sqlite3_bind_double,
-        bind_text: { sqlite3_bind_text($0, $1, $2, $3, Self.transientDestructor) },
-        bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, Self.transientDestructor) },
-        column_count: sqlite3_column_count,
-        column_type: sqlite3_column_type,
-        column_int64: sqlite3_column_int64,
-        column_double: sqlite3_column_double,
-        column_text: sqlite3_column_text,
-        column_blob: sqlite3_column_blob,
-        column_bytes: sqlite3_column_bytes,
-        column_name: sqlite3_column_name,
-        create_function_v2: sqlite3_create_function_v2
-      )
-      library.supportsTypedCallbacks = true
-      return library
-    }()
+    public static let system = Self(
+      open_v2: sqlite3_open_v2,
+      close_v2: sqlite3_close_v2,
+      errmsg: sqlite3_errmsg,
+      extended_errcode: sqlite3_extended_errcode,
+      extended_result_codes: sqlite3_extended_result_codes,
+      busy_timeout: sqlite3_busy_timeout,
+      interrupt: sqlite3_interrupt,
+      changes: sqlite3_changes,
+      last_insert_rowid: sqlite3_last_insert_rowid,
+      get_autocommit: sqlite3_get_autocommit,
+      threadsafe: sqlite3_threadsafe,
+      libversion_number: sqlite3_libversion_number,
+      prepare_v3: sqlite3_prepare_v3,
+      step: sqlite3_step,
+      reset: sqlite3_reset,
+      finalize: sqlite3_finalize,
+      clear_bindings: sqlite3_clear_bindings,
+      stmt_readonly: sqlite3_stmt_readonly,
+      sql: sqlite3_sql,
+      bind_parameter_count: sqlite3_bind_parameter_count,
+      bind_null: sqlite3_bind_null,
+      bind_int64: sqlite3_bind_int64,
+      bind_double: sqlite3_bind_double,
+      bind_text: { sqlite3_bind_text($0, $1, $2, $3, Self.transientDestructor) },
+      bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, Self.transientDestructor) },
+      column_count: sqlite3_column_count,
+      column_type: sqlite3_column_type,
+      column_int64: sqlite3_column_int64,
+      column_double: sqlite3_column_double,
+      column_text: sqlite3_column_text,
+      column_blob: sqlite3_column_blob,
+      column_bytes: sqlite3_column_bytes,
+      column_name: sqlite3_column_name,
+      create_function_v2: sqlite3_create_function_v2,
+      create_collation_v2: sqlite3_create_collation_v2,
+      user_data: sqlite3_user_data,
+      aggregate_context: sqlite3_aggregate_context,
+      value_type: sqlite3_value_type,
+      value_int64: sqlite3_value_int64,
+      value_double: sqlite3_value_double,
+      value_text: sqlite3_value_text,
+      value_blob: sqlite3_value_blob,
+      value_bytes: sqlite3_value_bytes,
+      result_null: sqlite3_result_null,
+      result_int64: sqlite3_result_int64,
+      result_double: sqlite3_result_double,
+      result_text: { sqlite3_result_text($0, $1, $2, Self.transientDestructor) },
+      result_blob: { sqlite3_result_blob($0, $1, $2, Self.transientDestructor) },
+      result_error: sqlite3_result_error
+    )
   }
 #endif

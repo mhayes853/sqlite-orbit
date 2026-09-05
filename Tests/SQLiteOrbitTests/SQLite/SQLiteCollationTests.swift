@@ -1,5 +1,6 @@
 #if SystemSQLite
   import SQLiteOrbit
+  import Synchronization
   import Testing
 
   @DatabaseCollation
@@ -92,5 +93,35 @@
   private struct Word: Equatable, Sendable {
     let id: Int
     var text: String
+  }
+
+  @Test
+  func collationsAreRegisteredThroughTheSuppliedTable() async throws {
+    // A comparator is handed its user data directly, so a collation needs nothing from the build
+    // that called it. Registration is the one part that goes through the table.
+    let registrations = Mutex(0)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.create_collation_v2 = { connection, name, flags, box, compare, destroy in
+      registrations.withLock { $0 += 1 }
+      return SQLiteLibrary.system
+        .create_collation_v2(connection, name, flags, box, compare, destroy)
+    }
+    configuration.register(collation: $reversedText)
+
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    let ordered = try await driver.read { transaction in
+      try transaction.fetchAll(
+        #sql(
+          """
+          SELECT text FROM (SELECT 'ab' AS text UNION SELECT 'ba')
+          ORDER BY text COLLATE reversedText
+          """,
+          as: String.self
+        )
+      )
+    }
+
+    #expect(ordered == ["ba", "ab"])
+    #expect(registrations.withLock { $0 } == 1)
   }
 #endif

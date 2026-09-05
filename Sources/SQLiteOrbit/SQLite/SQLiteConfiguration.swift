@@ -1,3 +1,5 @@
+import StructuredQueriesSQLite
+
 /// The settings a native SQLite driver applies to every connection it opens.
 ///
 /// A configuration is applied once per connection, before any transaction can reach it, so a
@@ -83,31 +85,6 @@ public struct SQLiteConfiguration: Sendable {
   }
 }
 
-/// Typed Swift callback registration was requested for a SQLite library whose callback ABI is not
-/// supplied by this package.
-///
-/// Thrown when a connection is opened with a configuration that registered a typed collation or
-/// function against a ``SQLiteLibrary`` other than ``SQLiteLibrary/system``.
-///
-/// ```swift
-/// var configuration = SQLiteConfiguration(library: myCustomBuild)
-/// configuration.register(function: $repeated)
-/// // Throws `SQLiteTypedCallbacksUnavailableError` when the connection is opened.
-/// _ = try? SQLiteQueue(path: ":memory:", configuration: configuration)
-/// ```
-public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertible, Sendable {
-  /// Creates the error.
-  public init() {}
-
-  /// Explains that typed callbacks need ``SQLiteLibrary/system``.
-  public var description: String {
-    """
-    Typed Swift collations and functions require SQLiteLibrary.system. Register callbacks through \
-    the custom SQLite build directly instead.
-    """
-  }
-}
-
 /// A native callback installed on every connection a configuration opens.
 ///
 /// This is the escape hatch for registering what the package does not model — an authorizer, an
@@ -152,9 +129,58 @@ public struct SQLiteConnectionSetup: Sendable {
   }
 }
 
-#if SystemSQLite
-  import StructuredQueriesSQLite
+extension SQLiteConfiguration {
+  /// Registers a collating sequence on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(collation: CaseInsensitiveCollation())
+  /// ```
+  ///
+  /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
+  public mutating func register(
+    collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+  ) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(collation: collation, on: $0, library: $1) }
+    )
+  }
 
+  /// Registers a scalar function on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// @DatabaseFunction(isDeterministic: true)
+  /// func repeated(_ text: String, _ count: Int) -> String {
+  ///   String(repeating: text, count: count)
+  /// }
+  ///
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(function: $repeated)
+  /// ```
+  ///
+  /// - Parameter function: The function to install. Its name is what SQL calls it by.
+  public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+    )
+  }
+
+  /// Registers an aggregate function on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(function: $longestTitle)
+  /// ```
+  ///
+  /// - Parameter function: The function to install. Its name is what SQL calls it by.
+  public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+    )
+  }
+}
+
+#if SystemSQLite
   extension SQLiteConfiguration {
     /// The default configuration, running against the SQLite this package was linked against.
     ///
@@ -164,62 +190,6 @@ public struct SQLiteConnectionSetup: Sendable {
     /// ```
     public static var `default`: Self {
       Self(library: .system)
-    }
-
-    /// Registers a collating sequence on every connection opened with this configuration.
-    ///
-    /// ```swift
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(collation: CaseInsensitiveCollation())
-    /// ```
-    ///
-    /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
-    public mutating func register(
-      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
-    ) {
-      registerTyped { orbitInstall(collation: collation, on: $0) }
-    }
-
-    /// Registers a scalar function on every connection opened with this configuration.
-    ///
-    /// ```swift
-    /// @DatabaseFunction(isDeterministic: true)
-    /// func repeated(_ text: String, _ count: Int) -> String {
-    ///   String(repeating: text, count: count)
-    /// }
-    ///
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(function: $repeated)
-    /// ```
-    ///
-    /// - Parameter function: The function to install. Its name is what SQL calls it by.
-    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-      registerTyped { orbitInstall(function: function, on: $0) }
-    }
-
-    /// Registers an aggregate function on every connection opened with this configuration.
-    ///
-    /// ```swift
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(function: $longestTitle)
-    /// ```
-    ///
-    /// - Parameter function: The function to install. Its name is what SQL calls it by.
-    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-      registerTyped { orbitInstall(function: function, on: $0) }
-    }
-
-    private mutating func registerTyped(
-      _ install: @escaping @Sendable (OpaquePointer) -> Int32
-    ) {
-      connectionSetups.append(
-        SQLiteConnectionSetup { connection, library in
-          guard library.supportsTypedCallbacks else {
-            throw SQLiteTypedCallbacksUnavailableError()
-          }
-          return install(connection)
-        }
-      )
     }
   }
 #endif
