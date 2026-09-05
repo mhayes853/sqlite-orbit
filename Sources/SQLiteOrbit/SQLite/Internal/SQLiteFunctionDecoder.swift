@@ -3,10 +3,6 @@
   import CSQLite3
   import StructuredQueriesSQLite
 
-  // Decodes a database function's arguments.
-  //
-  // A ported copy: swift-structured-queries implements this, but in a target it does not ship as
-  // a product, so no other package can reach it.
   struct SQLiteFunctionDecoder: QueryDecoder {
     let argumentCount: Int32
     let arguments: UnsafeMutablePointer<OpaquePointer?>?
@@ -17,11 +13,6 @@
       self.arguments = arguments
     }
 
-    // Steps past the current argument, returning it when its storage class is `expected`, `nil`
-    // when it is `NULL`, and throwing otherwise.
-    //
-    // A function registered without a fixed argument count is called with whatever arity the SQL
-    // used, so asking for an argument SQLite did not pass is reported rather than trapped.
     private mutating func argument(
       _ expected: Int32,
       for columnType: Any.Type
@@ -104,7 +95,6 @@
     }
   }
 
-  // A database function asked for an argument its caller did not pass.
   struct MissingDatabaseFunctionArgumentError: Error, CustomStringConvertible {
     let index: Int
 
@@ -113,15 +103,12 @@
     }
   }
 
-  // SQLite's marker for "copy this value", which the C headers define as a macro that Swift does
-  // not import.
   private let sqliteTransient = unsafeBitCast(
     -1,
     to: (@convention(c) (UnsafeMutableRawPointer?) -> Void).self
   )
 
   extension QueryBinding {
-    // Returns this binding as a database function's result.
     func result(_ context: OpaquePointer?) {
       switch self {
       case .blob(let blob):

@@ -387,11 +387,6 @@
     }
   }
 
-  // The message handlers one transport endpoint has registered, and the coordination-directory
-  // registrations that make them discoverable to peers.
-  //
-  // Peers discover a registration key rather than a database identifier, so a key stays registered
-  // for as long as any handler under it is subscribed.
   private final class OrbitIPCHandlers: Sendable {
     private struct State: Sendable {
       var handlers = KeyedHandlerRegistry<
@@ -454,8 +449,6 @@
       }
     }
 
-    // Whether a handler other than the ones for `databaseIdentifier` keeps its registration key
-    // discoverable.
     private func isRegistered(
       _ databaseIdentifier: OrbitDatabaseIdentifier,
       in state: State

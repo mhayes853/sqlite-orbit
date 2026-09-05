@@ -4,11 +4,6 @@
   import Synchronization
   import Testing
 
-  // Checks the constants the package declares by hand against the SQLite it was linked against.
-  //
-  // The core module cannot import a SQLite header, which is what lets a caller inject their own
-  // build. That freedom costs us the compiler's agreement that these numbers are right, so this
-  // test buys it back for the system library at least.
   @Test
   func systemConstantsMatchTheSQLiteHeaders() {
     #expect(SQLiteResultCode.ok.rawValue == SQLITE_OK)
@@ -54,7 +49,6 @@
     #expect(SQLiteFunctionFlags.innocuous.rawValue == SQLITE_INNOCUOUS)
   }
 
-  // SQLite qualifies some successes with extended bits, and those are still successes.
   @Test
   func resultCodesReportSuccessThroughTheirExtendedBits() {
     #expect(SQLiteResultCode.ok.isSuccess)
@@ -68,10 +62,6 @@
     #expect(SQLiteResultCode(rawValue: 517).primary == .busy)
   }
 
-  // Drives a query end to end through nothing but the function table.
-  //
-  // No wrapper types exist yet, which is the point: this proves the package can reach SQLite
-  // through an injected table alone.
   @Test
   func functionTableRunsAQueryWithoutAnyWrapperTypes() throws {
     let library = SQLiteLibrary.system
@@ -117,7 +107,6 @@
     #expect(library.step(statement) == SQLiteResultCode.done.rawValue)
   }
 
-  // Checks that bindings and mutations report through the table the way the drivers will rely on.
   @Test
   func functionTableBindsValuesAndReportsChanges() throws {
     let library = SQLiteLibrary.system
@@ -182,11 +171,6 @@
     #expect(library.last_insert_rowid(connection) == 2)
   }
 
-  // Checks that one entry point can be wrapped without disturbing the rest.
-  //
-  // Interposition is why the table holds Swift closures rather than C function pointers: a C
-  // function pointer cannot capture, so a counter or a fault would have to live in global state
-  // and could not survive tests running in parallel.
   @Test
   func functionTableEntryPointsCanBeInterposedPerInstance() throws {
     let preparedSQL = Mutex<[String]>([])
@@ -229,7 +213,6 @@
     #expect(failingStep.withLock { $0 } == 1)
   }
 
-  // Checks that a failure surfaces a code and a message the error type can carry.
   @Test
   func functionTableReportsErrorsForInvalidSQL() throws {
     let library = SQLiteLibrary.system

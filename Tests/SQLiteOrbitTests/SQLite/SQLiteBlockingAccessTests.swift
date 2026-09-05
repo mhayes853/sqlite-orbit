@@ -34,7 +34,6 @@
     #expect(n == 41)
   }
 
-  // Blocking writers on their own threads and asynchronous writers in tasks, all at once.
   @Test
   func blockingAndAsynchronousWritersShareOneLine() async throws {
     let database = BlockingTestDatabase()
@@ -75,7 +74,6 @@
     #expect(total == (writeBlockingrs + asyncWriters) * bumpsEach)
   }
 
-  // A blocking read issued after an asynchronous write must observe that write.
   @Test
   func aBlockingReadIssuedAfterAnAsynchronousWriteObservesIt() async throws {
     let database = BlockingTestDatabase()
@@ -103,9 +101,6 @@
     #expect(n == 7)
   }
 
-  // The case that used to hang: the inner read wants a reader while the outer write holds the
-  // writer, so neither can finish. The two are on different connections, so only the scheduler
-  // is in a position to notice.
   @Test func aBlockingReadNestedInsideABlockingWriteIsReported() async throws {
     await #expect(processExitsWith: .failure) {
       let database = BlockingTestDatabase()
@@ -125,7 +120,6 @@
     }
   }
 
-  // Nesting across two different databases is not reentrancy: neither access waits on the other.
   @Test func aBlockingAccessOnAnotherDatabaseIsNotReentrancy() async throws {
     let first = BlockingTestDatabase()
     let second = BlockingTestDatabase()
@@ -141,7 +135,6 @@
     #expect(copied == 0)
   }
 
-  // A blocking writer releases its reentrancy marker, so the same thread may write again.
   @Test func aThreadMayTakeAnotherBlockingAccessAfterItsFirstOneEnds() async throws {
     let database = BlockingTestDatabase()
     let driver = try SQLitePool(path: database.path)

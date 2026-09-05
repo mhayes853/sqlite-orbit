@@ -233,7 +233,6 @@
     #expect(stored == titles)
   }
 
-  // Counts connections opened and closed, so a leak is visible rather than merely suspected.
   private final class ConnectionCounter: Sendable {
     private let state = Mutex((opened: 0, closed: 0))
 
@@ -470,9 +469,6 @@
     var title: String
   }
 
-  // A cancellation interrupts whichever statement is running, and the interrupt stays armed
-  // through the one that ends the transaction. Leaving that transaction open would fail the next
-  // access on the connection rather than this one.
   @Test
   func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
     let base = SQLiteLibrary.system
@@ -502,8 +498,6 @@
     #expect(titles == ["after"])
   }
 
-  // `Int` is 32 bits wide on arm64_32, so this value does not fit there and used to trap on the
-  // way out of the decoder. It still decodes wherever `Int` is 64 bits, which is where this runs.
   @Test
   func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
     let handle = try openConnection()

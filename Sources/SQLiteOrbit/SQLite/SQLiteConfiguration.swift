@@ -73,10 +73,6 @@ public struct SQLiteConfiguration: Sendable {
     self.connectionSetups = connectionSetups
   }
 
-  // The busy timeout in the milliseconds SQLite expects.
-  //
-  // SQLite takes a signed millisecond count and treats anything at or below zero as "do not
-  // wait", so a duration outside that range saturates rather than overflowing into it.
   var busyTimeoutMilliseconds: Int32 {
     let components = busyTimeout.components
     guard components.seconds > 0 || components.attoseconds > 0 else { return 0 }
@@ -213,13 +209,6 @@ public struct SQLiteConnectionSetup: Sendable {
       registerTyped { orbitInstall(function: function, on: $0) }
     }
 
-    // Adds a setup that installs static C callbacks, refusing any connection whose SQLite is not
-    // the one those callbacks compile against.
-    //
-    // A typed registration installs callbacks that reach for the linked SQLite's value, result,
-    // and context entry points directly rather than through `library`. Handing those callbacks a
-    // value belonging to another build would be reading one SQLite's memory with another's
-    // layout, so the connection is refused instead.
     private mutating func registerTyped(
       _ install: @escaping @Sendable (OpaquePointer) -> Int32
     ) {

@@ -196,7 +196,6 @@
       try #require(Int(String(contentsOf: self.harness.file("result-\(index)"), encoding: .utf8)))
     }
 
-    // The number of peer registrations the coordination directory currently advertises.
     func registrationCount() throws -> Int {
       let root = self.harness.file("v1/d")
       guard FileManager.default.fileExists(atPath: root.path) else { return 0 }

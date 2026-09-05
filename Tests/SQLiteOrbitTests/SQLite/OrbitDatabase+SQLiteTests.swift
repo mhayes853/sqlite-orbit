@@ -3,7 +3,6 @@
   import SQLiteOrbit
   import Testing
 
-  // Opening a database by path alone selects the native pooled storage implementation.
   @Test
   func openingByPathResolvesThePooledWriter() throws {
     let path = NSTemporaryDirectory() + "ambig-\(UUID().uuidString).sqlite"

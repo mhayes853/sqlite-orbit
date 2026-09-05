@@ -2,7 +2,6 @@
   import CSQLite3
   import StructuredQueriesSQLite
 
-  // Installs a Swift-implemented collating sequence on `connection`.
   func orbitInstall(
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation,
     on connection: OpaquePointer?
@@ -27,7 +26,6 @@
     )
   }
 
-  // Installs a Swift-implemented scalar function on `connection`.
   func orbitInstall(
     function: some ScalarDatabaseFunction,
     on connection: OpaquePointer?
@@ -53,7 +51,6 @@
     )
   }
 
-  // Installs a Swift-implemented aggregate function on `connection`.
   func orbitInstall(
     function: some AggregateDatabaseFunction,
     on connection: OpaquePointer?
@@ -82,8 +79,6 @@
     )
   }
 
-  // Carries a Swift value through SQLite's `void *` user data, which SQLite owns for as long as
-  // the collation or function is registered and hands to its destructor when it is dropped.
   private final class Box<Value> {
     let value: Value
 
@@ -105,22 +100,9 @@
     }
   }
 
-  // One aggregation in progress.
-  //
-  // SQLite pushes rows one at a time through its `xStep` callback, while an aggregate body takes
-  // them all at once as a `Sequence`. Collecting the rows and running the body from `xFinal`
-  // bridges the two without leaving the thread SQLite called on.
-  //
-  // This holds a whole group in memory. Handing the body a sequence that produced rows as SQLite
-  // stepped would bound that, but `invoke` is synchronous and SQLite drives the loop, so it would
-  // mean running the body on another thread and blocking it between rows. That trades memory local
-  // to one query for a thread held for the length of every aggregation, and only pays off for
-  // bodies that consume their sequence lazily to begin with.
   private final class AggregateFunctionInvocation {
-    // Decodes one row into the group.
     let step: (inout SQLiteFunctionDecoder) throws -> Void
 
-    // Runs the body over the collected rows. Called once, when SQLite ends the group.
     let result: () -> QueryBinding
 
     // SQLite's callbacks are not generic, so the function's element type is erased behind the two
@@ -137,10 +119,6 @@
       }
     }
 
-    // The invocation for the aggregation `context` belongs to, creating it on first use.
-    //
-    // SQLite allocates one slot per aggregation, so each group gets its own invocation. The slot
-    // holds an unbalanced retain that `xFinal` releases.
     static func current(in context: OpaquePointer?) -> AggregateFunctionInvocation {
       let slot = sqlite3_aggregate_context(
         context,

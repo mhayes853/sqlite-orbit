@@ -2,8 +2,6 @@
   import SQLiteOrbit
   import Testing
 
-  // Orders text by its reversed characters, so the result is distinguishable from the default
-  // ordering for any test data.
   @DatabaseCollation
   func reversedText(_ lhs: String, _ rhs: String) -> CollationOrder {
     CollationOrder(String(lhs.reversed()), String(rhs.reversed()))
@@ -47,8 +45,6 @@
     }
   }
 
-  // Orders text by its length in characters, so multi-byte characters tell whether the bytes
-  // SQLite hands over were decoded as UTF-8 rather than compared byte for byte.
   @DatabaseCollation
   func characterCount(_ lhs: String, _ rhs: String) -> CollationOrder {
     CollationOrder(lhs.count, rhs.count)

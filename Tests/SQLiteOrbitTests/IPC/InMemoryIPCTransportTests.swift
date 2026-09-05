@@ -115,7 +115,6 @@ func commit(_ database: OrbitDatabaseIdentifier) -> OrbitIPCMessage {
   .transactionDidCommit(.init(databaseIdentifier: database))
 }
 
-// Collects the messages a transport subscription delivers.
 final class IPCMessageRecorder: Sendable {
   private let messages = Mutex([OrbitIPCMessage]())
   var values: [OrbitIPCMessage] { self.messages.withLock { $0 } }

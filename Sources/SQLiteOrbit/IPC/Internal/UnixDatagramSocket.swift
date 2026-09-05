@@ -176,7 +176,6 @@
       }
     }
 
-    // Uniquely owns the descriptor shared by the transport's send and receive paths.
     private struct Storage: ~Copyable {
       let descriptor: Int32
       let path: String

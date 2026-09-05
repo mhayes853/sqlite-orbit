@@ -109,7 +109,6 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
   ) throws -> OrbitSubscription
 }
 
-// The observers attached to one local database driver.
 final class OrbitDatabaseTransactionObservers: Sendable {
   private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
 

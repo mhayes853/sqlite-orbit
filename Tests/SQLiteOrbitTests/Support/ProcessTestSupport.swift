@@ -2,10 +2,6 @@ import Foundation
 
 struct TestTimeout: Error {}
 
-// Polls `condition` until it holds, or throws once `timeout` elapses.
-//
-// Tests wait on a condition rather than on a fixed sleep, so they neither flake under load nor
-// pay for a margin that is usually not needed.
 func waitUntil(
   timeout: Duration = .seconds(10),
   isolation: isolated (any Actor)? = #isolation,
@@ -50,10 +46,6 @@ func waitUntil(
     #endif
   }
 
-  // Spawns copies of the test binary filtered to a single helper test.
-  //
-  // Multi-process behavior cannot be observed from one process, so each peer runs the helper test
-  // named by `helper` with its role supplied through the environment.
   final class ProcessTestHarness {
     let directory: URL
     private let helper: String

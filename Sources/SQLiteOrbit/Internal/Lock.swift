@@ -4,14 +4,6 @@
   import Synchronization
 #endif
 
-// A mutex guarding a value.
-//
-// `Synchronization.Mutex` is the natural spelling, but it is only available from macOS 15 while
-// this package supports macOS 13, so Darwin gets an unfair lock around a separate allocation
-// instead. Every other platform uses `Mutex` directly, which stores the value inline.
-//
-// The type is noncopyable so that neither spelling can be duplicated out from under the value it
-// guards.
 struct Lock<Value: ~Copyable>: ~Copyable {
   #if canImport(Darwin) && canImport(os)
     private let lock = OSAllocatedUnfairLock()

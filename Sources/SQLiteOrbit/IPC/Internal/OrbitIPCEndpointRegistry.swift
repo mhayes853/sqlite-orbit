@@ -6,7 +6,6 @@
     let socketPath: String
   }
 
-  // Uses only atomic directory creation, rename, and unlink operations, so no file lock is needed.
   struct OrbitIPCEndpointRegistry: Sendable {
     let endpointName: String
     let socketPath: String

@@ -1,10 +1,6 @@
 import Foundation
 import StructuredQueries
 
-// Decodes Structured Queries values straight out of SQLite's current result row.
-//
-// Values are read through the connection's library table rather than a linked SQLite, and no
-// intermediate boxed value is allocated per column.
 @usableFromInline
 struct SQLiteRowDecoder: QueryDecoder {
   @usableFromInline
@@ -154,7 +150,6 @@ struct SQLiteRowDecoder: QueryDecoder {
 }
 
 extension SQLiteRowDecoder {
-  // Restates a decoding failure in terms of the column it happened on.
   @usableFromInline
   func describe(_ error: QueryDecodingError) -> any Error {
     switch error {

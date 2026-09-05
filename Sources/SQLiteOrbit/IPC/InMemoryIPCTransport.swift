@@ -136,7 +136,6 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   }
 }
 
-// One process's worth of local subscriptions, keyed the way a Unix-domain peer's would be.
 private final class Endpoint: Sendable {
   private let handlers = Mutex(
     KeyedHandlerRegistry<OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void>()

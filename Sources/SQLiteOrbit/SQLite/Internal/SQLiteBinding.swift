@@ -1,7 +1,6 @@
 import Foundation
 import StructuredQueries
 
-// Binds one Structured Queries value to a prepared statement.
 func bind(
   _ binding: QueryBinding,
   to statement: OpaquePointer,
@@ -48,11 +47,6 @@ func bind(
   }
 }
 
-// Binds `string` as text, keeping every byte of it.
-//
-// The byte count is passed explicitly rather than left to SQLite to measure. A Swift string may
-// contain a NUL, and asking SQLite to stop at the first one would silently store a prefix of the
-// value the caller asked to store.
 private func bindText(
   _ string: String,
   to statement: OpaquePointer,
@@ -72,7 +66,6 @@ private func bindText(
   }
 }
 
-// Renders a Structured Queries fragment into SQL and the bindings it needs.
 func prepareQuery(_ query: QueryFragment) -> (sql: String, bindings: [QueryBinding]) {
   let prepared = query.prepare { _ in "?" }
   guard !prepared.sql.isEmpty else {

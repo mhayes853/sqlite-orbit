@@ -11,16 +11,7 @@
     private let closeUnixDescriptor = Glibc.close
   #endif
 
-  // Serializes opening a database across every process that shares a coordination directory.
-  //
-  // SQLite briefly needs an exclusive lock to move a database into WAL mode, so processes that
-  // open the same database at the same time can otherwise fail rather than queue. The lock is
-  // advisory and is released when the lock file descriptor closes, including when a holder exits.
   enum OrbitDatabaseOpenLock {
-    // Runs `body` while holding the exclusive open lock for `databaseIdentifier`.
-    //
-    // Waiting for the lock blocks the calling thread, matching the blocking database open that it
-    // guards.
     static func withLock<Result>(
       databaseIdentifier: OrbitDatabaseIdentifier,
       directory: URL,

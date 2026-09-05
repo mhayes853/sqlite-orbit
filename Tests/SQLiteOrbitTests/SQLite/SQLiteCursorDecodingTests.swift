@@ -4,8 +4,6 @@
   import StructuredQueriesSQLite
   import Testing
 
-  // Tuple projections flow through the tuple cursor, including its lazy adapters and the eager
-  // `collect` the compiler cannot see through when `Element` is a pack expansion.
   @Test
   func tupleProjectionsDecodeThroughCursorsAndCollect() async throws {
     let database = try inMemoryDatabase()

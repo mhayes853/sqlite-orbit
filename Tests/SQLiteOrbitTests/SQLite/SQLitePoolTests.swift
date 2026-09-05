@@ -185,7 +185,6 @@
     #expect(count == 0)
   }
 
-  // Holds an access open until released, so a test can arrange overlaps deliberately.
   private final class Gate: Sendable {
     private let entered = Mutex(0)
     private let released = Mutex(false)

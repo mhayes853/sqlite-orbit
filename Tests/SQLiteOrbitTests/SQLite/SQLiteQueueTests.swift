@@ -240,10 +240,6 @@
     }
   }
 
-  // SQLite reads the empty path as a database it creates for one connection and deletes when that
-  // connection closes, which is what `OrbitDatabasePath.temporary` names. It is a real mode, and
-  // the third thing SQLite does with a path string, so `OrbitDatabasePath("")` has somewhere to
-  // land.
   @Test
   func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
     let driver = try SQLiteQueue(path: .temporary)
