@@ -1,7 +1,24 @@
 # sqlite-orbit
 
-`sqlite-orbit` is a transaction and observation foundation for coordinating a SQLite
-database across multiple processes.
+`sqlite-orbit` is a SQLite application framework for Swift: typed transactions, lazy cursors,
+value observation, and cross-process coordination, so several processes can share one database
+and react to each other's writes.
+
+```swift
+import SQLiteOrbit
+
+let database = try OrbitDatabase(path: databasePath)
+
+try await database.write { transaction in
+  try transaction.execute(Reminder.insert { reminder })
+}
+
+for try await reminders in ValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
+  .values(in: database)
+{
+  render(reminders)
+}
+```
 
 `SQLiteDatabaseReader` and `SQLiteDatabaseWriter` define the synchronous and asynchronous boundaries
 around the native SQLite implementation, which lends distinct `SQLiteReadTransaction` and

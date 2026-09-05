@@ -242,9 +242,10 @@
       // Exactly what a caller with their own SQLite build would do.
       let library = transaction.sqlite
       var statement: OpaquePointer?
-      let code = "SELECT count(*) FROM items".withCString {
-        library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
-      }
+      let code = "SELECT count(*) FROM items"
+        .withCString {
+          library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+        }
       try #require(code == SQLiteResultCode.ok.rawValue)
       defer { _ = library.finalize(statement) }
       try #require(library.step(statement) == SQLiteResultCode.row.rawValue)
