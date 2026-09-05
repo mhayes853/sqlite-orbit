@@ -1,4 +1,4 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import Synchronization
   import Testing
@@ -14,7 +14,7 @@
   }
 
   private func countingLibrary(_ counters: SQLiteCallCounters) -> SQLiteLibrary {
-    let base = SQLiteLibrary.system
+    let base = builtInTestLibrary
     var library = base
     library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
       let code = base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
@@ -299,7 +299,6 @@
   func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
     let seenVersion = Mutex<Int32?>(nil)
     var configuration = SQLiteConfiguration.default
-    configuration.library.supportsTypedCallbacks = false
     configuration.library.libversion_number = { 123_456 }
     configuration.connectionSetups = [
       SQLiteConnectionSetup { _, library in

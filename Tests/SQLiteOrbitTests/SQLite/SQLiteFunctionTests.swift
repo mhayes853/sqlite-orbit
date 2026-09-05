@@ -1,5 +1,6 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
+  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -367,14 +368,60 @@
   }
 
   @Test
-  func typedFunctionsRejectAnIncompatibleSQLiteCallbackABI() {
-    var configuration = SQLiteConfiguration.default
-    configuration.register(function: $repeated)
-    configuration.library.supportsTypedCallbacks = false
+  func functionCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
+    // A function's callbacks read arguments and write results through the build that called them,
+    // which is the whole reason a table has to carry them. Interposing those entry points is the
+    // only way to observe that the callback used this table rather than the linked SQLite.
+    let userData = Mutex(0)
+    let readArguments = Mutex(0)
+    let writtenResults = Mutex(0)
 
-    #expect(throws: SQLiteTypedCallbacksUnavailableError.self) {
-      _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.user_data = { context in
+      userData.withLock { $0 += 1 }
+      return builtInTestLibrary.user_data(context)
     }
+    configuration.library.value_text = { value in
+      readArguments.withLock { $0 += 1 }
+      return builtInTestLibrary.value_text(value)
+    }
+    configuration.library.result_text = { context, text, count in
+      writtenResults.withLock { $0 += 1 }
+      builtInTestLibrary.result_text(context, text, count)
+    }
+    configuration.register(function: $repeated)
+
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    let value = try await driver.read { transaction in
+      try transaction.fetchOne(#sql("SELECT repeated('ab', 2)", as: String.self))
+    }
+
+    #expect(value == "abab")
+    #expect(userData.withLock { $0 } == 1)
+    #expect(readArguments.withLock { $0 } == 1)
+    #expect(writtenResults.withLock { $0 } == 1)
+  }
+
+  @Test
+  func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
+    let aggregateContexts = Mutex(0)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.aggregate_context = { context, size in
+      aggregateContexts.withLock { $0 += 1 }
+      return builtInTestLibrary.aggregate_context(context, size)
+    }
+    configuration.register(function: $longestTitle)
+
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    let longest = try await driver.read { transaction in
+      try transaction.fetchOne(
+        #sql("SELECT longestTitle(x) FROM (SELECT 'ab' AS x UNION SELECT 'abcd')", as: String?.self)
+      )
+    }
+
+    #expect(longest == "abcd")
+    // Two steps and one finalizer, each reaching for the same per-invocation slot.
+    #expect(aggregateContexts.withLock { $0 } == 3)
   }
 
   @Test

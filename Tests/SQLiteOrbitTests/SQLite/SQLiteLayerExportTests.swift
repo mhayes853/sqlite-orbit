@@ -1,6 +1,6 @@
 // Deliberately imports only 'SQLiteOrbit': this asserts that the SQLite query-building layer is
 // re-exported, and covers a 'RETURNING' statement, which lives in StructuredQueriesSQLiteCore.
-#if SystemSQLite
+#if BuiltInSQLite
   import SQLiteOrbit
   import Testing
 

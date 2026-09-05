@@ -4,7 +4,7 @@ import Testing
 
 @testable import SQLiteOrbit
 
-#if SystemSQLite
+#if BuiltInSQLite
   @Test
   func orbitDatabaseUsesTheDriversDefaultIdentifier() async throws {
     let identifier = OrbitDatabaseIdentifier(rawValue: "native-default")

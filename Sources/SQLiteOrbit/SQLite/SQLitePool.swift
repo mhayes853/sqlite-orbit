@@ -202,7 +202,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   }
 }
 
-#if SystemSQLite
+#if BuiltInSQLite
   extension SQLitePool {
     /// Opens a pooled database using the SQLite this package was linked against.
     ///

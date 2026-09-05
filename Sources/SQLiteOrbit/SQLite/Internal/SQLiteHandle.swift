@@ -73,6 +73,11 @@ struct SQLiteHandle: ~Copyable {
   }
 
   private borrowing func configure(_ configuration: SQLiteConfiguration) throws {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    // An encrypted database is unreadable until it is keyed, so this comes before every other
+    // thing the connection does rather than merely before the first statement.
+    try unlock(with: configuration.key)
     _ = libraryStorage.pointee.extended_result_codes(pointer, 1)
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
@@ -87,13 +92,38 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
+  private borrowing func unlock(with key: SQLiteKey?) throws {
+    guard let key else { return }
+    guard let encryption = libraryStorage.pointee.encryption else {
+      throw SQLiteEncryptionUnavailableError()
+    }
+    // The key is passed as bytes, so it never reaches a statement and never lands in the `sql` of
+    // the error a wrong key produces.
+    let code = key.withUnsafeBytes { bytes in
+      "main"
+        .withCString { name in
+          encryption.key_v2(pointer, name, bytes.baseAddress, Int32(bytes.count))
+        }
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
+    }
+    // A codec accepts any key and only reports a wrong one when something reads the file. Reading
+    // the schema here is what turns that into a failed open rather than a failed first query.
+    try execute("SELECT count(*) FROM sqlite_schema")
+  }
+
   borrowing func execute(_ sql: String) throws {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try Self.execute(sql, on: pointer, library: library)
   }
 
   borrowing func read<Result: ~Copyable>(
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than quietly having
     // it discarded by the rollback below.
@@ -129,6 +159,8 @@ struct SQLiteHandle: ~Copyable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     do {
       let value = try body(SQLiteWriteTransaction(handle: self))

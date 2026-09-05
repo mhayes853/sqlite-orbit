@@ -1,6 +1,16 @@
-#if SystemSQLite
+#if BuiltInSQLite
   import Foundation
   import SQLiteOrbit
+
+  /// The build the enabled trait supplied, which tests interpose on to observe individual entry
+  /// points. Naming it once here is what lets the suite run under any of them.
+  var builtInTestLibrary: SQLiteLibrary {
+    #if SystemSQLite
+      .system
+    #elseif SQLCipher
+      .sqlCipher
+    #endif
+  }
 
   func temporaryDatabasePath(_ label: String = "db") -> String {
     NSTemporaryDirectory() + "sqlite-orbit-\(label)-\(UUID().uuidString).sqlite"

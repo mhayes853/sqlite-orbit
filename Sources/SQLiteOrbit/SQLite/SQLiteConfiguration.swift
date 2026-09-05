@@ -1,3 +1,5 @@
+import StructuredQueriesSQLite
+
 /// The settings a native SQLite driver applies to every connection it opens.
 ///
 /// A configuration is applied once per connection, before any transaction can reach it, so a
@@ -13,6 +15,13 @@
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
   public var library: SQLiteLibrary
+
+  /// The key a database encrypted by a build with a codec is unlocked with.
+  ///
+  /// Applied before anything else a connection does, so no statement and no read of the file can
+  /// precede it. Setting it for a ``SQLiteLibrary`` without ``SQLiteLibrary/encryption`` fails the
+  /// open with ``SQLiteEncryptionUnavailableError``.
+  public var key: SQLiteKey?
 
   /// The number of reader connections a pool opens, and so how many reads can run at once.
   ///
@@ -53,6 +62,7 @@ public struct SQLiteConfiguration: Sendable {
   ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
   ///   - setupSQL: SQL run on every connection once it has been configured.
   ///   - connectionSetups: Native callbacks installed on every connection.
+  ///   - key: The key an encrypted database is unlocked with.
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
@@ -61,9 +71,11 @@ public struct SQLiteConfiguration: Sendable {
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
     setupSQL: [String] = [],
-    connectionSetups: [SQLiteConnectionSetup] = []
+    connectionSetups: [SQLiteConnectionSetup] = [],
+    key: SQLiteKey? = nil
   ) {
     self.library = library
+    self.key = key
     self.readerCount = readerCount
     self.busyTimeout = busyTimeout
     self.isForeignKeysEnabled = isForeignKeysEnabled
@@ -80,31 +92,6 @@ public struct SQLiteConfiguration: Sendable {
     let milliseconds =
       components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
     return Int32(clamping: milliseconds)
-  }
-}
-
-/// Typed Swift callback registration was requested for a SQLite library whose callback ABI is not
-/// supplied by this package.
-///
-/// Thrown when a connection is opened with a configuration that registered a typed collation or
-/// function against a ``SQLiteLibrary`` other than ``SQLiteLibrary/system``.
-///
-/// ```swift
-/// var configuration = SQLiteConfiguration(library: myCustomBuild)
-/// configuration.register(function: $repeated)
-/// // Throws `SQLiteTypedCallbacksUnavailableError` when the connection is opened.
-/// _ = try? SQLiteQueue(path: ":memory:", configuration: configuration)
-/// ```
-public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertible, Sendable {
-  /// Creates the error.
-  public init() {}
-
-  /// Explains that typed callbacks need ``SQLiteLibrary/system``.
-  public var description: String {
-    """
-    Typed Swift collations and functions require SQLiteLibrary.system. Register callbacks through \
-    the custom SQLite build directly instead.
-    """
   }
 }
 
@@ -152,9 +139,58 @@ public struct SQLiteConnectionSetup: Sendable {
   }
 }
 
-#if SystemSQLite
-  import StructuredQueriesSQLite
+extension SQLiteConfiguration {
+  /// Registers a collating sequence on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(collation: CaseInsensitiveCollation())
+  /// ```
+  ///
+  /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
+  public mutating func register(
+    collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+  ) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(collation: collation, on: $0, library: $1) }
+    )
+  }
 
+  /// Registers a scalar function on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// @DatabaseFunction(isDeterministic: true)
+  /// func repeated(_ text: String, _ count: Int) -> String {
+  ///   String(repeating: text, count: count)
+  /// }
+  ///
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(function: $repeated)
+  /// ```
+  ///
+  /// - Parameter function: The function to install. Its name is what SQL calls it by.
+  public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+    )
+  }
+
+  /// Registers an aggregate function on every connection opened with this configuration.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.register(function: $longestTitle)
+  /// ```
+  ///
+  /// - Parameter function: The function to install. Its name is what SQL calls it by.
+  public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+    connectionSetups.append(
+      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+    )
+  }
+}
+
+#if BuiltInSQLite
   extension SQLiteConfiguration {
     /// The default configuration, running against the SQLite this package was linked against.
     ///
@@ -163,63 +199,29 @@ public struct SQLiteConnectionSetup: Sendable {
     /// configuration.isForeignKeysEnabled = false
     /// ```
     public static var `default`: Self {
-      Self(library: .system)
+      Self(library: .builtIn)
     }
+  }
+#endif
 
-    /// Registers a collating sequence on every connection opened with this configuration.
+#if SQLCipher
+  extension SQLiteConfiguration {
+    /// A configuration that opens a database encrypted under `key`.
+    ///
+    /// ``SQLiteLibrary/sqlCipher`` carries a codec, so the key cannot be refused the way one set
+    /// against a build without one would be.
     ///
     /// ```swift
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(collation: CaseInsensitiveCollation())
+    /// let database = try OrbitDatabase(
+    ///   path: .file(url),
+    ///   configuration: .sqlCipher(key: .passphrase(secret))
+    /// )
     /// ```
     ///
-    /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
-    public mutating func register(
-      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
-    ) {
-      registerTyped { orbitInstall(collation: collation, on: $0) }
-    }
-
-    /// Registers a scalar function on every connection opened with this configuration.
-    ///
-    /// ```swift
-    /// @DatabaseFunction(isDeterministic: true)
-    /// func repeated(_ text: String, _ count: Int) -> String {
-    ///   String(repeating: text, count: count)
-    /// }
-    ///
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(function: $repeated)
-    /// ```
-    ///
-    /// - Parameter function: The function to install. Its name is what SQL calls it by.
-    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-      registerTyped { orbitInstall(function: function, on: $0) }
-    }
-
-    /// Registers an aggregate function on every connection opened with this configuration.
-    ///
-    /// ```swift
-    /// var configuration = SQLiteConfiguration.default
-    /// configuration.register(function: $longestTitle)
-    /// ```
-    ///
-    /// - Parameter function: The function to install. Its name is what SQL calls it by.
-    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-      registerTyped { orbitInstall(function: function, on: $0) }
-    }
-
-    private mutating func registerTyped(
-      _ install: @escaping @Sendable (OpaquePointer) -> Int32
-    ) {
-      connectionSetups.append(
-        SQLiteConnectionSetup { connection, library in
-          guard library.supportsTypedCallbacks else {
-            throw SQLiteTypedCallbacksUnavailableError()
-          }
-          return install(connection)
-        }
-      )
+    /// - Parameter key: The key the database is unlocked with.
+    /// - Returns: A configuration running against ``SQLiteLibrary/sqlCipher``.
+    public static func sqlCipher(key: SQLiteKey) -> Self {
+      Self(library: .sqlCipher, key: key)
     }
   }
 #endif
