@@ -54,11 +54,11 @@ public struct OrbitSubscription: Sendable {
   }
 }
 
-/// Values registered under identifiers the registry hands out.
-///
-/// The four handler registries in this package — transaction observers, observation subscribers,
-/// in-process commit listeners, and IPC message handlers — all need the same identifier
-/// bookkeeping, and get it from here rather than each keeping its own counter.
+// Values registered under identifiers the registry hands out.
+//
+// The four handler registries in this package — transaction observers, observation subscribers,
+// in-process commit listeners, and IPC message handlers — all need the same identifier
+// bookkeeping, and get it from here rather than each keeping its own counter.
 struct IdentifiedRegistry<Value: Sendable>: Sendable {
   private var nextIdentifier: UInt64 = 0
   private var values = [UInt64: Value]()
@@ -66,27 +66,27 @@ struct IdentifiedRegistry<Value: Sendable>: Sendable {
   var isEmpty: Bool { self.values.isEmpty }
   var all: [Value] { Array(self.values.values) }
 
-  /// Adds `value` and returns the identifier it is filed under.
+  // Adds `value` and returns the identifier it is filed under.
   mutating func insert(_ value: Value) -> UInt64 {
     defer { self.nextIdentifier &+= 1 }
     self.values[self.nextIdentifier] = value
     return self.nextIdentifier
   }
 
-  /// Removes the value under `identifier`, reporting whether one was there.
+  // Removes the value under `identifier`, reporting whether one was there.
   @discardableResult
   mutating func remove(_ identifier: UInt64) -> Bool {
     self.values.removeValue(forKey: identifier) != nil
   }
 
-  /// Removes every value and returns them.
+  // Removes every value and returns them.
   mutating func removeAll() -> [Value] {
     defer { self.values.removeAll() }
     return self.all
   }
 }
 
-/// Handlers registered per key, under identifiers unique across every key.
+// Handlers registered per key, under identifiers unique across every key.
 struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendable {
   private var nextIdentifier: UInt64 = 0
   private var groups = [Key: [UInt64: Handler]]()
@@ -99,7 +99,7 @@ struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendab
 
   func contains(_ key: Key) -> Bool { self.groups[key] != nil }
 
-  /// Adds `handler` under `key`, reporting whether it is the first handler that key has.
+  // Adds `handler` under `key`, reporting whether it is the first handler that key has.
   mutating func insert(
     _ handler: Handler,
     for key: Key
@@ -111,7 +111,7 @@ struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendab
     return (identifier, isFirstForKey)
   }
 
-  /// Removes the handler under `identifier` and `key`, reporting whether that emptied the key.
+  // Removes the handler under `identifier` and `key`, reporting whether that emptied the key.
   @discardableResult
   mutating func remove(_ identifier: UInt64, for key: Key) -> Bool {
     guard var group = self.groups[key], group.removeValue(forKey: identifier) != nil else {
@@ -125,7 +125,7 @@ struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendab
     return true
   }
 
-  /// Removes every handler and returns the keys that had them.
+  // Removes every handler and returns the keys that had them.
   mutating func removeAll() -> [Key] {
     defer { self.groups.removeAll() }
     return self.keys

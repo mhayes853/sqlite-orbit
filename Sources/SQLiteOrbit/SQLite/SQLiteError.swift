@@ -39,7 +39,7 @@ public struct SQLiteError: Error, Hashable, Sendable {
     code.primary
   }
 
-  /// The error `connection` is currently reporting, after a call returned `code`.
+  // The error `connection` is currently reporting, after a call returned `code`.
   @usableFromInline
   static func reported(
     by library: borrowing SQLiteLibrary,

@@ -5,7 +5,7 @@
 
   @testable import SQLiteOrbit
 
-  /// Counts the statement entry points, so tests can assert on caching rather than guess at it.
+  // Counts the statement entry points, so tests can assert on caching rather than guess at it.
   private final class SQLiteCallCounters: Sendable {
     let prepared = Mutex(0)
     let finalized = Mutex(0)
@@ -33,8 +33,8 @@
     return library
   }
 
-  /// Reads a single integer, using the library table directly so the test does not depend on the
-  /// cursor types that do not exist yet.
+  // Reads a single integer, using the library table directly so the test does not depend on the
+  // cursor types that do not exist yet.
   private func scalar(_ connection: borrowing SQLiteHandle, _ sql: String) throws -> Int64 {
     let library = connection.library
     var statement: OpaquePointer?
@@ -298,9 +298,9 @@
     }
   }
 
-  /// A setup is handed the library its connection was opened through, so it calls the build it was
-  /// given rather than whichever one this package was linked against — which is also why the
-  /// linked callback ABI is none of its business.
+  // A setup is handed the library its connection was opened through, so it calls the build it was
+  // given rather than whichever one this package was linked against — which is also why the
+  // linked callback ABI is none of its business.
   @Test
   func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
     let seenVersion = Mutex<Int32?>(nil)

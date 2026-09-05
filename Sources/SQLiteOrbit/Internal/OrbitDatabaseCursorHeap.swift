@@ -1,8 +1,8 @@
-/// A binary heap holding at most `capacity` elements, used by the cursor's top-`k` algorithms.
-///
-/// The ordering closure is supplied per operation rather than stored so callers can hand over a
-/// non-escaping predicate. `isCloserToRoot(a, b)` must answer whether `a` belongs above `b`, which
-/// makes the root the first element to be evicted once the heap is full.
+// A binary heap holding at most `capacity` elements, used by the cursor's top-`k` algorithms.
+//
+// The ordering closure is supplied per operation rather than stored so callers can hand over a
+// non-escaping predicate. `isCloserToRoot(a, b)` must answer whether `a` belongs above `b`, which
+// makes the root the first element to be evicted once the heap is full.
 @usableFromInline
 internal struct OrbitDatabaseCursorHeap<Element> {
   @usableFromInline
@@ -21,7 +21,7 @@ internal struct OrbitDatabaseCursorHeap<Element> {
     storage.count >= capacity
   }
 
-  /// Offers a value to the heap, evicting the root when the heap is already full.
+  // Offers a value to the heap, evicting the root when the heap is already full.
   @inlinable
   internal mutating func insert(
     _ value: Element,
@@ -39,7 +39,7 @@ internal struct OrbitDatabaseCursorHeap<Element> {
     try siftDown(from: 0, by: isCloserToRoot)
   }
 
-  /// Empties the heap, returning its elements ordered from farthest from the root to the root.
+  // Empties the heap, returning its elements ordered from farthest from the root to the root.
   @inlinable
   internal mutating func drain(
     by isCloserToRoot: (Element, Element) throws -> Bool

@@ -169,7 +169,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
 
 @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
 extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
-  /// Decodes every remaining row into a tuple.
+  // Decodes every remaining row into a tuple.
   mutating func collectTuples<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
   ) throws -> [(repeat (each Value).QueryOutput)] {
@@ -178,7 +178,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     return values
   }
 
-  /// Decodes the next row into a tuple, or returns `nil` when the cursor is exhausted.
+  // Decodes the next row into a tuple, or returns `nil` when the cursor is exhausted.
   mutating func firstTuple<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
   ) throws -> (repeat (each Value).QueryOutput)? {

@@ -29,8 +29,8 @@ struct OrbitDatabasePathTests {
     #expect(path.fileURL?.path == directory + "/db.sqlite")
   }
 
-  /// Two spellings of one file are one database, which is what lets an identifier be derived from
-  /// the path rather than from whatever string a caller happened to type.
+  // Two spellings of one file are one database, which is what lets an identifier be derived from
+  // the path rather than from whatever string a caller happened to type.
   @Test
   func onlyOneDatabasePathNamesTheSameFile() {
     let directory = FileManager.default.temporaryDirectory.path
@@ -43,8 +43,8 @@ struct OrbitDatabasePathTests {
     )
   }
 
-  /// An absolute path can never begin with `file:`, so a SQLite built to read URI filenames by
-  /// default cannot reinterpret one of these as something other than a file.
+  // An absolute path can never begin with `file:`, so a SQLite built to read URI filenames by
+  // default cannot reinterpret one of these as something other than a file.
   @Test
   func aPathThatLooksLikeAURIIsStillJustAFile() {
     let path = OrbitDatabasePath("file::memory:")

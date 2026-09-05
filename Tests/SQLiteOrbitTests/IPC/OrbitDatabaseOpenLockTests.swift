@@ -6,10 +6,10 @@
 
   @testable import SQLiteOrbit
 
-  /// Holds the open lock for `databaseIdentifier` on a thread of its own until `release` is called.
-  ///
-  /// The holder parks on a semaphore rather than polling, so the test never trades correctness for
-  /// a sleep interval.
+  // Holds the open lock for `databaseIdentifier` on a thread of its own until `release` is called.
+  //
+  // The holder parks on a semaphore rather than polling, so the test never trades correctness for
+  // a sleep interval.
   private final class OpenLockHolder: Sendable {
     private let acquired = DispatchSemaphore(value: 0)
     private let mayRelease = DispatchSemaphore(value: 0)

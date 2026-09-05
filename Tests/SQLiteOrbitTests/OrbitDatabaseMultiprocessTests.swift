@@ -35,8 +35,8 @@
       #expect(journalMode == ["wal"])
     }
 
-    /// Moving a new database into WAL mode needs an exclusive lock of SQLite's own, so opening is
-    /// serialized across processes rather than left to contend.
+    // Moving a new database into WAL mode needs an exclusive lock of SQLite's own, so opening is
+    // serialized across processes rather than left to contend.
     @Test
     func openingWaitsWhileAnotherProcessIsOpening() async throws {
       let harness = try OrbitDatabaseProcessHarness(name: "open-lock")
@@ -177,7 +177,7 @@
     }
   }
 
-  /// Runs one peer process of an ``OrbitDatabaseMultiprocessTests`` case.
+  // Runs one peer process of an `OrbitDatabaseMultiprocessTests` case.
   @Test
   func orbitDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment

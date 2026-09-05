@@ -6,8 +6,8 @@
 
   @testable import SQLiteOrbit
 
-  /// Counts calls through an entry point, so a test can wait for a query to actually be running
-  /// rather than racing against it.
+  // Counts calls through an entry point, so a test can wait for a query to actually be running
+  // rather than racing against it.
   private final class CallCounter: Sendable {
     private let count = Mutex(0)
 
@@ -24,11 +24,11 @@
     }
   }
 
-  /// Marks the query a test waits on, so counting does not depend on how many statements a read
-  /// runs around it.
+  // Marks the query a test waits on, so counting does not depend on how many statements a read
+  // runs around it.
   private let endlessMarker = "RECURSIVE counter"
 
-  /// A library that reports steps of the marked query, and every interrupt.
+  // A library that reports steps of the marked query, and every interrupt.
   private func observedLibrary(steps: CallCounter, interrupts: CallCounter) -> SQLiteLibrary {
     let base = SQLiteLibrary.system
     var library = base
@@ -45,7 +45,7 @@
     return library
   }
 
-  /// Starts a query that will not finish on its own, so a test decides when it ends.
+  // Starts a query that will not finish on its own, so a test decides when it ends.
   private func endlessRead(on driver: SQLiteQueue) -> Task<[Int], any Error> {
     Task {
       try await driver.read { transaction in
@@ -173,8 +173,8 @@
     #expect(rows == [0])
   }
 
-  /// Coordinates the narrow race between a completed access disarming its token and a delayed
-  /// cancellation delivering `sqlite3_interrupt`.
+  // Coordinates the narrow race between a completed access disarming its token and a delayed
+  // cancellation delivering `sqlite3_interrupt`.
   private final class DelayedInterruptProbe: Sendable {
     private struct State {
       var firstStepEntered = false
@@ -276,7 +276,7 @@
     #expect(try await second.value == [2])
   }
 
-  /// Records how many accesses were ever inside the database at the same time.
+  // Records how many accesses were ever inside the database at the same time.
   private final class OverlapTracker: Sendable {
     private let state = Mutex((inFlight: 0, peak: 0))
 

@@ -47,7 +47,7 @@
     }
   }
 
-  /// Registered without a fixed argument count, so SQLite accepts any arity for it.
+  // Registered without a fixed argument count, so SQLite accepts any arity for it.
   private struct VariadicSumFunction: ScalarDatabaseFunction {
     typealias Input = Int
     typealias Output = Int
@@ -159,8 +159,8 @@
     )
   }
 
-  /// A zero-length text argument has no buffer behind it on some SQLite builds, so decoding one
-  /// must not read through a null pointer.
+  // A zero-length text argument has no buffer behind it on some SQLite builds, so decoding one
+  // must not read through a null pointer.
   @Test
   func functionArgumentsDecodeEmptyTextAndBlobs() async throws {
     let database = try await seededNotes()
@@ -182,8 +182,8 @@
     #expect(values.2 == "")
   }
 
-  /// A variadic function that reads past the arguments it was given reports the shortfall instead
-  /// of trapping, which would take the whole process down with it.
+  // A variadic function that reads past the arguments it was given reports the shortfall instead
+  // of trapping, which would take the whole process down with it.
   @Test
   func aFunctionAskedForAnArgumentItWasNotGivenReportsIt() async throws {
     let database = try await seededNotes()

@@ -150,13 +150,13 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     )
   }
 
-  /// Announces a committed write once the writer has released its write transaction.
-  ///
-  /// Announcing outside the transaction matters: a peer told about a commit must be able to read
-  /// it, and holding SQLite's write lock while waiting on a backpressured peer would turn one
-  /// stalled process into a stalled database. Callers run this in an unstructured `Task`, which
-  /// starts uncancelled, so cancelling the write cannot cut short an announcement of a commit that
-  /// already happened. The transaction is durable by then, so a failed announcement never fails it.
+  // Announces a committed write once the writer has released its write transaction.
+  //
+  // Announcing outside the transaction matters: a peer told about a commit must be able to read
+  // it, and holding SQLite's write lock while waiting on a backpressured peer would turn one
+  // stalled process into a stalled database. Callers run this in an unstructured `Task`, which
+  // starts uncancelled, so cancelling the write cannot cut short an announcement of a commit that
+  // already happened. The transaction is durable by then, so a failed announcement never fails it.
   private func announceCommittedTransaction() async {
     guard let transport else { return }
     let message = OrbitIPCMessage.transactionDidCommit(
@@ -221,9 +221,9 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
   }
 }
 
-/// Delivers commits between distinct handles in this process. The IPC transport excludes its own
-/// endpoint, and two wrappers around the same writer already share that writer's observer registry,
-/// so registrations are keyed by both database and writer identity.
+// Delivers commits between distinct handles in this process. The IPC transport excludes its own
+// endpoint, and two wrappers around the same writer already share that writer's observer registry,
+// so registrations are keyed by both database and writer identity.
 private final class OrbitDatabaseObservationHub: Sendable {
   static let shared = OrbitDatabaseObservationHub()
 

@@ -20,12 +20,12 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// The row this cursor lends.
   public typealias Row = SQLiteRow
 
-  /// The connection's library table, borrowed rather than copied.
-  ///
-  /// A cursor is created per query and a row per row, and ``SQLiteLibrary`` is a table of closures
-  /// — copying it into each of them would put hundreds of bytes and as many retains on the hottest
-  /// path in the package. Borrowing is sound because a cursor is nonescapable and so cannot
-  /// outlive the ``SQLiteHandle`` that owns the allocation.
+  // The connection's library table, borrowed rather than copied.
+  //
+  // A cursor is created per query and a row per row, and `SQLiteLibrary` is a table of closures
+  // — copying it into each of them would put hundreds of bytes and as many retains on the hottest
+  // path in the package. Borrowing is sound because a cursor is nonescapable and so cannot
+  // outlive the `SQLiteHandle` that owns the allocation.
   @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 
@@ -40,17 +40,17 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let statements: SQLiteStatementCache
 
-  /// Whether the statement came from the cache, and so has to go back rather than be finalized.
+  // Whether the statement came from the cache, and so has to go back rather than be finalized.
   let isCached: Bool
 
   @usableFromInline
   var isExhausted = false
 
-  /// Prepares and binds `query`, holding its statement for as long as the cursor lives.
-  ///
-  /// A cached statement is lent by the connection's cache and returned when the cursor goes out of
-  /// scope. An uncached one belongs to the cursor alone and is finalized there, which is what lets
-  /// two cursors over the same SQL be open at once.
+  // Prepares and binds `query`, holding its statement for as long as the cursor lives.
+  //
+  // A cached statement is lent by the connection's cache and returned when the cursor goes out of
+  // scope. An uncached one belongs to the cursor alone and is finalized there, which is what lets
+  // two cursors over the same SQL be open at once.
   @_lifetime(borrow statements)
   init(
     _ query: QueryFragment,

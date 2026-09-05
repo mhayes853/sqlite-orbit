@@ -2,12 +2,12 @@
   import Foundation
   import SQLiteOrbit
 
-  /// A unique path in the temporary directory, for a test that needs a real database file.
+  // A unique path in the temporary directory, for a test that needs a real database file.
   func temporaryDatabasePath(_ label: String = "db") -> String {
     NSTemporaryDirectory() + "sqlite-orbit-\(label)-\(UUID().uuidString).sqlite"
   }
 
-  /// The in-memory, single-connection database most tests here want.
+  // The in-memory, single-connection database most tests here want.
   func inMemoryDatabase(
     configuration: SQLiteConfiguration = .default
   ) throws -> OrbitDatabase<SQLiteQueue> {
@@ -16,10 +16,10 @@
     )
   }
 
-  /// Runs `body` against a file-backed pool opened with `configuration`, then deletes the file.
-  ///
-  /// A pool opens reader connections as concurrent reads demand them, which is what shows whether
-  /// a collation or function reached every connection rather than only the first.
+  // Runs `body` against a file-backed pool opened with `configuration`, then deletes the file.
+  //
+  // A pool opens reader connections as concurrent reads demand them, which is what shows whether
+  // a collation or function reached every connection rather than only the first.
   func withPooledDatabase<Result>(
     configuration: SQLiteConfiguration,
     maximumReaderCount: Int = 4,
@@ -39,7 +39,7 @@
     return try await body(OrbitDatabase(writer: pool))
   }
 
-  /// Runs `body` on `count` concurrent reads and returns their results.
+  // Runs `body` on `count` concurrent reads and returns their results.
   func concurrentReads<Result: Sendable>(
     _ count: Int,
     of database: OrbitDatabase<SQLitePool>,

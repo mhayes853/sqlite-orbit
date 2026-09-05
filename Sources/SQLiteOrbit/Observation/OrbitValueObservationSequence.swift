@@ -146,8 +146,8 @@ public struct OrbitValueObservationSequence<Element: Sendable>: AsyncSequence, S
   }
 }
 
-/// Holds the subscription a sequence's iteration owns, so that a cancellation racing the initial
-/// subscribe still tears the observation down.
+// Holds the subscription a sequence's iteration owns, so that a cancellation racing the initial
+// subscribe still tears the observation down.
 private final class OrbitValueObservationSubscriptionHolder: Sendable {
   private struct State: Sendable {
     var subscription: OrbitSubscription?

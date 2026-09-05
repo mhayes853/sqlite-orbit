@@ -1,13 +1,13 @@
 import Dispatch
 
-/// One open connection, isolated to a dispatch queue of its own.
-///
-/// The connection is an actor whose executor is that queue. Two things follow from it. A query
-/// never occupies a thread of the cooperative pool, which Swift expects nothing to block; a query
-/// blocks its own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
-/// cancellation and task locals propagate without being carried across a continuation by hand.
-///
-/// The handle is ordinary isolated state, so the connection needs no lock of its own.
+// One open connection, isolated to a dispatch queue of its own.
+//
+// The connection is an actor whose executor is that queue. Two things follow from it. A query
+// never occupies a thread of the cooperative pool, which Swift expects nothing to block; a query
+// blocks its own queue instead. And callers waiting their turn suspend as ordinary actor hops, so
+// cancellation and task locals propagate without being carried across a continuation by hand.
+//
+// The handle is ordinary isolated state, so the connection needs no lock of its own.
 actor SQLiteConnection {
   private let handle: SQLiteHandle
   private let executor: SQLiteConnectionExecutor
@@ -42,11 +42,11 @@ actor SQLiteConnection {
     try await perform { handle in try handle.write(observers: observers, body) }
   }
 
-  /// Runs `body` on the connection's queue, blocking the calling thread until it finishes.
-  ///
-  /// This is `nonisolated` because a blocking caller has no way to enter the actor. It reaches
-  /// isolated state through the executor's queue instead, which is the same mutual exclusion the
-  /// actor itself runs on, so the isolation is real rather than assumed.
+  // Runs `body` on the connection's queue, blocking the calling thread until it finishes.
+  //
+  // This is `nonisolated` because a blocking caller has no way to enter the actor. It reaches
+  // isolated state through the executor's queue instead, which is the same mutual exclusion the
+  // actor itself runs on, so the isolation is real rather than assumed.
   nonisolated func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
@@ -60,7 +60,7 @@ actor SQLiteConnection {
     try performBlocking { handle in try handle.write(observers: observers, body) }
   }
 
-  /// A blocking access carries no task, so there is no cancellation to arm the interrupt for.
+  // A blocking access carries no task, so there is no cancellation to arm the interrupt for.
   private nonisolated func performBlocking<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) throws -> Result {
@@ -72,10 +72,10 @@ actor SQLiteConnection {
     }
   }
 
-  /// Runs `work` on the connection's queue, holding the interrupt for the duration.
-  ///
-  /// The token belongs to this access alone, so cancellation cannot interrupt another access that
-  /// currently owns the connection. SQLite reports `SQLITE_INTERRUPT` as task cancellation.
+  // Runs `work` on the connection's queue, holding the interrupt for the duration.
+  //
+  // The token belongs to this access alone, so cancellation cannot interrupt another access that
+  // currently owns the connection. SQLite reports `SQLITE_INTERRUPT` as task cancellation.
   private func perform<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) async throws -> Result {
@@ -96,12 +96,12 @@ actor SQLiteConnection {
   }
 }
 
-/// A serial dispatch queue, as an actor's executor.
+// A serial dispatch queue, as an actor's executor.
 final class SQLiteConnectionExecutor: SerialExecutor {
   private let queue: DispatchQueue
 
-  /// Marks each connection queue with the executor that owns it, so a blocking access can tell
-  /// whether it is already on the queue it is about to wait for.
+  // Marks each connection queue with the executor that owns it, so a blocking access can tell
+  // whether it is already on the queue it is about to wait for.
   private static let owner = DispatchSpecificKey<ObjectIdentifier>()
 
   init(path: OrbitDatabasePath) {
@@ -114,7 +114,7 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     queue.setSpecific(key: Self.owner, value: ObjectIdentifier(self))
   }
 
-  /// Runs `body` on the queue, blocking the caller until it finishes.
+  // Runs `body` on the queue, blocking the caller until it finishes.
   func sync<Result>(_ body: () throws -> Result) rethrows -> Result {
     precondition(
       DispatchQueue.getSpecific(key: Self.owner) != ObjectIdentifier(self),
@@ -148,11 +148,11 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     dispatchPrecondition(condition: .onQueue(queue))
   }
 
-  /// The dispatch QoS closest to a job's priority.
-  ///
-  /// `TaskPriority` and `DispatchQoS` name the same four bands, but the priorities in between are
-  /// a caller's business, so each one rounds down to the band it belongs to. A job with no
-  /// priority of its own is left to inherit the queue's.
+  // The dispatch QoS closest to a job's priority.
+  //
+  // `TaskPriority` and `DispatchQoS` name the same four bands, but the priorities in between are
+  // a caller's business, so each one rounds down to the band it belongs to. A job with no
+  // priority of its own is left to inherit the queue's.
   private static func dispatchQoS(for priority: JobPriority) -> DispatchQoS {
     guard let priority = TaskPriority(priority) else { return .unspecified }
     if priority >= .high { return .userInitiated }
@@ -166,16 +166,16 @@ final class SQLiteConnectionExecutor: SerialExecutor {
   extension SQLiteConnectionExecutor: @unchecked Sendable {}
 #endif
 
-/// The interrupt belonging to one access, armed only while that access owns its connection.
-///
-/// A cancellation handler can race with the end of its operation. Holding the lock while firing
-/// prevents a delayed interrupt from reaching the next access after this token is disarmed.
-///
-/// Interrupting deliberately does not wait for the connection: taking its queue here would
-/// deadlock against the very query this is meant to stop. SQLite documents interrupting from
-/// another thread as supported.
+// The interrupt belonging to one access, armed only while that access owns its connection.
+//
+// A cancellation handler can race with the end of its operation. Holding the lock while firing
+// prevents a delayed interrupt from reaching the next access after this token is disarmed.
+//
+// Interrupting deliberately does not wait for the connection: taking its queue here would
+// deadlock against the very query this is meant to stop. SQLite documents interrupting from
+// another thread as supported.
 private final class SQLiteInterruptToken: Sendable {
-  /// The lock is held only for the moments around arming, so it is never contended for long.
+  // The lock is held only for the moments around arming, so it is never contended for long.
   private let interrupt = Lock<(@Sendable () -> Void)?>(nil)
 
   func arm(_ interrupt: @escaping @Sendable () -> Void) {

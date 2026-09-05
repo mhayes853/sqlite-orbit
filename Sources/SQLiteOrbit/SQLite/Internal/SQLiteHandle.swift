@@ -1,21 +1,21 @@
-/// One open `sqlite3 *` and the statements prepared on it.
-///
-/// The handle is noncopyable because SQLite's connection has exactly one owner: copying the pointer
-/// would mean two owners racing to close it. It is never handed out directly; transactions lend it
-/// as a nonescapable view that cannot outlive the access it was created for.
+// One open `sqlite3 *` and the statements prepared on it.
+//
+// The handle is noncopyable because SQLite's connection has exactly one owner: copying the pointer
+// would mean two owners racing to close it. It is never handed out directly; transactions lend it
+// as a nonescapable view that cannot outlive the access it was created for.
 struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
 
-  /// Whether the connection was opened read-only, and so refuses writes on its own.
+  // Whether the connection was opened read-only, and so refuses writes on its own.
   let isReadOnly: Bool
 
-  /// The library table, owned here and lent out by pointer.
-  ///
-  /// Transactions, cursors, and rows are created per access and per row, so copying a table of 33
-  /// closures into each of them would put hundreds of bytes of copying on the hottest path in the
-  /// package. They borrow this allocation instead, which is sound because every one of them is
-  /// nonescapable and so cannot outlive this handle.
+  // The library table, owned here and lent out by pointer.
+  //
+  // Transactions, cursors, and rows are created per access and per row, so copying a table of 33
+  // closures into each of them would put hundreds of bytes of copying on the hottest path in the
+  // package. They borrow this allocation instead, which is sound because every one of them is
+  // nonescapable and so cannot outlive this handle.
   private let libraryStorage: UnsafeMutablePointer<SQLiteLibrary>
 
   var library: UnsafePointer<SQLiteLibrary> {
@@ -38,11 +38,11 @@ struct SQLiteHandle: ~Copyable {
     )
   }
 
-  /// Opens and configures a connection.
-  ///
-  /// Opening is a factory rather than a throwing initializer because a noncopyable value cannot be
-  /// partially initialized and then thrown away. That turns out to be the better shape anyway: once
-  /// the handle exists, a failed `configure` is cleaned up by its own `deinit`.
+  // Opens and configures a connection.
+  //
+  // Opening is a factory rather than a throwing initializer because a noncopyable value cannot be
+  // partially initialized and then thrown away. That turns out to be the better shape anyway: once
+  // the handle exists, a failed `configure` is cleaned up by its own `deinit`.
   static func open(
     path: OrbitDatabasePath,
     flags: SQLiteOpenFlags,
@@ -104,15 +104,15 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  /// Runs every statement in `sql`, discarding any rows they produce.
+  // Runs every statement in `sql`, discarding any rows they produce.
   borrowing func execute(_ sql: String) throws {
     try Self.execute(sql, on: pointer, library: library)
   }
 
-  /// Runs `body` inside a deferred transaction and always rolls it back.
-  ///
-  /// A read still takes a transaction so that every statement it runs sees one consistent
-  /// snapshot, and rolling back is how that snapshot is released — there is nothing to commit.
+  // Runs `body` inside a deferred transaction and always rolls it back.
+  //
+  // A read still takes a transaction so that every statement it runs sees one consistent
+  // snapshot, and rolling back is how that snapshot is released — there is nothing to commit.
   borrowing func read<Result: ~Copyable>(
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
@@ -147,11 +147,11 @@ struct SQLiteHandle: ~Copyable {
     return value
   }
 
-  /// Runs `body` inside an immediate transaction, committing it or rolling it back.
-  ///
-  /// The transaction is immediate rather than deferred so that a write takes SQLite's write lock
-  /// up front. A deferred write would only discover a competing writer partway through, after work
-  /// that then has to be thrown away.
+  // Runs `body` inside an immediate transaction, committing it or rolling it back.
+  //
+  // The transaction is immediate rather than deferred so that a write takes SQLite's write lock
+  // up front. A deferred write would only discover a competing writer partway through, after work
+  // that then has to be thrown away.
   borrowing func write<Result: ~Copyable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
@@ -170,13 +170,13 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  /// Ends the open transaction with `sql`, leaving none open when that statement itself fails.
-  ///
-  /// Cancellation interrupts whichever statement is running, and the window it is armed for
-  /// includes this one. A `COMMIT` can also fail on its own, having taken no effect. Either way an
-  /// abandoned transaction would fail the *next* access on this connection — "cannot start a
-  /// transaction within a transaction" — rather than the one that caused it, so the connection is
-  /// asked whether one is still open and rolled back when it is.
+  // Ends the open transaction with `sql`, leaving none open when that statement itself fails.
+  //
+  // Cancellation interrupts whichever statement is running, and the window it is armed for
+  // includes this one. A `COMMIT` can also fail on its own, having taken no effect. Either way an
+  // abandoned transaction would fail the *next* access on this connection — "cannot start a
+  // transaction within a transaction" — rather than the one that caused it, so the connection is
+  // asked whether one is still open and rolled back when it is.
   private borrowing func endTransaction(with sql: String) throws {
     do {
       try execute(sql)
@@ -188,16 +188,16 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  /// Rolls back on a path that already has a failure to report, so this one cannot be raised.
+  // Rolls back on a path that already has a failure to report, so this one cannot be raised.
   private borrowing func rollbackIgnoringFailure() {
     try? endTransaction(with: "ROLLBACK")
   }
 
-  /// Runs every statement in `sql` on `connection`, discarding any rows they produce.
-  ///
-  /// This is the path for schema changes and pragmas, so it accepts several statements at once and
-  /// deliberately does not use the statement cache: cached statements are keyed by their whole SQL
-  /// text, which a multi-statement batch is not.
+  // Runs every statement in `sql` on `connection`, discarding any rows they produce.
+  //
+  // This is the path for schema changes and pragmas, so it accepts several statements at once and
+  // deliberately does not use the statement cache: cached statements are keyed by their whole SQL
+  // text, which a multi-statement batch is not.
   static func execute(
     _ sql: String,
     on connection: OpaquePointer,

@@ -131,7 +131,7 @@
   private struct WriteFailure: Error {}
   private struct AnnouncementFailure: Error {}
 
-  /// Records what a database announces without reaching another process.
+  // Records what a database announces without reaching another process.
   private final class RecordingDatabaseIPCTransport: OrbitIPCTransport, Sendable {
     private struct State {
       var messages = [OrbitIPCMessage]()

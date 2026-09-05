@@ -5,13 +5,13 @@
 
   @testable import SQLiteOrbit
 
-  /// Compares decoding a large scan through the native pool and queue implementations.
-  ///
-  /// Both reach SQLite through an injectable table of closures, keeping the native scan path under
-  /// measurement for both local scheduling strategies.
-  ///
-  /// Timing is not an assertion. The test only runs when asked, so that a loaded machine cannot
-  /// fail the suite.
+  // Compares decoding a large scan through the native pool and queue implementations.
+  //
+  // Both reach SQLite through an injectable table of closures, keeping the native scan path under
+  // measurement for both local scheduling strategies.
+  //
+  // Timing is not an assertion. The test only runs when asked, so that a loaded machine cannot
+  // fail the suite.
   @Test(
     .enabled(
       if: ProcessInfo.processInfo.environment["SQLITE_ORBIT_BENCHMARK"] != nil,

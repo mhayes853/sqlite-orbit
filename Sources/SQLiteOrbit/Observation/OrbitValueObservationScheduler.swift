@@ -289,7 +289,7 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     Task(priority: priority) { [self] in await drainActions(on: isolation) }
   }
 
-  /// Runs every queued action on `isolation`, hopping to it through the isolated parameter.
+  // Runs every queued action on `isolation`, hopping to it through the isolated parameter.
   private func drainActions(on isolation: isolated (any Actor)?) {
     while let action = state.withLock({ state -> (@Sendable () -> Void)? in
       guard !state.actions.isEmpty else {

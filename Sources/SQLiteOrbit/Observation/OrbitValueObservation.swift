@@ -59,7 +59,7 @@ private struct OrbitValueObservationReducer<Value: Sendable>: Sendable {
   var events = OrbitValueObservationEvents()
 }
 
-/// One `handleEvents` operator's callbacks.
+// One `handleEvents` operator's callbacks.
 private struct OrbitValueObservationEventHandler: Sendable {
   let willStart: (@Sendable () -> Void)?
   let willFetch: (@Sendable () -> Void)?
@@ -68,10 +68,10 @@ private struct OrbitValueObservationEventHandler: Sendable {
   let didCancel: (@Sendable () -> Void)?
 }
 
-/// The lifecycle callbacks a chain of operators installed, in the order they were written.
-///
-/// These are the events the runtime raises for itself rather than for one value, so unlike
-/// ``OrbitValueObservationReducer/reduce`` they cannot live at a single position in the chain.
+// The lifecycle callbacks a chain of operators installed, in the order they were written.
+//
+// These are the events the runtime raises for itself rather than for one value, so unlike
+// `OrbitValueObservationReducer.reduce` they cannot live at a single position in the chain.
 private struct OrbitValueObservationEvents: Sendable {
   private var handlers = [OrbitValueObservationEventHandler]()
 
@@ -153,10 +153,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
-  /// Returns an observation that shares this one's fetch, with a reducer derived from this one's.
-  ///
-  /// The derivation runs once per runtime, so an operator that keeps state between values can
-  /// create it here and have every subscriber to that runtime share it.
+  // Returns an observation that shares this one's fetch, with a reducer derived from this one's.
+  //
+  // The derivation runs once per runtime, so an operator that keeps state between values can
+  // create it here and have every subscriber to that runtime share it.
   private func mapReducer<Output: Sendable>(
     _ derive:
       @escaping @Sendable (OrbitValueObservationReducer<Value>) -> OrbitValueObservationReducer<
@@ -170,11 +170,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
-  /// Returns an observation that reduces each value this one emits, passing through the values it
-  /// skips and the transaction filtering and lifecycle callbacks it carries.
-  ///
-  /// The transform is built once per runtime, so an operator that keeps state between values can
-  /// create it here and have every subscriber to that runtime share it.
+  // Returns an observation that reduces each value this one emits, passing through the values it
+  // skips and the transaction filtering and lifecycle callbacks it carries.
+  //
+  // The transform is built once per runtime, so an operator that keeps state between values can
+  // create it here and have every subscriber to that runtime share it.
   private func mapReduction<Output: Sendable>(
     _ makeTransform:
       @escaping @Sendable () -> @Sendable (Value) throws -> OrbitValueObservationReduction<Output>
@@ -677,14 +677,14 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
   }
 }
 
-/// What a caller must do outside the lock once a fetch has been accepted.
+// What a caller must do outside the lock once a fetch has been accepted.
 private struct OrbitValueObservationDelivery: Sendable {
   static let idle = Self()
 
-  /// Whether the caller took on draining the delivery queue.
+  // Whether the caller took on draining the delivery queue.
   var shouldDrain = false
 
-  /// Whether accepting the fetch ended the observation.
+  // Whether accepting the fetch ended the observation.
   var didFail = false
 }
 
@@ -696,14 +696,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   private struct State: Sendable {
-    /// Whether the runtime has been discarded, by a failure or by its definition replacing it.
-    ///
-    /// This outlives every other piece of state, so it is checked before any of them is consulted
-    /// rather than being folded into one of them.
+    // Whether the runtime has been discarded, by a failure or by its definition replacing it.
+    //
+    // This outlives every other piece of state, so it is checked before any of them is consulted
+    // rather than being folded into one of them.
     var isStopped = false
 
-    /// What the fetch performed inside a committing local transaction produced, until the commit
-    /// it belongs to succeeds or rolls back.
+    // What the fetch performed inside a committing local transaction produced, until the commit
+    // it belongs to succeeds or rolls back.
     var pendingLocal: PendingLocal?
 
     var reads = OrbitValueObservationReadCoordinator()
@@ -929,10 +929,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     start(completed.1)
   }
 
-  /// Reduces `result` and queues whatever it owes subscribers.
-  ///
-  /// Queuing here rather than in a second locked step is what orders the publications: two
-  /// contexts can accept a fetch at once, and the later value must not be queued first.
+  // Reduces `result` and queues whatever it owes subscribers.
+  //
+  // Queuing here rather than in a second locked step is what orders the publications: two
+  // contexts can accept a fetch at once, and the later value must not be queued first.
   private func accept(
     _ result: Result<any Sendable, any Error>,
     source: OrbitValueObservationSource,
