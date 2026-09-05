@@ -111,12 +111,17 @@ func inMemoryTransportStopsDeliveringAfterDeinit() async throws {
   #expect(recorder.values.isEmpty)
 }
 
-private func commit(_ database: DatabaseIdentifier) -> DatabaseIPCMessage {
+func commit(_ database: DatabaseIdentifier) -> DatabaseIPCMessage {
   .transactionDidCommit(.init(databaseIdentifier: database))
 }
 
-private final class IPCMessageRecorder: Sendable {
+/// Collects the messages a transport subscription delivers.
+final class IPCMessageRecorder: Sendable {
   private let messages = Mutex([DatabaseIPCMessage]())
   var values: [DatabaseIPCMessage] { self.messages.withLock { $0 } }
   func append(_ message: DatabaseIPCMessage) { self.messages.withLock { $0.append(message) } }
+
+  func waitForCount(_ count: Int) async throws {
+    try await waitUntil(timeout: .seconds(5)) { self.messages.withLock { $0.count } >= count }
+  }
 }

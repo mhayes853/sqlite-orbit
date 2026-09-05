@@ -8,15 +8,6 @@ private struct FetchFailure: Error {}
 @Suite
 struct ValueObservationReadCoordinatorTests {
   @Test
-  func theObservationStartsOnce() {
-    var coordinator = ValueObservationReadCoordinator()
-    let first = coordinator.takeDidStart()
-    let second = coordinator.takeDidStart()
-    #expect(first)
-    #expect(!second)
-  }
-
-  @Test
   func theInitialReadIsIssuedOnce() throws {
     var coordinator = ValueObservationReadCoordinator()
     let issued = coordinator.requireInitialRead()
@@ -151,14 +142,22 @@ struct ValueObservationSubscriberRegistryTests {
   }
 
   @Test
-  func aSubscriberArrivingBeforeAnyValueIsOwedNothing() {
+  func theFirstSubscriberIsTheOneThatStartsTheObservation() {
     var registry = ValueObservationSubscriberRegistry<Int>()
-    let registration = registry.add(subscriber())
-    guard case .success(let place) = registration else {
-      Issue.record("the subscriber was refused")
+    let first = registry.add(subscriber())
+    _ = registry.publish(ValueObservationChange(value: 1, source: .initial))
+    let second = registry.add(subscriber())
+    guard case .success(let firstPlace) = first, case .success(let secondPlace) = second else {
+      Issue.record("a subscriber was refused")
       return
     }
-    #expect(place.latest == nil)
+
+    // The first subscriber starts the observation and is owed nothing; the second inherits the
+    // value published in between and must not restart it.
+    #expect(firstPlace.isFirstEver)
+    #expect(firstPlace.latest == nil)
+    #expect(!secondPlace.isFirstEver)
+    #expect(secondPlace.latest?.value == 1)
   }
 
   @Test

@@ -1,13 +1,18 @@
 /// How a ``ValueObservationSequence`` buffers elements that an observation produces faster than the
 /// sequence's consumer takes them.
+///
+/// ```swift
+/// // Skip ahead to the current state of the database rather than replaying every intermediate one.
+/// let latest = observation.values(in: database, bufferingPolicy: .bufferingNewest(1))
+/// ```
 public enum ValueObservationBufferingPolicy: Hashable, Sendable {
   /// Buffers every element the observation produces.
   case unbounded
 
-  /// Buffers at most `limit` elements, discarding the newest element once the buffer is full.
+  /// Buffers at most this many elements, discarding the newest element once the buffer is full.
   case bufferingOldest(Int)
 
-  /// Buffers at most `limit` elements, discarding the oldest element once the buffer is full.
+  /// Buffers at most this many elements, discarding the oldest element once the buffer is full.
   case bufferingNewest(Int)
 }
 
@@ -34,7 +39,17 @@ extension ValueObservationBufferingPolicy {
 /// ``ValueObservationBufferingPolicy``. Elements are buffered without bound by default, so a slow
 /// consumer still sees every one of them; buffer the newest element only to have it skip ahead to
 /// the current state of the database instead.
+///
+/// ```swift
+/// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
+///
+/// let observation = ValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+/// for try await reminders in observation.values(in: database) {
+///   print("\(reminders.count) reminders")
+/// }
+/// ```
 public struct ValueObservationSequence<Element: Sendable>: AsyncSequence, Sendable {
+  /// The error type the sequence fails with, which is the error that ended the observation.
   public typealias Failure = any Error
 
   private let bufferingPolicy: ValueObservationBufferingPolicy
@@ -57,10 +72,24 @@ public struct ValueObservationSequence<Element: Sendable>: AsyncSequence, Sendab
   }
 
   /// Returns this sequence with a different buffering policy.
+  ///
+  /// ```swift
+  /// for try await reminders in observation.values(in: database).buffering(.bufferingNewest(1)) {
+  ///   render(reminders)
+  /// }
+  /// ```
+  ///
+  /// - Parameter policy: How elements are buffered for a consumer that falls behind.
+  /// - Returns: A sequence that observes the same database with `policy`.
   public func buffering(_ policy: ValueObservationBufferingPolicy) -> Self {
     Self(bufferingPolicy: policy, subscribe: self.subscribe)
   }
 
+  /// Starts the observation and returns an iterator over the elements it produces.
+  ///
+  /// Each call starts an independent observation; iterators do not share elements.
+  ///
+  /// - Returns: An iterator that ends the observation when it is released.
   public func makeAsyncIterator() -> AsyncIterator {
     let holder = ValueObservationSubscriptionHolder()
     let subscribe = self.subscribe
@@ -81,6 +110,14 @@ public struct ValueObservationSequence<Element: Sendable>: AsyncSequence, Sendab
     return AsyncIterator(base: stream.makeAsyncIterator())
   }
 
+  /// An iterator over the elements one observation produces.
+  ///
+  /// The observation stops once the iterator and the elements it buffered are released.
+  ///
+  /// ```swift
+  /// var iterator = observation.values(in: database).makeAsyncIterator()
+  /// let reminders = try await iterator.next()
+  /// ```
   public struct AsyncIterator: AsyncIteratorProtocol {
     private var base: AsyncThrowingStream<Element, any Error>.AsyncIterator
 
@@ -88,10 +125,19 @@ public struct ValueObservationSequence<Element: Sendable>: AsyncSequence, Sendab
       self.base = base
     }
 
+    /// Returns the next element, waiting for one when none is buffered.
+    ///
+    /// - Returns: The next element, or `nil` once the observation has ended.
+    /// - Throws: The error that ended the observation.
     public mutating func next() async throws -> Element? {
       try await self.base.next()
     }
 
+    /// Returns the next element, resuming on `actor`.
+    ///
+    /// - Parameter actor: The actor to resume on.
+    /// - Returns: The next element, or `nil` once the observation has ended.
+    /// - Throws: The error that ended the observation.
     public mutating func next(
       isolation actor: isolated (any Actor)?
     ) async throws(any Error) -> Element? {

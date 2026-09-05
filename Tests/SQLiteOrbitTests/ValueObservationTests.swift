@@ -820,8 +820,6 @@
     }
   }
 
-  private struct ObservationTestTimeout: Error {}
-
   private final class ObservationRecorder<Value: Sendable>: Sendable {
     private struct State: Sendable {
       var changes = [ValueObservationChange<Value>]()
@@ -842,12 +840,7 @@
     }
 
     func waitForChangeCount(_ count: Int) async throws {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(2))
-      while changes.count < count {
-        guard clock.now < deadline else { throw ObservationTestTimeout() }
-        try await Task.sleep(for: .milliseconds(2))
-      }
+      try await waitUntil(timeout: .seconds(5)) { self.changes.count >= count }
     }
   }
 
@@ -857,12 +850,7 @@
     var errors = [String]()
 
     func waitForChangeCount(_ count: Int) async throws {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(2))
-      while changes.count < count {
-        guard clock.now < deadline else { throw ObservationTestTimeout() }
-        try await Task.sleep(for: .milliseconds(2))
-      }
+      try await waitUntil(timeout: .seconds(5)) { self.changes.count >= count }
     }
   }
 #endif

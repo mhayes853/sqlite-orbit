@@ -1,6 +1,5 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -192,26 +191,5 @@
     try .init(configuration: .init(directory: directory, backPressure: .fail))
   }
 
-  private func commit(_ database: DatabaseIdentifier) -> DatabaseIPCMessage {
-    .transactionDidCommit(.init(databaseIdentifier: database))
-  }
-
   private func remove(_ url: URL) { try? FileManager.default.removeItem(at: url) }
-
-  private final class IPCMessageRecorder: Sendable {
-    private let messages = Mutex([DatabaseIPCMessage]())
-    var values: [DatabaseIPCMessage] { self.messages.withLock { $0 } }
-    func append(_ message: DatabaseIPCMessage) { self.messages.withLock { $0.append(message) } }
-
-    func waitForCount(_ count: Int) async throws {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: .seconds(5))
-      while self.messages.withLock({ $0.count }) < count {
-        guard clock.now < deadline else { throw IPCMessageRecorderTimeout() }
-        try await Task.sleep(for: .milliseconds(2))
-      }
-    }
-  }
-
-  private struct IPCMessageRecorderTimeout: Error {}
 #endif

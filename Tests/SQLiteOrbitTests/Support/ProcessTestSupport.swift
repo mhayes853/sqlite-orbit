@@ -1,5 +1,25 @@
+import Foundation
+
+struct TestTimeout: Error {}
+
+/// Polls `condition` until it holds, or throws once `timeout` elapses.
+///
+/// Tests wait on a condition rather than on a fixed sleep, so they neither flake under load nor
+/// pay for a margin that is usually not needed.
+func waitUntil(
+  timeout: Duration = .seconds(10),
+  isolation: isolated (any Actor)? = #isolation,
+  _ condition: () -> Bool
+) async throws {
+  let clock = ContinuousClock()
+  let deadline = clock.now.advanced(by: timeout)
+  while !condition() {
+    guard clock.now < deadline else { throw TestTimeout() }
+    try await Task.sleep(for: .milliseconds(2))
+  }
+}
+
 #if canImport(Darwin) || canImport(Glibc)
-  import Foundation
   import Testing
 
   #if canImport(Darwin)
@@ -8,24 +28,10 @@
     import Glibc
   #endif
 
-  struct ProcessTestTimeout: Error {}
-
   func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
 
   func waitForFile(_ url: URL, timeout: Duration = .seconds(10)) async throws {
     try await waitUntil(timeout: timeout) { FileManager.default.fileExists(atPath: url.path) }
-  }
-
-  func waitUntil(
-    timeout: Duration = .seconds(10),
-    _ condition: () -> Bool
-  ) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while !condition() {
-      guard clock.now < deadline else { throw ProcessTestTimeout() }
-      try await Task.sleep(for: .milliseconds(2))
-    }
   }
 
   func processTestSignal(_ process: Process, _ signal: Int32) {

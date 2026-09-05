@@ -4,12 +4,6 @@
   import Synchronization
   import Testing
 
-  #if canImport(Darwin)
-    import Darwin
-  #else
-    import Glibc
-  #endif
-
   @Suite(.serialized)
   struct DatabaseIPCMultiprocessTests {
     @Test(arguments: [1, 2, 8, 32])
@@ -149,19 +143,22 @@
   }
 
   private final class IPCProcessHarness {
-    let directory: URL
+    private let harness: ProcessTestHarness
     let database: DatabaseIdentifier
-    private var processes = [Process]()
+
+    var directory: URL { self.harness.directory }
 
     var message: DatabaseIPCMessage {
       .transactionDidCommit(.init(databaseIdentifier: self.database))
     }
 
     init(database: String) throws {
-      self.directory = FileManager.default.temporaryDirectory
-        .appending(path: "sqlite-orbit-process-tests-\(UUID().uuidString)")
+      self.harness = try ProcessTestHarness(
+        helper: "ipcProcessPeer",
+        environmentPrefix: IPCProcessEnvironment.prefix,
+        name: database
+      )
       self.database = DatabaseIdentifier(rawValue: database)
-      try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
     }
 
     func transport(
@@ -178,75 +175,52 @@
     }
 
     func spawn(_ mode: String, index: Int = 0, expected: Int = 0) throws -> Process {
-      let process = Process()
-      process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-      process.arguments = [
-        "--testing-library", "swift-testing", "--filter", "ipcProcessPeer"
-      ]
-      var environment = ProcessInfo.processInfo.environment
-      environment[IPCProcessEnvironment.mode] = mode
-      environment[IPCProcessEnvironment.directory] = self.directory.path
-      environment[IPCProcessEnvironment.database] = self.database.rawValue
-      environment[IPCProcessEnvironment.ready] = self.file("ready-\(index)").path
-      environment[IPCProcessEnvironment.result] = self.file("result-\(index)").path
-      environment[IPCProcessEnvironment.expected] = String(expected)
-      process.environment = environment
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
-      try process.run()
-      self.processes.append(process)
-      return process
+      try self.harness.spawn([
+        "MODE": mode,
+        "DIRECTORY": self.directory.path,
+        "DATABASE": self.database.rawValue,
+        "READY": self.harness.file("ready-\(index)").path,
+        "RESULT": self.harness.file("result-\(index)").path,
+        "EXPECTED_COUNT": String(expected)
+      ])
     }
 
     func waitUntilReady(_ count: Int) async throws {
-      for index in 0..<count { try await waitForFile(self.file("ready-\(index)")) }
+      for index in 0..<count { try await waitForFile(self.harness.file("ready-\(index)")) }
     }
 
-    func start() throws { try touch(self.file("start")) }
-    func stop() throws { try touch(self.file("stop")) }
+    func start() throws { try touch(self.harness.file("start")) }
+    func stop() throws { try touch(self.harness.file("stop")) }
+
     func result(_ index: Int) throws -> Int {
-      try #require(Int(String(contentsOf: self.file("result-\(index)"), encoding: .utf8)))
+      try #require(Int(String(contentsOf: self.harness.file("result-\(index)"), encoding: .utf8)))
     }
 
+    /// The number of peer registrations the coordination directory currently advertises.
     func registrationCount() throws -> Int {
-      let root = self.file("v1/d")
+      let root = self.harness.file("v1/d")
       guard FileManager.default.fileExists(atPath: root.path) else { return 0 }
       return try FileManager.default
-        .contentsOfDirectory(
-          at: root,
-          includingPropertiesForKeys: nil
-        )
-        .reduce(0) {
-          $0 + (try FileManager.default.contentsOfDirectory(atPath: $1.path).count)
-        }
+        .contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        .reduce(0) { $0 + (try FileManager.default.contentsOfDirectory(atPath: $1.path).count) }
     }
 
     func waitForSuccessfulExit(_ process: Process) async throws {
-      try await self.waitForExit(process)
-      #expect(process.terminationStatus == 0)
+      try await self.harness.waitForSuccessfulExit(process)
     }
 
     func waitForExit(_ process: Process) async throws {
-      try await waitUntil { !process.isRunning }
+      try await self.harness.waitForExit(process)
     }
 
-    func suspend(_ process: Process) { processTestSignal(process, SIGSTOP) }
-    func resume(_ process: Process) { processTestSignal(process, SIGCONT) }
-    func kill(_ process: Process) { processTestSignal(process, SIGKILL) }
-
-    func cleanup() {
-      for process in self.processes where process.isRunning {
-        self.kill(process)
-        process.waitUntilExit()
-      }
-      try? FileManager.default.removeItem(at: self.directory)
-    }
-
-    private func file(_ name: String) -> URL { self.directory.appending(path: name) }
+    func suspend(_ process: Process) { self.harness.suspend(process) }
+    func resume(_ process: Process) { self.harness.resume(process) }
+    func kill(_ process: Process) { self.harness.kill(process) }
+    func cleanup() { self.harness.cleanup() }
   }
 
   private enum IPCProcessEnvironment {
-    private static let prefix = "SQLITE_ORBIT_IPC_HELPER_"
+    static let prefix = "SQLITE_ORBIT_IPC_HELPER_"
     static let mode = prefix + "MODE"
     static let directory = prefix + "DIRECTORY"
     static let database = prefix + "DATABASE"

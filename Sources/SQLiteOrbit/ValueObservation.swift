@@ -1,4 +1,13 @@
 /// Why a value observation fetched a value.
+///
+/// ```swift
+/// for try await change in observation.changes(in: database) {
+///   switch change.source {
+///   case .initial: print("first read:", change.value)
+///   case .transaction(let origin): print("refetched after a \(origin) commit")
+///   }
+/// }
+/// ```
 public enum ValueObservationSource: Hashable, Sendable {
   /// The fetch that establishes an observation's initial value.
   case initial
@@ -8,10 +17,25 @@ public enum ValueObservationSource: Hashable, Sendable {
 }
 
 /// A value emitted by an observation, together with the event that prompted its fetch.
+///
+/// ```swift
+/// let observation = ValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+/// try observation.subscribe(to: database, onError: { _ in }) { change in
+///   print(change.value.count, "reminders after a", change.source, "fetch")
+/// }
+/// ```
 public struct ValueObservationChange<Value: Sendable>: Sendable {
+  /// The value the observation produced.
   public let value: Value
+
+  /// The event whose fetch produced ``value``.
   public let source: ValueObservationSource
 
+  /// Creates a change.
+  ///
+  /// - Parameters:
+  ///   - value: The value the observation produced.
+  ///   - source: The event whose fetch produced `value`.
   public init(value: Value, source: ValueObservationSource) {
     self.value = value
     self.source = source
@@ -27,11 +51,6 @@ private typealias ValueObservationFetch =
 private enum ValueObservationReduction<Value: Sendable>: Sendable {
   case emit(Value)
   case skip
-}
-
-private enum ValueObservationPrevious<Value: Sendable>: Sendable {
-  case none
-  case value(Value)
 }
 
 private struct ValueObservationReducer<Value: Sendable>: Sendable {
@@ -62,21 +81,32 @@ private struct ValueObservationEvents: Sendable {
     return events
   }
 
-  func willStart() { send(\.willStart) }
-  func willFetch() { send(\.willFetch) }
-  func databaseDidChange() { send(\.databaseDidChange) }
-  func didCancel() { send(\.didCancel) }
-
-  func didFail(_ error: any Error) {
-    for handler in handlers { handler.didFail?(error) }
-  }
-
-  private func send(_ callback: (ValueObservationEventHandler) -> (@Sendable () -> Void)?) {
-    for handler in handlers { callback(handler)?() }
-  }
+  func willStart() { for handler in handlers { handler.willStart?() } }
+  func willFetch() { for handler in handlers { handler.willFetch?() } }
+  func databaseDidChange() { for handler in handlers { handler.databaseDidChange?() } }
+  func didCancel() { for handler in handlers { handler.didCancel?() } }
+  func didFail(_ error: any Error) { for handler in handlers { handler.didFail?(error) } }
 }
 
 /// A query that is fetched initially and again whenever the observed database changes.
+///
+/// An observation is a description, not a running process: nothing is read until you start it
+/// with ``subscribe(to:onError:onChange:)``, ``changes(in:)``, or ``values(in:)``. Every
+/// subscriber to the same observation value and database shares one runtime, so a chain built
+/// once and started twice fetches once and hands the same value to both.
+///
+/// ```swift
+/// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
+///
+/// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
+/// let observation = ValueObservation
+///   .tracking { try $0.fetchAll(Reminder.where { !$0.isCompleted }) }
+///   .removeDuplicates()
+///
+/// for try await reminders in observation.values(in: database) {
+///   print("\(reminders.count) reminders left")
+/// }
+/// ```
 public struct ValueObservation<Value: Sendable>: Sendable {
   private let definition: ValueObservationDefinition<Value>
 
@@ -91,6 +121,19 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   }
 
   /// Creates an observation whose value is produced by `fetch`.
+  ///
+  /// `fetch` runs inside a read transaction, so everything it reads comes from one consistent
+  /// snapshot of the database. It runs again after every committed write, whether that write came
+  /// from this process or from a peer.
+  ///
+  /// ```swift
+  /// let incompleteCount = ValueObservation.tracking { transaction in
+  ///   try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
+  /// }
+  /// ```
+  ///
+  /// - Parameter fetch: Reads the observed value from a transaction.
+  /// - Returns: An observation that produces whatever `fetch` returns.
   public static func tracking(
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
@@ -127,16 +170,11 @@ public struct ValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an observation that reduces each value this one emits, passing through the values it
   /// skips and the transaction filtering and lifecycle callbacks it carries.
+  ///
+  /// The transform is built once per runtime, so an operator that keeps state between values can
+  /// create it here and have every subscriber to that runtime share it.
   private func mapReduction<Output: Sendable>(
-    _ transform: @escaping @Sendable (Value) throws -> ValueObservationReduction<Output>
-  ) -> ValueObservation<Output> {
-    mapReduction(perRuntime: { transform })
-  }
-
-  /// Returns an observation that reduces each value this one emits, using a transform built once
-  /// per runtime so that it can keep state between values.
-  private func mapReduction<Output: Sendable>(
-    perRuntime makeTransform:
+    _ makeTransform:
       @escaping @Sendable () -> @Sendable (Value) throws -> ValueObservationReduction<Output>
   ) -> ValueObservation<Output> {
     mapReducer { upstream in
@@ -154,64 +192,127 @@ public struct ValueObservation<Value: Sendable>: Sendable {
 
   /// Transforms each value produced by this observation.
   ///
-  /// The transform runs after the database access has ended. A thrown error ends the observation.
+  /// The transform runs after the database access has ended, so it cannot read the database. A
+  /// thrown error ends the observation and is reported to every subscriber.
+  ///
+  /// ```swift
+  /// let titles = ValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .map { reminders in reminders.map(\.title) }
+  /// ```
+  ///
+  /// - Parameter transform: Converts each observed value.
+  /// - Returns: An observation producing the transformed values.
   public func map<Output: Sendable>(
     _ transform: @escaping @Sendable (Value) throws -> Output
   ) -> ValueObservation<Output> {
-    mapReduction { .emit(try transform($0)) }
+    mapReduction { { .emit(try transform($0)) } }
   }
 
   /// Produces only the values that satisfy `predicate`.
   ///
-  /// The predicate runs after the database access has ended. A thrown error ends the observation.
+  /// A suppressed value is not delivered and does not become the value a late subscriber is caught
+  /// up with. The predicate runs after the database access has ended; a thrown error ends the
+  /// observation.
+  ///
+  /// ```swift
+  /// let nonEmpty = ValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .filter { !$0.isEmpty }
+  /// ```
+  ///
+  /// - Parameter predicate: Returns whether a value should be delivered.
+  /// - Returns: An observation producing only the values `predicate` accepts.
   public func filter(
     _ predicate: @escaping @Sendable (Value) throws -> Bool
   ) -> Self {
-    mapReduction { try predicate($0) ? .emit($0) : .skip }
+    mapReduction { { try predicate($0) ? .emit($0) : .skip } }
   }
 
   /// Transforms each value and suppresses `nil` results.
   ///
-  /// The transform runs after the database access has ended. A thrown error ends the observation.
+  /// The transform runs after the database access has ended; a thrown error ends the observation.
+  ///
+  /// ```swift
+  /// let nextTitle = ValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.where { !$0.isCompleted }) }
+  ///   .compactMap { $0.first?.title }
+  /// ```
+  ///
+  /// - Parameter transform: Converts each observed value, returning `nil` to suppress it.
+  /// - Returns: An observation producing the non-`nil` transformed values.
   public func compactMap<Output: Sendable>(
     _ transform: @escaping @Sendable (Value) throws -> Output?
   ) -> ValueObservation<Output> {
-    mapReduction { try transform($0).map(ValueObservationReduction.emit) ?? .skip }
+    mapReduction { { try transform($0).map(ValueObservationReduction.emit) ?? .skip } }
   }
 
   /// Suppresses a value when `predicate` considers it equal to the preceding emitted value.
+  ///
+  /// Use this to keep a write that changed rows you do not observe from waking your subscribers.
+  ///
+  /// ```swift
+  /// let reminders = ValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .removeDuplicates { $0.map(\.id) == $1.map(\.id) }
+  /// ```
+  ///
+  /// - Parameter predicate: Compares the previously emitted value with a new one.
+  /// - Returns: An observation that emits a value only when `predicate` reports it as different.
   public func removeDuplicates(
     by predicate: @escaping @Sendable (Value, Value) -> Bool
   ) -> Self {
-    mapReduction(perRuntime: {
-      let previous = Lock<ValueObservationPrevious<Value>>(.none)
+    mapReduction {
+      let previous = Lock<Value?>(nil)
       return { value in
         previous.withLock { previous in
-          if case .value(let previousValue) = previous, predicate(previousValue, value) {
-            return .skip
-          }
-          previous = .value(value)
+          if let previousValue = previous, predicate(previousValue, value) { return .skip }
+          previous = value
           return .emit(value)
         }
       }
-    })
+    }
   }
 
   /// Skips fetching after committed transactions for which `predicate` returns `false`.
   ///
+  /// Unlike ``filter(_:)``, this runs before the fetch, so a rejected commit costs no read at all.
   /// The initial value is always fetched. Inspect ``DatabaseCommit/origin`` to distinguish a
   /// notification sent by this process from one sent by another process.
+  ///
+  /// ```swift
+  /// let localOnly = ValueObservation
+  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .filterTransactions { $0.origin == .local }
+  /// ```
+  ///
+  /// - Parameter predicate: Returns whether a commit should prompt a fetch.
+  /// - Returns: An observation that refetches only after the commits `predicate` accepts.
   public func filterTransactions(
     _ predicate: @escaping @Sendable (DatabaseCommit) -> Bool
   ) -> Self {
     filterTransactions { commit, _ in predicate(commit) }
   }
 
-  /// Skips fetching after committed transactions for which `predicate` returns `false`.
+  /// Skips fetching after committed transactions for which `predicate` returns `false`, using the
+  /// value the observation last produced.
   ///
   /// `previousValue` is the latest value accepted for delivery, or `nil` before the observation
-  /// produces its first value. A value suppressed by `removeDuplicates` does not replace it. The
-  /// initial value is always fetched.
+  /// produces its first value. A value suppressed by ``removeDuplicates()`` does not replace it.
+  /// The initial value is always fetched.
+  ///
+  /// ```swift
+  /// // Stop refetching once every reminder is done, until a local write says otherwise.
+  /// let untilFinished = ValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .filterTransactions { commit, reminders in
+  ///     commit.origin == .local || !(reminders?.allSatisfy(\.isCompleted) ?? false)
+  ///   }
+  /// ```
+  ///
+  /// - Parameter predicate: Returns whether a commit should prompt a fetch, given the value the
+  ///   observation last produced.
+  /// - Returns: An observation that refetches only after the commits `predicate` accepts.
   public func filterTransactions(
     _ predicate:
       @escaping @Sendable (
@@ -220,20 +321,16 @@ public struct ValueObservation<Value: Sendable>: Sendable {
       ) -> Bool
   ) -> Self {
     mapReducer { upstream in
-      let previous = Lock<ValueObservationPrevious<Value>>(.none)
+      let previous = Lock<Value?>(nil)
       return ValueObservationReducer(
         reduce: { payload in
           let reduction = try upstream.reduce(payload)
-          if case .emit(let value) = reduction { previous.withLock { $0 = .value(value) } }
+          if case .emit(let value) = reduction { previous.withLock { $0 = value } }
           return reduction
         },
         transactionNeedsFetch: { commit in
           guard upstream.transactionNeedsFetch(commit) else { return false }
-          let previousValue = previous.withLock { previous -> Value? in
-            guard case .value(let value) = previous else { return nil }
-            return value
-          }
-          return predicate(commit, previousValue)
+          return predicate(commit, previous.withLock { $0 })
         },
         events: upstream.events
       )
@@ -257,6 +354,25 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   /// local write is fetched inside its transaction, before the commit that the observation
   /// reports, so `willFetch` precedes `databaseDidChange`. Every other fetch follows the commit
   /// that prompted it.
+  ///
+  /// ```swift
+  /// let traced = ValueObservation
+  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .handleEvents(
+  ///     willStart: { logger.debug("observing reminders") },
+  ///     didReceiveValue: { count in logger.debug("\(count) reminders") },
+  ///     didCancel: { logger.debug("no subscribers left") }
+  ///   )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - willStart: Runs when the first subscriber starts the observation.
+  ///   - willFetch: Runs immediately before each fetch.
+  ///   - databaseDidChange: Runs when a commit the observation cares about is reported.
+  ///   - didReceiveValue: Runs for each value that reaches this point in the chain.
+  ///   - didFail: Runs with the error that ended the observation.
+  ///   - didCancel: Runs when the last subscriber goes away.
+  /// - Returns: An observation that behaves identically and reports its work to these callbacks.
   public func handleEvents(
     willStart: (@Sendable () -> Void)? = nil,
     willFetch: (@Sendable () -> Void)? = nil,
@@ -286,8 +402,30 @@ public struct ValueObservation<Value: Sendable>: Sendable {
     }
   }
 
-  /// Starts this observation and delivers its changes through callbacks using an asynchronous
-  /// scheduler.
+  /// Starts this observation and delivers its changes through callbacks on Swift's cooperative
+  /// executor.
+  ///
+  /// The observation runs until the returned subscription is cancelled or released, so store it
+  /// for as long as you want the callbacks.
+  ///
+  /// ```swift
+  /// let subscription = try ValueObservation
+  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .subscribe(to: database) { error in
+  ///     logger.error("reminder observation failed: \(error)")
+  ///   } onChange: { change in
+  ///     logger.info("\(change.value) reminders")
+  ///   }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
+  ///     without an extra hop. Defaults to the caller's isolation.
+  ///   - onError: Receives the error that ends the observation.
+  ///   - onChange: Receives each observed change.
+  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Throws: Whatever registering a transaction observer on `database` throws.
   @discardableResult
   public func subscribe<Database: SQLiteObservableDatabase>(
     to database: Database,
@@ -308,7 +446,27 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
   /// a gap between fetching and listening. A fetch error calls `onError` and ends the subscription.
-  /// A scheduler that requests an immediate initial value makes this method perform a blocking read.
+  /// A scheduler that requests an immediate initial value makes this method perform a blocking
+  /// read, so `onChange` has run once by the time it returns.
+  ///
+  /// ```swift
+  /// let subscription = try ValueObservation
+  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .subscribe(to: database, scheduling: .immediate) { error in
+  ///     logger.error("\(error)")
+  ///   } onChange: { change in
+  ///     counts.append(change.value)
+  ///   }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - scheduler: Decides where and when callbacks run.
+  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - onError: Receives the error that ends the observation.
+  ///   - onChange: Receives each observed change.
+  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Throws: Whatever registering a transaction observer on `database` throws.
   @discardableResult
   public func subscribe<Database: SQLiteObservableDatabase, Scheduler: ValueObservationScheduler>(
     to database: Database,
@@ -333,6 +491,31 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   }
 
   /// Starts this observation with callbacks isolated to the main actor.
+  ///
+  /// With ``ValueObservationScheduler/mainActor``, the initial value is delivered before this
+  /// method returns, which is what lets a view start with real data rather than a placeholder.
+  ///
+  /// ```swift
+  /// @MainActor final class RemindersModel {
+  ///   private(set) var count = 0
+  ///   private var subscription: OrbitSubscription?
+  ///
+  ///   func start(observing database: OrbitDatabase) throws {
+  ///     subscription = try ValueObservation
+  ///       .tracking { try $0.fetchCount(Reminder.all) }
+  ///       .subscribe(to: database, scheduling: .mainActor) { _ in
+  ///       } onChange: { [self] change in count = change.value }
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - scheduler: A scheduler that guarantees main-actor delivery.
+  ///   - onError: Receives the error that ends the observation.
+  ///   - onChange: Receives each observed change.
+  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Throws: Whatever registering a transaction observer on `database` throws.
   @MainActor
   @discardableResult
   public func subscribe<
@@ -359,9 +542,21 @@ public struct ValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
-  /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
-  /// survive when the observation produces them faster than the sequence is consumed; by default
-  /// every one of them is kept.
+  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// `bufferingPolicy` decides which elements survive when the observation produces them faster
+  /// than the sequence is consumed; by default every one of them is kept.
+  ///
+  /// ```swift
+  /// for try await change in observation.changes(in: database) {
+  ///   if change.source == .transaction(.external) { logger.info("another process wrote") }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - bufferingPolicy: How elements are buffered for a consumer that falls behind.
+  /// - Returns: An asynchronous sequence of changes, failing with the error that ends the
+  ///   observation.
   public func changes<Database: SQLiteObservableDatabase>(
     in database: Database,
     bufferingPolicy: ValueObservationBufferingPolicy = .unbounded
@@ -373,9 +568,22 @@ public struct ValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of observed values without their source metadata.
   ///
-  /// The observation starts when iteration begins. `bufferingPolicy` decides which elements
-  /// survive when the observation produces them faster than the sequence is consumed; by default
-  /// every one of them is kept.
+  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// `bufferingPolicy` decides which elements survive when the observation produces them faster
+  /// than the sequence is consumed; by default every one of them is kept.
+  ///
+  /// ```swift
+  /// let reminders = ValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+  /// for try await reminders in reminders.values(in: database, bufferingPolicy: .bufferingNewest(1)) {
+  ///   render(reminders)
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - bufferingPolicy: How elements are buffered for a consumer that falls behind.
+  /// - Returns: An asynchronous sequence of values, failing with the error that ends the
+  ///   observation.
   public func values<Database: SQLiteObservableDatabase>(
     in database: Database,
     bufferingPolicy: ValueObservationBufferingPolicy = .unbounded
@@ -392,6 +600,14 @@ public struct ValueObservation<Value: Sendable>: Sendable {
 
 extension ValueObservation where Value: Equatable {
   /// Suppresses consecutive equal values.
+  ///
+  /// ```swift
+  /// let count = ValueObservation
+  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .removeDuplicates()
+  /// ```
+  ///
+  /// - Returns: An observation that emits a value only when it differs from the last one emitted.
   public func removeDuplicates() -> Self {
     removeDuplicates(by: ==)
   }
@@ -548,12 +764,11 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
     )
     let registration = state.withLock {
       state -> ValueObservationSubscriberRegistry<Value>.Registration in
-      if let error = state.subscribers.terminalError { return .failure(error) }
-      precondition(!state.isStopped, "cannot subscribe to a discarded observation runtime")
-      return state.subscribers.add(subscriber)
+      state.subscribers.add(subscriber)
     }
     switch registration {
-    case .success(let (identifier, latest)):
+    case .success(let (identifier, latest, isFirstEver)):
+      if isFirstEver { events.willStart() }
       if let latest {
         subscriber.receive(.success(latest), from: isolation)
       }
@@ -574,28 +789,24 @@ private final class ValueObservationRuntime<Value: Sendable>: DatabaseTransactio
   // MARK: - Initial value
 
   func fetchInitialValueIfNeeded() {
-    let started = state.withLock { state -> (request: ValueObservationReadRequest?, start: Bool) in
-      guard !state.isStopped, let request = state.reads.requireInitialRead() else {
-        return (nil, false)
-      }
-      return (request, state.reads.takeDidStart())
+    let request = state.withLock { state -> ValueObservationReadRequest? in
+      guard !state.isStopped else { return nil }
+      return state.reads.requireInitialRead()
     }
-    if started.start { events.willStart() }
-    start(started.request)
+    start(request)
   }
 
   func fetchInitialValueImmediatelyIfNeeded(
     isolation: isolated (any Actor)?
   ) {
-    let started = state.withLock { state -> (shouldFetch: Bool, start: Bool) in
-      guard !state.isStopped, !state.reads.initialFetchCompleted else { return (false, false) }
+    let shouldFetch = state.withLock { state -> Bool in
+      guard !state.isStopped, !state.reads.initialFetchCompleted else { return false }
       // Discard an older asynchronous fetch if one is already in flight.
       state.reads.discardInFlightRead()
-      return (true, state.reads.takeDidStart())
+      return true
     }
-    guard started.shouldFetch else { return }
+    guard shouldFetch else { return }
 
-    if started.start { events.willStart() }
     events.willFetch()
     let result = readBlocking()
     let delivery = state.withLock { state -> ValueObservationDelivery in

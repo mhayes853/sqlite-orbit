@@ -7,18 +7,36 @@ import Synchronization
 /// each discovers the others' subscriptions and a broadcast reaches every peer but the sender.
 /// Delivery calls a peer's handlers directly instead of going through any OS resource, so peers can
 /// live in the same process and a test needs no filesystem or socket cleanup.
+///
+/// ```swift
+/// let network = InMemoryIPCTransport.Network()
+/// let database = InterprocessDatabase(
+///   writer: try SQLiteQueueDriver(path: .memory),
+///   id: DatabaseIdentifier(rawValue: "reminders"),
+///   transport: InMemoryIPCTransport(network: network)
+/// )
+/// let peer = InMemoryIPCTransport(network: network)
+/// let subscription = try peer.subscribe(to: database.id) { _ in refresh() }
+/// ```
 public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
   /// The medium that peer transports discover each other and exchange messages through.
   ///
   /// Construct one `Network` per simulated set of coordinating processes and hand it to every
   /// transport that should see the others' messages. Transports on different networks, or with no
   /// network in common, cannot see each other.
+  ///
+  /// ```swift
+  /// let network = InMemoryIPCTransport.Network()
+  /// let sender = InMemoryIPCTransport(network: network)
+  /// let receiver = InMemoryIPCTransport(network: network)
+  /// ```
   public final class Network: Sendable {
     fileprivate let state = Mutex(State())
     fileprivate struct State {
       var endpoints: [DatabaseIdentifier: [ObjectIdentifier: Endpoint]] = [:]
     }
 
+    /// Creates an empty network.
     public init() {}
 
     fileprivate func register(_ endpoint: Endpoint, for databaseIdentifier: DatabaseIdentifier) {
@@ -41,7 +59,7 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
       excluding endpoint: Endpoint
     ) -> [Endpoint] {
       self.state.withLock {
-        $0.endpoints[databaseIdentifier, default: [:]].values.filter { $0 !== endpoint }
+        ($0.endpoints[databaseIdentifier]?.values).map { $0.filter { $0 !== endpoint } } ?? []
       }
     }
   }
@@ -53,6 +71,8 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
   ///
   /// A transport created without an explicit network has no peers: pass the same `Network` to every
   /// transport that should discover this one.
+  ///
+  /// - Parameter network: The medium this transport discovers peers through.
   public init(network: Network = Network()) {
     self.network = network
   }
@@ -61,6 +81,19 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
     self.endpoint.shutdown(network: self.network)
   }
 
+  /// Subscribes to messages concerning `databaseIdentifier`.
+  ///
+  /// The first subscription for a database makes this transport discoverable to its peers for that
+  /// database, and cancelling the last one makes it undiscoverable again.
+  ///
+  /// ```swift
+  /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - databaseIdentifier: The database whose messages to receive.
+  ///   - onMessage: Receives each message concerning that database.
+  /// - Returns: A subscription that stops delivery when cancelled or released.
   public func subscribe(
     to databaseIdentifier: DatabaseIdentifier,
     onMessage: @escaping @Sendable (DatabaseIPCMessage) -> Void
@@ -73,10 +106,24 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
       network: network
     )
     return OrbitSubscription {
-      endpoint.remove(identifier: identifier, databaseIdentifier: databaseIdentifier, network: network)
+      endpoint.remove(
+        identifier: identifier,
+        databaseIdentifier: databaseIdentifier,
+        network: network
+      )
     }
   }
 
+  /// Delivers `message` to every peer on this transport's network, but not to itself.
+  ///
+  /// Handlers run before this method returns, so a test can assert on what a peer received without
+  /// waiting.
+  ///
+  /// ```swift
+  /// try await transport.send(.transactionDidCommit(.init(databaseIdentifier: database.id)))
+  /// ```
+  ///
+  /// - Parameter message: The message to broadcast.
   public func send(_ message: DatabaseIPCMessage) async throws {
     let peers = self.network.peers(for: message.databaseIdentifier, excluding: self.endpoint)
     for peer in peers {
@@ -87,14 +134,11 @@ public final class InMemoryIPCTransport: DatabaseIPCTransport, Sendable {
 
 /// One process's worth of local subscriptions, keyed the way a Unix-domain peer's would be.
 private final class Endpoint: Sendable {
-  private struct State {
-    var nextIdentifier: UInt64 = 0
-    var handlers: [DatabaseIdentifier: [UInt64: @Sendable (DatabaseIPCMessage) -> Void]] = [:]
-  }
-
-  private let state = Mutex(State())
+  private let handlers = Mutex(
+    KeyedHandlerRegistry<DatabaseIdentifier, @Sendable (DatabaseIPCMessage) -> Void>()
+  )
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
-  // without holding `state`'s lock (and risking deadlock) while a handler runs.
+  // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Mutex(())
 
   func add(
@@ -102,14 +146,9 @@ private final class Endpoint: Sendable {
     handler: @escaping @Sendable (DatabaseIPCMessage) -> Void,
     network: InMemoryIPCTransport.Network
   ) -> UInt64 {
-    self.state.withLock { state in
-      let isFirstSubscription = state.handlers[databaseIdentifier] == nil
-      let identifier = state.nextIdentifier
-      state.nextIdentifier &+= 1
-      state.handlers[databaseIdentifier, default: [:]][identifier] = handler
-      if isFirstSubscription { network.register(self, for: databaseIdentifier) }
-      return identifier
-    }
+    let added = self.handlers.withLock { $0.insert(handler, for: databaseIdentifier) }
+    if added.isFirstForKey { network.register(self, for: databaseIdentifier) }
+    return added.identifier
   }
 
   func remove(
@@ -117,19 +156,12 @@ private final class Endpoint: Sendable {
     databaseIdentifier: DatabaseIdentifier,
     network: InMemoryIPCTransport.Network
   ) {
-    let becameEmpty = self.state.withLock { state -> Bool in
-      state.handlers[databaseIdentifier]?.removeValue(forKey: identifier)
-      let isEmpty = state.handlers[databaseIdentifier]?.isEmpty ?? true
-      if isEmpty { state.handlers.removeValue(forKey: databaseIdentifier) }
-      return isEmpty
-    }
+    let becameEmpty = self.handlers.withLock { $0.remove(identifier, for: databaseIdentifier) }
     if becameEmpty { network.unregister(self, for: databaseIdentifier) }
   }
 
   func deliver(_ message: DatabaseIPCMessage) {
-    let callbacks = self.state.withLock { state in
-      Array(state.handlers[message.databaseIdentifier, default: [:]].values)
-    }
+    let callbacks = self.handlers.withLock { $0.handlers(for: message.databaseIdentifier) }
     guard !callbacks.isEmpty else { return }
     self.deliveryLock.withLock { _ in
       for callback in callbacks { callback(message) }
@@ -137,11 +169,7 @@ private final class Endpoint: Sendable {
   }
 
   func shutdown(network: InMemoryIPCTransport.Network) {
-    let databaseIdentifiers = self.state.withLock { state in
-      defer { state.handlers.removeAll() }
-      return Array(state.handlers.keys)
-    }
-    for databaseIdentifier in databaseIdentifiers {
+    for databaseIdentifier in self.handlers.withLock({ $0.removeAll() }) {
       network.unregister(self, for: databaseIdentifier)
     }
   }

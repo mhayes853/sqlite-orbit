@@ -22,11 +22,17 @@
         #expect(FileManager.default.fileExists(atPath: harness.file("opened-\(index)").path))
       }
       #expect(FileManager.default.fileExists(atPath: harness.databasePath))
-      let tableCount = try await harness.database()
-        .read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM sqlite_master", as: Int.self))
-        }
+      let database = try harness.database()
+      let tableCount = try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT count(*) FROM sqlite_master", as: Int.self))
+      }
       #expect(tableCount == 0)
+      // Moving a new database into WAL needs an exclusive lock of SQLite's own, so a race between
+      // openers would leave it in the default journal mode.
+      let journalMode = try await database.read { transaction in
+        try transaction.fetchAll(#sql("PRAGMA journal_mode", as: String.self))
+      }
+      #expect(journalMode == ["wal"])
     }
 
     /// Moving a new database into WAL mode needs an exclusive lock of SQLite's own, so opening is

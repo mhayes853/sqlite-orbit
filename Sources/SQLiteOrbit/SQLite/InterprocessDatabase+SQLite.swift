@@ -19,6 +19,18 @@
     ///   - coordination: Describes the directory and back pressure this process uses to reach its
     ///     peers. Processes coordinate only when they share a coordination directory.
     ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails.
+    ///
+    /// ```swift
+    /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
+    ///
+    /// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
+    /// try await database.write { transaction in
+    ///   try #sql("CREATE TABLE IF NOT EXISTS reminders (...)", as: Void.self).execute(transaction)
+    /// }
+    /// ```
+    ///
+    /// - Throws: A ``SQLiteError`` if the database cannot be opened, or a transport error if this
+    ///   process cannot join the coordination directory.
     public convenience init(
       path: DatabasePath,
       configuration: SQLiteConfiguration = .default,
@@ -47,5 +59,15 @@
   /// at a SQLite build of your choosing.
   ///
   /// This spelling names both the cross-process coordination layer and its native pooled storage.
+  ///
+  /// ```swift
+  /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
+  ///
+  /// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
+  /// let observation = ValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+  /// for try await reminders in observation.values(in: database) {
+  ///   print("\(reminders.count) reminders")
+  /// }
+  /// ```
   public typealias OrbitDatabase = InterprocessDatabase<SQLitePoolDriver>
 #endif

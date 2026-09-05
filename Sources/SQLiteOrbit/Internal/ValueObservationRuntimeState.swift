@@ -37,19 +37,11 @@ struct ValueObservationReadRequest: Sendable {
 /// invalidation and finished after it is stale: its value is dropped and the read is reissued.
 /// That costs a redundant fetch but never publishes a value older than a commit already seen.
 struct ValueObservationReadCoordinator: Sendable {
-  private(set) var didStart = false
   private(set) var initialFetchCompleted = false
   private var revision: UInt64 = 0
   private var readIsRequired = false
   private var readIsInFlight = false
   private var requiredSource = ValueObservationSource.initial
-
-  /// Marks the observation as started, reporting whether this call is what started it.
-  mutating func takeDidStart() -> Bool {
-    guard !self.didStart else { return false }
-    self.didStart = true
-    return true
-  }
 
   /// Records that a fetch has resolved the observation's first value.
   mutating func completeInitialFetch() {
@@ -111,31 +103,40 @@ struct ValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
   /// A subscriber's place in the registry, or the error that ended the observation before it
   /// arrived.
   typealias Registration = Result<
-    (identifier: UInt64, latest: ValueObservationChange<Value>?), any Error
+    (
+      identifier: UInt64,
+      latest: ValueObservationChange<Value>?,
+      isFirstEver: Bool
+    ), any Error
   >
 
-  private var nextIdentifier: UInt64 = 0
-  private var subscribers = [UInt64: ValueObservationSubscriber<Value>]()
+  private var subscribers = IdentifiedRegistry<ValueObservationSubscriber<Value>>()
+  private var didStart = false
   private var latest: ValueObservationChange<Value>?
 
   /// The error that ended the observation, once one has.
   private(set) var terminalError: (any Error)?
 
-  /// Adds `subscriber` unless the observation has already failed, reporting the value it is owed.
+  /// Adds `subscriber` unless the observation has already failed, reporting the value it is owed
+  /// and whether it is the subscriber that started the observation.
   mutating func add(_ subscriber: ValueObservationSubscriber<Value>) -> Registration {
     if let terminalError = self.terminalError { return .failure(terminalError) }
-    let identifier = self.nextIdentifier
-    self.nextIdentifier &+= 1
-    self.subscribers[identifier] = subscriber
-    return .success((identifier: identifier, latest: self.latest))
+    let isFirstEver = !self.didStart
+    self.didStart = true
+    return .success(
+      (
+        identifier: self.subscribers.insert(subscriber),
+        latest: self.latest,
+        isFirstEver: isFirstEver
+      )
+    )
   }
 
   /// Removes the subscriber under `identifier`, reporting whether that emptied the registry.
   ///
   /// A repeated removal reports `false`, so a subscription cancelled twice is one departure.
   mutating func remove(_ identifier: UInt64) -> Bool {
-    guard self.subscribers.removeValue(forKey: identifier) != nil else { return false }
-    return self.subscribers.isEmpty
+    self.subscribers.remove(identifier) && self.subscribers.isEmpty
   }
 
   /// Records `change` as the value a late subscriber is caught up with, and returns the
@@ -147,7 +148,7 @@ struct ValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     _ change: ValueObservationChange<Value>
   ) -> [ValueObservationSubscriber<Value>] {
     self.latest = change
-    return Array(self.subscribers.values)
+    return self.subscribers.all
   }
 
   /// Ends the registry with `error` and returns the subscribers owed it.
@@ -155,9 +156,7 @@ struct ValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
   /// A subscriber offered afterwards is refused with the same error rather than added.
   mutating func fail(_ error: any Error) -> [ValueObservationSubscriber<Value>] {
     self.terminalError = error
-    let owed = Array(self.subscribers.values)
-    self.subscribers.removeAll()
-    return owed
+    return self.subscribers.removeAll()
   }
 }
 

@@ -79,6 +79,7 @@ struct ValueObservationSchedulerTests {
   @Test
   func mainActorSchedulerIsImmediateOnlyWhenAlreadyIsolated() {
     let scheduler = MainActorValueObservationScheduler.mainActor
+    requireMainActorScheduler(scheduler)
 
     let hasImmediateInitialValue = scheduler.immediateInitialValue(from: MainActor.shared)
     #expect(hasImmediateInitialValue)
@@ -92,30 +93,7 @@ struct ValueObservationSchedulerTests {
     #expect(!hasImmediateInitialValue)
   }
 
-  @MainActor
-  @Test
-  func asyncMainActorSchedulerIsImmediateWhenAlreadyIsolated() {
-    let scheduler: MainActorValueObservationScheduler = .async(on: MainActor.shared)
-    requireMainActorScheduler(.async(on: MainActor.shared))
-
-    let hasImmediateInitialValue = scheduler.immediateInitialValue(from: MainActor.shared)
-    #expect(hasImmediateInitialValue)
-  }
-
   private func requireMainActorScheduler<Scheduler: ValueObservationMainActorScheduler>(
     _ scheduler: Scheduler
   ) {}
-
-  private func waitUntil(
-    _ predicate: @escaping @Sendable () -> Bool
-  ) async throws {
-    struct Timeout: Error {}
-
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: .seconds(2))
-    while !predicate() {
-      guard clock.now < deadline else { throw Timeout() }
-      try await Task.sleep(for: .milliseconds(2))
-    }
-  }
 }
