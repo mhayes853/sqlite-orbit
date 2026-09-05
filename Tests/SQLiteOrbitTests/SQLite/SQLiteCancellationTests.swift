@@ -46,7 +46,7 @@
   }
 
   /// Starts a query that will not finish on its own, so a test decides when it ends.
-  private func endlessRead(on driver: SQLiteQueueDriver) -> Task<[Int], any Error> {
+  private func endlessRead(on driver: SQLiteQueue) -> Task<[Int], any Error> {
     Task {
       try await driver.read { transaction in
         try transaction.fetchAll(
@@ -70,7 +70,7 @@
     let interrupts = CallCounter()
     var configuration = SQLiteConfiguration.default
     configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     // This access is inside `sqlite3_step` and is never cancelled.
     let running = endlessRead(on: driver)
@@ -116,7 +116,7 @@
     let interrupts = CallCounter()
     var configuration = SQLiteConfiguration.default
     configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     let running = endlessRead(on: driver)
     await steps.wait(untilAtLeast: 1)
@@ -140,7 +140,7 @@
 
   @Test
   func cancellingBeforeAnAccessStartsRunsNoQuery() async throws {
-    let driver = try SQLiteQueueDriver(path: ":memory:")
+    let driver = try SQLiteQueue(path: ":memory:")
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -243,7 +243,7 @@
 
     var configuration = SQLiteConfiguration.default
     configuration.library = library
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
     let first = Task {
       try await driver.read { transaction in
         try transaction.fetchAll(
@@ -296,7 +296,7 @@
 
   @Test
   func accessesOnOneConnectionNeverOverlap() async throws {
-    let driver = try SQLiteQueueDriver(path: ":memory:")
+    let driver = try SQLiteQueue(path: ":memory:")
     let overlap = OverlapTracker()
 
     try await withThrowingTaskGroup(of: Void.self) { group in

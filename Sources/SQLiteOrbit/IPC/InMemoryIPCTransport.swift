@@ -3,15 +3,15 @@ import Synchronization
 /// A database IPC transport that delivers messages in-process, for testing and mocking.
 ///
 /// Transports constructed against the same ``Network`` are peers, the way two
-/// ``UnixDatagramDatabaseIPCTransport``s pointed at the same coordination directory are peers:
+/// ``UnixDatagramIPCTransport``s pointed at the same coordination directory are peers:
 /// each discovers the others' subscriptions and a broadcast reaches every peer but the sender.
 /// Delivery calls a peer's handlers directly instead of going through any OS resource, so peers can
 /// live in the same process and a test needs no filesystem or socket cleanup.
 ///
 /// ```swift
 /// let network = InMemoryIPCTransport.Network()
-/// let database = InterprocessDatabase(
-///   writer: try SQLiteQueueDriver(path: .memory),
+/// let database = OrbitDatabase(
+///   writer: try SQLiteQueue(path: .memory),
 ///   id: DatabaseIdentifier(rawValue: "reminders"),
 ///   transport: InMemoryIPCTransport(network: network)
 /// )

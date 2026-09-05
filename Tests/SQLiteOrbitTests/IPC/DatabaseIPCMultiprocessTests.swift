@@ -115,7 +115,7 @@
     let ready = URL(fileURLWithPath: try value(IPCProcessEnvironment.ready))
     let result = URL(fileURLWithPath: try value(IPCProcessEnvironment.result))
     let expected = try #require(Int(try value(IPCProcessEnvironment.expected)))
-    let transport = try UnixDatagramDatabaseIPCTransport(
+    let transport = try UnixDatagramIPCTransport(
       configuration: .init(
         directory: directory,
         backPressure: .suspend(upTo: .seconds(5))
@@ -162,10 +162,10 @@
     }
 
     func transport(
-      _ backPressure: UnixDatagramDatabaseIPCTransport.BackPressurePolicy,
+      _ backPressure: UnixDatagramIPCTransport.BackPressurePolicy,
       receiveBufferByteCount: Int = 256 * 1024
-    ) throws -> UnixDatagramDatabaseIPCTransport {
-      try UnixDatagramDatabaseIPCTransport(
+    ) throws -> UnixDatagramIPCTransport {
+      try UnixDatagramIPCTransport(
         configuration: .init(
           directory: self.directory,
           backPressure: backPressure,
@@ -230,7 +230,7 @@
   }
 
   private func reachesBackPressure(
-    _ transport: UnixDatagramDatabaseIPCTransport,
+    _ transport: UnixDatagramIPCTransport,
     message: DatabaseIPCMessage
   ) async throws -> Bool {
     for _ in 0..<10_000 {

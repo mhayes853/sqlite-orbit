@@ -6,7 +6,7 @@
   import Testing
 
   @Suite(.serialized)
-  struct InterprocessDatabaseMultiprocessTests {
+  struct OrbitDatabaseMultiprocessTests {
     @Test
     func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
       let harness = try DatabaseProcessHarness(name: "open")
@@ -135,7 +135,7 @@
 
     @Test
     func writeIsDeliveredToARealSubscriberInAnotherProcess() async throws {
-      // Nothing subscribes through InterprocessDatabase itself yet, but the transport it announces
+      // Nothing subscribes through OrbitDatabase itself yet, but the transport it announces
       // through is real, so a peer that subscribes to it directly must still see the commit.
       let harness = try DatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
@@ -175,13 +175,13 @@
     }
   }
 
-  /// Runs one peer process of a ``InterprocessDatabaseMultiprocessTests`` case.
+  /// Runs one peer process of a ``OrbitDatabaseMultiprocessTests`` case.
   @Test
-  func interprocessDatabasePeer() async throws {
+  func orbitDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard let mode = environment[DatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
-    let coordination = UnixDatagramDatabaseIPCTransport.Configuration(
+    let coordination = UnixDatagramIPCTransport.Configuration(
       directory: URL(fileURLWithPath: try value(DatabaseProcessEnvironment.directory)),
       backPressure: .fail
     )
@@ -233,7 +233,7 @@
       // `shared` caches transports weakly, so the transport itself, not just the subscription,
       // must be kept alive for as long as the subscription should stay registered.
       let identifier = DatabaseIdentifier.forDatabase(path: DatabasePath(path))
-      let transport = try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination)
+      let transport = try UnixDatagramIPCTransport.shared(configuration: coordination)
       let receivedCount = Mutex(0)
       let subscription = try transport.subscribe(to: identifier) { _ in
         receivedCount.withLock { $0 += 1 }
@@ -265,8 +265,8 @@
 
     let databasePath: String
 
-    var coordination: UnixDatagramDatabaseIPCTransport.Configuration {
-      UnixDatagramDatabaseIPCTransport.Configuration(
+    var coordination: UnixDatagramIPCTransport.Configuration {
+      UnixDatagramIPCTransport.Configuration(
         directory: self.harness.directory,
         backPressure: .fail
       )
@@ -274,7 +274,7 @@
 
     init(name: String) throws {
       self.harness = try ProcessTestHarness(
-        helper: "interprocessDatabasePeer",
+        helper: "orbitDatabasePeer",
         environmentPrefix: DatabaseProcessEnvironment.prefix,
         name: name
       )
@@ -285,7 +285,7 @@
 
     func database(
       configuration: SQLiteConfiguration = .default
-    ) throws -> OrbitDatabase {
+    ) throws -> OrbitDatabase<SQLitePool> {
       try OrbitDatabase(
         path: DatabasePath(self.databasePath),
         configuration: configuration,

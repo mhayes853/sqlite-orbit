@@ -4,7 +4,9 @@
 /// react to each other's work. When its writer is observable, it also combines the writer's local
 /// transaction events with committed writes announced by its peers.
 ///
-/// Use ``OrbitDatabase`` unless you are supplying your own writer or transport.
+/// Opening one by path alone gives an `OrbitDatabase<SQLitePool>` reaching its peers over the
+/// package's own transport, which is what all but a caller supplying their own writer or transport
+/// wants.
 ///
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
@@ -14,7 +16,7 @@
 ///   try Reminder.insert { Reminder.Draft(title: "Buy milk") }.execute(transaction)
 /// }
 /// ```
-public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
+public final class OrbitDatabase<Writer: SQLiteDatabaseWriter>:
   Identifiable,
   SQLiteDatabaseWriter,
   Sendable
@@ -43,8 +45,8 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
   ///     write has already committed by then, so the failure is never surfaced to its caller.
   ///
   /// ```swift
-  /// let database = InterprocessDatabase(
-  ///   writer: try SQLiteQueueDriver(path: .memory),
+  /// let database = OrbitDatabase(
+  ///   writer: try SQLiteQueue(path: .memory),
   ///   id: DatabaseIdentifier(rawValue: "reminders"),
   ///   transport: InMemoryIPCTransport(network: network)
   /// )
@@ -142,7 +144,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
 
   private func reportLocalCommit() {
     guard let observableWriter = writer as? any SQLiteObservableDatabase else { return }
-    InterprocessDatabaseObservationHub.shared.didCommit(
+    OrbitDatabaseObservationHub.shared.didCommit(
       databaseIdentifier: id,
       writerIdentifier: ObjectIdentifier(observableWriter)
     )
@@ -168,7 +170,7 @@ public final class InterprocessDatabase<Writer: SQLiteDatabaseWriter>:
   }
 }
 
-extension InterprocessDatabase: SQLiteObservableDatabase where Writer: SQLiteObservableDatabase {
+extension OrbitDatabase: SQLiteObservableDatabase where Writer: SQLiteObservableDatabase {
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///
@@ -188,7 +190,7 @@ extension InterprocessDatabase: SQLiteObservableDatabase where Writer: SQLiteObs
     transactionObserver: any DatabaseTransactionObserver
   ) throws -> OrbitSubscription {
     let local = try writer.subscribe(transactionObserver: transactionObserver)
-    let sameProcess = InterprocessDatabaseObservationHub.shared.subscribe(
+    let sameProcess = OrbitDatabaseObservationHub.shared.subscribe(
       to: id,
       writerIdentifier: ObjectIdentifier(writer)
     ) {
@@ -222,8 +224,8 @@ extension InterprocessDatabase: SQLiteObservableDatabase where Writer: SQLiteObs
 /// Delivers commits between distinct handles in this process. The IPC transport excludes its own
 /// endpoint, and two wrappers around the same writer already share that writer's observer registry,
 /// so registrations are keyed by both database and writer identity.
-private final class InterprocessDatabaseObservationHub: Sendable {
-  static let shared = InterprocessDatabaseObservationHub()
+private final class OrbitDatabaseObservationHub: Sendable {
+  static let shared = OrbitDatabaseObservationHub()
 
   private struct Registration: Sendable {
     let writerIdentifier: ObjectIdentifier

@@ -7,8 +7,8 @@ import Foundation
 /// ``unique()`` deliberately does not.
 ///
 /// ```swift
-/// let database = InterprocessDatabase(
-///   writer: try SQLiteQueueDriver(path: ":memory:"),
+/// let database = OrbitDatabase(
+///   writer: try SQLiteQueue(path: ":memory:"),
 ///   id: DatabaseIdentifier(rawValue: "reminders")
 /// )
 /// ```

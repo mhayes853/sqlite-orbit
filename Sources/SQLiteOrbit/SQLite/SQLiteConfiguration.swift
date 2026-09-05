@@ -8,7 +8,7 @@
 /// configuration.readerCount = 8
 /// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
 /// configuration.register(function: $repeated)
-/// let driver = try SQLitePoolDriver(path: .file(url), configuration: configuration)
+/// let driver = try SQLitePool(path: .file(url), configuration: configuration)
 /// ```
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
@@ -97,7 +97,7 @@ public struct SQLiteConfiguration: Sendable {
 /// var configuration = SQLiteConfiguration(library: myCustomBuild)
 /// configuration.register(function: $repeated)
 /// // Throws `SQLiteTypedCallbacksUnavailableError` when the connection is opened.
-/// _ = try? SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+/// _ = try? SQLiteQueue(path: ":memory:", configuration: configuration)
 /// ```
 public struct SQLiteTypedCallbacksUnavailableError: Error, CustomStringConvertible, Sendable {
   /// Creates the error.

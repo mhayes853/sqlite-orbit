@@ -4,12 +4,12 @@
 /// by suspending ``send(_:)`` or throwing; they must not silently add messages to an unbounded
 /// user-space queue. A send may reach some peers before throwing.
 ///
-/// ``UnixDatagramDatabaseIPCTransport`` is the production implementation and
+/// ``UnixDatagramIPCTransport`` is the production implementation and
 /// ``InMemoryIPCTransport`` is its in-process stand-in; conform your own type to reach peers over
 /// some other medium.
 ///
 /// ```swift
-/// let transport = try UnixDatagramDatabaseIPCTransport.shared()
+/// let transport = try UnixDatagramIPCTransport.shared()
 /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
 /// ```
 public protocol DatabaseIPCTransport: Sendable {

@@ -63,11 +63,11 @@ let reminders = try await database.read { transaction in
 
 Two drivers back it:
 
-- `SQLitePoolDriver` runs the database in WAL mode with one writer and a fixed set of readers.
+- `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
   queued behind it, so a read issued after a write observes it. Waiting suspends rather than blocking
   a thread.
-- `SQLiteQueueDriver` serializes every access through a single connection. This is the driver for a
+- `SQLiteQueue` serializes every access through a single connection. This is the driver for a
   `DatabasePath.memory` or `.temporary` database, which is private to the connection that opened it
   and so cannot be pooled at all.
 
@@ -84,7 +84,7 @@ let scratch = DatabasePath.temporary        // ""
 ```
 
 A file path resolves to an absolute path, so the same database is the same `DatabasePath` however
-it was spelled. String literals convert, so `try SQLiteQueueDriver(path: ":memory:")` still reads
+it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
 the way it always did.
 
 ## Using your own SQLite build
@@ -264,14 +264,14 @@ These typed registration helpers are available with `SystemSQLite`, because thei
 callbacks must use the same SQLite ABI as the connection. With a fully caller-supplied SQLite
 build, register callbacks through that build's API using the transaction's raw connection instead.
 
-`InterprocessDatabase` is `Identifiable`. Its native writer supplies the default database
+`OrbitDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
 ## Observation
 
-`SQLiteQueueDriver`, `SQLitePoolDriver`, and `InterprocessDatabase` are observable databases. A
+`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A
 value observation fetches an initial value, then fetches again after every committed write:
 
 ```swift
@@ -421,7 +421,7 @@ The package includes a public, configurable Unix-domain datagram transport. Proc
 communicate must use the same coordination directory and database identifier:
 
 ```swift
-let transport = try UnixDatagramDatabaseIPCTransport(
+let transport = try UnixDatagramIPCTransport(
   configuration: .init(
     directory: coordinationDirectory,
     backPressure: .suspend(upTo: .milliseconds(250))
@@ -469,7 +469,7 @@ the library can add coordination messages in future versions.
 let database = try OrbitDatabase(path: databasePath)
 ```
 
-The database is opened by `SQLitePoolDriver`, so it runs in WAL mode with concurrent readers and a
+The database is opened by `SQLitePool`, so it runs in WAL mode with concurrent readers and a
 single writer, and every connection gets a busy timeout. Without one, a write that overlaps another
 process's write fails outright rather than waiting its turn.
 
@@ -492,7 +492,7 @@ let database = try OrbitDatabase(
 ```
 
 A database private to its connection cannot be shared between processes, or pooled, so
-`SQLitePoolDriver` rejects one; use `SQLiteQueueDriver` for those.
+`SQLitePool` rejects one; use `SQLiteQueue` for those.
 
 Constructing a driver yourself remains available for a database you configure and open on your own.
 That cannot coordinate opening, so pass a transport explicitly if the database is also opened
@@ -518,5 +518,5 @@ Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise 
 writing task's cancellation, since peers still need to learn about a commit that happened. A write
 that throws is rolled back by its driver and is not announced.
 
-An observed `InterprocessDatabase` also subscribes to its peers. Incoming announcements are exposed
+An observed `OrbitDatabase` also subscribes to its peers. Incoming announcements are exposed
 as external transaction events and cause active value observations to refetch.

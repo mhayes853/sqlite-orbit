@@ -97,13 +97,13 @@
   func sharedReturnsTheSameTransportForRepeatedCallsWithTheSameConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let configuration = UnixDatagramDatabaseIPCTransport.Configuration(
+    let configuration = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .fail
     )
 
-    let first = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
-    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
+    let first = try UnixDatagramIPCTransport.shared(configuration: configuration)
+    let second = try UnixDatagramIPCTransport.shared(configuration: configuration)
 
     #expect(first === second)
   }
@@ -112,17 +112,17 @@
   func sharedReturnsDifferentTransportsForDifferentConfigurations() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let fail = UnixDatagramDatabaseIPCTransport.Configuration(
+    let fail = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .fail
     )
-    let suspend = UnixDatagramDatabaseIPCTransport.Configuration(
+    let suspend = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .suspend(upTo: .milliseconds(1))
     )
 
-    let first = try UnixDatagramDatabaseIPCTransport.shared(configuration: fail)
-    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: suspend)
+    let first = try UnixDatagramIPCTransport.shared(configuration: fail)
+    let second = try UnixDatagramIPCTransport.shared(configuration: suspend)
 
     #expect(first !== second)
   }
@@ -138,14 +138,14 @@
     // this compares the endpoint a fresh subscription registers under before and after release.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let configuration = UnixDatagramDatabaseIPCTransport.Configuration(
+    let configuration = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .fail
     )
     let registry = try DatabaseIPCEndpointRegistry(directory: directory, endpointName: "observer")
     let database = DatabaseIdentifier(rawValue: "shared-lifetime")
 
-    var first: UnixDatagramDatabaseIPCTransport? = try .shared(configuration: configuration)
+    var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
     var subscription: OrbitSubscription? = try first?.subscribe(to: database) { _ in }
     let firstEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
       .endpointName
@@ -153,7 +153,7 @@
     subscription = nil
     first = nil
 
-    let second = try UnixDatagramDatabaseIPCTransport.shared(configuration: configuration)
+    let second = try UnixDatagramIPCTransport.shared(configuration: configuration)
     let secondSubscription = try second.subscribe(to: database) { _ in }
     let secondEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
       .endpointName
@@ -168,7 +168,7 @@
     defer { remove(directory) }
     for (maximum, receiveBuffer) in [(0, 256 * 1024), (1024, 512)] {
       #expect(throws: (any Error).self) {
-        try UnixDatagramDatabaseIPCTransport(
+        try UnixDatagramIPCTransport(
           configuration: .init(
             directory: directory,
             backPressure: .fail,
@@ -187,7 +187,7 @@
     return url
   }
 
-  private func ipcTransport(_ directory: URL) throws -> UnixDatagramDatabaseIPCTransport {
+  private func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
     try .init(configuration: .init(directory: directory, backPressure: .fail))
   }
 

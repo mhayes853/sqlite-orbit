@@ -24,7 +24,7 @@
   @Test
   func blockingAccessOnThePoolReadsItsOwnWrite() async throws {
     let database = BlockingTestDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await driver.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
 
     try driver.writeBlocking { try $0.execute("INSERT INTO counter (n) VALUES (41)") }
@@ -38,7 +38,7 @@
   @Test
   func blockingAndAsynchronousWritersShareOneLine() async throws {
     let database = BlockingTestDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await driver.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
     try await driver.write { try $0.execute("INSERT INTO counter (n) VALUES (0)") }
 
@@ -79,7 +79,7 @@
   @Test
   func aBlockingReadIssuedAfterAnAsynchronousWriteObservesIt() async throws {
     let database = BlockingTestDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await driver.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
     for round in 1...50 {
       try await driver.write {
@@ -94,7 +94,7 @@
 
   @Test
   func theQueueDriverAlsoBlocks() async throws {
-    let driver = try SQLiteQueueDriver(path: .memory)
+    let driver = try SQLiteQueue(path: .memory)
     try await driver.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
     try driver.writeBlocking { try $0.execute("INSERT INTO counter (n) VALUES (7)") }
     let n: Int? = try driver.readBlocking { transaction in
@@ -109,7 +109,7 @@
   @Test func aBlockingReadNestedInsideABlockingWriteIsReported() async throws {
     await #expect(processExitsWith: .failure) {
       let database = BlockingTestDatabase()
-      let driver = try SQLitePoolDriver(path: database.path)
+      let driver = try SQLitePool(path: database.path)
       try driver.writeBlocking { _ in
         _ = try driver.readBlocking { _ in 1 }
       }
@@ -118,7 +118,7 @@
 
   @Test func aBlockingAccessNestedOnOneConnectionIsReported() async throws {
     await #expect(processExitsWith: .failure) {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.readBlocking { _ in
         _ = try driver.readBlocking { _ in 1 }
       }
@@ -129,8 +129,8 @@
   @Test func aBlockingAccessOnAnotherDatabaseIsNotReentrancy() async throws {
     let first = BlockingTestDatabase()
     let second = BlockingTestDatabase()
-    let a = try SQLitePoolDriver(path: first.path)
-    let b = try SQLitePoolDriver(path: second.path)
+    let a = try SQLitePool(path: first.path)
+    let b = try SQLitePool(path: second.path)
     try await a.write { try $0.execute("CREATE TABLE t (n INTEGER NOT NULL)") }
     try await b.write { try $0.execute("CREATE TABLE t (n INTEGER NOT NULL)") }
 
@@ -144,7 +144,7 @@
   /// A blocking writer releases its reentrancy marker, so the same thread may write again.
   @Test func aThreadMayTakeAnotherBlockingAccessAfterItsFirstOneEnds() async throws {
     let database = BlockingTestDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try driver.writeBlocking { try $0.execute("CREATE TABLE t (n INTEGER NOT NULL)") }
     for _ in 0..<10 {
       try driver.writeBlocking { try $0.execute("INSERT INTO t (n) VALUES (1)") }

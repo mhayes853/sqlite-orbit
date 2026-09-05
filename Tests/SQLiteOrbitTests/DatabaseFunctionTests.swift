@@ -76,7 +76,7 @@
     }
   }
 
-  private func seededNotes() async throws -> InterprocessDatabase<SQLiteQueueDriver> {
+  private func seededNotes() async throws -> OrbitDatabase<SQLiteQueue> {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
     configuration.register(function: $longestTitle)
@@ -85,8 +85,8 @@
     configuration.register(function: FailingFunction())
     configuration.register(function: VariadicSumFunction())
     configuration.register(function: FailingTotalFunction())
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let database = OrbitDatabase(
+      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
     )
     try await database.write { transaction in
       try transaction.execute(
@@ -240,8 +240,8 @@
   func aggregatesSpanManyRowsAndManyGroups() async throws {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $longestTitle)
-    let database = InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let database = OrbitDatabase(
+      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
     )
 
     try await database.write { transaction in
@@ -378,7 +378,7 @@
     configuration.library.supportsTypedCallbacks = false
 
     #expect(throws: SQLiteTypedCallbacksUnavailableError.self) {
-      _ = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+      _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
     }
   }
 
@@ -390,7 +390,7 @@
       "CREATE TABLE configured (value TEXT NOT NULL)",
       "INSERT INTO configured VALUES (repeated('ab', 2))"
     ]
-    let driver = try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     let values = try await driver.read { transaction in
       try transaction.fetchAll(#sql("SELECT value FROM configured", as: String.self))

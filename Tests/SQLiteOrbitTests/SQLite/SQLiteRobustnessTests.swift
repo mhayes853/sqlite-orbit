@@ -273,7 +273,7 @@
     }
 
     do {
-      let driver = try SQLitePoolDriver(path: DatabasePath(path), configuration: configuration)
+      let driver = try SQLitePool(path: DatabasePath(path), configuration: configuration)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -299,7 +299,7 @@
     }
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 2
-    let driver = try SQLitePoolDriver(path: DatabasePath(path), configuration: configuration)
+    let driver = try SQLitePool(path: DatabasePath(path), configuration: configuration)
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -347,7 +347,7 @@
         try? FileManager.default.removeItem(atPath: path + suffix)
       }
     }
-    let driver = try SQLitePoolDriver(path: DatabasePath(path))
+    let driver = try SQLitePool(path: DatabasePath(path))
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -390,8 +390,8 @@
     }
 
     // Two drivers on one file stand in for two processes sharing a database.
-    let writer = try SQLitePoolDriver(path: DatabasePath(path))
-    let reader = try SQLitePoolDriver(path: DatabasePath(path))
+    let writer = try SQLitePool(path: DatabasePath(path))
+    let reader = try SQLitePool(path: DatabasePath(path))
     try await writer.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -417,8 +417,8 @@
       }
     }
 
-    let first = try SQLitePoolDriver(path: DatabasePath(path))
-    let second = try SQLitePoolDriver(path: DatabasePath(path))
+    let first = try SQLitePool(path: DatabasePath(path))
+    let second = try SQLitePool(path: DatabasePath(path))
     try await first.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }

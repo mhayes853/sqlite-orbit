@@ -10,9 +10,9 @@
   /// The in-memory, single-connection database most tests here want.
   func inMemoryDatabase(
     configuration: SQLiteConfiguration = .default
-  ) throws -> InterprocessDatabase<SQLiteQueueDriver> {
-    InterprocessDatabase(
-      writer: try SQLiteQueueDriver(path: ":memory:", configuration: configuration)
+  ) throws -> OrbitDatabase<SQLiteQueue> {
+    OrbitDatabase(
+      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
     )
   }
 
@@ -23,7 +23,7 @@
   func withPooledDatabase<Result>(
     configuration: SQLiteConfiguration,
     maximumReaderCount: Int = 4,
-    _ body: (OrbitDatabase) async throws -> Result
+    _ body: (OrbitDatabase<SQLitePool>) async throws -> Result
   ) async throws -> Result {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("sqlite-orbit-\(UUID().uuidString)", isDirectory: true)
@@ -32,17 +32,17 @@
 
     var configuration = configuration
     configuration.readerCount = maximumReaderCount
-    let pool = try SQLitePoolDriver(
+    let pool = try SQLitePool(
       path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration
     )
-    return try await body(InterprocessDatabase(writer: pool))
+    return try await body(OrbitDatabase(writer: pool))
   }
 
   /// Runs `body` on `count` concurrent reads and returns their results.
   func concurrentReads<Result: Sendable>(
     _ count: Int,
-    of database: OrbitDatabase,
+    of database: OrbitDatabase<SQLitePool>,
     _ body: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
   ) async throws -> [Result] {
     try await withThrowingTaskGroup(of: Result.self) { group in

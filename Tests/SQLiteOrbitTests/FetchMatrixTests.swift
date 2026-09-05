@@ -2,7 +2,7 @@
   import SQLiteOrbit
   import Testing
 
-  private func seededDatabase() async throws -> InterprocessDatabase<SQLiteQueueDriver> {
+  private func seededDatabase() async throws -> OrbitDatabase<SQLiteQueue> {
     let database = try inMemoryDatabase()
     try await database.write { transaction in
       try transaction.execute(

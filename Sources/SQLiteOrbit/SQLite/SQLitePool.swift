@@ -2,12 +2,12 @@ import Foundation
 
 /// Reported when a database cannot be pooled.
 ///
-/// Thrown by ``SQLitePoolDriver/init(path:configuration:identifier:coordinationDirectory:)`` for a
+/// Thrown by ``SQLitePool/init(path:configuration:identifier:coordinationDirectory:)`` for a
 /// database that is private to the connection that opens it.
 ///
 /// ```swift
 /// do {
-///   _ = try SQLitePoolDriver(path: .memory)
+///   _ = try SQLitePool(path: .memory)
 /// } catch let error as SQLitePoolUnavailableError {
 ///   print(error.path)
 /// }
@@ -20,7 +20,7 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
   public var description: String {
     """
     A database private to the connection that opened it cannot be pooled: a pool's readers would \
-    each see a different, empty database. Use SQLiteQueueDriver for "\(path)".
+    each see a different, empty database. Use SQLiteQueue for "\(path)".
     """
   }
 }
@@ -33,13 +33,13 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// that other processes' readers are never blocked by this one's writer.
 ///
 /// ```swift
-/// let driver = try SQLitePoolDriver(path: .file(url))
+/// let driver = try SQLitePool(path: .file(url))
 /// try await driver.write { transaction in
 ///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
 /// }
 /// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
 /// ```
-public final class SQLitePoolDriver: SQLiteObservableDatabase {
+public final class SQLitePool: SQLiteObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: DatabaseIdentifier
 
@@ -117,7 +117,7 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
     #if canImport(Darwin) || canImport(Glibc)
       return try DatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
-        directory: directory ?? UnixDatagramDatabaseIPCTransport.Configuration.defaultDirectory,
+        directory: directory ?? UnixDatagramIPCTransport.Configuration.defaultDirectory,
         body
       )
     #else
@@ -203,11 +203,11 @@ public final class SQLitePoolDriver: SQLiteObservableDatabase {
 }
 
 #if SystemSQLite
-  extension SQLitePoolDriver {
+  extension SQLitePool {
     /// Opens a pooled database using the SQLite this package was linked against.
     ///
     /// ```swift
-    /// let driver = try SQLitePoolDriver(path: .file(url))
+    /// let driver = try SQLitePool(path: .file(url))
     /// ```
     ///
     /// - Parameters:

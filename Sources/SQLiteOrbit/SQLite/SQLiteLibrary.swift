@@ -1,3 +1,7 @@
+#if SystemSQLite
+  import CSQLite3
+#endif
+
 /// The destructor SQLite calls to release a value or context it was handed.
 ///
 /// ```swift
@@ -37,16 +41,28 @@ extension SQLiteLibrary {
 ///   preparedSteps.withLock { $0 += 1 }
 ///   return SQLiteLibrary.system.step(statement)
 /// }
-/// let driver = try SQLiteQueueDriver(
+/// let driver = try SQLiteQueue(
 ///   path: ":memory:",
 ///   configuration: SQLiteConfiguration(library: library)
 /// )
 /// ```
 public struct SQLiteLibrary: Sendable {
 
-  /// Whether Swift callback registration can use the linked SQLite callback ABI with connections
-  /// opened through this table. Preserved when individual entry points are interposed.
-  var supportsTypedCallbacks = false
+  /// Whether this table's connections may be handed the static C callbacks that
+  /// ``SQLiteConfiguration/register(function:)-(some ScalarDatabaseFunction & Sendable)`` and its
+  /// siblings install.
+  ///
+  /// Those callbacks read values, results, and contexts through the SQLite this package was linked
+  /// against rather than through this table, so handing one a value belonging to another build
+  /// would read one SQLite's memory with another's layout. ``system`` is the only table this
+  /// package can vouch for, so it is the only one that sets this; every other table refuses typed
+  /// registration with ``SQLiteTypedCallbacksUnavailableError``. Interposing individual entry
+  /// points preserves the flag, because an interposed `system` is still the linked SQLite.
+  ///
+  /// Set this only for a table whose `sqlite3_*` functions come from the very build this package
+  /// linked against — a differently named export of the same library, for instance. Setting it for
+  /// a genuinely separate build is undefined behavior.
+  public var supportsTypedCallbacks = false
 
   // MARK: - Connections
 
@@ -264,3 +280,53 @@ public struct SQLiteLibrary: Sendable {
     self.create_function_v2 = create_function_v2
   }
 }
+
+#if SystemSQLite
+  extension SQLiteLibrary {
+    /// The SQLite that this package was linked against.
+    ///
+    /// This is the default for every driver. Supplying a different value is how a caller runs
+    /// against their own SQLite build without forking the package; this declaration doubles as the
+    /// template for writing one.
+    public static let system: Self = {
+      var library = Self(
+        open_v2: sqlite3_open_v2,
+        close_v2: sqlite3_close_v2,
+        errmsg: sqlite3_errmsg,
+        extended_errcode: sqlite3_extended_errcode,
+        extended_result_codes: sqlite3_extended_result_codes,
+        busy_timeout: sqlite3_busy_timeout,
+        interrupt: sqlite3_interrupt,
+        changes: sqlite3_changes,
+        last_insert_rowid: sqlite3_last_insert_rowid,
+        get_autocommit: sqlite3_get_autocommit,
+        threadsafe: sqlite3_threadsafe,
+        libversion_number: sqlite3_libversion_number,
+        prepare_v3: sqlite3_prepare_v3,
+        step: sqlite3_step,
+        reset: sqlite3_reset,
+        finalize: sqlite3_finalize,
+        clear_bindings: sqlite3_clear_bindings,
+        stmt_readonly: sqlite3_stmt_readonly,
+        sql: sqlite3_sql,
+        bind_parameter_count: sqlite3_bind_parameter_count,
+        bind_null: sqlite3_bind_null,
+        bind_int64: sqlite3_bind_int64,
+        bind_double: sqlite3_bind_double,
+        bind_text: { sqlite3_bind_text($0, $1, $2, $3, Self.transientDestructor) },
+        bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, Self.transientDestructor) },
+        column_count: sqlite3_column_count,
+        column_type: sqlite3_column_type,
+        column_int64: sqlite3_column_int64,
+        column_double: sqlite3_column_double,
+        column_text: sqlite3_column_text,
+        column_blob: sqlite3_column_blob,
+        column_bytes: sqlite3_column_bytes,
+        column_name: sqlite3_column_name,
+        create_function_v2: sqlite3_create_function_v2
+      )
+      library.supportsTypedCallbacks = true
+      return library
+    }()
+  }
+#endif

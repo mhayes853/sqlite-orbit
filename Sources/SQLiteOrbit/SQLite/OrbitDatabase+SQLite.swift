@@ -1,11 +1,11 @@
 #if SystemSQLite && (canImport(Darwin) || canImport(Glibc))
   import Foundation
 
-  extension InterprocessDatabase where Writer == SQLitePoolDriver {
+  extension OrbitDatabase where Writer == SQLitePool {
     /// Opens the SQLite database at `path` for access from any process using the same coordination
     /// directory.
     ///
-    /// The database is opened by ``SQLitePoolDriver``, so it runs in WAL mode with concurrent
+    /// The database is opened by ``SQLitePool``, so it runs in WAL mode with concurrent
     /// readers and a single writer, and every connection gets a busy timeout — without one, a write
     /// that overlaps another process's write fails outright rather than waiting its turn.
     ///
@@ -35,39 +35,21 @@
       path: DatabasePath,
       configuration: SQLiteConfiguration = .default,
       id: DatabaseIdentifier? = nil,
-      coordination: UnixDatagramDatabaseIPCTransport.Configuration = .default,
+      coordination: UnixDatagramIPCTransport.Configuration = .default,
       onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
     ) throws {
       let identifier = id ?? .forDatabase(path: path)
       self.init(
-        writer: try SQLitePoolDriver(
+        writer: try SQLitePool(
           path: path,
           configuration: configuration,
           identifier: identifier,
           coordinationDirectory: coordination.directory
         ),
         id: identifier,
-        transport: try UnixDatagramDatabaseIPCTransport.shared(configuration: coordination),
+        transport: try UnixDatagramIPCTransport.shared(configuration: coordination),
         onAnnouncementFailure: onAnnouncementFailure
       )
     }
   }
-
-  /// A cross-process database backed by the package's own SQLite driver.
-  ///
-  /// This is the default: it needs no third-party dependency, and it is the one that can be pointed
-  /// at a SQLite build of your choosing.
-  ///
-  /// This spelling names both the cross-process coordination layer and its native pooled storage.
-  ///
-  /// ```swift
-  /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
-  ///
-  /// let database = try OrbitDatabase(path: DatabasePath("reminders.sqlite"))
-  /// let observation = ValueObservation.tracking { try $0.fetchAll(Reminder.all) }
-  /// for try await reminders in observation.values(in: database) {
-  ///   print("\(reminders.count) reminders")
-  /// }
-  /// ```
-  public typealias OrbitDatabase = InterprocessDatabase<SQLitePoolDriver>
 #endif

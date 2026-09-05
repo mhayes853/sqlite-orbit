@@ -10,7 +10,7 @@
   struct DatabaseTransactionObservationTests {
     @Test
     func localDriverReportsCommitLifecycleAndFinalTransactionState() async throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -29,7 +29,7 @@
     func bodyFailureReportsRollbackWithoutWillCommit() async throws {
       struct Abort: Error {}
 
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
 
@@ -48,7 +48,7 @@
     func willCommitFailureAbortsTheWriteAndReportsRollback() async throws {
       struct Abort: Error {}
 
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -71,7 +71,7 @@
 
     @Test
     func cancellingSubscriptionStopsTransactionEvents() async throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -88,7 +88,7 @@
 
     @Test
     func blockingWritesUseTheSameObserverLifecycle() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -110,7 +110,7 @@
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       defer { try? FileManager.default.removeItem(at: directory) }
 
-      let driver = try SQLitePoolDriver(
+      let driver = try SQLitePool(
         path: .file(directory.appending(component: "database.sqlite"))
       )
       try await driver.write { transaction in

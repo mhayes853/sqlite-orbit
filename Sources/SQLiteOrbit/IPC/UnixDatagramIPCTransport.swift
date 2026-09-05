@@ -16,10 +16,10 @@
   /// a broker process. This is the transport ``OrbitDatabase`` uses.
   ///
   /// ```swift
-  /// let transport = try UnixDatagramDatabaseIPCTransport.shared()
+  /// let transport = try UnixDatagramIPCTransport.shared()
   /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
   /// ```
-  public final class UnixDatagramDatabaseIPCTransport: DatabaseIPCTransport, Sendable {
+  public final class UnixDatagramIPCTransport: DatabaseIPCTransport, Sendable {
     /// Controls how a sender responds when a peer's bounded receive queue is full.
     ///
     /// A datagram socket's receive queue is finite, so a peer that stops draining it eventually
@@ -27,7 +27,7 @@
     /// throws ``DatabaseIPCPartialDeliveryError``.
     ///
     /// ```swift
-    /// let coordination = UnixDatagramDatabaseIPCTransport.Configuration(
+    /// let coordination = UnixDatagramIPCTransport.Configuration(
     ///   backPressure: .suspend(upTo: .milliseconds(250))
     /// )
     /// ```
@@ -42,12 +42,12 @@
     /// Configuration for a Unix-domain datagram transport endpoint.
     ///
     /// Two transports coordinate only when they share a ``directory``, and
-    /// ``UnixDatagramDatabaseIPCTransport/shared(configuration:)`` reuses one endpoint per
+    /// ``UnixDatagramIPCTransport/shared(configuration:)`` reuses one endpoint per
     /// distinct configuration, so keep this value identical across the databases in a process that
     /// should share a transport.
     ///
     /// ```swift
-    /// let coordination = UnixDatagramDatabaseIPCTransport.Configuration(
+    /// let coordination = UnixDatagramIPCTransport.Configuration(
     ///   directory: appGroupDirectory.appending(path: "coordination"),
     ///   backPressure: .suspend(upTo: .milliseconds(250))
     /// )
@@ -116,7 +116,7 @@
     /// Prefer ``shared(configuration:)``, which gives every database in a process one endpoint.
     ///
     /// ```swift
-    /// let transport = try UnixDatagramDatabaseIPCTransport(
+    /// let transport = try UnixDatagramIPCTransport(
     ///   configuration: .init(directory: directory, backPressure: .fail)
     /// )
     /// ```
@@ -311,7 +311,7 @@
     }
   }
 
-  extension UnixDatagramDatabaseIPCTransport {
+  extension UnixDatagramIPCTransport {
     /// Returns this process's transport for `configuration`, creating it on first use.
     ///
     /// Peers discover a process rather than an individual database, and a transport already
@@ -320,7 +320,7 @@
     /// returned value for as long as its subscriptions should keep working.
     ///
     /// ```swift
-    /// let transport = try UnixDatagramDatabaseIPCTransport.shared()
+    /// let transport = try UnixDatagramIPCTransport.shared()
     /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
     /// ```
     ///
@@ -330,10 +330,10 @@
     /// - Throws: A ``DatabaseIPCSystemError`` if a new transport is needed and cannot be created.
     public static func shared(
       configuration: Configuration = .default
-    ) throws -> UnixDatagramDatabaseIPCTransport {
+    ) throws -> UnixDatagramIPCTransport {
       try sharedTransports.withLock { transports in
         if let transport = transports[configuration]?.transport { return transport }
-        let transport = try UnixDatagramDatabaseIPCTransport(configuration: configuration)
+        let transport = try UnixDatagramIPCTransport(configuration: configuration)
         transports = transports.filter { $0.value.transport != nil }
         transports[configuration] = WeakTransport(transport: transport)
         return transport
@@ -342,11 +342,11 @@
   }
 
   private struct WeakTransport: Sendable {
-    weak var transport: UnixDatagramDatabaseIPCTransport?
+    weak var transport: UnixDatagramIPCTransport?
   }
 
   private let sharedTransports =
-    Mutex<[UnixDatagramDatabaseIPCTransport.Configuration: WeakTransport]>([:])
+    Mutex<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
 
   /// Describes a broadcast that reached only some currently discoverable peers.
   ///

@@ -22,7 +22,7 @@
     }
   }
 
-  private func bootstrap(_ driver: SQLitePoolDriver) async throws {
+  private func bootstrap(_ driver: SQLitePool) async throws {
     try await driver.write { transaction in
       try transaction.execute(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
@@ -31,11 +31,11 @@
   }
 
   @Test
-  func poolDriverWritesAndReadsThroughTheDriverProtocol() async throws {
+  func poolWritesAndReadsThroughTheDriverProtocol() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
-    let interprocess = InterprocessDatabase(writer: driver)
+    let interprocess = OrbitDatabase(writer: driver)
 
     try await interprocess.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
@@ -48,16 +48,16 @@
   }
 
   @Test(arguments: [DatabasePath.memory, .temporary, ":memory:", ""])
-  func poolDriverRejectsDatabasesItCannotPool(path: DatabasePath) {
+  func poolRejectsDatabasesItCannotPool(path: DatabasePath) {
     #expect(throws: SQLitePoolUnavailableError.self) {
-      _ = try SQLitePoolDriver(path: path)
+      _ = try SQLitePool(path: path)
     }
   }
 
   @Test
-  func poolDriverRunsInWALMode() async throws {
+  func poolRunsInWALMode() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
 
     let mode = try await driver.read { transaction in
       try transaction.fetchAll(#sql("PRAGMA journal_mode", as: String.self))
@@ -68,7 +68,7 @@
   @Test
   func poolReadersRefuseToWriteThroughTheRawConnection() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
 
     let isReadOnly = try await driver.read { transaction in
@@ -84,9 +84,9 @@
   }
 
   @Test
-  func poolDriverRollsBackAWriteThatThrows() async throws {
+  func poolRollsBackAWriteThatThrows() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
 
     struct Abort: Error {}
@@ -104,11 +104,11 @@
   }
 
   @Test
-  func poolDriverSurvivesHighContentionFromManyTasks() async throws {
+  func poolSurvivesHighContentionFromManyTasks() async throws {
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 4
-    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
     try await bootstrap(driver)
     let count = 500
 
@@ -135,11 +135,11 @@
   }
 
   @Test
-  func poolDriverReturnsEveryReaderItLends() async throws {
+  func poolReturnsEveryReaderItLends() async throws {
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 2
-    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
     try await bootstrap(driver)
 
     // Far more concurrent readers than the pool holds, so most of them have to wait for one.
@@ -168,7 +168,7 @@
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 1
-    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
     try await bootstrap(driver)
 
     struct Abort: Error {}
@@ -223,7 +223,7 @@
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 2
-    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
     let gate = Gate()
 
     let reads = (0..<2)
@@ -241,7 +241,7 @@
   @Test
   func readsIssuedDuringAWriteWaitForItToCommit() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
     let gate = Gate()
 
@@ -270,7 +270,7 @@
   @Test
   func aWriteWaitsForTheReadsInFlight() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
     let gate = Gate()
     let wrote = Mutex(false)
@@ -300,7 +300,7 @@
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default
     configuration.readerCount = 2
-    let driver = try SQLitePoolDriver(path: database.path, configuration: configuration)
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
     try await bootstrap(driver)
     let gate = Gate()
 
@@ -346,7 +346,7 @@
   @Test
   func cancellingAQueuedWriteLetsTheRequestsBehindItRun() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
     let gate = Gate()
 
@@ -382,7 +382,7 @@
   @MainActor
   func poolAccessesRunOffTheCallersThread() async throws {
     let database = TemporaryDatabase()
-    let driver = try SQLitePoolDriver(path: database.path)
+    let driver = try SQLitePool(path: database.path)
 
     let readOnMain = try await driver.read { _ in Thread.isMainThread }
     let wroteOnMain = try await driver.write { _ in Thread.isMainThread }

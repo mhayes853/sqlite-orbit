@@ -45,7 +45,7 @@ public protocol SQLiteDatabaseReader: Sendable {
 /// }
 /// ```
 public protocol SQLiteDatabaseWriter: SQLiteDatabaseReader {
-  /// The identifier used when an ``InterprocessDatabase`` does not receive an explicit one.
+  /// The identifier used when an ``OrbitDatabase`` does not receive an explicit one.
   var defaultIdentifier: DatabaseIdentifier { get }
 
   /// Runs `body` in a write transaction, committing it when `body` returns.

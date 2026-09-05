@@ -2,11 +2,11 @@
 ///
 /// This is the driver for a database that does not benefit from concurrent readers: an in-memory
 /// database, which is private to the connection that opened it and so cannot be pooled at all, or a
-/// small file database where one connection is plenty. ``SQLitePoolDriver`` is the choice when
+/// small file database where one connection is plenty. ``SQLitePool`` is the choice when
 /// reads should run concurrently.
 ///
 /// ```swift
-/// let driver = try SQLiteQueueDriver(path: ":memory:")
+/// let driver = try SQLiteQueue(path: ":memory:")
 /// try await driver.write { transaction in
 ///   try transaction.execute(
 ///     """
@@ -19,7 +19,7 @@
 /// }
 /// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
 /// ```
-public final class SQLiteQueueDriver: SQLiteObservableDatabase {
+public final class SQLiteQueue: SQLiteObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: DatabaseIdentifier
 
@@ -112,11 +112,11 @@ public final class SQLiteQueueDriver: SQLiteObservableDatabase {
 }
 
 #if SystemSQLite
-  extension SQLiteQueueDriver {
+  extension SQLiteQueue {
     /// Opens a database using the SQLite this package was linked against.
     ///
     /// ```swift
-    /// let driver = try SQLiteQueueDriver(path: ":memory:")
+    /// let driver = try SQLiteQueue(path: ":memory:")
     /// ```
     ///
     /// - Parameters:

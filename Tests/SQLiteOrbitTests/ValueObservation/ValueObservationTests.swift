@@ -52,7 +52,7 @@
 
     @Test
     func immediateSchedulerIntroducesNoBoundaryForCommittedValues() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -74,9 +74,9 @@
     }
 
     @Test
-    func immediateSchedulerWorksThroughInterprocessDatabase() async throws {
+    func immediateSchedulerWorksThroughOrbitDatabase() async throws {
       let driver = try await itemsDatabase()
-      let database = InterprocessDatabase(writer: driver)
+      let database = OrbitDatabase(writer: driver)
       let recorder = ObservationRecorder<Int>()
 
       let subscription = try itemCountObservation()
@@ -172,7 +172,7 @@
 
     @Test
     func commitFailureDiscardsThePendingValue() async throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
         try transaction.execute(
           """
@@ -240,7 +240,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = DatabaseIdentifier(rawValue: "external-observation")
-      let database = InterprocessDatabase(
+      let database = OrbitDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -266,7 +266,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = DatabaseIdentifier(rawValue: "filtered-observation")
-      let database = InterprocessDatabase(
+      let database = OrbitDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -347,15 +347,15 @@
 
       let path = DatabasePath.file(directory.appending(component: "database.sqlite"))
       let identifier = DatabaseIdentifier(rawValue: "same-process-observation")
-      let writingDatabase = InterprocessDatabase(
-        writer: try SQLiteQueueDriver(path: path),
+      let writingDatabase = OrbitDatabase(
+        writer: try SQLiteQueue(path: path),
         id: identifier
       )
       try await writingDatabase.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      let observingDatabase = InterprocessDatabase(
-        writer: try SQLiteQueueDriver(path: path),
+      let observingDatabase = OrbitDatabase(
+        writer: try SQLiteQueue(path: path),
         id: identifier
       )
       let recorder = ObservationRecorder<Int>()
@@ -460,7 +460,7 @@
 
     @Test
     func mapTransformsValuesAndPreservesTheirSources() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -486,7 +486,7 @@
 
     @Test
     func filterSuppressesValuesWithoutRepeatingTheSharedInitialFetch() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -531,7 +531,7 @@
 
     @Test
     func compactMapSuppressesNilAndTransformsNonNilValues() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -562,7 +562,7 @@
 
     @Test
     func operatorsRunInTheirWrittenOrder() throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -594,7 +594,7 @@
     func throwingTransformEndsObservationAfterTheWriteCommits() throws {
       struct TransformError: Error {}
 
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -781,7 +781,7 @@
 
     @Test
     func handleEventsReportsAFetchFailure() async throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       let failures = Mutex(0)
       let values = itemCountObservation()
         .handleEvents(didFail: { _ in failures.withLock { $0 += 1 } })
@@ -796,7 +796,7 @@
 
     @Test
     func fetchErrorTerminatesTheAsyncSequence() async throws {
-      let driver = try SQLiteQueueDriver(path: .memory)
+      let driver = try SQLiteQueue(path: .memory)
       let values = itemCountObservation().values(in: driver)
       var iterator = values.makeAsyncIterator()
 
@@ -806,8 +806,8 @@
     }
   }
 
-  private func itemsDatabase() async throws -> SQLiteQueueDriver {
-    let driver = try SQLiteQueueDriver(path: .memory)
+  private func itemsDatabase() async throws -> SQLiteQueue {
+    let driver = try SQLiteQueue(path: .memory)
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }

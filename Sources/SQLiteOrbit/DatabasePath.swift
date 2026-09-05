@@ -10,8 +10,8 @@ import Foundation
 ///
 /// ```swift
 /// let onDisk = DatabasePath.file(URL.documentsDirectory.appending(path: "reminders.sqlite"))
-/// let driver = try SQLiteQueueDriver(path: onDisk)
-/// let scratch = try SQLiteQueueDriver(path: .memory)
+/// let driver = try SQLiteQueue(path: onDisk)
+/// let scratch = try SQLiteQueue(path: .memory)
 /// ```
 public struct DatabasePath: Hashable, Sendable {
   private enum Storage: Hashable, Sendable {
@@ -87,7 +87,7 @@ extension DatabasePath: ExpressibleByStringLiteral {
   /// Reads a string literal the way ``init(_:)`` does, so `":memory:"` names an in-memory database.
   ///
   /// ```swift
-  /// let driver = try SQLiteQueueDriver(path: ":memory:")
+  /// let driver = try SQLiteQueue(path: ":memory:")
   /// ```
   ///
   /// - Parameter value: The path SQLite would be handed.

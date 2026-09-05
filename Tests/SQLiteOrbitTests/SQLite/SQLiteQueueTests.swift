@@ -6,11 +6,11 @@
 
   @testable import SQLiteOrbit
 
-  private func makeQueueDriver() throws -> SQLiteQueueDriver {
-    try SQLiteQueueDriver(path: ":memory:")
+  private func makeQueueDriver() throws -> SQLiteQueue {
+    try SQLiteQueue(path: ":memory:")
   }
 
-  private func bootstrap(_ driver: SQLiteQueueDriver) async throws {
+  private func bootstrap(_ driver: SQLiteQueue) async throws {
     try await driver.write { transaction in
       try transaction.execute(
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
@@ -19,10 +19,10 @@
   }
 
   @Test
-  func queueDriverWritesAndReadsThroughTheDriverProtocol() async throws {
+  func queueWritesAndReadsThroughTheDriverProtocol() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
-    let database = InterprocessDatabase(writer: driver)
+    let database = OrbitDatabase(writer: driver)
 
     try await database.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
@@ -52,7 +52,7 @@
   }
 
   @Test
-  func queueDriverCommitsAcrossSeparateWrites() async throws {
+  func queueCommitsAcrossSeparateWrites() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
 
@@ -69,7 +69,7 @@
   }
 
   @Test
-  func queueDriverRollsBackAWriteThatThrows() async throws {
+  func queueRollsBackAWriteThatThrows() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
 
@@ -97,7 +97,7 @@
   }
 
   @Test
-  func queueDriverSerializesConcurrentWrites() async throws {
+  func queueSerializesConcurrentWrites() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
     let count = 200
@@ -120,7 +120,7 @@
   }
 
   @Test
-  func queueDriverInterleavesConcurrentReadsAndWrites() async throws {
+  func queueInterleavesConcurrentReadsAndWrites() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
     let count = 100
@@ -175,33 +175,33 @@
   }
 
   @Test
-  func queueDriverDerivesItsIdentifierFromThePath() throws {
+  func queueDerivesItsIdentifierFromThePath() throws {
     let path = temporaryDatabasePath()
     defer { try? FileManager.default.removeItem(atPath: path) }
 
-    let driver = try SQLiteQueueDriver(path: DatabasePath(path))
+    let driver = try SQLiteQueue(path: DatabasePath(path))
     #expect(driver.defaultIdentifier.rawValue.hasSuffix(".sqlite"))
 
     // An in-memory database is private to its connection, so no two of them are the same database.
-    let first = try SQLiteQueueDriver(path: ":memory:")
-    let second = try SQLiteQueueDriver(path: ":memory:")
+    let first = try SQLiteQueue(path: ":memory:")
+    let second = try SQLiteQueue(path: ":memory:")
     #expect(first.defaultIdentifier != second.defaultIdentifier)
   }
 
   @Test
-  func queueDriverPersistsToAFileAcrossDrivers() async throws {
+  func queuePersistsToAFileAcrossDrivers() async throws {
     let path = temporaryDatabasePath()
     defer { try? FileManager.default.removeItem(atPath: path) }
 
     do {
-      let driver = try SQLiteQueueDriver(path: DatabasePath(path))
+      let driver = try SQLiteQueue(path: DatabasePath(path))
       try await bootstrap(driver)
       try await driver.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
       }
     }
 
-    let reopened = try SQLiteQueueDriver(path: DatabasePath(path))
+    let reopened = try SQLiteQueue(path: DatabasePath(path))
     let items = try await reopened.read { transaction in
       try transaction.fetchAll(Item.all)
     }
@@ -245,7 +245,7 @@
   /// third thing SQLite does with a path string, so `DatabasePath("")` has somewhere to land.
   @Test
   func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
-    let driver = try SQLiteQueueDriver(path: .temporary)
+    let driver = try SQLiteQueue(path: .temporary)
     try await bootstrap(driver)
     try await driver.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
@@ -257,7 +257,7 @@
 
     // No file names it, so a second driver opens a different, empty database of its own.
     #expect(DatabasePath.temporary.fileURL == nil)
-    let other = try SQLiteQueueDriver(path: .temporary)
+    let other = try SQLiteQueue(path: .temporary)
     #expect(other.defaultIdentifier != driver.defaultIdentifier)
     await #expect(throws: SQLiteError.self) {
       try await other.read { try $0.fetchCount(Item.all) }

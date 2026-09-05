@@ -6,10 +6,10 @@ import Testing
 
 #if SystemSQLite
   @Test
-  func interprocessDatabaseUsesTheDriversDefaultIdentifier() async throws {
+  func orbitDatabaseUsesTheDriversDefaultIdentifier() async throws {
     let identifier = DatabaseIdentifier(rawValue: "native-default")
-    let driver = try SQLiteQueueDriver(path: ":memory:", identifier: identifier)
-    let database = InterprocessDatabase(writer: driver)
+    let driver = try SQLiteQueue(path: ":memory:", identifier: identifier)
+    let database = OrbitDatabase(writer: driver)
 
     #expect(database.id == identifier)
     #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
@@ -17,11 +17,11 @@ import Testing
   }
 
   @Test
-  func interprocessDatabaseCanOverrideItsIdentifier() {
-    let driver = try! SQLiteQueueDriver(path: ":memory:")
+  func orbitDatabaseCanOverrideItsIdentifier() {
+    let driver = try! SQLiteQueue(path: ":memory:")
     let override = DatabaseIdentifier(rawValue: "application-defined")
 
-    let database = InterprocessDatabase(writer: driver, id: override)
+    let database = OrbitDatabase(writer: driver, id: override)
 
     #expect(database.id == override)
   }

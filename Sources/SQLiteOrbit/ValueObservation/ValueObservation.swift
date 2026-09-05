@@ -500,7 +500,7 @@ public struct ValueObservation<Value: Sendable>: Sendable {
   ///   private(set) var count = 0
   ///   private var subscription: OrbitSubscription?
   ///
-  ///   func start(observing database: OrbitDatabase) throws {
+  ///   func start(observing database: OrbitDatabase<SQLitePool>) throws {
   ///     subscription = try ValueObservation
   ///       .tracking { try $0.fetchCount(Reminder.all) }
   ///       .subscribe(to: database, scheduling: .mainActor) { _ in
