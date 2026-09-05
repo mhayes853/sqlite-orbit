@@ -128,6 +128,14 @@
   }
 
   @Test
+  func theKeyIsSettableThroughImplicitMemberSyntax() {
+    // The form the README shows.
+    var configuration = SQLiteConfiguration(library: builtInTestLibrary)
+    configuration.key = .passphrase("secret")
+    #expect(configuration.key != nil)
+  }
+
+  @Test
   func aKeyDoesNotPrintItself() {
     let key = SQLiteKey.passphrase("hunter2")
     #expect("\(key)" == "SQLiteKey(redacted)")

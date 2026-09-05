@@ -114,6 +114,20 @@ it links no SQLite at all, leaving the library entirely to you:
 )
 ```
 
+The `SQLCipher` trait links SQLCipher instead and vends `SQLiteLibrary.sqlCipher`. It is mutually
+exclusive with `SystemSQLite`: SQLCipher is a fork of SQLite and exports the same `sqlite3_*`
+symbols, so enabling both would link two builds under one set of names and leave the link order to
+decide which one every call reaches. Naming any trait leaves the defaults out, which is what makes
+the two exclusive in practice:
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["SQLCipher"]
+)
+```
+
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
 under contention.
@@ -230,9 +244,19 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 
 ## Encrypted databases
 
-A build with a codec — SQLCipher, or an amalgamation compiled with one — adds `sqlite3_key_v2` and
-`sqlite3_rekey_v2`, which stock SQLite does not have. Those go on the library as
-`SQLiteLibrary.Encryption`, and the key itself goes on the configuration:
+With the `SQLCipher` trait enabled, an encrypted database needs only a key:
+
+```swift
+let database = try OrbitDatabase(
+  path: databasePath,
+  configuration: .sqlCipher(key: .passphrase(secret))
+)
+```
+
+A build with a codec adds `sqlite3_key_v2` and `sqlite3_rekey_v2`, which stock SQLite does not
+have. `SQLiteConfiguration.sqlCipher(key:)` pairs the key with a library that has them, so there is
+nothing to get wrong. Supplying your own build with a codec means filling the same two entry points
+in yourself:
 
 ```swift
 var library = myCipherBuild
@@ -260,6 +284,10 @@ its own copy of the material and wipes it when the last reference goes away, and
 Setting a key on a library with no `encryption` fails the open with
 `SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no
 codec, so that is a fact about the build rather than a claim about it.
+
+A codec accepts any key and only reports a wrong one once something reads the file, so a keyed
+connection reads the schema while it is being configured. A wrong key fails the open rather than
+the first query the caller happens to run.
 
 ## Collations and functions
 
