@@ -31,11 +31,6 @@ public struct SQLiteResultCode: RawRepresentable, Hashable, Sendable {
   public var primary: Self {
     Self(rawValue: rawValue & 0xff)
   }
-
-  /// Whether the code reports success rather than failure.
-  public var isSuccess: Bool {
-    self == .ok || self == .row || self == .done
-  }
 }
 
 /// The flags that describe how a database is opened.

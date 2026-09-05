@@ -37,7 +37,7 @@ struct ValueObservationReadRequest: Sendable {
 /// invalidation and finished after it is stale: its value is dropped and the read is reissued.
 /// That costs a redundant fetch but never publishes a value older than a commit already seen.
 struct ValueObservationReadCoordinator: Sendable {
-  private(set) var didStart = false
+  private var didStart = false
   private(set) var initialFetchCompleted = false
   private var revision: UInt64 = 0
   private var readIsRequired = false
