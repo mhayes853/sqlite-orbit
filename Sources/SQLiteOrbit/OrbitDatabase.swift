@@ -113,13 +113,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
     let (result, region) = try await writer.write { transaction in
-      let recorder = OrbitDatabaseRegionRecorder()
-      guard let observers = transaction.observers else {
-        return (try body(transaction), OrbitDatabaseRegion.fullDatabase)
-      }
-      let subscription = observers.subscribe(recorder)
-      defer { subscription.cancel() }
-      return (try body(transaction), recorder.region)
+      try transaction.recordingDatabaseRegion(body)
     }
     reportLocalCommit(in: region)
     await Task { await self.announceCommittedTransaction(in: region) }.value
@@ -145,13 +139,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     let (result, region) = try writer.writeBlocking { transaction in
-      let recorder = OrbitDatabaseRegionRecorder()
-      guard let observers = transaction.observers else {
-        return (try body(transaction), OrbitDatabaseRegion.fullDatabase)
-      }
-      let subscription = observers.subscribe(recorder)
-      defer { subscription.cancel() }
-      return (try body(transaction), recorder.region)
+      try transaction.recordingDatabaseRegion(body)
     }
     reportLocalCommit(in: region)
     Task { await self.announceCommittedTransaction(in: region) }
@@ -281,5 +269,19 @@ private final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserve
 
   func databaseDidChange(in region: OrbitDatabaseRegion) {
     recordedRegion.withLock { $0.formUnion(region) }
+  }
+}
+
+extension SQLiteWriteTransaction {
+  fileprivate borrowing func recordingDatabaseRegion<Result: Sendable>(
+    _ body: (borrowing SQLiteWriteTransaction) throws -> Result
+  ) rethrows -> (Result, OrbitDatabaseRegion) {
+    let recorder = OrbitDatabaseRegionRecorder()
+    guard let observers else {
+      return (try body(self), .fullDatabase)
+    }
+    let subscription = observers.subscribe(recorder)
+    defer { subscription.cancel() }
+    return (try body(self), recorder.region)
   }
 }

@@ -18,7 +18,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   /// whole-table, and composite regions to be inserted and removed through the same interface.
   public typealias Element = Self
 
-  private struct TableIdentifier: Hashable, Sendable {
+  struct TableIdentifier: Hashable, Sendable {
     let schema: SQLiteSchemaName
     let name: String
 
@@ -28,7 +28,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     }
   }
 
-  private struct TableRegion: Hashable, Sendable {
+  struct TableRegion: Hashable, Sendable {
     /// Whether a column not listed in `exceptions` belongs to the region.
     let includesUnspecifiedColumns: Bool
     /// Columns whose membership is the inverse of `includesUnspecifiedColumns`.
@@ -69,65 +69,17 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   }
 
   /// Whether columns in a table not listed in `tableRegions` belong to the region.
-  private let includesUnspecifiedTables: Bool
+  let includesUnspecifiedTables: Bool
   /// Table regions that differ from the unspecified-table default.
-  private let tableRegions: [TableIdentifier: TableRegion]
+  let tableRegions: [TableIdentifier: TableRegion]
 
-  struct IPCRepresentation: Sendable {
-    struct Table: Sendable {
-      let schema: String
-      let name: String
-      let includesUnspecifiedColumns: Bool
-      let columnExceptions: [String]
-    }
-
-    let includesUnspecifiedTables: Bool
-    let tables: [Table]
-  }
-
-  private init(
+  init(
     includesUnspecifiedTables: Bool,
     tableRegions: [TableIdentifier: TableRegion]
   ) {
     let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
     self.includesUnspecifiedTables = includesUnspecifiedTables
     self.tableRegions = tableRegions.filter { $0.value != defaultTableRegion }
-  }
-
-  init(ipcRepresentation: IPCRepresentation) {
-    self.init(
-      includesUnspecifiedTables: ipcRepresentation.includesUnspecifiedTables,
-      tableRegions: Dictionary(
-        uniqueKeysWithValues: ipcRepresentation.tables.map { table in
-          (
-            TableIdentifier(schema: SQLiteSchemaName(table.schema), name: table.name),
-            TableRegion(
-              includesUnspecifiedColumns: table.includesUnspecifiedColumns,
-              exceptions: Set(table.columnExceptions.map(\.asciiLowercased))
-            )
-          )
-        }
-      )
-    )
-  }
-
-  var ipcRepresentation: IPCRepresentation {
-    IPCRepresentation(
-      includesUnspecifiedTables: includesUnspecifiedTables,
-      tables:
-        tableRegions
-        .map { table, region in
-          IPCRepresentation.Table(
-            schema: table.schema.rawValue,
-            name: table.name,
-            includesUnspecifiedColumns: region.includesUnspecifiedColumns,
-            columnExceptions: region.exceptions.sorted()
-          )
-        }
-        .sorted {
-          ($0.schema, $0.name) < ($1.schema, $1.name)
-        }
-    )
   }
 
   /// The empty database region.

@@ -16,13 +16,11 @@ enum OrbitIPCWireProtocol {
     _ message: OrbitIPCMessage,
     maximumByteCount: Int? = nil
   ) throws -> [UInt8] {
-    let bytes: [UInt8]
-    do {
-      bytes = try encodeExactly(message)
-    } catch OrbitIPCWireError.regionTooLarge {
-      return try encodeExactly(message.withFullDatabaseRegion)
+    if let bytes = try? encodeExactly(message),
+      maximumByteCount.map({ bytes.count <= $0 }) ?? true
+    {
+      return bytes
     }
-    guard let maximumByteCount, bytes.count > maximumByteCount else { return bytes }
     return try encodeExactly(message.withFullDatabaseRegion)
   }
 
@@ -35,7 +33,7 @@ enum OrbitIPCWireProtocol {
     var bytes: [UInt8] = [
       0x4F, 0x52, 0x42, 0x54,  // ORBT
       1,
-      Self.kind(of: message),
+      1,
       UInt8(truncatingIfNeeded: databaseCount >> 8),
       UInt8(truncatingIfNeeded: databaseCount)
     ]
@@ -43,7 +41,7 @@ enum OrbitIPCWireProtocol {
 
     switch message {
     case .transactionDidCommit(let commit):
-      try append(commit.region.ipcRepresentation, to: &bytes)
+      try append(commit.region, to: &bytes)
     }
     return bytes
   }
@@ -60,31 +58,29 @@ enum OrbitIPCWireProtocol {
     var offset = 6
     let database = try readString(from: bytes, at: &offset)
     let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: database)
-
-    switch bytes[5] {
-    case 1:
-      let region = try readRegion(from: bytes, at: &offset)
-      guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
-      return .transactionDidCommit(
-        .init(databaseIdentifier: databaseIdentifier, region: region)
-      )
-    default:
-      throw OrbitIPCWireError.unsupportedMessageKind(bytes[5])
-    }
+    guard bytes[5] == 1 else { throw OrbitIPCWireError.unsupportedMessageKind(bytes[5]) }
+    let region = try readRegion(from: bytes, at: &offset)
+    guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
+    return .transactionDidCommit(
+      .init(databaseIdentifier: databaseIdentifier, region: region)
+    )
   }
 
   private static func append(
-    _ representation: OrbitDatabaseRegion.IPCRepresentation,
+    _ region: OrbitDatabaseRegion,
     to bytes: inout [UInt8]
   ) throws {
-    bytes.append(representation.includesUnspecifiedTables ? 1 : 0)
-    try appendCount(representation.tables.count, to: &bytes)
-    for table in representation.tables {
-      try append(table.schema, to: &bytes)
+    bytes.append(region.includesUnspecifiedTables ? 1 : 0)
+    let tables = region.tableRegions.sorted {
+      ($0.key.schema.rawValue, $0.key.name) < ($1.key.schema.rawValue, $1.key.name)
+    }
+    try appendCount(tables.count, to: &bytes)
+    for (table, tableRegion) in tables {
+      try append(table.schema.rawValue, to: &bytes)
       try append(table.name, to: &bytes)
-      bytes.append(table.includesUnspecifiedColumns ? 1 : 0)
-      try appendCount(table.columnExceptions.count, to: &bytes)
-      for column in table.columnExceptions {
+      bytes.append(tableRegion.includesUnspecifiedColumns ? 1 : 0)
+      try appendCount(tableRegion.exceptions.count, to: &bytes)
+      for column in tableRegion.exceptions.sorted() {
         try append(column, to: &bytes)
       }
     }
@@ -108,43 +104,38 @@ enum OrbitIPCWireProtocol {
   ) throws -> OrbitDatabaseRegion {
     let includesUnspecifiedTables = try readBoolean(from: bytes, at: &offset)
     let tableCount = try readCount(from: bytes, at: &offset)
-    var tables: [OrbitDatabaseRegion.IPCRepresentation.Table] = []
-    var tableNames: Set<RegionTableName> = []
+    var tables: [OrbitDatabaseRegion.TableIdentifier: OrbitDatabaseRegion.TableRegion] = [:]
     tables.reserveCapacity(tableCount)
 
     for _ in 0..<tableCount {
       let schema = try readString(from: bytes, at: &offset)
       let name = try readString(from: bytes, at: &offset)
-      guard tableNames.insert(RegionTableName(schema: schema, name: name)).inserted else {
+      let table = OrbitDatabaseRegion.TableIdentifier(
+        schema: SQLiteSchemaName(schema),
+        name: name
+      )
+      guard tables[table] == nil else {
         throw OrbitIPCWireError.duplicateRegionEntry
       }
       let includesUnspecifiedColumns = try readBoolean(from: bytes, at: &offset)
       let columnCount = try readCount(from: bytes, at: &offset)
-      var columns: [String] = []
-      var columnNames: Set<String> = []
+      var columns: Set<String> = []
       columns.reserveCapacity(columnCount)
       for _ in 0..<columnCount {
-        let column = try readString(from: bytes, at: &offset)
-        guard columnNames.insert(column.asciiLowercased).inserted else {
+        let column = try readString(from: bytes, at: &offset).asciiLowercased
+        guard columns.insert(column).inserted else {
           throw OrbitIPCWireError.duplicateRegionEntry
         }
-        columns.append(column)
       }
-      tables.append(
-        .init(
-          schema: schema,
-          name: name,
-          includesUnspecifiedColumns: includesUnspecifiedColumns,
-          columnExceptions: columns
-        )
+      tables[table] = OrbitDatabaseRegion.TableRegion(
+        includesUnspecifiedColumns: includesUnspecifiedColumns,
+        exceptions: columns
       )
     }
 
     return OrbitDatabaseRegion(
-      ipcRepresentation: .init(
-        includesUnspecifiedTables: includesUnspecifiedTables,
-        tables: tables
-      )
+      includesUnspecifiedTables: includesUnspecifiedTables,
+      tableRegions: tables
     )
   }
 
@@ -174,26 +165,6 @@ enum OrbitIPCWireProtocol {
     return string
   }
 
-  private static func kind(of message: OrbitIPCMessage) -> UInt8 {
-    switch message {
-    case .transactionDidCommit: 1
-    }
-  }
-
-  private struct RegionTableName: Hashable {
-    let schema: String
-    let name: String
-
-    func hash(into hasher: inout Hasher) {
-      hasher.combine(schema.asciiLowercased)
-      hasher.combine(name.asciiLowercased)
-    }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-      lhs.schema.asciiLowercased == rhs.schema.asciiLowercased
-        && lhs.name.asciiLowercased == rhs.name.asciiLowercased
-    }
-  }
 }
 
 extension OrbitIPCMessage {
