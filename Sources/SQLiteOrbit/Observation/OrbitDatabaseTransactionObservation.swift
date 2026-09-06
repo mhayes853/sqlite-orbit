@@ -32,10 +32,11 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   }
 }
 
-/// Observes the lifecycle of database write transactions.
+/// Observes database reads and the lifecycle of database write transactions.
 ///
-/// A transaction performed through the observed handle calls ``databaseDidChange(in:)`` for each
-/// changed region it publishes. After its access closure returns it calls
+/// A read or write transaction performed through the observed handle calls ``databaseDidRead(in:)``
+/// for each read region it publishes. A write transaction also calls ``databaseDidChange(in:)``
+/// for each changed region. After its access closure returns it calls
 /// ``databaseWillCommit(_:)``, while those changes are still visible through the transaction, and
 /// then exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
 /// reported by another handle in this process, or by another process, reports its aggregate region
@@ -54,6 +55,14 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
 public protocol OrbitDatabaseTransactionObserver: Sendable {
+  /// Called when a transaction reads a database region.
+  ///
+  /// Read notifications are immediate and are not paired with a commit or rollback. The callback
+  /// must not access the database.
+  ///
+  /// - Parameter region: The region the transaction may have read.
+  func databaseDidRead(in region: OrbitDatabaseRegion)
+
   /// Called when a transaction may have changed a database region.
   ///
   /// A local change remains provisional until ``databaseDidCommit(_:)``. If the transaction rolls
@@ -85,6 +94,11 @@ public protocol OrbitDatabaseTransactionObserver: Sendable {
 }
 
 extension OrbitDatabaseTransactionObserver {
+  /// Ignores a read region.
+  ///
+  /// - Parameter region: The region the transaction may have read.
+  public func databaseDidRead(in region: OrbitDatabaseRegion) {}
+
   /// Ignores a changed region.
   ///
   /// - Parameter region: The region the transaction may have changed.
@@ -106,7 +120,7 @@ extension OrbitDatabaseTransactionObserver {
   public func databaseDidRollback() {}
 }
 
-/// A database whose write transactions can be observed.
+/// A database whose reads and write transactions can be observed.
 ///
 /// This is what ``OrbitValueObservation`` needs from a database, and what ``OrbitDatabase``
 /// provides.
@@ -143,6 +157,13 @@ final class OrbitDatabaseTransactionObservers: Sendable {
     }
   }
 
+  func didRead(in region: OrbitDatabaseRegion) {
+    guard !region.isEmpty else { return }
+    for observer in observers.withLock({ $0.all }) {
+      observer.databaseDidRead(in: region)
+    }
+  }
+
   func didChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
     for observer in observers.withLock({ $0.all }) {
@@ -160,6 +181,45 @@ final class OrbitDatabaseTransactionObservers: Sendable {
   func didRollback() {
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidRollback()
+    }
+  }
+}
+
+/// Routes one database access to its database-wide observers and any observers scoped to it.
+///
+/// A context is confined to one serialized SQLite connection access. Keeping scoped observers here
+/// instead of in the database-wide registry prevents concurrent pool reads from seeing one
+/// another's events.
+final class OrbitDatabaseTransactionObservationContext {
+  private let databaseObservers: OrbitDatabaseTransactionObservers?
+  private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
+
+  init(databaseObservers: OrbitDatabaseTransactionObservers?) {
+    self.databaseObservers = databaseObservers
+  }
+
+  func withObserver<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    scopedObservers.append(observer)
+    defer { scopedObservers.removeLast() }
+    return try operation()
+  }
+
+  func didRead(in region: OrbitDatabaseRegion) {
+    guard !region.isEmpty else { return }
+    databaseObservers?.didRead(in: region)
+    for observer in scopedObservers {
+      observer.databaseDidRead(in: region)
+    }
+  }
+
+  func didChange(in region: OrbitDatabaseRegion) {
+    guard !region.isEmpty else { return }
+    databaseObservers?.didChange(in: region)
+    for observer in scopedObservers {
+      observer.databaseDidChange(in: region)
     }
   }
 }

@@ -46,6 +46,7 @@ extension OrbitValueObservationChange: Equatable where Value: Equatable {}
 extension OrbitValueObservationChange: Hashable where Value: Hashable {}
 
 private enum OrbitValueObservationRegionSource: Sendable {
+  case automatic
   case constant(OrbitDatabaseRegion)
   case query(QueryFragment)
 
@@ -53,20 +54,25 @@ private enum OrbitValueObservationRegionSource: Sendable {
     guard case .constant(let region) = self else { return nil }
     return region
   }
-
-  func resolve(in transaction: borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion {
-    switch self {
-    case .constant(let region):
-      return region
-    case .query(let query):
-      return try OrbitDatabaseRegion(query, in: transaction)
-    }
-  }
 }
 
 private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
+}
+
+private final class OrbitValueObservationReadRegionRecorder:
+  OrbitDatabaseTransactionObserver
+{
+  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
+
+  var region: OrbitDatabaseRegion {
+    recordedRegion.withLock { $0 }
+  }
+
+  func databaseDidRead(in region: OrbitDatabaseRegion) {
+    recordedRegion.withLock { $0.formUnion(region) }
+  }
 }
 
 private typealias OrbitValueObservationFetch =
@@ -147,7 +153,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// Creates an observation whose value is produced by `fetch`.
   ///
   /// `fetch` runs inside a read transaction, so everything it reads comes from one consistent
-  /// snapshot of the database. It runs again after a committed write that may affect `region`.
+  /// snapshot of the database. The observation automatically tracks the regions read by `fetch`
+  /// and runs it again after a committed write that may affect them.
+  /// If `fetch` reads through ``SQLiteReadTransaction/sqliteConnection``, it must call
+  /// ``SQLiteReadTransaction/notifyReads(in:)`` for those reads to be tracked.
   /// A database that reports a commit without first reporting its changed region is treated
   /// conservatively.
   ///
@@ -157,12 +166,23 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// }
   /// ```
   ///
+  /// - Parameter fetch: Reads the observed value from a transaction.
+  /// - Returns: An observation that produces whatever `fetch` returns.
+  public static func tracking(
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .automatic, fetch)
+  }
+
+  /// Creates an observation whose value is produced by `fetch` and whose region is supplied by
+  /// the caller.
+  ///
   /// - Parameters:
   ///   - region: The database region read by `fetch`.
   ///   - fetch: Reads the observed value from a transaction.
   /// - Returns: An observation that produces whatever `fetch` returns.
   public static func tracking(
-    region: OrbitDatabaseRegion = .fullDatabase,
+    region: OrbitDatabaseRegion,
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .constant(region), fetch)
@@ -978,11 +998,24 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     self.reducer = reducer
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
-      let region = try regionSource.resolve(in: transaction)
-      return OrbitValueObservationFetchOutput(
-        payload: try fetch(transaction),
-        region: region
-      )
+      switch regionSource {
+      case .automatic:
+        let recorder = OrbitValueObservationReadRegionRecorder()
+        let payload = try transaction.withObserver(recorder) {
+          try fetch(transaction)
+        }
+        return OrbitValueObservationFetchOutput(payload: payload, region: recorder.region)
+      case .constant(let region):
+        return OrbitValueObservationFetchOutput(
+          payload: try fetch(transaction),
+          region: region
+        )
+      case .query(let query):
+        return OrbitValueObservationFetchOutput(
+          payload: try fetch(transaction),
+          region: try OrbitDatabaseRegion(query, in: transaction)
+        )
+      }
     }
     self.fetch = resolveAndFetch
     self.read = {

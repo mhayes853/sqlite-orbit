@@ -139,7 +139,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   ) async throws -> Result {
     let reader = try await scheduler.acquireReader()
     defer { scheduler.releaseReader(reader) }
-    return try await reader.read(body)
+    return try await reader.read(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -155,7 +155,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   ) throws -> Result {
     let reader = scheduler.acquireReaderBlocking()
     defer { scheduler.releaseReaderBlocking(reader) }
-    return try reader.readBlocking(body)
+    return try reader.readBlocking(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction on the pool's single writer.
@@ -193,7 +193,7 @@ public final class SQLitePool: OrbitObservableDatabase {
 
   /// Registers an observer of the transactions this driver commits.
   ///
-  /// - Parameter transactionObserver: Receives each changed region, commit, and rollback.
+  /// - Parameter transactionObserver: Receives reads and each changed region, commit, and rollback.
   /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
     transactionObserver: any OrbitDatabaseTransactionObserver

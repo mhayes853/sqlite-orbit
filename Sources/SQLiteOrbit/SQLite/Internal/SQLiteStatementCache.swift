@@ -46,6 +46,8 @@ final class SQLiteStatementCache {
     return SQLitePreparedStatement(
       pointer: statement,
       authorizations: authorizations,
+      connection: connection,
+      authorizer: authorizer,
       library: library
     )
   }
@@ -70,14 +72,26 @@ final class SQLiteStatementCache {
 
 struct SQLitePreparedStatement {
   let pointer: OpaquePointer
+  let readRegion: OrbitDatabaseRegion
   let changedRegion: OrbitDatabaseRegion
 
   init(
     pointer: OpaquePointer,
     authorizations: [SQLiteAuthorization],
+    connection: OpaquePointer,
+    authorizer: SQLiteAuthorizerDispatcher?,
     library: UnsafePointer<SQLiteLibrary>
   ) {
     self.pointer = pointer
+    self.readRegion = sqliteDatabaseRegion(readBy: authorizations) { table in
+      guard let authorizer else { return nil }
+      return sqliteResolvedSchema(
+        for: table,
+        on: connection,
+        library: library,
+        authorizer: authorizer
+      )
+    }
     var changedRegion = OrbitDatabaseRegion.empty
     for authorization in authorizations {
       changedRegion.formUnion(authorization.changedRegion)

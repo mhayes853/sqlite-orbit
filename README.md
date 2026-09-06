@@ -403,15 +403,17 @@ for try await reminders in reminders.values(in: database) {
 }
 ```
 
-For a custom fetch, provide its region directly. It defaults to `.fullDatabase` when omitted:
+For a custom fetch, the observation tracks every region read by the closure and updates its region
+after each successful fetch:
 
 ```swift
-let incompleteCount = OrbitValueObservation.tracking(
-  region: Reminder.databaseRegion
-) { transaction in
+let incompleteCount = OrbitValueObservation.tracking { transaction in
   try transaction.fetchCount(Reminder.where { !$0.isCompleted })
 }
 ```
+
+Pass `region:` to use an explicit region instead. A fetch that uses `sqliteConnection` directly can
+include those dependencies by calling `transaction.notifyReads(in:)`.
 
 Commits from the observed driver, another database handle, or another process carry regions, so
 observations avoid refetching after unrelated writes. A custom observable database that reports a
@@ -545,21 +547,25 @@ throwing asynchronous sequence; they never roll back the write whose final state
 
 For transaction lifecycle events that do not produce a value, register an
 `OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
-`databaseDidChange(in:)` hook receives each provisional region from a directly observed write, or
-the aggregate committed region from another handle. `databaseWillCommit` receives a read-only view
-of a pending local transaction and may throw to abort the write, and `databaseDidCommit` identifies
-the transaction's local or external origin. A write performed directly through `sqliteConnection`
-can publish a region explicitly:
+`databaseDidRead(in:)` hook receives regions read by local transactions.
+`databaseDidChange(in:)` receives each provisional region from a directly observed write, or the
+aggregate committed region from another handle. `databaseWillCommit` receives a read-only view of
+a pending local transaction and may throw to abort the write, and `databaseDidCommit` identifies
+the transaction's local or external origin. Work performed directly through `sqliteConnection`
+can publish its regions explicitly:
 
 ```swift
 try await database.write { transaction in
+  try performDirectSQLiteRead(transaction.sqliteConnection)
+  transaction.notifyReads(in: Reminder.databaseRegion)
+
   try performDirectSQLiteWrite(transaction.sqliteConnection)
   transaction.notifyChanges(in: Reminder.databaseRegion)
 }
 ```
 
-Repeated calls publish repeated observer events. A rollback follows provisional changes with
-`databaseDidRollback`.
+Read notifications are immediate and remain local to the process. Repeated calls publish repeated
+observer events. A rollback follows provisional changes with `databaseDidRollback`.
 
 ## Cross-process transport
 

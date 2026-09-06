@@ -125,6 +125,7 @@ struct SQLiteHandle: ~Copyable {
   }
 
   borrowing func read<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
@@ -132,10 +133,10 @@ struct SQLiteHandle: ~Copyable {
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than quietly having
     // it discarded by the rollback below.
-    guard !isReadOnly else { return try runRead(body) }
+    guard !isReadOnly else { return try runRead(observers: observers, body) }
     try execute("PRAGMA query_only = ON")
     do {
-      let value = try runRead(body)
+      let value = try runRead(observers: observers, body)
       try execute("PRAGMA query_only = OFF")
       return value
     } catch {
@@ -145,12 +146,14 @@ struct SQLiteHandle: ~Copyable {
   }
 
   private borrowing func runRead<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers?,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
     let value: Result
     do {
-      value = try body(SQLiteReadTransaction(handle: self))
+      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+      value = try body(SQLiteReadTransaction(handle: self, observations: observations))
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
       rollbackIgnoringFailure()
@@ -168,8 +171,9 @@ struct SQLiteHandle: ~Copyable {
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     do {
-      let value = try body(SQLiteWriteTransaction(handle: self, observers: observers))
-      try observers?.willCommit(SQLiteReadTransaction(handle: self))
+      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+      let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
+      try observers?.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
       try endTransaction(with: "COMMIT")
       observers?.didCommit(origin: .local)
       return value
@@ -200,7 +204,7 @@ struct SQLiteHandle: ~Copyable {
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     authorizer: SQLiteAuthorizerDispatcher? = nil,
-    observers: OrbitDatabaseTransactionObservers? = nil
+    observations: OrbitDatabaseTransactionObservationContext? = nil
   ) throws {
     // Each statement's length is passed explicitly rather than left to SQLite to measure again.
     try sql.withCString { start in
@@ -239,9 +243,12 @@ struct SQLiteHandle: ~Copyable {
         let preparedStatement = SQLitePreparedStatement(
           pointer: statement,
           authorizations: authorizations,
+          connection: connection,
+          authorizer: authorizer,
           library: library
         )
-        observers?.didChange(in: preparedStatement.changedRegion)
+        observations?.didRead(in: preparedStatement.readRegion)
+        observations?.didChange(in: preparedStatement.changedRegion)
 
         var stepCode = library.pointee.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {

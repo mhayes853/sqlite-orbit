@@ -22,9 +22,10 @@ actor SQLiteConnection {
   }
 
   func read<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.read(body) }
+    try await perform { handle in try handle.read(observers: observers, body) }
   }
 
   func write<Result: Sendable>(
@@ -35,9 +36,10 @@ actor SQLiteConnection {
   }
 
   nonisolated func readBlocking<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try performBlocking { handle in try handle.read(body) }
+    try performBlocking { handle in try handle.read(observers: observers, body) }
   }
 
   nonisolated func writeBlocking<Result: Sendable>(

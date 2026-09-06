@@ -947,6 +947,130 @@
     }
 
     @Test
+    func automaticRegionSkipsUnrelatedLocalWrites() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      _ = subscription
+    }
+
+    @Test
+    func automaticRegionFollowsTheReadsOfEachSuccessfulFetch() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE settings (useNotes INTEGER NOT NULL);
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          INSERT INTO settings VALUES (0);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          let useNotes = try transaction.fetchOne(
+            #sql("SELECT useNotes FROM settings", as: Bool.self)
+          ) ?? false
+          let table = useNotes ? "notes" : "items"
+          return try transaction.fetchOne(
+            #sql("SELECT COUNT(*) FROM \(raw: table)", as: Int.self)
+          ) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("UPDATE settings SET useNotes = 1")
+      }
+      #expect(recorder.changes.map(\.value) == [0, 1])
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (2)")
+      }
+      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(recorder.changes.map(\.value) == [0, 1, 2])
+      _ = subscription
+    }
+
+    @Test
+    func automaticRegionIncludesManuallyPublishedReads() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      let fetchCount = Mutex(0)
+      let region = OrbitDatabaseRegion(table: "raw_items")
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          transaction.notifyReads(in: region)
+          return 1
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { _ in },
+          onChange: { _ in }
+        )
+
+      try driver.writeBlocking { transaction in
+        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        transaction.notifyChanges(in: region)
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+      _ = subscription
+    }
+
+    @Test
     func rollbackClearsItsPublishedRegion() throws {
       struct Abort: Error {}
 

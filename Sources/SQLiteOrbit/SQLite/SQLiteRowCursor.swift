@@ -38,12 +38,12 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let preparedStatement: SQLitePreparedStatement
 
-  let observers: OrbitDatabaseTransactionObservers?
+  let observations: OrbitDatabaseTransactionObservationContext
 
   @usableFromInline
   var isExhausted = false
 
-  var didPublishChanges = false
+  var didPublishAccesses = false
 
   @_lifetime(borrow statements)
   init(
@@ -52,7 +52,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
-    observers: OrbitDatabaseTransactionObservers? = nil
+    observations: OrbitDatabaseTransactionObservationContext
   ) throws {
     let (sql, bindings) = prepareQuery(query)
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
@@ -77,7 +77,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.statements = copy statements
     self.isCached = cached
     self.preparedStatement = preparedStatement
-    self.observers = observers
+    self.observations = observations
   }
 
   deinit {
@@ -98,9 +98,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
     guard !isExhausted else { return nil }
-    if !didPublishChanges {
-      didPublishChanges = true
-      observers?.didChange(in: preparedStatement.changedRegion)
+    if !didPublishAccesses {
+      didPublishAccesses = true
+      observations.didRead(in: preparedStatement.readRegion)
+      observations.didChange(in: preparedStatement.changedRegion)
     }
     let code = library.pointee.step(statement)
     switch code {

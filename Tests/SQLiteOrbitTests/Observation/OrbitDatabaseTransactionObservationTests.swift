@@ -93,6 +93,38 @@
     }
 
     @Test
+    func readTransactionsPublishAutomaticCachedAndManualRegions() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+        )
+        try transaction.execute("INSERT INTO items VALUES (1, 'One')")
+      }
+      let observer = ReadRecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+      let automatic = OrbitDatabaseRegion(columns: ["id", "title"], in: "items")
+      let manual = OrbitDatabaseRegion(table: "manual")
+
+      try await driver.read { transaction in
+        for _ in 0..<2 {
+          _ = try transaction.fetchOne(
+            #sql("SELECT title FROM items WHERE id = 1", as: String.self)
+          )
+        }
+        try transaction.execute("SELECT title FROM items WHERE id = 1")
+        transaction.notifyReads(in: manual)
+      }
+
+      try await driver.write { transaction in
+        transaction.notifyReads(in: manual)
+      }
+
+      #expect(observer.regions == [automatic, automatic, automatic, manual, manual])
+      _ = subscription
+    }
+
+    @Test
     func blockingWritesUseTheSameObserverLifecycle() throws {
       let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
@@ -172,7 +204,7 @@
     }
 
     @Test
-    func automaticallyPublishesColumnAndTableRegionsButNotReads() async throws {
+    func automaticallyPublishesColumnAndTableChangedRegions() async throws {
       let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
         try transaction.execute(
@@ -267,6 +299,19 @@
 
     func databaseDidRollback() {
       recordedEvents.withLock { $0.append(.didRollback) }
+    }
+  }
+
+  private final class ReadRecordingTransactionObserver:
+    OrbitDatabaseTransactionObserver,
+    Sendable
+  {
+    private let recordedRegions = Mutex([OrbitDatabaseRegion]())
+
+    var regions: [OrbitDatabaseRegion] { recordedRegions.withLock { $0 } }
+
+    func databaseDidRead(in region: OrbitDatabaseRegion) {
+      recordedRegions.withLock { $0.append(region) }
     }
   }
 

@@ -38,7 +38,12 @@ extension SQLiteReadTransaction {
   fileprivate borrowing func databaseRegion(readBy query: QueryFragment) throws
     -> OrbitDatabaseRegion
   {
-    let (statement, reads) = try prepare(query)
+    let (statement, reads) = try sqlitePrepare(
+      query,
+      on: connection,
+      library: library,
+      authorizer: authorizer
+    )
     guard let statement else { return .empty }
     defer { _ = library.pointee.finalize(statement) }
 
@@ -46,72 +51,88 @@ extension SQLiteReadTransaction {
       throw OrbitDatabaseRegionError.writableStatement
     }
 
-    var region = OrbitDatabaseRegion.empty
-    for read in reads {
-      guard let table = read.firstArgument else {
-        return .fullDatabase
-      }
-      guard
-        let schema =
-          read.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? resolvedSchema(for: table)
-      else {
-        // SQLite normally omits the schema only for an unqualified `count(*)`. If an unusual
-        // virtual table or extension prevents resolving it, observe conservatively.
-        return .fullDatabase
-      }
-
-      if let column = read.secondArgument, !column.isEmpty {
-        region.formUnion(OrbitDatabaseRegion(column: column, in: table, schema: schema))
-      } else {
-        region.formUnion(OrbitDatabaseRegion(table: table, schema: schema))
-      }
-    }
-    return region
-  }
-
-  private borrowing func prepare(_ query: QueryFragment) throws -> (
-    statement: OpaquePointer?, reads: [SQLiteAuthorization]
-  ) {
-    let (sql, _) = query.prepare { _ in "?" }
-    var reads: [SQLiteAuthorization] = []
-    var statement: OpaquePointer?
-    let code = authorizer.withHandler(
-      { authorization in
-        // SQLITE_READ is part of SQLite's stable ABI.
-        if authorization.actionCode == 20 {
-          reads.append(authorization)
-        }
-        return .allow
-      },
-      perform: {
-        sql.withCString {
-          library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
-        }
-      }
-    )
-    guard code == SQLiteResultCode.ok.rawValue else {
-      if let statement {
-        _ = library.pointee.finalize(statement)
-      }
-      throw SQLiteError.reported(
-        by: library.pointee,
+    return sqliteDatabaseRegion(readBy: reads) { table in
+      sqliteResolvedSchema(
+        for: table,
         on: connection,
-        code: code,
-        sql: sql
+        library: library,
+        authorizer: authorizer
       )
     }
-    return (statement, reads)
   }
+}
 
-  private borrowing func resolvedSchema(for table: String) -> SQLiteSchemaName? {
-    let query: QueryFragment = "SELECT * FROM \(quote: table) LIMIT 0"
-    guard let prepared = try? prepare(query), let statement = prepared.statement else { return nil }
-    defer { _ = library.pointee.finalize(statement) }
+func sqliteDatabaseRegion(
+  readBy reads: [SQLiteAuthorization],
+  resolvingSchema: (String) -> SQLiteSchemaName?
+) -> OrbitDatabaseRegion {
+  var region = OrbitDatabaseRegion.empty
+  for read in reads where read.actionCode == 20 {  // SQLITE_READ
+    guard let table = read.firstArgument else { return .fullDatabase }
+    guard
+      let schema =
+        read.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? resolvingSchema(table)
+    else {
+      return .fullDatabase
+    }
 
-    let normalizedTable = table.asciiLowercased
-    return prepared.reads.first {
-      $0.sourceName == nil && $0.firstArgument?.asciiLowercased == normalizedTable
-    }?
-    .schemaName.map(SQLiteSchemaName.init(rawValue:))
+    if let column = read.secondArgument, !column.isEmpty {
+      region.formUnion(OrbitDatabaseRegion(column: column, in: table, schema: schema))
+    } else {
+      region.formUnion(OrbitDatabaseRegion(table: table, schema: schema))
+    }
   }
+  return region
+}
+
+func sqliteResolvedSchema(
+  for table: String,
+  on connection: OpaquePointer,
+  library: UnsafePointer<SQLiteLibrary>,
+  authorizer: SQLiteAuthorizerDispatcher
+) -> SQLiteSchemaName? {
+  let query: QueryFragment = "SELECT * FROM \(quote: table) LIMIT 0"
+  guard
+    let prepared = try? sqlitePrepare(
+      query,
+      on: connection,
+      library: library,
+      authorizer: authorizer
+    ),
+    let statement = prepared.statement
+  else { return nil }
+  defer { _ = library.pointee.finalize(statement) }
+
+  let normalizedTable = table.asciiLowercased
+  return prepared.reads.first {
+    $0.sourceName == nil && $0.firstArgument?.asciiLowercased == normalizedTable
+  }?
+  .schemaName.map(SQLiteSchemaName.init(rawValue:))
+}
+
+private func sqlitePrepare(
+  _ query: QueryFragment,
+  on connection: OpaquePointer,
+  library: UnsafePointer<SQLiteLibrary>,
+  authorizer: SQLiteAuthorizerDispatcher
+) throws -> (statement: OpaquePointer?, reads: [SQLiteAuthorization]) {
+  let (sql, _) = query.prepare { _ in "?" }
+  var reads: [SQLiteAuthorization] = []
+  var statement: OpaquePointer?
+  let code = authorizer.withHandler(
+    { authorization in
+      if authorization.actionCode == 20 { reads.append(authorization) }
+      return .allow
+    },
+    perform: {
+      sql.withCString {
+        library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
+      }
+    }
+  )
+  guard code == SQLiteResultCode.ok.rawValue else {
+    if let statement { _ = library.pointee.finalize(statement) }
+    throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+  }
+  return (statement, reads)
 }
