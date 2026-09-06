@@ -346,6 +346,27 @@ identifier, and callers can override it when constructing the database. File dat
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
+## Database regions
+
+`OrbitDatabaseRegion` describes a set of database columns without opening or inspecting a
+database. A region can be empty, cover the full database, cover whole tables, or cover selected
+columns:
+
+```swift
+let everything = OrbitDatabaseRegion.fullDatabase
+let reminders = OrbitDatabaseRegion(Reminder.self)
+let titles = Reminder.databaseRegion(\.title)
+let visibleFields = Reminder.databaseRegion { ($0.title, $0.isCompleted) }
+let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "reminders")
+```
+
+Typed table instances produce the region of their entire table; their stored values do not narrow
+the region. Regions support union, intersection, containment, and overlap testing. Whole-table
+regions absorb their column regions, while regions for distinct tables do not intersect.
+
+Database regions are currently standalone values. Deriving them from arbitrary SQL and using them
+to filter observation invalidations will be added separately.
+
 ## Observation
 
 `SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A
