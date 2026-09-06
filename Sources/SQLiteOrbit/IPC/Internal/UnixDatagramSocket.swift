@@ -1,5 +1,4 @@
 #if canImport(Darwin) || canImport(Glibc)
-  import Foundation
   import Synchronization
 
   #if canImport(Darwin)
