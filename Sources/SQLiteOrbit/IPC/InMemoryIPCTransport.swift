@@ -124,7 +124,9 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// waiting.
   ///
   /// ```swift
-  /// try await transport.send(.transactionDidCommit(.init(databaseIdentifier: database.id)))
+  /// try await transport.send(
+  ///   .transactionDidCommit(.init(databaseIdentifier: database.id, region: .fullDatabase))
+  /// )
   /// ```
   ///
   /// - Parameter message: The message to broadcast.

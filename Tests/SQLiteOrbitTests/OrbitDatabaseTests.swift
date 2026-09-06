@@ -17,7 +17,9 @@
       }
 
       #expect(
-        transport.messages == [.transactionDidCommit(.init(databaseIdentifier: identifier))]
+        transport.messages == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+        ]
       )
     }
 
@@ -32,7 +34,76 @@
       try await waitUntil { transport.messages.count == 1 }
 
       #expect(
-        transport.messages == [.transactionDidCommit(.init(databaseIdentifier: identifier))]
+        transport.messages == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+        ]
+      )
+    }
+
+    @Test
+    func writeAnnouncesTheUnionOfItsChangedRegions() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "region-announcement")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      let title = OrbitDatabaseRegion(column: "title", in: "items")
+      let archived = OrbitDatabaseRegion(table: "archived", schema: "archive")
+
+      try await database.write { transaction in
+        transaction.notifyChanges(in: title)
+        transaction.notifyChanges(in: archived)
+        transaction.notifyChanges(in: title)
+      }
+
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(
+            .init(databaseIdentifier: identifier, region: title.union(archived))
+          )
+        ]
+      )
+    }
+
+    @Test
+    func writeAnnouncesAnEmptyRegionWhenNothingChanged() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "empty-region-announcement")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+
+      _ = try await database.write { transaction in
+        try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+      }
+
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: .empty))
+        ]
+      )
+    }
+
+    @Test
+    func writeAnnouncesAutomaticallyTrackedColumns() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "automatic-region-announcement")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      try await database.writer.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
+        )
+        try transaction.execute("INSERT INTO items VALUES (1, 'Before', 0)")
+      }
+
+      try await database.write { transaction in
+        try transaction.execute(
+          "UPDATE items SET title = 'After', isCompleted = 1 WHERE id = 1"
+        )
+      }
+
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(
+            .init(
+              databaseIdentifier: identifier,
+              region: OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "items")
+            )
+          )
+        ]
       )
     }
 
@@ -110,6 +181,52 @@
       #expect(transport.messages.count == 1)
       #expect(failures.withLock { $0 } == 0)
     }
+
+    @Test
+    func externalAnnouncementReportsItsRegionBeforeItsCommit() async throws {
+      let network = InMemoryIPCTransport.Network()
+      let receivingTransport = InMemoryIPCTransport(network: network)
+      let sendingTransport = InMemoryIPCTransport(network: network)
+      let identifier = OrbitDatabaseIdentifier(rawValue: "external-region")
+      let database = OrbitDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: receivingTransport
+      )
+      let observer = RecordingPeerTransactionObserver()
+      let subscription = try database.subscribe(transactionObserver: observer)
+      let region = OrbitDatabaseRegion(column: "title", in: "items")
+
+      try await sendingTransport.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: region))
+      )
+
+      #expect(observer.events == [.didChange(region), .didCommit(.external)])
+      _ = subscription
+    }
+
+    @Test
+    func siblingHandleReportsItsRegionBeforeItsCommit() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "sibling-region")
+      let writingDatabase = OrbitDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier
+      )
+      let observingDatabase = OrbitDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier
+      )
+      let observer = RecordingPeerTransactionObserver()
+      let subscription = try observingDatabase.subscribe(transactionObserver: observer)
+      let region = OrbitDatabaseRegion(table: "items")
+
+      try await writingDatabase.write { transaction in
+        transaction.notifyChanges(in: region)
+      }
+
+      #expect(observer.events == [.didChange(region), .didCommit(.local)])
+      _ = subscription
+    }
   }
 
   private func makeAnnouncingDatabase(
@@ -130,6 +247,28 @@
 
   private struct WriteFailure: Error {}
   private struct AnnouncementFailure: Error {}
+
+  private enum RecordedPeerTransactionEvent: Equatable, Sendable {
+    case didChange(OrbitDatabaseRegion)
+    case didCommit(OrbitDatabaseTransactionOrigin)
+  }
+
+  private final class RecordingPeerTransactionObserver:
+    OrbitDatabaseTransactionObserver,
+    Sendable
+  {
+    private let recordedEvents = Mutex([RecordedPeerTransactionEvent]())
+
+    var events: [RecordedPeerTransactionEvent] { recordedEvents.withLock { $0 } }
+
+    func databaseDidChange(in region: OrbitDatabaseRegion) {
+      recordedEvents.withLock { $0.append(.didChange(region)) }
+    }
+
+    func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
+      recordedEvents.withLock { $0.append(.didCommit(commit.origin)) }
+    }
+  }
 
   private final class RecordingDatabaseIPCTransport: OrbitIPCTransport, Sendable {
     private struct State {

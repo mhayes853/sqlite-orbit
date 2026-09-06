@@ -17,7 +17,14 @@
       sender.subscribe(to: database, onMessage: senderMessages.append),
       receiver.subscribe(to: database, onMessage: receiverMessages.append)
     ]
-    let message = commit(database)
+    let message = OrbitIPCMessage.transactionDidCommit(
+      .init(
+        databaseIdentifier: database,
+        region: OrbitDatabaseRegion.fullDatabase.subtracting(
+          OrbitDatabaseRegion(column: "title", in: "items")
+        )
+      )
+    )
 
     try await sender.send(message)
     try await receiverMessages.waitForCount(1)
@@ -48,6 +55,40 @@
       #expect(recorder.values == [message])
     }
     _ = subscriptions
+  }
+
+  @Test
+  func unixDatagramTransportBroadensARegionThatDoesNotFit() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let configuration = UnixDatagramIPCTransport.Configuration(
+      directory: directory,
+      backPressure: .fail,
+      maximumDatagramByteCount: 12,
+      receiveBufferByteCount: 4_096
+    )
+    let sender = try UnixDatagramIPCTransport(configuration: configuration)
+    let receiver = try UnixDatagramIPCTransport(configuration: configuration)
+    let recorder = IPCMessageRecorder()
+    let database = OrbitDatabaseIdentifier(rawValue: "d")
+    let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
+
+    try await sender.send(
+      .transactionDidCommit(
+        .init(
+          databaseIdentifier: database,
+          region: OrbitDatabaseRegion(column: "title", in: "items")
+        )
+      )
+    )
+    try await recorder.waitForCount(1)
+
+    #expect(
+      recorder.values == [
+        .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+      ]
+    )
+    _ = subscription
   }
 
   @Test

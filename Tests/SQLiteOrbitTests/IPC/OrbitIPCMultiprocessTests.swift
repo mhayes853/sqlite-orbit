@@ -24,6 +24,25 @@
       }
     }
 
+    @Test
+    func databaseRegionRoundTripsBetweenProcesses() async throws {
+      let harness = try IPCProcessHarness(database: "region-round-trip")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen-region", expected: 1)
+      try await harness.waitUntilReady(1)
+      let region = OrbitDatabaseRegion.fullDatabase.subtracting(
+        OrbitDatabaseRegion(column: "title", in: "items")
+      )
+
+      try await harness.transport(.fail)
+        .send(
+          .transactionDidCommit(.init(databaseIdentifier: harness.database, region: region))
+        )
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == 1)
+    }
+
     @Test(arguments: [2, 4, 8])
     func subscribedProcessesBroadcastToEveryOtherProcess(processCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "all-to-all")
@@ -122,14 +141,27 @@
       )
     )
     let received = Mutex(0)
-    let subscription = try transport.subscribe(to: database) { _ in
+    let subscription = try transport.subscribe(to: database) { message in
+      if mode == "listen-region" {
+        let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
+          OrbitDatabaseRegion(column: "title", in: "items")
+        )
+        guard
+          message
+            == .transactionDidCommit(
+              .init(databaseIdentifier: database, region: expectedRegion)
+            )
+        else { return }
+      }
       received.withLock { $0 += 1 }
     }
     try touch(ready)
 
     if mode == "subscribe-and-send" {
       try await waitForFile(directory.appending(path: "start"))
-      try await transport.send(.transactionDidCommit(.init(databaseIdentifier: database)))
+      try await transport.send(
+        .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+      )
     }
     if mode == "idle" {
       try await waitForFile(directory.appending(path: "stop"), timeout: .seconds(30))
@@ -149,7 +181,7 @@
     var directory: URL { self.harness.directory }
 
     var message: OrbitIPCMessage {
-      .transactionDidCommit(.init(databaseIdentifier: self.database))
+      .transactionDidCommit(.init(databaseIdentifier: self.database, region: .fullDatabase))
     }
 
     init(database: String) throws {

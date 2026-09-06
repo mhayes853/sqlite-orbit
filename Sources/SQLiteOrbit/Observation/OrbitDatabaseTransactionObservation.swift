@@ -38,8 +38,8 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// changed region it publishes. After its access closure returns it calls
 /// ``databaseWillCommit(_:)``, while those changes are still visible through the transaction, and
 /// then exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
-/// reported by another handle in this process, or by another process, can only produce
-/// `databaseDidCommit` because it is observed after the commit succeeds.
+/// reported by another handle in this process, or by another process, reports its aggregate region
+/// followed immediately by `databaseDidCommit` because it is observed after the commit succeeds.
 ///
 /// Prefer ``OrbitValueObservation`` for tracking a query; conform to this protocol when you need
 /// the transaction lifecycle itself.
@@ -54,10 +54,12 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
 public protocol OrbitDatabaseTransactionObserver: Sendable {
-  /// Called when a local transaction may have changed a database region.
+  /// Called when a transaction may have changed a database region.
   ///
-  /// A change remains provisional until ``databaseDidCommit(_:)``. If the transaction rolls back,
-  /// ``databaseDidRollback()`` follows instead. The callback must not access the database.
+  /// A local change remains provisional until ``databaseDidCommit(_:)``. If the transaction rolls
+  /// back, ``databaseDidRollback()`` follows instead. A change reported by another handle is
+  /// already committed and is followed immediately by `databaseDidCommit`. The callback must not
+  /// access the database.
   ///
   /// - Parameter region: The region the transaction may have changed.
   func databaseDidChange(in region: OrbitDatabaseRegion)

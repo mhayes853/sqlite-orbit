@@ -73,6 +73,18 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   /// Table regions that differ from the unspecified-table default.
   private let tableRegions: [TableIdentifier: TableRegion]
 
+  struct IPCRepresentation: Sendable {
+    struct Table: Sendable {
+      let schema: String
+      let name: String
+      let includesUnspecifiedColumns: Bool
+      let columnExceptions: [String]
+    }
+
+    let includesUnspecifiedTables: Bool
+    let tables: [Table]
+  }
+
   private init(
     includesUnspecifiedTables: Bool,
     tableRegions: [TableIdentifier: TableRegion]
@@ -80,6 +92,42 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
     self.includesUnspecifiedTables = includesUnspecifiedTables
     self.tableRegions = tableRegions.filter { $0.value != defaultTableRegion }
+  }
+
+  init(ipcRepresentation: IPCRepresentation) {
+    self.init(
+      includesUnspecifiedTables: ipcRepresentation.includesUnspecifiedTables,
+      tableRegions: Dictionary(
+        uniqueKeysWithValues: ipcRepresentation.tables.map { table in
+          (
+            TableIdentifier(schema: SQLiteSchemaName(table.schema), name: table.name),
+            TableRegion(
+              includesUnspecifiedColumns: table.includesUnspecifiedColumns,
+              exceptions: Set(table.columnExceptions.map(\.asciiLowercased))
+            )
+          )
+        }
+      )
+    )
+  }
+
+  var ipcRepresentation: IPCRepresentation {
+    IPCRepresentation(
+      includesUnspecifiedTables: includesUnspecifiedTables,
+      tables:
+        tableRegions
+        .map { table, region in
+          IPCRepresentation.Table(
+            schema: table.schema.rawValue,
+            name: table.name,
+            includesUnspecifiedColumns: region.includesUnspecifiedColumns,
+            columnExceptions: region.exceptions.sorted()
+          )
+        }
+        .sorted {
+          ($0.schema, $0.name) < ($1.schema, $1.name)
+        }
+    )
   }
 
   /// The empty database region.

@@ -148,7 +148,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// `fetch` runs inside a read transaction, so everything it reads comes from one consistent
   /// snapshot of the database. It runs again after a committed write that may affect `region`.
-  /// Commits from another database handle or process do not carry a region and are treated
+  /// A database that reports a commit without first reporting its changed region is treated
   /// conservatively.
   ///
   /// ```swift
@@ -949,7 +949,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var isStopped = false
 
     var observedRegion: OrbitDatabaseRegion?
-    var transactionRegion = OrbitDatabaseRegion.empty
+    var transactionRegion: OrbitDatabaseRegion?
     var pendingLocal: PendingLocal?
 
     var reads = OrbitValueObservationReadCoordinator()
@@ -1082,7 +1082,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func databaseDidChange(in region: OrbitDatabaseRegion) {
     state.withLock { state in
       guard !state.isStopped else { return }
-      state.transactionRegion.formUnion(region)
+      state.transactionRegion = state.transactionRegion?.union(region) ?? region
     }
   }
 
@@ -1093,8 +1093,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     let regionNeedsFetch = state.withLock { state in
       guard !state.isStopped else { return false }
       let observedRegion = state.observedRegion ?? .fullDatabase
-      let needsFetch = observedRegion.overlaps(state.transactionRegion)
-      state.transactionRegion = .empty
+      let needsFetch = observedRegion.overlaps(state.transactionRegion ?? .empty)
+      state.transactionRegion = nil
       state.pendingLocal = .skipped
       return needsFetch
     }
@@ -1123,14 +1123,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         publishLocal(result)
         return
       case nil:
-        guard unknownTransactionNeedsFetch(commit) else { return }
+        guard committedTransactionNeedsFetch(commit) else { return }
         events.databaseDidChange()
         requestRead(source: .transaction(.local))
         return
       }
 
     case .external:
-      guard unknownTransactionNeedsFetch(commit) else { return }
+      guard committedTransactionNeedsFetch(commit) else { return }
       events.databaseDidChange()
       requestRead(source: .transaction(.external))
     }
@@ -1138,7 +1138,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
   func databaseDidRollback() {
     state.withLock {
-      $0.transactionRegion = .empty
+      $0.transactionRegion = nil
       $0.pendingLocal = nil
     }
   }
@@ -1147,10 +1147,12 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     reducer.transactionNeedsFetch(commit)
   }
 
-  private func unknownTransactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
+  private func committedTransactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
     let regionNeedsFetch = state.withLock { state in
       guard !state.isStopped else { return false }
-      return (state.observedRegion ?? .fullDatabase).overlaps(.fullDatabase)
+      let region = state.transactionRegion ?? .fullDatabase
+      state.transactionRegion = nil
+      return (state.observedRegion ?? .fullDatabase).overlaps(region)
     }
     return regionNeedsFetch && transactionNeedsFetch(commit)
   }

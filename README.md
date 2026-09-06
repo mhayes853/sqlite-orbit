@@ -381,7 +381,7 @@ let region = try await database.read { transaction in
 
 Compilation resolves tables, columns, views, and attached schemas without executing the statement
 or evaluating its bindings. Region derivation rejects statements that may write. Query-backed value
-observations use this region to avoid refetching after unrelated local writes.
+observations use this region to avoid refetching after unrelated writes.
 
 ## Observation
 
@@ -413,8 +413,9 @@ let incompleteCount = OrbitValueObservation.tracking(
 }
 ```
 
-Writes from the observed driver carry regions. Commit notifications from another database handle
-or process currently do not, so observations conservatively refetch after those commits.
+Commits from the observed driver, another database handle, or another process carry regions, so
+observations avoid refetching after unrelated writes. A custom observable database that reports a
+commit without a region is handled conservatively.
 
 Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
 source; a committed transaction reports whether it came from this process or another one:
@@ -544,10 +545,11 @@ throwing asynchronous sequence; they never roll back the write whose final state
 
 For transaction lifecycle events that do not produce a value, register an
 `OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
-`databaseDidChange(in:)` hook receives each provisional changed region, `databaseWillCommit`
-receives a read-only view of the pending transaction and may throw to abort the write, and
-`databaseDidCommit` identifies the transaction's local or external origin. A write performed
-directly through `sqliteConnection` can publish a region explicitly:
+`databaseDidChange(in:)` hook receives each provisional region from a directly observed write, or
+the aggregate committed region from another handle. `databaseWillCommit` receives a read-only view
+of a pending local transaction and may throw to abort the write, and `databaseDidCommit` identifies
+the transaction's local or external origin. A write performed directly through `sqliteConnection`
+can publish a region explicitly:
 
 ```swift
 try await database.write { transaction in
@@ -583,7 +585,9 @@ let subscription = try transport.subscribe(to: databaseIdentifier) { message in
 }
 
 try await transport.send(
-  .transactionDidCommit(.init(databaseIdentifier: databaseIdentifier))
+  .transactionDidCommit(
+    .init(databaseIdentifier: databaseIdentifier, region: .fullDatabase)
+  )
 )
 ```
 
@@ -650,7 +654,7 @@ A database announces every write transaction it commits:
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
-// Peers sharing the coordination directory have now been sent .transactionDidCommit.
+// Peers have now been sent .transactionDidCommit with the transaction's aggregate region.
 ```
 
 The announcement is sent after the driver releases its write transaction, never inside it: a peer

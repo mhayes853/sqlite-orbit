@@ -112,7 +112,7 @@ func inMemoryTransportStopsDeliveringAfterDeinit() async throws {
 }
 
 func commit(_ database: OrbitDatabaseIdentifier) -> OrbitIPCMessage {
-  .transactionDidCommit(.init(databaseIdentifier: database))
+  .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
 }
 
 final class IPCMessageRecorder: Sendable {

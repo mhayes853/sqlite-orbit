@@ -252,11 +252,64 @@
       #expect(initial.source == .initial)
 
       try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier))
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
       )
       let external = try #require(try await iterator.next())
       #expect(external.value == 0)
       #expect(external.source == .transaction(.external))
+    }
+
+    @Test
+    func interprocessObservationIgnoresDisjointRegions() async throws {
+      let driver = try await itemsDatabase()
+      let network = InMemoryIPCTransport.Network()
+      let receivingTransport = InMemoryIPCTransport(network: network)
+      let sendingTransport = InMemoryIPCTransport(network: network)
+      let identifier = OrbitDatabaseIdentifier(rawValue: "external-region-filtering")
+      let database = OrbitDatabase(
+        writer: driver,
+        id: identifier,
+        transport: receivingTransport
+      )
+      let fetchCount = Mutex(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: database,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .empty))
+      )
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(
+          .init(
+            databaseIdentifier: identifier,
+            region: OrbitDatabaseRegion(table: "unrelated")
+          )
+        )
+      )
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(
+          .init(databaseIdentifier: identifier, region: OrbitDatabaseRegion(table: "items"))
+        )
+      )
+      try await recorder.waitForChangeCount(2)
+
+      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.external)])
+      _ = subscription
     }
 
     @Test
@@ -292,7 +345,7 @@
       #expect(fetchCount.withLock { $0 } == 1)
 
       try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier))
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
       )
       try await recorder.waitForChangeCount(2)
 
@@ -373,6 +426,49 @@
       try await recorder.waitForChangeCount(2)
 
       #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+      _ = subscription
+    }
+
+    @Test
+    func interprocessObservationIgnoresDisjointSiblingHandleWrites() async throws {
+      let directory = FileManager.default.temporaryDirectory
+        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: directory) }
+
+      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+      let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-region-filtering")
+      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      try await writingDatabase.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      let fetchCount = Mutex(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: observingDatabase,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await writingDatabase.write { transaction in
+        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await writingDatabase.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(fetchCount.withLock { $0 } == 2)
       #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
       _ = subscription
     }
@@ -1068,7 +1164,7 @@
 
       #expect(try await iterator.next()?.source == .initial)
       try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier))
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
       )
       #expect(try await iterator.next()?.source == .transaction(.external))
     }
