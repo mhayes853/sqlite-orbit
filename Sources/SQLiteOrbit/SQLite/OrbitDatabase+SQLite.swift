@@ -1,5 +1,4 @@
 #if BuiltInSQLite && (canImport(Darwin) || canImport(Glibc))
-  import Foundation
 
   extension OrbitDatabase where Writer == SQLitePool {
     /// Opens the SQLite database at `path` for access from any process using the same coordination
