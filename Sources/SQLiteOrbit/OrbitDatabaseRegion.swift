@@ -206,13 +206,16 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The other region.
   public func union(_ other: Self) -> Self {
-    combining(other, with: { $0 || $1 })
+    if self == other || other.isEmpty || isFullDatabase { return self }
+    if isEmpty || other.isFullDatabase { return other }
+    return combining(other, with: { $0 || $1 })
   }
 
   /// Adds everything in `other` to this region.
   ///
   /// - Parameter other: The region to add.
   public mutating func formUnion(_ other: Self) {
+    guard self != other, !other.isEmpty, !isFullDatabase else { return }
     self = union(other)
   }
 
