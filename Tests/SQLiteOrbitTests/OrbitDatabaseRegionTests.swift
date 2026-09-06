@@ -4,6 +4,17 @@ import Testing
 @Suite
 struct OrbitDatabaseRegionTests {
   @Test
+  func schemaNamesAreExplicitAndCaseInsensitive() {
+    #expect(SQLiteSchemaName.main == SQLiteSchemaName("MAIN"))
+    #expect(SQLiteSchemaName.temp.rawValue == "temp")
+    #expect(SQLiteSchemaName("Archive") == "archive")
+    #expect(
+      OrbitDatabaseRegion(table: "reminders")
+        == OrbitDatabaseRegion(table: "reminders", schema: .main)
+    )
+  }
+
+  @Test
   func emptyAndFullDatabaseAreAlgebraicBounds() {
     let title = OrbitDatabaseRegion(column: "title", in: "reminders")
 

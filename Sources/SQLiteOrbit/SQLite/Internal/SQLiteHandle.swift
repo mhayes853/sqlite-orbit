@@ -1,6 +1,7 @@
 struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
+  let authorizer: SQLiteAuthorizerDispatcher
 
   let isReadOnly: Bool
 
@@ -19,6 +20,7 @@ struct SQLiteHandle: ~Copyable {
     self.pointer = pointer
     self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
+    self.authorizer = SQLiteAuthorizerDispatcher()
     self.statements = SQLiteStatementCache(
       library: UnsafePointer(libraryStorage),
       connection: pointer,
@@ -61,6 +63,7 @@ struct SQLiteHandle: ~Copyable {
       isReadOnly: flags.contains(.readOnly)
     )
     try handle.configure(configuration)
+    try handle.authorizer.install(on: pointer, using: handle.library)
     return handle
   }
 

@@ -19,11 +19,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   public typealias Element = Self
 
   private struct TableIdentifier: Hashable, Sendable {
-    let schema: String?
+    let schema: SQLiteSchemaName
     let name: String
 
-    init(schema: String?, name: String) {
-      self.schema = schema?.asciiLowercased
+    init(schema: SQLiteSchemaName, name: String) {
+      self.schema = schema
       self.name = name.asciiLowercased
     }
   }
@@ -97,8 +97,8 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameters:
   ///   - table: The table's name.
-  ///   - schema: The table's schema, or `nil` for an unqualified table name.
-  public init(table: String, schema: String? = nil) {
+  ///   - schema: The table's schema. The default is ``SQLiteSchemaName/main``.
+  public init(table: String, schema: SQLiteSchemaName = .main) {
     self.init(
       includesUnspecifiedTables: false,
       tableRegions: [TableIdentifier(schema: schema, name: table): .full]
@@ -110,8 +110,8 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   /// - Parameters:
   ///   - column: The column's name.
   ///   - table: The table's name.
-  ///   - schema: The table's schema, or `nil` for an unqualified table name.
-  public init(column: String, in table: String, schema: String? = nil) {
+  ///   - schema: The table's schema. The default is ``SQLiteSchemaName/main``.
+  public init(column: String, in table: String, schema: SQLiteSchemaName = .main) {
     self.init(columns: CollectionOfOne(column), in: table, schema: schema)
   }
 
@@ -122,11 +122,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   /// - Parameters:
   ///   - columns: The columns to include.
   ///   - table: The table's name.
-  ///   - schema: The table's schema, or `nil` for an unqualified table name.
+  ///   - schema: The table's schema. The default is ``SQLiteSchemaName/main``.
   public init<Columns: Sequence>(
     columns: Columns,
     in table: String,
-    schema: String? = nil
+    schema: SQLiteSchemaName = .main
   ) where Columns.Element == String {
     let columns = Set(columns.map(\.asciiLowercased))
     guard !columns.isEmpty else {
@@ -146,7 +146,10 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter table: The table type.
   public init<TableType: Table>(_ table: TableType.Type) {
-    self.init(table: TableType.tableName, schema: TableType.schemaName)
+    self.init(
+      table: TableType.tableName,
+      schema: TableType.schemaName.map { SQLiteSchemaName($0) } ?? .main
+    )
   }
 
   /// Creates a region containing a typed table column.
@@ -156,7 +159,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     self.init(
       column: column.name,
       in: Column.Root.tableName,
-      schema: Column.Root.schemaName
+      schema: Column.Root.schemaName.map { SQLiteSchemaName($0) } ?? .main
     )
   }
 
@@ -328,7 +331,7 @@ extension Table {
     OrbitDatabaseRegion(
       columns: Self.columns[keyPath: column]._names,
       in: tableName,
-      schema: schemaName
+      schema: schemaName.map { SQLiteSchemaName($0) } ?? .main
     )
   }
 
@@ -348,7 +351,11 @@ extension Table {
     for column in repeat each columns(Self.columns) {
       names.append(contentsOf: column._names)
     }
-    return OrbitDatabaseRegion(columns: names, in: tableName, schema: schemaName)
+    return OrbitDatabaseRegion(
+      columns: names,
+      in: tableName,
+      schema: schemaName.map { SQLiteSchemaName($0) } ?? .main
+    )
   }
 
   /// The region containing every column in this instance's table.

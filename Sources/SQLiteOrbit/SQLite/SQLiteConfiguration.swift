@@ -97,13 +97,15 @@ public struct SQLiteConfiguration: Sendable {
 
 /// A native callback installed on every connection a configuration opens.
 ///
-/// This is the escape hatch for registering what the package does not model — an authorizer, an
-/// update hook, a virtual table module. The closure is handed the `sqlite3 *` once the connection
-/// has been configured, along with the ``SQLiteLibrary`` that connection was opened through, and
-/// returns a SQLite result code. Being handed the library is what lets a setup call the same build
-/// the connection belongs to, and lets one that cannot refuse the connection outright.
+/// This is the escape hatch for registering what the package does not model — an update hook or a
+/// virtual table module. The closure is handed the `sqlite3 *` once the connection has been
+/// configured, along with the ``SQLiteLibrary`` that connection was opened through, and returns a
+/// SQLite result code. Being handed the library is what lets a setup call the same build the
+/// connection belongs to, and lets one that cannot refuse the connection outright.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
+///
+/// - Important: SQLiteOrbit owns SQLite's single authorizer callback. A setup must not replace it.
 ///
 /// ```swift
 /// var configuration = SQLiteConfiguration.default

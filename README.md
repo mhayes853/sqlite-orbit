@@ -358,16 +358,30 @@ let reminders = OrbitDatabaseRegion(Reminder.self)
 let titles = Reminder.databaseRegion(\.title)
 let visibleFields = Reminder.databaseRegion { ($0.title, $0.isCompleted) }
 let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "reminders")
+let archived = OrbitDatabaseRegion(table: "reminders", schema: "archive")
 ```
 
 Typed table instances produce the region of their entire table; their stored values do not narrow
-the region. Regions conform to `SetAlgebra`, supporting union, intersection, symmetric difference,
-subtraction, containment, and overlap testing. Subtraction can express exclusions such as every
-column in a table except one particular column. Whole-table regions absorb their column regions,
-while regions for distinct tables do not intersect.
+the region. Raw regions default to `SQLiteSchemaName.main`; use `.temp` or a string literal for a
+temporary or attached schema. Regions conform to `SetAlgebra`, supporting union, intersection,
+symmetric difference, subtraction, containment, and overlap testing. Subtraction can express
+exclusions such as every column in a table except one particular column. Whole-table regions absorb
+their column regions, while regions for distinct tables or schemas do not intersect.
 
-Database regions are currently standalone values. Deriving them from arbitrary SQL and using them
-to filter observation invalidations will be added separately.
+A read transaction can derive the region of a `QueryFragment` by asking SQLite to compile it:
+
+```swift
+let region = try await database.read { transaction in
+  try OrbitDatabaseRegion(
+    #sql("SELECT title FROM reminders WHERE NOT isCompleted", as: String.self).query,
+    in: transaction
+  )
+}
+```
+
+Compilation resolves tables, columns, views, and attached schemas without executing the statement
+or evaluating its bindings. Region derivation rejects statements that may write. Using regions to
+filter observation invalidations will be added separately.
 
 ## Observation
 

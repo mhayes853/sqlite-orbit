@@ -20,12 +20,14 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   let connection: OpaquePointer
   let library: UnsafePointer<SQLiteLibrary>
   let statements: SQLiteStatementCache
+  let authorizer: SQLiteAuthorizerDispatcher
 
   @_lifetime(borrow handle)
   init(handle: borrowing SQLiteHandle) {
     self.connection = handle.pointer
     self.library = handle.library
     self.statements = handle.statements
+    self.authorizer = handle.authorizer
   }
 
   /// The underlying `sqlite3 *`.
