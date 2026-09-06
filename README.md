@@ -13,7 +13,7 @@ try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
 
-for try await reminders in OrbitValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
+for try await reminders in OrbitValueObservation.trackingAll(Reminder.all)
   .values(in: database)
 {
   render(reminders)
@@ -380,23 +380,41 @@ let region = try await database.read { transaction in
 ```
 
 Compilation resolves tables, columns, views, and attached schemas without executing the statement
-or evaluating its bindings. Region derivation rejects statements that may write. Using regions to
-filter observation invalidations will be added separately.
+or evaluating its bindings. Region derivation rejects statements that may write. Query-backed value
+observations use this region to avoid refetching after unrelated local writes.
 
 ## Observation
 
-`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A
-value observation fetches an initial value, then fetches again after every committed write:
+`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A value observation
+fetches an initial value, then fetches again after a committed write that may affect its region.
+`trackingAll` and `trackingOne` derive that region directly from a readable query:
 
 ```swift
-let reminders = OrbitValueObservation.tracking { transaction in
-  try transaction.fetchAll(Reminder.all)
-}
+let reminders = OrbitValueObservation.trackingAll(
+  Reminder.where { !$0.isCompleted }
+)
+
+let firstReminder = OrbitValueObservation.trackingOne(
+  Reminder.order { $0.id }
+)
 
 for try await reminders in reminders.values(in: database) {
   render(reminders)
 }
 ```
+
+For a custom fetch, provide its region directly. It defaults to `.fullDatabase` when omitted:
+
+```swift
+let incompleteCount = OrbitValueObservation.tracking(
+  region: Reminder.databaseRegion
+) { transaction in
+  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
+}
+```
+
+Writes from the observed driver carry regions. Commit notifications from another database handle
+or process currently do not, so observations conservatively refetch after those commits.
 
 Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
 source; a committed transaction reports whether it came from this process or another one:
