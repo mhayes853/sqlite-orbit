@@ -680,7 +680,6 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   - onChange: Receives each observed change.
   /// - Returns: A subscription that ends the observation when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
-  @discardableResult
   public func subscribe<Database: OrbitObservableDatabase>(
     to database: Database,
     isolation: isolated (any Actor)? = #isolation,
@@ -721,7 +720,6 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   - onChange: Receives each observed change.
   /// - Returns: A subscription that ends the observation when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
-  @discardableResult
   public func subscribe<
     Database: OrbitObservableDatabase,
     Scheduler: OrbitValueObservationScheduler
@@ -774,7 +772,6 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// - Returns: A subscription that ends the observation when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   @MainActor
-  @discardableResult
   public func subscribe<
     Database: OrbitObservableDatabase,
     Scheduler: OrbitValueObservationMainActorScheduler
