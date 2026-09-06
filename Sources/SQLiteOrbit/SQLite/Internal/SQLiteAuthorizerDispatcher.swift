@@ -19,8 +19,7 @@ struct SQLiteAuthorization {
 final class SQLiteAuthorizerDispatcher {
   typealias Handler = (SQLiteAuthorization) -> SQLiteAuthorizationDecision
 
-  private var handlers: [Int: Handler] = [:]
-  private var nextHandlerID = 0
+  private var handlers: [Handler] = []
 
   func install(
     on connection: OpaquePointer,
@@ -42,16 +41,14 @@ final class SQLiteAuthorizerDispatcher {
     _ handler: @escaping Handler,
     perform operation: () throws -> Result
   ) rethrows -> Result {
-    let id = nextHandlerID
-    nextHandlerID += 1
-    handlers[id] = handler
-    defer { handlers[id] = nil }
+    handlers.append(handler)
+    defer { handlers.removeLast() }
     return try operation()
   }
 
   private func authorize(_ authorization: SQLiteAuthorization) -> SQLiteAuthorizationDecision {
     var decision = SQLiteAuthorizationDecision.allow
-    for handler in handlers.values {
+    for handler in handlers {
       switch handler(authorization) {
       case .deny:
         decision = .deny
