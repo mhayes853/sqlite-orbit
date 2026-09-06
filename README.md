@@ -361,8 +361,10 @@ let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "rem
 ```
 
 Typed table instances produce the region of their entire table; their stored values do not narrow
-the region. Regions support union, intersection, containment, and overlap testing. Whole-table
-regions absorb their column regions, while regions for distinct tables do not intersect.
+the region. Regions conform to `SetAlgebra`, supporting union, intersection, symmetric difference,
+subtraction, containment, and overlap testing. Subtraction can express exclusions such as every
+column in a table except one particular column. Whole-table regions absorb their column regions,
+while regions for distinct tables do not intersect.
 
 Database regions are currently standalone values. Deriving them from arbitrary SQL and using them
 to filter observation invalidations will be added separately.

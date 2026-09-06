@@ -37,25 +37,34 @@ struct OrbitDatabaseRegionTests {
   }
 
   @Test
-  func unionAndIntersectionObeyTheirAlgebraicLaws() {
+  func setOperationsObeyTheirAlgebraicLaws() {
     let title = OrbitDatabaseRegion(column: "title", in: "reminders")
     let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let reminders = OrbitDatabaseRegion(table: "reminders")
     let tags = OrbitDatabaseRegion(table: "tags")
     let regions = [
       OrbitDatabaseRegion.empty,
       title,
       completed,
       title.union(completed),
+      reminders,
+      reminders.subtracting(title),
       tags,
+      OrbitDatabaseRegion.fullDatabase.subtracting(reminders),
       OrbitDatabaseRegion.fullDatabase
     ]
 
     for lhs in regions {
       #expect(lhs.union(lhs) == lhs)
       #expect(lhs.intersection(lhs) == lhs)
+      #expect(lhs.symmetricDifference(lhs) == .empty)
+      #expect(lhs.subtracting(lhs) == .empty)
       for rhs in regions {
         #expect(lhs.union(rhs) == rhs.union(lhs))
         #expect(lhs.intersection(rhs) == rhs.intersection(lhs))
+        #expect(lhs.symmetricDifference(rhs) == rhs.symmetricDifference(lhs))
+        #expect(lhs.subtracting(rhs).intersection(rhs) == .empty)
+        #expect(lhs.subtracting(rhs).union(lhs.intersection(rhs)) == lhs)
         for third in regions {
           #expect(lhs.union(rhs.union(third)) == lhs.union(rhs).union(third))
           #expect(
@@ -66,6 +75,96 @@ struct OrbitDatabaseRegionTests {
               == lhs.intersection(rhs).union(lhs.intersection(third))
           )
         }
+      }
+    }
+  }
+
+  @Test
+  func setAlgebraRepresentsFiniteExclusions() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let tags = OrbitDatabaseRegion(table: "tags")
+
+    let remindersExceptTitle = reminders.subtracting(title)
+    #expect(!remindersExceptTitle.overlaps(title))
+    #expect(remindersExceptTitle.contains(completed))
+    #expect(remindersExceptTitle.union(title) == reminders)
+    #expect(reminders.symmetricDifference(title) == remindersExceptTitle)
+
+    let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
+    #expect(!databaseExceptReminders.overlaps(reminders))
+    #expect(databaseExceptReminders.contains(tags))
+    #expect(databaseExceptReminders.union(reminders) == .fullDatabase)
+    #expect(
+      OrbitDatabaseRegion.fullDatabase.symmetricDifference(reminders)
+        == databaseExceptReminders
+    )
+  }
+
+  @Test
+  func supportsTheSetAlgebraProtocolSurface() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let both = title.union(completed)
+
+    let literal: OrbitDatabaseRegion = [title, completed]
+    #expect(literal == both)
+    #expect(unionThroughSetAlgebra(title, completed) == both)
+
+    var region = OrbitDatabaseRegion.empty
+    let insertion = region.insert(title)
+    #expect(insertion.inserted)
+    #expect(insertion.memberAfterInsert == title)
+    #expect(region == title)
+    #expect(!region.insert(title).inserted)
+
+    #expect(region.update(with: both) == title)
+    #expect(region == both)
+    #expect(region.remove(title) == title)
+    #expect(region == completed)
+    #expect(region.remove(title) == nil)
+  }
+
+  @Test
+  func subsetRelationshipsIncludeFiniteExclusions() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let both = title.union(completed)
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let remindersExceptTitle = reminders.subtracting(title)
+    let tags = OrbitDatabaseRegion(table: "tags")
+    let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
+    let regions = [
+      OrbitDatabaseRegion.empty,
+      title,
+      completed,
+      both,
+      remindersExceptTitle,
+      reminders,
+      tags,
+      databaseExceptReminders,
+      OrbitDatabaseRegion.fullDatabase
+    ]
+
+    #expect(OrbitDatabaseRegion.empty.isSubset(of: title))
+    #expect(title.isSubset(of: both))
+    #expect(title.isStrictSubset(of: reminders))
+    #expect(!title.isStrictSubset(of: title))
+    #expect(completed.isSubset(of: remindersExceptTitle))
+    #expect(!title.isSubset(of: remindersExceptTitle))
+    #expect(remindersExceptTitle.isStrictSubset(of: reminders))
+    #expect(tags.isSubset(of: databaseExceptReminders))
+    #expect(databaseExceptReminders.isStrictSubset(of: .fullDatabase))
+    #expect(!reminders.isSubset(of: databaseExceptReminders))
+
+    for lhs in regions {
+      for rhs in regions {
+        #expect(lhs.isSubset(of: rhs) == rhs.contains(lhs))
+        #expect(lhs.isSuperset(of: rhs) == lhs.contains(rhs))
+        #expect(lhs.isStrictSubset(of: rhs) == (lhs.isSubset(of: rhs) && lhs != rhs))
+        #expect(lhs.isStrictSuperset(of: rhs) == (lhs.isSuperset(of: rhs) && lhs != rhs))
+        #expect(lhs.isDisjoint(with: rhs) == !lhs.overlaps(rhs))
       }
     }
   }
@@ -110,6 +209,14 @@ struct OrbitDatabaseRegionTests {
     var intersection = union
     intersection.formIntersection(title)
     #expect(intersection == title)
+
+    var symmetricDifference = title
+    symmetricDifference.formSymmetricDifference(completed)
+    #expect(symmetricDifference == union)
+
+    var subtraction = union
+    subtraction.subtract(title)
+    #expect(subtraction == completed)
   }
 
   @Test
@@ -160,5 +267,12 @@ struct OrbitDatabaseRegionTests {
   struct ArchivedItem: Equatable, Sendable {
     let id: Int
     var name: String
+  }
+
+  private func unionThroughSetAlgebra<Region: SetAlgebra>(
+    _ lhs: Region,
+    _ rhs: Region
+  ) -> Region {
+    lhs.union(rhs)
   }
 }

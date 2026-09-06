@@ -11,7 +11,13 @@ public import StructuredQueries
 /// let reminders = OrbitDatabaseRegion(Reminder.self)
 /// let observed = titles.union(Tag.databaseRegion)
 /// ```
-public struct OrbitDatabaseRegion: Hashable, Sendable {
+public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
+  /// The element type used by `SetAlgebra`.
+  ///
+  /// Like `OptionSet`, a region's elements are themselves regions. This allows individual column,
+  /// whole-table, and composite regions to be inserted and removed through the same interface.
+  public typealias Element = Self
+
   private struct TableIdentifier: Hashable, Sendable {
     let schema: String?
     let name: String
@@ -22,57 +28,69 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
     }
   }
 
-  private enum TableRegion: Hashable, Sendable {
-    case allColumns
-    case columns(Set<String>)
+  private struct TableRegion: Hashable, Sendable {
+    /// Whether a column not listed in `exceptions` belongs to the region.
+    let includesUnspecifiedColumns: Bool
+    /// Columns whose membership is the inverse of `includesUnspecifiedColumns`.
+    let exceptions: Set<String>
 
-    func union(_ other: Self) -> Self {
-      switch (self, other) {
-      case (.allColumns, _), (_, .allColumns):
-        return .allColumns
-      case (.columns(let columns), .columns(let otherColumns)):
-        return .columns(columns.union(otherColumns))
-      }
+    static let empty = Self(includesUnspecifiedColumns: false, exceptions: [])
+    static let full = Self(includesUnspecifiedColumns: true, exceptions: [])
+
+    static func columns(_ columns: Set<String>) -> Self {
+      Self(includesUnspecifiedColumns: false, exceptions: columns)
     }
 
-    func intersection(_ other: Self) -> Self? {
-      switch (self, other) {
-      case (.allColumns, let region), (let region, .allColumns):
-        return region
-      case (.columns(let columns), .columns(let otherColumns)):
-        let intersection = columns.intersection(otherColumns)
-        return intersection.isEmpty ? nil : .columns(intersection)
-      }
+    func contains(column: String) -> Bool {
+      includesUnspecifiedColumns != exceptions.contains(column)
     }
 
-    func contains(_ other: Self) -> Bool {
-      switch (self, other) {
-      case (.allColumns, _):
-        return true
-      case (.columns, .allColumns):
-        return false
-      case (.columns(let columns), .columns(let otherColumns)):
-        return columns.isSuperset(of: otherColumns)
+    func combining(
+      _ other: Self,
+      with operation: (Bool, Bool) -> Bool
+    ) -> Self {
+      let includesUnspecifiedColumns = operation(
+        includesUnspecifiedColumns,
+        other.includesUnspecifiedColumns
+      )
+      var exceptions: Set<String> = []
+      for column in self.exceptions.union(other.exceptions) {
+        if operation(contains(column: column), other.contains(column: column))
+          != includesUnspecifiedColumns
+        {
+          exceptions.insert(column)
+        }
       }
+      return Self(
+        includesUnspecifiedColumns: includesUnspecifiedColumns,
+        exceptions: exceptions
+      )
     }
   }
 
-  // `nil` is the full database. An empty dictionary is the empty region.
-  private let tableRegions: [TableIdentifier: TableRegion]?
+  /// Whether columns in a table not listed in `tableRegions` belong to the region.
+  private let includesUnspecifiedTables: Bool
+  /// Table regions that differ from the unspecified-table default.
+  private let tableRegions: [TableIdentifier: TableRegion]
 
-  private init(tableRegions: [TableIdentifier: TableRegion]?) {
-    self.tableRegions = tableRegions
+  private init(
+    includesUnspecifiedTables: Bool,
+    tableRegions: [TableIdentifier: TableRegion]
+  ) {
+    let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
+    self.includesUnspecifiedTables = includesUnspecifiedTables
+    self.tableRegions = tableRegions.filter { $0.value != defaultTableRegion }
   }
 
   /// The empty database region.
   public static let empty = Self()
 
   /// The region containing every column in the database.
-  public static let fullDatabase = Self(tableRegions: nil)
+  public static let fullDatabase = Self(includesUnspecifiedTables: true, tableRegions: [:])
 
   /// Creates the empty database region.
   public init() {
-    self.init(tableRegions: [:])
+    self.init(includesUnspecifiedTables: false, tableRegions: [:])
   }
 
   /// Creates a region containing every column in a table.
@@ -82,7 +100,8 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
   ///   - schema: The table's schema, or `nil` for an unqualified table name.
   public init(table: String, schema: String? = nil) {
     self.init(
-      tableRegions: [TableIdentifier(schema: schema, name: table): .allColumns]
+      includesUnspecifiedTables: false,
+      tableRegions: [TableIdentifier(schema: schema, name: table): .full]
     )
   }
 
@@ -115,6 +134,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
       return
     }
     self.init(
+      includesUnspecifiedTables: false,
       tableRegions: [TableIdentifier(schema: schema, name: table): .columns(columns)]
     )
   }
@@ -142,31 +162,48 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
 
   /// Whether the region contains no database columns.
   public var isEmpty: Bool {
-    tableRegions?.isEmpty == true
+    !includesUnspecifiedTables && tableRegions.isEmpty
   }
 
   /// Whether the region contains every column in the database.
   public var isFullDatabase: Bool {
-    tableRegions == nil
+    includesUnspecifiedTables && tableRegions.isEmpty
+  }
+
+  private func combining(
+    _ other: Self,
+    with operation: (Bool, Bool) -> Bool
+  ) -> Self {
+    let includesUnspecifiedTables = operation(
+      includesUnspecifiedTables,
+      other.includesUnspecifiedTables
+    )
+    let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
+    let selfDefaultTableRegion: TableRegion = self.includesUnspecifiedTables ? .full : .empty
+    let otherDefaultTableRegion: TableRegion = other.includesUnspecifiedTables ? .full : .empty
+
+    var tableRegions: [TableIdentifier: TableRegion] = [:]
+    for table in Set(self.tableRegions.keys).union(other.tableRegions.keys) {
+      let tableRegion = (self.tableRegions[table] ?? selfDefaultTableRegion)
+        .combining(
+          other.tableRegions[table] ?? otherDefaultTableRegion,
+          with: operation
+        )
+      if tableRegion != defaultTableRegion {
+        tableRegions[table] = tableRegion
+      }
+    }
+    return Self(
+      includesUnspecifiedTables: includesUnspecifiedTables,
+      tableRegions: tableRegions
+    )
   }
 
   /// Returns a region containing everything in either region.
   ///
   /// - Parameter other: The other region.
   public func union(_ other: Self) -> Self {
-    guard let tableRegions, let otherTableRegions = other.tableRegions else {
-      return .fullDatabase
-    }
-
-    var result = tableRegions
-    for (table, otherTableRegion) in otherTableRegions {
-      if let tableRegion = result[table] {
-        result[table] = tableRegion.union(otherTableRegion)
-      } else {
-        result[table] = otherTableRegion
-      }
-    }
-    return Self(tableRegions: result)
+    combining(other, with: { $0 || $1 })
   }
 
   /// Adds everything in `other` to this region.
@@ -180,18 +217,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
   ///
   /// - Parameter other: The other region.
   public func intersection(_ other: Self) -> Self {
-    guard let tableRegions else { return other }
-    guard let otherTableRegions = other.tableRegions else { return self }
-
-    var result: [TableIdentifier: TableRegion] = [:]
-    for (table, tableRegion) in tableRegions {
-      guard
-        let otherTableRegion = otherTableRegions[table],
-        let intersection = tableRegion.intersection(otherTableRegion)
-      else { continue }
-      result[table] = intersection
-    }
-    return Self(tableRegions: result)
+    combining(other, with: { $0 && $1 })
   }
 
   /// Keeps only what is also present in `other`.
@@ -201,22 +227,44 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
     self = intersection(other)
   }
 
+  /// Returns a region containing everything present in exactly one of the two regions.
+  ///
+  /// - Parameter other: The other region.
+  public func symmetricDifference(_ other: Self) -> Self {
+    combining(other, with: { $0 != $1 })
+  }
+
+  /// Replaces this region with the elements present in exactly one of the two regions.
+  ///
+  /// - Parameter other: The other region.
+  public mutating func formSymmetricDifference(_ other: Self) {
+    self = symmetricDifference(other)
+  }
+
+  /// Returns a region after removing everything in `other`.
+  ///
+  /// The result can contain exclusions, such as every column in a table except a particular
+  /// column, or every table in the database except a particular table.
+  ///
+  /// - Parameter other: The region to remove.
+  public func subtracting(_ other: Self) -> Self {
+    combining(other, with: { $0 && !$1 })
+  }
+
+  /// Removes everything in `other` from this region.
+  ///
+  /// - Parameter other: The region to remove.
+  public mutating func subtract(_ other: Self) {
+    self = subtracting(other)
+  }
+
   /// Returns whether this region contains all of `other`.
   ///
   /// Every region contains ``empty``, and only ``fullDatabase`` contains the full database.
   ///
   /// - Parameter other: The region whose containment is tested.
   public func contains(_ other: Self) -> Bool {
-    guard let tableRegions else { return true }
-    guard let otherTableRegions = other.tableRegions else { return false }
-
-    for (table, otherTableRegion) in otherTableRegions {
-      guard
-        let tableRegion = tableRegions[table],
-        tableRegion.contains(otherTableRegion)
-      else { return false }
-    }
-    return true
+    other.subtracting(self).isEmpty
   }
 
   /// Returns whether the two regions contain any of the same columns.
@@ -224,6 +272,40 @@ public struct OrbitDatabaseRegion: Hashable, Sendable {
   /// - Parameter other: The region to compare with this one.
   public func overlaps(_ other: Self) -> Bool {
     !intersection(other).isEmpty
+  }
+
+  /// Inserts a region into this region.
+  ///
+  /// - Parameter newMember: The region to insert.
+  /// - Returns: Whether any new columns were inserted, and `newMember` after insertion.
+  @discardableResult
+  public mutating func insert(_ newMember: Self) -> (inserted: Bool, memberAfterInsert: Self) {
+    let inserted = !contains(newMember)
+    formUnion(newMember)
+    return (inserted, newMember)
+  }
+
+  /// Removes a region from this region.
+  ///
+  /// - Parameter member: The region to remove.
+  /// - Returns: The portion of `member` that was present, or `nil` if it was disjoint.
+  @discardableResult
+  public mutating func remove(_ member: Self) -> Self? {
+    let removed = intersection(member)
+    guard !removed.isEmpty else { return nil }
+    subtract(member)
+    return removed
+  }
+
+  /// Inserts a region and returns the portion that was previously present.
+  ///
+  /// - Parameter newMember: The region to insert.
+  /// - Returns: The portion previously present, or `nil` if the regions were disjoint.
+  @discardableResult
+  public mutating func update(with newMember: Self) -> Self? {
+    let previous = intersection(newMember)
+    formUnion(newMember)
+    return previous.isEmpty ? nil : previous
   }
 }
 
