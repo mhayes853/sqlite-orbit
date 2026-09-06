@@ -34,9 +34,10 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 
 /// Observes the lifecycle of database write transactions.
 ///
-/// A transaction performed through the observed handle calls ``databaseWillCommit(_:)`` after its
-/// access closure returns, while its changes are still visible through the transaction. It then
-/// calls exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
+/// A transaction performed through the observed handle calls ``databaseDidChange(in:)`` for each
+/// changed region it publishes. After its access closure returns it calls
+/// ``databaseWillCommit(_:)``, while those changes are still visible through the transaction, and
+/// then exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
 /// reported by another handle in this process, or by another process, can only produce
 /// `databaseDidCommit` because it is observed after the commit succeeds.
 ///
@@ -53,6 +54,14 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
 public protocol OrbitDatabaseTransactionObserver: Sendable {
+  /// Called when a local transaction may have changed a database region.
+  ///
+  /// A change remains provisional until ``databaseDidCommit(_:)``. If the transaction rolls back,
+  /// ``databaseDidRollback()`` follows instead. The callback must not access the database.
+  ///
+  /// - Parameter region: The region the transaction may have changed.
+  func databaseDidChange(in region: OrbitDatabaseRegion)
+
   /// Called before a local transaction commits.
   ///
   /// The transaction exposes the read capability, so its structured-query APIs can inspect the
@@ -74,6 +83,11 @@ public protocol OrbitDatabaseTransactionObserver: Sendable {
 }
 
 extension OrbitDatabaseTransactionObserver {
+  /// Ignores a changed region.
+  ///
+  /// - Parameter region: The region the transaction may have changed.
+  public func databaseDidChange(in region: OrbitDatabaseRegion) {}
+
   /// Ignores the transaction, letting it commit.
   ///
   /// - Parameter transaction: The committing transaction.
@@ -124,6 +138,13 @@ final class OrbitDatabaseTransactionObservers: Sendable {
   func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
     for observer in observers.withLock({ $0.all }) {
       try observer.databaseWillCommit(transaction)
+    }
+  }
+
+  func didChange(in region: OrbitDatabaseRegion) {
+    guard !region.isEmpty else { return }
+    for observer in observers.withLock({ $0.all }) {
+      observer.databaseDidChange(in: region)
     }
   }
 

@@ -46,6 +46,20 @@ final class SQLiteAuthorizerDispatcher {
     return try operation()
   }
 
+  func recordingAuthorizations<Result>(
+    during operation: () throws -> Result
+  ) rethrows -> (result: Result, authorizations: [SQLiteAuthorization]) {
+    var authorizations: [SQLiteAuthorization] = []
+    let result = try withHandler(
+      { authorization in
+        authorizations.append(authorization)
+        return .allow
+      },
+      perform: operation
+    )
+    return (result, authorizations)
+  }
+
   private func authorize(_ authorization: SQLiteAuthorization) -> SQLiteAuthorizationDecision {
     var decision = SQLiteAuthorizationDecision.allow
     for handler in handlers {

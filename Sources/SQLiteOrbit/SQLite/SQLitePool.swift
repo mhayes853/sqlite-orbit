@@ -193,7 +193,7 @@ public final class SQLitePool: OrbitObservableDatabase {
 
   /// Registers an observer of the transactions this driver commits.
   ///
-  /// - Parameter transactionObserver: Receives each commit and rollback.
+  /// - Parameter transactionObserver: Receives each changed region, commit, and rollback.
   /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
     transactionObserver: any OrbitDatabaseTransactionObserver

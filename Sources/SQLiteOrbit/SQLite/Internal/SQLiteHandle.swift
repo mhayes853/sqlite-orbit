@@ -17,13 +17,15 @@ struct SQLiteHandle: ~Copyable {
     maximumCachedStatements: Int,
     isReadOnly: Bool
   ) {
+    let authorizer = SQLiteAuthorizerDispatcher()
     self.pointer = pointer
     self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
-    self.authorizer = SQLiteAuthorizerDispatcher()
+    self.authorizer = authorizer
     self.statements = SQLiteStatementCache(
       library: UnsafePointer(libraryStorage),
       connection: pointer,
+      authorizer: authorizer,
       capacity: maximumCachedStatements
     )
   }
@@ -166,7 +168,7 @@ struct SQLiteHandle: ~Copyable {
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     do {
-      let value = try body(SQLiteWriteTransaction(handle: self))
+      let value = try body(SQLiteWriteTransaction(handle: self, observers: observers))
       try observers?.willCommit(SQLiteReadTransaction(handle: self))
       try endTransaction(with: "COMMIT")
       observers?.didCommit(origin: .local)
@@ -196,7 +198,9 @@ struct SQLiteHandle: ~Copyable {
   static func execute(
     _ sql: String,
     on connection: OpaquePointer,
-    library: UnsafePointer<SQLiteLibrary>
+    library: UnsafePointer<SQLiteLibrary>,
+    authorizer: SQLiteAuthorizerDispatcher? = nil,
+    observers: OrbitDatabaseTransactionObservers? = nil
   ) throws {
     // Each statement's length is passed explicitly rather than left to SQLite to measure again.
     try sql.withCString { start in
@@ -205,22 +209,39 @@ struct SQLiteHandle: ~Copyable {
       while next < end {
         var statement: OpaquePointer?
         var tail: UnsafePointer<CChar>?
-        let code = library.pointee.prepare_v3(
-          connection,
-          next,
-          Int32(end - next),
-          0,
-          &statement,
-          &tail
-        )
+        let prepare = {
+          library.pointee.prepare_v3(
+            connection,
+            next,
+            Int32(end - next),
+            0,
+            &statement,
+            &tail
+          )
+        }
+        let code: Int32
+        let authorizations: [SQLiteAuthorization]
+        if let authorizer {
+          (code, authorizations) = authorizer.recordingAuthorizations(during: prepare)
+        } else {
+          code = prepare()
+          authorizations = []
+        }
         guard code == SQLiteResultCode.ok.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
         }
         defer { _ = library.pointee.finalize(statement) }
 
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
-        guard statement != nil else { return }
+        guard let statement else { return }
         next = tail ?? end
+
+        let preparedStatement = SQLitePreparedStatement(
+          pointer: statement,
+          authorizations: authorizations,
+          library: library
+        )
+        observers?.didChange(in: preparedStatement.changedRegion)
 
         var stepCode = library.pointee.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {

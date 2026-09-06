@@ -21,7 +21,13 @@
         try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
-      #expect(observer.events == [.willCommit(1), .didCommit(.local)])
+      #expect(
+        observer.events == [
+          .didChange(OrbitDatabaseRegion(table: "items")),
+          .willCommit(1),
+          .didCommit(.local)
+        ]
+      )
       _ = subscription
     }
 
@@ -40,7 +46,7 @@
         }
       }
 
-      #expect(observer.events == [.didRollback])
+      #expect(observer.events == [.didChange(.fullDatabase), .didRollback])
       _ = subscription
     }
 
@@ -99,7 +105,13 @@
         try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
-      #expect(observer.events == [.willCommit(1), .didCommit(.local)])
+      #expect(
+        observer.events == [
+          .didChange(OrbitDatabaseRegion(table: "items")),
+          .willCommit(1),
+          .didCommit(.local)
+        ]
+      )
       _ = subscription
     }
 
@@ -123,12 +135,111 @@
         try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
-      #expect(observer.events == [.willCommit(1), .didCommit(.local)])
+      #expect(
+        observer.events == [
+          .didChange(OrbitDatabaseRegion(table: "items")),
+          .willCommit(1),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func publishesEveryExplicitChangedRegion() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+      let region = OrbitDatabaseRegion(column: "id", in: "items")
+
+      try await driver.write { transaction in
+        transaction.notifyChanges(in: region)
+        transaction.notifyChanges(in: region)
+      }
+
+      #expect(
+        observer.events == [
+          .didChange(region),
+          .didChange(region),
+          .willCommit(0),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func automaticallyPublishesColumnAndTableRegionsButNotReads() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
+        )
+        try transaction.execute("INSERT INTO items VALUES (1, 'Before', 0)")
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      try await driver.write { transaction in
+        _ = try transaction.fetchOne(#sql("SELECT title FROM items", as: String.self))
+        try transaction.execute(
+          "UPDATE items SET title = 'After', isCompleted = 1 WHERE id = 1"
+        )
+        try transaction.execute("DELETE FROM items")
+      }
+
+      let updatedColumns = OrbitDatabaseRegion(
+        columns: ["title", "isCompleted"],
+        in: "items"
+      )
+      #expect(
+        observer.events == [
+          .didChange(updatedColumns),
+          .didChange(OrbitDatabaseRegion(table: "items")),
+          .willCommit(0),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func cachedWriteStatementsRetainTheirChangedRegion() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      try await driver.write { transaction in
+        for id in 1...2 {
+          let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
+            #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
+          )
+          var cursor = try transaction.rowCursor(query, cached: true)
+          while try cursor.next() != nil {}
+        }
+      }
+
+      let table = OrbitDatabaseRegion(table: "items")
+      #expect(
+        observer.events == [
+          .didChange(table),
+          .didChange(table),
+          .willCommit(2),
+          .didCommit(.local)
+        ]
+      )
       _ = subscription
     }
   }
 
   private enum RecordedTransactionEvent: Equatable, Sendable {
+    case didChange(OrbitDatabaseRegion)
     case willCommit(Int)
     case didCommit(OrbitDatabaseTransactionOrigin)
     case didRollback
@@ -138,6 +249,10 @@
     private let recordedEvents = Mutex([RecordedTransactionEvent]())
 
     var events: [RecordedTransactionEvent] { recordedEvents.withLock { $0 } }
+
+    func databaseDidChange(in region: OrbitDatabaseRegion) {
+      recordedEvents.withLock { $0.append(.didChange(region)) }
+    }
 
     func databaseWillCommit(
       _ transaction: borrowing SQLiteReadTransaction

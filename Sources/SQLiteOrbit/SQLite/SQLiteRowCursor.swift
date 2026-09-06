@@ -36,8 +36,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let isCached: Bool
 
+  let preparedStatement: SQLitePreparedStatement
+
+  let observers: OrbitDatabaseTransactionObservers?
+
   @usableFromInline
   var isExhausted = false
+
+  var didPublishChanges = false
 
   @_lifetime(borrow statements)
   init(
@@ -45,10 +51,12 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     cached: Bool,
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
-    statements: borrowing SQLiteStatementCache
+    statements: borrowing SQLiteStatementCache,
+    observers: OrbitDatabaseTransactionObservers? = nil
   ) throws {
     let (sql, bindings) = prepareQuery(query)
-    let statement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
+    let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
+    let statement = preparedStatement.pointer
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)
@@ -56,7 +64,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
       if cached {
-        statements.checkIn(statement, sql: sql)
+        statements.checkIn(preparedStatement, sql: sql)
       } else {
         _ = library.pointee.finalize(statement)
       }
@@ -68,11 +76,13 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.sql = sql
     self.statements = copy statements
     self.isCached = cached
+    self.preparedStatement = preparedStatement
+    self.observers = observers
   }
 
   deinit {
     if isCached {
-      statements.checkIn(statement, sql: sql)
+      statements.checkIn(preparedStatement, sql: sql)
     } else {
       _ = library.pointee.finalize(statement)
     }
@@ -85,10 +95,13 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   ///
   /// - Returns: The next row, or `nil` when the statement has no more.
   /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
-  @inlinable
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
     guard !isExhausted else { return nil }
+    if !didPublishChanges {
+      didPublishChanges = true
+      observers?.didChange(in: preparedStatement.changedRegion)
+    }
     let code = library.pointee.step(statement)
     switch code {
     case SQLiteResultCode.row.rawValue:

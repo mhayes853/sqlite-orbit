@@ -143,7 +143,7 @@
     let sql = "SELECT 1"
     let first = try connection.statements.checkOut(sql)
     let second = try connection.statements.checkOut(sql)
-    #expect(first != second)
+    #expect(first.pointer != second.pointer)
     #expect(counters.preparedCount == afterOpen + 2)
 
     connection.statements.checkIn(first, sql: sql)

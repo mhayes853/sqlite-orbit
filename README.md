@@ -526,8 +526,20 @@ throwing asynchronous sequence; they never roll back the write whose final state
 
 For transaction lifecycle events that do not produce a value, register an
 `OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
-`databaseWillCommit` hook receives a read-only view of the pending transaction and may throw to
-abort the write; `databaseDidCommit` identifies the transaction's local or external origin.
+`databaseDidChange(in:)` hook receives each provisional changed region, `databaseWillCommit`
+receives a read-only view of the pending transaction and may throw to abort the write, and
+`databaseDidCommit` identifies the transaction's local or external origin. A write performed
+directly through `sqliteConnection` can publish a region explicitly:
+
+```swift
+try await database.write { transaction in
+  try performDirectSQLiteWrite(transaction.sqliteConnection)
+  transaction.notifyChanges(in: Reminder.databaseRegion)
+}
+```
+
+Repeated calls publish repeated observer events. A rollback follows provisional changes with
+`databaseDidRollback`.
 
 ## Cross-process transport
 
