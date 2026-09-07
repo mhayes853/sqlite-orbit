@@ -2,103 +2,138 @@
   import Observation
 #endif
 
-struct OrbitValueObservationExternallyTracked<Output: Sendable>: Sendable {
+struct ExternalCapture<Output: Sendable>: Sendable {
   let output: Output
-  let session: OrbitValueObservationExternalSession?
+  let dependencies: ExternalDependencies?
 }
 
-struct OrbitValueObservationExternalDependencyID: Hashable, @unchecked Sendable {
-  let object: ObjectIdentifier
-  let keyPath: AnyKeyPath
-}
+/// Captures the observable properties read by each fetch and keeps the accepted fetch's
+/// dependencies active. A dependency change invalidates the observation once.
+final class ExternalTracking: Sendable {
+  private let changeHandler = Lock<(@Sendable () -> Void)?>(nil)
+  private let activeDependencies = Lock<ExternalDependencies?>(nil)
 
-struct OrbitValueObservationExternalDependencyRevision: Equatable, Sendable {
-  let member: UInt64
-  let replacement: UInt64
-}
-
-struct OrbitValueObservationExternalDependency: Sendable {
-  let id: OrbitValueObservationExternalDependencyID
-  let revision: OrbitValueObservationExternalDependencyRevision
-  let isCurrent: @Sendable () -> Bool
-}
-
-final class OrbitValueObservationExternalAccessRecorder: Sendable {
-  private struct State: Sendable {
-    var dependencies = [
-      OrbitValueObservationExternalDependencyID: OrbitValueObservationExternalDependency
-    ]()
-    var changedDuringAccess = false
+  func onDependencyChange(_ handler: @escaping @Sendable () -> Void) {
+    changeHandler.withLock { $0 = handler }
   }
 
-  private let state = Lock(State())
-
-  func record(_ dependency: OrbitValueObservationExternalDependency) {
-    state.withLock { state in
-      if let previous = state.dependencies[dependency.id],
-        previous.revision != dependency.revision
-      {
-        state.changedDuringAccess = true
+  func capture<Output: Sendable>(
+    _ fetch: () throws -> Output
+  ) throws -> ExternalCapture<Output> {
+    #if canImport(Observation)
+      if #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) {
+        return try captureUsingObservation(fetch)
       }
-      state.dependencies[dependency.id] = dependency
+    #endif
+    return ExternalCapture(output: try fetch(), dependencies: nil)
+  }
+
+  /// Makes a fetch's captured dependencies authoritative, replacing those from the previous fetch.
+  /// Returns false when a dependency changed before the fetch could be accepted.
+  func accept(_ dependencies: ExternalDependencies?) -> Bool {
+    guard let dependencies else { return true }
+    guard dependencies.activate() else {
+      dependencies.cancel()
+      return false
     }
+    let previous = activeDependencies.withLock { active in
+      defer { active = dependencies }
+      return active
+    }
+    previous?.cancel()
+    return true
   }
 
-  var isCurrent: Bool {
-    let snapshot = state.withLock { ($0.changedDuringAccess, Array($0.dependencies.values)) }
-    return !snapshot.0 && snapshot.1.allSatisfy { $0.isCurrent() }
+  func discard(_ dependencies: ExternalDependencies?) {
+    dependencies?.cancel()
   }
+
+  func stop() {
+    let dependencies = activeDependencies.withLock { active in
+      defer { active = nil }
+      return active
+    }
+    dependencies?.cancel()
+  }
+
+  deinit { stop() }
+
+  #if canImport(Observation)
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    private func captureUsingObservation<Output: Sendable>(
+      _ fetch: () throws -> Output
+    ) throws -> ExternalCapture<Output> {
+      let cancellation = ObservationCancellation()
+      let dependencies = ExternalDependencies(
+        detachment: OrbitSubscription { cancellation.detach() },
+        onChange: { [weak self] in
+          self?.changeHandler.withLock { $0 }?()
+        }
+      )
+      let accesses = ExternalAccessRecorder()
+      let result = withObservationTracking {
+        accesses.recording {
+          cancellation.recordAccess()
+          return Result { try fetch() }
+        }
+      } onChange: { [weak dependencies] in
+        dependencies?.didChange()
+      }
+
+      // `ExternalValue` revisions close the race between registering a property access and reading
+      // its locked storage. A raced mutation makes this fetch stale even if Observation missed it.
+      if !accesses.areCurrent { dependencies.didChange() }
+
+      switch result {
+      case .success(let output):
+        return ExternalCapture(
+          output: output,
+          dependencies: dependencies
+        )
+      case .failure(let error):
+        dependencies.cancel()
+        throw error
+      }
+    }
+  #endif
 }
 
-enum OrbitValueObservationExternalAccessContext {
-  @TaskLocal static var recorder: OrbitValueObservationExternalAccessRecorder?
-}
-
-func orbitRecordValueObservationExternalAccess(
-  _ dependency: OrbitValueObservationExternalDependency
-) {
-  OrbitValueObservationExternalAccessContext.recorder?.record(dependency)
-}
-
-final class OrbitValueObservationExternalSession: Sendable {
-  private enum Status: Sendable {
-    case candidate
+/// The one-shot dependency set captured by a single fetch.
+final class ExternalDependencies: Sendable {
+  private enum Phase: Sendable {
+    case captured
     case active
-    case changed
+    case invalidated
     case cancelled
   }
 
-  private struct State: Sendable {
-    var status = Status.candidate
-    var cancellation: OrbitSubscription?
-  }
-
-  private let state: Lock<State>
+  private let phase = Lock(Phase.captured)
+  private let detachment: OrbitSubscription
   private let onChange: @Sendable () -> Void
 
   init(
-    cancellation: OrbitSubscription,
+    detachment: OrbitSubscription,
     onChange: @escaping @Sendable () -> Void
   ) {
-    self.state = Lock(State(cancellation: cancellation))
+    self.detachment = detachment
     self.onChange = onChange
   }
 
   func activate() -> Bool {
-    state.withLock { state in
-      guard case .candidate = state.status else { return false }
-      state.status = .active
+    phase.withLock { phase in
+      guard case .captured = phase else { return false }
+      phase = .active
       return true
     }
   }
 
-  func dependencyDidChange() {
-    let shouldNotify = state.withLock { state in
-      switch state.status {
-      case .candidate, .active:
-        state.status = .changed
+  func didChange() {
+    let shouldNotify = phase.withLock { phase in
+      switch phase {
+      case .captured, .active:
+        phase = .invalidated
         return true
-      case .changed, .cancelled:
+      case .invalidated, .cancelled:
         return false
       }
     }
@@ -106,119 +141,82 @@ final class OrbitValueObservationExternalSession: Sendable {
   }
 
   func cancel() {
-    let cancellation = state.withLock { state in
-      guard case .cancelled = state.status else {
-        state.status = .cancelled
-        defer { state.cancellation = nil }
-        return state.cancellation
+    let shouldDetach = phase.withLock { phase in
+      guard case .cancelled = phase else {
+        phase = .cancelled
+        return true
       }
-      return nil
+      return false
     }
-    cancellation?.cancel()
+    if shouldDetach { detachment.cancel() }
   }
 
   deinit { cancel() }
 }
 
-final class OrbitValueObservationExternalTracking: Sendable {
-  private let onChange = Lock<(@Sendable () -> Void)?>(nil)
-  private let activeSession = Lock<OrbitValueObservationExternalSession?>(nil)
+// MARK: - Detecting mutations during ExternalValue reads
 
-  func installOnChange(_ onChange: @escaping @Sendable () -> Void) {
-    self.onChange.withLock { $0 = onChange }
+struct ExternalAccess: Sendable {
+  struct Version: Equatable, Sendable {
+    let member: UInt64
+    let replacement: UInt64
   }
 
-  func track<Output: Sendable>(
-    _ operation: () throws -> Output
-  ) throws -> OrbitValueObservationExternallyTracked<Output> {
-    #if canImport(Observation)
-      if #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) {
-        return try trackUsingObservation(operation)
-      }
-    #endif
-    return OrbitValueObservationExternallyTracked(output: try operation(), session: nil)
+  let id: ObjectIdentifier
+  let version: Version
+  let isCurrent: @Sendable () -> Bool
+
+  func record() {
+    ExternalAccessContext.recorder?.record(self)
   }
-
-  func promote(_ session: OrbitValueObservationExternalSession?) -> Bool {
-    guard let session else { return true }
-    guard session.activate() else {
-      session.cancel()
-      return false
-    }
-    let previous = activeSession.withLock { active in
-      defer { active = session }
-      return active
-    }
-    previous?.cancel()
-    return true
-  }
-
-  func discard(_ session: OrbitValueObservationExternalSession?) {
-    session?.cancel()
-  }
-
-  func stop() {
-    let session = activeSession.withLock { active in
-      defer { active = nil }
-      return active
-    }
-    session?.cancel()
-  }
-
-  deinit { stop() }
-
-  #if canImport(Observation)
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    private func trackUsingObservation<Output: Sendable>(
-      _ operation: () throws -> Output
-    ) throws -> OrbitValueObservationExternallyTracked<Output> {
-      let cancellationDependency = CancellationDependency()
-      let session = OrbitValueObservationExternalSession(
-        cancellation: OrbitSubscription {
-          cancellationDependency.invalidate()
-        },
-        onChange: { [weak self] in
-          let onChange = self?.onChange.withLock { $0 }
-          onChange?()
-        }
-      )
-      let accessRecorder = OrbitValueObservationExternalAccessRecorder()
-      let result = withObservationTracking {
-        OrbitValueObservationExternalAccessContext.$recorder.withValue(accessRecorder) {
-          cancellationDependency.recordAccess()
-          return Result { try operation() }
-        }
-      } onChange: { [weak session] in
-        session?.dependencyDidChange()
-      }
-      if !accessRecorder.isCurrent { session.dependencyDidChange() }
-      switch result {
-      case .success(let output):
-        return OrbitValueObservationExternallyTracked(
-          output: output,
-          session: session
-        )
-      case .failure(let error):
-        session.cancel()
-        throw error
-      }
-    }
-
-    // `withObservationTracking` has no cancellation handle. Every session observes this private
-    // dependency so cancelling can consume and detach all of its one-shot registrations.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    private final class CancellationDependency: Observable, Sendable {
-      private let registrar = ObservationRegistrar()
-
-      func recordAccess() {
-        registrar.access(self, keyPath: \.value)
-      }
-
-      func invalidate() {
-        registrar.withMutation(of: self, keyPath: \.value) {}
-      }
-
-      private var value: Void { () }
-    }
-  #endif
 }
+
+private final class ExternalAccessRecorder: Sendable {
+  private struct State: Sendable {
+    var accesses = [ObjectIdentifier: ExternalAccess]()
+    var changedWhileRecording = false
+  }
+
+  private let state = Lock(State())
+
+  func recording<Result>(_ operation: () throws -> Result) rethrows -> Result {
+    try ExternalAccessContext.$recorder.withValue(self, operation: operation)
+  }
+
+  func record(_ access: ExternalAccess) {
+    state.withLock { state in
+      if let previous = state.accesses[access.id], previous.version != access.version {
+        state.changedWhileRecording = true
+      }
+      state.accesses[access.id] = access
+    }
+  }
+
+  var areCurrent: Bool {
+    let snapshot = state.withLock { ($0.changedWhileRecording, Array($0.accesses.values)) }
+    return !snapshot.0 && snapshot.1.allSatisfy { $0.isCurrent() }
+  }
+}
+
+private enum ExternalAccessContext {
+  @TaskLocal static var recorder: ExternalAccessRecorder?
+}
+
+#if canImport(Observation)
+  /// `withObservationTracking` has no cancellation handle. Reading this private dependency adds it
+  /// to the captured set; mutating it later consumes and detaches that set's one-shot registrations.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  private final class ObservationCancellation: Observable, Sendable {
+    private let registrar = ObservationRegistrar()
+
+    func recordAccess() {
+      registrar.access(self, keyPath: \.value)
+    }
+
+    func detach() {
+      registrar.withMutation(of: self, keyPath: \.value) {}
+    }
+
+    private var value: Void { () }
+  }
+#endif

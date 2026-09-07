@@ -63,7 +63,7 @@ private enum OrbitValueObservationRegionSource: Sendable {
 private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
-  let externalSession: OrbitValueObservationExternalSession?
+  let externalDependencies: ExternalDependencies?
 }
 
 private struct OrbitValueObservationUntrackedFetchOutput: Sendable {
@@ -1008,7 +1008,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private var events: OrbitValueObservationEvents { reducer.events }
   private let state: Lock<State>
   private let transactionSubscription = Lock<OrbitSubscription?>(nil)
-  private let externalTracking: OrbitValueObservationExternalTracking
+  private let externalTracking: ExternalTracking
 
   init<Database: OrbitObservableDatabase>(
     database: Database,
@@ -1016,7 +1016,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     fetch: @escaping OrbitValueObservationFetch,
     reducer: OrbitValueObservationReducer<Value>
   ) {
-    let externalTracking = OrbitValueObservationExternalTracking()
+    let externalTracking = ExternalTracking()
     self.reducer = reducer
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
@@ -1047,13 +1047,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         }
       }
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
-      let tracked = try externalTracking.track {
+      let capture = try externalTracking.capture {
         try resolveDatabaseRegionAndFetch(transaction)
       }
       return OrbitValueObservationFetchOutput(
-        payload: tracked.output.payload,
-        region: tracked.output.region,
-        externalSession: tracked.session
+        payload: capture.output.payload,
+        region: capture.output.region,
+        externalDependencies: capture.dependencies
       )
     }
     self.fetch = resolveAndFetch
@@ -1070,7 +1070,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         try database.readBlocking(resolveAndFetch)
       }
     }
-    externalTracking.installOnChange { [weak self] in
+    externalTracking.onDependencyChange { [weak self] in
       self?.requestRead(source: .observable)
     }
   }
@@ -1309,7 +1309,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     let outcome: Result<OrbitValueObservationChange<Value>, any Error>
     switch result {
     case .success(let output):
-      guard externalTracking.promote(output.externalSession) else { return .rejected }
+      guard externalTracking.accept(output.externalDependencies) else { return .rejected }
       state.reads.completeInitialFetch()
       state.observedRegion = output.region
       do {
@@ -1349,7 +1349,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     _ result: Result<OrbitValueObservationFetchOutput, any Error>
   ) {
     guard case .success(let output) = result else { return }
-    externalTracking.discard(output.externalSession)
+    externalTracking.discard(output.externalDependencies)
   }
 
   private func discard(_ pending: PendingLocal?) {

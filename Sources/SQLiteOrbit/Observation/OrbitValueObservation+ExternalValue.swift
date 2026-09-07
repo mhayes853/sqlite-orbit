@@ -46,15 +46,26 @@
         let value: WritableKeyPath<ObservationRoot, Box>
       }
 
+      // Besides counting mutations, each token gives one field a stable Sendable identity.
+      private final class VersionToken: Sendable {
+        private let storage = Lock(UInt64.zero)
+
+        var value: UInt64 { storage.withLock { $0 } }
+
+        func increment() {
+          storage.withLock { $0 &+= 1 }
+        }
+      }
+
       private struct State {
         var value: Wrapped
-        var valueRevision: UInt64 = 0
-        var replacementRevision: UInt64 = 0
-        var memberRevisions = [ObservedPath: UInt64]()
+        var memberVersions = [ObservedPath: VersionToken]()
       }
 
       private let registrar = ObservationRegistrar()
       private let state: Lock<State>
+      private let valueVersion = VersionToken()
+      private let replacementVersion = VersionToken()
 
       /// Creates an external value.
       public init(_ value: Wrapped) {
@@ -69,14 +80,12 @@
         get {
           registrar.access(self, keyPath: \.value)
           let read = state.withLock {
-            ($0.value, $0.valueRevision)
+            ($0.value, valueVersion.value)
           }
           recordAccess(
-            keyPath: \ExternalValue<Wrapped>.value,
-            revision: .init(member: read.1, replacement: 0),
-            isCurrent: { [weak self] in
-              self?.state.withLock { $0.valueRevision == read.1 } ?? false
-            }
+            id: ObjectIdentifier(valueVersion),
+            version: .init(member: read.1, replacement: 0),
+            isCurrent: { [valueVersion] in valueVersion.value == read.1 }
           )
           return read.0
         }
@@ -84,8 +93,8 @@
           withWholeValueMutation {
             state.withLock { state in
               state.value = newValue
-              state.valueRevision &+= 1
-              state.replacementRevision &+= 1
+              valueVersion.increment()
+              replacementVersion.increment()
             }
           }
         }
@@ -107,25 +116,24 @@
           registrar.access(self, keyPath: \.replacementEpoch)
           registrar.access(self, keyPath: modelPath)
           let read = state.withLock { state in
-            (
+            let memberVersion = Self.memberVersion(for: path, in: &state)
+            return (
               state.value[keyPath: memberPath.value],
-              state.memberRevisions[path, default: 0],
-              state.replacementRevision
+              memberVersion,
+              memberVersion.value,
+              replacementVersion.value
             )
           }
-          let revision = OrbitValueObservationExternalDependencyRevision(
-            member: read.1,
-            replacement: read.2
+          let version = ExternalAccess.Version(
+            member: read.2,
+            replacement: read.3
           )
           recordAccess(
-            keyPath: modelPath,
-            revision: revision,
-            isCurrent: { [weak self] in
-              self?.state
-                .withLock {
-                  $0.memberRevisions[path, default: 0] == revision.member
-                    && $0.replacementRevision == revision.replacement
-                } ?? false
+            id: ObjectIdentifier(read.1),
+            version: version,
+            isCurrent: { [memberVersion = read.1, replacementVersion] in
+              memberVersion.value == version.member
+                && replacementVersion.value == version.replacement
             }
           )
           return read.0
@@ -136,8 +144,8 @@
             let path = boxedPath(for: memberPath)
             state.withLock { state in
               state.value[keyPath: memberPath.value] = newValue
-              state.valueRevision &+= 1
-              state.memberRevisions[path, default: 0] &+= 1
+              valueVersion.increment()
+              Self.memberVersion(for: path, in: &state).increment()
             }
           }
         }
@@ -158,8 +166,8 @@
         try withWholeValueMutation {
           try state.withLock { state in
             defer {
-              state.valueRevision &+= 1
-              state.replacementRevision &+= 1
+              valueVersion.increment()
+              replacementVersion.increment()
             }
             try operation(&state.value)
           }
@@ -176,8 +184,8 @@
           let path = boxedPath(for: memberPath)
           try state.withLock { state in
             defer {
-              state.valueRevision &+= 1
-              state.memberRevisions[path, default: 0] &+= 1
+              valueVersion.increment()
+              Self.memberVersion(for: path, in: &state).increment()
             }
             try operation(&state.value[keyPath: memberPath.value])
           }
@@ -205,21 +213,27 @@
         (\ExternalValue<Wrapped>.observationRoot).appending(path: path.value)
       }
 
+      private static func memberVersion(
+        for path: ObservedPath,
+        in state: inout State
+      ) -> VersionToken {
+        if let version = state.memberVersions[path] { return version }
+        let version = VersionToken()
+        state.memberVersions[path] = version
+        return version
+      }
+
       private func recordAccess(
-        keyPath: AnyKeyPath,
-        revision: OrbitValueObservationExternalDependencyRevision,
+        id: ObjectIdentifier,
+        version: ExternalAccess.Version,
         isCurrent: @escaping @Sendable () -> Bool
       ) {
-        orbitRecordValueObservationExternalAccess(
-          OrbitValueObservationExternalDependency(
-            id: OrbitValueObservationExternalDependencyID(
-              object: ObjectIdentifier(self),
-              keyPath: keyPath
-            ),
-            revision: revision,
-            isCurrent: isCurrent
-          )
+        ExternalAccess(
+          id: id,
+          version: version,
+          isCurrent: isCurrent
         )
+        .record()
       }
 
       private func withMemberMutation<Member: Sendable, Result: ~Copyable>(
