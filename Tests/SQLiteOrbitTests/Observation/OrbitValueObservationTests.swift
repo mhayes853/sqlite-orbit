@@ -252,11 +252,64 @@
       #expect(initial.source == .initial)
 
       try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier))
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
       )
       let external = try #require(try await iterator.next())
       #expect(external.value == 0)
       #expect(external.source == .transaction(.external))
+    }
+
+    @Test
+    func interprocessObservationIgnoresDisjointRegions() async throws {
+      let driver = try await itemsDatabase()
+      let network = InMemoryIPCTransport.Network()
+      let receivingTransport = InMemoryIPCTransport(network: network)
+      let sendingTransport = InMemoryIPCTransport(network: network)
+      let identifier = OrbitDatabaseIdentifier(rawValue: "external-region-filtering")
+      let database = OrbitDatabase(
+        writer: driver,
+        id: identifier,
+        transport: receivingTransport
+      )
+      let fetchCount = Mutex(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: database,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .empty))
+      )
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(
+          .init(
+            databaseIdentifier: identifier,
+            region: OrbitDatabaseRegion(table: "unrelated")
+          )
+        )
+      )
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await sendingTransport.send(
+        .transactionDidCommit(
+          .init(databaseIdentifier: identifier, region: OrbitDatabaseRegion(table: "items"))
+        )
+      )
+      try await recorder.waitForChangeCount(2)
+
+      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.external)])
+      _ = subscription
     }
 
     @Test
@@ -292,7 +345,7 @@
       #expect(fetchCount.withLock { $0 } == 1)
 
       try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier))
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
       )
       try await recorder.waitForChangeCount(2)
 
@@ -373,6 +426,49 @@
       try await recorder.waitForChangeCount(2)
 
       #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+      _ = subscription
+    }
+
+    @Test
+    func interprocessObservationIgnoresDisjointSiblingHandleWrites() async throws {
+      let directory = FileManager.default.temporaryDirectory
+        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: directory) }
+
+      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+      let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-region-filtering")
+      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      try await writingDatabase.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      let fetchCount = Mutex(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: observingDatabase,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await writingDatabase.write { transaction in
+        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await writingDatabase.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(fetchCount.withLock { $0 } == 2)
       #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
       _ = subscription
     }
@@ -804,6 +900,489 @@
         _ = try await iterator.next()
       }
     }
+
+    @Test
+    func explicitRegionSkipsUnrelatedLocalWrites() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(recorder.changes.map(\.value) == [0])
+
+      try driver.writeBlocking { transaction in
+        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "items"))
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(recorder.changes.map(\.value) == [0, 0])
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(recorder.changes.map(\.value) == [0, 0, 1])
+      _ = subscription
+    }
+
+    @Test
+    func automaticRegionSkipsUnrelatedLocalWrites() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      _ = subscription
+    }
+
+    @Test
+    func automaticRegionRefreshesWhenSQLiteRecompilesACachedStatement() async throws {
+      try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await database.write { transaction in
+          try transaction.execute(
+            """
+            CREATE TABLE original_items (title TEXT NOT NULL);
+            CREATE TABLE alternate_items (title TEXT NOT NULL);
+            INSERT INTO original_items VALUES ('Original');
+            INSERT INTO alternate_items VALUES ('Alternate');
+            CREATE VIEW current_items AS SELECT title FROM original_items;
+            """
+          )
+        }
+
+        let recorder = ObservationRecorder<String?>()
+        let subscription = try OrbitValueObservation<String?>
+          .tracking { transaction in
+            try transaction.fetchOne(
+              #sql("SELECT title FROM current_items", as: String.self)
+            )
+          }
+          .subscribe(
+            to: database,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+        try await recorder.waitForChangeCount(1)
+
+        try await database.write { transaction in
+          try transaction.execute(
+            """
+            DROP VIEW current_items;
+            CREATE VIEW current_items AS SELECT title FROM alternate_items;
+            """
+          )
+        }
+        try await recorder.waitForChangeCount(2)
+
+        try await database.write { transaction in
+          try transaction.execute("UPDATE alternate_items SET title = 'Changed'")
+        }
+        try await recorder.waitForChangeCount(3)
+
+        #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
+        _ = subscription
+      }
+    }
+
+    @Test
+    func automaticRegionFollowsTheReadsOfEachSuccessfulFetch() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE settings (useNotes INTEGER NOT NULL);
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          INSERT INTO settings VALUES (0);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          let useNotes =
+            try transaction.fetchOne(
+              #sql("SELECT useNotes FROM settings", as: Bool.self)
+            ) ?? false
+          let table = useNotes ? "notes" : "items"
+          return try transaction.fetchOne(
+            #sql("SELECT COUNT(*) FROM \(raw: table)", as: Int.self)
+          ) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("UPDATE settings SET useNotes = 1")
+      }
+      #expect(recorder.changes.map(\.value) == [0, 1])
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (2)")
+      }
+      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(recorder.changes.map(\.value) == [0, 1, 2])
+      _ = subscription
+    }
+
+    @Test
+    func automaticRegionIncludesManuallyPublishedReads() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      let fetchCount = Mutex(0)
+      let region = OrbitDatabaseRegion(table: "raw_items")
+      let subscription = try OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          transaction.notifyReads(in: region)
+          return 1
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { _ in },
+          onChange: { _ in }
+        )
+
+      try driver.writeBlocking { transaction in
+        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
+      }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try driver.writeBlocking { transaction in
+        transaction.notifyChanges(in: region)
+      }
+      #expect(fetchCount.withLock { $0 } == 2)
+      _ = subscription
+    }
+
+    @Test
+    func rollbackClearsItsPublishedRegion() throws {
+      struct Abort: Error {}
+
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          """
+        )
+      }
+      let fetchCount = Mutex(0)
+      let subscription = try OrbitValueObservation<Int>
+        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { _ in },
+          onChange: { _ in }
+        )
+
+      #expect(throws: Abort.self) {
+        try driver.writeBlocking { transaction in
+          try transaction.execute("INSERT INTO items VALUES (1)")
+          throw Abort()
+        }
+      }
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+
+      #expect(fetchCount.withLock { $0 } == 1)
+      _ = subscription
+    }
+
+    @Test
+    func trackingAllDerivesItsRegionFromTypedSQL() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, ignored TEXT);
+          CREATE TABLE notes (id INTEGER PRIMARY KEY);
+          INSERT INTO items VALUES (1, 'Before', NULL);
+          """
+        )
+      }
+      let recorder = ObservationRecorder<[String]>()
+      let observation = OrbitValueObservation.trackingAll(
+        #sql("SELECT title FROM items ORDER BY id", as: String.self)
+      )
+      let subscription = try observation.subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("UPDATE items SET ignored = 'Unobserved' WHERE id = 1")
+        try transaction.execute("INSERT INTO notes VALUES (1)")
+      }
+      #expect(recorder.changes.map(\.value) == [["Before"]])
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("UPDATE items SET title = 'After' WHERE id = 1")
+      }
+      #expect(recorder.changes.map(\.value) == [["Before"], ["After"]])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func trackingAllAndOneInferTypedQueryOutputs() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE observed_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+          CREATE TABLE observed_items (
+            id INTEGER PRIMARY KEY,
+            groupID INTEGER NOT NULL,
+            title TEXT NOT NULL
+          );
+          INSERT INTO observed_groups VALUES (1, 'Group');
+          INSERT INTO observed_items VALUES (1, 1, 'One'), (2, 1, 'Two');
+          """
+        )
+      }
+
+      let all = OrbitValueObservation.trackingAll(ObservedItem.order { $0.id })
+      let allRecorder = ObservationRecorder<[ObservedItem]>()
+      let allSubscription = try all.subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: allRecorder.record(error:),
+        onChange: allRecorder.record(change:)
+      )
+
+      let one = OrbitValueObservation.trackingOne(ObservedItem.where { $0.id.eq(2) })
+      let oneRecorder = ObservationRecorder<ObservedItem?>()
+      let oneSubscription = try one.subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: oneRecorder.record(error:),
+        onChange: oneRecorder.record(change:)
+      )
+
+      let tuples = OrbitValueObservation.trackingAll(
+        ObservedItem.order { $0.id }.select { ($0.id, $0.title) }
+      )
+      let tupleRecorder = ObservationRecorder<[(Int, String)]>()
+      let tupleSubscription = try tuples.subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: tupleRecorder.record(error:),
+        onChange: tupleRecorder.record(change:)
+      )
+
+      let joined = OrbitValueObservation.trackingAll(
+        ObservedItem.join(ObservedGroup.all) { $0.groupID.eq($1.id) }
+          .order { item, _ in item.id }
+      )
+      let joinedRecorder = ObservationRecorder<[(ObservedItem, ObservedGroup)]>()
+      let joinedSubscription = try joined.subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: joinedRecorder.record(error:),
+        onChange: joinedRecorder.record(change:)
+      )
+
+      #expect(allRecorder.changes.first?.value.map(\.title) == ["One", "Two"])
+      #expect(oneRecorder.changes.first?.value?.title == "Two")
+      #expect(tupleRecorder.changes.first?.value.map(\.0) == [1, 2])
+      #expect(tupleRecorder.changes.first?.value.map(\.1) == ["One", "Two"])
+      #expect(joinedRecorder.changes.first?.value.map { $0.1.name } == ["Group", "Group"])
+      #expect(allRecorder.errors.isEmpty)
+      #expect(oneRecorder.errors.isEmpty)
+      #expect(tupleRecorder.errors.isEmpty)
+      #expect(joinedRecorder.errors.isEmpty)
+      _ = (allSubscription, oneSubscription, tupleSubscription, joinedSubscription)
+    }
+
+    @Test
+    func queryFragmentTrackingOneObservesAnOptionalValue() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
+      }
+      let query: QueryFragment = "SELECT title FROM items ORDER BY id LIMIT 1"
+      let recorder = ObservationRecorder<String?>()
+      let subscription =
+        try OrbitValueObservation
+        .trackingOne(query, as: String.self)
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      #expect(recorder.changes.map(\.value) == [nil])
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1, 'One')")
+      }
+      #expect(recorder.changes.map(\.value) == [nil, "One"])
+      _ = subscription
+    }
+
+    @Test
+    func emptyQueryRegionDoesNotRefetch() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let recorder = ObservationRecorder<Int?>()
+      let subscription =
+        try OrbitValueObservation
+        .trackingOne(#sql("SELECT 1", as: Int.self))
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+      }
+      #expect(recorder.changes.map(\.value) == [1])
+      _ = subscription
+    }
+
+    @Test
+    func queryObservationConservativelyRefetchesAfterExternalCommit() async throws {
+      let driver = try await itemsDatabase()
+      let network = InMemoryIPCTransport.Network()
+      let receivingTransport = InMemoryIPCTransport(network: network)
+      let sendingTransport = InMemoryIPCTransport(network: network)
+      let identifier = OrbitDatabaseIdentifier(rawValue: "query-region-external-observation")
+      let database = OrbitDatabase(
+        writer: driver,
+        id: identifier,
+        transport: receivingTransport
+      )
+      let changes =
+        OrbitValueObservation
+        .trackingAll(#sql("SELECT id FROM items", as: Int.self))
+        .changes(in: database)
+      var iterator = changes.makeAsyncIterator()
+
+      #expect(try await iterator.next()?.source == .initial)
+      try await sendingTransport.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+      )
+      #expect(try await iterator.next()?.source == .transaction(.external))
+    }
+
+    @Test
+    func writableTypedSQLIsRejectedBeforeItExecutes() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1)"
+        )
+      }
+      let recorder = ObservationRecorder<[Int]>()
+      let subscription =
+        try OrbitValueObservation
+        .trackingAll(#sql("DELETE FROM items RETURNING id", as: Int.self))
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+
+      let count = try driver.readBlocking { transaction in
+        try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+      }
+      #expect(count == 1)
+      #expect(recorder.changes.isEmpty)
+      #expect(recorder.errors.count == 1)
+      _ = subscription
+    }
+  }
+
+  @Table("observed_items")
+  private struct ObservedItem: Equatable {
+    let id: Int
+    var groupID: Int
+    var title: String
+  }
+
+  @Table("observed_groups")
+  private struct ObservedGroup: Equatable {
+    let id: Int
+    var name: String
   }
 
   private func itemsDatabase() async throws -> SQLiteQueue {

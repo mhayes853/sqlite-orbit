@@ -20,18 +20,25 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   let connection: OpaquePointer
   let library: UnsafePointer<SQLiteLibrary>
   let statements: SQLiteStatementCache
+  let authorizer: SQLiteAuthorizerDispatcher
+  let observations: OrbitDatabaseTransactionObservationContext
 
   @_lifetime(borrow handle)
-  init(handle: borrowing SQLiteHandle) {
+  init(
+    handle: borrowing SQLiteHandle,
+    observations: OrbitDatabaseTransactionObservationContext
+  ) {
     self.connection = handle.pointer
     self.library = handle.library
     self.statements = handle.statements
+    self.authorizer = handle.authorizer
+    self.observations = observations
   }
 
   /// The underlying `sqlite3 *`.
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
-  /// duration of the access that lent this transaction.
+  /// duration of the access that lent this transaction and must not be used to mutate the database.
   public var sqliteConnection: OpaquePointer {
     connection
   }
@@ -56,29 +63,36 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
     try cursor(for: query.fragment, cached: cached)
   }
 
-  /// Runs SQL that the query builder does not model, such as schema changes.
+  /// Notifies transaction observers that this transaction may have read a database region.
   ///
-  /// Several statements may be given at once, separated by semicolons, and any rows they produce
-  /// are discarded.
+  /// Use this after a read performed through ``sqliteConnection`` or another API that SQLiteOrbit
+  /// cannot track.
   ///
-  /// ```swift
-  /// try transaction.execute("PRAGMA optimize")
-  /// ```
-  ///
-  /// - Parameter sql: One or more statements.
-  /// - Throws: A ``SQLiteError`` naming the SQL that failed.
-  public borrowing func execute(_ sql: String) throws {
-    try SQLiteHandle.execute(sql, on: connection, library: library)
+  /// - Parameter region: The region the transaction may have read.
+  public borrowing func notifyReads(in region: OrbitDatabaseRegion) {
+    observations.didRead(in: region)
+  }
+
+  borrowing func withObserver<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try observations.withObserver(observer, perform: operation)
   }
 
   @_lifetime(borrow self)
-  borrowing func cursor(for query: QueryFragment, cached: Bool) throws -> SQLiteRowCursor {
+  borrowing func cursor(
+    for query: QueryFragment,
+    cached: Bool
+  ) throws -> SQLiteRowCursor {
     try SQLiteRowCursor(
       query,
       cached: cached,
       connection: connection,
       library: library,
-      statements: statements
+      statements: statements,
+      authorizer: authorizer,
+      observations: observations
     )
   }
 }
@@ -103,8 +117,11 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   let base: SQLiteReadTransaction
 
   @_lifetime(borrow handle)
-  init(handle: borrowing SQLiteHandle) {
-    self.base = SQLiteReadTransaction(handle: handle)
+  init(
+    handle: borrowing SQLiteHandle,
+    observations: OrbitDatabaseTransactionObservationContext
+  ) {
+    self.base = SQLiteReadTransaction(handle: handle, observations: observations)
   }
 
   /// The underlying `sqlite3 *`.
@@ -160,7 +177,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     // `changes` reporting whatever the previous statement changed.
     guard !query.fragment.isEmpty else { return 0 }
     var cursor = try base.cursor(for: query.fragment, cached: false)
-    try cursor.forEach { _ in }
+    while try cursor.next() != nil {}
     return Int(base.library.pointee.changes(base.connection))
   }
 
@@ -178,6 +195,33 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   /// - Parameter sql: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
   public borrowing func execute(_ sql: String) throws {
-    try base.execute(sql)
+    try SQLiteHandle.execute(
+      sql,
+      on: base.connection,
+      library: base.library,
+      authorizer: base.authorizer,
+      statements: base.statements,
+      observations: base.observations
+    )
+  }
+
+  /// Notifies transaction observers that this transaction may have changed a database region.
+  ///
+  /// Use this after a successful write performed through ``sqliteConnection`` or another API that
+  /// SQLiteOrbit cannot track. The notification remains provisional until the transaction commits.
+  ///
+  /// - Parameter region: The region the transaction may have changed.
+  public borrowing func notifyChanges(in region: OrbitDatabaseRegion) {
+    base.observations.didChange(in: region)
+  }
+
+  /// Notifies transaction observers that this transaction may have read a database region.
+  ///
+  /// Use this after a read performed through ``sqliteConnection`` or another API that SQLiteOrbit
+  /// cannot track.
+  ///
+  /// - Parameter region: The region the transaction may have read.
+  public borrowing func notifyReads(in region: OrbitDatabaseRegion) {
+    base.observations.didRead(in: region)
   }
 }

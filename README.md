@@ -13,7 +13,7 @@ try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
 
-for try await reminders in OrbitValueObservation.tracking({ try $0.fetchAll(Reminder.all) })
+for try await reminders in OrbitValueObservation.trackingAll(Reminder.all)
   .values(in: database)
 {
   render(reminders)
@@ -346,20 +346,107 @@ identifier, and callers can override it when constructing the database. File dat
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
 
-## Observation
+## Database regions
 
-`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A
-value observation fetches an initial value, then fetches again after every committed write:
+`OrbitDatabaseRegion` describes a set of database columns without opening or inspecting a
+database. A region can be empty, cover the full database, cover whole tables, or cover selected
+columns:
 
 ```swift
-let reminders = OrbitValueObservation.tracking { transaction in
-  try transaction.fetchAll(Reminder.all)
+let everything = OrbitDatabaseRegion.fullDatabase
+let reminders = OrbitDatabaseRegion(Reminder.self)
+let titles = Reminder.databaseRegion(\.title)
+let visibleFields = Reminder.databaseRegion { ($0.title, $0.isCompleted) }
+let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "reminders")
+let archived = OrbitDatabaseRegion(table: "reminders", schema: "archive")
+```
+
+Typed table instances produce the region of their entire table; their stored values do not narrow
+the region. Raw regions default to `SQLiteSchemaName.main`; use `.temp` or a string literal for a
+temporary or attached schema. Regions conform to `SetAlgebra`, supporting union, intersection,
+symmetric difference, subtraction, containment, and overlap testing. Subtraction can express
+exclusions such as every column in a table except one particular column. Whole-table regions absorb
+their column regions, while regions for distinct tables or schemas do not intersect.
+
+A read transaction can derive the region of a `QueryFragment` by asking SQLite to compile it:
+
+```swift
+let region = try await database.read { transaction in
+  try OrbitDatabaseRegion(
+    #sql("SELECT title FROM reminders WHERE NOT isCompleted", as: String.self).query,
+    in: transaction
+  )
 }
+```
+
+Compilation resolves tables, columns, views, and attached schemas without executing the statement
+or evaluating its bindings. Region derivation rejects statements that may write and treats
+read-only pragmas as full-database reads. Query-backed value observations use this region to avoid
+refetching after unrelated writes.
+
+## Observation
+
+`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A value observation
+fetches an initial value, then fetches again after a committed write that may affect its region.
+`trackingAll` and `trackingOne` derive that region directly from a readable query:
+
+```swift
+let reminders = OrbitValueObservation.trackingAll(
+  Reminder.where { !$0.isCompleted }
+)
+
+let firstReminder = OrbitValueObservation.trackingOne(
+  Reminder.order { $0.id }
+)
 
 for try await reminders in reminders.values(in: database) {
   render(reminders)
 }
 ```
+
+For a custom fetch, the observation tracks every region read by the closure and updates its region
+after each successful fetch. It also tracks properties read from Swift `Observable` values:
+
+```swift
+let incompleteCount = OrbitValueObservation.tracking { transaction in
+  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
+}
+```
+
+`OrbitValueObservation.ExternalValue` is a thread-safe observable reference for simple external
+state. Dynamic member lookup tracks only the fields the fetch actually reads:
+
+```swift
+struct Filters: Sendable {
+  var showsCompleted = false
+  var ordering = Ordering.date
+}
+
+let filters = OrbitValueObservation.ExternalValue(Filters())
+let reminders = OrbitValueObservation.tracking { transaction in
+  if filters.showsCompleted {
+    try transaction.fetchAll(Reminder.where(\.isCompleted))
+  } else {
+    try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+  }
+}
+
+filters.ordering = .title       // Does not refetch this observation.
+filters.showsCompleted = true   // Refetches with the other branch.
+```
+
+Access `.value` when the entire wrapped value is a dependency. Use `update` for an atomic
+read-modify-write. Every successful fetch replaces its previous observable and database
+dependencies, so conditionals follow only their currently active branch. Other `Observable` types
+participate automatically when they can be safely read from the fetch's nonisolated executor;
+actor-isolated models cannot be captured and read there directly.
+
+Pass `region:` to use an explicit region instead. A fetch that uses `sqliteConnection` directly can
+include those dependencies by calling `transaction.notifyReads(in:)`.
+
+Commits from the observed driver, another database handle, or another process carry regions, so
+observations avoid refetching after unrelated writes. A custom observable database that reports a
+commit without a region is handled conservatively.
 
 Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
 source; a committed transaction reports whether it came from this process or another one:
@@ -373,6 +460,8 @@ for try await change in reminders.changes(in: database) {
     updateFromLocalWrite(change.value)
   case .transaction(.external):
     updateFromExternalWrite(change.value)
+  case .observable:
+    updateFromObservableState(change.value)
   }
 }
 ```
@@ -489,8 +578,25 @@ throwing asynchronous sequence; they never roll back the write whose final state
 
 For transaction lifecycle events that do not produce a value, register an
 `OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
-`databaseWillCommit` hook receives a read-only view of the pending transaction and may throw to
-abort the write; `databaseDidCommit` identifies the transaction's local or external origin.
+`databaseDidRead(in:)` hook receives regions read by local transactions.
+`databaseDidChange(in:)` receives each provisional region from a directly observed write, or the
+aggregate committed region from another handle. `databaseWillCommit` receives a read-only view of
+a pending local transaction and may throw to abort the write, and `databaseDidCommit` identifies
+the transaction's local or external origin. Work performed directly through `sqliteConnection`
+can publish its regions explicitly:
+
+```swift
+try await database.write { transaction in
+  try performDirectSQLiteRead(transaction.sqliteConnection)
+  transaction.notifyReads(in: Reminder.databaseRegion)
+
+  try performDirectSQLiteWrite(transaction.sqliteConnection)
+  transaction.notifyChanges(in: Reminder.databaseRegion)
+}
+```
+
+Read notifications are immediate and remain local to the process. Repeated calls publish repeated
+observer events. A rollback follows provisional changes with `databaseDidRollback`.
 
 ## Cross-process transport
 
@@ -516,7 +622,9 @@ let subscription = try transport.subscribe(to: databaseIdentifier) { message in
 }
 
 try await transport.send(
-  .transactionDidCommit(.init(databaseIdentifier: databaseIdentifier))
+  .transactionDidCommit(
+    .init(databaseIdentifier: databaseIdentifier, region: .fullDatabase)
+  )
 )
 ```
 
@@ -583,7 +691,7 @@ A database announces every write transaction it commits:
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
-// Peers sharing the coordination directory have now been sent .transactionDidCommit.
+// Peers have now been sent .transactionDidCommit with the transaction's aggregate region.
 ```
 
 The announcement is sent after the driver releases its write transaction, never inside it: a peer

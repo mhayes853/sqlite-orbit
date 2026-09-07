@@ -58,7 +58,12 @@
     // merely rolled back at the end of the read would look like it had worked.
     #expect(throws: SQLiteError.self) {
       try handle.read { transaction in
-        try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'nope')")
+        try transaction.fetchAll(
+          #sql(
+            "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id",
+            as: Int.self
+          )
+        )
       }
     }
 

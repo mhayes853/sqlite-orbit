@@ -217,17 +217,23 @@
     ///
     /// Peers that have died are pruned from the coordination directory as they are discovered, so
     /// a crashed process does not fail later broadcasts. A peer whose receive queue is full is
-    /// handled according to ``Configuration/backPressure``.
+    /// handled according to ``Configuration/backPressure``. If a commit's precise database region
+    /// does not fit in one datagram, it is safely broadened to ``OrbitDatabaseRegion/fullDatabase``.
     ///
     /// ```swift
-    /// try await transport.send(.transactionDidCommit(.init(databaseIdentifier: database.id)))
+    /// try await transport.send(
+    ///   .transactionDidCommit(.init(databaseIdentifier: database.id, region: .fullDatabase))
+    /// )
     /// ```
     ///
     /// - Parameter message: The message to broadcast.
     /// - Throws: ``OrbitIPCPartialDeliveryError`` when a live peer did not accept the message,
     ///   or an ``OrbitIPCSystemError`` if the message cannot be encoded or sent at all.
     public func send(_ message: OrbitIPCMessage) async throws {
-      let bytes = try OrbitIPCWireProtocol.encode(message)
+      let bytes = try OrbitIPCWireProtocol.encode(
+        message,
+        maximumByteCount: self.configuration.maximumDatagramByteCount
+      )
       guard bytes.count <= self.configuration.maximumDatagramByteCount else {
         throw OrbitIPCSystemError(operation: "datagram is too large", code: EMSGSIZE)
       }

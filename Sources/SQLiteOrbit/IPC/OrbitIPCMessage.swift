@@ -29,17 +29,31 @@ public enum OrbitIPCMessage: Hashable, Sendable {
 ///
 /// ```swift
 /// try await transport.send(
-///   .transactionDidCommit(OrbitDatabaseTransactionDidCommit(databaseIdentifier: database.id))
+///   .transactionDidCommit(
+///     OrbitDatabaseTransactionDidCommit(
+///       databaseIdentifier: database.id,
+///       region: Reminder.databaseRegion
+///     )
+///   )
 /// )
 /// ```
 public struct OrbitDatabaseTransactionDidCommit: Hashable, Sendable {
   /// The database whose transaction committed.
   public let databaseIdentifier: OrbitDatabaseIdentifier
 
+  /// The region that the transaction may have changed.
+  public let region: OrbitDatabaseRegion
+
   /// Creates an announcement.
   ///
-  /// - Parameter databaseIdentifier: The database whose transaction committed.
-  public init(databaseIdentifier: OrbitDatabaseIdentifier) {
+  /// - Parameters:
+  ///   - databaseIdentifier: The database whose transaction committed.
+  ///   - region: The region that the transaction may have changed.
+  public init(
+    databaseIdentifier: OrbitDatabaseIdentifier,
+    region: OrbitDatabaseRegion
+  ) {
     self.databaseIdentifier = databaseIdentifier
+    self.region = region
   }
 }

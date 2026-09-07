@@ -20,6 +20,13 @@ public typealias SQLiteComparator =
     UnsafeMutableRawPointer?, Int32, UnsafeRawPointer?, Int32, UnsafeRawPointer?
   ) -> Int32
 
+/// The callback SQLite invokes while authorizing statement compilation.
+public typealias SQLiteAuthorizerCallback =
+  @convention(c) (
+    UnsafeMutableRawPointer?, Int32, UnsafePointer<CChar>?, UnsafePointer<CChar>?,
+    UnsafePointer<CChar>?, UnsafePointer<CChar>?
+  ) -> Int32
+
 extension SQLiteLibrary {
   /// SQLite's `SQLITE_TRANSIENT`: the destructor that tells SQLite to copy the bytes it was handed
   /// rather than borrow them.
@@ -161,6 +168,12 @@ public struct SQLiteLibrary: Sendable {
   public var column_bytes: @Sendable (OpaquePointer?, Int32) -> Int32
   /// A column's name: `sqlite3_column_name`.
   public var column_name: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
+
+  // MARK: - Authorization
+
+  /// Installs the callback invoked while statements are compiled: `sqlite3_set_authorizer`.
+  public var set_authorizer:
+    @Sendable (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32
 
   // MARK: - Custom functions
 
@@ -316,6 +329,9 @@ public struct SQLiteLibrary: Sendable {
     column_blob: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?,
     column_bytes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
     column_name: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?,
+    set_authorizer:
+      @escaping @Sendable (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) ->
+      Int32,
     create_function_v2:
       @escaping @Sendable (
         OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
@@ -378,6 +394,7 @@ public struct SQLiteLibrary: Sendable {
     self.column_blob = column_blob
     self.column_bytes = column_bytes
     self.column_name = column_name
+    self.set_authorizer = set_authorizer
     self.create_function_v2 = create_function_v2
     self.create_collation_v2 = create_collation_v2
     self.user_data = user_data
@@ -440,6 +457,7 @@ public struct SQLiteLibrary: Sendable {
         column_blob: sqlite3_column_blob,
         column_bytes: sqlite3_column_bytes,
         column_name: sqlite3_column_name,
+        set_authorizer: sqlite3_set_authorizer,
         create_function_v2: sqlite3_create_function_v2,
         create_collation_v2: sqlite3_create_collation_v2,
         user_data: sqlite3_user_data,

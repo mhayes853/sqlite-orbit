@@ -1,6 +1,7 @@
 struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
+  let authorizer: SQLiteAuthorizerDispatcher
 
   let isReadOnly: Bool
 
@@ -16,12 +17,15 @@ struct SQLiteHandle: ~Copyable {
     maximumCachedStatements: Int,
     isReadOnly: Bool
   ) {
+    let authorizer = SQLiteAuthorizerDispatcher()
     self.pointer = pointer
     self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
+    self.authorizer = authorizer
     self.statements = SQLiteStatementCache(
       library: UnsafePointer(libraryStorage),
       connection: pointer,
+      authorizer: authorizer,
       capacity: maximumCachedStatements
     )
   }
@@ -61,6 +65,7 @@ struct SQLiteHandle: ~Copyable {
       isReadOnly: flags.contains(.readOnly)
     )
     try handle.configure(configuration)
+    try handle.authorizer.install(on: pointer, using: handle.library)
     return handle
   }
 
@@ -120,6 +125,7 @@ struct SQLiteHandle: ~Copyable {
   }
 
   borrowing func read<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
@@ -127,10 +133,10 @@ struct SQLiteHandle: ~Copyable {
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than quietly having
     // it discarded by the rollback below.
-    guard !isReadOnly else { return try runRead(body) }
+    guard !isReadOnly else { return try runRead(observers: observers, body) }
     try execute("PRAGMA query_only = ON")
     do {
-      let value = try runRead(body)
+      let value = try runRead(observers: observers, body)
       try execute("PRAGMA query_only = OFF")
       return value
     } catch {
@@ -140,12 +146,14 @@ struct SQLiteHandle: ~Copyable {
   }
 
   private borrowing func runRead<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers?,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
     let value: Result
     do {
-      value = try body(SQLiteReadTransaction(handle: self))
+      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+      value = try body(SQLiteReadTransaction(handle: self, observations: observations))
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
       rollbackIgnoringFailure()
@@ -163,8 +171,9 @@ struct SQLiteHandle: ~Copyable {
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     do {
-      let value = try body(SQLiteWriteTransaction(handle: self))
-      try observers?.willCommit(SQLiteReadTransaction(handle: self))
+      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+      let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
+      try observers?.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
       try endTransaction(with: "COMMIT")
       observers?.didCommit(origin: .local)
       return value
@@ -193,7 +202,10 @@ struct SQLiteHandle: ~Copyable {
   static func execute(
     _ sql: String,
     on connection: OpaquePointer,
-    library: UnsafePointer<SQLiteLibrary>
+    library: UnsafePointer<SQLiteLibrary>,
+    authorizer: SQLiteAuthorizerDispatcher? = nil,
+    statements: SQLiteStatementCache? = nil,
+    observations: OrbitDatabaseTransactionObservationContext? = nil
   ) throws {
     // Each statement's length is passed explicitly rather than left to SQLite to measure again.
     try sql.withCString { start in
@@ -202,22 +214,55 @@ struct SQLiteHandle: ~Copyable {
       while next < end {
         var statement: OpaquePointer?
         var tail: UnsafePointer<CChar>?
-        let code = library.pointee.prepare_v3(
-          connection,
-          next,
-          Int32(end - next),
-          0,
-          &statement,
-          &tail
-        )
+        let prepare = {
+          library.pointee.prepare_v3(
+            connection,
+            next,
+            Int32(end - next),
+            0,
+            &statement,
+            &tail
+          )
+        }
+        let code: Int32
+        let authorizations: [SQLiteAuthorization]
+        if let authorizer {
+          (code, authorizations) = authorizer.recordingAuthorizations(during: prepare)
+        } else {
+          code = prepare()
+          authorizations = []
+        }
         guard code == SQLiteResultCode.ok.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
         }
         defer { _ = library.pointee.finalize(statement) }
 
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
-        guard statement != nil else { return }
+        guard let statement else { return }
         next = tail ?? end
+
+        if let statements,
+          sqliteInvalidatesStatementCache(
+            after: authorizations,
+            statement: statement,
+            library: library
+          )
+        {
+          statements.invalidate()
+        }
+
+        if let observations {
+          let preparedStatement = SQLitePreparedStatement(
+            pointer: statement,
+            authorizations: authorizations,
+            statements: statements,
+            connection: connection,
+            authorizer: authorizer,
+            library: library
+          )
+          observations.didRead(in: preparedStatement.readRegion)
+          observations.didChange(in: preparedStatement.changedRegion)
+        }
 
         var stepCode = library.pointee.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {

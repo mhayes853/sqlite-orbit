@@ -56,7 +56,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await connection.read(body)
+    try await connection.read(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction, committing it when `body` returns and rolling it back
@@ -83,7 +83,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try connection.readBlocking(body)
+    try connection.readBlocking(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -102,7 +102,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
 
   /// Registers an observer of the transactions this driver commits.
   ///
-  /// - Parameter transactionObserver: Receives each commit and rollback.
+  /// - Parameter transactionObserver: Receives reads and each changed region, commit, and rollback.
   /// - Returns: A subscription that stops the observer when it is cancelled or released.
   public func subscribe(
     transactionObserver: any OrbitDatabaseTransactionObserver

@@ -36,8 +36,16 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let isCached: Bool
 
+  var preparedStatement: SQLitePreparedStatement
+
+  let authorizer: SQLiteAuthorizerDispatcher
+
+  let observations: OrbitDatabaseTransactionObservationContext
+
   @usableFromInline
   var isExhausted = false
+
+  var didPublishAccesses = false
 
   @_lifetime(borrow statements)
   init(
@@ -45,10 +53,13 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     cached: Bool,
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
-    statements: borrowing SQLiteStatementCache
+    statements: borrowing SQLiteStatementCache,
+    authorizer: SQLiteAuthorizerDispatcher,
+    observations: OrbitDatabaseTransactionObservationContext
   ) throws {
     let (sql, bindings) = prepareQuery(query)
-    let statement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
+    let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
+    let statement = preparedStatement.pointer
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)
@@ -56,7 +67,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
       if cached {
-        statements.checkIn(statement, sql: sql)
+        statements.checkIn(preparedStatement, sql: sql)
       } else {
         _ = library.pointee.finalize(statement)
       }
@@ -68,11 +79,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.sql = sql
     self.statements = copy statements
     self.isCached = cached
+    self.preparedStatement = preparedStatement
+    self.authorizer = authorizer
+    self.observations = observations
   }
 
   deinit {
     if isCached {
-      statements.checkIn(statement, sql: sql)
+      statements.checkIn(preparedStatement, sql: sql)
     } else {
       _ = library.pointee.finalize(statement)
     }
@@ -85,11 +99,47 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   ///
   /// - Returns: The next row, or `nil` when the statement has no more.
   /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
-  @inlinable
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
     guard !isExhausted else { return nil }
-    let code = library.pointee.step(statement)
+    if !didPublishAccesses {
+      didPublishAccesses = true
+      // SQLite may recompile a cached statement on its first step after another connection changed
+      // the schema. Its callbacks cover both the retired and replacement programs, so prepare a
+      // fresh copy to capture only the replacement's metadata. Falling back to their union is safe.
+      let (code, authorizations) = authorizer.recordingAuthorizations {
+        library.pointee.step(statement)
+      }
+      if !authorizations.isEmpty {
+        statements.invalidate()
+        preparedStatement =
+          statements.refreshedMetadata(for: statement, sql: sql)
+          ?? SQLitePreparedStatement(
+            pointer: statement,
+            authorizations: authorizations,
+            cacheGeneration: statements.currentGeneration,
+            statements: statements,
+            connection: connection,
+            authorizer: authorizer,
+            library: library
+          )
+      }
+      publishAccesses()
+      return try row(for: code)
+    }
+    return try row(for: library.pointee.step(statement))
+  }
+
+  private mutating func publishAccesses() {
+    observations.didRead(in: preparedStatement.readRegion)
+    observations.didChange(in: preparedStatement.changedRegion)
+    if preparedStatement.invalidatesStatementCache {
+      statements.invalidate()
+    }
+  }
+
+  @_lifetime(&self)
+  private mutating func row(for code: Int32) throws -> SQLiteRow? {
     switch code {
     case SQLiteResultCode.row.rawValue:
       return SQLiteRow(cursor: self)

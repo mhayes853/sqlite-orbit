@@ -97,7 +97,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ///
   /// A write that throws is rolled back by its writer and is not announced. The announcement is
   /// complete by the time this method returns, so a peer that observes the database has already
-  /// been told about the commit.
+  /// been told about the commit and the union of its changed regions.
   ///
   /// ```swift
   /// try await database.write { transaction in
@@ -112,9 +112,11 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    let result = try await writer.write(body)
-    reportLocalCommit()
-    await Task { await self.announceCommittedTransaction() }.value
+    let (result, region) = try await writer.write { transaction in
+      try transaction.recordingDatabaseRegion(body)
+    }
+    reportLocalCommit(in: region)
+    await Task { await self.announceCommittedTransaction(in: region) }.value
     return result
   }
 
@@ -122,7 +124,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ///
   /// The durable write completes before this method returns. Since IPC transports are
   /// asynchronous, its announcement continues in an independent task, so a peer may not have been
-  /// told about the commit yet.
+  /// told about the commit and the union of its changed regions yet.
   ///
   /// ```swift
   /// try database.writeBlocking { transaction in
@@ -136,24 +138,27 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    let result = try writer.writeBlocking(body)
-    reportLocalCommit()
-    Task { await self.announceCommittedTransaction() }
+    let (result, region) = try writer.writeBlocking { transaction in
+      try transaction.recordingDatabaseRegion(body)
+    }
+    reportLocalCommit(in: region)
+    Task { await self.announceCommittedTransaction(in: region) }
     return result
   }
 
-  private func reportLocalCommit() {
+  private func reportLocalCommit(in region: OrbitDatabaseRegion) {
     guard let observableWriter = writer as? any OrbitObservableDatabase else { return }
     OrbitDatabaseObservationHub.shared.didCommit(
       databaseIdentifier: id,
-      writerIdentifier: ObjectIdentifier(observableWriter)
+      writerIdentifier: ObjectIdentifier(observableWriter),
+      region: region
     )
   }
 
-  private func announceCommittedTransaction() async {
+  private func announceCommittedTransaction(in region: OrbitDatabaseRegion) async {
     guard let transport else { return }
     let message = OrbitIPCMessage.transactionDidCommit(
-      OrbitDatabaseTransactionDidCommit(databaseIdentifier: id)
+      OrbitDatabaseTransactionDidCommit(databaseIdentifier: id, region: region)
     )
     do {
       try await transport.send(message)
@@ -186,7 +191,8 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
     let sameProcess = OrbitDatabaseObservationHub.shared.subscribe(
       to: id,
       writerIdentifier: ObjectIdentifier(writer)
-    ) {
+    ) { region in
+      transactionObserver.databaseDidChange(in: region)
       transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .local))
     }
     guard let transport else {
@@ -198,7 +204,8 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
 
     do {
       let external = try transport.subscribe(to: id) { message in
-        guard case .transactionDidCommit = message else { return }
+        guard case .transactionDidCommit(let commit) = message else { return }
+        transactionObserver.databaseDidChange(in: commit.region)
         transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .external))
       }
       return OrbitSubscription {
@@ -219,7 +226,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
 
   private struct Registration: Sendable {
     let writerIdentifier: ObjectIdentifier
-    let onCommit: @Sendable () -> Void
+    let onCommit: @Sendable (OrbitDatabaseRegion) -> Void
   }
 
   private let registrations = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, Registration>())
@@ -227,7 +234,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
   func subscribe(
     to databaseIdentifier: OrbitDatabaseIdentifier,
     writerIdentifier: ObjectIdentifier,
-    onCommit: @escaping @Sendable () -> Void
+    onCommit: @escaping @Sendable (OrbitDatabaseRegion) -> Void
   ) -> OrbitSubscription {
     let identifier = registrations.withLock {
       $0.insert(
@@ -243,13 +250,36 @@ private final class OrbitDatabaseObservationHub: Sendable {
 
   func didCommit(
     databaseIdentifier: OrbitDatabaseIdentifier,
-    writerIdentifier: ObjectIdentifier
+    writerIdentifier: ObjectIdentifier,
+    region: OrbitDatabaseRegion
   ) {
     let callbacks = registrations.withLock { registrations in
       registrations.handlers(for: databaseIdentifier)
         .filter { $0.writerIdentifier != writerIdentifier }
         .map(\.onCommit)
     }
-    for callback in callbacks { callback() }
+    for callback in callbacks { callback(region) }
+  }
+}
+
+private final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
+  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
+
+  var region: OrbitDatabaseRegion { recordedRegion.withLock { $0 } }
+
+  func databaseDidChange(in region: OrbitDatabaseRegion) {
+    recordedRegion.withLock { $0.formUnion(region) }
+  }
+}
+
+extension SQLiteWriteTransaction {
+  fileprivate borrowing func recordingDatabaseRegion<Result: Sendable>(
+    _ body: (borrowing SQLiteWriteTransaction) throws -> Result
+  ) rethrows -> (Result, OrbitDatabaseRegion) {
+    let recorder = OrbitDatabaseRegionRecorder()
+    let result = try base.observations.withObserver(recorder) {
+      try body(self)
+    }
+    return (result, recorder.region)
   }
 }
