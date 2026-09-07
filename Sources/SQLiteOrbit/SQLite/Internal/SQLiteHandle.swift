@@ -255,6 +255,7 @@ struct SQLiteHandle: ~Copyable {
           let preparedStatement = SQLitePreparedStatement(
             pointer: statement,
             authorizations: authorizations,
+            statements: statements,
             connection: connection,
             authorizer: authorizer,
             library: library

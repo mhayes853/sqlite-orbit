@@ -111,10 +111,12 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
         library.pointee.step(statement)
       }
       if !authorizations.isEmpty {
+        statements.invalidate()
         preparedStatement = SQLitePreparedStatement(
           pointer: statement,
           authorizations: authorizations,
-          cacheGeneration: preparedStatement.cacheGeneration,
+          cacheGeneration: statements.currentGeneration,
+          statements: statements,
           connection: connection,
           authorizer: authorizer,
           library: library

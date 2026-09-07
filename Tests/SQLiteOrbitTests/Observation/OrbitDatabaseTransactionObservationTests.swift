@@ -242,6 +242,65 @@
     }
 
     @Test
+    func updatesPublishWrittenAndGeneratedColumns() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (
+            id INTEGER PRIMARY KEY,
+            quantity INTEGER NOT NULL,
+            doubled INTEGER GENERATED ALWAYS AS (quantity * 2),
+            title TEXT
+          );
+          INSERT INTO items (id, quantity, title) VALUES (1, 1, 'One');
+          """
+        )
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      try await driver.write { transaction in
+        try transaction.execute("UPDATE items SET quantity = 2 WHERE id = 1")
+      }
+
+      #expect(
+        observer.events == [
+          .didChange(
+            OrbitDatabaseRegion(
+              columns: ["quantity", "doubled"],
+              in: "items"
+            )
+          ),
+          .willCommit(1),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func attachingADatabasePublishesNoChangedRegion() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      try await driver.write { transaction in
+        try transaction.execute("ATTACH DATABASE ':memory:' AS archive")
+      }
+      #expect(
+        observer.events == [
+          .willCommit(0),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
     func cachedWriteStatementsRetainTheirChangedRegion() async throws {
       let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in

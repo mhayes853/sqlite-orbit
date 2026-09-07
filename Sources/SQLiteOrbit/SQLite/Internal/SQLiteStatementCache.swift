@@ -1,11 +1,21 @@
+import StructuredQueries
+
 final class SQLiteStatementCache {
+  private struct Table: Hashable {
+    let schema: SQLiteSchemaName
+    let name: String
+  }
+
   private let library: UnsafePointer<SQLiteLibrary>
   private let connection: OpaquePointer
   private let authorizer: SQLiteAuthorizerDispatcher
   private let capacity: Int
 
   private var idle: [String: SQLitePreparedStatement] = [:]
+  private var generatedColumnsByTable: [Table: Set<String>] = [:]
   private var generation: UInt64 = 0
+
+  var currentGeneration: UInt64 { generation }
 
   init(
     library: UnsafePointer<SQLiteLibrary>,
@@ -48,6 +58,7 @@ final class SQLiteStatementCache {
       pointer: statement,
       authorizations: authorizations,
       cacheGeneration: generation,
+      statements: self,
       connection: connection,
       authorizer: authorizer,
       library: library
@@ -70,7 +81,60 @@ final class SQLiteStatementCache {
 
   func invalidate() {
     generation &+= 1
+    generatedColumnsByTable.removeAll()
     finalizeAll()
+  }
+
+  func generatedColumns(in table: String, schema: SQLiteSchemaName) -> Set<String>? {
+    let table = Table(schema: schema, name: table.asciiLowercased)
+    if let cached = generatedColumnsByTable[table] { return cached }
+    guard let result = inspectGeneratedColumns(in: table.name, schema: table.schema) else {
+      return nil
+    }
+    generatedColumnsByTable[table] = result
+    return result
+  }
+
+  private func inspectGeneratedColumns(
+    in table: String,
+    schema: SQLiteSchemaName
+  ) -> Set<String>? {
+    let query: QueryFragment =
+      """
+      SELECT name
+      FROM pragma_table_xinfo(\(bind: table), \(bind: schema.rawValue))
+      WHERE hidden IN (2, 3)
+      """
+    let (sql, bindings) = prepareQuery(query)
+    var statement: OpaquePointer?
+    let code = sql.withCString {
+      library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
+    }
+    guard code == SQLiteResultCode.ok.rawValue, let statement else { return nil }
+    defer { _ = library.pointee.finalize(statement) }
+    do {
+      for (offset, binding) in bindings.enumerated() {
+        try bind(binding, to: statement, at: Int32(offset + 1), library: library)
+      }
+    } catch {
+      return nil
+    }
+    var columns: Set<String> = []
+    while true {
+      switch library.pointee.step(statement) {
+      case SQLiteResultCode.done.rawValue:
+        return columns
+      case SQLiteResultCode.row.rawValue:
+        guard let text = library.pointee.column_text(statement, 0) else { return nil }
+        let count = Int(library.pointee.column_bytes(statement, 0))
+        columns.insert(
+          String(decoding: UnsafeBufferPointer(start: text, count: count), as: UTF8.self)
+            .asciiLowercased
+        )
+      default:
+        return nil
+      }
+    }
   }
 
   func finalizeAll() {
@@ -92,6 +156,7 @@ struct SQLitePreparedStatement {
     pointer: OpaquePointer,
     authorizations: [SQLiteAuthorization],
     cacheGeneration: UInt64 = 0,
+    statements: SQLiteStatementCache?,
     connection: OpaquePointer,
     authorizer: SQLiteAuthorizerDispatcher?,
     library: UnsafePointer<SQLiteLibrary>
@@ -109,7 +174,11 @@ struct SQLitePreparedStatement {
     }
     var changedRegion = OrbitDatabaseRegion.empty
     for authorization in authorizations {
-      changedRegion.formUnion(authorization.changedRegion)
+      changedRegion.formUnion(
+        authorization.changedRegion { table, schema in
+          statements?.generatedColumns(in: table, schema: schema)
+        }
+      )
     }
     if changedRegion.isEmpty && library.pointee.stmt_readonly(pointer) == 0 {
       changedRegion = .fullDatabase
@@ -148,16 +217,29 @@ extension SQLiteAuthorization {
     }
   }
 
-  var changedRegion: OrbitDatabaseRegion {
+  var changesFullDatabase: Bool {
+    invalidatesStatementCache && action != .attach && action != .detach
+  }
+
+  func changedRegion(
+    generatedColumns: (String, SQLiteSchemaName) -> Set<String>?
+  ) -> OrbitDatabaseRegion {
     let schema = schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
-    if invalidatesStatementCache { return .fullDatabase }
+    if changesFullDatabase { return .fullDatabase }
     switch action {
     case .delete, .insert:
       guard let table = firstArgument else { return .fullDatabase }
       return OrbitDatabaseRegion(table: table, schema: schema)
     case .update:
       guard let table = firstArgument, let column = secondArgument else { return .fullDatabase }
-      return OrbitDatabaseRegion(column: column, in: table, schema: schema)
+      guard let generatedColumns = generatedColumns(table, schema) else {
+        return OrbitDatabaseRegion(table: table, schema: schema)
+      }
+      return OrbitDatabaseRegion(
+        columns: generatedColumns.union([column]),
+        in: table,
+        schema: schema
+      )
     default:
       return .empty
     }
