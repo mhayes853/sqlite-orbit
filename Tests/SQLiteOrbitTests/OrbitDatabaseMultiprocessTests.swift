@@ -152,6 +152,40 @@
     }
 
     @Test
+    func schemaCookieRecompilesCachedUpdatesAcrossProcesses() async throws {
+      // SQLiteQueue has no IPC transport: SQLite's schema cookie is the only cross-process signal
+      // that can make the updater replace its cached statement metadata.
+      let harness = try OrbitDatabaseProcessHarness(name: "schema-cookie")
+      defer { harness.cleanup() }
+      let database = try SQLiteQueue(path: OrbitDatabasePath(harness.databasePath))
+      try await database.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (
+            id INTEGER PRIMARY KEY,
+            quantity INTEGER NOT NULL
+          );
+          INSERT INTO items VALUES (1, 1);
+          """
+        )
+      }
+      let updater = try harness.spawn("reuse-update", index: 0)
+      try await harness.waitUntilReady(1)
+
+      try await database.write { transaction in
+        try transaction.execute(
+          """
+          ALTER TABLE items ADD COLUMN doubled INTEGER
+            GENERATED ALWAYS AS (quantity * 2)
+          """
+        )
+      }
+      try harness.start()
+
+      try await harness.waitForSuccessfulExit(updater)
+    }
+
+    @Test
     func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
       // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
       // holder that crashes must not leave the lock stuck for whoever opens next.
@@ -242,6 +276,34 @@
       try touch(ready)
       try await waitUntil(timeout: .seconds(10)) { receivedCount.withLock { $0 } >= 1 }
       try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.received)))
+      _ = subscription
+
+    case "reuse-update":
+      let driver = try SQLiteQueue(path: OrbitDatabasePath(path))
+      let observer = ChangedRegionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+      let update = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
+        #sql("UPDATE items SET quantity = quantity + 1 WHERE id = 1", as: Void.self)
+      )
+      try await driver.write { transaction in
+        var cursor = try transaction.rowCursor(update, cached: true)
+        while try cursor.next() != nil {}
+      }
+      try touch(ready)
+      try await waitForFile(start)
+      try await driver.write { transaction in
+        var cursor = try transaction.rowCursor(update, cached: true)
+        while try cursor.next() != nil {}
+      }
+
+      guard
+        observer.regions == [
+          OrbitDatabaseRegion(column: "quantity", in: "items"),
+          OrbitDatabaseRegion(columns: ["quantity", "doubled"], in: "items")
+        ]
+      else {
+        processTestExit(1)
+      }
       _ = subscription
 
     case "hold-open-lock":
@@ -347,5 +409,15 @@
     static let writerID = prefix + "WRITER_ID"
     static let writeCount = prefix + "WRITE_COUNT"
     static let holdMilliseconds = prefix + "HOLD_MS"
+  }
+
+  private final class ChangedRegionObserver: OrbitDatabaseTransactionObserver, Sendable {
+    private let recordedRegions = Mutex([OrbitDatabaseRegion]())
+
+    var regions: [OrbitDatabaseRegion] { recordedRegions.withLock { $0 } }
+
+    func databaseDidChange(in region: OrbitDatabaseRegion) {
+      recordedRegions.withLock { $0.append(region) }
+    }
   }
 #endif

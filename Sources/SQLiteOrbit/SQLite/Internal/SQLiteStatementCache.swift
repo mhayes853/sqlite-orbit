@@ -17,7 +17,6 @@ final class SQLiteStatementCache {
   private let capacity: Int
 
   private var idle: [String: SQLitePreparedStatement] = [:]
-  private var updateScopesByTable: [Table: TableUpdateScope] = [:]
   private var generation: UInt64 = 0
 
   var currentGeneration: UInt64 { generation }
@@ -92,24 +91,26 @@ final class SQLiteStatementCache {
 
   func invalidate() {
     generation &+= 1
-    updateScopesByTable.removeAll()
     finalizeAll()
   }
 
-  func additionalColumnsAffectedByUpdate(
-    in table: String,
-    schema: SQLiteSchemaName
-  ) -> Set<String>? {
-    let table = Table(schema: schema, name: table.asciiLowercased)
-    let scope: TableUpdateScope
-    if let cached = updateScopesByTable[table] {
-      scope = cached
-    } else {
-      scope = inspectUpdateScope(in: table.name, schema: table.schema) ?? .table
-      updateScopesByTable[table] = scope
+  func changedRegion(after authorizations: [SQLiteAuthorization]) -> OrbitDatabaseRegion {
+    var scopes: [Table: TableUpdateScope] = [:]
+    var region = OrbitDatabaseRegion.empty
+    for authorization in authorizations {
+      region.formUnion(
+        authorization.changedRegion { table, schema in
+          let table = Table(schema: schema, name: table.asciiLowercased)
+          let scope =
+            scopes[table] ?? inspectUpdateScope(in: table.name, schema: table.schema)
+            ?? .table
+          scopes[table] = scope
+          guard case .columns(let columns) = scope else { return nil }
+          return columns
+        }
+      )
     }
-    guard case .columns(let columns) = scope else { return nil }
-    return columns
+    return region
   }
 
   private func inspectUpdateScope(
@@ -205,14 +206,11 @@ struct SQLitePreparedStatement {
         authorizer: authorizer
       )
     }
-    var changedRegion = OrbitDatabaseRegion.empty
-    for authorization in authorizations {
-      changedRegion.formUnion(
-        authorization.changedRegion { table, schema in
-          statements?.additionalColumnsAffectedByUpdate(in: table, schema: schema)
-        }
-      )
-    }
+    var changedRegion =
+      statements?.changedRegion(after: authorizations)
+      ?? authorizations.reduce(into: OrbitDatabaseRegion.empty) { region, authorization in
+        region.formUnion(authorization.changedRegion { _, _ in nil })
+      }
     if changedRegion.isEmpty && library.pointee.stmt_readonly(pointer) == 0 {
       changedRegion = .fullDatabase
     }
