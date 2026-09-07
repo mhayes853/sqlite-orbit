@@ -9,17 +9,11 @@
   /// synchronously anyway, and blocking the thread that is about to render for a value it will not
   /// see helps nobody.
   struct OrbitFetchAnimationScheduler: OrbitValueObservationMainActorScheduler {
-    // `Animation` predates the concurrency annotations this package builds under, and one is only
-    // ever read on the main actor.
-    private struct AnimationBox: @unchecked Sendable {
-      let value: Animation?
-    }
-
-    private let animation: AnimationBox
+    private let animation: Animation?
     private let base = OrbitMainActorValueObservationScheduler.mainActor
 
     init(animation: Animation?) {
-      self.animation = AnimationBox(value: animation)
+      self.animation = animation
     }
 
     func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
@@ -30,10 +24,9 @@
       from isolation: isolated (any Actor)?,
       _ action: @escaping @Sendable () -> Void
     ) {
-      let animation = self.animation
-      base.schedule(from: isolation) {
+      base.schedule(from: isolation) { [animation] in
         MainActor.assumeIsolated {
-          withAnimation(animation.value) {
+          withAnimation(animation) {
             action()
           }
         }

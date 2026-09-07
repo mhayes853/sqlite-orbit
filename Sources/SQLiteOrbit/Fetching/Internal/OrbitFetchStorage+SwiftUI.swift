@@ -12,22 +12,15 @@
       guard #unavailable(iOS 17, macOS 14, tvOS 17, watchOS 10) else { return }
       // Reading the state is what enrolls the view in its changes.
       _ = generation.wrappedValue
-      let generation = OrbitFetchUncheckedBox(generation)
+      // `State` is not `Sendable`, and the observer that bumps it can be called from anywhere.
+      // Bumping it on the main actor is what makes carrying it there safe, which is a fact about
+      // this one closure rather than about `State`.
+      nonisolated(unsafe) let generation = generation
       setSwiftUIObservation(
         addObserver {
-          Task { @MainActor in generation.value.wrappedValue &+= 1 }
+          Task { @MainActor in generation.wrappedValue &+= 1 }
         }
       )
-    }
-  }
-
-  /// Carries a SwiftUI value that predates the concurrency annotations this package builds under
-  /// to the main actor, where it is read.
-  struct OrbitFetchUncheckedBox<Value>: @unchecked Sendable {
-    let value: Value
-
-    init(_ value: Value) {
-      self.value = value
     }
   }
 #endif

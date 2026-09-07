@@ -66,7 +66,7 @@ public struct OrbitFetchReader<Value: Sendable>: Sendable {
   public subscript<Member: Sendable>(
     dynamicMember keyPath: KeyPath<Value, Member>
   ) -> OrbitFetchReader<Member> {
-    let path = OrbitFetchMemberPath(keyPath)
+    let path = SendableKeyPath(keyPath)
     let tracked = self.tracked
     let untracked = self.untracked
     return OrbitFetchReader<Member>(
@@ -111,13 +111,3 @@ protocol OrbitFetchReaderStorage: AnyObject, Sendable {
 }
 
 extension OrbitFetchStorage: OrbitFetchReaderStorage {}
-
-// Key paths carry no concurrency guarantees of their own, and a reader's projections are read
-// wherever the value is.
-private struct OrbitFetchMemberPath<Root, Member>: @unchecked Sendable {
-  let value: KeyPath<Root, Member>
-
-  init(_ value: KeyPath<Root, Member>) {
-    self.value = value
-  }
-}

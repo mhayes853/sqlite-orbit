@@ -48,11 +48,23 @@ struct OrbitFetchRequestID: Hashable, Sendable {
   }
 }
 
-struct OrbitAnyHashableSendable: Hashable, @unchecked Sendable {
-  private let base: AnyHashable
+/// A request of any type, compared and hashed as itself.
+///
+/// `AnyHashable` would say this in one word, but it erases `Sendable` along with the type. Holding
+/// the existential instead keeps the guarantee the requests came with.
+struct OrbitAnyHashableSendable: Hashable, Sendable {
+  private let base: any Hashable & Sendable
 
   init(_ base: some Hashable & Sendable) {
-    self.base = AnyHashable(base)
+    self.base = base
+  }
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    AnyHashable(lhs.base) == AnyHashable(rhs.base)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    base.hash(into: &hasher)
   }
 }
 

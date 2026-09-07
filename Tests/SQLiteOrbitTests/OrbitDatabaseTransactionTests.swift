@@ -698,13 +698,36 @@ private struct TestDatabaseRow: OrbitDatabaseRow {
   }
 }
 
-private final class TestDatabaseState: @unchecked Sendable {
-  var executedQueries: [QueryFragment] = []
-  var rows: [[QueryBinding]]
-  var visitedRowCount = 0
+/// The queries a fake connection ran and the rows it was told to hand back.
+///
+/// The fake is read and written from whichever thread a transaction runs on, so its state lives
+/// behind a lock rather than an `@unchecked Sendable` promise.
+private final class TestDatabaseState: Sendable {
+  private struct State {
+    var executedQueries: [QueryFragment] = []
+    var rows: [[QueryBinding]]
+    var visitedRowCount = 0
+  }
+
+  private let state: Lock<State>
+
+  var executedQueries: [QueryFragment] {
+    get { state.withLock { $0.executedQueries } }
+    set { state.withLock { $0.executedQueries = newValue } }
+  }
+
+  var rows: [[QueryBinding]] {
+    get { state.withLock { $0.rows } }
+    set { state.withLock { $0.rows = newValue } }
+  }
+
+  var visitedRowCount: Int {
+    get { state.withLock { $0.visitedRowCount } }
+    set { state.withLock { $0.visitedRowCount = newValue } }
+  }
 
   init(rows: [[QueryBinding]] = []) {
-    self.rows = rows
+    self.state = Lock(State(rows: rows))
   }
 }
 
