@@ -985,6 +985,55 @@
     }
 
     @Test
+    func automaticRegionRefreshesWhenSQLiteRecompilesACachedStatement() async throws {
+      try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await database.write { transaction in
+          try transaction.execute(
+            """
+            CREATE TABLE original_items (title TEXT NOT NULL);
+            CREATE TABLE alternate_items (title TEXT NOT NULL);
+            INSERT INTO original_items VALUES ('Original');
+            INSERT INTO alternate_items VALUES ('Alternate');
+            CREATE VIEW current_items AS SELECT title FROM original_items;
+            """
+          )
+        }
+
+        let recorder = ObservationRecorder<String?>()
+        let subscription = try OrbitValueObservation<String?>
+          .tracking { transaction in
+            try transaction.fetchOne(
+              #sql("SELECT title FROM current_items", as: String.self)
+            )
+          }
+          .subscribe(
+            to: database,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+        try await recorder.waitForChangeCount(1)
+
+        try await database.write { transaction in
+          try transaction.execute(
+            """
+            DROP VIEW current_items;
+            CREATE VIEW current_items AS SELECT title FROM alternate_items;
+            """
+          )
+        }
+        try await recorder.waitForChangeCount(2)
+
+        try await database.write { transaction in
+          try transaction.execute("UPDATE alternate_items SET title = 'Changed'")
+        }
+        try await recorder.waitForChangeCount(3)
+
+        #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
+        _ = subscription
+      }
+    }
+
+    @Test
     func automaticRegionFollowsTheReadsOfEachSuccessfulFetch() throws {
       let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
@@ -1002,9 +1051,10 @@
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
-          let useNotes = try transaction.fetchOne(
-            #sql("SELECT useNotes FROM settings", as: Bool.self)
-          ) ?? false
+          let useNotes =
+            try transaction.fetchOne(
+              #sql("SELECT useNotes FROM settings", as: Bool.self)
+            ) ?? false
           let table = useNotes ? "notes" : "items"
           return try transaction.fetchOne(
             #sql("SELECT COUNT(*) FROM \(raw: table)", as: Int.self)

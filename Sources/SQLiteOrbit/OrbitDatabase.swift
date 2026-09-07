@@ -277,7 +277,7 @@ extension SQLiteWriteTransaction {
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) rethrows -> (Result, OrbitDatabaseRegion) {
     let recorder = OrbitDatabaseRegionRecorder()
-    let result = try observations.withObserver(recorder) {
+    let result = try base.observations.withObserver(recorder) {
       try body(self)
     }
     return (result, recorder.region)

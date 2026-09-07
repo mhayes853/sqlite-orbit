@@ -380,8 +380,9 @@ let region = try await database.read { transaction in
 ```
 
 Compilation resolves tables, columns, views, and attached schemas without executing the statement
-or evaluating its bindings. Region derivation rejects statements that may write. Query-backed value
-observations use this region to avoid refetching after unrelated writes.
+or evaluating its bindings. Region derivation rejects statements that may write and treats
+read-only pragmas as full-database reads. Query-backed value observations use this region to avoid
+refetching after unrelated writes.
 
 ## Observation
 

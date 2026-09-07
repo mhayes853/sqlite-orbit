@@ -223,7 +223,10 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The other region.
   public func intersection(_ other: Self) -> Self {
-    combining(other, with: { $0 && $1 })
+    if self == other || other.isFullDatabase { return self }
+    if isFullDatabase { return other }
+    if isEmpty || other.isEmpty { return .empty }
+    return combining(other, with: { $0 && $1 })
   }
 
   /// Keeps only what is also present in `other`.
@@ -237,7 +240,10 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The other region.
   public func symmetricDifference(_ other: Self) -> Self {
-    combining(other, with: { $0 != $1 })
+    if self == other { return .empty }
+    if isEmpty { return other }
+    if other.isEmpty { return self }
+    return combining(other, with: { $0 != $1 })
   }
 
   /// Replaces this region with the elements present in exactly one of the two regions.
@@ -254,7 +260,9 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The region to remove.
   public func subtracting(_ other: Self) -> Self {
-    combining(other, with: { $0 && !$1 })
+    if self == other || isEmpty || other.isFullDatabase { return .empty }
+    if other.isEmpty { return self }
+    return combining(other, with: { $0 && !$1 })
   }
 
   /// Removes everything in `other` from this region.
@@ -270,14 +278,18 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The region whose containment is tested.
   public func contains(_ other: Self) -> Bool {
-    other.subtracting(self).isEmpty
+    if self == other || other.isEmpty || isFullDatabase { return true }
+    if isEmpty || other.isFullDatabase { return false }
+    return other.subtracting(self).isEmpty
   }
 
   /// Returns whether the two regions contain any of the same columns.
   ///
   /// - Parameter other: The region to compare with this one.
   public func overlaps(_ other: Self) -> Bool {
-    !intersection(other).isEmpty
+    if isEmpty || other.isEmpty { return false }
+    if isFullDatabase || other.isFullDatabase { return true }
+    return !intersection(other).isEmpty
   }
 
   /// Inserts a region into this region.
@@ -286,8 +298,9 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   /// - Returns: Whether any new columns were inserted, and `newMember` after insertion.
   @discardableResult
   public mutating func insert(_ newMember: Self) -> (inserted: Bool, memberAfterInsert: Self) {
-    let inserted = !contains(newMember)
-    formUnion(newMember)
+    let result = union(newMember)
+    let inserted = result != self
+    self = result
     return (inserted, newMember)
   }
 

@@ -50,7 +50,9 @@
       Thread.detachNewThread {
         for _ in 0..<bumpsEach {
           try! driver.writeBlocking { try $0.execute("UPDATE counter SET n = n + 1") }
-          _ = try! driver.readBlocking { try $0.execute("SELECT n FROM counter") }
+          _ = try! driver.readBlocking {
+            try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+          }
         }
         done.signal()
       }
@@ -61,7 +63,9 @@
         group.addTask {
           for _ in 0..<bumpsEach {
             try! await driver.write { try $0.execute("UPDATE counter SET n = n + 1") }
-            try! await driver.read { try $0.execute("SELECT n FROM counter") }
+            _ = try! await driver.read {
+              try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+            }
           }
         }
       }

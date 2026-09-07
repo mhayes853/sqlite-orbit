@@ -112,7 +112,8 @@
             #sql("SELECT title FROM items WHERE id = 1", as: String.self)
           )
         }
-        try transaction.execute("SELECT title FROM items WHERE id = 1")
+        _ = try transaction.fetchAll(#sql("SELECT title FROM items WHERE id = 1", as: String.self))
+        _ = try transaction.fetchOne(#sql("PRAGMA user_version", as: Int.self))
         transaction.notifyReads(in: manual)
       }
 
@@ -120,7 +121,9 @@
         transaction.notifyReads(in: manual)
       }
 
-      #expect(observer.regions == [automatic, automatic, automatic, manual, manual])
+      #expect(
+        observer.regions == [automatic, automatic, automatic, .fullDatabase, manual, manual]
+      )
       _ = subscription
     }
 

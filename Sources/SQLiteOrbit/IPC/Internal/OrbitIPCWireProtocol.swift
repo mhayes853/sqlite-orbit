@@ -16,12 +16,16 @@ enum OrbitIPCWireProtocol {
     _ message: OrbitIPCMessage,
     maximumByteCount: Int? = nil
   ) throws -> [UInt8] {
-    if let bytes = try? encodeExactly(message),
-      maximumByteCount.map({ bytes.count <= $0 }) ?? true
-    {
-      return bytes
+    let bytes: [UInt8]
+    do {
+      bytes = try encodeExactly(message)
+    } catch OrbitIPCWireError.regionTooLarge {
+      return try encodeExactly(message.withFullDatabaseRegion)
     }
-    return try encodeExactly(message.withFullDatabaseRegion)
+    if let maximumByteCount, bytes.count > maximumByteCount {
+      return try encodeExactly(message.withFullDatabaseRegion)
+    }
+    return bytes
   }
 
   private static func encodeExactly(_ message: OrbitIPCMessage) throws -> [UInt8] {
@@ -164,7 +168,6 @@ enum OrbitIPCWireProtocol {
     guard let string else { throw OrbitIPCWireError.invalidUTF8 }
     return string
   }
-
 }
 
 extension OrbitIPCMessage {

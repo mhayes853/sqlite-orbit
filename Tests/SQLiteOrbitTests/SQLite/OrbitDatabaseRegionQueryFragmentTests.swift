@@ -129,6 +129,17 @@
     }
 
     @Test
+    func treatsReadOnlyPragmasAsFullDatabaseReads() async throws {
+      let database = try regionDatabase()
+
+      try await database.read { transaction in
+        let query: QueryFragment = "PRAGMA table_info(reminders)"
+        let region = try OrbitDatabaseRegion(query, in: transaction)
+        #expect(region == .fullDatabase)
+      }
+    }
+
+    @Test
     func installsTheConnectionAuthorizerOnlyOnce() async throws {
       let installationCount = Mutex(0)
       let base = builtInTestLibrary

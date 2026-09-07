@@ -38,7 +38,7 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// The underlying `sqlite3 *`.
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
-  /// duration of the access that lent this transaction.
+  /// duration of the access that lent this transaction and must not be used to mutate the database.
   public var sqliteConnection: OpaquePointer {
     connection
   }
@@ -61,27 +61,6 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
     cached: Bool
   ) throws -> SQLiteRowCursor {
     try cursor(for: query.fragment, cached: cached)
-  }
-
-  /// Runs SQL that the query builder does not model, such as schema changes.
-  ///
-  /// Several statements may be given at once, separated by semicolons, and any rows they produce
-  /// are discarded.
-  ///
-  /// ```swift
-  /// try transaction.execute("PRAGMA optimize")
-  /// ```
-  ///
-  /// - Parameter sql: One or more statements.
-  /// - Throws: A ``SQLiteError`` naming the SQL that failed.
-  public borrowing func execute(_ sql: String) throws {
-    try SQLiteHandle.execute(
-      sql,
-      on: connection,
-      library: library,
-      authorizer: authorizer,
-      observations: observations
-    )
   }
 
   /// Notifies transaction observers that this transaction may have read a database region.
@@ -112,6 +91,7 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
       connection: connection,
       library: library,
       statements: statements,
+      authorizer: authorizer,
       observations: observations
     )
   }
@@ -135,7 +115,6 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   public typealias RowCursor = SQLiteRowCursor
 
   let base: SQLiteReadTransaction
-  let observations: OrbitDatabaseTransactionObservationContext
 
   @_lifetime(borrow handle)
   init(
@@ -143,7 +122,6 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     observations: OrbitDatabaseTransactionObservationContext
   ) {
     self.base = SQLiteReadTransaction(handle: handle, observations: observations)
-    self.observations = observations
   }
 
   /// The underlying `sqlite3 *`.
@@ -222,7 +200,8 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
       on: base.connection,
       library: base.library,
       authorizer: base.authorizer,
-      observations: observations
+      statements: base.statements,
+      observations: base.observations
     )
   }
 
@@ -233,7 +212,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   ///
   /// - Parameter region: The region the transaction may have changed.
   public borrowing func notifyChanges(in region: OrbitDatabaseRegion) {
-    observations.didChange(in: region)
+    base.observations.didChange(in: region)
   }
 
   /// Notifies transaction observers that this transaction may have read a database region.
@@ -243,6 +222,6 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   ///
   /// - Parameter region: The region the transaction may have read.
   public borrowing func notifyReads(in region: OrbitDatabaseRegion) {
-    observations.didRead(in: region)
+    base.observations.didRead(in: region)
   }
 }

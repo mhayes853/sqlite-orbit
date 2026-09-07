@@ -66,7 +66,7 @@
   }
 
   @Test
-  func poolReadersRefuseToWriteThroughTheRawConnection() async throws {
+  func poolReadersRefuseRawSQLWrites() async throws {
     let database = TemporaryDatabase()
     let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
@@ -78,7 +78,9 @@
 
     await #expect(throws: SQLiteError.self) {
       try await driver.read { transaction in
-        try transaction.execute("INSERT INTO items (title) VALUES ('nope')")
+        try transaction.fetchAll(
+          #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
+        )
       }
     }
   }

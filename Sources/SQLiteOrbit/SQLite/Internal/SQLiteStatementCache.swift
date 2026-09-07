@@ -5,6 +5,7 @@ final class SQLiteStatementCache {
   private let capacity: Int
 
   private var idle: [String: SQLitePreparedStatement] = [:]
+  private var generation: UInt64 = 0
 
   init(
     library: UnsafePointer<SQLiteLibrary>,
@@ -46,6 +47,7 @@ final class SQLiteStatementCache {
     return SQLitePreparedStatement(
       pointer: statement,
       authorizations: authorizations,
+      cacheGeneration: generation,
       connection: connection,
       authorizer: authorizer,
       library: library
@@ -55,11 +57,20 @@ final class SQLiteStatementCache {
   func checkIn(_ statement: SQLitePreparedStatement, sql: String) {
     _ = library.pointee.reset(statement.pointer)
     _ = library.pointee.clear_bindings(statement.pointer)
-    guard idle.count < capacity, idle[sql] == nil else {
+    guard
+      statement.cacheGeneration == generation,
+      idle.count < capacity,
+      idle[sql] == nil
+    else {
       _ = library.pointee.finalize(statement.pointer)
       return
     }
     idle[sql] = statement
+  }
+
+  func invalidate() {
+    generation &+= 1
+    finalizeAll()
   }
 
   func finalizeAll() {
@@ -74,15 +85,19 @@ struct SQLitePreparedStatement {
   let pointer: OpaquePointer
   let readRegion: OrbitDatabaseRegion
   let changedRegion: OrbitDatabaseRegion
+  let invalidatesStatementCache: Bool
+  let cacheGeneration: UInt64
 
   init(
     pointer: OpaquePointer,
     authorizations: [SQLiteAuthorization],
+    cacheGeneration: UInt64 = 0,
     connection: OpaquePointer,
     authorizer: SQLiteAuthorizerDispatcher?,
     library: UnsafePointer<SQLiteLibrary>
   ) {
     self.pointer = pointer
+    self.cacheGeneration = cacheGeneration
     self.readRegion = sqliteDatabaseRegion(readBy: authorizations) { table in
       guard let authorizer else { return nil }
       return sqliteResolvedSchema(
@@ -100,21 +115,49 @@ struct SQLitePreparedStatement {
       changedRegion = .fullDatabase
     }
     self.changedRegion = changedRegion
+    self.invalidatesStatementCache = sqliteInvalidatesStatementCache(
+      after: authorizations,
+      statement: pointer,
+      library: library
+    )
   }
 }
 
+func sqliteInvalidatesStatementCache(
+  after authorizations: [SQLiteAuthorization],
+  statement: OpaquePointer,
+  library: UnsafePointer<SQLiteLibrary>
+) -> Bool {
+  authorizations.contains(where: \.invalidatesStatementCache)
+    || (library.pointee.stmt_readonly(statement) == 0
+      && authorizations.contains { $0.action == .pragma })
+}
+
 extension SQLiteAuthorization {
+  var invalidatesStatementCache: Bool {
+    switch action {
+    case .createIndex, .createTable, .createTemporaryIndex, .createTemporaryTable,
+      .createTemporaryTrigger, .createTemporaryView, .createTrigger, .createView,
+      .dropIndex, .dropTable, .dropTemporaryIndex, .dropTemporaryTable,
+      .dropTemporaryTrigger, .dropTemporaryView, .dropTrigger, .dropView,
+      .attach, .detach, .alterTable, .reindex, .analyze, .createVirtualTable,
+      .dropVirtualTable:
+      return true
+    default:
+      return false
+    }
+  }
+
   var changedRegion: OrbitDatabaseRegion {
     let schema = schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
-    switch actionCode {
-    case 9, 18:  // SQLITE_DELETE, SQLITE_INSERT
+    if invalidatesStatementCache { return .fullDatabase }
+    switch action {
+    case .delete, .insert:
       guard let table = firstArgument else { return .fullDatabase }
       return OrbitDatabaseRegion(table: table, schema: schema)
-    case 23:  // SQLITE_UPDATE
+    case .update:
       guard let table = firstArgument, let column = secondArgument else { return .fullDatabase }
       return OrbitDatabaseRegion(column: column, in: table, schema: schema)
-    case 1...8, 10...17, 24...30:  // Schema changes, ATTACH, DETACH, REINDEX, ANALYZE.
-      return .fullDatabase
     default:
       return .empty
     }

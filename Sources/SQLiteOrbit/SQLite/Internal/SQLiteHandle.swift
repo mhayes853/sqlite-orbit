@@ -204,6 +204,7 @@ struct SQLiteHandle: ~Copyable {
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     authorizer: SQLiteAuthorizerDispatcher? = nil,
+    statements: SQLiteStatementCache? = nil,
     observations: OrbitDatabaseTransactionObservationContext? = nil
   ) throws {
     // Each statement's length is passed explicitly rather than left to SQLite to measure again.
@@ -240,15 +241,27 @@ struct SQLiteHandle: ~Copyable {
         guard let statement else { return }
         next = tail ?? end
 
-        let preparedStatement = SQLitePreparedStatement(
-          pointer: statement,
-          authorizations: authorizations,
-          connection: connection,
-          authorizer: authorizer,
-          library: library
-        )
-        observations?.didRead(in: preparedStatement.readRegion)
-        observations?.didChange(in: preparedStatement.changedRegion)
+        if let statements,
+          sqliteInvalidatesStatementCache(
+            after: authorizations,
+            statement: statement,
+            library: library
+          )
+        {
+          statements.invalidate()
+        }
+
+        if let observations {
+          let preparedStatement = SQLitePreparedStatement(
+            pointer: statement,
+            authorizations: authorizations,
+            connection: connection,
+            authorizer: authorizer,
+            library: library
+          )
+          observations.didRead(in: preparedStatement.readRegion)
+          observations.didChange(in: preparedStatement.changedRegion)
+        }
 
         var stepCode = library.pointee.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {

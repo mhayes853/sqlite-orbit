@@ -36,7 +36,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let isCached: Bool
 
-  let preparedStatement: SQLitePreparedStatement
+  var preparedStatement: SQLitePreparedStatement
+
+  let authorizer: SQLiteAuthorizerDispatcher
 
   let observations: OrbitDatabaseTransactionObservationContext
 
@@ -52,6 +54,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
+    authorizer: SQLiteAuthorizerDispatcher,
     observations: OrbitDatabaseTransactionObservationContext
   ) throws {
     let (sql, bindings) = prepareQuery(query)
@@ -77,6 +80,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.statements = copy statements
     self.isCached = cached
     self.preparedStatement = preparedStatement
+    self.authorizer = authorizer
     self.observations = observations
   }
 
@@ -100,10 +104,38 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     guard !isExhausted else { return nil }
     if !didPublishAccesses {
       didPublishAccesses = true
-      observations.didRead(in: preparedStatement.readRegion)
-      observations.didChange(in: preparedStatement.changedRegion)
+      publishAccesses()
+      // SQLite may recompile a cached statement on its first step after another connection changed
+      // the schema. Replace its stored regions with the authorizations from that compilation.
+      let (code, authorizations) = authorizer.recordingAuthorizations {
+        library.pointee.step(statement)
+      }
+      if !authorizations.isEmpty {
+        preparedStatement = SQLitePreparedStatement(
+          pointer: statement,
+          authorizations: authorizations,
+          cacheGeneration: preparedStatement.cacheGeneration,
+          connection: connection,
+          authorizer: authorizer,
+          library: library
+        )
+        publishAccesses()
+      }
+      return try row(for: code)
     }
-    let code = library.pointee.step(statement)
+    return try row(for: library.pointee.step(statement))
+  }
+
+  private mutating func publishAccesses() {
+    observations.didRead(in: preparedStatement.readRegion)
+    observations.didChange(in: preparedStatement.changedRegion)
+    if preparedStatement.invalidatesStatementCache {
+      statements.invalidate()
+    }
+  }
+
+  @_lifetime(&self)
+  private mutating func row(for code: Int32) throws -> SQLiteRow? {
     switch code {
     case SQLiteResultCode.row.rawValue:
       return SQLiteRow(cursor: self)

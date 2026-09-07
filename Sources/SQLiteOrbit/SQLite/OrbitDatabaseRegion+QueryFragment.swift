@@ -10,7 +10,9 @@ extension OrbitDatabaseRegion {
   /// Creates the region read by a query fragment.
   ///
   /// SQLite compiles the fragment against the transaction's connection and reports every resolved
-  /// table and column read. The statement is never executed. Its bindings are not evaluated.
+  /// table and column read. Read-only pragmas conservatively produce ``fullDatabase`` because
+  /// SQLite does not report the schema state they inspect. The statement is never executed. Its
+  /// bindings are not evaluated.
   ///
   /// ```swift
   /// let region = try await database.read { transaction in
@@ -38,7 +40,7 @@ extension SQLiteReadTransaction {
   fileprivate borrowing func databaseRegion(readBy query: QueryFragment) throws
     -> OrbitDatabaseRegion
   {
-    let (statement, reads) = try sqlitePrepare(
+    let (statement, authorizations) = try sqlitePrepare(
       query,
       on: connection,
       library: library,
@@ -51,7 +53,7 @@ extension SQLiteReadTransaction {
       throw OrbitDatabaseRegionError.writableStatement
     }
 
-    return sqliteDatabaseRegion(readBy: reads) { table in
+    return sqliteDatabaseRegion(readBy: authorizations) { table in
       sqliteResolvedSchema(
         for: table,
         on: connection,
@@ -63,20 +65,23 @@ extension SQLiteReadTransaction {
 }
 
 func sqliteDatabaseRegion(
-  readBy reads: [SQLiteAuthorization],
+  readBy authorizations: [SQLiteAuthorization],
   resolvingSchema: (String) -> SQLiteSchemaName?
 ) -> OrbitDatabaseRegion {
   var region = OrbitDatabaseRegion.empty
-  for read in reads where read.actionCode == 20 {  // SQLITE_READ
-    guard let table = read.firstArgument else { return .fullDatabase }
+  for authorization in authorizations {
+    // SQLite reports pragma access without the tables or schema state it may inspect.
+    if authorization.action == .pragma { return .fullDatabase }
+    guard authorization.action == .read else { continue }
+    guard let table = authorization.firstArgument else { return .fullDatabase }
     guard
       let schema =
-        read.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? resolvingSchema(table)
+        authorization.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? resolvingSchema(table)
     else {
       return .fullDatabase
     }
 
-    if let column = read.secondArgument, !column.isEmpty {
+    if let column = authorization.secondArgument, !column.isEmpty {
       region.formUnion(OrbitDatabaseRegion(column: column, in: table, schema: schema))
     } else {
       region.formUnion(OrbitDatabaseRegion(table: table, schema: schema))
@@ -104,7 +109,7 @@ func sqliteResolvedSchema(
   defer { _ = library.pointee.finalize(statement) }
 
   let normalizedTable = table.asciiLowercased
-  return prepared.reads.first {
+  return prepared.authorizations.first {
     $0.sourceName == nil && $0.firstArgument?.asciiLowercased == normalizedTable
   }?
   .schemaName.map(SQLiteSchemaName.init(rawValue:))
@@ -115,24 +120,17 @@ private func sqlitePrepare(
   on connection: OpaquePointer,
   library: UnsafePointer<SQLiteLibrary>,
   authorizer: SQLiteAuthorizerDispatcher
-) throws -> (statement: OpaquePointer?, reads: [SQLiteAuthorization]) {
+) throws -> (statement: OpaquePointer?, authorizations: [SQLiteAuthorization]) {
   let (sql, _) = query.prepare { _ in "?" }
-  var reads: [SQLiteAuthorization] = []
   var statement: OpaquePointer?
-  let code = authorizer.withHandler(
-    { authorization in
-      if authorization.actionCode == 20 { reads.append(authorization) }
-      return .allow
-    },
-    perform: {
-      sql.withCString {
-        library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
-      }
+  let (code, authorizations) = authorizer.recordingAuthorizations {
+    sql.withCString {
+      library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
     }
-  )
+  }
   guard code == SQLiteResultCode.ok.rawValue else {
     if let statement { _ = library.pointee.finalize(statement) }
     throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
   }
-  return (statement, reads)
+  return (statement, authorizations)
 }

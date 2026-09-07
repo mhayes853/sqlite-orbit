@@ -232,6 +232,51 @@
   }
 
   @Test
+  func schemaChangesInvalidateCachedStatements() throws {
+    let preparations = Mutex(0)
+    let base = builtInTestLibrary
+    var configuration = SQLiteConfiguration.default
+    configuration.library = base
+    configuration.library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
+      if let sql, String(cString: sql).hasPrefix("SELECT title FROM current_items") {
+        preparations.withLock { $0 += 1 }
+      }
+      return base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
+    }
+
+    let connection = try openTestConnection(configuration: configuration)
+    try connection.write { transaction in
+      try transaction.execute("INSERT INTO items VALUES (1, 'Original')")
+      try transaction.execute(
+        """
+        CREATE TABLE alternate_items (title TEXT NOT NULL);
+        INSERT INTO alternate_items VALUES ('Alternate');
+        CREATE VIEW current_items AS SELECT title FROM items;
+        """
+      )
+    }
+
+    let original = try connection.read { transaction in
+      try transaction.fetchAll(#sql("SELECT title FROM current_items", as: String.self))
+    }
+    try connection.write { transaction in
+      try transaction.execute(
+        """
+        DROP VIEW current_items;
+        CREATE VIEW current_items AS SELECT title FROM alternate_items;
+        """
+      )
+    }
+    let alternate = try connection.read { transaction in
+      try transaction.fetchAll(#sql("SELECT title FROM current_items", as: String.self))
+    }
+
+    #expect(original == ["Original"])
+    #expect(alternate == ["Alternate"])
+    #expect(preparations.withLock { $0 } == 2)
+  }
+
+  @Test
   func transactionsExposeTheRawConnectionAndItsLibrary() throws {
     let connection = try openTestConnection()
     try connection.write { transaction in
