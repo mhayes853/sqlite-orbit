@@ -104,25 +104,27 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     guard !isExhausted else { return nil }
     if !didPublishAccesses {
       didPublishAccesses = true
-      publishAccesses()
       // SQLite may recompile a cached statement on its first step after another connection changed
-      // the schema. Replace its stored regions with the authorizations from that compilation.
+      // the schema. Its callbacks cover both the retired and replacement programs, so prepare a
+      // fresh copy to capture only the replacement's metadata. Falling back to their union is safe.
       let (code, authorizations) = authorizer.recordingAuthorizations {
         library.pointee.step(statement)
       }
       if !authorizations.isEmpty {
         statements.invalidate()
-        preparedStatement = SQLitePreparedStatement(
-          pointer: statement,
-          authorizations: authorizations,
-          cacheGeneration: statements.currentGeneration,
-          statements: statements,
-          connection: connection,
-          authorizer: authorizer,
-          library: library
-        )
-        publishAccesses()
+        preparedStatement =
+          statements.refreshedMetadata(for: statement, sql: sql)
+          ?? SQLitePreparedStatement(
+            pointer: statement,
+            authorizations: authorizations,
+            cacheGeneration: statements.currentGeneration,
+            statements: statements,
+            connection: connection,
+            authorizer: authorizer,
+            library: library
+          )
       }
+      publishAccesses()
       return try row(for: code)
     }
     return try row(for: library.pointee.step(statement))

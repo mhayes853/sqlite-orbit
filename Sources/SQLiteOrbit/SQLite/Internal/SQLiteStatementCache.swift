@@ -6,13 +6,18 @@ final class SQLiteStatementCache {
     let name: String
   }
 
+  private enum TableUpdateScope {
+    case columns(Set<String>)
+    case table
+  }
+
   private let library: UnsafePointer<SQLiteLibrary>
   private let connection: OpaquePointer
   private let authorizer: SQLiteAuthorizerDispatcher
   private let capacity: Int
 
   private var idle: [String: SQLitePreparedStatement] = [:]
-  private var generatedColumnsByTable: [Table: Set<String>] = [:]
+  private var updateScopesByTable: [Table: TableUpdateScope] = [:]
   private var generation: UInt64 = 0
 
   var currentGeneration: UInt64 { generation }
@@ -65,6 +70,12 @@ final class SQLiteStatementCache {
     )
   }
 
+  func refreshedMetadata(for statement: OpaquePointer, sql: String) -> SQLitePreparedStatement? {
+    guard let probe = try? prepare(sql, flags: 0) else { return nil }
+    defer { _ = library.pointee.finalize(probe.pointer) }
+    return SQLitePreparedStatement(pointer: statement, metadata: probe)
+  }
+
   func checkIn(_ statement: SQLitePreparedStatement, sql: String) {
     _ = library.pointee.reset(statement.pointer)
     _ = library.pointee.clear_bindings(statement.pointer)
@@ -81,29 +92,39 @@ final class SQLiteStatementCache {
 
   func invalidate() {
     generation &+= 1
-    generatedColumnsByTable.removeAll()
+    updateScopesByTable.removeAll()
     finalizeAll()
   }
 
-  func generatedColumns(in table: String, schema: SQLiteSchemaName) -> Set<String>? {
-    let table = Table(schema: schema, name: table.asciiLowercased)
-    if let cached = generatedColumnsByTable[table] { return cached }
-    guard let result = inspectGeneratedColumns(in: table.name, schema: table.schema) else {
-      return nil
-    }
-    generatedColumnsByTable[table] = result
-    return result
-  }
-
-  private func inspectGeneratedColumns(
+  func additionalColumnsAffectedByUpdate(
     in table: String,
     schema: SQLiteSchemaName
   ) -> Set<String>? {
+    let table = Table(schema: schema, name: table.asciiLowercased)
+    let scope: TableUpdateScope
+    if let cached = updateScopesByTable[table] {
+      scope = cached
+    } else {
+      scope = inspectUpdateScope(in: table.name, schema: table.schema) ?? .table
+      updateScopesByTable[table] = scope
+    }
+    guard case .columns(let columns) = scope else { return nil }
+    return columns
+  }
+
+  private func inspectUpdateScope(
+    in table: String,
+    schema: SQLiteSchemaName
+  ) -> TableUpdateScope? {
     let query: QueryFragment =
       """
-      SELECT name
-      FROM pragma_table_xinfo(\(bind: table), \(bind: schema.rawValue))
-      WHERE hidden IN (2, 3)
+      SELECT
+        info.name,
+        info.hidden,
+        coalesce(upper(ltrim(tables.sql)) GLOB 'CREATE VIRTUAL TABLE *', 0)
+      FROM pragma_table_xinfo(\(bind: table), \(bind: schema.rawValue)) AS info
+      LEFT JOIN \(quote: schema.rawValue).sqlite_schema AS tables
+        ON tables.type = 'table' AND tables.name = \(bind: table) COLLATE NOCASE
       """
     let (sql, bindings) = prepareQuery(query)
     var statement: OpaquePointer?
@@ -123,8 +144,12 @@ final class SQLiteStatementCache {
     while true {
       switch library.pointee.step(statement) {
       case SQLiteResultCode.done.rawValue:
-        return columns
+        return .columns(columns)
       case SQLiteResultCode.row.rawValue:
+        if library.pointee.column_int64(statement, 2) != 0 { return .table }
+
+        let hidden = library.pointee.column_int64(statement, 1)
+        guard hidden == 2 || hidden == 3 else { continue }
         guard let text = library.pointee.column_text(statement, 0) else { return nil }
         let count = Int(library.pointee.column_bytes(statement, 0))
         columns.insert(
@@ -152,6 +177,14 @@ struct SQLitePreparedStatement {
   let invalidatesStatementCache: Bool
   let cacheGeneration: UInt64
 
+  init(pointer: OpaquePointer, metadata: Self) {
+    self.pointer = pointer
+    self.readRegion = metadata.readRegion
+    self.changedRegion = metadata.changedRegion
+    self.invalidatesStatementCache = metadata.invalidatesStatementCache
+    self.cacheGeneration = metadata.cacheGeneration
+  }
+
   init(
     pointer: OpaquePointer,
     authorizations: [SQLiteAuthorization],
@@ -176,7 +209,7 @@ struct SQLitePreparedStatement {
     for authorization in authorizations {
       changedRegion.formUnion(
         authorization.changedRegion { table, schema in
-          statements?.generatedColumns(in: table, schema: schema)
+          statements?.additionalColumnsAffectedByUpdate(in: table, schema: schema)
         }
       )
     }
@@ -222,7 +255,7 @@ extension SQLiteAuthorization {
   }
 
   func changedRegion(
-    generatedColumns: (String, SQLiteSchemaName) -> Set<String>?
+    additionalColumnsAffectedByUpdate: (String, SQLiteSchemaName) -> Set<String>?
   ) -> OrbitDatabaseRegion {
     let schema = schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
     if changesFullDatabase { return .fullDatabase }
@@ -232,11 +265,11 @@ extension SQLiteAuthorization {
       return OrbitDatabaseRegion(table: table, schema: schema)
     case .update:
       guard let table = firstArgument, let column = secondArgument else { return .fullDatabase }
-      guard let generatedColumns = generatedColumns(table, schema) else {
+      guard let additionalColumns = additionalColumnsAffectedByUpdate(table, schema) else {
         return OrbitDatabaseRegion(table: table, schema: schema)
       }
       return OrbitDatabaseRegion(
-        columns: generatedColumns.union([column]),
+        columns: additionalColumns.union([column]),
         in: table,
         schema: schema
       )

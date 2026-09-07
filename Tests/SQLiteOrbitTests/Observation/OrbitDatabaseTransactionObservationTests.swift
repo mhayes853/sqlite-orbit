@@ -280,6 +280,97 @@
     }
 
     @Test
+    func virtualTableUpdatesPublishTheWholeVirtualTable() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          CREATE VIRTUAL TABLE documents USING fts5(title);
+          INSERT INTO documents VALUES ('Before');
+          """
+        )
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      try await driver.write { transaction in
+        try transaction.execute("UPDATE documents SET title = 'After'")
+      }
+
+      let changedRegions: [OrbitDatabaseRegion] = observer.events.compactMap { event in
+        guard case .didChange(let region) = event else { return nil }
+        return region
+      }
+      #expect(changedRegions.count == 1)
+      #expect(
+        changedRegions.first?
+          .contains(
+            OrbitDatabaseRegion(table: "documents")
+          ) == true
+      )
+      #expect(
+        observer.events.suffix(2) == [
+          .willCommit(0),
+          .didCommit(.local)
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func automaticRecompilationPublishesOnlyTheReplacementReadRegion() async throws {
+      let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sqlite-orbit-\(UUID().uuidString)", isDirectory: true)
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      defer { try? FileManager.default.removeItem(at: directory) }
+
+      let path = OrbitDatabasePath.file(directory.appendingPathComponent("db.sqlite"))
+      do {
+        let reader = try SQLiteQueue(path: path)
+        let writer = try SQLiteQueue(path: path)
+        try await writer.write { transaction in
+          try transaction.execute(
+            """
+            CREATE TABLE original_items (title TEXT NOT NULL);
+            CREATE TABLE alternate_items (title TEXT NOT NULL);
+            INSERT INTO original_items VALUES ('Original');
+            INSERT INTO alternate_items VALUES ('Alternate');
+            CREATE VIEW current_items AS SELECT title FROM original_items;
+            """
+          )
+        }
+        let query = #sql("SELECT title FROM current_items", as: String.self)
+        _ = try await reader.read { transaction in
+          try transaction.fetchOne(query)
+        }
+
+        let observer = ReadRecordingTransactionObserver()
+        let subscription = try reader.subscribe(transactionObserver: observer)
+        try await writer.write { transaction in
+          try transaction.execute(
+            """
+            DROP VIEW current_items;
+            CREATE VIEW current_items AS SELECT title FROM alternate_items;
+            """
+          )
+        }
+
+        let value = try await reader.read { transaction in
+          try transaction.fetchOne(query)
+        }
+        #expect(value == "Alternate")
+        #expect(
+          observer.regions == [
+            OrbitDatabaseRegion(column: "title", in: "current_items")
+              .union(OrbitDatabaseRegion(column: "title", in: "alternate_items"))
+          ]
+        )
+        _ = subscription
+      }
+    }
+
+    @Test
     func attachingADatabasePublishesNoChangedRegion() async throws {
       let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
