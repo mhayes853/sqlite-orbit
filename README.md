@@ -404,13 +404,41 @@ for try await reminders in reminders.values(in: database) {
 ```
 
 For a custom fetch, the observation tracks every region read by the closure and updates its region
-after each successful fetch:
+after each successful fetch. It also tracks properties read from Swift `Observable` values:
 
 ```swift
 let incompleteCount = OrbitValueObservation.tracking { transaction in
   try transaction.fetchCount(Reminder.where { !$0.isCompleted })
 }
 ```
+
+`OrbitValueObservation.ExternalValue` is a thread-safe observable reference for simple external
+state. Dynamic member lookup tracks only the fields the fetch actually reads:
+
+```swift
+struct Filters: Sendable {
+  var showsCompleted = false
+  var ordering = Ordering.date
+}
+
+let filters = OrbitValueObservation.ExternalValue(Filters())
+let reminders = OrbitValueObservation.tracking { transaction in
+  if filters.showsCompleted {
+    try transaction.fetchAll(Reminder.where(\.isCompleted))
+  } else {
+    try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+  }
+}
+
+filters.ordering = .title       // Does not refetch this observation.
+filters.showsCompleted = true   // Refetches with the other branch.
+```
+
+Access `.value` when the entire wrapped value is a dependency. Use `update` for an atomic
+read-modify-write. Every successful fetch replaces its previous observable and database
+dependencies, so conditionals follow only their currently active branch. Other `Observable` types
+participate automatically when they can be safely read from the fetch's nonisolated executor;
+actor-isolated models cannot be captured and read there directly.
 
 Pass `region:` to use an explicit region instead. A fetch that uses `sqliteConnection` directly can
 include those dependencies by calling `transaction.notifyReads(in:)`.
@@ -431,6 +459,8 @@ for try await change in reminders.changes(in: database) {
     updateFromLocalWrite(change.value)
   case .transaction(.external):
     updateFromExternalWrite(change.value)
+  case .observable:
+    updateFromObservableState(change.value)
   }
 }
 ```

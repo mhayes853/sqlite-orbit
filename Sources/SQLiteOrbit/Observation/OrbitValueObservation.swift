@@ -5,6 +5,7 @@
 ///   switch change.source {
 ///   case .initial: print("first read:", change.value)
 ///   case .transaction(let origin): print("refetched after a \(origin) commit")
+///   case .observable: print("refetched after observable state changed")
 ///   }
 /// }
 /// ```
@@ -14,6 +15,9 @@ public enum OrbitValueObservationSource: Hashable, Sendable {
 
   /// A fetch associated with a committed transaction.
   case transaction(OrbitDatabaseTransactionOrigin)
+
+  /// A fetch prompted by a change to an observable value read by the fetch closure.
+  case observable
 }
 
 /// A value emitted by an observation, together with the event that prompted its fetch.
@@ -57,6 +61,12 @@ private enum OrbitValueObservationRegionSource: Sendable {
 }
 
 private struct OrbitValueObservationFetchOutput: Sendable {
+  let payload: any Sendable
+  let region: OrbitDatabaseRegion
+  let externalSession: OrbitValueObservationExternalSession?
+}
+
+private struct OrbitValueObservationUntrackedFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
 }
@@ -116,7 +126,8 @@ private struct OrbitValueObservationEvents: Sendable {
   func didFail(_ error: any Error) { for handler in handlers { handler.didFail?(error) } }
 }
 
-/// A value that is fetched initially and again whenever its database region may have changed.
+/// A value fetched initially and again whenever a recorded database or observable dependency may
+/// have changed.
 ///
 /// An observation is a description, not a running process: nothing is read until you start it
 /// with ``subscribe(to:onError:onChange:)``, ``changes(in:)``, or ``values(in:)``. Every
@@ -154,7 +165,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// `fetch` runs inside a read transaction, so everything it reads comes from one consistent
   /// snapshot of the database. The observation automatically tracks the regions read by `fetch`
-  /// and runs it again after a committed write that may affect them.
+  /// and runs it again after a committed write that may affect them. On systems with Observation,
+  /// it also tracks observable properties read by `fetch` and runs again when one changes.
+  /// ``ExternalValue`` provides thread-safe, field-sensitive observation for captured values.
   /// If `fetch` reads through ``SQLiteReadTransaction/sqliteConnection``, it must call
   /// ``SQLiteReadTransaction/notifyReads(in:)`` for those reads to be tracked.
   /// A database that reports a commit without first reporting its changed region is treated
@@ -958,6 +971,13 @@ private struct OrbitValueObservationDelivery: Sendable {
   var didFail = false
 }
 
+private struct OrbitValueObservationAcceptance: Sendable {
+  let delivery: OrbitValueObservationDelivery
+  let acceptedFetch: Bool
+
+  static let rejected = Self(delivery: .idle, acceptedFetch: false)
+}
+
 private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabaseTransactionObserver
 {
   private enum PendingLocal: Sendable {
@@ -988,6 +1008,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private var events: OrbitValueObservationEvents { reducer.events }
   private let state: Lock<State>
   private let transactionSubscription = Lock<OrbitSubscription?>(nil)
+  private let externalTracking: OrbitValueObservationExternalTracking
 
   init<Database: OrbitObservableDatabase>(
     database: Database,
@@ -995,27 +1016,45 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     fetch: @escaping OrbitValueObservationFetch,
     reducer: OrbitValueObservationReducer<Value>
   ) {
+    let externalTracking = OrbitValueObservationExternalTracking()
     self.reducer = reducer
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
-    let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
-      switch regionSource {
-      case .automatic:
-        let recorder = OrbitValueObservationReadRegionRecorder()
-        let payload = try transaction.withObserver(recorder) {
-          try fetch(transaction)
+    self.externalTracking = externalTracking
+    let resolveDatabaseRegionAndFetch:
+      @Sendable (
+        borrowing SQLiteReadTransaction
+      ) throws -> OrbitValueObservationUntrackedFetchOutput = { transaction in
+        switch regionSource {
+        case .automatic:
+          let recorder = OrbitValueObservationReadRegionRecorder()
+          let payload = try transaction.withObserver(recorder) {
+            try fetch(transaction)
+          }
+          return OrbitValueObservationUntrackedFetchOutput(
+            payload: payload,
+            region: recorder.region
+          )
+        case .constant(let region):
+          return OrbitValueObservationUntrackedFetchOutput(
+            payload: try fetch(transaction),
+            region: region
+          )
+        case .query(let query):
+          return OrbitValueObservationUntrackedFetchOutput(
+            payload: try fetch(transaction),
+            region: try OrbitDatabaseRegion(query, in: transaction)
+          )
         }
-        return OrbitValueObservationFetchOutput(payload: payload, region: recorder.region)
-      case .constant(let region):
-        return OrbitValueObservationFetchOutput(
-          payload: try fetch(transaction),
-          region: region
-        )
-      case .query(let query):
-        return OrbitValueObservationFetchOutput(
-          payload: try fetch(transaction),
-          region: try OrbitDatabaseRegion(query, in: transaction)
-        )
       }
+    let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
+      let tracked = try externalTracking.track {
+        try resolveDatabaseRegionAndFetch(transaction)
+      }
+      return OrbitValueObservationFetchOutput(
+        payload: tracked.output.payload,
+        region: tracked.output.region,
+        externalSession: tracked.session
+      )
     }
     self.fetch = resolveAndFetch
     self.read = {
@@ -1030,6 +1069,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       Result {
         try database.readBlocking(resolveAndFetch)
       }
+    }
+    externalTracking.installOnChange { [weak self] in
+      self?.requestRead(source: .observable)
     }
   }
 
@@ -1104,8 +1146,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     events.willFetch()
     let result = readBlocking()
     let delivery = state.withLock { state -> OrbitValueObservationDelivery in
-      guard !state.isStopped, !state.reads.initialFetchCompleted else { return .idle }
-      return accept(result, source: .initial, state: &state)
+      guard !state.isStopped, !state.reads.initialFetchCompleted else {
+        discard(result)
+        return .idle
+      }
+      return accept(result, source: .initial, state: &state).delivery
     }
     deliver(delivery, from: isolation)
   }
@@ -1170,10 +1215,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   func databaseDidRollback() {
-    state.withLock {
-      $0.transactionRegion = nil
-      $0.pendingLocal = nil
+    let pending = state.withLock { state in
+      defer {
+        state.transactionRegion = nil
+        state.pendingLocal = nil
+      }
+      return state.pendingLocal
     }
+    discard(pending)
   }
 
   private func transactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
@@ -1194,11 +1243,15 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     _ result: Result<OrbitValueObservationFetchOutput, any Error>
   ) {
     let delivery = state.withLock { state -> OrbitValueObservationDelivery in
-      guard !state.isStopped else { return .idle }
+      guard !state.isStopped else {
+        discard(result)
+        return .idle
+      }
+      let acceptance = accept(result, source: .transaction(.local), state: &state)
       // The fetch inside this transaction includes every commit visible before this one, so it
       // also satisfies an older external invalidation whose read has not completed yet.
-      state.reads.supersedePendingRead()
-      return accept(result, source: .transaction(.local), state: &state)
+      if acceptance.acceptedFetch { state.reads.supersedePendingRead() }
+      return acceptance.delivery
     }
     deliver(delivery, from: nil)
   }
@@ -1229,11 +1282,17 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   ) {
     let completed = state.withLock {
       state -> (OrbitValueObservationDelivery, OrbitValueObservationReadRequest?) in
-      guard !state.isStopped else { return (.idle, nil) }
-      let delivery =
-        state.reads.completeRead(request)
-        ? accept(result, source: request.source, state: &state)
-        : .idle
+      guard !state.isStopped else {
+        discard(result)
+        return (.idle, nil)
+      }
+      let delivery: OrbitValueObservationDelivery
+      if state.reads.completeRead(request) {
+        delivery = accept(result, source: request.source, state: &state).delivery
+      } else {
+        discard(result)
+        delivery = .idle
+      }
       // Accepting a failure ends the observation, and an ended observation reads no further.
       guard !state.isStopped else { return (delivery, nil) }
       return (delivery, state.reads.takeRequestIfPossible())
@@ -1246,19 +1305,23 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
     source: OrbitValueObservationSource,
     state: inout State
-  ) -> OrbitValueObservationDelivery {
-    state.reads.completeInitialFetch()
+  ) -> OrbitValueObservationAcceptance {
     let outcome: Result<OrbitValueObservationChange<Value>, any Error>
     switch result {
     case .success(let output):
+      guard externalTracking.promote(output.externalSession) else { return .rejected }
+      state.reads.completeInitialFetch()
       state.observedRegion = output.region
       do {
-        guard case .emit(let value) = try reducer.reduce(output.payload) else { return .idle }
+        guard case .emit(let value) = try reducer.reduce(output.payload) else {
+          return OrbitValueObservationAcceptance(delivery: .idle, acceptedFetch: true)
+        }
         outcome = .success(OrbitValueObservationChange(value: value, source: source))
       } catch {
         outcome = .failure(error)
       }
     case .failure(let error):
+      state.reads.completeInitialFetch()
       outcome = .failure(error)
     }
 
@@ -1273,10 +1336,25 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       owed = state.subscribers.fail(error)
     }
     let publication = OrbitValueObservationPublication(outcome: outcome, subscribers: owed)
-    return OrbitValueObservationDelivery(
-      shouldDrain: state.deliveries.enqueue(publication),
-      didFail: didFail
+    return OrbitValueObservationAcceptance(
+      delivery: OrbitValueObservationDelivery(
+        shouldDrain: state.deliveries.enqueue(publication),
+        didFail: didFail
+      ),
+      acceptedFetch: true
     )
+  }
+
+  private func discard(
+    _ result: Result<OrbitValueObservationFetchOutput, any Error>
+  ) {
+    guard case .success(let output) = result else { return }
+    externalTracking.discard(output.externalSession)
+  }
+
+  private func discard(_ pending: PendingLocal?) {
+    guard case .fetched(let result) = pending else { return }
+    discard(result)
   }
 
   // MARK: - Delivery
@@ -1285,7 +1363,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     _ delivery: OrbitValueObservationDelivery,
     from isolation: isolated (any Actor)?
   ) {
-    if delivery.didFail { stopObservingTransactions() }
+    if delivery.didFail {
+      externalTracking.stop()
+      stopObservingTransactions()
+    }
     guard delivery.shouldDrain else { return }
     while let publication = state.withLock({ $0.deliveries.next() }) {
       if case .failure(let error) = publication.outcome { events.didFail(error) }
@@ -1298,12 +1379,16 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   // MARK: - Lifetime
 
   func stop() {
-    let shouldStop = state.withLock { state in
-      guard !state.isStopped else { return false }
+    let stopped = state.withLock { state -> (Bool, PendingLocal?) in
+      guard !state.isStopped else { return (false, nil) }
       state.isStopped = true
-      return true
+      defer { state.pendingLocal = nil }
+      return (true, state.pendingLocal)
     }
-    if shouldStop { stopObservingTransactions() }
+    guard stopped.0 else { return }
+    discard(stopped.1)
+    externalTracking.stop()
+    stopObservingTransactions()
   }
 
   private func stopObservingTransactions() {
