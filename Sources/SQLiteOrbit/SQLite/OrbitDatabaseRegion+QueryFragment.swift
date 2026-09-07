@@ -68,6 +68,11 @@ func sqliteDatabaseRegion(
   readBy authorizations: [SQLiteAuthorization],
   resolvingSchema: (String) -> SQLiteSchemaName?
 ) -> OrbitDatabaseRegion {
+  // A successfully compiled statement normally produces at least one authorization, even when it
+  // reads no database values. No authorizations means SQLite's single callback was displaced or
+  // unavailable, so an empty region would be unsafe.
+  guard !authorizations.isEmpty else { return .fullDatabase }
+
   var region = OrbitDatabaseRegion.empty
   for authorization in authorizations {
     // SQLite reports pragma access without the tables or schema state it may inspect.

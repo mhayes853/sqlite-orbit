@@ -128,6 +128,34 @@
     }
 
     @Test
+    func missingAuthorizerBroadensReadRegionsToTheFullDatabase() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (title TEXT NOT NULL);
+          INSERT INTO items VALUES ('One');
+          """
+        )
+      }
+      let observer = ReadRecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+
+      let explicitRegion = try await driver.read { transaction in
+        let code = transaction.sqlite.set_authorizer(transaction.sqliteConnection, nil, nil)
+        #expect(code == SQLiteResultCode.ok.rawValue)
+
+        let region = try OrbitDatabaseRegion(QueryFragment("SELECT 1"), in: transaction)
+        _ = try transaction.fetchOne(#sql("SELECT title FROM items", as: String.self))
+        return region
+      }
+
+      #expect(explicitRegion == .fullDatabase)
+      #expect(observer.regions == [.fullDatabase])
+      _ = subscription
+    }
+
+    @Test
     func blockingWritesUseTheSameObserverLifecycle() throws {
       let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
