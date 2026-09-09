@@ -258,12 +258,16 @@
     @Test
     func aDeferredSchedulerLeavesThePropertyLoading() async throws {
       let database = try await remindersDatabase(titles: "Milk")
+      // Deferring by hand rather than with `.mainActor`, whose delivery lands on another thread
+      // and can beat the expectations below to the property.
+      let scheduler = HeldScheduler()
 
-      @FetchAll(Reminder.all, database: database, scheduler: .mainActor) var reminders
+      @FetchAll(Reminder.all, database: database, scheduler: scheduler) var reminders
 
       #expect(reminders.isEmpty)
       #expect($reminders.isLoading)
 
+      scheduler.release()
       try await waitUntil { reminders.count == 1 }
       #expect(!$reminders.isLoading)
     }
@@ -750,6 +754,45 @@
       }
     }
     return database
+  }
+
+  /// A scheduler that holds everything it is given until a test lets it go, and passes
+  /// everything after that straight through.
+  private final class HeldScheduler: OrbitValueObservationScheduler {
+    private struct State {
+      var isHeld = true
+      var held: [@Sendable () -> Void] = []
+    }
+
+    private let state = Lock(State())
+
+    func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      false
+    }
+
+    func schedule(
+      from isolation: isolated (any Actor)?,
+      _ action: @escaping @Sendable () -> Void
+    ) {
+      let runsNow = state.withLock { state -> Bool in
+        guard state.isHeld else { return true }
+        state.held.append(action)
+        return false
+      }
+      if runsNow { action() }
+    }
+
+    /// Runs everything held so far, and stops holding.
+    func release() {
+      let held = state.withLock { state in
+        state.isHeld = false
+        defer { state.held = [] }
+        return state.held
+      }
+      for action in held {
+        action()
+      }
+    }
   }
 
   private func waitUntil(

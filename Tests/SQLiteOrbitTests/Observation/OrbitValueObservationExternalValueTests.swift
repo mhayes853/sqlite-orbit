@@ -217,7 +217,7 @@
         )
 
       external.value = 1
-      #expect(secondFetchStarted.wait(timeout: .now() + 5) == .success)
+      #expect(secondFetchStarted.blockingWait(timeout: .now() + 5) == .success)
       external.value = 2
       releaseSecondFetch.signal()
       try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 2 } }
