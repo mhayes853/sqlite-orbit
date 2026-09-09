@@ -2,7 +2,6 @@
   import Dispatch
   import Observation
   import StructuredQueriesSQLite
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -18,10 +17,10 @@
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     private final class LockedObservableFlag: Observable, Sendable {
       private let registrar = ObservationRegistrar()
-      private let storage: Mutex<Bool>
+      private let storage: Lock<Bool>
 
       init(_ value: Bool) {
-        self.storage = Mutex(value)
+        self.storage = Lock(value)
       }
 
       var value: Bool {
@@ -41,7 +40,7 @@
     func dynamicMemberObservationTracksOnlyTheAccessedField() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Mutex(0)
+      let changes = Lock(0)
 
       withObservationTracking {
         _ = filters.primary
@@ -60,7 +59,7 @@
     func wholeValueObservationTracksEveryMemberMutation() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Mutex(0)
+      let changes = Lock(0)
 
       withObservationTracking {
         _ = filters.value
@@ -76,7 +75,7 @@
     func replacingTheWholeValueInvalidatesMemberObservation() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Mutex(0)
+      let changes = Lock(0)
 
       withObservationTracking {
         _ = filters.primary
@@ -92,8 +91,8 @@
     func keyPathUpdateIsAtomicAndFieldSpecific() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Mutex(0)
-      let secondaryChanges = Mutex(0)
+      let primaryChanges = Lock(0)
+      let secondaryChanges = Lock(0)
 
       withObservationTracking {
         _ = filters.primary
@@ -117,8 +116,8 @@
     func modifyAccessorsPreserveObservationGranularity() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Mutex(0)
-      let secondaryChanges = Mutex(0)
+      let primaryChanges = Lock(0)
+      let secondaryChanges = Lock(0)
 
       withObservationTracking {
         _ = filters.primary
@@ -148,7 +147,7 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = OrbitValueObservation.ExternalValue(false)
-      let changes = Mutex([OrbitValueObservationChange<Bool>]())
+      let changes = Lock([OrbitValueObservationChange<Bool>]())
       let subscription = try OrbitValueObservation<Bool>
         .tracking { _ in external.value }
         .subscribe(
@@ -171,7 +170,7 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = LockedObservableFlag(false)
-      let values = Mutex([Bool]())
+      let values = Lock([Bool]())
       let subscription = try OrbitValueObservation<Bool>
         .tracking(region: .empty) { _ in external.value }
         .subscribe(
@@ -193,8 +192,8 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = OrbitValueObservation.ExternalValue(0)
-      let fetchCount = Mutex(0)
-      let values = Mutex([Int]())
+      let fetchCount = Lock(0)
+      let values = Lock([Int]())
       let secondFetchStarted = DispatchSemaphore(value: 0)
       let releaseSecondFetch = DispatchSemaphore(value: 0)
       let subscription = try OrbitValueObservation<Int>
@@ -246,8 +245,8 @@
         )
       }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let fetchCount = Mutex(0)
-      let values = Mutex([Int]())
+      let fetchCount = Lock(0)
+      let values = Lock([Int]())
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -288,8 +287,8 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let values = Mutex([Int]())
-      let fetchCount = Mutex(0)
+      let values = Lock([Int]())
+      let fetchCount = Lock(0)
       let subscription = try OrbitValueObservation<Int>
         .tracking { _ in
           fetchCount.withLock { $0 += 1 }

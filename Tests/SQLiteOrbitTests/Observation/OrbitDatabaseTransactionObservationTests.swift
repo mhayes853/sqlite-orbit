@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueriesSQLite
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -459,7 +458,7 @@
   }
 
   private final class RecordingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
-    private let recordedEvents = Mutex([RecordedTransactionEvent]())
+    private let recordedEvents = Lock([RecordedTransactionEvent]())
 
     var events: [RecordedTransactionEvent] { recordedEvents.withLock { $0 } }
 
@@ -487,7 +486,7 @@
     OrbitDatabaseTransactionObserver,
     Sendable
   {
-    private let recordedRegions = Mutex([OrbitDatabaseRegion]())
+    private let recordedRegions = Lock([OrbitDatabaseRegion]())
 
     var regions: [OrbitDatabaseRegion] { recordedRegions.withLock { $0 } }
 
@@ -498,7 +497,7 @@
 
   private final class FailingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
     private let error: any Error
-    private let rollback = Mutex(false)
+    private let rollback = Lock(false)
 
     var didRollback: Bool { rollback.withLock { $0 } }
 

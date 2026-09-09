@@ -1,11 +1,10 @@
-import Synchronization
 import Testing
 
 @testable import SQLiteOrbit
 
 @Test
 func orbitSubscriptionCancelsAtMostOnceAcrossCopies() {
-  let cancellationCount = Mutex(0)
+  let cancellationCount = Lock(0)
   let subscription = OrbitSubscription {
     cancellationCount.withLock { $0 += 1 }
   }
@@ -19,7 +18,7 @@ func orbitSubscriptionCancelsAtMostOnceAcrossCopies() {
 
 @Test
 func orbitSubscriptionCancelsWhenItsStorageIsReleased() {
-  let cancellationCount = Mutex(0)
+  let cancellationCount = Lock(0)
 
   do {
     _ = OrbitSubscription {

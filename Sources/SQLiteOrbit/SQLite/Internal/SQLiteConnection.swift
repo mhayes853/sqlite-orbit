@@ -107,6 +107,7 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     return try queue.sync(execute: body)
   }
 
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   func enqueue(_ job: consuming ExecutorJob) {
     // The job's priority is handed to dispatch rather than dropped. Without it every query would
     // run at the queue's own QoS, so a read a user is waiting on would be served no sooner than a
@@ -114,10 +115,13 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     // resolves the inversion this leaves behind: a high-priority block enqueued behind a
     // low-priority one raises the queue until it drains.
     let qos = Self.dispatchQoS(for: job.priority)
-    let job = UnownedJob(job)
-    queue.async(qos: qos) {
-      job.runSynchronously(on: self.asUnownedSerialExecutor())
-    }
+    run(UnownedJob(job), at: qos)
+  }
+
+  // The entry point on platforms that predate `ExecutorJob`, where a job's priority cannot be
+  // read, so every one of them runs at the queue's own.
+  func enqueue(_ job: UnownedJob) {
+    run(job, at: .unspecified)
   }
 
   func asUnownedSerialExecutor() -> UnownedSerialExecutor {
@@ -128,6 +132,13 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     dispatchPrecondition(condition: .onQueue(queue))
   }
 
+  private func run(_ job: UnownedJob, at qos: DispatchQoS) {
+    queue.async(qos: qos) {
+      job.runSynchronously(on: self.asUnownedSerialExecutor())
+    }
+  }
+
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   private static func dispatchQoS(for priority: JobPriority) -> DispatchQoS {
     guard let priority = TaskPriority(priority) else { return .unspecified }
     if priority >= .high { return .userInitiated }

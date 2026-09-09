@@ -1,13 +1,12 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
 
   private final class CallCounter: Sendable {
-    private let count = Mutex(0)
+    private let count = Lock(0)
 
     var value: Int { count.withLock { $0 } }
 
@@ -138,8 +137,8 @@
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
-    let blockerEntered = Mutex(false)
-    let releaseBlocker = Mutex(false)
+    let blockerEntered = Lock(false)
+    let releaseBlocker = Lock(false)
     let blocker = Task {
       try await driver.read { _ in
         blockerEntered.withLock { $0 = true }
@@ -177,7 +176,7 @@
       var secondAccessEntered = false
     }
 
-    private let state = Mutex(State())
+    private let state = Lock(State())
 
     var firstStepEntered: Bool { state.withLock { $0.firstStepEntered } }
     var firstQueryFinished: Bool { state.withLock { $0.firstQueryFinished } }
@@ -269,7 +268,7 @@
   }
 
   private final class OverlapTracker: Sendable {
-    private let state = Mutex((inFlight: 0, peak: 0))
+    private let state = Lock((inFlight: 0, peak: 0))
 
     var peak: Int { state.withLock { $0.peak } }
 

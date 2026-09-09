@@ -73,6 +73,7 @@ public struct OrbitFetchSequence<Element: Sendable>: AsyncSequence, Sendable {
     ///
     /// - Parameter actor: The actor to resume on.
     /// - Returns: The next value, or `nil` once the iterating task is cancelled.
+    @available(iOS 18, macOS 15, tvOS 18, watchOS 11, visionOS 2, *)
     public mutating func next(isolation actor: isolated (any Actor)?) async -> Element? {
       await self.base.next(isolation: actor)
     }

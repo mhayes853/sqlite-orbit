@@ -1,4 +1,3 @@
-import Synchronization
 import Testing
 
 @testable import SQLiteOrbit
@@ -110,8 +109,8 @@ struct OrbitValueObservationSubscriberRegistryTests {
   @Test
   func aSubscriberRegisteringDuringAPublicationIsCaughtUpExactlyOnce() throws {
     var registry = OrbitValueObservationSubscriberRegistry<Int>()
-    let early = Mutex([Int]())
-    let late = Mutex([Int]())
+    let early = Lock([Int]())
+    let late = Lock([Int]())
 
     let firstRegistration = registry.add(
       subscriber { change in early.withLock { $0.append(change.value) } }

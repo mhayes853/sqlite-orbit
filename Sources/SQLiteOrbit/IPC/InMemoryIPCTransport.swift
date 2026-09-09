@@ -1,5 +1,3 @@
-import Synchronization
-
 /// A database IPC transport that delivers messages in-process, for testing and mocking.
 ///
 /// Transports constructed against the same ``Network`` are peers, the way two
@@ -31,7 +29,7 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// let receiver = InMemoryIPCTransport(network: network)
   /// ```
   public final class Network: Sendable {
-    fileprivate let state = Mutex(State())
+    fileprivate let state = Lock(State())
     fileprivate struct State {
       var endpoints: [OrbitDatabaseIdentifier: [ObjectIdentifier: Endpoint]] = [:]
     }
@@ -139,12 +137,12 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
 }
 
 private final class Endpoint: Sendable {
-  private let handlers = Mutex(
+  private let handlers = Lock(
     KeyedHandlerRegistry<OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void>()
   )
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
   // without holding the handler lock (and risking deadlock) while a handler runs.
-  private let deliveryLock = Mutex(())
+  private let deliveryLock = Lock(())
 
   func add(
     databaseIdentifier: OrbitDatabaseIdentifier,

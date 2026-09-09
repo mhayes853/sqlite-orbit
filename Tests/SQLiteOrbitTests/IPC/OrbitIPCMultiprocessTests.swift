@@ -1,7 +1,6 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Foundation
-  import SQLiteOrbit
-  import Synchronization
+  @testable import SQLiteOrbit
   import Testing
 
   @Suite(.serialized)
@@ -140,7 +139,7 @@
         backPressure: .suspend(upTo: .seconds(5))
       )
     )
-    let received = Mutex(0)
+    let received = Lock(0)
     let subscription = try transport.subscribe(to: database) { message in
       if mode == "listen-region" {
         let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(

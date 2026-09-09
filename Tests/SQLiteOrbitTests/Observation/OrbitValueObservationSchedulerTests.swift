@@ -1,4 +1,3 @@
-import Synchronization
 import Testing
 
 @testable import SQLiteOrbit
@@ -10,7 +9,7 @@ struct OrbitValueObservationSchedulerTests {
   @Test
   func immediateSchedulerRunsInlineWithoutIsolation() {
     let scheduler = OrbitImmediateValueObservationScheduler.immediate
-    let didRun = Mutex(false)
+    let didRun = Lock(false)
 
     let hasImmediateInitialValue = scheduler.immediateInitialValue(from: nil)
     #expect(hasImmediateInitialValue)
@@ -25,7 +24,7 @@ struct OrbitValueObservationSchedulerTests {
   func asyncSchedulerRunsOnItsActor() async throws {
     let destination = Destination()
     let scheduler = OrbitAsyncValueObservationScheduler.async(on: destination)
-    let didRun = Mutex(false)
+    let didRun = Lock(false)
 
     scheduler.schedule(from: nil) {
       destination.assumeIsolated { _ in
@@ -39,7 +38,7 @@ struct OrbitValueObservationSchedulerTests {
   @Test
   func asyncSchedulerPreservesSubmissionOrder() async throws {
     let scheduler = OrbitAsyncValueObservationScheduler.async(on: Destination())
-    let values = Mutex([Int]())
+    let values = Lock([Int]())
 
     for value in 0..<100 {
       scheduler.schedule(from: nil) {
@@ -55,7 +54,7 @@ struct OrbitValueObservationSchedulerTests {
   @Test
   func asyncSchedulerRunsInlineWhenIsolationMatches() {
     let scheduler = OrbitAsyncValueObservationScheduler.async(on: MainActor.shared)
-    let didRun = Mutex(false)
+    let didRun = Lock(false)
 
     let hasImmediateInitialValue = scheduler.immediateInitialValue(from: MainActor.shared)
     #expect(hasImmediateInitialValue)

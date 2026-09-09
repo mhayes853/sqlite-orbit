@@ -1,7 +1,6 @@
 #if BuiltInSQLite
-  import SQLiteOrbit
+  @testable import SQLiteOrbit
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @Suite
@@ -141,7 +140,7 @@
 
     @Test
     func installsTheConnectionAuthorizerOnlyOnce() async throws {
-      let installationCount = Mutex(0)
+      let installationCount = Lock(0)
       let base = builtInTestLibrary
       var library = base
       library.set_authorizer = { connection, callback, context in

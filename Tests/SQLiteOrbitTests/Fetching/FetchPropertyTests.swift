@@ -1,5 +1,4 @@
 #if BuiltInSQLite
-  import Synchronization
   import Testing
 
   #if canImport(Observation)
@@ -290,7 +289,7 @@
         let database = try await remindersDatabase(titles: "Milk")
 
         @FetchAll(Reminder.order(by: \.id), database: database) var reminders
-        let didChange = Mutex(false)
+        let didChange = Lock(false)
 
         withObservationTracking {
           _ = reminders

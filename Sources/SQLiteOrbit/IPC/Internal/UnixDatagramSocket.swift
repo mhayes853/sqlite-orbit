@@ -1,5 +1,4 @@
 #if canImport(Darwin) || canImport(Glibc)
-  import Synchronization
 
   #if canImport(Darwin)
     import Darwin
@@ -61,7 +60,7 @@
   }
 
   final class UnixDatagramSocket: Sendable {
-    private let storage: Mutex<Storage>
+    private let storage: Lock<Storage>
 
     var descriptor: Int32 {
       self.storage.withLock { $0.descriptor }
@@ -82,7 +81,7 @@
         _ = closeUnixDescriptor(descriptor)
         throw error
       }
-      self.storage = Mutex(Storage(descriptor: descriptor, path: path))
+      self.storage = Lock(Storage(descriptor: descriptor, path: path))
     }
 
     deinit {

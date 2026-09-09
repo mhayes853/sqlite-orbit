@@ -1,13 +1,12 @@
 #if BuiltInSQLite
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
 
   private final class SQLiteCallCounters: Sendable {
-    let prepared = Mutex(0)
-    let finalized = Mutex(0)
+    let prepared = Lock(0)
+    let finalized = Lock(0)
 
     var preparedCount: Int { prepared.withLock { $0 } }
     var finalizedCount: Int { finalized.withLock { $0 } }
@@ -252,7 +251,7 @@
 
   @Test
   func connectionSetupsRunOnEveryConnectionAndCanFailTheOpen() throws {
-    let installs = Mutex(0)
+    let installs = Lock(0)
     var configuration = SQLiteConfiguration.default
     configuration.connectionSetups = [
       SQLiteConnectionSetup { _, _ in
@@ -297,7 +296,7 @@
 
   @Test
   func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
-    let seenVersion = Mutex<Int32?>(nil)
+    let seenVersion = Lock<Int32?>(nil)
     var configuration = SQLiteConfiguration.default
     configuration.library.libversion_number = { 123_456 }
     configuration.connectionSetups = [

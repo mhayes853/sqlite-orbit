@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueriesSQLite
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -271,7 +270,7 @@
         id: identifier,
         transport: receivingTransport
       )
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -324,7 +323,7 @@
         id: identifier,
         transport: receivingTransport
       )
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -358,8 +357,8 @@
     @Test
     func transactionFilterReceivesThePreviousAcceptedValue() async throws {
       let driver = try await itemsDatabase()
-      let previousValues = Mutex([Int?]())
-      let fetchCount = Mutex(0)
+      let previousValues = Lock([Int?]())
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -444,7 +443,7 @@
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
       let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -476,7 +475,7 @@
     @Test
     func cancellingValueSubscriptionStopsRefetching() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -501,7 +500,7 @@
     @Test
     func subscribersShareOneRuntimeAndFetch() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -586,7 +585,7 @@
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -662,7 +661,7 @@
       try driver.writeBlocking { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      let transformCount = Mutex(0)
+      let transformCount = Lock(0)
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .removeDuplicates(by: { _, _ in true })
@@ -767,7 +766,7 @@
     @Test
     func theSequenceStartsObservingWhenIterationBegins() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let values = OrbitValueObservation<Int>
         .tracking { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -786,7 +785,7 @@
     @Test
     func handleEventsReportsTheRuntimeLifecycle() async throws {
       let driver = try await itemsDatabase()
-      let events = Mutex([String]())
+      let events = Lock([String]())
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .handleEvents(
@@ -829,7 +828,7 @@
     @Test
     func handleEventsSkipsFetchesTheObservationDoesNotMake() async throws {
       let driver = try await itemsDatabase()
-      let events = Mutex([String]())
+      let events = Lock([String]())
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .filterTransactions { _ in false }
@@ -856,7 +855,7 @@
     @Test
     func handleEventsSurvivesDownstreamOperators() async throws {
       let driver = try await itemsDatabase()
-      let values = Mutex([Int]())
+      let values = Lock([Int]())
       let recorder = ObservationRecorder<String>()
       let subscription = try itemCountObservation()
         .handleEvents(didReceiveValue: { value in values.withLock { $0.append(value) } })
@@ -878,7 +877,7 @@
     @Test
     func handleEventsReportsAFetchFailure() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      let failures = Mutex(0)
+      let failures = Lock(0)
       let values = itemCountObservation()
         .handleEvents(didFail: { _ in failures.withLock { $0 += 1 } })
         .values(in: driver)
@@ -912,7 +911,7 @@
           """
         )
       }
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let recorder = ObservationRecorder<Int>()
       let subscription = try OrbitValueObservation<Int>
         .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
@@ -957,7 +956,7 @@
           """
         )
       }
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let recorder = ObservationRecorder<Int>()
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
@@ -1046,7 +1045,7 @@
           """
         )
       }
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let recorder = ObservationRecorder<Int>()
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
@@ -1093,7 +1092,7 @@
     @Test
     func automaticRegionIncludesManuallyPublishedReads() throws {
       let driver = try SQLiteQueue(path: .memory)
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let region = OrbitDatabaseRegion(table: "raw_items")
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
@@ -1133,7 +1132,7 @@
           """
         )
       }
-      let fetchCount = Mutex(0)
+      let fetchCount = Lock(0)
       let subscription = try OrbitValueObservation<Int>
         .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
           fetchCount.withLock { $0 += 1 }
@@ -1405,7 +1404,7 @@
       var errors = [String]()
     }
 
-    private let state = Mutex(State())
+    private let state = Lock(State())
 
     var changes: [OrbitValueObservationChange<Value>] { state.withLock { $0.changes } }
     var errors: [String] { state.withLock { $0.errors } }

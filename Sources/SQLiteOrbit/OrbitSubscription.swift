@@ -1,5 +1,3 @@
-import Synchronization
-
 /// A cancellable registration with an interprocess transport.
 ///
 /// Copies share the same cancellation state. The cancellation closure runs at most once, either
@@ -36,10 +34,10 @@ public struct OrbitSubscription: Sendable {
   }
 
   private final class Storage: Sendable {
-    private let onCancel: Mutex<(@Sendable () -> Void)?>
+    private let onCancel: Lock<(@Sendable () -> Void)?>
 
     init(onCancel: @escaping @Sendable () -> Void) {
-      self.onCancel = Mutex(onCancel)
+      self.onCancel = Lock(onCancel)
     }
 
     deinit { self.cancel() }

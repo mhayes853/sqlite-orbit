@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -203,7 +202,7 @@
 
   @Test
   func cursorsGiveTheirStatementBackToTheCache() throws {
-    let counters = Mutex(0)
+    let counters = Lock(0)
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
@@ -233,7 +232,7 @@
 
   @Test
   func schemaChangesInvalidateCachedStatements() throws {
-    let preparations = Mutex(0)
+    let preparations = Lock(0)
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base

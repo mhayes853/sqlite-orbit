@@ -1,5 +1,6 @@
 #if canImport(SwiftUI)
-  import SwiftUI
+  // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
+  import struct SwiftUI.Animation
 #endif
 
 extension FetchAll {

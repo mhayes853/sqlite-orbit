@@ -164,7 +164,13 @@ enum OrbitIPCWireProtocol {
     guard count <= bytes.count - offset else { throw OrbitIPCWireError.truncated }
     defer { offset += count }
     let string = bytes.extracting(offset..<(offset + count))
-      .withUnsafeBufferPointer { String(validating: $0, as: UTF8.self) }
+      .withUnsafeBufferPointer { buffer -> String? in
+        // `String(decoding:as:)` repairs malformed sequences rather than rejecting them, so the
+        // round trip is what rejects them. `String(validating:as:)` says this in one call, but
+        // only on platforms newer than the ones this package supports.
+        let decoded = String(decoding: buffer, as: UTF8.self)
+        return decoded.utf8.elementsEqual(buffer) ? decoded : nil
+      }
     guard let string else { throw OrbitIPCWireError.invalidUTF8 }
     return string
   }

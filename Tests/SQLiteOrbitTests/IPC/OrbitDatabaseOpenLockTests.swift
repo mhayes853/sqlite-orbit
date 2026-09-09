@@ -1,7 +1,6 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Dispatch
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -48,13 +47,13 @@
     let directory = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
-    let order = Mutex([String]())
+    let order = Lock([String]())
 
     let holder = OpenLockHolder(databaseIdentifier, in: directory) {
       order.withLock { $0.append("first") }
     }
 
-    let didAcquireSecond = Mutex(false)
+    let didAcquireSecond = Lock(false)
     Thread.detachNewThread {
       try? OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: databaseIdentifier,

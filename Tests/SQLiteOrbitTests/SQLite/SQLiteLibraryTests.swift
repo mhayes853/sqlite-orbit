@@ -1,7 +1,6 @@
 #if SystemSQLite
   import CSQLite3
-  import SQLiteOrbit
-  import Synchronization
+  @testable import SQLiteOrbit
   import Testing
 
   @Test
@@ -173,7 +172,7 @@
 
   @Test
   func functionTableEntryPointsCanBeInterposedPerInstance() throws {
-    let preparedSQL = Mutex<[String]>([])
+    let preparedSQL = Lock<[String]>([])
     var library = SQLiteLibrary.system
     let base = SQLiteLibrary.system
     library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
@@ -184,7 +183,7 @@
     }
 
     // A second table wrapping the same system library keeps its own state.
-    let failingStep = Mutex(0)
+    let failingStep = Lock(0)
     var faulty = SQLiteLibrary.system
     faulty.step = { statement in
       failingStep.withLock { $0 += 1 }

@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -212,8 +211,8 @@
   func cancellingBeforeTheConnectionIsFreeStillCancels() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
-    let holding = Mutex(false)
-    let release = Mutex(false)
+    let holding = Lock(false)
+    let release = Lock(false)
 
     // Occupy the connection so the next reader has to wait its turn.
     let blocker = Task {

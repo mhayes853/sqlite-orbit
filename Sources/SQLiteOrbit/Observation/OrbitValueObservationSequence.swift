@@ -138,6 +138,7 @@ public struct OrbitValueObservationSequence<Element: Sendable>: AsyncSequence, S
     /// - Parameter actor: The actor to resume on.
     /// - Returns: The next element, or `nil` once the observation has ended.
     /// - Throws: The error that ended the observation.
+    @available(iOS 18, macOS 15, tvOS 18, watchOS 11, visionOS 2, *)
     public mutating func next(
       isolation actor: isolated (any Actor)?
     ) async throws(any Error) -> Element? {

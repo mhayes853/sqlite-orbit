@@ -1,7 +1,6 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Dispatch
   import Foundation
-  import Synchronization
 
   #if canImport(Darwin)
     import Darwin
@@ -109,7 +108,7 @@
     private let registry: OrbitIPCEndpointRegistry
     private let socket: UnixDatagramSocket
     private let handlers: OrbitIPCHandlers
-    private let receiver: Mutex<DispatchSourceRead?>
+    private let receiver: Lock<DispatchSourceRead?>
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -172,7 +171,7 @@
       self.socket = socket
       self.handlers = handlers
       receiver.resume()
-      self.receiver = Mutex(receiver)
+      self.receiver = Lock(receiver)
     }
 
     deinit {
@@ -352,7 +351,7 @@
   }
 
   private let sharedTransports =
-    Mutex<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
+    Lock<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
 
   /// Describes a broadcast that reached only some currently discoverable peers.
   ///
@@ -402,7 +401,7 @@
     }
 
     private let registry: OrbitIPCEndpointRegistry
-    private let state = Mutex(State())
+    private let state = Lock(State())
 
     init(registry: OrbitIPCEndpointRegistry) {
       self.registry = registry

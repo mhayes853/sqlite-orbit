@@ -1,5 +1,8 @@
 #if canImport(SwiftUI)
-  import SwiftUI
+  // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
+  import protocol SwiftUI.DynamicProperty
+  import struct SwiftUI.Animation
+  import struct SwiftUI.State
 #endif
 
 /// A property that observes every row a query produces.
