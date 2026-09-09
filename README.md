@@ -98,12 +98,16 @@ closures bound to SQLite's entry points, so the package can drive a build it was
 against — SQLCipher, a custom amalgamation, or one with extensions compiled in:
 
 ```swift
-var library = SQLiteLibrary.system
-library.open_v2 = myBuild.open_v2
-// ...or build the whole table from your own module's symbols.
+let library = #sqliteLibrary(module: "MySQLite")
 
 var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitDatabase(path: databasePath, configuration: configuration)
+```
+
+Set `encryption: true` when the module also exports SQLite's codec entry points, such as SQLCipher:
+
+```swift
+let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
 ```
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling

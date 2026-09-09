@@ -279,15 +279,8 @@ public struct SQLiteLibrary: Sendable {
   /// `sqlite3_bind_text` and `sqlite3_bind_blob` — because the buffers this package binds live
   /// only for the call.
   ///
-  /// ```swift
-  /// let library = SQLiteLibrary(
-  ///   open_v2: myBuild_open_v2,
-  ///   // ...
-  ///   bind_text: { myBuild_bind_text($0, $1, $2, $3, SQLiteLibrary.transientDestructor) },
-  ///   bind_blob: { myBuild_bind_blob($0, $1, $2, $3, SQLiteLibrary.transientDestructor) },
-  ///   // ...
-  /// )
-  /// ```
+  /// Prefer ``sqliteLibrary(module:encryption:)`` when every entry point comes from one SQLite
+  /// build. The initializer remains available for tables that adapt or combine entry points.
   public init(
     open_v2:
       @escaping @Sendable (
@@ -417,67 +410,6 @@ public struct SQLiteLibrary: Sendable {
 
 #if BuiltInSQLite
   extension SQLiteLibrary {
-    // The entry points of whichever build a trait linked. `SystemSQLite` and `SQLCipher` export
-    // the same names — SQLCipher is a fork of SQLite — so the table is written once and the codec
-    // is what distinguishes them.
-    //
-    // This declaration doubles as the template for a caller writing a table for their own build.
-    private static func linked(encryption: Encryption?) -> Self {
-      Self(
-        open_v2: sqlite3_open_v2,
-        close_v2: sqlite3_close_v2,
-        errmsg: sqlite3_errmsg,
-        extended_errcode: sqlite3_extended_errcode,
-        extended_result_codes: sqlite3_extended_result_codes,
-        busy_timeout: sqlite3_busy_timeout,
-        interrupt: sqlite3_interrupt,
-        changes: sqlite3_changes,
-        last_insert_rowid: sqlite3_last_insert_rowid,
-        get_autocommit: sqlite3_get_autocommit,
-        threadsafe: sqlite3_threadsafe,
-        libversion_number: sqlite3_libversion_number,
-        prepare_v3: sqlite3_prepare_v3,
-        step: sqlite3_step,
-        reset: sqlite3_reset,
-        finalize: sqlite3_finalize,
-        clear_bindings: sqlite3_clear_bindings,
-        stmt_readonly: sqlite3_stmt_readonly,
-        sql: sqlite3_sql,
-        bind_parameter_count: sqlite3_bind_parameter_count,
-        bind_null: sqlite3_bind_null,
-        bind_int64: sqlite3_bind_int64,
-        bind_double: sqlite3_bind_double,
-        bind_text: { sqlite3_bind_text($0, $1, $2, $3, Self.transientDestructor) },
-        bind_blob: { sqlite3_bind_blob($0, $1, $2, $3, Self.transientDestructor) },
-        column_count: sqlite3_column_count,
-        column_type: sqlite3_column_type,
-        column_int64: sqlite3_column_int64,
-        column_double: sqlite3_column_double,
-        column_text: sqlite3_column_text,
-        column_blob: sqlite3_column_blob,
-        column_bytes: sqlite3_column_bytes,
-        column_name: sqlite3_column_name,
-        set_authorizer: sqlite3_set_authorizer,
-        create_function_v2: sqlite3_create_function_v2,
-        create_collation_v2: sqlite3_create_collation_v2,
-        user_data: sqlite3_user_data,
-        aggregate_context: sqlite3_aggregate_context,
-        value_type: sqlite3_value_type,
-        value_int64: sqlite3_value_int64,
-        value_double: sqlite3_value_double,
-        value_text: sqlite3_value_text,
-        value_blob: sqlite3_value_blob,
-        value_bytes: sqlite3_value_bytes,
-        result_null: sqlite3_result_null,
-        result_int64: sqlite3_result_int64,
-        result_double: sqlite3_result_double,
-        result_text: { sqlite3_result_text($0, $1, $2, Self.transientDestructor) },
-        result_blob: { sqlite3_result_blob($0, $1, $2, Self.transientDestructor) },
-        result_error: sqlite3_result_error,
-        encryption: encryption
-      )
-    }
-
     // The build a default configuration runs against, whichever trait supplied it.
     static var builtIn: Self {
       #if SystemSQLite
@@ -498,7 +430,7 @@ public struct SQLiteLibrary: Sendable {
     ///
     /// Stock SQLite has no codec, so this table's ``encryption`` is `nil` and a
     /// ``SQLiteConfiguration/key`` set against it is refused.
-    public static let system = linked(encryption: nil)
+    public static let system = #sqliteLibrary()
   }
 #endif
 
@@ -508,8 +440,6 @@ public struct SQLiteLibrary: Sendable {
     ///
     /// Vended by the `SQLCipher` trait. Pair it with a ``SQLiteConfiguration/key``, or reach for
     /// ``SQLiteConfiguration/sqlCipher(key:)``, which does both at once.
-    public static let sqlCipher = linked(
-      encryption: Encryption(key_v2: sqlite3_key_v2, rekey_v2: sqlite3_rekey_v2)
-    )
+    public static let sqlCipher = #sqliteLibrary(encryption: true)
   }
 #endif
