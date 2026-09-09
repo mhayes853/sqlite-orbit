@@ -22,7 +22,8 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["Milk", "Eggs"])
+          let texts = try view.texts()
+          #expect(texts == ["Milk", "Eggs"])
         }
       }
     }
@@ -34,13 +35,15 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["Milk"])
+          let texts = try view.texts()
+          #expect(texts == ["Milk"])
         }
         try await database.write { transaction in
           _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["Milk", "Eggs"])
+          let texts = try view.texts()
+          #expect(texts == ["Milk", "Eggs"])
         }
       }
     }
@@ -52,13 +55,15 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(FilteredRemindersList.self).texts() == ["Milk"])
+          let texts = try view.find(FilteredRemindersList.self).texts()
+          #expect(texts == ["Milk"])
           try view.find(button: "Eggs").tap()
         }
         // The child view SwiftUI built for this render describes a different read, so the storage
         // that survived the last one adopts it.
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(FilteredRemindersList.self).texts() == ["Eggs"])
+          let texts = try view.find(FilteredRemindersList.self).texts()
+          #expect(texts == ["Eggs"])
         }
       }
     }
@@ -70,7 +75,8 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(RemindersList.self).texts() == ["Milk"])
+          let texts = try view.find(RemindersList.self).texts()
+          #expect(texts == ["Milk"])
           try view.find(button: "Rebuild").tap()
         }
         try await database.write { transaction in
@@ -79,7 +85,8 @@
         // The rebuilt property describes the same read, so the observation the first render
         // started is the one still delivering.
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(RemindersList.self).texts() == ["Milk", "Eggs"])
+          let texts = try view.find(RemindersList.self).texts()
+          #expect(texts == ["Milk", "Eggs"])
         }
       }
     }
@@ -100,7 +107,8 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["high", "Eggs", "low", "Milk", "Bread"])
+          let texts = try view.texts()
+          #expect(texts == ["high", "Eggs", "low", "Milk", "Bread"])
         }
       }
     }
@@ -112,13 +120,15 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["1 remaining"])
+          let texts = try view.texts()
+          #expect(texts == ["1 remaining"])
         }
         try await database.write { transaction in
           _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["2 remaining"])
+          let texts = try view.texts()
+          #expect(texts == ["2 remaining"])
         }
       }
     }
@@ -132,7 +142,8 @@
       // main actor, which is the render this one is a part of.
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.texts() == ["Milk", "Eggs"])
+          let texts = try view.texts()
+          #expect(texts == ["Milk", "Eggs"])
         }
       }
     }
