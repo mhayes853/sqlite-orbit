@@ -50,12 +50,7 @@ jobs:
           xcode-version: latest-stable
 
       - name: Test
-        run: |
-          swift test || {
-            echo "=== the build failed silently; repeating it verbosely ==="
-            swift build --build-tests -v
-            exit 1
-          }
+        run: swift test
 
   build-without-sqlite:
     name: Linux (no traits)
