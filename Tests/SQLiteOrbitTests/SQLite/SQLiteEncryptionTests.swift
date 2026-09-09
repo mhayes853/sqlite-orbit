@@ -175,11 +175,20 @@
 
 #if SQLCipher
   import Foundation
+  import SQLCipher
 
   @Suite(.serialized)
   struct SQLCipherEndToEndTests {
     private func path() -> String {
       temporaryDatabasePath("cipher")
+    }
+
+    @Test
+    func macroBuildsAnEncryptedTableFromAQualifiedModule() {
+      let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
+
+      #expect(library.libversion_number() == SQLiteLibrary.sqlCipher.libversion_number())
+      #expect(library.encryption != nil)
     }
 
     @Test

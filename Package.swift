@@ -1,5 +1,6 @@
 // swift-tools-version: 6.2
 
+import CompilerPluginSupport
 import PackageDescription
 
 // ViewInspector renders a SwiftUI view in a hosting controller, so it only exists where SwiftUI
@@ -44,6 +45,8 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
+    .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
+    .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
     .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
   ] + swiftUITestPackages,
   targets: [
@@ -60,6 +63,7 @@ let package = Package(
     .target(
       name: "SQLiteOrbit",
       dependencies: [
+        "SQLiteOrbitMacros",
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",
@@ -84,6 +88,23 @@ let package = Package(
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
         .define("BuiltInSQLite", .when(traits: ["SQLCipher"]))
+      ]
+    ),
+    .macro(
+      name: "SQLiteOrbitMacros",
+      dependencies: [
+        .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+        .product(name: "SwiftDiagnostics", package: "swift-syntax"),
+        .product(name: "SwiftSyntax", package: "swift-syntax"),
+        .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+        .product(name: "SwiftSyntaxMacros", package: "swift-syntax")
+      ]
+    ),
+    .testTarget(
+      name: "SQLiteOrbitMacrosTests",
+      dependencies: [
+        "SQLiteOrbitMacros",
+        .product(name: "MacroTesting", package: "swift-macro-testing")
       ]
     ),
     .testTarget(

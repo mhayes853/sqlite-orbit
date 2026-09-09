@@ -107,6 +107,14 @@
   }
 
   @Test
+  func macroBuildsATableFromAQualifiedModule() {
+    let library = #sqliteLibrary(module: "CSQLite3")
+
+    #expect(library.libversion_number() == SQLiteLibrary.system.libversion_number())
+    #expect(library.encryption == nil)
+  }
+
+  @Test
   func functionTableBindsValuesAndReportsChanges() throws {
     let library = SQLiteLibrary.system
     var connection: OpaquePointer?
