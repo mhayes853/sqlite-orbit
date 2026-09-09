@@ -1,7 +1,9 @@
 import Dispatch
 
 actor SQLiteConnection {
-  private let handle: SQLiteHandle
+  // Reached from `performBlocking` without hopping onto the actor: what serializes access to the
+  // handle is the connection's queue, which is also this actor's executor.
+  private nonisolated(unsafe) let handle: SQLiteHandle
   private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
@@ -52,12 +54,10 @@ actor SQLiteConnection {
   private nonisolated func performBlocking<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) throws -> Result {
-    nonisolated(unsafe) let work = work
-    return try executor.sync {
-      try self.assumeIsolated { connection in
-        try work(connection.handle)
-      }
-    }
+    // `sync` runs the work on the queue that is this actor's executor, so no isolated use of the
+    // handle can be running while it does. Hopping onto the actor to say so is what a closure the
+    // caller only lent us cannot do.
+    return try executor.sync { try work(handle) }
   }
 
   private func perform<Result: Sendable>(
