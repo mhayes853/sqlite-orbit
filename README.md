@@ -1,5 +1,8 @@
 # sqlite-orbit
 
+> [!IMPORTANT]
+> This is entirely agent written and is mainly a prototype.
+
 `sqlite-orbit` is a SQLite application framework for Swift: typed transactions, lazy cursors,
 value observation, and cross-process coordination, so several processes can share one database
 and react to each other's writes.
