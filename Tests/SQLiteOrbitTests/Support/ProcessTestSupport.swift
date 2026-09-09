@@ -8,9 +8,11 @@ struct TestTimeout: Error {}
 /// half of that before a test adds anything, so a directory an IPC transport will put its sockets
 /// in has to be brief about the rest.
 ///
-/// - Parameter label: A short name for what the directory is for.
+/// - Parameter label: A name for what the directory is for, of which the first few characters
+///   are kept.
 /// - Returns: The directory, created.
 func makeShortTemporaryDirectory(_ label: String) throws -> URL {
+  let label = label.prefix(8)
   let suffix = String(UInt32.random(in: .min ... .max), radix: 36)
   let directory = FileManager.default.temporaryDirectory
     .appending(path: "\(label)-\(suffix)", directoryHint: .isDirectory)
