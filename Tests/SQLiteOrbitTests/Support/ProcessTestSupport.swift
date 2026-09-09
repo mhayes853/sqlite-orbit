@@ -68,8 +68,34 @@ func waitUntil(
     private let environmentPrefix: String
     private var processes = [Process]()
 
+    /// The arguments that run one helper test in a process of its own.
+    ///
+    /// A test process is started differently on each platform: the test executable itself on
+    /// Linux, a bundle handed to a runner on Apple platforms. Repeating whatever started this
+    /// process, with its filter replaced by the helper's name, is what runs one helper either
+    /// way — and dropping the filter this process was given is what keeps a filtered run from
+    /// spawning children that run the whole suite again.
     private var arguments: [String] {
-      ["--testing-library", "swift-testing", "--filter", self.helper]
+      var arguments: [String] = []
+      var given = CommandLine.arguments.dropFirst().makeIterator()
+      while let argument = given.next() {
+        if argument == "--filter" {
+          _ = given.next()
+          continue
+        }
+        if argument.hasPrefix("--filter=") { continue }
+        arguments.append(argument)
+      }
+      let filter = ["--filter", self.helper]
+      guard !arguments.isEmpty else {
+        return ["--testing-library", "swift-testing"] + filter
+      }
+      // A runner takes the bundle to load as its last argument, so the filter goes ahead of it.
+      guard let bundle = arguments.firstIndex(where: { $0.hasSuffix(".xctest") }) else {
+        return arguments + filter
+      }
+      arguments.insert(contentsOf: filter, at: bundle)
+      return arguments
     }
 
     init(helper: String, environmentPrefix: String, name: String) throws {
@@ -131,14 +157,18 @@ func waitUntil(
       try? FileManager.default.removeItem(at: self.directory)
     }
 
-    /// Prints what a helper that failed had to say.
+    /// Prints what the helpers that did not exit cleanly had to say.
     ///
     /// Printed rather than recorded as an issue, because a few of these tests kill their helpers
-    /// on purpose, where a non-zero status is the point.
+    /// on purpose, where a non-zero status is the point. A test that waits on a helper can
+    /// otherwise only report that nothing happened.
     private func reportHelpersThatFailed() {
+      let failed = self.processes.enumerated().filter { $0.element.terminationStatus != 0 }
+      guard !failed.isEmpty else { return }
       let command = ([CommandLine.arguments[0]] + self.arguments).joined(separator: " ")
-      for (index, process) in self.processes.enumerated() where process.terminationStatus != 0 {
-        print("helper \(index) of '\(command)' exited with \(process.terminationStatus)")
+      print("--- helpers of '\(self.helper)', run as: \(command)")
+      for (index, process) in failed {
+        print("--- helper \(index) exited with \(process.terminationStatus)")
         print(self.helperOutput(index).suffix(2000))
       }
     }
