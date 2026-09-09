@@ -1,4 +1,3 @@
-import Synchronization
 import Testing
 
 @testable import SQLiteOrbit
@@ -116,7 +115,7 @@ func commit(_ database: OrbitDatabaseIdentifier) -> OrbitIPCMessage {
 }
 
 final class IPCMessageRecorder: Sendable {
-  private let messages = Mutex([OrbitIPCMessage]())
+  private let messages = Lock([OrbitIPCMessage]())
   var values: [OrbitIPCMessage] { self.messages.withLock { $0 } }
   func append(_ message: OrbitIPCMessage) { self.messages.withLock { $0.append(message) } }
 

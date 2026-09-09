@@ -2,6 +2,21 @@
 
 import PackageDescription
 
+// ViewInspector renders a SwiftUI view in a hosting controller, so it only exists where SwiftUI
+// does. A manifest is compiled and run on the host, which is what keeps a Linux build from
+// resolving a package it could never build.
+#if canImport(Darwin)
+  let swiftUITestPackages: [Package.Dependency] = [
+    .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.3")
+  ]
+  let swiftUITestDependencies: [Target.Dependency] = [
+    .product(name: "ViewInspector", package: "ViewInspector")
+  ]
+#else
+  let swiftUITestPackages: [Package.Dependency] = []
+  let swiftUITestDependencies: [Target.Dependency] = []
+#endif
+
 let package = Package(
   name: "sqlite-orbit",
   platforms: [
@@ -30,7 +45,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
     .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
-  ],
+  ] + swiftUITestPackages,
   targets: [
     .systemLibrary(
       name: "CSQLite3",
@@ -85,7 +100,7 @@ let package = Package(
           package: "swift-sqlcipher",
           condition: .when(traits: ["SQLCipher"])
         )
-      ],
+      ] + swiftUITestDependencies,
       cSettings: [
         // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
         // dependency's own C settings do not reach the clang importer of a target importing it.

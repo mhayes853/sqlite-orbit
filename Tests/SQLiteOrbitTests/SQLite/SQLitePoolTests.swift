@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -188,8 +187,8 @@
   }
 
   private final class Gate: Sendable {
-    private let entered = Mutex(0)
-    private let released = Mutex(false)
+    private let entered = Lock(0)
+    private let released = Lock(false)
 
     var enteredCount: Int { entered.withLock { $0 } }
 
@@ -210,7 +209,7 @@
   }
 
   private final class RequestCounter: Sendable {
-    private let count = Mutex(0)
+    private let count = Lock(0)
 
     var value: Int { count.withLock { $0 } }
 
@@ -274,7 +273,7 @@
     let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
     let gate = Gate()
-    let wrote = Mutex(false)
+    let wrote = Lock(false)
 
     let read = Task { try await driver.read { _ in gate.hold() } }
     await gate.waitUntilEntered(1)
@@ -311,7 +310,7 @@
       }
     await gate.waitUntilEntered(2)
 
-    let writerRequested = Mutex(false)
+    let writerRequested = Lock(false)
     let writer = Task {
       writerRequested.withLock { $0 = true }
       try await driver.write { transaction in

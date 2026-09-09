@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -304,9 +303,7 @@
 
   @Test
   func extensionsComposeWithTheCrossProcessConfiguration() async throws {
-    let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("sqlite-orbit-compose-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directory = try makeShortTemporaryDirectory("fn")
     defer { try? FileManager.default.removeItem(at: directory) }
 
     // Function registration composes with the native cross-process defaults.
@@ -372,9 +369,9 @@
     // A function's callbacks read arguments and write results through the build that called them,
     // which is the whole reason a table has to carry them. Interposing those entry points is the
     // only way to observe that the callback used this table rather than the linked SQLite.
-    let userData = Mutex(0)
-    let readArguments = Mutex(0)
-    let writtenResults = Mutex(0)
+    let userData = Lock(0)
+    let readArguments = Lock(0)
+    let writtenResults = Lock(0)
 
     var configuration = SQLiteConfiguration.default
     configuration.library.user_data = { context in
@@ -404,7 +401,7 @@
 
   @Test
   func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
-    let aggregateContexts = Mutex(0)
+    let aggregateContexts = Lock(0)
     var configuration = SQLiteConfiguration.default
     configuration.library.aggregate_context = { context, size in
       aggregateContexts.withLock { $0 += 1 }

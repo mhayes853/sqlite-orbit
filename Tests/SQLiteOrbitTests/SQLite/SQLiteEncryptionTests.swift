@@ -1,6 +1,5 @@
 #if BuiltInSQLite
-  import SQLiteOrbit
-  import Synchronization
+  @testable import SQLiteOrbit
   import Testing
 
   // A codec the built-in build does not actually have. Stock SQLite never sees the key, which is
@@ -21,7 +20,7 @@
 
   @Test
   func theKeyIsAppliedBeforeAnythingElseTheConnectionDoes() throws {
-    let events = Mutex<[String]>([])
+    let events = Lock<[String]>([])
     var library = libraryWithFakeCodec { _ in
       events.withLock { $0.append("key") }
       return SQLiteResultCode.ok.rawValue
@@ -48,7 +47,7 @@
 
   @Test
   func aPassphraseReachesTheBuildAsItsUTF8() throws {
-    let keys = Mutex<[[UInt8]]>([])
+    let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { key in
         keys.withLock { $0.append(key) }
@@ -63,7 +62,7 @@
 
   @Test
   func aRawKeyReachesTheBuildUnchanged() throws {
-    let keys = Mutex<[[UInt8]]>([])
+    let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { key in
         keys.withLock { $0.append(key) }
@@ -108,7 +107,7 @@
 
   @Test
   func everyConnectionAPoolOpensIsKeyed() async throws {
-    let keys = Mutex<[[UInt8]]>([])
+    let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { key in
         keys.withLock { $0.append(key) }
@@ -157,7 +156,7 @@
   func aWrongKeyFailsTheOpenRatherThanTheFirstQuery() throws {
     // A codec accepts any key and only objects once something reads the file, so without the
     // schema read the open would succeed and the failure would surface somewhere unrelated.
-    let keys = Mutex<[[UInt8]]>([])
+    let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { key in
         keys.withLock { $0.append(key) }

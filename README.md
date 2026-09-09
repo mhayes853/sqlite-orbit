@@ -601,6 +601,170 @@ try await database.write { transaction in
 Read notifications are immediate and remain local to the process. Repeated calls publish repeated
 observer events. A rollback follows provisional changes with `databaseDidRollback`.
 
+## Fetch properties
+
+`@FetchAll`, `@FetchOne`, and `@Fetch` are the property wrappers over that observation machinery.
+A property declares the query it wants, and stays current with it:
+
+```swift
+@Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
+
+struct RemindersView: View {
+  @FetchAll(Reminder.where { !$0.isCompleted }.order(by: \.title)) var reminders
+  @FetchOne(Reminder.all.count()) var total = 0
+
+  var body: some View {
+    List(reminders, id: \.id) { reminder in Text(reminder.title) }
+    Text("\(reminders.count) of \(total)")
+  }
+}
+```
+
+`@FetchAll` produces every row a query returns, and fetches an entire table when declared without
+one. `@FetchOne` produces a single value: a count, an aggregate, or a row. A property whose value
+is not optional keeps the value it was declared with until the first read finishes, and a query
+that returns no row fails it with `OrbitDatabaseRecordNotFoundError`; declaring the value optional
+makes an absent row `nil` instead.
+
+```swift
+@FetchAll var reminders: [Reminder]                       // Every reminder.
+@FetchOne(Reminder.find(id)) var reminder: Reminder?      // One row, or nil.
+@FetchOne(Reminder.all.count()) var count = 0             // An aggregate.
+```
+
+`@Fetch` takes an `OrbitFetchKeyRequest`, which is what several queries that must agree with one
+another are written as. Its `fetch` runs in one read transaction, so the values it assembles come
+from a single snapshot, and the property refetches when a write touches any region any of them
+read:
+
+```swift
+struct RemindersOverview: OrbitFetchKeyRequest {
+  struct Value: Sendable {
+    var incompleteCount = 0
+    var newest: [Reminder] = []
+  }
+
+  func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
+    try Value(
+      incompleteCount: transaction.fetchCount(Reminder.where { !$0.isCompleted }),
+      newest: transaction.fetchAll(Reminder.order { $0.createdAt.desc() }.limit(10))
+    )
+  }
+}
+
+@Fetch(RemindersOverview()) var overview = RemindersOverview.Value()
+```
+
+### The database a property reads
+
+A property is created wherever the property it wraps lives, which is rarely somewhere a database is
+at hand, so it reads from `OrbitDefaultDatabase.current` unless it is given one:
+
+```swift
+@main
+struct RemindersApp: App {
+  init() { OrbitDefaultDatabase.set(try! appDatabase()) }
+  var body: some Scene { WindowGroup { RemindersView() } }
+}
+```
+
+`OrbitDefaultDatabase.withValue(_:operation:)` overrides it for the duration of an operation, which
+is how a test gives itself a database of its own without touching the process-wide one. A property
+built with no database at all, in a process that has no default, keeps the value it was declared
+with and reports an `OrbitMissingDefaultDatabaseError` through `loadError` rather than trapping, so
+a view built before its database exists still renders.
+
+A property does not query until something reads it. Reading it the first time performs the fetch
+and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
+each rebuilt property costing a query.
+
+### The projected value
+
+The projected value is the rest of the property: whether a read is in flight, the error one failed
+with, a reader for one of its members, and the queries it can be given later.
+
+```swift
+@FetchAll(Reminder.all) var reminders
+
+$reminders.isLoading           // Whether a read is in flight.
+$reminders.loadError           // The error the last read failed with.
+try await $reminders.load()    // Read the same query again.
+let count = $reminders.count   // An `OrbitFetchReader<Int>`.
+
+// Every value the property observes, starting with the rows as they stand.
+for await reminders in $reminders.values {
+  render(reminders)
+}
+```
+
+A read that fails leaves the value the property last produced in place, reports the error through
+`loadError`, and ends the observation; `load()` reads again and resumes it, which is what a retry
+button calls.
+
+`load(_:)` replaces the query the property observes, which is what a filter or a sort control
+drives:
+
+```swift
+try await $reminders.load(Reminder.where { $0.title.contains(search) })
+```
+
+It returns an `OrbitFetchSubscription`. Awaiting its `task` ties the observation to the lifetime of
+a SwiftUI view's `task`, so drilling into a child screen stops the query and popping back restarts
+it:
+
+```swift
+.task { try? await $reminders.load(Reminder.order(by: \.title)).task }
+```
+
+Assigning one projected value to another hands over its query, and a reader projected from a member
+stays current with the rest of the property.
+
+### Where values are delivered
+
+By default a property fetches its first value on the thread that first reads it, and delivers later
+ones as the observation produces them. Pass a `scheduler:` to move that elsewhere — any
+`OrbitValueObservationScheduler`, including `.mainActor` — or, in SwiftUI, an `animation:`, which
+delivers every change on the main actor inside that animation:
+
+```swift
+@FetchAll(Reminder.all, animation: .default) var reminders
+@FetchAll(Reminder.all, scheduler: .mainActor) var reminders
+```
+
+### Sections
+
+`@FetchAll` can have the database group its rows. The `sectionBy:` expression is selected alongside
+each row and ordered ahead of the query's own ordering, so one pass over the result set both
+decodes the rows and lays out the sections:
+
+```swift
+@FetchAll(Reminder.order(by: \.title), sectionBy: \.priority) var reminders
+
+var body: some View {
+  List {
+    ForEach($reminders.sections) { section in
+      Section(section.name ?? "None") {
+        ForEach(section, id: \.id) { reminder in Text(reminder.title) }
+      }
+    }
+  }
+}
+```
+
+The expression can be an ordering, or any expression of the query's tables:
+
+```swift
+@FetchAll(Reminder.all, sectionBy: { $0.priority.desc(nulls: .last) }) var reminders
+@FetchAll(
+  Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }.select { ... },
+  sectionBy: { _, list in list.title }
+) var rows
+```
+
+`wrappedValue` is still the flat array of rows in the order the query produced them. A property
+with no `sectionBy:` expression still projects `sections`: a single section, named `nil`, holding
+every row.
+
 ## Cross-process transport
 
 The package includes a public, configurable Unix-domain datagram transport. Processes that need to

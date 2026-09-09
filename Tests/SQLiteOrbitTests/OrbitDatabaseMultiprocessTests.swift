@@ -2,7 +2,6 @@
   import Foundation
   @testable import SQLiteOrbit
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @Suite(.serialized)
@@ -44,8 +43,8 @@
       )
       let directory = harness.coordination.directory
       let opened = harness.file("opened-0")
-      let isHeld = Mutex(false)
-      let mayRelease = Mutex(false)
+      let isHeld = Lock(false)
+      let mayRelease = Lock(false)
 
       Thread.detachNewThread {
         try? OrbitDatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
@@ -199,7 +198,7 @@
 
       let databasePath = harness.databasePath
       let coordination = harness.coordination
-      let didOpen = Mutex(false)
+      let didOpen = Lock(false)
       Thread.detachNewThread {
         _ = try? OrbitDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
         didOpen.withLock { $0 = true }
@@ -269,7 +268,7 @@
       // must be kept alive for as long as the subscription should stay registered.
       let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(path))
       let transport = try UnixDatagramIPCTransport.shared(configuration: coordination)
-      let receivedCount = Mutex(0)
+      let receivedCount = Lock(0)
       let subscription = try transport.subscribe(to: identifier) { _ in
         receivedCount.withLock { $0 += 1 }
       }
@@ -412,7 +411,7 @@
   }
 
   private final class ChangedRegionObserver: OrbitDatabaseTransactionObserver, Sendable {
-    private let recordedRegions = Mutex([OrbitDatabaseRegion]())
+    private let recordedRegions = Lock([OrbitDatabaseRegion]())
 
     var regions: [OrbitDatabaseRegion] { recordedRegions.withLock { $0 } }
 

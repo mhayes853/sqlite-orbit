@@ -37,6 +37,21 @@ jobs:
       - name: Test
         run: swift test ${{ matrix.traits }}
 
+  test-swiftui:
+    name: macOS (SwiftUI)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The fetch properties' SwiftUI half — the `DynamicProperty` conformances and the
+      # `animation:` scheduler — compiles and runs nowhere else, so it is tested here.
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Test
+        run: swift test
+
   build-without-sqlite:
     name: Linux (no traits)
     runs-on: ubuntu-latest

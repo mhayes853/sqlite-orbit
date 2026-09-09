@@ -1,5 +1,4 @@
 #if canImport(Darwin) || canImport(Glibc)
-  import Synchronization
 
   #if canImport(Darwin)
     import Darwin
@@ -61,7 +60,7 @@
   }
 
   final class UnixDatagramSocket: Sendable {
-    private let storage: Mutex<Storage>
+    private let storage: Lock<Storage>
 
     var descriptor: Int32 {
       self.storage.withLock { $0.descriptor }
@@ -82,7 +81,7 @@
         _ = closeUnixDescriptor(descriptor)
         throw error
       }
-      self.storage = Mutex(Storage(descriptor: descriptor, path: path))
+      self.storage = Lock(Storage(descriptor: descriptor, path: path))
     }
 
     deinit {
@@ -113,7 +112,10 @@
         }
         if result == bytes.count { return true }
         let code = errno
-        if code == EAGAIN || code == EWOULDBLOCK { return false }
+        // A peer whose receive queue is full says so as `EAGAIN` on Linux and as `ENOBUFS` on
+        // Darwin. Both mean the same thing here: nothing is wrong, and the datagram can be sent
+        // again once the peer drains.
+        if code == EAGAIN || code == EWOULDBLOCK || code == ENOBUFS { return false }
         throw OrbitIPCSystemError(operation: "sendto", code: code)
       }
     }

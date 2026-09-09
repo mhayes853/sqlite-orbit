@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueriesSQLite
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -180,9 +179,7 @@
 
     @Test
     func poolWritesUseTheSameObserverLifecycle() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let driver = try SQLitePool(
@@ -348,9 +345,7 @@
 
     @Test
     func automaticRecompilationPublishesOnlyTheReplacementReadRegion() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("sqlite-orbit-\(UUID().uuidString)", isDirectory: true)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let path = OrbitDatabasePath.file(directory.appendingPathComponent("db.sqlite"))
@@ -459,7 +454,7 @@
   }
 
   private final class RecordingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
-    private let recordedEvents = Mutex([RecordedTransactionEvent]())
+    private let recordedEvents = Lock([RecordedTransactionEvent]())
 
     var events: [RecordedTransactionEvent] { recordedEvents.withLock { $0 } }
 
@@ -487,7 +482,7 @@
     OrbitDatabaseTransactionObserver,
     Sendable
   {
-    private let recordedRegions = Mutex([OrbitDatabaseRegion]())
+    private let recordedRegions = Lock([OrbitDatabaseRegion]())
 
     var regions: [OrbitDatabaseRegion] { recordedRegions.withLock { $0 } }
 
@@ -498,7 +493,7 @@
 
   private final class FailingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
     private let error: any Error
-    private let rollback = Mutex(false)
+    private let rollback = Lock(false)
 
     var didRollback: Bool { rollback.withLock { $0 } }
 

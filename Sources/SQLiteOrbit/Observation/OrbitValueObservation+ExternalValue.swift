@@ -38,13 +38,9 @@
         }
       }
 
-      private struct MemberPath<Member: Sendable>: @unchecked Sendable {
-        let value: WritableKeyPath<Wrapped, Member>
-      }
-
-      private struct ObservedPath: Hashable, @unchecked Sendable {
-        let value: WritableKeyPath<ObservationRoot, Box>
-      }
+      private typealias MemberPath<Member: Sendable> =
+        SendableKeyPath<WritableKeyPath<Wrapped, Member>>
+      private typealias ObservedPath = SendableKeyPath<WritableKeyPath<ObservationRoot, Box>>
 
       // Besides counting mutations, each token gives one field a stable Sendable identity.
       private final class VersionToken: Sendable {
@@ -110,7 +106,7 @@
         dynamicMember keyPath: WritableKeyPath<Wrapped, Member>
       ) -> Member {
         get {
-          let memberPath = MemberPath(value: keyPath)
+          let memberPath = MemberPath(keyPath)
           let path = boxedPath(for: memberPath)
           let modelPath = modelKeyPath(for: path)
           registrar.access(self, keyPath: \.replacementEpoch)
@@ -139,7 +135,7 @@
           return read.0
         }
         set {
-          let memberPath = MemberPath(value: keyPath)
+          let memberPath = MemberPath(keyPath)
           withMemberMutation(memberPath) {
             let path = boxedPath(for: memberPath)
             state.withLock { state in
@@ -179,7 +175,7 @@
         _ keyPath: WritableKeyPath<Wrapped, Member>,
         _ operation: (inout Member) throws -> Void
       ) rethrows {
-        let memberPath = MemberPath(value: keyPath)
+        let memberPath = MemberPath(keyPath)
         try withMemberMutation(memberPath) {
           let path = boxedPath(for: memberPath)
           try state.withLock { state in
@@ -204,7 +200,7 @@
       private var replacementEpoch: UInt8 { 0 }
 
       private func boxedPath<Member: Sendable>(for path: MemberPath<Member>) -> ObservedPath {
-        ObservedPath(value: \ObservationRoot.[path.value])
+        ObservedPath(\ObservationRoot.[path.value])
       }
 
       private func modelKeyPath(

@@ -29,9 +29,7 @@
     maximumReaderCount: Int = 4,
     _ body: (OrbitDatabase<SQLitePool>) async throws -> Result
   ) async throws -> Result {
-    let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("sqlite-orbit-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directory = try makeShortTemporaryDirectory("pool")
     defer { try? FileManager.default.removeItem(at: directory) }
 
     var configuration = configuration

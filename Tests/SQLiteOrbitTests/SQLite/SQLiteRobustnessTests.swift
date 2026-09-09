@@ -1,7 +1,6 @@
 #if BuiltInSQLite
   import Foundation
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -239,7 +238,7 @@
   }
 
   private final class ConnectionCounter: Sendable {
-    private let state = Mutex((opened: 0, closed: 0))
+    private let state = Lock((opened: 0, closed: 0))
 
     var opened: Int { state.withLock { $0.opened } }
     var closed: Int { state.withLock { $0.closed } }
@@ -477,7 +476,7 @@
   @Test
   func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
     let base = builtInTestLibrary
-    let isArmed = Mutex(true)
+    let isArmed = Lock(true)
     var configuration = SQLiteConfiguration.default
     configuration.library.step = { statement in
       let sql = base.sql(statement).map { String(cString: $0) }

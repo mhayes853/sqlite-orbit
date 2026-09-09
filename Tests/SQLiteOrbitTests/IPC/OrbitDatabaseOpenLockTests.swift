@@ -1,7 +1,6 @@
 #if canImport(Darwin) || canImport(Glibc)
   import Dispatch
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -37,10 +36,7 @@
   }
 
   private func makeTempDirectory() throws -> URL {
-    let directory = FileManager.default.temporaryDirectory
-      .appending(path: "sqlite-orbit-open-lock-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory
+    try makeShortTemporaryDirectory("lock")
   }
 
   @Test
@@ -48,13 +44,13 @@
     let directory = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
     let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
-    let order = Mutex([String]())
+    let order = Lock([String]())
 
     let holder = OpenLockHolder(databaseIdentifier, in: directory) {
       order.withLock { $0.append("first") }
     }
 
-    let didAcquireSecond = Mutex(false)
+    let didAcquireSecond = Lock(false)
     Thread.detachNewThread {
       try? OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: databaseIdentifier,

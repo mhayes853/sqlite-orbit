@@ -1,8 +1,7 @@
 #if BuiltInSQLite
   import Foundation
-  import SQLiteOrbit
+  @testable import SQLiteOrbit
   import StructuredQueries
-  import Synchronization
   import Testing
 
   @Suite
@@ -132,7 +131,7 @@
     @Test
     func announcementIsSentOnlyAfterTheWriteTransactionCommits() async throws {
       let (database, transport) = try makeAnnouncingDatabase()
-      let announcementsDuringWrite = Mutex(-1)
+      let announcementsDuringWrite = Lock(-1)
 
       try await database.write { transaction in
         try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
@@ -145,7 +144,7 @@
 
     @Test
     func failedAnnouncementDoesNotFailTheWriteItFollows() async throws {
-      let failures = Mutex([String]())
+      let failures = Lock([String]())
       let (database, _) = try makeAnnouncingDatabase(
         failure: AnnouncementFailure(),
         onAnnouncementFailure: { error in failures.withLock { $0.append("\(type(of: error))") } }
@@ -163,7 +162,7 @@
     func announcementIsNotCancelledAlongWithTheWritingTask() async throws {
       // The transaction is already durable once the announcement starts, so cancelling the writer
       // must not stop peers from being told about a commit that happened.
-      let failures = Mutex(0)
+      let failures = Lock(0)
       let (database, transport) = try makeAnnouncingDatabase(
         delay: .milliseconds(50),
         onAnnouncementFailure: { _ in failures.withLock { $0 += 1 } }
@@ -257,7 +256,7 @@
     OrbitDatabaseTransactionObserver,
     Sendable
   {
-    private let recordedEvents = Mutex([RecordedPeerTransactionEvent]())
+    private let recordedEvents = Lock([RecordedPeerTransactionEvent]())
 
     var events: [RecordedPeerTransactionEvent] { recordedEvents.withLock { $0 } }
 
@@ -276,7 +275,7 @@
       var didBeginSending = false
     }
 
-    private let state = Mutex(State())
+    private let state = Lock(State())
     private let failure: (any Error)?
     private let delay: Duration?
 

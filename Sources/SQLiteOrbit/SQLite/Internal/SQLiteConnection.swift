@@ -1,7 +1,9 @@
 import Dispatch
 
 actor SQLiteConnection {
-  private let handle: SQLiteHandle
+  // Reached from `performBlocking` without hopping onto the actor: what serializes access to the
+  // handle is the connection's queue, which is also this actor's executor.
+  private nonisolated(unsafe) let handle: SQLiteHandle
   private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
@@ -52,12 +54,10 @@ actor SQLiteConnection {
   private nonisolated func performBlocking<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) throws -> Result {
-    nonisolated(unsafe) let work = work
-    return try executor.sync {
-      try self.assumeIsolated { connection in
-        try work(connection.handle)
-      }
-    }
+    // `sync` runs the work on the queue that is this actor's executor, so no isolated use of the
+    // handle can be running while it does. Hopping onto the actor to say so is what a closure the
+    // caller only lent us cannot do.
+    return try executor.sync { try work(handle) }
   }
 
   private func perform<Result: Sendable>(
@@ -107,17 +107,19 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     return try queue.sync(execute: body)
   }
 
-  func enqueue(_ job: consuming ExecutorJob) {
-    // The job's priority is handed to dispatch rather than dropped. Without it every query would
-    // run at the queue's own QoS, so a read a user is waiting on would be served no sooner than a
-    // background one, and the thread running it would not be raised to match. Dispatch also
-    // resolves the inversion this leaves behind: a high-priority block enqueued behind a
-    // low-priority one raises the queue until it drains.
-    let qos = Self.dispatchQoS(for: job.priority)
-    let job = UnownedJob(job)
-    queue.async(qos: qos) {
-      job.runSynchronously(on: self.asUnownedSerialExecutor())
+  // A job's priority is handed to dispatch rather than dropped. Without it every query would run
+  // at the queue's own QoS, so a read a user is waiting on would be served no sooner than a
+  // background one, and the thread running it would not be raised to match. Dispatch also
+  // resolves the inversion this leaves behind: a high-priority block enqueued behind a
+  // low-priority one raises the queue until it drains.
+  //
+  // This is the entry point every platform has. Implementing the newer one as well would mean
+  // implementing neither: a type that has this one is never asked for the other.
+  func enqueue(_ job: UnownedJob) {
+    guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else {
+      return run(job, at: .unspecified)
     }
+    run(job, at: Self.dispatchQoS(for: job.priority))
   }
 
   func asUnownedSerialExecutor() -> UnownedSerialExecutor {
@@ -128,6 +130,13 @@ final class SQLiteConnectionExecutor: SerialExecutor {
     dispatchPrecondition(condition: .onQueue(queue))
   }
 
+  private func run(_ job: UnownedJob, at qos: DispatchQoS) {
+    queue.async(qos: qos) {
+      job.runSynchronously(on: self.asUnownedSerialExecutor())
+    }
+  }
+
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   private static func dispatchQoS(for priority: JobPriority) -> DispatchQoS {
     guard let priority = TaskPriority(priority) else { return .unspecified }
     if priority >= .high { return .userInitiated }

@@ -70,7 +70,7 @@
         }
       }
     }
-    for _ in 0..<writeBlockingrs { done.wait() }
+    for _ in 0..<writeBlockingrs { done.blockingWait() }
 
     let total: Int? = try driver.readBlocking { transaction in
       try transaction.fetchOne(#sql("SELECT n FROM counter", as: Int.self))

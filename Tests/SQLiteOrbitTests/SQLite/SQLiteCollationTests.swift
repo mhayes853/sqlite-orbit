@@ -1,6 +1,5 @@
 #if BuiltInSQLite
-  import SQLiteOrbit
-  import Synchronization
+  @testable import SQLiteOrbit
   import Testing
 
   @DatabaseCollation
@@ -99,7 +98,7 @@
   func collationsAreRegisteredThroughTheSuppliedTable() async throws {
     // A comparator is handed its user data directly, so a collation needs nothing from the build
     // that called it. Registration is the one part that goes through the table.
-    let registrations = Mutex(0)
+    let registrations = Lock(0)
     var configuration = SQLiteConfiguration.default
     configuration.library.create_collation_v2 = { connection, name, flags, box, compare, destroy in
       registrations.withLock { $0 += 1 }

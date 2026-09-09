@@ -23,6 +23,7 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
   /// - Returns: The decoded value.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the column's storage class or contents
   ///   cannot produce `type`.
+  @_lifetime(self: copy self)
   mutating func decode<Value: QueryRepresentable>(
     _ type: Value.Type
   ) throws -> Value.QueryOutput
@@ -34,6 +35,7 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a column's storage class or contents
   ///   cannot produce its value.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  @_lifetime(self: copy self)
   mutating func decode<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
   ) throws -> (repeat (each Value).QueryOutput)
@@ -68,6 +70,7 @@ public protocol OrbitDatabaseRowCursor: ~Copyable, ~Escapable {
   ///
   /// - Parameter body: Receives each row in turn.
   /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
+  @_lifetime(self: copy self)
   mutating func forEach(_ body: (inout Row) throws -> Void) throws
 }
 
@@ -77,6 +80,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
   /// - Parameter body: Receives each row in turn.
   /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
   @inlinable
+  @_lifetime(self: copy self)
   public mutating func forEach(_ body: (inout Row) throws -> Void) throws {
     while var row = try next() {
       try body(&row)
@@ -114,6 +118,7 @@ public protocol OrbitDatabaseCursor<Element>: ~Copyable, ~Escapable {
   ///
   /// - Parameter body: Receives each value in turn.
   /// - Throws: Whatever `body` throws, or whatever ``next()`` throws.
+  @_lifetime(self: copy self)
   mutating func forEach(_ body: (inout Element) throws -> Void) throws
 }
 
@@ -123,6 +128,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// - Parameter body: Receives each value in turn.
   /// - Throws: Whatever `body` throws, or whatever ``next()`` throws.
   @inlinable
+  @_lifetime(self: copy self)
   public mutating func forEach(_ body: (inout Element) throws -> Void) throws {
     while var value = try next() {
       try body(&value)
