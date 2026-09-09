@@ -5,8 +5,14 @@
 #endif
 
 // `memset` named indirectly. See `SQLiteKey.Storage.deinit`.
-private nonisolated(unsafe) let orbitEraseBytes:
-  @convention(c) (UnsafeMutableRawPointer, Int32, Int) -> UnsafeMutableRawPointer? = memset
+//
+// Computed rather than stored: a global of this type is initialized by a function that Swift
+// 6.2's isolation checker crashes on, and a computed one is never initialized at all.
+private var orbitEraseBytes:
+  @convention(c) @Sendable (UnsafeMutableRawPointer, Int32, Int) -> UnsafeMutableRawPointer?
+{
+  memset
+}
 
 /// The key a build with a codec — SQLCipher, say — unlocks a database with.
 ///
