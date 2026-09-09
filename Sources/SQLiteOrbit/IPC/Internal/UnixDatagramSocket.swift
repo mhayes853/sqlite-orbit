@@ -112,7 +112,10 @@
         }
         if result == bytes.count { return true }
         let code = errno
-        if code == EAGAIN || code == EWOULDBLOCK { return false }
+        // A peer whose receive queue is full says so as `EAGAIN` on Linux and as `ENOBUFS` on
+        // Darwin. Both mean the same thing here: nothing is wrong, and the datagram can be sent
+        // again once the peer drains.
+        if code == EAGAIN || code == EWOULDBLOCK || code == ENOBUFS { return false }
         throw OrbitIPCSystemError(operation: "sendto", code: code)
       }
     }
