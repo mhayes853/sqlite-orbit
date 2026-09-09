@@ -185,6 +185,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its storage class or
   ///   contents cannot produce `type`.
   @inlinable
+  @_lifetime(self: copy self)
   public mutating func decode<Value: QueryRepresentable>(
     _ type: Value.Type
   ) throws -> Value.QueryOutput {
@@ -202,6 +203,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column that could not be decoded.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   @inlinable
+  @_lifetime(self: copy self)
   public mutating func decode<each Value: QueryRepresentable>(
     _ type: (repeat each Value).Type
   ) throws -> (repeat (each Value).QueryOutput) {

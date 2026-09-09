@@ -210,9 +210,13 @@ public struct FetchAll<Element: Sendable>: Sendable {
     scheduler: (any OrbitValueObservationScheduler)? = nil
   )
   where Element: Table, Element.QueryOutput == Element {
+    // Spelled out rather than inferred: a statement of every column is a `Select` whose value is
+    // the table itself, and the overload that takes one is not something every compiler this
+    // package builds under picks unaided.
+    let statement: Select<Element, Element, ()> = Element.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      Element.all.selectStar().asSelect(),
+      request: OrbitFetchAllStatementRequest<Element>(statement: statement),
       database: database,
       scheduler: scheduler
     )

@@ -172,11 +172,10 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler)? = nil
   ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      request: OrbitFetchOneStatementRequest<Value>(
-        statement: Value.all.selectStar().asSelect().limit(1)
-      ),
+      request: OrbitFetchOneStatementRequest<Value>(statement: statement.limit(1)),
       database: database,
       scheduler: scheduler
     )
@@ -194,10 +193,11 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler)? = nil
   ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
       request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: Value.all.selectStar().asSelect().limit(1)
+        statement: statement.limit(1)
       ),
       database: database,
       scheduler: scheduler
@@ -217,10 +217,11 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler)? = nil
   ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
       request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: Value.all.selectStar().asSelect().limit(1)
+        statement: statement.limit(1)
       ),
       database: database,
       scheduler: scheduler
@@ -246,13 +247,11 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler)? = nil
   ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
       request: OrbitFetchOneStatementRequest<Value>(
-        statement: Value.all
-          .selectStar()
-          .asSelect()
-          .find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey))
+        statement: statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey))
       ),
       database: database,
       scheduler: scheduler
