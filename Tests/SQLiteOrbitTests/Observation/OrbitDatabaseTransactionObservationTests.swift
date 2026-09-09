@@ -179,9 +179,7 @@
 
     @Test
     func poolWritesUseTheSameObserverLifecycle() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let driver = try SQLitePool(
@@ -347,9 +345,7 @@
 
     @Test
     func automaticRecompilationPublishesOnlyTheReplacementReadRegion() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent("sqlite-orbit-\(UUID().uuidString)", isDirectory: true)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let path = OrbitDatabasePath.file(directory.appendingPathComponent("db.sqlite"))

@@ -392,9 +392,7 @@
 
     @Test
     func interprocessObservationSeesSiblingHandleWriteAsLocal() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
@@ -431,9 +429,7 @@
 
     @Test
     func interprocessObservationIgnoresDisjointSiblingHandleWrites() async throws {
-      let directory = FileManager.default.temporaryDirectory
-        .appending(component: UUID().uuidString, directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      let directory = try makeShortTemporaryDirectory("obs")
       defer { try? FileManager.default.removeItem(at: directory) }
 
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))

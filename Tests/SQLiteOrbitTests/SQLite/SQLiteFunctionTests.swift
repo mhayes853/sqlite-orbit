@@ -303,9 +303,7 @@
 
   @Test
   func extensionsComposeWithTheCrossProcessConfiguration() async throws {
-    let directory = FileManager.default.temporaryDirectory
-      .appendingPathComponent("sqlite-orbit-compose-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    let directory = try makeShortTemporaryDirectory("fn")
     defer { try? FileManager.default.removeItem(at: directory) }
 
     // Function registration composes with the native cross-process defaults.

@@ -36,10 +36,7 @@
   }
 
   private func makeTempDirectory() throws -> URL {
-    let directory = FileManager.default.temporaryDirectory
-      .appending(path: "sqlite-orbit-open-lock-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    return directory
+    try makeShortTemporaryDirectory("lock")
   }
 
   @Test

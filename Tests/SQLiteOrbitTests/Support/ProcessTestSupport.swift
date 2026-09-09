@@ -2,6 +2,22 @@ import Foundation
 
 struct TestTimeout: Error {}
 
+/// Creates a temporary directory whose path is short enough to hold a unix socket.
+///
+/// A socket address carries 104 bytes on Darwin, and the per-user temporary directory there is
+/// half of that before a test adds anything, so a directory an IPC transport will put its sockets
+/// in has to be brief about the rest.
+///
+/// - Parameter label: A short name for what the directory is for.
+/// - Returns: The directory, created.
+func makeShortTemporaryDirectory(_ label: String) throws -> URL {
+  let suffix = String(UInt32.random(in: .min ... .max), radix: 36)
+  let directory = FileManager.default.temporaryDirectory
+    .appending(path: "\(label)-\(suffix)", directoryHint: .isDirectory)
+  try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+  return directory
+}
+
 func waitUntil(
   timeout: Duration = .seconds(10),
   isolation: isolated (any Actor)? = #isolation,
@@ -52,12 +68,14 @@ func waitUntil(
     private let environmentPrefix: String
     private var processes = [Process]()
 
+    private var arguments: [String] {
+      ["--testing-library", "swift-testing", "--filter", self.helper]
+    }
+
     init(helper: String, environmentPrefix: String, name: String) throws {
       self.helper = helper
       self.environmentPrefix = environmentPrefix
-      self.directory = FileManager.default.temporaryDirectory
-        .appending(path: "sqlite-orbit-\(name)-\(UUID().uuidString)")
-      try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true)
+      self.directory = try makeShortTemporaryDirectory(name)
     }
 
     func file(_ name: String) -> URL { self.directory.appending(path: name) }
@@ -65,17 +83,30 @@ func waitUntil(
     func spawn(_ variables: [String: String]) throws -> Process {
       let process = Process()
       process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-      process.arguments = ["--testing-library", "swift-testing", "--filter", self.helper]
+      process.arguments = self.arguments
       var environment = ProcessInfo.processInfo.environment
       for (name, value) in variables {
         environment[self.environmentPrefix + name] = value
       }
       process.environment = environment
-      process.standardOutput = FileHandle.nullDevice
-      process.standardError = FileHandle.nullDevice
+      // Kept rather than discarded: a helper that fails says why here, and the test waiting on it
+      // can only say that nothing happened.
+      let log = self.file("h-\(self.processes.count).log")
+      FileManager.default.createFile(atPath: log.path, contents: nil)
+      let output = try FileHandle(forWritingTo: log)
+      process.standardOutput = output
+      process.standardError = output
       try process.run()
       self.processes.append(process)
       return process
+    }
+
+    /// What a helper process printed before it stopped.
+    ///
+    /// - Parameter index: The helper, in the order they were spawned.
+    /// - Returns: Its output, or an empty string when it produced none.
+    func helperOutput(_ index: Int) -> String {
+      (try? String(contentsOf: self.file("h-\(index).log"), encoding: .utf8)) ?? ""
     }
 
     func waitForSuccessfulExit(_ process: Process) async throws {
@@ -96,7 +127,20 @@ func waitUntil(
         self.kill(process)
         process.waitUntilExit()
       }
+      self.reportHelpersThatFailed()
       try? FileManager.default.removeItem(at: self.directory)
+    }
+
+    /// Prints what a helper that failed had to say.
+    ///
+    /// Printed rather than recorded as an issue, because a few of these tests kill their helpers
+    /// on purpose, where a non-zero status is the point.
+    private func reportHelpersThatFailed() {
+      let command = ([CommandLine.arguments[0]] + self.arguments).joined(separator: " ")
+      for (index, process) in self.processes.enumerated() where process.terminationStatus != 0 {
+        print("helper \(index) of '\(command)' exited with \(process.terminationStatus)")
+        print(self.helperOutput(index).suffix(2000))
+      }
     }
   }
 #endif

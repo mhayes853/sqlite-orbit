@@ -222,10 +222,7 @@
   }
 
   private func ipcTestDirectory() throws -> URL {
-    let url = FileManager.default.temporaryDirectory
-      .appending(path: "sqlite-orbit-tests-" + UUID().uuidString)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-    return url
+    try makeShortTemporaryDirectory("ipc")
   }
 
   private func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
