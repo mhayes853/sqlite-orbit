@@ -39,8 +39,8 @@ public struct SQLiteConfiguration: Sendable {
 
   /// Whether foreign key enforcement is turned on.
   ///
-  /// An access may change it for its own duration with
-  /// ``SQLiteWriteConnection/setForeignKeysEnabled(_:)``.
+  /// An access may change it for its own duration through
+  /// ``SQLiteWriteConnection/isForeignKeysEnabled``.
   public var isForeignKeysEnabled: Bool
 
   /// Whether SQLite trusts schema-defined functions and virtual tables.

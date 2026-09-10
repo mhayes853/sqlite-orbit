@@ -98,19 +98,20 @@ must commit together:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  try connection.setForeignKeysEnabled(false)
+  connection.isForeignKeysEnabled = false
   try connection.transaction { transaction in
     try transaction.execute(Reminder.delete())
   }
 }
 ```
 
-Foreign key enforcement and the `busyTimeout` changed through the connection are put back to their
-configured values when the access ends, even when it throws. Any other pragma stays changed on the
-connection, so restore it before returning. Outside `transaction`, statements that begin or end a
-transaction or a savepoint are refused, so the connection always knows what has committed.
-Observers see each statement as a commit of its own, and an `OrbitDatabase` announces what
-committed once the access ends, even when it throws.
+Setting `isForeignKeysEnabled` takes effect before the connection's next statement or
+`transaction`, which is also where a failure to apply it is thrown. It and the `busyTimeout` are put
+back to their configured values when the access ends, even when it throws. Any other pragma stays
+changed on the connection, so restore it before returning. Outside `transaction`, statements that
+begin or end a transaction or a savepoint are refused, so the connection always knows what has
+committed. Observers see each statement as a commit of its own, and an `OrbitDatabase` announces
+what committed once the access ends, even when it throws.
 
 ## Using your own SQLite build
 

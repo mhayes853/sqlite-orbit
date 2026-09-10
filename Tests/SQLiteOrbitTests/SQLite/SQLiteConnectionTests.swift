@@ -354,7 +354,7 @@
       (.limit(.zero), 0),
       (.limit(.seconds(-1)), 0),
       (.limit(.seconds(Int64.max)), .max),
-      (.unlimited, .max)
+      (.maximum, .max)
     ]
   )
   func aBusyTimeoutSaturatesRatherThanOverflowing(

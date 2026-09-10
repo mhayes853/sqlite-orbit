@@ -4,7 +4,10 @@ struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
-  let settings: SQLiteConnectionSettings
+
+  // Every access borrows the handle, yet an access changes settings, so they live in storage of
+  // their own that a borrowed handle can still mutate through.
+  let settings: UnsafeMutablePointer<SQLiteConnectionSettings>
 
   let isReadOnly: Bool
 
@@ -32,14 +35,19 @@ struct SQLiteHandle: ~Copyable {
     self.libraryStorage = libraryStorage
     self.authorizer = authorizer
     self.statements = statements
-    self.settings = SQLiteConnectionSettings(
-      library: UnsafePointer(libraryStorage),
-      connection: pointer,
-      authorizer: authorizer,
-      statements: statements,
-      busyTimeout: configuration.busyTimeout,
-      isForeignKeysEnabled: configuration.isForeignKeysEnabled
+    // Freed by `deinit`, which also runs when configuring the handle this returns fails.
+    let settings = UnsafeMutablePointer<SQLiteConnectionSettings>.allocate(capacity: 1)
+    settings.initialize(
+      to: SQLiteConnectionSettings(
+        library: UnsafePointer(libraryStorage),
+        connection: pointer,
+        authorizer: authorizer,
+        statements: statements,
+        busyTimeout: configuration.busyTimeout,
+        isForeignKeysEnabled: configuration.isForeignKeysEnabled
+      )
     )
+    self.settings = settings
   }
 
   static func open(
@@ -85,6 +93,10 @@ struct SQLiteHandle: ~Copyable {
     // Statements are finalized before the table allocation goes away, because finalizing needs it.
     statements.finalizeAll()
     _ = libraryStorage.pointee.connections.close(pointer)
+    // The settings only point at the connection and the table, and never touch either on their
+    // way out, so they go once the connection has closed and before the table does.
+    settings.deinitialize(count: 1)
+    settings.deallocate()
     libraryStorage.deinitialize(count: 1)
     libraryStorage.deallocate()
   }
@@ -188,7 +200,7 @@ struct SQLiteHandle: ~Copyable {
     // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
     // its own. The access turns it back off with the rest of its settings.
     guard !isReadOnly else { return }
-    try settings.setQueryOnly(true)
+    try settings.pointee.setQueryOnly(true)
   }
 
   // Every access runs its body through here, so that none begins under a setting an earlier one
@@ -198,20 +210,20 @@ struct SQLiteHandle: ~Copyable {
   ) throws -> Result {
     // Whatever an earlier access could not restore is retried first. A setting that still cannot
     // be restored fails this access, rather than letting it run under what the earlier one left.
-    try settings.restore()
+    try settings.pointee.restore()
     let value: Result
     do {
       value = try body()
     } catch {
       do {
-        try settings.restore()
+        try settings.pointee.restore()
       } catch {
         // The body's failure is the one worth reporting. The setting stays changed, so the next
         // access restores it before it begins, and fails if it still cannot.
       }
       throw error
     }
-    try settings.restore()
+    try settings.pointee.restore()
     return value
   }
 

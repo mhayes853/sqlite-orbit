@@ -9,20 +9,20 @@ public enum SQLiteBusyTimeout: Hashable, Sendable {
   /// Waits up to the given duration, counted in whole milliseconds.
   ///
   /// A negative duration waits not at all, and one longer than SQLite can express waits as long
-  /// as ``unlimited`` does.
+  /// as ``maximum`` does.
   case limit(Duration)
 
-  /// Waits as long as SQLite's busy timeout can express.
+  /// Waits the longest SQLite's busy timeout can express: `Int32.max` milliseconds, about 24.8
+  /// days.
   ///
-  /// SQLite takes the timeout as a 32-bit count of milliseconds, so this is `Int32.max`
-  /// milliseconds, about 24.8 days, rather than forever.
-  case unlimited
+  /// SQLite takes the timeout as a 32-bit count of milliseconds, so no timeout waits forever.
+  case maximum
 
   /// The timeout as SQLite's busy timeout takes it: whole milliseconds, clamped to what an `Int32`
   /// holds, with a negative duration meaning no wait at all.
   var milliseconds: Int32 {
     switch self {
-    case .unlimited:
+    case .maximum:
       return .max
     case .limit(let duration):
       let components = duration.components

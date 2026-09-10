@@ -44,8 +44,8 @@
       let driver = try kind.open(in: directory, configuration: singleReaderConfiguration())
 
       let during = try await driver.readWithoutTransaction { connection in
-        connection.busyTimeout = .unlimited
-        #expect(connection.busyTimeout == .unlimited)
+        connection.busyTimeout = .maximum
+        #expect(connection.busyTimeout == .maximum)
         return try connection.fetchOne(busyTimeout)
       }
       #expect(during == Int(Int32.max))
@@ -75,7 +75,7 @@
 
       let during = try await driver.writeWithoutTransaction { connection in
         let wasEnabled = connection.isForeignKeysEnabled
-        try connection.setForeignKeysEnabled(false)
+        connection.isForeignKeysEnabled = false
         #expect(wasEnabled && !connection.isForeignKeysEnabled)
         // With enforcement off the orphan is accepted, which the pragma alone would not show.
         try connection.transaction { transaction in _ = try transaction.execute(orphan) }
@@ -94,6 +94,99 @@
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
+    func foreignKeysChangeBeforeTheNextStatementOrTransaction(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("settings")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let probe = PragmaProbe()
+      let driver = try await kind.openWithLists(in: directory, probe: probe)
+
+      try await driver.writeWithoutTransaction { connection in
+        // Setting runs nothing, and reading returns what was set.
+        connection.isForeignKeysEnabled = false
+        #expect(probe.foreignKeysChanges.isEmpty)
+        let isEnabled = connection.isForeignKeysEnabled
+        #expect(!isEnabled)
+
+        // A cursor, and so every fetch built on one.
+        #expect(try connection.fetchOne(foreignKeys) == 0)
+        #expect(probe.foreignKeysChanges == ["PRAGMA foreign_keys = 0"])
+
+        // A transaction, before it begins: the pragma would be ignored once it had.
+        connection.isForeignKeysEnabled = true
+        #expect(try connection.transaction { try $0.fetchOne(foreignKeys) } == 1)
+
+        // Both kinds of `execute`, which the orphan is refused or accepted by.
+        connection.isForeignKeysEnabled = false
+        try connection.execute("INSERT INTO entries (id, listID) VALUES (1, 1)")
+        connection.isForeignKeysEnabled = true
+        #expect(throws: SQLiteError.self) { try connection.execute(secondOrphan) }
+      }
+
+      #expect(
+        probe.foreignKeysChanges == [
+          "PRAGMA foreign_keys = 0",
+          "PRAGMA foreign_keys = 1",
+          "PRAGMA foreign_keys = 0",
+          "PRAGMA foreign_keys = 1"
+        ]
+      )
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func aChangeUndoneBeforeAnyStatementRunsNoPragma(_ kind: SQLiteTestDriver) async throws {
+      let directory = try makeShortTemporaryDirectory("settings")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let probe = PragmaProbe()
+      let driver = try await kind.openWithLists(in: directory, probe: probe)
+
+      try await driver.writeWithoutTransaction { connection in
+        connection.isForeignKeysEnabled = false
+        connection.isForeignKeysEnabled = true
+        _ = try connection.fetchOne(foreignKeys)
+      }
+      // A change left pending when the access ends never reached SQLite, so nothing undoes it.
+      try await driver.writeWithoutTransaction { connection in
+        connection.isForeignKeysEnabled = false
+      }
+
+      #expect(probe.foreignKeysChanges.isEmpty)
+      #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func aFailedChangeIsThrownByTheNextStatementAndStaysPending(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("settings")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 0")
+      let driver = try await kind.openWithLists(in: directory, probe: probe)
+      probe.isFailing = true
+
+      let (isEnabledAfterFailure, during) = try await driver.writeWithoutTransaction { connection in
+        connection.isForeignKeysEnabled = false
+        let error = #expect(throws: SQLiteError.self) { try connection.fetchOne(foreignKeys) }
+        #expect(error?.sql == "PRAGMA foreign_keys = 0")
+        // Still pending, so a transaction tries again before it begins and fails the same way.
+        let ran = Lock(false)
+        #expect(throws: SQLiteError.self) {
+          try connection.transaction { _ in ran.withLock { $0 = true } }
+        }
+        #expect(!ran.withLock { $0 })
+        let isEnabledAfterFailure = connection.isForeignKeysEnabled
+
+        probe.isFailing = false
+        return (isEnabledAfterFailure, try connection.fetchOne(foreignKeys))
+      }
+
+      #expect(!isEnabledAfterFailure)
+      #expect(during == 0)
+      #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
     func foreignKeysAreRestoredWhenTheBodyThrows(_ kind: SQLiteTestDriver) async throws {
       struct Abort: Error {}
 
@@ -103,7 +196,8 @@
 
       await #expect(throws: Abort.self) {
         try await driver.writeWithoutTransaction { connection in
-          try connection.setForeignKeysEnabled(false)
+          connection.isForeignKeysEnabled = false
+          _ = try connection.fetchOne(foreignKeys)
           throw Abort()
         }
       }
@@ -121,7 +215,7 @@
       let savepoint = #sql("SAVEPOINT leftover", as: Void.self)
 
       try await driver.writeWithoutTransaction { connection in
-        try connection.setForeignKeysEnabled(false)
+        connection.isForeignKeysEnabled = false
         // Reusing a statement the cache prepared inside the transaction leaves one open when the
         // access ends. SQLite ignores the restoring pragma until it has been rolled back.
         try connection.transaction { transaction in
@@ -145,7 +239,7 @@
 
       let (wasEnabled, during) = try await driver.writeWithoutTransaction { connection in
         let wasEnabled = connection.isForeignKeysEnabled
-        try connection.setForeignKeysEnabled(true)
+        connection.isForeignKeysEnabled = true
         return (wasEnabled, try connection.fetchOne(foreignKeys))
       }
 
@@ -162,7 +256,7 @@
           let driver = try SQLiteQueue(path: .memory)
           try driver.writeWithoutTransactionBlocking { connection in
             try connection.transaction { _ in
-              try connection.setForeignKeysEnabled(false)
+              connection.isForeignKeysEnabled = false
             }
           }
         }
@@ -177,14 +271,15 @@
     ) async throws {
       let directory = try makeShortTemporaryDirectory("settings")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let failing = FailingStatement("PRAGMA foreign_keys = 1")
-      let driver = try await kind.openWithLists(in: directory, failing: failing)
-      failing.isFailing = true
+      let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 1")
+      let driver = try await kind.openWithLists(in: directory, probe: probe)
+      probe.isFailing = true
 
       // The body succeeded, so the restore's failure is what the access reports.
       let error = await #expect(throws: SQLiteError.self) {
         try await driver.writeWithoutTransaction { connection in
-          try connection.setForeignKeysEnabled(false)
+          connection.isForeignKeysEnabled = false
+          _ = try connection.fetchOne(foreignKeys)
         }
       }
       #expect(error?.primaryCode == .ioError)
@@ -207,7 +302,7 @@
       }
       #expect(!ran.withLock { $0 })
 
-      failing.isFailing = false
+      probe.isFailing = false
       let (isEnabled, restored) = try await driver.writeWithoutTransaction { connection in
         (connection.isForeignKeysEnabled, try connection.fetchOne(foreignKeys))
       }
@@ -221,30 +316,35 @@
 
       let directory = try makeShortTemporaryDirectory("settings")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let failing = FailingStatement("PRAGMA foreign_keys = 1")
-      let driver = try await kind.openWithLists(in: directory, failing: failing)
-      failing.isFailing = true
+      let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 1")
+      let driver = try await kind.openWithLists(in: directory, probe: probe)
+      probe.isFailing = true
 
       await #expect(throws: Abort.self) {
         try await driver.writeWithoutTransaction { connection in
-          try connection.setForeignKeysEnabled(false)
+          connection.isForeignKeysEnabled = false
+          _ = try connection.fetchOne(foreignKeys)
           throw Abort()
         }
       }
 
       // The setting stayed marked as changed, so the next access restores it before it begins.
-      failing.isFailing = false
+      let held = await #expect(throws: SQLiteError.self) {
+        try await driver.write { try $0.fetchOne(foreignKeys) }
+      }
+      #expect(held?.sql == "PRAGMA foreign_keys = 1")
+      probe.isFailing = false
       #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
     }
 
     @Test
     func aFailedQueryOnlyRestoreHoldsBackTheNextWrite() async throws {
-      let failing = FailingStatement("PRAGMA query_only = 0")
-      let driver = try SQLiteQueue(path: .memory, configuration: failing.configuration())
+      let probe = PragmaProbe(failing: "PRAGMA query_only = 0")
+      let driver = try SQLiteQueue(path: .memory, configuration: probe.configuration())
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      failing.isFailing = true
+      probe.isFailing = true
 
       let error = await #expect(throws: SQLiteError.self) {
         try await driver.read { transaction in
@@ -261,7 +361,7 @@
       }
       #expect(held?.sql == "PRAGMA query_only = 0")
 
-      failing.isFailing = false
+      probe.isFailing = false
       try await driver.write { transaction in
         _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
@@ -285,11 +385,11 @@
 
     fileprivate func openWithLists(
       in directory: URL,
-      failing: FailingStatement? = nil
+      probe: PragmaProbe? = nil
     ) async throws -> any OrbitObservableDatabase {
       let driver = try open(
         in: directory,
-        configuration: failing?.configuration() ?? .default
+        configuration: probe?.configuration() ?? .default
       )
       try await driver.write { transaction in
         try transaction.execute(
@@ -303,13 +403,15 @@
     }
   }
 
-  /// Makes one statement's step fail while switched on, standing in for a pragma SQLite refuses.
-  private final class FailingStatement: Sendable {
-    private let sql: String
+  /// Records the foreign keys changes a connection runs, and makes one pragma fail while switched
+  /// on, standing in for a pragma SQLite refuses.
+  private final class PragmaProbe: Sendable {
+    private let failingSQL: String?
     private let failing = Lock(false)
+    private let changes = Lock([String]())
 
-    init(_ sql: String) {
-      self.sql = sql
+    init(failing sql: String? = nil) {
+      self.failingSQL = sql
     }
 
     var isFailing: Bool {
@@ -317,15 +419,25 @@
       set { failing.withLock { $0 = newValue } }
     }
 
+    /// Every `PRAGMA foreign_keys = …` statement stepped since the connection was configured,
+    /// failed or not.
+    var foreignKeysChanges: [String] { changes.withLock { $0 } }
+
     func configuration() -> SQLiteConfiguration {
       let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
       configuration.library = base
       configuration.readerCount = 1
       configuration.library.statements.execution.step = { [self] statement in
-        if isFailing, let text = base.statements.inspection.sql(statement),
-          String(cString: text) == sql
-        {
+        guard let text = base.statements.inspection.sql(statement) else {
+          return base.statements.execution.step(statement)
+        }
+        let sql = String(cString: text)
+        // Configuring the connection spells the pragma `ON` or `OFF`, which this leaves out.
+        if sql.hasPrefix("PRAGMA foreign_keys = "), sql.last?.isNumber == true {
+          changes.withLock { $0.append(sql) }
+        }
+        if isFailing, sql == failingSQL {
           return SQLiteResultCode.ioError.rawValue
         }
         return base.statements.execution.step(statement)

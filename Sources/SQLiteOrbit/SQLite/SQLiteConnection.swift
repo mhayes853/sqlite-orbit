@@ -74,8 +74,8 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
   /// timeout is only put back after a change, but once it is set the connection waits by the
   /// configured timeout rather than the handler.
   public var busyTimeout: SQLiteBusyTimeout {
-    get { handle.pointee.settings.busyTimeout }
-    nonmutating set { handle.pointee.settings.setBusyTimeout(newValue) }
+    get { handle.pointee.settings.pointee.busyTimeout }
+    nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
   }
 
   /// Creates a cursor over the rows a read query returns.
@@ -143,7 +143,7 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
 ///
 /// ```swift
 /// try await database.writeWithoutTransaction { connection in
-///   try connection.setForeignKeysEnabled(false)
+///   connection.isForeignKeysEnabled = false
 ///   try connection.transaction { transaction in
 ///     try transaction.execute("ALTER TABLE reminders RENAME TO old_reminders")
 ///     // ...
@@ -151,7 +151,7 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
 /// }
 /// ```
 ///
-/// The ``busyTimeout`` and foreign key enforcement this connection changes are put back when the
+/// The ``busyTimeout`` and ``isForeignKeysEnabled`` this connection changes are put back when the
 /// access that lent it ends, even when it throws. Any other pragma it runs stays changed on the
 /// connection, so restore it before returning.
 public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
@@ -212,50 +212,51 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// timeout is only put back after a change, but once it is set the connection waits by the
   /// configured timeout rather than the handler.
   public var busyTimeout: SQLiteBusyTimeout {
-    get { handle.pointee.settings.busyTimeout }
-    nonmutating set { handle.pointee.settings.setBusyTimeout(newValue) }
+    get { handle.pointee.settings.pointee.busyTimeout }
+    nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
   }
 
   /// Whether this connection enforces foreign keys.
   ///
-  /// It starts at the configuration's ``SQLiteConfiguration/isForeignKeysEnabled`` and changes
-  /// only through ``setForeignKeysEnabled(_:)``. A `PRAGMA foreign_keys` statement run directly is
-  /// not reflected here, and is not undone when the access ends.
-  public var isForeignKeysEnabled: Bool {
-    handle.pointee.settings.isForeignKeysEnabled
-  }
-
-  /// Turns foreign key enforcement on or off until the access that lent this connection ends, when
-  /// the configured setting is put back.
-  ///
-  /// This is a method rather than a settable ``isForeignKeysEnabled`` because it runs a
-  /// `PRAGMA foreign_keys` statement, which can fail, and a setter cannot throw. The statement
-  /// runs outside any transaction, which is the only place SQLite honors it.
+  /// It starts at the configuration's ``SQLiteConfiguration/isForeignKeysEnabled``. A change lasts
+  /// until the access that lent this connection ends, when the configured setting is put back,
+  /// even when the access throws.
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.setForeignKeysEnabled(false)
+  ///   connection.isForeignKeysEnabled = false
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }
   /// }
   /// ```
   ///
-  /// - Important: Calling this inside this connection's own ``transaction(_:)`` is a programming
-  ///   error and stops the process, since SQLite would silently ignore it there.
+  /// SQLite changes foreign keys with a `PRAGMA foreign_keys` statement, which can fail, and a
+  /// setter cannot throw. So setting this only records the change. It takes effect just before
+  /// this connection's next statement or ``transaction(_:)``, outside any transaction, where
+  /// SQLite honors it, and a failure to apply it is thrown from that statement or transaction. The
+  /// change then stays pending for the next one to try again. Reading this returns the value last
+  /// set, whether or not it has taken effect.
   ///
-  /// - Parameter isEnabled: Whether foreign keys are enforced.
-  /// - Throws: A ``SQLiteError`` when the pragma fails, in which case the setting is unchanged.
-  public borrowing func setForeignKeysEnabled(_ isEnabled: Bool) throws {
-    precondition(
-      !state.isInTransaction,
-      """
-      Foreign keys cannot be turned on or off inside a connection's transaction: SQLite ignores \
-      PRAGMA foreign_keys while a transaction is open. Call setForeignKeysEnabled before the \
-      transaction begins.
-      """
-    )
-    try handle.pointee.settings.setForeignKeysEnabled(isEnabled)
+  /// Work done through ``sqliteConnection`` does not apply a pending change first. A
+  /// `PRAGMA foreign_keys` statement run directly is not reflected here, and is not undone when the
+  /// access ends.
+  ///
+  /// - Important: Setting this inside this connection's own ``transaction(_:)`` is a programming
+  ///   error and stops the process, since SQLite would silently ignore it there.
+  public var isForeignKeysEnabled: Bool {
+    get { handle.pointee.settings.pointee.isForeignKeysEnabled }
+    nonmutating set {
+      precondition(
+        !state.isInTransaction,
+        """
+        Foreign keys cannot be turned on or off inside a connection's transaction: SQLite ignores \
+        PRAGMA foreign_keys while a transaction is open. Set isForeignKeysEnabled before the \
+        transaction begins.
+        """
+      )
+      handle.pointee.settings.pointee.isForeignKeysEnabled = newValue
+    }
   }
 
   /// Creates a cursor over the rows a read query returns.
@@ -272,7 +273,8 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.rowCursor(query, cached: cached)
+    try applyPendingSettings()
+    return try base.rowCursor(query, cached: cached)
   }
 
   /// Runs a statement to completion, committing it, and reports how many rows it changed.
@@ -288,6 +290,7 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   ///   had changed.
   @discardableResult
   public borrowing func execute(_ statement: some Statement) throws -> Int {
+    try applyPendingSettings()
     defer { commitPendingChanges() }
     return try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
   }
@@ -305,6 +308,7 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// - Parameter sql: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
   public borrowing func execute(_ sql: String) throws {
+    try applyPendingSettings()
     defer { commitPendingChanges() }
     try base.execute(sql)
   }
@@ -353,9 +357,17 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   public borrowing func transaction<Result: ~Copyable>(
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try state.inTransaction {
+    // Before `BEGIN`, since SQLite ignores a foreign keys change once the transaction is open.
+    try applyPendingSettings()
+    return try state.inTransaction {
       try handle.pointee.runWrite(observations: base.base.observations, body)
     }
+  }
+
+  // Every statement and transaction this connection runs comes through here first, which is what
+  // puts a change the `isForeignKeysEnabled` setter could only record into effect.
+  private borrowing func applyPendingSettings() throws {
+    try handle.pointee.settings.pointee.applyForeignKeys()
   }
 
   private borrowing func commitPendingChanges() {

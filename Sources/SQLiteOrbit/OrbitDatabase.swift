@@ -195,7 +195,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.setForeignKeysEnabled(false)
+  ///   connection.isForeignKeysEnabled = false
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }

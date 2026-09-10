@@ -218,15 +218,15 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.busyTimeout = .unlimited
+  ///   connection.busyTimeout = .maximum
   ///   try migrator.migrate(connection)
   /// }
   /// ```
   ///
-  /// A deferred migration turns foreign keys off through
-  /// ``SQLiteWriteConnection/setForeignKeysEnabled(_:)`` while it runs, and back to what they were
-  /// once it commits. After a migration fails, foreign keys may still be off: the connection puts
-  /// its configured setting back when the access that lent it ends.
+  /// A deferred migration turns ``SQLiteWriteConnection/isForeignKeysEnabled`` off while it runs,
+  /// and back to what it was once it commits, which takes effect before the connection's next
+  /// statement. After a migration fails, foreign keys may still be off: the connection puts its
+  /// configured setting back when the access that lent it ends.
   ///
   /// - Important: Calling this inside the connection's own
   ///   ``SQLiteWriteConnection/transaction(_:)`` is a programming error: each migration opens a
@@ -282,7 +282,8 @@ public struct OrbitDatabaseMigrator: Sendable {
     let disablesForeignKeys =
       connection.isForeignKeysEnabled && migration.foreignKeyChecks != .immediate
     if disablesForeignKeys {
-      try connection.setForeignKeysEnabled(false)
+      // Applied just before the transaction begins.
+      connection.isForeignKeysEnabled = false
     }
     let checksForeignKeys = disablesForeignKeys && migration.foreignKeyChecks == .deferred
     // A migration that fails is rethrown as it is, with foreign keys left off: the connection puts
@@ -292,7 +293,10 @@ public struct OrbitDatabaseMigrator: Sendable {
       try record(migration, in: transaction, checkingForeignKeys: checksForeignKeys)
     }
     if disablesForeignKeys {
-      try connection.setForeignKeysEnabled(true)
+      // Only recorded, so a deferred migration next turns it off again without a pragma in
+      // between. Anything else puts it back on first: an immediate migration's transaction, the
+      // caller's next statement, or the end of the access.
+      connection.isForeignKeysEnabled = true
     }
   }
 

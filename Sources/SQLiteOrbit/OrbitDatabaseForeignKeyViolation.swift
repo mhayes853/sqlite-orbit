@@ -9,7 +9,7 @@ import StructuredQueries
 ///
 /// ```swift
 /// try await database.writeWithoutTransaction { connection in
-///   try connection.setForeignKeysEnabled(false)
+///   connection.isForeignKeysEnabled = false
 ///   try connection.transaction { transaction in
 ///     try rebuildLists(in: transaction)
 ///     let violations = try transaction.foreignKeyViolations()

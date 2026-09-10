@@ -315,7 +315,7 @@
         try connection.transaction { try createListsAndReminders($0) }
         let before = try connection.foreignKeyViolations()
         // A table rebuild outside the migrator: foreign keys off, the change, then the check.
-        try connection.setForeignKeysEnabled(false)
+        connection.isForeignKeysEnabled = false
         let during = try connection.transaction { transaction in
           try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
           return try transaction.foreignKeyViolations()
@@ -442,7 +442,7 @@
       }
 
       let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
-        try connection.setForeignKeysEnabled(true)
+        connection.isForeignKeysEnabled = true
         try migrator.migrate(connection)
         return (
           connection.isForeignKeysEnabled,
@@ -542,7 +542,7 @@
 
       let running = Task { [migrator] in
         try await driver.writeWithoutTransaction { connection in
-          connection.busyTimeout = .unlimited
+          connection.busyTimeout = .maximum
           try migrator.migrate(connection)
         }
       }
