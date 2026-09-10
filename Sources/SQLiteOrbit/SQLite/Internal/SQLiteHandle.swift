@@ -165,6 +165,7 @@ struct SQLiteHandle: ~Copyable {
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
+    statements.invalidateIfSchemaChanged()
     let value: Result
     do {
       let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
@@ -185,6 +186,7 @@ struct SQLiteHandle: ~Copyable {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
+    statements.invalidateIfSchemaChanged()
     do {
       let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
