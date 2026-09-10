@@ -125,7 +125,7 @@ The `SQLCipher` trait links SQLCipher instead and vends `SQLiteLibrary.sqlCipher
 exclusive with `SystemSQLite`: SQLCipher is a fork of SQLite and exports the same `sqlite3_*`
 symbols, so enabling both would link two builds under one set of names and leave the link order to
 decide which one every call reaches. Naming any trait leaves the defaults out, which is what makes
-the two exclusive in practice:
+the traits exclusive in practice:
 
 ```swift
 .package(
@@ -134,6 +134,42 @@ the two exclusive in practice:
   traits: ["SQLCipher"]
 )
 ```
+
+The experimental `Turso` trait drives Turso's local Rust engine through its SQLite-compatible C
+API and vends `SQLiteLibrary.turso`:
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["Turso"]
+)
+```
+
+For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
+linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
+SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
+module and the bundle both expose the module as `TursoSQLite3`, so publishing the bundle does not
+change SQLiteOrbit's Swift source.
+
+Turso's compatibility surface is still smaller than SQLite's. SQLiteOrbit handles that boundary
+explicitly:
+
+- Missing authorizer callbacks broaden observed reads and writes to the whole database, and every
+  write invalidates the statement cache. This loses precision, not correctness.
+- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept;
+  libraries without that pragma can opt into a `sqlite3_stmt_readonly` fallback.
+- Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
+  multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
+  unimplemented entry point. Use `OrbitDatabase(localPath:)` for a pooled database confined to one
+  process.
+- Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
+  cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
+  there is no safe client-side substitute for native early finalization.
+
+These decisions are represented by `SQLiteLibrary.capabilities`, so support can be enabled one
+feature at a time as Turso implements it rather than by adding engine-specific conditionals
+throughout the driver.
 
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves

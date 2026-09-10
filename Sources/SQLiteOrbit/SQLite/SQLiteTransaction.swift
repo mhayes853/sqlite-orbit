@@ -60,7 +60,11 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try cursor(for: query.fragment, cached: cached)
+    try cursor(
+      for: query.fragment,
+      cached: cached,
+      requiresReadOnlyStatement: !library.pointee.capabilities.contains(.queryOnlyControl)
+    )
   }
 
   /// Notifies transaction observers that this transaction may have read a database region.
@@ -83,7 +87,8 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   @_lifetime(borrow self)
   borrowing func cursor(
     for query: QueryFragment,
-    cached: Bool
+    cached: Bool,
+    requiresReadOnlyStatement: Bool
   ) throws -> SQLiteRowCursor {
     try SQLiteRowCursor(
       query,
@@ -92,7 +97,8 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
       library: library,
       statements: statements,
       authorizer: authorizer,
-      observations: observations
+      observations: observations,
+      requiresReadOnlyStatement: requiresReadOnlyStatement
     )
   }
 }
@@ -146,7 +152,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.fragment, cached: cached)
+    try base.cursor(for: query.fragment, cached: cached, requiresReadOnlyStatement: false)
   }
 
   /// Creates a cursor over the rows a write query returns, such as one with a `RETURNING` clause.
@@ -161,7 +167,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.fragment, cached: cached)
+    try base.cursor(for: query.fragment, cached: cached, requiresReadOnlyStatement: false)
   }
 
   /// Runs a query to completion and reports how many rows it changed.
@@ -176,7 +182,11 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     // A statement that builds no SQL changes nothing. Running the empty-query stand-in would leave
     // `changes` reporting whatever the previous statement changed.
     guard !query.fragment.isEmpty else { return 0 }
-    var cursor = try base.cursor(for: query.fragment, cached: false)
+    var cursor = try base.cursor(
+      for: query.fragment,
+      cached: false,
+      requiresReadOnlyStatement: false
+    )
     while try cursor.next() != nil {}
     return Int(base.library.pointee.changes(base.connection))
   }

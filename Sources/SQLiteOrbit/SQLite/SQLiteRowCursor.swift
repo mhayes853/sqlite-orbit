@@ -55,11 +55,20 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
-    observations: OrbitDatabaseTransactionObservationContext
+    observations: OrbitDatabaseTransactionObservationContext,
+    requiresReadOnlyStatement: Bool
   ) throws {
     let (sql, bindings) = prepareQuery(query)
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     let statement = preparedStatement.pointer
+    if requiresReadOnlyStatement && library.pointee.stmt_readonly(statement) == 0 {
+      if cached {
+        statements.checkIn(preparedStatement, sql: sql)
+      } else {
+        _ = library.pointee.finalize(statement)
+      }
+      throw SQLiteReadOnlyStatementError(sql: sql)
+    }
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)

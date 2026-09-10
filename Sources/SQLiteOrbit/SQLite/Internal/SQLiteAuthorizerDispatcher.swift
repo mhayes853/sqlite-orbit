@@ -61,6 +61,7 @@ final class SQLiteAuthorizerDispatcher {
     on connection: OpaquePointer,
     using library: UnsafePointer<SQLiteLibrary>
   ) throws {
+    guard library.pointee.capabilities.contains(.statementAuthorizer) else { return }
     let context = Unmanaged.passUnretained(self).toOpaque()
     let code = library.pointee.set_authorizer(connection, Self.callback, context)
     guard code == SQLiteResultCode.ok.rawValue else {

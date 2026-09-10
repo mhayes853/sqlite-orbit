@@ -86,7 +86,14 @@ struct SQLiteHandle: ~Copyable {
     _ = libraryStorage.pointee.extended_result_codes(pointer, 1)
     _ = libraryStorage.pointee.busy_timeout(pointer, configuration.busyTimeoutMilliseconds)
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
-    try execute("PRAGMA trusted_schema = \(configuration.isTrustedSchemaEnabled ? "ON" : "OFF")")
+    if libraryStorage.pointee.capabilities.contains(.trustedSchemaControl) {
+      try execute("PRAGMA trusted_schema = \(configuration.isTrustedSchemaEnabled ? "ON" : "OFF")")
+    } else if !configuration.isTrustedSchemaEnabled {
+      throw SQLiteFeatureUnavailableError(
+        libraryName: libraryStorage.pointee.name,
+        capability: .trustedSchemaControl
+      )
+    }
     // A setup is handed the library this connection was opened through, so whether it can run
     // against that build is its own question to answer rather than one asked on its behalf here.
     for setup in configuration.connectionSetups {
@@ -134,13 +141,20 @@ struct SQLiteHandle: ~Copyable {
     // to for the duration, so that a read attempting a mutation fails rather than quietly having
     // it discarded by the rollback below.
     guard !isReadOnly else { return try runRead(observers: observers, body) }
-    try execute("PRAGMA query_only = ON")
+    guard libraryStorage.pointee.capabilities.contains(.queryOnlyControl) else {
+      // Libraries without `query_only` are guarded statement-by-statement by
+      // `SQLiteReadTransaction` using `sqlite3_stmt_readonly`.
+      return try runRead(observers: observers, body)
+    }
+    // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
+    // keyword as a different expression kind than the pragma implementation accepts.
+    try execute("PRAGMA query_only = 1")
     do {
       let value = try runRead(observers: observers, body)
-      try execute("PRAGMA query_only = OFF")
+      try execute("PRAGMA query_only = 0")
       return value
     } catch {
-      try? execute("PRAGMA query_only = OFF")
+      try? execute("PRAGMA query_only = 0")
       throw error
     }
   }

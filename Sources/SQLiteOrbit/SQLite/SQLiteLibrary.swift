@@ -2,7 +2,69 @@
   import CSQLite3
 #elseif SQLCipher
   import SQLCipher
+#elseif Turso
+  import TursoSQLite3
 #endif
+
+/// Optional SQLite behavior a library is known to implement faithfully.
+///
+/// A build can export an entry point without implementing its contract. Turso, for example,
+/// currently exports several compatibility stubs. Capabilities let SQLiteOrbit avoid calling a
+/// stub and either fall back conservatively or report that the requested feature is unavailable.
+public enum SQLiteLibraryCapability: String, CaseIterable, Hashable, Sendable {
+  /// Preparing a statement invokes the callback installed by `sqlite3_set_authorizer`.
+  case statementAuthorizer
+  /// `PRAGMA trusted_schema` can enable and disable trusted-schema behavior.
+  case trustedSchemaControl
+  /// `PRAGMA query_only` can protect a writable connection while it lends a read transaction.
+  case queryOnlyControl
+  /// Scalar functions can be installed with `sqlite3_create_function_v2`.
+  case scalarFunctions
+  /// Aggregate functions can be installed with `sqlite3_create_function_v2`.
+  case aggregateFunctions
+  /// Collating sequences can be installed with `sqlite3_create_collation_v2`.
+  case collations
+  /// Separate processes can safely open and coordinate access to the same database file.
+  case multiprocessFileAccess
+}
+
+/// Reported when a configured feature is not implemented by the selected SQLite library.
+public struct SQLiteFeatureUnavailableError: Error, Hashable, Sendable {
+  /// The name of the library that cannot provide the feature.
+  public let libraryName: String
+
+  /// The unavailable behavior.
+  public let capability: SQLiteLibraryCapability
+
+  /// Creates an error for a capability a library cannot provide.
+  public init(libraryName: String, capability: SQLiteLibraryCapability) {
+    self.libraryName = libraryName
+    self.capability = capability
+  }
+}
+
+extension SQLiteFeatureUnavailableError: CustomStringConvertible {
+  public var description: String {
+    "\(libraryName) does not support SQLite's \(capability.rawValue) capability."
+  }
+}
+
+/// Reported when a write-shaped statement is passed through a read transaction.
+public struct SQLiteReadOnlyStatementError: Error, Hashable, Sendable {
+  /// The SQL that was refused.
+  public let sql: String
+
+  /// Creates an error for a statement that must not run in a read transaction.
+  public init(sql: String) {
+    self.sql = sql
+  }
+}
+
+extension SQLiteReadOnlyStatementError: CustomStringConvertible {
+  public var description: String {
+    "A read transaction cannot run a statement that may write: \(sql)"
+  }
+}
 
 /// The destructor SQLite calls to release a value or context it was handed.
 ///
@@ -69,6 +131,11 @@ extension SQLiteLibrary {
 /// )
 /// ```
 public struct SQLiteLibrary: Sendable {
+  /// A diagnostic name for this build of SQLite.
+  public var name: String
+
+  /// Optional SQLite behavior this build implements faithfully.
+  public var capabilities: Set<SQLiteLibraryCapability>
 
   // MARK: - Connections
 
@@ -352,8 +419,12 @@ public struct SQLiteLibrary: Sendable {
     result_text: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
     result_blob: @escaping @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void,
     result_error: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
-    encryption: Encryption? = nil
+    encryption: Encryption? = nil,
+    name: String = "custom SQLite",
+    capabilities: Set<SQLiteLibraryCapability> = Set(SQLiteLibraryCapability.allCases)
   ) {
+    self.name = name
+    self.capabilities = capabilities
     self.open_v2 = open_v2
     self.close_v2 = close_v2
     self.errmsg = errmsg
@@ -410,12 +481,26 @@ public struct SQLiteLibrary: Sendable {
 
 #if BuiltInSQLite
   extension SQLiteLibrary {
+    /// Adds the identity and feature set that are specific to a known SQLite build.
+    private static func configured(
+      _ library: Self,
+      name: String,
+      capabilities: Set<SQLiteLibraryCapability> = Set(SQLiteLibraryCapability.allCases)
+    ) -> Self {
+      var library = library
+      library.name = name
+      library.capabilities = capabilities
+      return library
+    }
+
     // The build a default configuration runs against, whichever trait supplied it.
     static var builtIn: Self {
       #if SystemSQLite
         .system
       #elseif SQLCipher
         .sqlCipher
+      #elseif Turso
+        .turso
       #endif
     }
   }
@@ -430,7 +515,7 @@ public struct SQLiteLibrary: Sendable {
     ///
     /// Stock SQLite has no codec, so this table's ``encryption`` is `nil` and a
     /// ``SQLiteConfiguration/key`` set against it is refused.
-    public static let system = #sqliteLibrary()
+    public static let system = configured(#sqliteLibrary(), name: "system SQLite")
   }
 #endif
 
@@ -440,6 +525,24 @@ public struct SQLiteLibrary: Sendable {
     ///
     /// Vended by the `SQLCipher` trait. Pair it with a ``SQLiteConfiguration/key``, or reach for
     /// ``SQLiteConfiguration/sqlCipher(key:)``, which does both at once.
-    public static let sqlCipher = #sqliteLibrary(encryption: true)
+    public static let sqlCipher = configured(
+      #sqliteLibrary(encryption: true),
+      name: "SQLCipher"
+    )
+  }
+#endif
+
+#if Turso
+  extension SQLiteLibrary {
+    /// The local Rust Turso database engine this package was linked against.
+    ///
+    /// Turso exposes SQLite's C ABI, but its compatibility layer does not yet implement every
+    /// optional behavior. SQLiteOrbit falls back to whole-database observation without an
+    /// authorizer and refuses unsupported callback registration rather than calling Turso's stubs.
+    public static let turso = configured(
+      #sqliteLibrary(module: "TursoSQLite3"),
+      name: "Turso",
+      capabilities: [.queryOnlyControl]
+    )
   }
 #endif

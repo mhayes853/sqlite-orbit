@@ -228,7 +228,10 @@ func sqliteInvalidatesStatementCache(
   statement: OpaquePointer,
   library: UnsafePointer<SQLiteLibrary>
 ) -> Bool {
-  authorizations.contains(where: \.invalidatesStatementCache)
+  // Without an authorizer there is no safe way to distinguish DDL and connection-changing
+  // pragmas from ordinary mutations. Invalidating after every write is broader but correct.
+  if authorizations.isEmpty { return library.pointee.stmt_readonly(statement) == 0 }
+  return authorizations.contains(where: \.invalidatesStatementCache)
     || (library.pointee.stmt_readonly(statement) == 0
       && authorizations.contains { $0.action == .pragma })
 }

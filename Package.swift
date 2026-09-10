@@ -41,6 +41,12 @@ let package = Package(
       description:
         "Links SQLCipher and vends `SQLiteLibrary.sqlCipher`, which opens encrypted databases. "
         + "Mutually exclusive with `SystemSQLite`, which exports the same `sqlite3_*` symbols."
+    ),
+    .trait(
+      name: "Turso",
+      description:
+        "Links the local Rust Turso engine and vends `SQLiteLibrary.turso`. Mutually exclusive "
+        + "with the other SQLite traits, which export the same `sqlite3_*` symbols."
     )
   ],
   dependencies: [
@@ -60,6 +66,10 @@ let package = Package(
         .brew(["sqlite3"])
       ]
     ),
+    .systemLibrary(
+      name: "TursoSQLite3",
+      path: "Sources/TursoSQLite3"
+    ),
     .target(
       name: "SQLiteOrbit",
       dependencies: [
@@ -73,6 +83,10 @@ let package = Package(
           name: "SQLCipher",
           package: "swift-sqlcipher",
           condition: .when(traits: ["SQLCipher"])
+        ),
+        .target(
+          name: "TursoSQLite3",
+          condition: .when(traits: ["Turso"])
         )
       ],
       cSettings: [
@@ -87,7 +101,13 @@ let package = Package(
         // Every trait that links a SQLite of its own defines this, so that code needing only
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
-        .define("BuiltInSQLite", .when(traits: ["SQLCipher"]))
+        .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
+        .define("BuiltInSQLite", .when(traits: ["Turso"]))
+      ],
+      linkerSettings: [
+        // Rust's standard library uses the platform math library. This is already implicit on
+        // Apple platforms, while Linux consumers of the Turso static artifact must name it.
+        .linkedLibrary("m", .when(platforms: [.linux]))
       ]
     ),
     .macro(
@@ -120,6 +140,10 @@ let package = Package(
           name: "SQLCipher",
           package: "swift-sqlcipher",
           condition: .when(traits: ["SQLCipher"])
+        ),
+        .target(
+          name: "TursoSQLite3",
+          condition: .when(traits: ["Turso"])
         )
       ] + swiftUITestDependencies,
       cSettings: [
@@ -134,7 +158,8 @@ let package = Package(
         // Every trait that links a SQLite of its own defines this, so that code needing only
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
-        .define("BuiltInSQLite", .when(traits: ["SQLCipher"]))
+        .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
+        .define("BuiltInSQLite", .when(traits: ["Turso"]))
       ]
     )
   ],
