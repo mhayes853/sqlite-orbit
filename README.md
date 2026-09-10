@@ -478,28 +478,30 @@ A target that is not registered, or one that a later migration has already gone 
 
 ### Foreign keys
 
-A migration runs with foreign keys off by default, and the whole database is checked with
-`PRAGMA foreign_key_check` just before the migration commits. That is what makes SQLite's procedure
-for the schema changes `ALTER TABLE` cannot make safe to follow — create the new table, copy the
-rows across, drop the old one, rename the new one — since dropping a table other tables refer to
-with foreign keys on would delete, or cascade to, every row that refers to it. A migration that
-leaves violations is rolled back with an `OrbitDatabaseForeignKeyViolationError` listing them, and
-the migrations before it stay applied.
+A migration runs with foreign keys off by default, and the whole database is checked for violations
+just before the migration commits. That is what makes SQLite's procedure for the schema changes
+`ALTER TABLE` cannot make safe to follow — create the new table, copy the rows across, drop the old
+one, rename the new one — since dropping a table other tables refer to with foreign keys on would
+delete, or cascade to, every row that refers to it. A migration that leaves violations is rolled
+back with an `OrbitDatabaseForeignKeyViolationError` listing them, and the migrations before it
+stay applied.
 
 Register a migration with `foreignKeyChecks: .immediate` to keep foreign keys enforced statement by
 statement instead. The check reads every table with a foreign key, which on a large database takes
-time; `disablingDeferredForeignKeyChecks()` returns a migrator whose later migrations skip it,
-trading the guarantee for that time. A connection configured without foreign keys has nothing to
-defer or check.
+time; after `disableDeferredForeignKeyChecks()`, the migrations registered next skip it, trading the
+guarantee for that time. A connection without foreign keys on has nothing to defer or check. A
+rebuild outside the migrator runs the same check itself: `foreignKeyViolations()` is available on
+every transaction and connection, and returns each `OrbitDatabaseForeignKeyViolation` it finds.
 
 ### The table of applied migrations
 
 Applied migrations are recorded in a table named `orbit_migrations`, created by the first migration
 to run. It has the layout GRDB gives its own table, so a database GRDB's `DatabaseMigrator` has been
-migrating continues its history under the same identifiers:
+migrating can continue its history under the same identifiers. `.grdb` is a migrator that records
+it in GRDB's own `grdb_migrations` table:
 
 ```swift
-var migrator = OrbitDatabaseMigrator(tableName: "grdb_migrations")
+var migrator = OrbitDatabaseMigrator.grdb
 ```
 
 The inspection methods read that table from any read or write transaction, or from a connection
@@ -511,12 +513,15 @@ database no migrator has run on has applied nothing, and reading it creates no t
 
 Processes that share a database may all migrate it as they launch. Each migration's transaction
 checks again, under the write lock, whether another process applied it in the meantime, so every
-migration runs once. A transaction that finds the database busy is retried a few times, and
-`busyTimeout` sets how long each attempt waits for the lock, restoring the connection's own timeout
-afterwards:
+migration runs once. It waits for the lock as long as the connection's busy timeout allows, and
+fails with `SQLITE_BUSY` once that runs out. To wait longer, migrate on a connection whose timeout
+you raise, which is put back when the access ends:
 
 ```swift
-migrator.busyTimeout = .limit(.seconds(30))
+try await database.writeWithoutTransaction { connection in
+  connection.busyTimeout = .limit(.seconds(30))
+  try migrator.migrate(connection)
+}
 ```
 
 A migration applied by a newer build of the application is tolerated: an older build migrates the

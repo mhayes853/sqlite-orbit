@@ -1,6 +1,7 @@
 /// Reported when a migrator cannot migrate a database up to the migration it was given.
 ///
-/// Thrown by ``OrbitDatabaseMigrator/migrate(_:upTo:)`` before anything is written.
+/// Thrown by ``OrbitDatabaseMigrator/migrate(_:upTo:)-(OrbitDatabaseWriter,_)``, and the other
+/// `migrate` methods, before anything is written.
 ///
 /// ```swift
 /// do {

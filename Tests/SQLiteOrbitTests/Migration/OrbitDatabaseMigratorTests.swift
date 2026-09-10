@@ -182,7 +182,7 @@
       }
       #expect(reminders == 2)
       #expect(colors == ["blue"])
-      #expect(try await writerPragma("foreign_keys", on: driver) == 1)
+      try await expectWriterForeignKeys(true, on: driver)
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -216,7 +216,7 @@
         try transaction.fetchOne(#sql("SELECT count(*) FROM reminders", as: Int.self))
       }
       #expect(reminders == 2)
-      #expect(try await writerPragma("foreign_keys", on: driver) == 1)
+      try await expectWriterForeignKeys(true, on: driver)
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -258,7 +258,7 @@
       checked.registerMigration("Checked orphan") { transaction in
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
       }
-      migrator = migrator.disablingDeferredForeignKeyChecks()
+      migrator.disableDeferredForeignKeyChecks()
       migrator.registerMigration("Unchecked orphan") { transaction in
         try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
@@ -267,16 +267,15 @@
       let uncheckedDriver = try SQLiteQueue(path: .memory)
       try await migrator.migrate(uncheckedDriver)
       #expect(foreignKeys.withLock { $0 } == [0])
-      #expect(try await writerPragma("foreign_keys", on: uncheckedDriver) == 1)
-      let orphans = try await uncheckedDriver.read { transaction in
-        try transaction.fetchAll(#sql("PRAGMA foreign_key_check", as: String.self))
-      }
-      #expect(orphans == ["reminders"])
+      try await expectWriterForeignKeys(true, on: uncheckedDriver)
+      let orphans = try await uncheckedDriver.read { try $0.foreignKeyViolations() }
+      #expect(orphans.map(\.table) == ["reminders"])
 
+      // A migration registered before the call keeps its check.
+      checked.disableDeferredForeignKeyChecks()
       let checkedDriver = try SQLiteQueue(path: .memory)
-      let checkedMigrator = checked.disablingDeferredForeignKeyChecks()
       await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
-        try await checkedMigrator.migrate(checkedDriver)
+        try await checked.migrate(checkedDriver)
       }
     }
 
@@ -296,8 +295,40 @@
       try await migrator.migrate(driver)
 
       #expect(foreignKeys.withLock { $0 } == [0])
-      #expect(try await writerPragma("foreign_keys", on: driver) == 0)
+      try await expectWriterForeignKeys(false, on: driver)
       #expect(try await driver.read { try migrator.hasCompletedMigrations(in: $0) })
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func foreignKeyViolationsAreReadOutsideTheMigrator(_ kind: SQLiteTestDriver) async throws {
+      let directory = try makeShortTemporaryDirectory("migrate")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      let orphan = OrbitDatabaseForeignKeyViolation(
+        table: "reminders",
+        rowID: 3,
+        parentTable: "lists",
+        foreignKeyIndex: 0
+      )
+
+      let (before, during) = try await driver.writeWithoutTransaction { connection in
+        try connection.transaction { try createListsAndReminders($0) }
+        let before = try connection.foreignKeyViolations()
+        // A table rebuild outside the migrator: foreign keys off, the change, then the check.
+        try connection.setForeignKeysEnabled(false)
+        let during = try connection.transaction { transaction in
+          try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+          return try transaction.foreignKeyViolations()
+        }
+        return (before, during)
+      }
+
+      #expect(before.isEmpty)
+      #expect(during == [orphan])
+      // Foreign keys are back on for these, and the check finds the orphan all the same.
+      try await expectWriterForeignKeys(true, on: driver)
+      #expect(try await driver.read { try $0.foreignKeyViolations() } == [orphan])
+      #expect(try await driver.readWithoutTransaction { try $0.foreignKeyViolations() } == [orphan])
     }
 
     // MARK: - The table of applied migrations
@@ -336,7 +367,7 @@
           """
         )
       }
-      var migrator = OrbitDatabaseMigrator(tableName: "grdb_migrations")
+      var migrator = OrbitDatabaseMigrator.grdb
       migrator.registerMigration("v1") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -355,10 +386,82 @@
       #expect(columns == ["id", "title"])
     }
 
-    // MARK: - Pragmas
+    @Test
+    func grdbMigratorRecordsItsHistoryInGRDBsTable() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      var migrator = OrbitDatabaseMigrator.grdb
+      migrator.registerMigration("v1") { _ in }
+
+      try await migrator.migrate(driver)
+
+      let tables = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM sqlite_schema WHERE type = 'table'", as: String.self)
+        )
+      }
+      #expect(tables == ["grdb_migrations"])
+      let recorded = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT identifier FROM grdb_migrations", as: String.self))
+      }
+      #expect(recorded == ["v1"])
+    }
+
+    // MARK: - Migrating on a connection
 
     @Test(arguments: SQLiteTestDriver.allCases)
-    func failingMigrationRethrowsItsErrorAndRestoresPragmas(
+    func migratingOnAConnectionAppliesPendingMigrationsOnce(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("migrate")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      let migrator = loggingMigrator(["one", "two", "three"])
+
+      let appliedUpToTarget = try await driver.writeWithoutTransaction { connection in
+        try migrator.migrate(connection, upTo: "two")
+        let applied = try migrator.appliedMigrations(in: connection)
+        try migrator.migrate(connection)
+        try migrator.migrate(connection)
+        return applied
+      }
+
+      #expect(appliedUpToTarget == ["one", "two"])
+      #expect(try await log(in: driver) == ["one", "two", "three"])
+    }
+
+    @Test
+    func migratingOnAConnectionPutsBackTheForeignKeysTheCallerSet() async throws {
+      var configuration = SQLiteConfiguration.default
+      configuration.isForeignKeysEnabled = false
+      let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+      let foreignKeys = Lock([Int]())
+      var migrator = OrbitDatabaseMigrator()
+      migrator.registerMigration("Create lists") { transaction in
+        try createListsAndReminders(transaction)
+        try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
+      }
+
+      let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
+        try connection.setForeignKeysEnabled(true)
+        try migrator.migrate(connection)
+        return (
+          connection.isForeignKeysEnabled,
+          try connection.fetchOne(#sql("PRAGMA foreign_keys", as: Int.self))
+        )
+      }
+
+      // Off while the migration ran, then back to what the caller set rather than the
+      // configured value, which the end of the access restores instead.
+      #expect(foreignKeys.withLock { $0 } == [0])
+      #expect(isEnabled)
+      #expect(pragma == 1)
+      try await expectWriterForeignKeys(false, on: driver)
+    }
+
+    // MARK: - Restoring the connection
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func failingMigrationRethrowsItsErrorAndRestoresTheConnection(
       _ kind: SQLiteTestDriver
     ) async throws {
       struct MigrationFailure: Error, Equatable {}
@@ -367,7 +470,6 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
       var migrator = OrbitDatabaseMigrator()
-      migrator.busyTimeout = .limit(.seconds(42))
       migrator.registerMigration("one") { _ in }
       migrator.registerMigration("two") { transaction in
         try transaction.execute("CREATE TABLE doomed (id INTEGER)")
@@ -375,41 +477,37 @@
       }
 
       let error = await #expect(throws: MigrationFailure.self) {
-        try await migrator.migrate(driver)
+        try await driver.writeWithoutTransaction { connection in
+          connection.busyTimeout = .limit(.seconds(42))
+          try migrator.migrate(connection)
+        }
       }
 
       #expect(error == MigrationFailure())
-      #expect(try await writerPragma("foreign_keys", on: driver) == 1)
+      try await expectWriterForeignKeys(true, on: driver)
       #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
       #expect(try await driver.read { try migrator.appliedMigrations(in: $0) } == ["one"])
     }
 
-    @Test(arguments: [
-      (OrbitDatabaseMigrator.BusyTimeout.limit(.milliseconds(1234)), 1234),
-      (.unlimited, Int(Int32.max)),
-      (.configured, 5000)
-    ])
-    func busyTimeoutOverrideAppliesDuringTheRunOnly(
-      _ busyTimeout: OrbitDatabaseMigrator.BusyTimeout,
-      _ expected: Int
-    ) async throws {
+    @Test
+    func foreignKeysStayOffAfterAFailedMigrationUntilTheAccessEnds() async throws {
+      struct MigrationFailure: Error {}
+
       let driver = try SQLiteQueue(path: .memory)
-      let observed = Lock<Int?>(nil)
       var migrator = OrbitDatabaseMigrator()
-      migrator.busyTimeout = busyTimeout
-      migrator.registerMigration("one") { transaction in
-        let value = try transaction.fetchOne(#sql("PRAGMA busy_timeout", as: Int.self))
-        observed.withLock { $0 = value }
+      migrator.registerMigration("one") { _ in throw MigrationFailure() }
+
+      let isEnabledAfterFailure = try await driver.writeWithoutTransaction { connection in
+        #expect(throws: MigrationFailure.self) { try migrator.migrate(connection) }
+        return connection.isForeignKeysEnabled
       }
 
-      try await migrator.migrate(driver)
-
-      #expect(observed.withLock { $0 } == expected)
-      #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
+      #expect(!isEnabledAfterFailure)
+      try await expectWriterForeignKeys(true, on: driver)
     }
 
     @Test
-    func cancellingStopsOnAMigrationBoundaryAndRestoresPragmas() async throws {
+    func cancellingStopsOnAMigrationBoundaryAndRestoresTheConnection() async throws {
       let steps = Lock(0)
       let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
@@ -424,7 +522,6 @@
       }
       let driver = try SQLiteQueue(path: .memory, configuration: configuration)
       var migrator = OrbitDatabaseMigrator()
-      migrator.busyTimeout = .unlimited
       migrator.registerMigration("one") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -443,7 +540,12 @@
         )
       }
 
-      let running = Task { [migrator] in try await migrator.migrate(driver) }
+      let running = Task { [migrator] in
+        try await driver.writeWithoutTransaction { connection in
+          connection.busyTimeout = .unlimited
+          try migrator.migrate(connection)
+        }
+      }
       try await waitUntil { steps.withLock { $0 } > 0 }
       running.cancel()
 
@@ -455,49 +557,84 @@
         try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
       }
       #expect(items == 0)
-      #expect(try await writerPragma("foreign_keys", on: driver) == 1)
+      try await expectWriterForeignKeys(true, on: driver)
       #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
     }
 
     // MARK: - Busy databases
 
     @Test
-    func busyTransactionIsRetriedAFewTimes() async throws {
+    func busyMigrationFailsWithoutRetryingAndRestoresTheConnection() async throws {
       let begins = Lock(0)
-      let busyBegins = Lock(0)
+      let isBusy = Lock(false)
       let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
       configuration.library = base
       configuration.library.statements.execution.step = { statement in
-        if let sql = base.statements.inspection.sql(statement),
+        if isBusy.withLock({ $0 }), let sql = base.statements.inspection.sql(statement),
           String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
         {
-          let attempt = begins.withLock { count in
-            count += 1
-            return count
-          }
-          if attempt <= busyBegins.withLock({ $0 }) {
-            return SQLiteResultCode.busy.rawValue
-          }
+          begins.withLock { $0 += 1 }
+          return SQLiteResultCode.busy.rawValue
         }
         return base.statements.execution.step(statement)
       }
       let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+      try await loggingMigrator(["one"]).migrate(driver)
+      let migrator = loggingMigrator(["one", "two"])
+
+      isBusy.withLock { $0 = true }
+      let error = await #expect(throws: SQLiteError.self) {
+        try await migrator.migrate(driver)
+      }
+      isBusy.withLock { $0 = false }
+
+      #expect(error?.primaryCode == .busy)
+      #expect(begins.withLock { $0 } == 1)
+      #expect(try await log(in: driver) == ["one"])
+      // The migration had turned foreign keys off before it found the database busy.
+      try await expectWriterForeignKeys(true, on: driver)
+      #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
+    }
+
+    @Test
+    func raisedBusyTimeoutWaitsOutALockHeldLongerThanTheConfiguredOne() async throws {
+      let directory = try makeShortTemporaryDirectory("migrate")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+      let holder = try SQLiteQueue(path: path)
+      var configuration = SQLiteConfiguration.default
+      configuration.busyTimeout = .limit(.milliseconds(100))
+      let driver = try SQLiteQueue(path: path, configuration: configuration)
       let migrator = loggingMigrator(["one"])
 
-      busyBegins.withLock { $0 = 3 }
-      try await migrator.migrate(driver)
-      #expect(begins.withLock { $0 } == 4)
-      #expect(try await log(in: driver) == ["one"])
+      let isHeld = Lock(false)
+      let holding = Task {
+        try await holder.write { transaction in
+          try transaction.execute("CREATE TABLE held (id INTEGER)")
+          isHeld.withLock { $0 = true }
+          Thread.sleep(forTimeInterval: 1)
+        }
+      }
+      try await waitUntil { isHeld.withLock { $0 } }
 
-      let later = loggingMigrator(["one", "two"])
-      begins.withLock { $0 = 0 }
-      busyBegins.withLock { $0 = .max }
+      // The configured timeout runs out while the lock is still held.
       let error = await #expect(throws: SQLiteError.self) {
-        try await later.migrate(driver)
+        try await migrator.migrate(driver)
       }
       #expect(error?.primaryCode == .busy)
-      #expect(begins.withLock { $0 } == 4)
+
+      let clock = ContinuousClock()
+      let started = clock.now
+      try await driver.writeWithoutTransaction { connection in
+        connection.busyTimeout = .limit(.seconds(30))
+        try migrator.migrate(connection)
+      }
+      try await holding.value
+
+      #expect(clock.now - started > .milliseconds(100))
+      #expect(try await log(in: driver) == ["one"])
+      #expect(try await writerPragma("busy_timeout", on: driver) == 100)
     }
 
     @Test
@@ -705,6 +842,23 @@
 
   private func foreignKeysPragma(in transaction: borrowing SQLiteWriteTransaction) throws -> Int {
     try transaction.fetchOne(#sql("PRAGMA foreign_keys", as: Int.self)) ?? -1
+  }
+
+  /// Checks that foreign keys on the connection migrations run on are as `isEnabled` says, both as
+  /// the connection tracks them and as SQLite reports them.
+  private func expectWriterForeignKeys(
+    _ isEnabled: Bool,
+    on writer: some OrbitDatabaseWriter,
+    sourceLocation: SourceLocation = #_sourceLocation
+  ) async throws {
+    let (tracked, pragma) = try await writer.writeWithoutTransaction { connection in
+      (
+        connection.isForeignKeysEnabled,
+        try connection.fetchOne(#sql("PRAGMA foreign_keys", as: Int.self))
+      )
+    }
+    #expect(tracked == isEnabled, sourceLocation: sourceLocation)
+    #expect(pragma == (isEnabled ? 1 : 0), sourceLocation: sourceLocation)
   }
 
   /// Reads a pragma from the connection that migrations run on, which in a pool is not one of the

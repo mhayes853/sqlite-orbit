@@ -3,10 +3,11 @@ import StructuredQueries
 /// Applies a database's schema migrations in order, each exactly once.
 ///
 /// Register every migration the application has shipped, oldest first, and call
-/// ``migrate(_:upTo:)`` when the database opens. Each pending migration runs in a write
-/// transaction of its own, which also records its identifier in a table of applied migrations, so
-/// a run that stops part way resumes where it stopped and a database that is up to date is left
-/// alone. A migration that has shipped must never change afterwards; register a new one instead.
+/// ``migrate(_:upTo:)-(OrbitDatabaseWriter,_)`` when the database opens. Each pending migration
+/// runs in a write transaction of its own, which also records its identifier in a table of applied
+/// migrations, so a run that stops part way resumes where it stopped and a database that is up to
+/// date is left alone. A migration that has shipped must never change afterwards; register a new
+/// one instead.
 ///
 /// ```swift
 /// var migrator = OrbitDatabaseMigrator()
@@ -26,14 +27,16 @@ import StructuredQueries
 /// ```
 ///
 /// Several processes may migrate the same database at once. Each migration's transaction checks
-/// again whether another process has applied it in the meantime, and a transaction that finds the
-/// database busy is retried a few times. An applied migration this migrator does not register is
-/// tolerated, which is what an older build of the application sees after a newer one has migrated
-/// the database; ``hasBeenSuperseded(in:)`` detects it.
+/// again whether another process has applied it in the meantime, and waits for the write lock as
+/// long as the connection's busy timeout allows. To wait longer, migrate on a connection whose
+/// ``SQLiteWriteConnection/busyTimeout`` has been raised, with
+/// ``migrate(_:upTo:)-(SQLiteWriteConnection,_)``. An applied migration this migrator does not
+/// register is tolerated, which is what an older build of the application sees after a newer one
+/// has migrated the database; ``hasBeenSuperseded(in:)`` detects it.
 ///
 /// The applied migrations are kept in a table named `orbit_migrations` by default, laid out as
-/// GRDB lays out its own, so `OrbitDatabaseMigrator(tableName: "grdb_migrations")` continues the
-/// history of a database that GRDB's `DatabaseMigrator` has migrated.
+/// GRDB lays out its own, so ``grdb`` continues the history of a database that GRDB's
+/// `DatabaseMigrator` has migrated.
 public struct OrbitDatabaseMigrator: Sendable {
   /// When the foreign keys of a migration's changes are checked.
   ///
@@ -51,41 +54,14 @@ public struct OrbitDatabaseMigrator: Sendable {
     /// keys on would cascade its deletion to every row that refers to it.
     case deferred
 
-    /// Foreign keys are enforced as the connection is configured to enforce them, statement by
-    /// statement.
+    /// Foreign keys are enforced as the connection enforces them when the migration begins,
+    /// statement by statement.
     case immediate
   }
-
-  /// How long a migration waits for a lock another connection holds.
-  ///
-  /// ```swift
-  /// migrator.busyTimeout = .limit(.seconds(30))
-  /// ```
-  public enum BusyTimeout: Hashable, Sendable {
-    /// Waits as long as the connection's ``SQLiteConfiguration/busyTimeout`` allows.
-    case configured
-
-    /// Waits up to the given duration, counted in whole milliseconds.
-    case limit(Duration)
-
-    /// Waits for as long as it takes.
-    case unlimited
-  }
-
-  /// How long each migration waits for a lock another connection holds.
-  ///
-  /// A migration's transaction is retried a few times when it still finds the database busy. The
-  /// connection's own busy timeout is restored once migrating is done.
-  public var busyTimeout = BusyTimeout.configured
 
   private let tableName: String
   private var migrations: [Migration] = []
   private var defersForeignKeyChecks = true
-
-  // A transaction that finds the database busy rolls back, so trying it again is safe. A few more
-  // tries cover a writer that keeps winning the lock, without spinning on one that holds it for
-  // good.
-  private static let busyRetryLimit = 3
 
   /// Creates a migrator with no migrations registered.
   ///
@@ -94,10 +70,26 @@ public struct OrbitDatabaseMigrator: Sendable {
   /// ```
   ///
   /// - Parameter tableName: The table that records which migrations have been applied. It is
-  ///   created by the first migration to run. Pass `"grdb_migrations"` to continue a history
-  ///   recorded by GRDB.
+  ///   created by the first migration to run. ``grdb`` is the migrator for a history recorded by
+  ///   GRDB.
   public init(tableName: String = "orbit_migrations") {
     self.tableName = tableName
+  }
+
+  /// A migrator with no migrations registered that records its history in `grdb_migrations`, the
+  /// table GRDB's `DatabaseMigrator` records its own in.
+  ///
+  /// Register the migrations GRDB applied under the identifiers GRDB knew them by, and the
+  /// database carries on from where GRDB left it.
+  ///
+  /// ```swift
+  /// var migrator = OrbitDatabaseMigrator.grdb
+  /// migrator.registerMigration("v1") { transaction in
+  ///   try transaction.execute("CREATE TABLE reminders (id INTEGER PRIMARY KEY)")
+  /// }
+  /// ```
+  public static var grdb: Self {
+    Self(tableName: "grdb_migrations")
   }
 
   /// Registers a migration, to run after every migration registered before it.
@@ -118,7 +110,7 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///     change once the migration has shipped.
   ///   - foreignKeyChecks: When the foreign keys of the migration's changes are checked.
   ///   - migrate: Makes the migration's changes in the transaction it is given. Throwing rolls the
-  ///     migration back and fails ``migrate(_:upTo:)`` with the same error.
+  ///     migration back and fails the run with the same error.
   public mutating func registerMigration(
     _ identifier: String,
     foreignKeyChecks: ForeignKeyChecks = .deferred,
@@ -139,26 +131,22 @@ public struct OrbitDatabaseMigrator: Sendable {
     migrations.append(Migration(identifier: identifier, foreignKeyChecks: checks, migrate: migrate))
   }
 
-  /// Returns a migrator whose later deferred migrations skip their foreign key check.
+  /// Makes the deferred migrations registered after this call skip their foreign key check.
   ///
-  /// A migration registered on the returned migrator with ``ForeignKeyChecks/deferred`` still runs
-  /// with foreign keys off, but is not checked for violations before it commits. Checking reads
-  /// every table that has a foreign key, which a large database can take a while over. Skipping it
-  /// trades that time for the guarantee: a migration can then leave rows whose foreign keys refer
-  /// to nothing, and nothing reports them. Migrations registered before the call keep their check.
+  /// A migration registered afterwards with ``ForeignKeyChecks/deferred`` still runs with foreign
+  /// keys off, but is not checked for violations before it commits. Checking reads every table
+  /// that has a foreign key, which a large database can take a while over. Skipping it trades that
+  /// time for the guarantee: a migration can then leave rows whose foreign keys refer to nothing,
+  /// and nothing reports them. Migrations registered before the call keep their check.
   ///
   /// ```swift
   /// var migrator = OrbitDatabaseMigrator()
   /// migrator.registerMigration("Create lists", migrate: createLists)
-  /// migrator = migrator.disablingDeferredForeignKeyChecks()
+  /// migrator.disableDeferredForeignKeyChecks()
   /// migrator.registerMigration("Rebuild reminders", migrate: rebuildReminders)
   /// ```
-  ///
-  /// - Returns: A copy of this migrator that registers deferred migrations without a check.
-  public func disablingDeferredForeignKeyChecks() -> Self {
-    var migrator = self
-    migrator.defersForeignKeyChecks = false
-    return migrator
+  public mutating func disableDeferredForeignKeyChecks() {
+    defersForeignKeyChecks = false
   }
 
   // MARK: - Migrating
@@ -189,7 +177,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     upTo target: String? = nil
   ) async throws {
     try await writer.writeWithoutTransaction { connection in
-      try self.migratePending(on: connection, upTo: target)
+      try self.migrate(connection, upTo: target)
     }
   }
 
@@ -215,31 +203,52 @@ public struct OrbitDatabaseMigrator: Sendable {
     upTo target: String? = nil
   ) throws {
     try writer.writeWithoutTransactionBlocking { connection in
-      try self.migratePending(on: connection, upTo: target)
+      try self.migrate(connection, upTo: target)
     }
   }
 
-  private func migratePending(
-    on connection: borrowing SQLiteWriteConnection,
-    upTo target: String?
+  /// Applies every registered migration the database has not applied yet, on a connection the
+  /// caller already holds.
+  ///
+  /// This is what the other `migrate` methods run, for when the connection needs setting up
+  /// first. Each migration's transaction waits for the write lock as long as the connection's
+  /// ``SQLiteWriteConnection/busyTimeout`` allows, and fails with `SQLITE_BUSY` once it runs out,
+  /// so raising the timeout is how a launch waits out another process that holds the lock for
+  /// long:
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   connection.busyTimeout = .unlimited
+  ///   try migrator.migrate(connection)
+  /// }
+  /// ```
+  ///
+  /// A deferred migration turns foreign keys off through
+  /// ``SQLiteWriteConnection/setForeignKeysEnabled(_:)`` while it runs, and back to what they were
+  /// once it commits. After a migration fails, foreign keys may still be off: the connection puts
+  /// its configured setting back when the access that lent it ends.
+  ///
+  /// - Important: Calling this inside the connection's own
+  ///   ``SQLiteWriteConnection/transaction(_:)`` is a programming error: each migration opens a
+  ///   transaction of its own, and transactions do not nest.
+  ///
+  /// - Parameters:
+  ///   - connection: The connection to migrate on.
+  ///   - target: The identifier of the last migration to apply, or `nil` to apply every
+  ///     registered migration.
+  /// - Throws: ``OrbitDatabaseMigrationTargetError`` when `target` cannot be migrated up to,
+  ///   ``OrbitDatabaseForeignKeyViolationError`` when a deferred migration leaves violations,
+  ///   whatever a migration throws, or a ``SQLiteError``, whose code is `SQLITE_BUSY` when the
+  ///   write lock could not be taken in time.
+  public func migrate(
+    _ connection: borrowing SQLiteWriteConnection,
+    upTo target: String? = nil
   ) throws {
     // Reading outside a transaction takes no write lock, which is what lets the launch of an
     // application whose database is up to date leave it alone.
     let pending = try pendingMigrations(applied: appliedIdentifiers(in: connection), upTo: target)
-    guard !pending.isEmpty else { return }
-
-    let configuredBusyTimeout = try overrideBusyTimeout(on: connection)
-    defer {
-      if let configuredBusyTimeout {
-        try? connection.execute("PRAGMA busy_timeout = \(configuredBusyTimeout)")
-      }
-    }
-    let foreignKeys = try connection.fetchOne(
-      SQLQueryExpression("PRAGMA foreign_keys", as: Int.self)
-    )
-    let isForeignKeysEnabled = (foreignKeys ?? 0) != 0
     for migration in pending {
-      try apply(migration, on: connection, isForeignKeysEnabled: isForeignKeysEnabled)
+      try apply(migration, on: connection)
     }
   }
 
@@ -263,52 +272,27 @@ public struct OrbitDatabaseMigrator: Sendable {
     return candidates.filter { !applied.contains($0.identifier) }
   }
 
-  private func overrideBusyTimeout(on connection: borrowing SQLiteWriteConnection) throws -> Int? {
-    let milliseconds: Int32
-    switch busyTimeout {
-    case .configured: return nil
-    case .limit(let duration): milliseconds = SQLiteBusyTimeout.limit(duration).milliseconds
-    case .unlimited: milliseconds = .max
-    }
-    let configured =
-      try connection.fetchOne(SQLQueryExpression("PRAGMA busy_timeout", as: Int.self)) ?? 0
-    try connection.execute("PRAGMA busy_timeout = \(milliseconds)")
-    return configured
-  }
-
   private func apply(
     _ migration: Migration,
-    on connection: borrowing SQLiteWriteConnection,
-    isForeignKeysEnabled: Bool
+    on connection: borrowing SQLiteWriteConnection
   ) throws {
-    // SQLite ignores `PRAGMA foreign_keys` inside a transaction, which is why a migration runs on
-    // a connection outside one and opens its own. With foreign keys already off there is nothing
-    // to defer, and nothing a check would be guarding.
-    let disablesForeignKeys = isForeignKeysEnabled && migration.foreignKeyChecks != .immediate
+    // SQLite ignores a change to foreign keys inside a transaction, which is why a migration runs
+    // on a connection outside one and opens its own. With foreign keys already off there is
+    // nothing to defer, and nothing a check would be guarding.
+    let disablesForeignKeys =
+      connection.isForeignKeysEnabled && migration.foreignKeyChecks != .immediate
     if disablesForeignKeys {
-      try connection.execute("PRAGMA foreign_keys = 0")
-    }
-    defer {
-      if disablesForeignKeys {
-        try? connection.execute("PRAGMA foreign_keys = 1")
-      }
+      try connection.setForeignKeysEnabled(false)
     }
     let checksForeignKeys = disablesForeignKeys && migration.foreignKeyChecks == .deferred
-
-    var retries = 0
-    while true {
-      do {
-        try connection.transaction { transaction in
-          try record(migration, in: transaction, checkingForeignKeys: checksForeignKeys)
-        }
-        return
-      } catch let error as SQLiteError
-        where error.primaryCode == .busy && retries < Self.busyRetryLimit
-      {
-        // The transaction rolled back, and the next one checks again whether the migration is
-        // still pending, so another process that got there first is not raced a second time.
-        retries += 1
-      }
+    // A migration that fails is rethrown as it is, with foreign keys left off: the connection puts
+    // its configured setting back when the access ends. Restoring here too would add a second
+    // failure that could only be dropped in favor of the migration's.
+    try connection.transaction { transaction in
+      try record(migration, in: transaction, checkingForeignKeys: checksForeignKeys)
+    }
+    if disablesForeignKeys {
+      try connection.setForeignKeysEnabled(true)
     }
   }
 
@@ -332,37 +316,19 @@ public struct OrbitDatabaseMigrator: Sendable {
     }
     try migration.migrate(transaction)
     if checkingForeignKeys {
-      try checkForeignKeys(after: migration, in: transaction)
+      let violations = try transaction.foreignKeyViolations()
+      guard violations.isEmpty else {
+        throw OrbitDatabaseForeignKeyViolationError(
+          migration: migration.identifier,
+          violations: violations
+        )
+      }
     }
     try transaction.execute(
       SQLQueryExpression(
         "INSERT INTO \(quote: tableName) (identifier) VALUES (\(bind: migration.identifier))"
       )
     )
-  }
-
-  private func checkForeignKeys(
-    after migration: Migration,
-    in transaction: borrowing SQLiteWriteTransaction
-  ) throws {
-    var violations: [OrbitDatabaseForeignKeyViolationError.Violation] = []
-    var cursor = try transaction.rowCursor(SQLQueryExpression("PRAGMA foreign_key_check"))
-    while var row = try cursor.next() {
-      violations.append(
-        OrbitDatabaseForeignKeyViolationError.Violation(
-          table: try row.decode(String.self),
-          rowID: try row.decode(Int64?.self),
-          parentTable: try row.decode(String.self),
-          foreignKeyIndex: try row.decode(Int.self)
-        )
-      )
-    }
-    guard violations.isEmpty else {
-      throw OrbitDatabaseForeignKeyViolationError(
-        migration: migration.identifier,
-        violations: violations
-      )
-    }
   }
 
   // MARK: - Inspecting
@@ -503,7 +469,7 @@ private struct Migration: Sendable {
     // Foreign keys off while it runs, then the whole database checked before it commits.
     case deferred
     // Foreign keys off while it runs, and no check: registered after
-    // `disablingDeferredForeignKeyChecks()`.
+    // `disableDeferredForeignKeyChecks()`.
     case disabled
     // Foreign keys as the connection has them.
     case immediate
