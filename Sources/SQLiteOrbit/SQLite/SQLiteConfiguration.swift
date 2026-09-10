@@ -86,7 +86,15 @@ public struct SQLiteConfiguration: Sendable {
   }
 
   var busyTimeoutMilliseconds: Int32 {
-    let components = busyTimeout.components
+    busyTimeout.sqliteBusyTimeoutMilliseconds
+  }
+}
+
+extension Duration {
+  /// The duration as SQLite's busy timeout takes it: whole milliseconds, clamped to what an
+  /// `Int32` holds, with a negative duration meaning no wait at all.
+  var sqliteBusyTimeoutMilliseconds: Int32 {
+    let components = components
     guard components.seconds > 0 || components.attoseconds > 0 else { return 0 }
     guard components.seconds < Int64(Int32.max) / 1000 else { return .max }
     let milliseconds =

@@ -91,6 +91,26 @@ A file path resolves to an absolute path, so the same database is the same `Orbi
 however it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
 the way it always did.
 
+A little work cannot happen inside a transaction: SQLite ignores `PRAGMA foreign_keys` in one, and
+refuses to `VACUUM` in one at all. `readWithoutTransaction` and `writeWithoutTransaction` lend a
+connection whose statements each commit on their own, and whose `transaction` groups the ones that
+must commit together:
+
+```swift
+try await database.writeWithoutTransaction { connection in
+  try connection.execute("PRAGMA foreign_keys = 0")
+  defer { try? connection.execute("PRAGMA foreign_keys = 1") }
+  try connection.transaction { transaction in
+    try transaction.execute(Reminder.delete())
+  }
+}
+```
+
+A pragma changed this way stays changed on the connection, so restore it before returning. Outside
+`transaction`, statements that begin or end a transaction or a savepoint are refused, so the
+connection always knows what has committed. Observers see each statement as a commit of its own,
+and an `OrbitDatabase` announces what committed once the access ends, even when it throws.
+
 ## Using your own SQLite build
 
 The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
@@ -409,6 +429,107 @@ the linked one does.
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
+
+## Migrations
+
+`OrbitDatabaseMigrator` brings a database's schema up to date, one registered migration at a time.
+Register every migration the application has shipped, oldest first, and migrate when the database
+opens:
+
+```swift
+var migrator = OrbitDatabaseMigrator()
+migrator.registerMigration("Create reminders") { transaction in
+  try transaction.execute(
+    "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+  )
+}
+migrator.registerMigration("Add completion") { transaction in
+  try transaction.execute(
+    "ALTER TABLE reminders ADD COLUMN isCompleted INTEGER NOT NULL DEFAULT 0"
+  )
+}
+
+let database = try OrbitDatabase(path: databasePath)
+try await migrator.migrate(database)
+```
+
+Each pending migration runs in a write transaction of its own, which also records its identifier,
+so a run that stops part way — on an error, or because its task was cancelled — resumes where it
+stopped, and a migration that throws is rolled back with the error rethrown as it was. Whether
+anything is pending is read before the write lock is taken: launching with a database that is
+already up to date locks nothing and announces nothing to other processes. A migration that has
+shipped must never change afterwards; register a new one instead. `migrateBlocking` does the same
+from synchronous code.
+
+`upTo:` stops after a given migration, which is how a test checks one migration against the data
+the migrations before it left behind:
+
+```swift
+try await migrator.migrate(database, upTo: "Create reminders")
+try await database.write { transaction in
+  try transaction.execute(#sql("INSERT INTO reminders (title) VALUES ('Old')", as: Void.self))
+}
+try await migrator.migrate(database, upTo: "Add completion")
+```
+
+A target that is not registered, or one that a later migration has already gone past, throws
+`OrbitDatabaseMigrationTargetError` before anything is written.
+
+### Foreign keys
+
+A migration runs with foreign keys off by default, and the whole database is checked with
+`PRAGMA foreign_key_check` just before the migration commits. That is what makes SQLite's procedure
+for the schema changes `ALTER TABLE` cannot make safe to follow — create the new table, copy the
+rows across, drop the old one, rename the new one — since dropping a table other tables refer to
+with foreign keys on would delete, or cascade to, every row that refers to it. A migration that
+leaves violations is rolled back with an `OrbitDatabaseForeignKeyViolationError` listing them, and
+the migrations before it stay applied.
+
+Register a migration with `foreignKeyChecks: .immediate` to keep foreign keys enforced statement by
+statement instead. The check reads every table with a foreign key, which on a large database takes
+time; `disablingDeferredForeignKeyChecks()` returns a migrator whose later migrations skip it,
+trading the guarantee for that time. A connection configured without foreign keys has nothing to
+defer or check.
+
+### The table of applied migrations
+
+Applied migrations are recorded in a table named `orbit_migrations`, created by the first migration
+to run. It has the layout GRDB gives its own table, so a database GRDB's `DatabaseMigrator` has been
+migrating continues its history under the same identifiers:
+
+```swift
+var migrator = OrbitDatabaseMigrator(tableName: "grdb_migrations")
+```
+
+The inspection methods read that table from any read or write transaction, or from a connection
+lent outside one: `appliedIdentifiers(in:)`, `appliedMigrations(in:)`,
+`completedMigrations(in:)`, `hasCompletedMigrations(in:)`, and `hasBeenSuperseded(in:)`. A
+database no migrator has run on has applied nothing, and reading it creates no table.
+
+### Several processes
+
+Processes that share a database may all migrate it as they launch. Each migration's transaction
+checks again, under the write lock, whether another process applied it in the meantime, so every
+migration runs once. A transaction that finds the database busy is retried a few times, and
+`busyTimeout` sets how long each attempt waits for the lock, restoring the connection's own timeout
+afterwards:
+
+```swift
+migrator.busyTimeout = .limit(.seconds(30))
+```
+
+A migration applied by a newer build of the application is tolerated: an older build migrates the
+ones it knows and leaves the rest alone. `hasBeenSuperseded(in:)` tells the older build that it is
+running against a schema it does not fully know:
+
+```swift
+if try await database.read({ try migrator.hasBeenSuperseded(in: $0) }) {
+  showUpdateRequiredAlert()
+}
+```
+
+The migrations a run commits are announced together once it ends, so observations in other
+processes fetch again after the schema they read has changed.
 
 ## Database regions
 

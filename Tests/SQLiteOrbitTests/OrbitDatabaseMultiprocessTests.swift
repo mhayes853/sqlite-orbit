@@ -185,6 +185,20 @@
     }
 
     @Test
+    func migratingFromManyProcessesAppliesEachMigrationOnce() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "migrate")
+      defer { harness.cleanup() }
+      let migratorCount = 4
+      let migrators = try (0..<migratorCount).map { try harness.spawn("migrate", index: $0) }
+      try await harness.waitUntilReady(migratorCount)
+
+      try harness.start()
+
+      for migrator in migrators { try await harness.waitForSuccessfulExit(migrator) }
+      try await expectContendedMigrationsAppliedOnce(in: try harness.database())
+    }
+
+    @Test
     func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
       // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
       // holder that crashes must not leave the lock stuck for whoever opens next.
@@ -247,6 +261,12 @@
           )
         }
       }
+
+    case "migrate":
+      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      try touch(ready)
+      try await waitForFile(start)
+      try await makeContendedMigrator().migrate(database)
 
     case "hold":
       let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
