@@ -93,9 +93,11 @@ the way it always did.
 
 ## Using your own SQLite build
 
-The core module imports no SQLite header. Every call goes through `SQLiteLibrary`, a struct of
-closures bound to SQLite's entry points, so the package can drive a build it was never linked
-against — SQLCipher, a custom amalgamation, or one with extensions compiled in:
+The core module imports no SQLite header. Every call goes through `SQLiteLibrary`, whose entry
+points are grouped into runtime, connection, statement, binding, and column APIs. Optional groups
+for authorization, functions, collations, and encryption are `nil` when a build cannot provide
+them. The package can therefore drive a build it was never linked against — SQLCipher, a custom
+amalgamation, or one with extensions compiled in:
 
 ```swift
 let library = #sqliteLibrary(module: "MySQLite")
@@ -104,10 +106,22 @@ var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitDatabase(path: databasePath, configuration: configuration)
 ```
 
-Set `encryption: true` when the module also exports SQLite's codec entry points, such as SQLCipher:
+The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
+exports. `.standard` is the default; add encryption for a module such as SQLCipher:
 
 ```swift
-let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
+let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption])
+```
+
+The option set only controls macro expansion—it is not retained as runtime capability state. Code
+checks the optional operation it needs. For example, a custom library can implement trusted-schema
+control in whatever way its engine supports; the borrowed `SQLiteConnectionContext` exposes the
+raw connection and can execute setup SQL through the same library:
+
+```swift
+library.connection.trustedSchema = SQLiteLibrary.TrustedSchemaControl { context, enabled in
+  try context.execute("PRAGMA trusted_schema = \(enabled ? 1 : 0)")
+}
 ```
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
@@ -157,8 +171,7 @@ explicitly:
 
 - Missing authorizer callbacks broaden observed reads and writes to the whole database, and every
   write invalidates the statement cache. This loses precision, not correctness.
-- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept;
-  libraries without that pragma can opt into a `sqlite3_stmt_readonly` fallback.
+- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
 - Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
   multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
   unimplemented entry point. Use `OrbitDatabase(localPath:)` for a pooled database confined to one
@@ -167,9 +180,9 @@ explicitly:
   cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
   there is no safe client-side substitute for native early finalization.
 
-These decisions are represented by `SQLiteLibrary.capabilities`, so support can be enabled one
-feature at a time as Turso implements it rather than by adding engine-specific conditionals
-throughout the driver.
+The unavailable operations are `nil` in `SQLiteLibrary.turso`, while its `fileSharing` value is
+`.singleProcess`. As Turso fills in its compatibility API, each operation can be enabled directly
+without engine-specific branches throughout the driver.
 
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
@@ -183,9 +196,9 @@ try await database.read { transaction in
   let library = transaction.sqlite
   var statement: OpaquePointer?
   _ = "SELECT 1".withCString {
-    library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+    library.statement.prepare(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
   }
-  defer { _ = library.finalize(statement) }
+  defer { _ = library.statement.finalize(statement) }
   // ...
 }
 ```
@@ -304,8 +317,8 @@ in yourself:
 ```swift
 var library = myCipherBuild
 library.encryption = SQLiteLibrary.Encryption(
-  key_v2: sqlite3_key_v2,
-  rekey_v2: sqlite3_rekey_v2
+  key: sqlite3_key_v2,
+  rekey: sqlite3_rekey_v2
 )
 
 var configuration = SQLiteConfiguration(library: library)
@@ -332,7 +345,7 @@ reach material you hold: the `String` a passphrase was read from stays yours to 
 configuration.connectionSetups.append(
   SQLiteConnectionSetup { connection, library in
     key.withUnsafeBytes { bytes in
-      library.encryption!.rekey_v2(connection, "main", bytes.baseAddress, Int32(bytes.count))
+      library.encryption!.rekey(connection, "main", bytes.baseAddress, Int32(bytes.count))
     }
   }
 )

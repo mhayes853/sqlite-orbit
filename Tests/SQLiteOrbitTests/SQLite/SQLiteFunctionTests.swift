@@ -374,17 +374,17 @@
     let writtenResults = Lock(0)
 
     var configuration = SQLiteConfiguration.default
-    configuration.library.user_data = { context in
+    configuration.library.functions!.context.userData = { context in
       userData.withLock { $0 += 1 }
-      return builtInTestLibrary.user_data(context)
+      return builtInTestLibrary.functions!.context.userData(context)
     }
-    configuration.library.value_text = { value in
+    configuration.library.functions!.argument.text = { value in
       readArguments.withLock { $0 += 1 }
-      return builtInTestLibrary.value_text(value)
+      return builtInTestLibrary.functions!.argument.text(value)
     }
-    configuration.library.result_text = { context, text, count in
+    configuration.library.functions!.result.text = { context, text, count in
       writtenResults.withLock { $0 += 1 }
-      builtInTestLibrary.result_text(context, text, count)
+      builtInTestLibrary.functions!.result.text(context, text, count)
     }
     configuration.register(function: $repeated)
 
@@ -403,9 +403,9 @@
   func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
     let aggregateContexts = Lock(0)
     var configuration = SQLiteConfiguration.default
-    configuration.library.aggregate_context = { context, size in
+    configuration.library.functions!.context.aggregate = { context, size in
       aggregateContexts.withLock { $0 += 1 }
-      return builtInTestLibrary.aggregate_context(context, size)
+      return builtInTestLibrary.functions!.context.aggregate!(context, size)
     }
     configuration.register(function: $longestTitle)
 

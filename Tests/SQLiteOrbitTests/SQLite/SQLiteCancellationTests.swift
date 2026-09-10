@@ -26,15 +26,15 @@
   private func observedLibrary(steps: CallCounter, interrupts: CallCounter) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
-    library.step = { statement in
-      if let sql = base.sql(statement), String(cString: sql).contains(endlessMarker) {
+    library.statement.step = { statement in
+      if let sql = base.statement.sql(statement), String(cString: sql).contains(endlessMarker) {
         steps.record()
       }
-      return base.step(statement)
+      return base.statement.step(statement)
     }
-    library.interrupt = { connection in
+    library.connection.interrupt = { connection in
       interrupts.record()
-      base.interrupt(connection)
+      base.connection.interrupt(connection)
     }
     return library
   }
@@ -215,21 +215,21 @@
     let probe = DelayedInterruptProbe()
     let base = builtInTestLibrary
     var library = base
-    library.step = { statement in
-      let sql = base.sql(statement).map(String.init(cString:)) ?? ""
+    library.statement.step = { statement in
+      let sql = base.statement.sql(statement).map(String.init(cString:)) ?? ""
       if sql.contains("first cancellation target") {
         probe.enterFirstStep()
-        let code = base.step(statement)
+        let code = base.statement.step(statement)
         if code == SQLiteResultCode.done.rawValue {
           probe.finishFirstQuery()
         }
         return code
       }
-      return base.step(statement)
+      return base.statement.step(statement)
     }
-    library.interrupt = { connection in
+    library.connection.interrupt = { connection in
       probe.delayInterrupt()
-      base.interrupt(connection)
+      base.connection.interrupt(connection)
     }
 
     var configuration = SQLiteConfiguration.default

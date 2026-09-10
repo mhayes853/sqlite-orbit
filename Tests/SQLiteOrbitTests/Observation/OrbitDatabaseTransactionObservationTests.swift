@@ -141,7 +141,7 @@
       let subscription = try driver.subscribe(transactionObserver: observer)
 
       let explicitRegion = try await driver.read { transaction in
-        let code = transaction.sqlite.set_authorizer(transaction.sqliteConnection, nil, nil)
+        let code = transaction.sqlite.authorization!.install(transaction.sqliteConnection, nil, nil)
         #expect(code == SQLiteResultCode.ok.rawValue)
 
         let region = try OrbitDatabaseRegion(QueryFragment("SELECT 1"), in: transaction)

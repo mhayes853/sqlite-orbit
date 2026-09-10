@@ -6,30 +6,30 @@
 /// let library = #sqliteLibrary()
 /// ```
 ///
-/// Supply a module name when its functions need to be qualified. Set `encryption` when that build
-/// provides SQLite's codec entry points too:
+/// Supply a module name when its functions need to be qualified. Use `apis` to select the optional
+/// entry-point groups the build implements faithfully:
 ///
 /// ```swift
-/// let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
+/// let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption])
 /// ```
 ///
-/// Both arguments must be literals. The macro supplies ``SQLiteLibrary/transientDestructor`` to
-/// the text and blob functions whose buffers must be copied.
+/// Arguments must be literals. The macro supplies ``SQLiteLibrary/transientDestructor`` to the
+/// text and blob functions whose buffers must be copied.
 ///
 /// - Parameters:
-///   - encryption: Whether to include `sqlite3_key_v2` and `sqlite3_rekey_v2`.
+///   - apis: Optional API groups to include in the generated library.
 @freestanding(expression)
 public macro sqliteLibrary(
-  encryption: Bool = false
+  apis: SQLiteLibrary.APIs = .standard
 ) -> SQLiteLibrary = #externalMacro(module: "SQLiteOrbitMacros", type: "SQLiteLibraryMacro")
 
 /// Creates a ``SQLiteLibrary`` from the SQLite functions in a named Swift module.
 ///
 /// - Parameters:
 ///   - module: The Swift module containing the SQLite functions.
-///   - encryption: Whether to include `sqlite3_key_v2` and `sqlite3_rekey_v2`.
+///   - apis: Optional API groups to include in the generated library.
 @freestanding(expression)
 public macro sqliteLibrary(
   module: String,
-  encryption: Bool = false
+  apis: SQLiteLibrary.APIs = .standard
 ) -> SQLiteLibrary = #externalMacro(module: "SQLiteOrbitMacros", type: "SQLiteLibraryMacro")

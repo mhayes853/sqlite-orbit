@@ -246,16 +246,16 @@
     var library: SQLiteLibrary {
       let base = builtInTestLibrary
       var library = base
-      library.open_v2 = { path, connection, flags, vfs in
-        let code = base.open_v2(path, connection, flags, vfs)
+      library.connection.open = { path, connection, flags, vfs in
+        let code = base.connection.open(path, connection, flags, vfs)
         if code == SQLiteResultCode.ok.rawValue {
           self.state.withLock { $0.opened += 1 }
         }
         return code
       }
-      library.close_v2 = { connection in
+      library.connection.close = { connection in
         self.state.withLock { $0.closed += 1 }
-        return base.close_v2(connection)
+        return base.connection.close(connection)
       }
       return library
     }
@@ -478,9 +478,11 @@
     let base = builtInTestLibrary
     let isArmed = Lock(true)
     var configuration = SQLiteConfiguration.default
-    configuration.library.step = { statement in
-      let sql = base.sql(statement).map { String(cString: $0) }
-      guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else { return base.step(statement) }
+    configuration.library.statement.step = { statement in
+      let sql = base.statement.sql(statement).map { String(cString: $0) }
+      guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else {
+        return base.statement.step(statement)
+      }
       isArmed.withLock { $0 = false }
       return SQLiteResultCode.interrupt.rawValue
     }

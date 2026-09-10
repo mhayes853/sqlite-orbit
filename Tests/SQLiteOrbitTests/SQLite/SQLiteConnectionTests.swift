@@ -15,18 +15,18 @@
   private func countingLibrary(_ counters: SQLiteCallCounters) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
-    library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
-      let code = base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
+    library.statement.prepare = { connection, sql, byteCount, flags, statement, tail in
+      let code = base.statement.prepare(connection, sql, byteCount, flags, statement, tail)
       if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
         counters.prepared.withLock { $0 += 1 }
       }
       return code
     }
-    library.finalize = { statement in
+    library.statement.finalize = { statement in
       if statement != nil {
         counters.finalized.withLock { $0 += 1 }
       }
-      return base.finalize(statement)
+      return base.statement.finalize(statement)
     }
     return library
   }
@@ -35,12 +35,12 @@
     let library = connection.library
     var statement: OpaquePointer?
     let code = sql.withCString {
-      library.pointee.prepare_v3(connection.pointer, $0, -1, 0, &statement, nil)
+      library.pointee.statement.prepare(connection.pointer, $0, -1, 0, &statement, nil)
     }
     try #require(code == SQLiteResultCode.ok.rawValue)
-    defer { _ = library.pointee.finalize(statement) }
-    try #require(library.pointee.step(statement) == SQLiteResultCode.row.rawValue)
-    return library.pointee.column_int64(statement, 0)
+    defer { _ = library.pointee.statement.finalize(statement) }
+    try #require(library.pointee.statement.step(statement) == SQLiteResultCode.row.rawValue)
+    return library.pointee.column.int64(statement, 0)
   }
 
   @Test
@@ -298,10 +298,10 @@
   func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
     let seenVersion = Lock<Int32?>(nil)
     var configuration = SQLiteConfiguration.default
-    configuration.library.libversion_number = { 123_456 }
+    configuration.library.runtime.versionNumber = { 123_456 }
     configuration.connectionSetups = [
       SQLiteConnectionSetup { _, library in
-        seenVersion.withLock { $0 = library.libversion_number() }
+        seenVersion.withLock { $0 = library.runtime.versionNumber() }
         return SQLiteResultCode.ok.rawValue
       }
     ]

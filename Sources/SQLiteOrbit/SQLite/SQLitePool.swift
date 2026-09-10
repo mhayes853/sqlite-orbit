@@ -97,9 +97,7 @@ public final class SQLitePool: OrbitObservableDatabase {
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
     // the raw connection into an error rather than a surprise.
     var readerConfiguration = configuration
-    if configuration.library.capabilities.contains(.queryOnlyControl) {
-      readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
-    }
+    readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
     let readers = try (0..<max(1, configuration.readerCount))
       .map { _ in
         try SQLiteConnection(

@@ -55,20 +55,11 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
-    observations: OrbitDatabaseTransactionObservationContext,
-    requiresReadOnlyStatement: Bool
+    observations: OrbitDatabaseTransactionObservationContext
   ) throws {
     let (sql, bindings) = prepareQuery(query)
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     let statement = preparedStatement.pointer
-    if requiresReadOnlyStatement && library.pointee.stmt_readonly(statement) == 0 {
-      if cached {
-        statements.checkIn(preparedStatement, sql: sql)
-      } else {
-        _ = library.pointee.finalize(statement)
-      }
-      throw SQLiteReadOnlyStatementError(sql: sql)
-    }
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)
@@ -78,7 +69,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       if cached {
         statements.checkIn(preparedStatement, sql: sql)
       } else {
-        _ = library.pointee.finalize(statement)
+        _ = library.pointee.statement.finalize(statement)
       }
       throw error
     }
@@ -97,7 +88,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     if isCached {
       statements.checkIn(preparedStatement, sql: sql)
     } else {
-      _ = library.pointee.finalize(statement)
+      _ = library.pointee.statement.finalize(statement)
     }
   }
 
@@ -117,7 +108,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       // the schema. Its callbacks cover both the retired and replacement programs, so prepare a
       // fresh copy to capture only the replacement's metadata. Falling back to their union is safe.
       let (code, authorizations) = authorizer.recordingAuthorizations {
-        library.pointee.step(statement)
+        library.pointee.statement.step(statement)
       }
       if !authorizations.isEmpty {
         statements.invalidate()
@@ -136,7 +127,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       publishAccesses()
       return try row(for: code)
     }
-    return try row(for: library.pointee.step(statement))
+    return try row(for: library.pointee.statement.step(statement))
   }
 
   private mutating func publishAccesses() {

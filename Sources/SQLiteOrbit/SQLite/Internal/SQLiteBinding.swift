@@ -14,28 +14,28 @@ func bind(
       guard let baseAddress = buffer.baseAddress else {
         var empty: UInt8 = 0
         return withUnsafeBytes(of: &empty) {
-          library.pointee.bind_blob(statement, index, $0.baseAddress, 0)
+          library.pointee.binding.blob(statement, index, $0.baseAddress, 0)
         }
       }
-      return library.pointee.bind_blob(statement, index, baseAddress, Int32(buffer.count))
+      return library.pointee.binding.blob(statement, index, baseAddress, Int32(buffer.count))
     }
   case .bool(let bool):
-    code = library.pointee.bind_int64(statement, index, bool ? 1 : 0)
+    code = library.pointee.binding.int64(statement, index, bool ? 1 : 0)
   case .date(let date):
     code = bindText(date.orbitISO8601String, to: statement, at: index, library: library)
   case .double(let double):
-    code = library.pointee.bind_double(statement, index, double)
+    code = library.pointee.binding.double(statement, index, double)
   case .int(let integer):
-    code = library.pointee.bind_int64(statement, index, integer)
+    code = library.pointee.binding.int64(statement, index, integer)
   case .null:
-    code = library.pointee.bind_null(statement, index)
+    code = library.pointee.binding.null(statement, index)
   case .text(let string):
     code = bindText(string, to: statement, at: index, library: library)
   case .uint(let integer):
     guard integer <= UInt64(Int64.max) else {
       throw OrbitDatabaseIntegerOverflowError(value: integer)
     }
-    code = library.pointee.bind_int64(statement, index, Int64(integer))
+    code = library.pointee.binding.int64(statement, index, Int64(integer))
   case .uuid(let uuid):
     code = bindText(uuid.uuidString.lowercased(), to: statement, at: index, library: library)
   case .invalid(let error):
@@ -57,10 +57,10 @@ private func bindText(
     guard let baseAddress = buffer.baseAddress else {
       // An empty string has no storage to point at, and a null pointer would bind SQL NULL rather
       // than empty text.
-      return "".withCString { library.pointee.bind_text(statement, index, $0, 0) }
+      return "".withCString { library.pointee.binding.text(statement, index, $0, 0) }
     }
     return baseAddress.withMemoryRebound(to: CChar.self, capacity: buffer.count) {
-      library.pointee.bind_text(statement, index, $0, Int32(buffer.count))
+      library.pointee.binding.text(statement, index, $0, Int32(buffer.count))
     }
   }
 }

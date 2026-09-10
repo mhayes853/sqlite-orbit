@@ -72,7 +72,7 @@ public struct SQLiteResultCode: RawRepresentable, Hashable, Sendable {
 /// The flags that describe how a database is opened.
 ///
 /// These are the third argument to `sqlite3_open_v2`, so they matter to a caller reaching for
-/// ``SQLiteLibrary/open_v2`` directly.
+/// ``SQLiteLibrary/Connection/open`` directly.
 ///
 /// ```swift
 /// let flags: SQLiteOpenFlags = [.readWrite, .create, .noMutex]
@@ -113,7 +113,7 @@ public struct SQLiteOpenFlags: OptionSet, Hashable, Sendable {
 /// These are the fourth argument to `sqlite3_prepare_v3`.
 ///
 /// ```swift
-/// _ = library.prepare_v3(connection, sql, -1, SQLitePrepareFlags.persistent.rawValue, &stmt, nil)
+/// _ = library.statement.prepare(connection, sql, -1, SQLitePrepareFlags.persistent.rawValue, &stmt, nil)
 /// ```
 public struct SQLitePrepareFlags: OptionSet, Hashable, Sendable {
   /// The bits SQLite is handed.
@@ -137,10 +137,10 @@ public struct SQLitePrepareFlags: OptionSet, Hashable, Sendable {
 
 /// The datatype of a value in a result row.
 ///
-/// SQLite calls these storage classes, and they are what ``SQLiteLibrary/column_type`` returns.
+/// SQLite calls these storage classes, and they are what ``SQLiteLibrary/Column/type`` returns.
 ///
 /// ```swift
-/// if library.column_type(statement, 0) == SQLiteColumnType.null.rawValue { ... }
+/// if library.column.type(statement, 0) == SQLiteColumnType.null.rawValue { ... }
 /// ```
 public struct SQLiteColumnType: RawRepresentable, Hashable, Sendable {
   /// The number SQLite reports for this storage class.
@@ -168,11 +168,11 @@ public struct SQLiteColumnType: RawRepresentable, Hashable, Sendable {
 /// The text encoding and behavior flags accepted when registering a custom function.
 ///
 /// These are the fourth argument to `sqlite3_create_function_v2`, so they matter to a caller
-/// reaching for ``SQLiteLibrary/create_function_v2`` directly.
+/// reaching for ``SQLiteLibrary/Functions/Registration/scalar`` directly.
 ///
 /// ```swift
 /// let flags: SQLiteFunctionFlags = [.utf8, .deterministic]
-/// _ = library.create_function_v2(
+/// _ = library.functions!.registration.scalar!(
 ///   connection, "double", 1, flags.rawValue, nil, xFunc, nil, nil, nil
 /// )
 /// ```

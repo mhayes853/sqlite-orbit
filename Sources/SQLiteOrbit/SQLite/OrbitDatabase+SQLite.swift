@@ -37,10 +37,10 @@
       coordination: UnixDatagramIPCTransport.Configuration = .default,
       onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
     ) throws {
-      guard configuration.library.capabilities.contains(.multiprocessFileAccess) else {
+      guard case .multipleProcesses = configuration.library.fileSharing else {
         throw SQLiteFeatureUnavailableError(
           libraryName: configuration.library.name,
-          capability: .multiprocessFileAccess
+          feature: "multiprocess file sharing"
         )
       }
       let identifier = id ?? .forDatabase(path: path)

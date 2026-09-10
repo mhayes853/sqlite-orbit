@@ -6,26 +6,27 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   collation.name.withCString { name in
-    library.create_collation_v2(
-      connection,
-      name,
-      SQLiteFunctionFlags.utf8.rawValue,
-      Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation),
-      { box, lhsCount, lhs, rhsCount, rhs in
-        // A comparator is handed its user data directly, so it is the one callback that needs
-        // nothing from the build that called it.
-        let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
-        switch collation.compare(
-          UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
-          UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
-        ) {
-        case .ascending: return -1
-        case .same: return 0
-        case .descending: return 1
-        }
-      },
-      { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
-    )
+    library.collation!
+      .create(
+        connection,
+        name,
+        SQLiteFunctionFlags.utf8.rawValue,
+        Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation),
+        { box, lhsCount, lhs, rhsCount, rhs in
+          // A comparator is handed its user data directly, so it is the one callback that needs
+          // nothing from the build that called it.
+          let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
+          switch collation.compare(
+            UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
+            UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
+          ) {
+          case .ascending: return -1
+          case .same: return 0
+          case .descending: return 1
+          }
+        },
+        { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
+      )
   }
 }
 
@@ -35,7 +36,7 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   function.name.withCString { name in
-    library.create_function_v2(
+    library.functions!.registration.scalar!(
       connection,
       name,
       Int32(function.argumentCount ?? -1),
@@ -43,7 +44,10 @@ func orbitInstall(
       Box.retain(function as any ScalarDatabaseFunction),
       { context, argumentCount, arguments in
         let library = SQLiteCurrentLibrary.current
-        let function = Box<any ScalarDatabaseFunction>.value(in: library.pointee.user_data(context))
+        let function = Box<any ScalarDatabaseFunction>
+          .value(
+            in: library.pointee.functions!.context.userData(context)
+          )
         var decoder = SQLiteFunctionDecoder(
           argumentCount: argumentCount,
           arguments: arguments,
@@ -68,7 +72,7 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   function.name.withCString { name in
-    library.create_function_v2(
+    library.functions!.registration.aggregate!(
       connection,
       name,
       Int32(function.argumentCount ?? -1),
@@ -151,7 +155,7 @@ private final class AggregateFunctionInvocation {
     in context: OpaquePointer?,
     library: UnsafePointer<SQLiteLibrary>
   ) -> AggregateFunctionInvocation {
-    let slot = library.pointee.aggregate_context(
+    let slot = library.pointee.functions!.context.aggregate!(
       context,
       Int32(MemoryLayout<Unmanaged<AggregateFunctionInvocation>>.size)
     )!
@@ -159,7 +163,7 @@ private final class AggregateFunctionInvocation {
     if let invocation = slot.pointee {
       return invocation.takeUnretainedValue()
     }
-    let userData = library.pointee.user_data(context)
+    let userData = library.pointee.functions!.context.userData(context)
     let function = Box<any AggregateDatabaseFunction>.value(in: userData)
     let invocation = Unmanaged.passRetained(AggregateFunctionInvocation(function))
     slot.pointee = invocation

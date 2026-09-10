@@ -143,9 +143,9 @@
       let installationCount = Lock(0)
       let base = builtInTestLibrary
       var library = base
-      library.set_authorizer = { connection, callback, context in
+      library.authorization!.install = { connection, callback, context in
         installationCount.withLock { $0 += 1 }
-        return base.set_authorizer(connection, callback, context)
+        return base.authorization!.install(connection, callback, context)
       }
       let database = try regionDatabase(configuration: SQLiteConfiguration(library: library))
 

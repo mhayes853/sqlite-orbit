@@ -207,11 +207,17 @@
     var configuration = SQLiteConfiguration.default
     configuration.library = base
     // Only the fetches count; the transaction's own BEGIN and ROLLBACK are prepared uncached.
-    configuration.library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
+    configuration.library.statement.prepare = {
+      connection,
+      sql,
+      byteCount,
+      flags,
+      statement,
+      tail in
       if let sql, String(cString: sql).hasPrefix("SELECT") {
         counters.withLock { $0 += 1 }
       }
-      return base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
+      return base.statement.prepare(connection, sql, byteCount, flags, statement, tail)
     }
 
     let connection = try openTestConnection(configuration: configuration)
@@ -236,11 +242,17 @@
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
-    configuration.library.prepare_v3 = { connection, sql, byteCount, flags, statement, tail in
+    configuration.library.statement.prepare = {
+      connection,
+      sql,
+      byteCount,
+      flags,
+      statement,
+      tail in
       if let sql, String(cString: sql).hasPrefix("SELECT title FROM current_items") {
         preparations.withLock { $0 += 1 }
       }
-      return base.prepare_v3(connection, sql, byteCount, flags, statement, tail)
+      return base.statement.prepare(connection, sql, byteCount, flags, statement, tail)
     }
 
     let connection = try openTestConnection(configuration: configuration)
@@ -288,12 +300,12 @@
       var statement: OpaquePointer?
       let code = "SELECT count(*) FROM items"
         .withCString {
-          library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+          library.statement.prepare(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
         }
       try #require(code == SQLiteResultCode.ok.rawValue)
-      defer { _ = library.finalize(statement) }
-      try #require(library.step(statement) == SQLiteResultCode.row.rawValue)
-      return library.column_int64(statement, 0)
+      defer { _ = library.statement.finalize(statement) }
+      try #require(library.statement.step(statement) == SQLiteResultCode.row.rawValue)
+      return library.column.int64(statement, 0)
     }
     #expect(count == 1)
   }

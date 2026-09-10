@@ -27,7 +27,7 @@ struct SQLiteFunctionDecoder: QueryDecoder {
       )
     }
     let value = arguments?[Int(currentIndex)]
-    switch SQLiteColumnType(rawValue: library.pointee.value_type(value)) {
+    switch SQLiteColumnType(rawValue: library.pointee.functions!.argument.type(value)) {
     case .null:
       currentIndex += 1
       return nil
@@ -42,23 +42,23 @@ struct SQLiteFunctionDecoder: QueryDecoder {
   mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
     guard let value = try argument(.blob, for: columnType) else { return nil }
     // A zero-length blob has no buffer to point at.
-    guard let blob = library.pointee.value_blob(value) else { return [] }
-    let count = Int(library.pointee.value_bytes(value))
+    guard let blob = library.pointee.functions!.argument.blob(value) else { return [] }
+    let count = Int(library.pointee.functions!.argument.byteCount(value))
     return [UInt8](UnsafeRawBufferPointer(start: blob, count: count))
   }
 
   mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-    try argument(.float, for: columnType).map(library.pointee.value_double)
+    try argument(.float, for: columnType).map(library.pointee.functions!.argument.double)
   }
 
   mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-    try argument(.integer, for: columnType).map(library.pointee.value_int64)
+    try argument(.integer, for: columnType).map(library.pointee.functions!.argument.int64)
   }
 
   mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
     // A zero-length text value has no buffer behind it, which is not the same as SQL NULL.
     try argument(.text, for: columnType)
-      .map { library.pointee.value_text($0).map(String.init(cString:)) ?? "" }
+      .map { library.pointee.functions!.argument.text($0).map(String.init(cString:)) ?? "" }
   }
 
   mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
@@ -112,32 +112,32 @@ extension QueryBinding {
   // The table's result entry points copy what they are handed, so nothing here has to outlive the
   // call the way `SQLITE_TRANSIENT` would otherwise demand.
   func result(_ context: OpaquePointer?, library: UnsafePointer<SQLiteLibrary>) {
-    let library = library.pointee
+    let result = library.pointee.functions!.result
     switch self {
     case .blob(let blob):
       let bytes = Array(blob)
-      bytes.withUnsafeBytes { library.result_blob(context, $0.baseAddress, Int32($0.count)) }
+      bytes.withUnsafeBytes { result.blob(context, $0.baseAddress, Int32($0.count)) }
     case .bool(let bool):
-      library.result_int64(context, bool ? 1 : 0)
+      result.int64(context, bool ? 1 : 0)
     case .date(let date):
-      date.orbitISO8601String.withCString { library.result_text(context, $0, -1) }
+      date.orbitISO8601String.withCString { result.text(context, $0, -1) }
     case .double(let double):
-      library.result_double(context, double)
+      result.double(context, double)
     case .int(let int):
-      library.result_int64(context, int)
+      result.int64(context, int)
     case .null:
-      library.result_null(context)
+      result.null(context)
     case .text(let text):
-      text.withCString { library.result_text(context, $0, -1) }
+      text.withCString { result.text(context, $0, -1) }
     case .uint(let uint) where uint <= UInt64(Int64.max):
-      library.result_int64(context, Int64(uint))
+      result.int64(context, Int64(uint))
     case .uint(let uint):
       "Unsigned integer \(uint) overflows Int64.max"
-        .withCString { library.result_error(context, $0, -1) }
+        .withCString { result.error(context, $0, -1) }
     case .uuid(let uuid):
-      uuid.uuidString.lowercased().withCString { library.result_text(context, $0, -1) }
+      uuid.uuidString.lowercased().withCString { result.text(context, $0, -1) }
     case .invalid(let error):
-      "\(error.underlyingError)".withCString { library.result_error(context, $0, -1) }
+      "\(error.underlyingError)".withCString { result.error(context, $0, -1) }
     }
   }
 }

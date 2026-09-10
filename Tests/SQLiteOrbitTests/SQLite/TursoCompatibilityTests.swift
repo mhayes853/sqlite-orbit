@@ -64,11 +64,11 @@
     try handle.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
 
     let read = try handle.statements.prepare("SELECT title FROM notes")
-    defer { _ = handle.library.pointee.finalize(read.pointer) }
+    defer { _ = handle.library.pointee.statement.finalize(read.pointer) }
     #expect(read.readRegion.isFullDatabase)
 
     let write = try handle.statements.prepare("INSERT INTO notes (title) VALUES ('hello')")
-    defer { _ = handle.library.pointee.finalize(write.pointer) }
+    defer { _ = handle.library.pointee.statement.finalize(write.pointer) }
     #expect(write.changedRegion.isFullDatabase)
     #expect(write.invalidatesStatementCache)
   }
