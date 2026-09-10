@@ -17,7 +17,7 @@ actor SQLiteConnection {
     // closure be shared without an unchecked conformance on `OpaquePointer`. It stays valid
     // because the closure and the handle are released together.
     let address = UInt(bitPattern: handle.pointer)
-    let entryPoint = handle.library.pointee.connection.interrupt
+    let entryPoint = handle.library.pointee.connections.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
     self.executor = SQLiteConnectionExecutor(path: path)
     self.handle = handle

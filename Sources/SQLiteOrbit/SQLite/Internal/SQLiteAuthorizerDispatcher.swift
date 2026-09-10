@@ -61,9 +61,9 @@ final class SQLiteAuthorizerDispatcher {
     on connection: OpaquePointer,
     using library: UnsafePointer<SQLiteLibrary>
   ) throws {
-    guard let authorization = library.pointee.authorization else { return }
+    guard let authorizer = library.pointee.authorizer else { return }
     let context = Unmanaged.passUnretained(self).toOpaque()
-    let code = authorization.install(connection, Self.callback, context)
+    let code = authorizer.install(connection, Self.callback, context)
     guard code == SQLiteResultCode.ok.rawValue else {
       throw SQLiteError.reported(
         by: library.pointee,

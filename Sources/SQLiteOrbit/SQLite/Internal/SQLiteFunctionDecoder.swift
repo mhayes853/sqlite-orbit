@@ -4,17 +4,17 @@ import StructuredQueriesSQLite
 struct SQLiteFunctionDecoder: QueryDecoder {
   let argumentCount: Int32
   let arguments: UnsafeMutablePointer<OpaquePointer?>?
-  let library: UnsafePointer<SQLiteLibrary>
+  let api: SQLiteLibrary.FunctionCallbacks.Argument
   var currentIndex: Int32 = 0
 
   init(
     argumentCount: Int32,
     arguments: UnsafeMutablePointer<OpaquePointer?>?,
-    library: UnsafePointer<SQLiteLibrary>
+    api: SQLiteLibrary.FunctionCallbacks.Argument
   ) {
     self.argumentCount = argumentCount
     self.arguments = arguments
-    self.library = library
+    self.api = api
   }
 
   private mutating func argument(
@@ -27,7 +27,7 @@ struct SQLiteFunctionDecoder: QueryDecoder {
       )
     }
     let value = arguments?[Int(currentIndex)]
-    switch SQLiteColumnType(rawValue: library.pointee.functions!.argument.type(value)) {
+    switch SQLiteColumnType(rawValue: api.type(value)) {
     case .null:
       currentIndex += 1
       return nil
@@ -42,23 +42,23 @@ struct SQLiteFunctionDecoder: QueryDecoder {
   mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
     guard let value = try argument(.blob, for: columnType) else { return nil }
     // A zero-length blob has no buffer to point at.
-    guard let blob = library.pointee.functions!.argument.blob(value) else { return [] }
-    let count = Int(library.pointee.functions!.argument.byteCount(value))
+    guard let blob = api.blob(value) else { return [] }
+    let count = Int(api.byteCount(value))
     return [UInt8](UnsafeRawBufferPointer(start: blob, count: count))
   }
 
   mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-    try argument(.float, for: columnType).map(library.pointee.functions!.argument.double)
+    try argument(.float, for: columnType).map(api.double)
   }
 
   mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-    try argument(.integer, for: columnType).map(library.pointee.functions!.argument.int64)
+    try argument(.integer, for: columnType).map(api.int64)
   }
 
   mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
     // A zero-length text value has no buffer behind it, which is not the same as SQL NULL.
     try argument(.text, for: columnType)
-      .map { library.pointee.functions!.argument.text($0).map(String.init(cString:)) ?? "" }
+      .map { api.text($0).map(String.init(cString:)) ?? "" }
   }
 
   mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
@@ -111,8 +111,7 @@ struct MissingDatabaseFunctionArgumentError: Error, CustomStringConvertible {
 extension QueryBinding {
   // The table's result entry points copy what they are handed, so nothing here has to outlive the
   // call the way `SQLITE_TRANSIENT` would otherwise demand.
-  func result(_ context: OpaquePointer?, library: UnsafePointer<SQLiteLibrary>) {
-    let result = library.pointee.functions!.result
+  func result(_ context: OpaquePointer?, using result: SQLiteLibrary.FunctionCallbacks.Result) {
     switch self {
     case .blob(let blob):
       let bytes = Array(blob)

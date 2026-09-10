@@ -1,3 +1,5 @@
+import StructuredQueries
+
 struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
@@ -40,7 +42,7 @@ struct SQLiteHandle: ~Copyable {
 
     var pointer: OpaquePointer?
     let code = path.sqlitePath.withCString {
-      libraryStorage.pointee.connection.open($0, &pointer, flags.rawValue, nil)
+      libraryStorage.pointee.connections.open($0, &pointer, flags.rawValue, nil)
     }
     guard code == SQLiteResultCode.ok.rawValue, let pointer else {
       // SQLite hands back a connection even for most failed opens, and it is the caller's to close.
@@ -51,7 +53,7 @@ struct SQLiteHandle: ~Copyable {
         sql: nil
       )
       if let pointer {
-        _ = libraryStorage.pointee.connection.close(pointer)
+        _ = libraryStorage.pointee.connections.close(pointer)
       }
       libraryStorage.deinitialize(count: 1)
       libraryStorage.deallocate()
@@ -72,7 +74,7 @@ struct SQLiteHandle: ~Copyable {
   deinit {
     // Statements are finalized before the table allocation goes away, because finalizing needs it.
     statements.finalizeAll()
-    _ = libraryStorage.pointee.connection.close(pointer)
+    _ = libraryStorage.pointee.connections.close(pointer)
     libraryStorage.deinitialize(count: 1)
     libraryStorage.deallocate()
   }
@@ -83,25 +85,25 @@ struct SQLiteHandle: ~Copyable {
     // An encrypted database is unreadable until it is keyed, so this comes before every other
     // thing the connection does rather than merely before the first statement.
     try unlock(with: configuration.key)
-    _ = libraryStorage.pointee.connection.setExtendedResultCodes(pointer, 1)
-    _ = libraryStorage.pointee.connection.setBusyTimeout(
+    _ = libraryStorage.pointee.connections.setExtendedResultCodes(pointer, 1)
+    _ = libraryStorage.pointee.connections.setBusyTimeout(
       pointer,
       configuration.busyTimeoutMilliseconds
     )
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
-    if let trustedSchema = libraryStorage.pointee.connection.trustedSchema {
-      let context = SQLiteConnectionContext(connection: pointer, library: library)
-      try trustedSchema(context, enabled: configuration.isTrustedSchemaEnabled)
+    let connection = SQLiteConnectionAccess(handle: self)
+    if let trustedSchema = libraryStorage.pointee.trustedSchema {
+      try trustedSchema(connection, configuration.isTrustedSchemaEnabled)
     } else if !configuration.isTrustedSchemaEnabled {
       throw SQLiteFeatureUnavailableError(
         libraryName: libraryStorage.pointee.name,
-        feature: "trusted schema control"
+        feature: .trustedSchema
       )
     }
     // A setup is handed the library this connection was opened through, so whether it can run
     // against that build is its own question to answer rather than one asked on its behalf here.
     for setup in configuration.connectionSetups {
-      try setup(pointer, library: libraryStorage.pointee)
+      try setup(connection)
     }
     for sql in configuration.setupSQL {
       try execute(sql)
@@ -201,7 +203,7 @@ struct SQLiteHandle: ~Copyable {
     do {
       try execute(sql)
     } catch {
-      if libraryStorage.pointee.connection.isAutocommit(pointer) == 0 {
+      if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
         try? execute("ROLLBACK")
       }
       throw error
@@ -210,6 +212,43 @@ struct SQLiteHandle: ~Copyable {
 
   private borrowing func rollbackIgnoringFailure() {
     try? endTransaction(with: "ROLLBACK")
+  }
+
+  static func execute(
+    _ query: QueryFragment,
+    on connection: OpaquePointer,
+    library: UnsafePointer<SQLiteLibrary>
+  ) throws {
+    let (sql, bindings) = prepareQuery(query)
+    var statement: OpaquePointer?
+    let code = sql.withCString {
+      library.pointee.statements.preparation.prepare(
+        connection,
+        $0,
+        -1,
+        0,
+        &statement,
+        nil
+      )
+    }
+    guard code == SQLiteResultCode.ok.rawValue, let statement else {
+      if let statement {
+        _ = library.pointee.statements.execution.finalize(statement)
+      }
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+    }
+    defer { _ = library.pointee.statements.execution.finalize(statement) }
+
+    for (offset, binding) in bindings.enumerated() {
+      try bind(binding, to: statement, at: Int32(offset + 1), library: library)
+    }
+    var stepCode = library.pointee.statements.execution.step(statement)
+    while stepCode == SQLiteResultCode.row.rawValue {
+      stepCode = library.pointee.statements.execution.step(statement)
+    }
+    guard stepCode == SQLiteResultCode.done.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)
+    }
   }
 
   static func execute(
@@ -228,7 +267,7 @@ struct SQLiteHandle: ~Copyable {
         var statement: OpaquePointer?
         var tail: UnsafePointer<CChar>?
         let prepare = {
-          library.pointee.statement.prepare(
+          library.pointee.statements.preparation.prepare(
             connection,
             next,
             Int32(end - next),
@@ -248,7 +287,7 @@ struct SQLiteHandle: ~Copyable {
         guard code == SQLiteResultCode.ok.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
         }
-        defer { _ = library.pointee.statement.finalize(statement) }
+        defer { _ = library.pointee.statements.execution.finalize(statement) }
 
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard let statement else { return }
@@ -277,9 +316,9 @@ struct SQLiteHandle: ~Copyable {
           observations.didChange(in: preparedStatement.changedRegion)
         }
 
-        var stepCode = library.pointee.statement.step(statement)
+        var stepCode = library.pointee.statements.execution.step(statement)
         while stepCode == SQLiteResultCode.row.rawValue {
-          stepCode = library.pointee.statement.step(statement)
+          stepCode = library.pointee.statements.execution.step(statement)
         }
         guard stepCode == SQLiteResultCode.done.rawValue else {
           throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)

@@ -1,5 +1,6 @@
 #if BuiltInSQLite
   import Foundation
+  import StructuredQueries
   import Testing
 
   @testable import SQLiteOrbit
@@ -15,18 +16,25 @@
   private func countingLibrary(_ counters: SQLiteCallCounters) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
-    library.statement.prepare = { connection, sql, byteCount, flags, statement, tail in
-      let code = base.statement.prepare(connection, sql, byteCount, flags, statement, tail)
+    library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail in
+      let code = base.statements.preparation.prepare(
+        connection,
+        sql,
+        byteCount,
+        flags,
+        statement,
+        tail
+      )
       if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
         counters.prepared.withLock { $0 += 1 }
       }
       return code
     }
-    library.statement.finalize = { statement in
+    library.statements.execution.finalize = { statement in
       if statement != nil {
         counters.finalized.withLock { $0 += 1 }
       }
-      return base.statement.finalize(statement)
+      return base.statements.execution.finalize(statement)
     }
     return library
   }
@@ -35,12 +43,14 @@
     let library = connection.library
     var statement: OpaquePointer?
     let code = sql.withCString {
-      library.pointee.statement.prepare(connection.pointer, $0, -1, 0, &statement, nil)
+      library.pointee.statements.preparation.prepare(connection.pointer, $0, -1, 0, &statement, nil)
     }
     try #require(code == SQLiteResultCode.ok.rawValue)
-    defer { _ = library.pointee.statement.finalize(statement) }
-    try #require(library.pointee.statement.step(statement) == SQLiteResultCode.row.rawValue)
-    return library.pointee.column.int64(statement, 0)
+    defer { _ = library.pointee.statements.execution.finalize(statement) }
+    try #require(
+      library.pointee.statements.execution.step(statement) == SQLiteResultCode.row.rawValue
+    )
+    return library.pointee.columns.int64(statement, 0)
   }
 
   @Test
@@ -254,7 +264,7 @@
     let installs = Lock(0)
     var configuration = SQLiteConfiguration.default
     configuration.connectionSetups = [
-      SQLiteConnectionSetup { _, _ in
+      SQLiteConnectionSetup { _ in
         installs.withLock { $0 += 1 }
         return SQLiteResultCode.ok.rawValue
       }
@@ -268,7 +278,7 @@
     #expect(installs.withLock { $0 } == 1)
 
     configuration.connectionSetups.append(
-      SQLiteConnectionSetup { _, _ in SQLiteResultCode.error.rawValue }
+      SQLiteConnectionSetup { _ in SQLiteResultCode.error.rawValue }
     )
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteHandle.open(
@@ -283,7 +293,7 @@
   func aConnectionSetupThatThrowsFailsTheOpenWithItsOwnError() {
     struct SetupError: Error {}
     var configuration = SQLiteConfiguration.default
-    configuration.connectionSetups = [SQLiteConnectionSetup { _, _ in throw SetupError() }]
+    configuration.connectionSetups = [SQLiteConnectionSetup { _ in throw SetupError() }]
 
     #expect(throws: SetupError.self) {
       _ = try SQLiteHandle.open(
@@ -300,8 +310,8 @@
     var configuration = SQLiteConfiguration.default
     configuration.library.runtime.versionNumber = { 123_456 }
     configuration.connectionSetups = [
-      SQLiteConnectionSetup { _, library in
-        seenVersion.withLock { $0 = library.runtime.versionNumber() }
+      SQLiteConnectionSetup { connection in
+        seenVersion.withLock { $0 = connection.sqlite.runtime.versionNumber() }
         return SQLiteResultCode.ok.rawValue
       }
     ]
@@ -312,6 +322,29 @@
       configuration: configuration
     )
     #expect(seenVersion.withLock { $0 } == 123_456)
+  }
+
+  @Test
+  func connectionAccessExecutesQueryFragmentsWithBindings() throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.connectionSetups = [
+      SQLiteConnectionSetup { connection in
+        try connection.execute("CREATE TABLE settings (value TEXT NOT NULL)")
+        let value = "bound during setup"
+        let query: QueryFragment = "INSERT INTO settings VALUES (\(bind: value))"
+        try connection.execute(query)
+        return SQLiteResultCode.ok.rawValue
+      }
+    ]
+
+    let handle = try SQLiteHandle.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: configuration
+    )
+    #expect(
+      try scalar(handle, "SELECT count(*) FROM settings WHERE value = 'bound during setup'") == 1
+    )
   }
 
   @Test(

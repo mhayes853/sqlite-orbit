@@ -17,8 +17,7 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// The cursor this transaction lends.
   public typealias RowCursor = SQLiteRowCursor
 
-  let connection: OpaquePointer
-  let library: UnsafePointer<SQLiteLibrary>
+  let access: SQLiteConnectionAccess
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
   let observations: OrbitDatabaseTransactionObservationContext
@@ -28,8 +27,7 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
     handle: borrowing SQLiteHandle,
     observations: OrbitDatabaseTransactionObservationContext
   ) {
-    self.connection = handle.pointer
-    self.library = handle.library
+    self.access = SQLiteConnectionAccess(handle: handle)
     self.statements = handle.statements
     self.authorizer = handle.authorizer
     self.observations = observations
@@ -40,13 +38,16 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// This is the escape hatch for work the package does not model. It is only valid for the
   /// duration of the access that lent this transaction and must not be used to mutate the database.
   public var sqliteConnection: OpaquePointer {
-    connection
+    access.sqliteConnection
   }
 
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
-    library.pointee
+    access.sqlite
   }
+
+  var connection: OpaquePointer { access.sqliteConnection }
+  var library: UnsafePointer<SQLiteLibrary> { access.libraryPointer }
 
   /// Creates a cursor over the rows a read query returns.
   ///
@@ -178,7 +179,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
     guard !query.fragment.isEmpty else { return 0 }
     var cursor = try base.cursor(for: query.fragment, cached: false)
     while try cursor.next() != nil {}
-    return Int(base.library.pointee.connection.changes(base.connection))
+    return Int(base.library.pointee.connections.changes(base.connection))
   }
 
   /// Runs SQL that the query builder does not model, such as schema changes.

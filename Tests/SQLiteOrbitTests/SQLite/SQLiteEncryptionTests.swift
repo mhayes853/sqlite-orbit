@@ -26,14 +26,14 @@
       return SQLiteResultCode.ok.rawValue
     }
 
-    let resultCodes = library.connection.setExtendedResultCodes
-    library.connection.setExtendedResultCodes = {
+    let resultCodes = library.connections.setExtendedResultCodes
+    library.connections.setExtendedResultCodes = {
       (connection: OpaquePointer?, on: Int32) -> Int32 in
       events.withLock { $0.append("extended_result_codes") }
       return resultCodes(connection, on)
     }
-    let timeout = library.connection.setBusyTimeout
-    library.connection.setBusyTimeout = {
+    let timeout = library.connections.setBusyTimeout
+    library.connections.setBusyTimeout = {
       (connection: OpaquePointer?, milliseconds: Int32) -> Int32 in
       events.withLock { $0.append("busy_timeout") }
       return timeout(connection, milliseconds)

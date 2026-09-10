@@ -6,7 +6,7 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   collation.name.withCString { name in
-    library.collation!
+    library.collations!
       .create(
         connection,
         name,
@@ -36,33 +36,33 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   function.name.withCString { name in
-    library.functions!.registration.scalar!(
-      connection,
-      name,
-      Int32(function.argumentCount ?? -1),
-      orbitFunctionFlags(isDeterministic: function.isDeterministic),
-      Box.retain(function as any ScalarDatabaseFunction),
-      { context, argumentCount, arguments in
-        let library = SQLiteCurrentLibrary.current
-        let function = Box<any ScalarDatabaseFunction>
-          .value(
-            in: library.pointee.functions!.context.userData(context)
+    library.scalarFunctions!
+      .register(
+        connection,
+        name,
+        Int32(function.argumentCount ?? -1),
+        orbitFunctionFlags(isDeterministic: function.isDeterministic),
+        Box.retain(function as any ScalarDatabaseFunction),
+        { context, argumentCount, arguments in
+          let library = SQLiteCurrentLibrary.current
+          let functions = library.pointee.scalarFunctions!
+          let function = Box<any ScalarDatabaseFunction>
+            .value(in: functions.callbacks.context.userData(context))
+          var decoder = SQLiteFunctionDecoder(
+            argumentCount: argumentCount,
+            arguments: arguments,
+            api: functions.callbacks.argument
           )
-        var decoder = SQLiteFunctionDecoder(
-          argumentCount: argumentCount,
-          arguments: arguments,
-          library: library
-        )
-        do {
-          try function.invoke(&decoder).result(context, library: library)
-        } catch {
-          QueryBinding.invalid(error).result(context, library: library)
-        }
-      },
-      nil,
-      nil,
-      { Box<any ScalarDatabaseFunction>.release($0) }
-    )
+          do {
+            try function.invoke(&decoder).result(context, using: functions.callbacks.result)
+          } catch {
+            QueryBinding.invalid(error).result(context, using: functions.callbacks.result)
+          }
+        },
+        nil,
+        nil,
+        { Box<any ScalarDatabaseFunction>.release($0) }
+      )
   }
 }
 
@@ -72,34 +72,37 @@ func orbitInstall(
   library: SQLiteLibrary
 ) -> Int32 {
   function.name.withCString { name in
-    library.functions!.registration.aggregate!(
-      connection,
-      name,
-      Int32(function.argumentCount ?? -1),
-      orbitFunctionFlags(isDeterministic: function.isDeterministic),
-      Box.retain(function as any AggregateDatabaseFunction),
-      nil,
-      { context, argumentCount, arguments in
-        let library = SQLiteCurrentLibrary.current
-        var decoder = SQLiteFunctionDecoder(
-          argumentCount: argumentCount,
-          arguments: arguments,
-          library: library
-        )
-        do {
-          try AggregateFunctionInvocation.current(in: context, library: library).step(&decoder)
-        } catch {
-          QueryBinding.invalid(error).result(context, library: library)
-        }
-      },
-      { context in
-        let library = SQLiteCurrentLibrary.current
-        let invocation = AggregateFunctionInvocation.current(in: context, library: library)
-        invocation.result().result(context, library: library)
-        Unmanaged.passUnretained(invocation).release()
-      },
-      { Box<any AggregateDatabaseFunction>.release($0) }
-    )
+    library.aggregateFunctions!
+      .register(
+        connection,
+        name,
+        Int32(function.argumentCount ?? -1),
+        orbitFunctionFlags(isDeterministic: function.isDeterministic),
+        Box.retain(function as any AggregateDatabaseFunction),
+        nil,
+        { context, argumentCount, arguments in
+          let library = SQLiteCurrentLibrary.current
+          let functions = library.pointee.aggregateFunctions!
+          var decoder = SQLiteFunctionDecoder(
+            argumentCount: argumentCount,
+            arguments: arguments,
+            api: functions.callbacks.argument
+          )
+          do {
+            try AggregateFunctionInvocation.current(in: context, library: library).step(&decoder)
+          } catch {
+            QueryBinding.invalid(error).result(context, using: functions.callbacks.result)
+          }
+        },
+        { context in
+          let library = SQLiteCurrentLibrary.current
+          let functions = library.pointee.aggregateFunctions!
+          let invocation = AggregateFunctionInvocation.current(in: context, library: library)
+          invocation.result().result(context, using: functions.callbacks.result)
+          Unmanaged.passUnretained(invocation).release()
+        },
+        { Box<any AggregateDatabaseFunction>.release($0) }
+      )
   }
 }
 
@@ -155,7 +158,8 @@ private final class AggregateFunctionInvocation {
     in context: OpaquePointer?,
     library: UnsafePointer<SQLiteLibrary>
   ) -> AggregateFunctionInvocation {
-    let slot = library.pointee.functions!.context.aggregate!(
+    let functions = library.pointee.aggregateFunctions!
+    let slot = functions.context(
       context,
       Int32(MemoryLayout<Unmanaged<AggregateFunctionInvocation>>.size)
     )!
@@ -163,7 +167,7 @@ private final class AggregateFunctionInvocation {
     if let invocation = slot.pointee {
       return invocation.takeUnretainedValue()
     }
-    let userData = library.pointee.functions!.context.userData(context)
+    let userData = functions.callbacks.context.userData(context)
     let function = Box<any AggregateDatabaseFunction>.value(in: userData)
     let invocation = Unmanaged.passRetained(AggregateFunctionInvocation(function))
     slot.pointee = invocation

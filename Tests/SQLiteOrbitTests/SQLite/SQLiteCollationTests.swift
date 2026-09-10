@@ -100,9 +100,9 @@
     // that called it. Registration is the one part that goes through the table.
     let registrations = Lock(0)
     var configuration = SQLiteConfiguration.default
-    configuration.library.collation!.create = { connection, name, flags, box, compare, destroy in
+    configuration.library.collations!.create = { connection, name, flags, box, compare, destroy in
       registrations.withLock { $0 += 1 }
-      return builtInTestLibrary.collation!
+      return builtInTestLibrary.collations!
         .create(
           connection,
           name,

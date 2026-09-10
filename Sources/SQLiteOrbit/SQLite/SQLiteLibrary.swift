@@ -1,3 +1,5 @@
+import StructuredQueries
+
 #if SystemSQLite
   import CSQLite3
 #elseif SQLCipher
@@ -29,16 +31,45 @@ public typealias SQLiteAuthorizerCallback =
     UnsafePointer<CChar>?, UnsafePointer<CChar>?
   ) -> Int32
 
+/// A SQLite operation that a library may implement independently.
+///
+/// Unlike an enum, this value is open-ended: custom integrations can define their own features
+/// while SQLiteOrbit provides names for the operations it knows how to request.
+public struct SQLiteLibraryFeature: RawRepresentable, Hashable, Sendable {
+  /// A stable, human-readable name for the feature.
+  public let rawValue: String
+
+  /// Creates a feature name.
+  public init(rawValue: String) {
+    self.rawValue = rawValue
+  }
+
+  /// Controlling whether schemas may invoke potentially unsafe SQL functions.
+  public static let trustedSchema = Self(rawValue: "trusted schema control")
+  /// Authorizing operations while SQLite compiles a statement.
+  public static let authorizer = Self(rawValue: "statement authorization")
+  /// Registering and running custom scalar functions.
+  public static let scalarFunctions = Self(rawValue: "custom scalar functions")
+  /// Registering and running custom aggregate functions.
+  public static let aggregateFunctions = Self(rawValue: "custom aggregate functions")
+  /// Registering custom collating sequences.
+  public static let collations = Self(rawValue: "custom collations")
+  /// Encrypting a database through a SQLite codec.
+  public static let encryption = Self(rawValue: "database encryption")
+  /// Sharing a database file between multiple processes.
+  public static let multiprocessFileSharing = Self(rawValue: "multiprocess file sharing")
+}
+
 /// Reported when an operation is not implemented by the selected SQLite library.
 public struct SQLiteFeatureUnavailableError: Error, Hashable, Sendable {
   /// The name of the library that cannot provide the operation.
   public let libraryName: String
 
-  /// A description of the unavailable operation.
-  public let feature: String
+  /// The unavailable operation.
+  public let feature: SQLiteLibraryFeature
 
   /// Creates an error for an operation the selected library cannot provide.
-  public init(libraryName: String, feature: String) {
+  public init(libraryName: String, feature: SQLiteLibraryFeature) {
     self.libraryName = libraryName
     self.feature = feature
   }
@@ -46,9 +77,22 @@ public struct SQLiteFeatureUnavailableError: Error, Hashable, Sendable {
 
 extension SQLiteFeatureUnavailableError: CustomStringConvertible {
   public var description: String {
-    "\(libraryName) does not support SQLite's \(feature)."
+    "\(libraryName) does not support SQLite's \(feature.rawValue)."
   }
 }
+
+/// A library-defined operation that enables or disables trusted-schema behavior.
+public typealias SQLiteTrustedSchemaControl =
+  @Sendable (borrowing SQLiteConnectionAccess, Bool) throws -> Void
+
+/// The shape of SQLite's `sqlite3_create_function_v2` entry point.
+public typealias SQLiteFunctionRegistration =
+  @Sendable (
+    OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
+    (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+    (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
+    (@convention(c) (OpaquePointer?) -> Void)?, SQLiteDestructor?
+  ) -> Int32
 
 /// A table of the SQLite entry points SQLiteOrbit needs, grouped by responsibility.
 ///
@@ -61,19 +105,23 @@ public struct SQLiteLibrary: Sendable {
   /// Information about the loaded SQLite runtime.
   public var runtime: Runtime
   /// Operations on database connections.
-  public var connection: Connection
+  public var connections: Connections
   /// Operations on prepared statements.
-  public var statement: Statement
+  public var statements: Statements
   /// Operations that bind values to statement parameters.
-  public var binding: Binding
+  public var bindings: Bindings
   /// Operations that read values from result columns.
-  public var column: Column
+  public var columns: Columns
   /// Statement-compilation authorization, when the library implements it faithfully.
-  public var authorization: Authorization?
-  /// Custom SQL function support, when the library implements it faithfully.
-  public var functions: Functions?
+  public var authorizer: Authorizer?
+  /// Trusted-schema control, when the library implements it faithfully.
+  public var trustedSchema: SQLiteTrustedSchemaControl?
+  /// Custom scalar function support, when the library implements it faithfully.
+  public var scalarFunctions: ScalarFunctions?
+  /// Custom aggregate function support, when the library implements it faithfully.
+  public var aggregateFunctions: AggregateFunctions?
   /// Custom collation support, when the library implements it faithfully.
-  public var collation: Collation?
+  public var collations: Collations?
   /// Database encryption support, when the library has a codec.
   public var encryption: Encryption?
   /// How database files opened by this library may be shared.
@@ -82,26 +130,30 @@ public struct SQLiteLibrary: Sendable {
   /// Creates a library from its required and optional operation groups.
   public init(
     runtime: Runtime,
-    connection: Connection,
-    statement: Statement,
-    binding: Binding,
-    column: Column,
-    authorization: Authorization? = nil,
-    functions: Functions? = nil,
-    collation: Collation? = nil,
+    connections: Connections,
+    statements: Statements,
+    bindings: Bindings,
+    columns: Columns,
+    authorizer: Authorizer? = nil,
+    trustedSchema: SQLiteTrustedSchemaControl? = nil,
+    scalarFunctions: ScalarFunctions? = nil,
+    aggregateFunctions: AggregateFunctions? = nil,
+    collations: Collations? = nil,
     encryption: Encryption? = nil,
     name: String = "custom SQLite",
     fileSharing: FileSharing = .multipleProcesses
   ) {
     self.name = name
     self.runtime = runtime
-    self.connection = connection
-    self.statement = statement
-    self.binding = binding
-    self.column = column
-    self.authorization = authorization
-    self.functions = functions
-    self.collation = collation
+    self.connections = connections
+    self.statements = statements
+    self.bindings = bindings
+    self.columns = columns
+    self.authorizer = authorizer
+    self.trustedSchema = trustedSchema
+    self.scalarFunctions = scalarFunctions
+    self.aggregateFunctions = aggregateFunctions
+    self.collations = collations
     self.encryption = encryption
     self.fileSharing = fileSharing
   }
@@ -126,7 +178,7 @@ extension SQLiteLibrary {
     /// Trusted-schema control implemented with setup SQL.
     public static let trustedSchema = Self(rawValue: 1 << 0)
     /// Statement authorization through `sqlite3_set_authorizer`.
-    public static let authorization = Self(rawValue: 1 << 1)
+    public static let authorizer = Self(rawValue: 1 << 1)
     /// Scalar SQL function registration and callbacks.
     public static let scalarFunctions = Self(rawValue: 1 << 2)
     /// Aggregate SQL function registration and callbacks.
@@ -139,7 +191,7 @@ extension SQLiteLibrary {
     /// The optional APIs provided by an ordinary SQLite build.
     public static let standard: Self = [
       .trustedSchema,
-      .authorization,
+      .authorizer,
       .scalarFunctions,
       .aggregateFunctions,
       .collations
@@ -175,7 +227,7 @@ extension SQLiteLibrary {
   }
 
   /// Operations on database connections.
-  public struct Connection: Sendable {
+  public struct Connections: Sendable {
     /// Opens a connection: `sqlite3_open_v2`.
     public var open:
       @Sendable (
@@ -199,9 +251,6 @@ extension SQLiteLibrary {
     public var lastInsertedRowID: @Sendable (OpaquePointer?) -> Int64
     /// Whether the connection currently has no transaction open: `sqlite3_get_autocommit`.
     public var isAutocommit: @Sendable (OpaquePointer?) -> Int32
-    /// Applies trusted-schema behavior, or `nil` when the library cannot control it.
-    public var trustedSchema: TrustedSchemaControl?
-
     /// Creates a connection operation group.
     public init(
       open:
@@ -217,8 +266,7 @@ extension SQLiteLibrary {
       interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
       changes: @escaping @Sendable (OpaquePointer?) -> Int32,
       lastInsertedRowID: @escaping @Sendable (OpaquePointer?) -> Int64,
-      isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32,
-      trustedSchema: TrustedSchemaControl?
+      isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32
     ) {
       self.open = open
       self.close = close
@@ -230,38 +278,53 @@ extension SQLiteLibrary {
       self.changes = changes
       self.lastInsertedRowID = lastInsertedRowID
       self.isAutocommit = isAutocommit
-      self.trustedSchema = trustedSchema
     }
   }
 
-  /// A library-defined operation that enables or disables trusted-schema behavior.
-  public struct TrustedSchemaControl: Sendable {
-    private let apply: @Sendable (borrowing SQLiteConnectionContext, Bool) throws -> Void
+  /// Operations on prepared statements, divided by responsibility.
+  public struct Statements: Sendable {
+    /// Operations that compile statements.
+    public var preparation: StatementPreparation
+    /// Operations that run and manage compiled statements.
+    public var execution: StatementExecution
+    /// Operations that inspect compiled statements.
+    public var inspection: StatementInspection
 
-    /// Creates a control from an operation that borrows the connection being configured.
+    /// Creates a statement operation group.
     public init(
-      _ apply: @escaping @Sendable (borrowing SQLiteConnectionContext, Bool) throws -> Void
+      preparation: StatementPreparation,
+      execution: StatementExecution,
+      inspection: StatementInspection
     ) {
-      self.apply = apply
-    }
-
-    /// Applies the requested trusted-schema behavior.
-    public func callAsFunction(
-      _ connection: borrowing SQLiteConnectionContext,
-      enabled: Bool
-    ) throws {
-      try apply(connection, enabled)
+      self.preparation = preparation
+      self.execution = execution
+      self.inspection = inspection
     }
   }
 
-  /// Operations on prepared statements.
-  public struct Statement: Sendable {
+  /// The operation that compiles a statement.
+  public struct StatementPreparation: Sendable {
     /// Compiles one statement and reports where it stopped: `sqlite3_prepare_v3`.
     public var prepare:
       @Sendable (
         OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
         UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
       ) -> Int32
+
+    /// Creates a statement-preparation operation group.
+    public init(
+      prepare:
+        @escaping @Sendable (
+          OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
+          UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
+        ) -> Int32
+    ) {
+      self.prepare = prepare
+    }
+  }
+
+  /// Operations that run and manage a prepared statement.
+  public struct StatementExecution: Sendable {
     /// Advances a statement to its next row or completion: `sqlite3_step`.
     public var step: @Sendable (OpaquePointer?) -> Int32
     /// Rewinds a statement while retaining its bindings: `sqlite3_reset`.
@@ -270,37 +333,40 @@ extension SQLiteLibrary {
     public var finalize: @Sendable (OpaquePointer?) -> Int32
     /// Clears a statement's parameter bindings: `sqlite3_clear_bindings`.
     public var clearBindings: @Sendable (OpaquePointer?) -> Int32
+
+    /// Creates a statement-execution operation group.
+    public init(
+      step: @escaping @Sendable (OpaquePointer?) -> Int32,
+      reset: @escaping @Sendable (OpaquePointer?) -> Int32,
+      finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
+      clearBindings: @escaping @Sendable (OpaquePointer?) -> Int32
+    ) {
+      self.step = step
+      self.reset = reset
+      self.finalize = finalize
+      self.clearBindings = clearBindings
+    }
+  }
+
+  /// Operations that inspect a prepared statement.
+  public struct StatementInspection: Sendable {
     /// Whether a statement only reads: `sqlite3_stmt_readonly`.
     public var isReadOnly: @Sendable (OpaquePointer?) -> Int32
     /// The SQL a statement was prepared from: `sqlite3_sql`.
     public var sql: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
 
-    /// Creates a statement operation group.
+    /// Creates a statement-inspection operation group.
     public init(
-      prepare:
-        @escaping @Sendable (
-          OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
-          UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
-        ) -> Int32,
-      step: @escaping @Sendable (OpaquePointer?) -> Int32,
-      reset: @escaping @Sendable (OpaquePointer?) -> Int32,
-      finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
-      clearBindings: @escaping @Sendable (OpaquePointer?) -> Int32,
       isReadOnly: @escaping @Sendable (OpaquePointer?) -> Int32,
       sql: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
     ) {
-      self.prepare = prepare
-      self.step = step
-      self.reset = reset
-      self.finalize = finalize
-      self.clearBindings = clearBindings
       self.isReadOnly = isReadOnly
       self.sql = sql
     }
   }
 
   /// Operations that bind Swift values to statement parameters.
-  public struct Binding: Sendable {
+  public struct Bindings: Sendable {
     /// How many parameters a statement has: `sqlite3_bind_parameter_count`.
     public var parameterCount: @Sendable (OpaquePointer?) -> Int32
     /// Binds SQL NULL: `sqlite3_bind_null`.
@@ -333,7 +399,7 @@ extension SQLiteLibrary {
   }
 
   /// Operations that read values from a result row.
-  public struct Column: Sendable {
+  public struct Columns: Sendable {
     /// How many columns a result row has: `sqlite3_column_count`.
     public var count: @Sendable (OpaquePointer?) -> Int32
     /// A column's storage class: `sqlite3_column_type`.
@@ -374,7 +440,7 @@ extension SQLiteLibrary {
   }
 
   /// Statement-compilation authorization operations.
-  public struct Authorization: Sendable {
+  public struct Authorizer: Sendable {
     /// Installs the callback invoked while statements are compiled: `sqlite3_set_authorizer`.
     public var install:
       @Sendable (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32
@@ -391,9 +457,7 @@ extension SQLiteLibrary {
   }
 
   /// Operations used to register and run custom SQL functions.
-  public struct Functions: Sendable {
-    /// Function-registration operations.
-    public var registration: Registration
+  public struct FunctionCallbacks: Sendable {
     /// Operations that inspect a running function's context.
     public var context: Context
     /// Operations that read function arguments.
@@ -403,54 +467,25 @@ extension SQLiteLibrary {
 
     /// Creates a custom-function operation group.
     public init(
-      registration: Registration,
       context: Context,
       argument: Argument,
       result: Result
     ) {
-      self.registration = registration
       self.context = context
       self.argument = argument
       self.result = result
-    }
-
-    /// Operations that register scalar and aggregate SQL functions.
-    public struct Registration: Sendable {
-      /// The shape of SQLite's `sqlite3_create_function_v2` entry point.
-      public typealias Create =
-        @Sendable (
-          OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
-          (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-          (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
-          (@convention(c) (OpaquePointer?) -> Void)?, SQLiteDestructor?
-        ) -> Int32
-
-      /// Registers a scalar function, or `nil` when scalar functions are unavailable.
-      public var scalar: Create?
-      /// Registers an aggregate function, or `nil` when aggregate functions are unavailable.
-      public var aggregate: Create?
-
-      /// Creates a function-registration operation group.
-      public init(scalar: Create?, aggregate: Create?) {
-        self.scalar = scalar
-        self.aggregate = aggregate
-      }
     }
 
     /// Operations that inspect the context passed to a custom function callback.
     public struct Context: Sendable {
       /// The pointer the function was registered with: `sqlite3_user_data`.
       public var userData: @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?
-      /// An aggregate's per-invocation state: `sqlite3_aggregate_context`.
-      public var aggregate: (@Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?)?
 
       /// Creates a function-context operation group.
       public init(
-        userData: @escaping @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?,
-        aggregate: (@Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?)?
+        userData: @escaping @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?
       ) {
         self.userData = userData
-        self.aggregate = aggregate
       }
     }
 
@@ -521,8 +556,46 @@ extension SQLiteLibrary {
     }
   }
 
+  /// Everything needed to install and run scalar SQL functions.
+  public struct ScalarFunctions: Sendable {
+    /// Registers a scalar function.
+    public var register: SQLiteFunctionRegistration
+    /// Operations used by an installed function's callbacks.
+    public var callbacks: FunctionCallbacks
+
+    /// Creates a scalar-function operation group.
+    public init(
+      register: @escaping SQLiteFunctionRegistration,
+      callbacks: FunctionCallbacks
+    ) {
+      self.register = register
+      self.callbacks = callbacks
+    }
+  }
+
+  /// Everything needed to install and run aggregate SQL functions.
+  public struct AggregateFunctions: Sendable {
+    /// Registers an aggregate function.
+    public var register: SQLiteFunctionRegistration
+    /// Finds or allocates an aggregate invocation's state.
+    public var context: @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?
+    /// Operations used by an installed function's callbacks.
+    public var callbacks: FunctionCallbacks
+
+    /// Creates an aggregate-function operation group.
+    public init(
+      register: @escaping SQLiteFunctionRegistration,
+      context: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?,
+      callbacks: FunctionCallbacks
+    ) {
+      self.register = register
+      self.context = context
+      self.callbacks = callbacks
+    }
+  }
+
   /// Operations that register custom collating sequences.
-  public struct Collation: Sendable {
+  public struct Collations: Sendable {
     /// Registers a collating sequence: `sqlite3_create_collation_v2`.
     public var create:
       @Sendable (
@@ -566,25 +639,34 @@ extension SQLiteLibrary {
   }
 }
 
-/// A borrowed view of a connection while SQLiteOrbit applies connection controls.
-public struct SQLiteConnectionContext: ~Copyable {
+/// Primitive access to a connection lent by SQLiteOrbit.
+///
+/// Connection setup hooks and transactions build on this type. It cannot be copied or escape the
+/// access that lent it.
+public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   private let connection: OpaquePointer
-  private let library: UnsafePointer<SQLiteLibrary>
+  let libraryPointer: UnsafePointer<SQLiteLibrary>
 
-  init(connection: OpaquePointer, library: UnsafePointer<SQLiteLibrary>) {
-    self.connection = connection
-    self.library = library
+  @_lifetime(borrow handle)
+  init(handle: borrowing SQLiteHandle) {
+    self.connection = handle.pointer
+    self.libraryPointer = handle.library
   }
 
-  /// The raw connection being configured.
-  ///
-  /// Prefer ``execute(_:)`` when setup SQL is sufficient. This escape hatch supports library
-  /// controls that require engine-specific entry points.
-  public var rawConnection: OpaquePointer { connection }
+  /// The underlying `sqlite3 *`.
+  public var sqliteConnection: OpaquePointer { connection }
 
-  /// Executes setup SQL on the borrowed connection.
+  /// The SQLite build this connection runs against.
+  public var sqlite: SQLiteLibrary { libraryPointer.pointee }
+
+  /// Executes a query fragment to completion, safely binding its values.
+  public borrowing func execute(_ query: QueryFragment) throws {
+    try SQLiteHandle.execute(query, on: connection, library: libraryPointer)
+  }
+
+  /// Executes one or more raw SQL statements to completion.
   public borrowing func execute(_ sql: String) throws {
-    try SQLiteHandle.execute(sql, on: connection, library: library)
+    try SQLiteHandle.execute(sql, on: connection, library: libraryPointer)
   }
 }
 

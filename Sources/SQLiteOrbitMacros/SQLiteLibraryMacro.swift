@@ -6,7 +6,7 @@ import SwiftSyntaxMacros
 public struct SQLiteLibraryMacro: ExpressionMacro {
   private enum API: String, CaseIterable {
     case trustedSchema
-    case authorization
+    case authorizer
     case scalarFunctions
     case aggregateFunctions
     case collations
@@ -14,7 +14,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
 
     static let standard: Set<Self> = [
       .trustedSchema,
-      .authorization,
+      .authorizer,
       .scalarFunctions,
       .aggregateFunctions,
       .collations
@@ -63,23 +63,47 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     let trustedSchema: ExprSyntax =
       if apis.contains(.trustedSchema) {
         """
-        SQLiteLibrary.TrustedSchemaControl { connection, enabled in
-          try connection.execute("PRAGMA trusted_schema = " + (enabled ? "1" : "0"))
+        { connection, enabled in
+          try connection.execute("PRAGMA trusted_schema = \\(raw: enabled ? 1 : 0)")
         }
         """
       } else {
         "nil"
       }
-    let authorization: ExprSyntax =
-      if apis.contains(.authorization) {
-        "SQLiteLibrary.Authorization(install: \(raw: qualifier)sqlite3_set_authorizer)"
+    let authorizer: ExprSyntax =
+      if apis.contains(.authorizer) {
+        "SQLiteLibrary.Authorizer(install: \(raw: qualifier)sqlite3_set_authorizer)"
       } else {
         "nil"
       }
-    let functions = functionAPIs(apis: apis, qualifier: qualifier)
+    let callbacks = functionCallbacks(qualifier: qualifier)
+    let callbacksArgument = labeledArgument("callbacks", callbacks)
+    let scalarFunctions: ExprSyntax =
+      if apis.contains(.scalarFunctions) {
+        """
+        SQLiteLibrary.ScalarFunctions(
+          register: \(raw: qualifier)sqlite3_create_function_v2,
+          \(callbacksArgument)
+        )
+        """
+      } else {
+        "nil"
+      }
+    let aggregateFunctions: ExprSyntax =
+      if apis.contains(.aggregateFunctions) {
+        """
+        SQLiteLibrary.AggregateFunctions(
+          register: \(raw: qualifier)sqlite3_create_function_v2,
+          context: \(raw: qualifier)sqlite3_aggregate_context,
+          \(callbacksArgument)
+        )
+        """
+      } else {
+        "nil"
+      }
     let collation: ExprSyntax =
       if apis.contains(.collations) {
-        "SQLiteLibrary.Collation(create: \(raw: qualifier)sqlite3_create_collation_v2)"
+        "SQLiteLibrary.Collations(create: \(raw: qualifier)sqlite3_create_collation_v2)"
       } else {
         "nil"
       }
@@ -89,17 +113,9 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       } else {
         "nil"
       }
-    let trustedSchemaArgument = LabeledExprSyntax(
-      label: .identifier("trustedSchema"),
-      colon: .colonToken(trailingTrivia: .space),
-      expression: trustedSchema
-    )
-    let functionsArgument = LabeledExprSyntax(
-      label: .identifier("functions"),
-      colon: .colonToken(trailingTrivia: .space),
-      expression: functions,
-      trailingComma: .commaToken()
-    )
+    let trustedSchemaArgument = labeledArgument("trustedSchema", trustedSchema)
+    let scalarFunctionsArgument = labeledArgument("scalarFunctions", scalarFunctions)
+    let aggregateFunctionsArgument = labeledArgument("aggregateFunctions", aggregateFunctions)
 
     return """
       SQLiteLibrary(
@@ -107,7 +123,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           threadsafe: \(raw: qualifier)sqlite3_threadsafe,
           versionNumber: \(raw: qualifier)sqlite3_libversion_number
         ),
-        connection: SQLiteLibrary.Connection(
+        connections: SQLiteLibrary.Connections(
           open: \(raw: qualifier)sqlite3_open_v2,
           close: \(raw: qualifier)sqlite3_close_v2,
           errorMessage: \(raw: qualifier)sqlite3_errmsg,
@@ -117,19 +133,24 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           interrupt: \(raw: qualifier)sqlite3_interrupt,
           changes: \(raw: qualifier)sqlite3_changes,
           lastInsertedRowID: \(raw: qualifier)sqlite3_last_insert_rowid,
-          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit,
-          \(trustedSchemaArgument)
+          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit
         ),
-        statement: SQLiteLibrary.Statement(
-          prepare: \(raw: qualifier)sqlite3_prepare_v3,
-          step: \(raw: qualifier)sqlite3_step,
-          reset: \(raw: qualifier)sqlite3_reset,
-          finalize: \(raw: qualifier)sqlite3_finalize,
-          clearBindings: \(raw: qualifier)sqlite3_clear_bindings,
-          isReadOnly: \(raw: qualifier)sqlite3_stmt_readonly,
-          sql: \(raw: qualifier)sqlite3_sql
+        statements: SQLiteLibrary.Statements(
+          preparation: SQLiteLibrary.StatementPreparation(
+            prepare: \(raw: qualifier)sqlite3_prepare_v3
+          ),
+          execution: SQLiteLibrary.StatementExecution(
+            step: \(raw: qualifier)sqlite3_step,
+            reset: \(raw: qualifier)sqlite3_reset,
+            finalize: \(raw: qualifier)sqlite3_finalize,
+            clearBindings: \(raw: qualifier)sqlite3_clear_bindings
+          ),
+          inspection: SQLiteLibrary.StatementInspection(
+            isReadOnly: \(raw: qualifier)sqlite3_stmt_readonly,
+            sql: \(raw: qualifier)sqlite3_sql
+          )
         ),
-        binding: SQLiteLibrary.Binding(
+        bindings: SQLiteLibrary.Bindings(
           parameterCount: \(raw: qualifier)sqlite3_bind_parameter_count,
           null: \(raw: qualifier)sqlite3_bind_null,
           int64: \(raw: qualifier)sqlite3_bind_int64,
@@ -145,7 +166,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
             )
           }
         ),
-        column: SQLiteLibrary.Column(
+        columns: SQLiteLibrary.Columns(
           count: \(raw: qualifier)sqlite3_column_count,
           type: \(raw: qualifier)sqlite3_column_type,
           int64: \(raw: qualifier)sqlite3_column_int64,
@@ -155,42 +176,23 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           byteCount: \(raw: qualifier)sqlite3_column_bytes,
           name: \(raw: qualifier)sqlite3_column_name
         ),
-        authorization: \(authorization),
-        \(functionsArgument)
-        collation: \(collation),
+        authorizer: \(authorizer),
+        \(trustedSchemaArgument),
+        \(scalarFunctionsArgument),
+        \(aggregateFunctionsArgument),
+        collations: \(collation),
         encryption: \(encryption)
       )
       """
   }
 
-  private static func functionAPIs(apis: Set<API>, qualifier: String) -> ExprSyntax {
-    guard apis.contains(.scalarFunctions) || apis.contains(.aggregateFunctions) else {
-      return "nil"
-    }
-    let scalar: ExprSyntax =
-      apis.contains(.scalarFunctions)
-      ? "\(raw: qualifier)sqlite3_create_function_v2"
-      : "nil"
-    let aggregate: ExprSyntax =
-      apis.contains(.aggregateFunctions)
-      ? "\(raw: qualifier)sqlite3_create_function_v2"
-      : "nil"
-    let aggregateContext: ExprSyntax =
-      apis.contains(.aggregateFunctions)
-      ? "\(raw: qualifier)sqlite3_aggregate_context"
-      : "nil"
-
+  private static func functionCallbacks(qualifier: String) -> ExprSyntax {
     return """
-      SQLiteLibrary.Functions(
-        registration: SQLiteLibrary.Functions.Registration(
-          scalar: \(scalar),
-          aggregate: \(aggregate)
+      SQLiteLibrary.FunctionCallbacks(
+        context: SQLiteLibrary.FunctionCallbacks.Context(
+          userData: \(raw: qualifier)sqlite3_user_data
         ),
-        context: SQLiteLibrary.Functions.Context(
-          userData: \(raw: qualifier)sqlite3_user_data,
-          aggregate: \(aggregateContext)
-        ),
-        argument: SQLiteLibrary.Functions.Argument(
+        argument: SQLiteLibrary.FunctionCallbacks.Argument(
           type: \(raw: qualifier)sqlite3_value_type,
           int64: \(raw: qualifier)sqlite3_value_int64,
           double: \(raw: qualifier)sqlite3_value_double,
@@ -198,7 +200,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           blob: \(raw: qualifier)sqlite3_value_blob,
           byteCount: \(raw: qualifier)sqlite3_value_bytes
         ),
-        result: SQLiteLibrary.Functions.Result(
+        result: SQLiteLibrary.FunctionCallbacks.Result(
           null: \(raw: qualifier)sqlite3_result_null,
           int64: \(raw: qualifier)sqlite3_result_int64,
           double: \(raw: qualifier)sqlite3_result_double,
@@ -216,6 +218,16 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
         )
       )
       """
+  }
+
+  private static func labeledArgument(_ label: String, _ expression: ExprSyntax)
+    -> LabeledExprSyntax
+  {
+    LabeledExprSyntax(
+      label: .identifier(label),
+      colon: .colonToken(trailingTrivia: .space),
+      expression: expression
+    )
   }
 
   private static func parseAPIs(_ expression: ExprSyntax) throws -> Set<API> {

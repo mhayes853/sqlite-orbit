@@ -47,9 +47,9 @@ extension SQLiteReadTransaction {
       authorizer: authorizer
     )
     guard let statement else { return .empty }
-    defer { _ = library.pointee.statement.finalize(statement) }
+    defer { _ = library.pointee.statements.execution.finalize(statement) }
 
-    guard library.pointee.statement.isReadOnly(statement) != 0 else {
+    guard library.pointee.statements.inspection.isReadOnly(statement) != 0 else {
       throw OrbitDatabaseRegionError.writableStatement
     }
 
@@ -111,7 +111,7 @@ func sqliteResolvedSchema(
     ),
     let statement = prepared.statement
   else { return nil }
-  defer { _ = library.pointee.statement.finalize(statement) }
+  defer { _ = library.pointee.statements.execution.finalize(statement) }
 
   let normalizedTable = table.asciiLowercased
   return prepared.authorizations.first {
@@ -130,11 +130,11 @@ private func sqlitePrepare(
   var statement: OpaquePointer?
   let (code, authorizations) = authorizer.recordingAuthorizations {
     sql.withCString {
-      library.pointee.statement.prepare(connection, $0, -1, 0, &statement, nil)
+      library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
     }
   }
   guard code == SQLiteResultCode.ok.rawValue else {
-    if let statement { _ = library.pointee.statement.finalize(statement) }
+    if let statement { _ = library.pointee.statements.execution.finalize(statement) }
     throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
   }
   return (statement, authorizations)

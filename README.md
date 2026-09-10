@@ -93,11 +93,12 @@ the way it always did.
 
 ## Using your own SQLite build
 
-The core module imports no SQLite header. Every call goes through `SQLiteLibrary`, whose entry
-points are grouped into runtime, connection, statement, binding, and column APIs. Optional groups
-for authorization, functions, collations, and encryption are `nil` when a build cannot provide
-them. The package can therefore drive a build it was never linked against — SQLCipher, a custom
-amalgamation, or one with extensions compiled in:
+The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
+entry points are grouped by responsibility, including distinct statement preparation, execution,
+and inspection APIs. Authorizers, trusted-schema control, scalar functions, aggregate functions,
+collations, and encryption are independent optional operations. The package can therefore drive a
+build it was never linked against — SQLCipher, a custom amalgamation, or one with extensions
+compiled in:
 
 ```swift
 let library = #sqliteLibrary(module: "MySQLite")
@@ -115,14 +116,16 @@ let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption]
 
 The option set only controls macro expansion—it is not retained as runtime capability state. Code
 checks the optional operation it needs. For example, a custom library can implement trusted-schema
-control in whatever way its engine supports; the borrowed `SQLiteConnectionContext` exposes the
-raw connection and can execute setup SQL through the same library:
+control as a function over the same primitive connection access used by setup callbacks and
+transactions:
 
 ```swift
-library.connection.trustedSchema = SQLiteLibrary.TrustedSchemaControl { context, enabled in
-  try context.execute("PRAGMA trusted_schema = \(enabled ? 1 : 0)")
+library.trustedSchema = { connection, enabled in
+  try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
 }
 ```
+
+`SQLiteConnectionAccess.execute` also accepts a `QueryFragment`, including safely bound values.
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
 it links no SQLite at all, leaving the library entirely to you:
@@ -196,9 +199,9 @@ try await database.read { transaction in
   let library = transaction.sqlite
   var statement: OpaquePointer?
   _ = "SELECT 1".withCString {
-    library.statement.prepare(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+    library.statements.preparation.prepare(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
   }
-  defer { _ = library.statement.finalize(statement) }
+  defer { _ = library.statements.execution.finalize(statement) }
   // ...
 }
 ```
@@ -343,9 +346,14 @@ reach material you hold: the `String` a passphrase was read from stays yours to 
 
 ```swift
 configuration.connectionSetups.append(
-  SQLiteConnectionSetup { connection, library in
+  SQLiteConnectionSetup { connection in
     key.withUnsafeBytes { bytes in
-      library.encryption!.rekey(connection, "main", bytes.baseAddress, Int32(bytes.count))
+      connection.sqlite.encryption!.rekey(
+        connection.sqliteConnection,
+        "main",
+        bytes.baseAddress,
+        Int32(bytes.count)
+      )
     }
   }
 )

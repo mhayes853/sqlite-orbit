@@ -40,7 +40,7 @@
       guard case .multipleProcesses = configuration.library.fileSharing else {
         throw SQLiteFeatureUnavailableError(
           libraryName: configuration.library.name,
-          feature: "multiprocess file sharing"
+          feature: .multiprocessFileSharing
         )
       }
       let identifier = id ?? .forDatabase(path: path)

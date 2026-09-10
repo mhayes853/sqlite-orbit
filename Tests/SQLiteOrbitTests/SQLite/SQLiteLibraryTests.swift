@@ -62,6 +62,15 @@
   }
 
   @Test
+  func unavailableLibraryFeaturesAreTypedAndExtensible() {
+    let feature = SQLiteLibraryFeature(rawValue: "extension loading")
+    let error = SQLiteFeatureUnavailableError(libraryName: "custom", feature: feature)
+
+    #expect(error.feature == feature)
+    #expect(error.description == "custom does not support SQLite's extension loading.")
+  }
+
+  @Test
   func functionTableRunsAQueryWithoutAnyWrapperTypes() throws {
     let library = SQLiteLibrary.system
     #expect(library.runtime.threadsafe() != 0)
@@ -70,40 +79,40 @@
     var connection: OpaquePointer?
     let openFlags: SQLiteOpenFlags = [.readWrite, .create, .memory, .noMutex]
     #expect(
-      ":memory:".withCString { library.connection.open($0, &connection, openFlags.rawValue, nil) }
+      ":memory:".withCString { library.connections.open($0, &connection, openFlags.rawValue, nil) }
         == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.connection.close(connection) }
+    defer { _ = library.connections.close(connection) }
 
     var statement: OpaquePointer?
     #expect(
       "SELECT 1, 'hello', 2.5, NULL"
         .withCString {
-          library.statement.prepare(connection, $0, -1, 0, &statement, nil)
+          library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
         } == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.statement.finalize(statement) }
+    defer { _ = library.statements.execution.finalize(statement) }
 
-    #expect(library.statement.isReadOnly(statement) != 0)
-    #expect(library.column.count(statement) == 4)
-    #expect(library.statement.step(statement) == SQLiteResultCode.row.rawValue)
+    #expect(library.statements.inspection.isReadOnly(statement) != 0)
+    #expect(library.columns.count(statement) == 4)
+    #expect(library.statements.execution.step(statement) == SQLiteResultCode.row.rawValue)
 
-    #expect(library.column.type(statement, 0) == SQLiteColumnType.integer.rawValue)
-    #expect(library.column.int64(statement, 0) == 1)
+    #expect(library.columns.type(statement, 0) == SQLiteColumnType.integer.rawValue)
+    #expect(library.columns.int64(statement, 0) == 1)
 
-    #expect(library.column.type(statement, 1) == SQLiteColumnType.text.rawValue)
-    let text = try #require(library.column.text(statement, 1))
-    let byteCount = Int(library.column.byteCount(statement, 1))
+    #expect(library.columns.type(statement, 1) == SQLiteColumnType.text.rawValue)
+    let text = try #require(library.columns.text(statement, 1))
+    let byteCount = Int(library.columns.byteCount(statement, 1))
     #expect(
       String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self) == "hello"
     )
 
-    #expect(library.column.type(statement, 2) == SQLiteColumnType.float.rawValue)
-    #expect(library.column.double(statement, 2) == 2.5)
+    #expect(library.columns.type(statement, 2) == SQLiteColumnType.float.rawValue)
+    #expect(library.columns.double(statement, 2) == 2.5)
 
-    #expect(library.column.type(statement, 3) == SQLiteColumnType.null.rawValue)
+    #expect(library.columns.type(statement, 3) == SQLiteColumnType.null.rawValue)
 
-    #expect(library.statement.step(statement) == SQLiteResultCode.done.rawValue)
+    #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
   }
 
   @Test
@@ -120,19 +129,21 @@
     var connection: OpaquePointer?
     let openFlags: SQLiteOpenFlags = [.readWrite, .create, .memory, .noMutex]
     #expect(
-      ":memory:".withCString { library.connection.open($0, &connection, openFlags.rawValue, nil) }
+      ":memory:".withCString { library.connections.open($0, &connection, openFlags.rawValue, nil) }
         == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.connection.close(connection) }
+    defer { _ = library.connections.close(connection) }
 
     func run(_ sql: String) throws {
       var statement: OpaquePointer?
       #expect(
-        sql.withCString { library.statement.prepare(connection, $0, -1, 0, &statement, nil) }
+        sql.withCString {
+          library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
+        }
           == SQLiteResultCode.ok.rawValue
       )
-      defer { _ = library.statement.finalize(statement) }
-      #expect(library.statement.step(statement) == SQLiteResultCode.done.rawValue)
+      defer { _ = library.statements.execution.finalize(statement) }
+      #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
     }
 
     try run("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
@@ -141,7 +152,7 @@
     #expect(
       "INSERT INTO items (title) VALUES (?)"
         .withCString {
-          library.statement.prepare(
+          library.statements.preparation.prepare(
             connection,
             $0,
             -1,
@@ -151,31 +162,31 @@
           )
         } == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.statement.finalize(insert) }
+    defer { _ = library.statements.execution.finalize(insert) }
 
-    #expect(library.statement.isReadOnly(insert) == 0)
-    #expect(library.binding.parameterCount(insert) == 1)
+    #expect(library.statements.inspection.isReadOnly(insert) == 0)
+    #expect(library.bindings.parameterCount(insert) == 1)
     #expect(
       "Blob"
         .withCString {
-          library.binding.text(insert, 1, $0, -1)
+          library.bindings.text(insert, 1, $0, -1)
         } == SQLiteResultCode.ok.rawValue
     )
-    #expect(library.statement.step(insert) == SQLiteResultCode.done.rawValue)
-    #expect(library.connection.changes(connection) == 1)
-    #expect(library.connection.lastInsertedRowID(connection) == 1)
+    #expect(library.statements.execution.step(insert) == SQLiteResultCode.done.rawValue)
+    #expect(library.connections.changes(connection) == 1)
+    #expect(library.connections.lastInsertedRowID(connection) == 1)
 
     // Resetting and rebinding is exactly what the statement cache will do.
-    #expect(library.statement.reset(insert) == SQLiteResultCode.ok.rawValue)
-    #expect(library.statement.clearBindings(insert) == SQLiteResultCode.ok.rawValue)
+    #expect(library.statements.execution.reset(insert) == SQLiteResultCode.ok.rawValue)
+    #expect(library.statements.execution.clearBindings(insert) == SQLiteResultCode.ok.rawValue)
     #expect(
       "Blob Jr"
         .withCString {
-          library.binding.text(insert, 1, $0, -1)
+          library.bindings.text(insert, 1, $0, -1)
         } == SQLiteResultCode.ok.rawValue
     )
-    #expect(library.statement.step(insert) == SQLiteResultCode.done.rawValue)
-    #expect(library.connection.lastInsertedRowID(connection) == 2)
+    #expect(library.statements.execution.step(insert) == SQLiteResultCode.done.rawValue)
+    #expect(library.connections.lastInsertedRowID(connection) == 2)
   }
 
   @Test
@@ -183,17 +194,17 @@
     let preparedSQL = Lock<[String]>([])
     var library = SQLiteLibrary.system
     let base = SQLiteLibrary.system
-    library.statement.prepare = { connection, sql, byteCount, flags, statement, tail in
+    library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail in
       if let sql {
         preparedSQL.withLock { $0.append(String(cString: sql)) }
       }
-      return base.statement.prepare(connection, sql, byteCount, flags, statement, tail)
+      return base.statements.preparation.prepare(connection, sql, byteCount, flags, statement, tail)
     }
 
     // A second table wrapping the same system library keeps its own state.
     let failingStep = Lock(0)
     var faulty = SQLiteLibrary.system
-    faulty.statement.step = { statement in
+    faulty.statements.execution.step = { statement in
       failingStep.withLock { $0 += 1 }
       return SQLiteResultCode.busy.rawValue
     }
@@ -201,22 +212,25 @@
     var connection: OpaquePointer?
     let openFlags: SQLiteOpenFlags = [.readWrite, .create, .memory, .noMutex]
     #expect(
-      ":memory:".withCString { library.connection.open($0, &connection, openFlags.rawValue, nil) }
+      ":memory:".withCString { library.connections.open($0, &connection, openFlags.rawValue, nil) }
         == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.connection.close(connection) }
+    defer { _ = library.connections.close(connection) }
 
     var statement: OpaquePointer?
     #expect(
-      "SELECT 1".withCString { library.statement.prepare(connection, $0, -1, 0, &statement, nil) }
+      "SELECT 1"
+        .withCString {
+          library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
+        }
         == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.statement.finalize(statement) }
+    defer { _ = library.statements.execution.finalize(statement) }
 
     #expect(preparedSQL.withLock { $0 } == ["SELECT 1"])
     // The unwrapped table is unaffected, and the faulty one reports its injected failure.
-    #expect(library.statement.step(statement) == SQLiteResultCode.row.rawValue)
-    #expect(faulty.statement.step(statement) == SQLiteResultCode.busy.rawValue)
+    #expect(library.statements.execution.step(statement) == SQLiteResultCode.row.rawValue)
+    #expect(faulty.statements.execution.step(statement) == SQLiteResultCode.busy.rawValue)
     #expect(failingStep.withLock { $0 } == 1)
   }
 
@@ -226,24 +240,24 @@
     var connection: OpaquePointer?
     let openFlags: SQLiteOpenFlags = [.readWrite, .create, .memory, .noMutex]
     #expect(
-      ":memory:".withCString { library.connection.open($0, &connection, openFlags.rawValue, nil) }
+      ":memory:".withCString { library.connections.open($0, &connection, openFlags.rawValue, nil) }
         == SQLiteResultCode.ok.rawValue
     )
-    defer { _ = library.connection.close(connection) }
+    defer { _ = library.connections.close(connection) }
     #expect(
-      library.connection.setExtendedResultCodes(connection, 1) == SQLiteResultCode.ok.rawValue
+      library.connections.setExtendedResultCodes(connection, 1) == SQLiteResultCode.ok.rawValue
     )
 
     var statement: OpaquePointer?
     let code = "SELECT * FROM missing"
       .withCString {
-        library.statement.prepare(connection, $0, -1, 0, &statement, nil)
+        library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
       }
     #expect(SQLiteResultCode(rawValue: code).primary == .error)
 
-    let message = String(cString: try #require(library.connection.errorMessage(connection)))
+    let message = String(cString: try #require(library.connections.errorMessage(connection)))
     let error = SQLiteError(
-      code: SQLiteResultCode(rawValue: library.connection.extendedErrorCode(connection)),
+      code: SQLiteResultCode(rawValue: library.connections.extendedErrorCode(connection)),
       message: message,
       sql: "SELECT * FROM missing"
     )

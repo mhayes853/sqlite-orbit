@@ -46,10 +46,10 @@ public struct SQLiteError: Error, Hashable, Sendable {
     code: Int32,
     sql: String?
   ) -> SQLiteError {
-    let message = library.connection.errorMessage(connection).map { String(cString: $0) }
+    let message = library.connections.errorMessage(connection).map { String(cString: $0) }
     // `extended_errcode` carries the same failure with more detail, but only when it is still
     // describing the failure we were handed.
-    let extended = library.connection.extendedErrorCode(connection)
+    let extended = library.connections.extendedErrorCode(connection)
     let resolved = (extended & 0xff) == (code & 0xff) ? extended : code
     return SQLiteError(code: SQLiteResultCode(rawValue: resolved), message: message, sql: sql)
   }

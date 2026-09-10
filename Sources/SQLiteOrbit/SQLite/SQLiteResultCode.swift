@@ -113,7 +113,7 @@ public struct SQLiteOpenFlags: OptionSet, Hashable, Sendable {
 /// These are the fourth argument to `sqlite3_prepare_v3`.
 ///
 /// ```swift
-/// _ = library.statement.prepare(connection, sql, -1, SQLitePrepareFlags.persistent.rawValue, &stmt, nil)
+/// _ = library.statements.preparation.prepare(connection, sql, -1, SQLitePrepareFlags.persistent.rawValue, &stmt, nil)
 /// ```
 public struct SQLitePrepareFlags: OptionSet, Hashable, Sendable {
   /// The bits SQLite is handed.
@@ -140,7 +140,7 @@ public struct SQLitePrepareFlags: OptionSet, Hashable, Sendable {
 /// SQLite calls these storage classes, and they are what ``SQLiteLibrary/Column/type`` returns.
 ///
 /// ```swift
-/// if library.column.type(statement, 0) == SQLiteColumnType.null.rawValue { ... }
+/// if library.columns.type(statement, 0) == SQLiteColumnType.null.rawValue { ... }
 /// ```
 public struct SQLiteColumnType: RawRepresentable, Hashable, Sendable {
   /// The number SQLite reports for this storage class.
@@ -172,7 +172,7 @@ public struct SQLiteColumnType: RawRepresentable, Hashable, Sendable {
 ///
 /// ```swift
 /// let flags: SQLiteFunctionFlags = [.utf8, .deterministic]
-/// _ = library.functions!.registration.scalar!(
+/// _ = library.scalarFunctions!.register(
 ///   connection, "double", 1, flags.rawValue, nil, xFunc, nil, nil, nil
 /// )
 /// ```
