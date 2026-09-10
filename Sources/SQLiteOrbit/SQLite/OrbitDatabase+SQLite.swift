@@ -37,6 +37,12 @@
       coordination: UnixDatagramIPCTransport.Configuration = .default,
       onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
     ) throws {
+      guard case .multipleProcesses = configuration.library.fileSharing else {
+        throw SQLiteFeatureUnavailableError(
+          libraryName: configuration.library.name,
+          feature: .multiprocessFileSharing
+        )
+      }
       let identifier = id ?? .forDatabase(path: path)
       self.init(
         writer: try SQLitePool(
@@ -48,6 +54,28 @@
         id: identifier,
         transport: try UnixDatagramIPCTransport.shared(configuration: coordination),
         onAnnouncementFailure: onAnnouncementFailure
+      )
+    }
+  }
+#endif
+
+#if BuiltInSQLite
+  extension OrbitDatabase where Writer == SQLitePool {
+    /// Opens a pooled SQLite database confined to this process.
+    ///
+    /// This is the supported `OrbitDatabase` convenience for a library such as Turso that permits
+    /// concurrent connections within one process but cannot coordinate ordinary file access with
+    /// another process.
+    public convenience init(
+      localPath path: OrbitDatabasePath,
+      configuration: SQLiteConfiguration = .default,
+      id: OrbitDatabaseIdentifier? = nil
+    ) throws {
+      let identifier = id ?? .forDatabase(path: path)
+      self.init(
+        writer: try SQLitePool(path: path, configuration: configuration, identifier: identifier),
+        id: identifier,
+        transport: nil
       )
     }
   }

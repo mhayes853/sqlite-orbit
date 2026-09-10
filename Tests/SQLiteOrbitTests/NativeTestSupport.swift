@@ -9,6 +9,8 @@
       .system
     #elseif SQLCipher
       .sqlCipher
+    #elseif Turso
+      .turso
     #endif
   }
 

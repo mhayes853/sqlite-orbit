@@ -10,10 +10,10 @@
   ) -> SQLiteLibrary {
     var library = builtInTestLibrary
     library.encryption = SQLiteLibrary.Encryption(
-      key_v2: { _, _, bytes, count in
+      key: { _, _, bytes, count in
         record(bytes.map { Array(UnsafeRawBufferPointer(start: $0, count: Int(count))) } ?? [])
       },
-      rekey_v2: { _, _, _, _ in SQLiteResultCode.ok.rawValue }
+      rekey: { _, _, _, _ in SQLiteResultCode.ok.rawValue }
     )
     return library
   }
@@ -26,13 +26,15 @@
       return SQLiteResultCode.ok.rawValue
     }
 
-    let resultCodes = library.extended_result_codes
-    library.extended_result_codes = { (connection: OpaquePointer?, on: Int32) -> Int32 in
+    let resultCodes = library.connections.setExtendedResultCodes
+    library.connections.setExtendedResultCodes = {
+      (connection: OpaquePointer?, on: Int32) -> Int32 in
       events.withLock { $0.append("extended_result_codes") }
       return resultCodes(connection, on)
     }
-    let timeout = library.busy_timeout
-    library.busy_timeout = { (connection: OpaquePointer?, milliseconds: Int32) -> Int32 in
+    let timeout = library.connections.setBusyTimeout
+    library.connections.setBusyTimeout = {
+      (connection: OpaquePointer?, milliseconds: Int32) -> Int32 in
       events.withLock { $0.append("busy_timeout") }
       return timeout(connection, milliseconds)
     }
@@ -185,9 +187,9 @@
 
     @Test
     func macroBuildsAnEncryptedTableFromAQualifiedModule() {
-      let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
+      let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption])
 
-      #expect(library.libversion_number() == SQLiteLibrary.sqlCipher.libversion_number())
+      #expect(library.runtime.versionNumber() == SQLiteLibrary.sqlCipher.runtime.versionNumber())
       #expect(library.encryption != nil)
     }
 

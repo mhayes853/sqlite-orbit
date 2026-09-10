@@ -98,10 +98,9 @@ public struct SQLiteConfiguration: Sendable {
 /// A native callback installed on every connection a configuration opens.
 ///
 /// This is the escape hatch for registering what the package does not model — an update hook or a
-/// virtual table module. The closure is handed the `sqlite3 *` once the connection has been
-/// configured, along with the ``SQLiteLibrary`` that connection was opened through, and returns a
-/// SQLite result code. Being handed the library is what lets a setup call the same build the
-/// connection belongs to, and lets one that cannot refuse the connection outright.
+/// virtual table module. The closure receives primitive ``SQLiteConnectionAccess`` once the
+/// connection has been configured. It exposes the raw connection and its library, and can execute
+/// a `QueryFragment` with bindings.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
 ///
@@ -110,33 +109,36 @@ public struct SQLiteConfiguration: Sendable {
 /// ```swift
 /// var configuration = SQLiteConfiguration.default
 /// configuration.connectionSetups.append(
-///   SQLiteConnectionSetup { connection, library in
-///     library.busy_timeout(connection, 10_000)
+///   SQLiteConnectionSetup { connection in
+///     connection.sqlite.connections.setBusyTimeout(connection.sqliteConnection, 10_000)
 ///   }
 /// )
 /// ```
 public struct SQLiteConnectionSetup: Sendable {
-  private let install: @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32
+  private let install: @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
 
   /// Creates a setup from a closure run on every connection.
   ///
-  /// - Parameter install: Receives the `sqlite3 *` and the library it was opened through, and
-  ///   returns a SQLite result code. Anything other than `SQLITE_OK` fails the open.
-  public init(install: @escaping @Sendable (OpaquePointer, SQLiteLibrary) throws -> Int32) {
+  /// - Parameter install: Receives primitive access to the connection and returns a SQLite result
+  ///   code. Anything other than `SQLITE_OK` fails the open.
+  public init(
+    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
+  ) {
     self.install = install
   }
 
-  /// Installs the setup on `connection`, which was opened through `library`.
-  ///
-  /// - Parameters:
-  ///   - connection: The `sqlite3 *` to install on.
-  ///   - library: The SQLite build that connection was opened through.
+  /// Installs the setup on `connection`.
   /// - Throws: Whatever the setup threw, or a ``SQLiteError`` when it reported a result code other
   ///   than `SQLITE_OK`. Either fails the open that ran it.
-  public func callAsFunction(_ connection: OpaquePointer, library: SQLiteLibrary) throws {
-    let code = try install(connection, library)
+  public func callAsFunction(_ connection: borrowing SQLiteConnectionAccess) throws {
+    let code = try install(connection)
     guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(by: library, on: connection, code: code, sql: nil)
+      throw SQLiteError.reported(
+        by: connection.sqlite,
+        on: connection.sqliteConnection,
+        code: code,
+        sql: nil
+      )
     }
   }
 }
@@ -154,7 +156,21 @@ extension SQLiteConfiguration {
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
   ) {
     connectionSetups.append(
-      SQLiteConnectionSetup { orbitInstall(collation: collation, on: $0, library: $1) }
+      SQLiteConnectionSetup(
+        install: { connection in
+          guard connection.sqlite.collations != nil else {
+            throw SQLiteFeatureUnavailableError(
+              libraryName: connection.sqlite.name,
+              feature: .collations
+            )
+          }
+          return orbitInstall(
+            collation: collation,
+            on: connection.sqliteConnection,
+            library: connection.sqlite
+          )
+        }
+      )
     )
   }
 
@@ -173,7 +189,21 @@ extension SQLiteConfiguration {
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
     connectionSetups.append(
-      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+      SQLiteConnectionSetup(
+        install: { connection in
+          guard connection.sqlite.scalarFunctions != nil else {
+            throw SQLiteFeatureUnavailableError(
+              libraryName: connection.sqlite.name,
+              feature: .scalarFunctions
+            )
+          }
+          return orbitInstall(
+            function: function,
+            on: connection.sqliteConnection,
+            library: connection.sqlite
+          )
+        }
+      )
     )
   }
 
@@ -187,7 +217,21 @@ extension SQLiteConfiguration {
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
     connectionSetups.append(
-      SQLiteConnectionSetup { orbitInstall(function: function, on: $0, library: $1) }
+      SQLiteConnectionSetup(
+        install: { connection in
+          guard connection.sqlite.aggregateFunctions != nil else {
+            throw SQLiteFeatureUnavailableError(
+              libraryName: connection.sqlite.name,
+              feature: .aggregateFunctions
+            )
+          }
+          return orbitInstall(
+            function: function,
+            on: connection.sqliteConnection,
+            library: connection.sqlite
+          )
+        }
+      )
     )
   }
 }
@@ -201,7 +245,24 @@ extension SQLiteConfiguration {
     /// configuration.isForeignKeysEnabled = false
     /// ```
     public static var `default`: Self {
-      Self(library: .builtIn)
+      #if Turso
+        .turso
+      #else
+        Self(library: .builtIn)
+      #endif
+    }
+  }
+#endif
+
+#if Turso
+  extension SQLiteConfiguration {
+    /// A configuration for the local Rust Turso database engine.
+    ///
+    /// Turso does not currently implement `PRAGMA trusted_schema`. Its compatibility layer also
+    /// cannot install Swift functions, aggregates, or collations, so trusted schema is enabled to
+    /// describe the behavior Turso actually provides rather than claiming the default protection.
+    public static var turso: Self {
+      Self(library: .turso, isTrustedSchemaEnabled: true)
     }
   }
 #endif

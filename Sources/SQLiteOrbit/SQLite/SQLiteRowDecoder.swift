@@ -20,7 +20,7 @@ struct SQLiteRowDecoder: QueryDecoder {
 
   @inlinable
   mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
-    switch library.pointee.column_type(statement, currentIndex) {
+    switch library.pointee.columns.type(statement, currentIndex) {
     case SQLiteColumnType.null.rawValue:
       currentIndex += 1
       return nil
@@ -32,15 +32,15 @@ struct SQLiteRowDecoder: QueryDecoder {
     defer { currentIndex += 1 }
     // SQLite asks for the value before its size: reading the size can convert the value, and a
     // pointer taken before that conversion is the one it invalidates.
-    guard let bytes = library.pointee.column_blob(statement, currentIndex) else { return [] }
-    let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
+    guard let bytes = library.pointee.columns.blob(statement, currentIndex) else { return [] }
+    let byteCount = Int(library.pointee.columns.byteCount(statement, currentIndex))
     guard byteCount > 0 else { return [] }
     return [UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount))
   }
 
   @inlinable
   mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-    switch library.pointee.column_type(statement, currentIndex) {
+    switch library.pointee.columns.type(statement, currentIndex) {
     case SQLiteColumnType.null.rawValue:
       currentIndex += 1
       return nil
@@ -50,12 +50,12 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch(Double.self)
     }
     defer { currentIndex += 1 }
-    return library.pointee.column_double(statement, currentIndex)
+    return library.pointee.columns.double(statement, currentIndex)
   }
 
   @inlinable
   mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-    switch library.pointee.column_type(statement, currentIndex) {
+    switch library.pointee.columns.type(statement, currentIndex) {
     case SQLiteColumnType.null.rawValue:
       currentIndex += 1
       return nil
@@ -65,7 +65,7 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch(Int64.self)
     }
     defer { currentIndex += 1 }
-    return library.pointee.column_int64(statement, currentIndex)
+    return library.pointee.columns.int64(statement, currentIndex)
   }
 
   @inlinable
@@ -79,7 +79,7 @@ struct SQLiteRowDecoder: QueryDecoder {
 
   @inlinable
   mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-    switch library.pointee.column_type(statement, currentIndex) {
+    switch library.pointee.columns.type(statement, currentIndex) {
     case SQLiteColumnType.null.rawValue:
       currentIndex += 1
       return nil
@@ -90,8 +90,8 @@ struct SQLiteRowDecoder: QueryDecoder {
     }
     defer { currentIndex += 1 }
     // The value is read before its size, which is the order SQLite documents as safe.
-    guard let text = library.pointee.column_text(statement, currentIndex) else { return "" }
-    let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
+    guard let text = library.pointee.columns.text(statement, currentIndex) else { return "" }
+    let byteCount = Int(library.pointee.columns.byteCount(statement, currentIndex))
     guard byteCount > 0 else { return "" }
     return String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
   }
@@ -124,7 +124,7 @@ struct SQLiteRowDecoder: QueryDecoder {
 
   @inlinable
   mutating func decode(_ columnType: UUID.Type) throws(QueryDecodingError) -> UUID? {
-    switch library.pointee.column_type(statement, currentIndex) {
+    switch library.pointee.columns.type(statement, currentIndex) {
     case SQLiteColumnType.null.rawValue:
       currentIndex += 1
       return nil
@@ -134,10 +134,10 @@ struct SQLiteRowDecoder: QueryDecoder {
       throw QueryDecodingError.typeMismatch(UUID.self)
     }
     defer { currentIndex += 1 }
-    guard let text = library.pointee.column_text(statement, currentIndex) else {
+    guard let text = library.pointee.columns.text(statement, currentIndex) else {
       throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
     }
-    let byteCount = Int(library.pointee.column_bytes(statement, currentIndex))
+    let byteCount = Int(library.pointee.columns.byteCount(statement, currentIndex))
     let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
     if let uuid = UUID(orbitUTF8: utf8) {
       return uuid
@@ -167,7 +167,7 @@ extension SQLiteRowDecoder {
         columnIndex: currentIndex,
         reason:
           "to decode \(columnType), but found "
-          + orbitStorageClassName(library.pointee.column_type(statement, currentIndex))
+          + orbitStorageClassName(library.pointee.columns.type(statement, currentIndex))
       )
     case .other(let error):
       return error
@@ -211,9 +211,9 @@ public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
   ) {
     self.columnIndex = Int(columnIndex)
     self.columnName =
-      library.pointee.column_name(statement, columnIndex).map(String.init(cString:)) ?? "?"
+      library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?"
     self.reason = reason
-    self.sql = library.pointee.sql(statement).map(String.init(cString:)) ?? ""
+    self.sql = library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
   }
 
   /// The column, its name, what was expected of it, and the SQL that produced it.

@@ -93,9 +93,12 @@ the way it always did.
 
 ## Using your own SQLite build
 
-The core module imports no SQLite header. Every call goes through `SQLiteLibrary`, a struct of
-closures bound to SQLite's entry points, so the package can drive a build it was never linked
-against — SQLCipher, a custom amalgamation, or one with extensions compiled in:
+The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
+entry points are grouped by responsibility, including distinct statement preparation, execution,
+and inspection APIs. Authorizers, trusted-schema control, scalar functions, aggregate functions,
+collations, and encryption are independent optional operations. The package can therefore drive a
+build it was never linked against — SQLCipher, a custom amalgamation, or one with extensions
+compiled in:
 
 ```swift
 let library = #sqliteLibrary(module: "MySQLite")
@@ -104,11 +107,25 @@ var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitDatabase(path: databasePath, configuration: configuration)
 ```
 
-Set `encryption: true` when the module also exports SQLite's codec entry points, such as SQLCipher:
+The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
+exports. `.standard` is the default; add encryption for a module such as SQLCipher:
 
 ```swift
-let library = #sqliteLibrary(module: "SQLCipher", encryption: true)
+let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption])
 ```
+
+The option set only controls macro expansion—it is not retained as runtime capability state. Code
+checks the optional operation it needs. For example, a custom library can implement trusted-schema
+control as a function over the same primitive connection access used by setup callbacks and
+transactions:
+
+```swift
+library.trustedSchema = { connection, enabled in
+  try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
+}
+```
+
+`SQLiteConnectionAccess.execute` also accepts a `QueryFragment`, including safely bound values.
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
 it links no SQLite at all, leaving the library entirely to you:
@@ -125,7 +142,7 @@ The `SQLCipher` trait links SQLCipher instead and vends `SQLiteLibrary.sqlCipher
 exclusive with `SystemSQLite`: SQLCipher is a fork of SQLite and exports the same `sqlite3_*`
 symbols, so enabling both would link two builds under one set of names and leave the link order to
 decide which one every call reaches. Naming any trait leaves the defaults out, which is what makes
-the two exclusive in practice:
+the traits exclusive in practice:
 
 ```swift
 .package(
@@ -134,6 +151,41 @@ the two exclusive in practice:
   traits: ["SQLCipher"]
 )
 ```
+
+The experimental `Turso` trait drives Turso's local Rust engine through its SQLite-compatible C
+API and vends `SQLiteLibrary.turso`:
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["Turso"]
+)
+```
+
+For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
+linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
+SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
+module and the bundle both expose the module as `TursoSQLite3`, so publishing the bundle does not
+change SQLiteOrbit's Swift source.
+
+Turso's compatibility surface is still smaller than SQLite's. SQLiteOrbit handles that boundary
+explicitly:
+
+- Missing authorizer callbacks broaden observed reads and writes to the whole database, and every
+  write invalidates the statement cache. This loses precision, not correctness.
+- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
+- Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
+  multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
+  unimplemented entry point. Use `OrbitDatabase(localPath:)` for a pooled database confined to one
+  process.
+- Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
+  cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
+  there is no safe client-side substitute for native early finalization.
+
+The unavailable operations are `nil` in `SQLiteLibrary.turso`, while its `fileSharing` value is
+`.singleProcess`. As Turso fills in its compatibility API, each operation can be enabled directly
+without engine-specific branches throughout the driver.
 
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
@@ -147,9 +199,9 @@ try await database.read { transaction in
   let library = transaction.sqlite
   var statement: OpaquePointer?
   _ = "SELECT 1".withCString {
-    library.prepare_v3(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
+    library.statements.preparation.prepare(transaction.sqliteConnection, $0, -1, 0, &statement, nil)
   }
-  defer { _ = library.finalize(statement) }
+  defer { _ = library.statements.execution.finalize(statement) }
   // ...
 }
 ```
@@ -268,8 +320,8 @@ in yourself:
 ```swift
 var library = myCipherBuild
 library.encryption = SQLiteLibrary.Encryption(
-  key_v2: sqlite3_key_v2,
-  rekey_v2: sqlite3_rekey_v2
+  key: sqlite3_key_v2,
+  rekey: sqlite3_rekey_v2
 )
 
 var configuration = SQLiteConfiguration(library: library)
@@ -294,9 +346,14 @@ reach material you hold: the `String` a passphrase was read from stays yours to 
 
 ```swift
 configuration.connectionSetups.append(
-  SQLiteConnectionSetup { connection, library in
+  SQLiteConnectionSetup { connection in
     key.withUnsafeBytes { bytes in
-      library.encryption!.rekey_v2(connection, "main", bytes.baseAddress, Int32(bytes.count))
+      connection.sqlite.encryption!.rekey(
+        connection.sqliteConnection,
+        "main",
+        bytes.baseAddress,
+        Int32(bytes.count)
+      )
     }
   }
 )

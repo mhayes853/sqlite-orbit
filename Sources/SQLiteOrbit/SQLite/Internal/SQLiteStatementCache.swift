@@ -49,12 +49,12 @@ final class SQLiteStatementCache {
     var statement: OpaquePointer?
     let (code, authorizations) = authorizer.recordingAuthorizations {
       sql.withCString {
-        library.pointee.prepare_v3(connection, $0, -1, flags, &statement, nil)
+        library.pointee.statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
       }
     }
     guard code == SQLiteResultCode.ok.rawValue, let statement else {
       if let statement {
-        _ = library.pointee.finalize(statement)
+        _ = library.pointee.statements.execution.finalize(statement)
       }
       throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
     }
@@ -71,19 +71,19 @@ final class SQLiteStatementCache {
 
   func refreshedMetadata(for statement: OpaquePointer, sql: String) -> SQLitePreparedStatement? {
     guard let probe = try? prepare(sql, flags: 0) else { return nil }
-    defer { _ = library.pointee.finalize(probe.pointer) }
+    defer { _ = library.pointee.statements.execution.finalize(probe.pointer) }
     return SQLitePreparedStatement(pointer: statement, metadata: probe)
   }
 
   func checkIn(_ statement: SQLitePreparedStatement, sql: String) {
-    _ = library.pointee.reset(statement.pointer)
-    _ = library.pointee.clear_bindings(statement.pointer)
+    _ = library.pointee.statements.execution.reset(statement.pointer)
+    _ = library.pointee.statements.execution.clearBindings(statement.pointer)
     guard
       statement.cacheGeneration == generation,
       idle.count < capacity,
       idle[sql] == nil
     else {
-      _ = library.pointee.finalize(statement.pointer)
+      _ = library.pointee.statements.execution.finalize(statement.pointer)
       return
     }
     idle[sql] = statement
@@ -130,10 +130,10 @@ final class SQLiteStatementCache {
     let (sql, bindings) = prepareQuery(query)
     var statement: OpaquePointer?
     let code = sql.withCString {
-      library.pointee.prepare_v3(connection, $0, -1, 0, &statement, nil)
+      library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
     }
     guard code == SQLiteResultCode.ok.rawValue, let statement else { return nil }
-    defer { _ = library.pointee.finalize(statement) }
+    defer { _ = library.pointee.statements.execution.finalize(statement) }
     do {
       for (offset, binding) in bindings.enumerated() {
         try bind(binding, to: statement, at: Int32(offset + 1), library: library)
@@ -143,16 +143,16 @@ final class SQLiteStatementCache {
     }
     var columns: Set<String> = []
     while true {
-      switch library.pointee.step(statement) {
+      switch library.pointee.statements.execution.step(statement) {
       case SQLiteResultCode.done.rawValue:
         return .columns(columns)
       case SQLiteResultCode.row.rawValue:
-        if library.pointee.column_int64(statement, 2) != 0 { return .table }
+        if library.pointee.columns.int64(statement, 2) != 0 { return .table }
 
-        let hidden = library.pointee.column_int64(statement, 1)
+        let hidden = library.pointee.columns.int64(statement, 1)
         guard hidden == 2 || hidden == 3 else { continue }
-        guard let text = library.pointee.column_text(statement, 0) else { return nil }
-        let count = Int(library.pointee.column_bytes(statement, 0))
+        guard let text = library.pointee.columns.text(statement, 0) else { return nil }
+        let count = Int(library.pointee.columns.byteCount(statement, 0))
         columns.insert(
           String(decoding: UnsafeBufferPointer(start: text, count: count), as: UTF8.self)
             .asciiLowercased
@@ -165,7 +165,7 @@ final class SQLiteStatementCache {
 
   func finalizeAll() {
     for statement in idle.values {
-      _ = library.pointee.finalize(statement.pointer)
+      _ = library.pointee.statements.execution.finalize(statement.pointer)
     }
     idle.removeAll()
   }
@@ -211,7 +211,7 @@ struct SQLitePreparedStatement {
       ?? authorizations.reduce(into: OrbitDatabaseRegion.empty) { region, authorization in
         region.formUnion(authorization.changedRegion { _, _ in nil })
       }
-    if changedRegion.isEmpty && library.pointee.stmt_readonly(pointer) == 0 {
+    if changedRegion.isEmpty && library.pointee.statements.inspection.isReadOnly(pointer) == 0 {
       changedRegion = .fullDatabase
     }
     self.changedRegion = changedRegion
@@ -228,8 +228,13 @@ func sqliteInvalidatesStatementCache(
   statement: OpaquePointer,
   library: UnsafePointer<SQLiteLibrary>
 ) -> Bool {
-  authorizations.contains(where: \.invalidatesStatementCache)
-    || (library.pointee.stmt_readonly(statement) == 0
+  // Without an authorizer there is no safe way to distinguish DDL and connection-changing
+  // pragmas from ordinary mutations. Invalidating after every write is broader but correct.
+  if authorizations.isEmpty {
+    return library.pointee.statements.inspection.isReadOnly(statement) == 0
+  }
+  return authorizations.contains(where: \.invalidatesStatementCache)
+    || (library.pointee.statements.inspection.isReadOnly(statement) == 0
       && authorizations.contains { $0.action == .pragma })
 }
 
