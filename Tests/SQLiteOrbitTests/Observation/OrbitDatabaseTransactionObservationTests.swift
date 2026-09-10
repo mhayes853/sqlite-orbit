@@ -444,6 +444,129 @@
       )
       _ = subscription
     }
+
+    @Test
+    func contextReportsTheLifecycleToDatabaseAndScopedObservers() throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try driver.writeBlocking { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE items (id INTEGER PRIMARY KEY);
+          INSERT INTO items VALUES (1);
+          """
+        )
+      }
+      let databaseObservers = OrbitDatabaseTransactionObservers()
+      let databaseObserver = RecordingTransactionObserver()
+      let subscription = databaseObservers.subscribe(databaseObserver)
+      let scopedObserver = RecordingTransactionObserver()
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: databaseObservers)
+      let region = OrbitDatabaseRegion(table: "items")
+
+      try driver.readBlocking { transaction in
+        try context.withObserver(scopedObserver) {
+          context.didChange(in: region)
+          try context.willCommit(transaction)
+          context.didCommit(origin: .local)
+          context.didChange(in: region)
+          context.didRollback()
+        }
+        context.didChange(in: region)
+        context.didCommit(origin: .local)
+      }
+
+      #expect(
+        databaseObserver.events == [
+          .didChange(region),
+          .willCommit(1),
+          .didCommit(.local),
+          .didChange(region),
+          .didRollback,
+          .didChange(region),
+          .didCommit(.local)
+        ]
+      )
+      #expect(
+        scopedObserver.events == [
+          .didChange(region),
+          .willCommit(1),
+          .didCommit(.local),
+          .didChange(region),
+          .didRollback
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func contextCommitsPendingChangesOnlyWhenThereAreSome() {
+      let databaseObservers = OrbitDatabaseTransactionObservers()
+      let databaseObserver = RecordingTransactionObserver()
+      let subscription = databaseObservers.subscribe(databaseObserver)
+      let scopedObserver = RecordingTransactionObserver()
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: databaseObservers)
+      let region = OrbitDatabaseRegion(table: "items")
+
+      context.withObserver(scopedObserver) {
+        context.didCommitPendingChanges()
+        context.didChange(in: .empty)
+        context.didCommitPendingChanges()
+
+        context.didChange(in: region)
+        context.didChange(in: region)
+        context.didCommitPendingChanges()
+        context.didCommitPendingChanges()
+
+        context.didChange(in: region)
+        context.didRollback()
+        context.didCommitPendingChanges()
+
+        context.didChange(in: region)
+        context.didCommit(origin: .local)
+        context.didCommitPendingChanges()
+      }
+
+      let expected: [RecordedTransactionEvent] = [
+        .didChange(region),
+        .didChange(region),
+        .didCommit(.local),
+        .didChange(region),
+        .didRollback,
+        .didChange(region),
+        .didCommit(.local)
+      ]
+      #expect(databaseObserver.events == expected)
+      #expect(scopedObserver.events == expected)
+      _ = subscription
+    }
+
+    @Test
+    func observerScopedToAWriteBodyDoesNotSeeTheCommitThatFollowsIt() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = RecordingTransactionObserver()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+      let scopedObserver = RecordingTransactionObserver()
+
+      try await driver.write { transaction in
+        try transaction.base.withObserver(scopedObserver) {
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        }
+      }
+
+      let table = OrbitDatabaseRegion(table: "items")
+      #expect(
+        observer.events == [
+          .didChange(table),
+          .willCommit(1),
+          .didCommit(.local)
+        ]
+      )
+      #expect(scopedObserver.events == [.didChange(table)])
+      _ = subscription
+    }
   }
 
   private enum RecordedTransactionEvent: Equatable, Sendable {

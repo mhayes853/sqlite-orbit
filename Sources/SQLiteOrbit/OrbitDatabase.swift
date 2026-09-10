@@ -262,13 +262,44 @@ private final class OrbitDatabaseObservationHub: Sendable {
   }
 }
 
-private final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
-  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
+/// Records the regions an access changes, keeping apart those whose transaction has committed from
+/// those whose transaction has not ended yet.
+///
+/// A change is pending until the transaction it was made in commits, when it joins the committed
+/// region, or rolls back, when it is discarded. An access that runs several transactions can then
+/// announce only what actually committed.
+final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
+  private struct Regions {
+    var committed = OrbitDatabaseRegion.empty
+    var pending = OrbitDatabaseRegion.empty
+  }
 
-  var region: OrbitDatabaseRegion { recordedRegion.withLock { $0 } }
+  private let regions = Lock(Regions())
+
+  /// The union of the changes whose transaction has committed while this recorder was registered.
+  var committedRegion: OrbitDatabaseRegion { regions.withLock { $0.committed } }
+
+  /// Every change not rolled back while this recorder was registered, committed or not.
+  ///
+  /// A write transaction commits after its body returns and so after the recorder scoped to the
+  /// body is gone, which leaves all of its changes pending here.
+  var changedRegion: OrbitDatabaseRegion {
+    regions.withLock { $0.committed.union($0.pending) }
+  }
 
   func databaseDidChange(in region: OrbitDatabaseRegion) {
-    recordedRegion.withLock { $0.formUnion(region) }
+    regions.withLock { $0.pending.formUnion(region) }
+  }
+
+  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
+    regions.withLock { regions in
+      regions.committed.formUnion(regions.pending)
+      regions.pending = .empty
+    }
+  }
+
+  func databaseDidRollback() {
+    regions.withLock { $0.pending = .empty }
   }
 }
 
@@ -280,6 +311,6 @@ extension SQLiteWriteTransaction {
     let result = try base.observations.withObserver(recorder) {
       try body(self)
     }
-    return (result, recorder.region)
+    return (result, recorder.changedRegion)
   }
 }

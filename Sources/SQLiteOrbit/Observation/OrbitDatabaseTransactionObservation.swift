@@ -42,6 +42,13 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// reported by another handle in this process, or by another process, reports its aggregate region
 /// followed immediately by `databaseDidCommit` because it is observed after the commit succeeds.
 ///
+/// A change made through the observed handle outside a transaction, where SQLite commits each
+/// statement on its own as it finishes, is reported in that same shape: its regions followed by
+/// `databaseDidCommit` with a ``OrbitDatabaseTransactionOrigin/local`` origin, and no
+/// `databaseWillCommit`, since there is no moment before the commit to observe. Such a change is
+/// reported as committed even when its statement then fails, because an observer that fetches
+/// again needlessly costs less than one that misses a change.
+///
 /// Prefer ``OrbitValueObservation`` for tracking a query; conform to this protocol when you need
 /// the transaction lifecycle itself.
 ///
@@ -66,9 +73,10 @@ public protocol OrbitDatabaseTransactionObserver: Sendable {
   /// Called when a transaction may have changed a database region.
   ///
   /// A local change remains provisional until ``databaseDidCommit(_:)``. If the transaction rolls
-  /// back, ``databaseDidRollback()`` follows instead. A change reported by another handle is
-  /// already committed and is followed immediately by `databaseDidCommit`. The callback must not
-  /// access the database.
+  /// back, ``databaseDidRollback()`` follows instead. A local change made outside a transaction is
+  /// followed by `databaseDidCommit` once its statement finishes. A change reported by another
+  /// handle is already committed and is followed immediately by `databaseDidCommit`. The callback
+  /// must not access the database.
   ///
   /// - Parameter region: The region the transaction may have changed.
   func databaseDidChange(in region: OrbitDatabaseRegion)
@@ -76,7 +84,8 @@ public protocol OrbitDatabaseTransactionObserver: Sendable {
   /// Called before a local transaction commits.
   ///
   /// The transaction exposes the read capability, so its structured-query APIs can inspect the
-  /// final transaction state but cannot mutate it. Throwing aborts the write transaction.
+  /// final transaction state but cannot mutate it. Throwing aborts the write transaction. Changes
+  /// made outside a transaction commit statement by statement and are not preceded by this call.
   ///
   /// - Parameter transaction: The committing transaction, readable but not writable.
   /// - Throws: Any error, which rolls the write transaction back and fails the write.
@@ -190,9 +199,18 @@ final class OrbitDatabaseTransactionObservers: Sendable {
 /// A context is confined to one serialized SQLite connection access. Keeping scoped observers here
 /// instead of in the database-wide registry prevents concurrent pool reads from seeing one
 /// another's events.
+///
+/// Every event goes to the database-wide observers first and then to the scoped observers
+/// registered at the moment it happens, so a scoped observer sees the commits and rollbacks of the
+/// transactions that end while it is registered, and nothing of those that end after it is gone.
 final class OrbitDatabaseTransactionObservationContext {
   private let databaseObservers: OrbitDatabaseTransactionObservers?
   private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
+
+  // Whether a change has been reported since the last commit or rollback. Outside a transaction
+  // SQLite commits each statement on its own, and this is what tells whether one that finished
+  // left anything to report as committed.
+  private var hasPendingChanges = false
 
   init(databaseObservers: OrbitDatabaseTransactionObservers?) {
     self.databaseObservers = databaseObservers
@@ -217,9 +235,46 @@ final class OrbitDatabaseTransactionObservationContext {
 
   func didChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
+    hasPendingChanges = true
     databaseObservers?.didChange(in: region)
     for observer in scopedObservers {
       observer.databaseDidChange(in: region)
     }
+  }
+
+  func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+    try databaseObservers?.willCommit(transaction)
+    for observer in scopedObservers {
+      try observer.databaseWillCommit(transaction)
+    }
+  }
+
+  func didCommit(origin: OrbitDatabaseTransactionOrigin) {
+    hasPendingChanges = false
+    databaseObservers?.didCommit(origin: origin)
+    let commit = OrbitDatabaseCommit(origin: origin)
+    for observer in scopedObservers {
+      observer.databaseDidCommit(commit)
+    }
+  }
+
+  func didRollback() {
+    hasPendingChanges = false
+    databaseObservers?.didRollback()
+    for observer in scopedObservers {
+      observer.databaseDidRollback()
+    }
+  }
+
+  /// Reports the changes made since the last commit or rollback as committed, if there are any.
+  ///
+  /// This is for a statement run outside a transaction, which SQLite commits as it finishes. There
+  /// is no moment before that commit to call `databaseWillCommit` in, so the changes are reported
+  /// in the shape of a commit made by another handle. A statement that fails after its changes were
+  /// reported still counts as having committed them: an observer told about a change that did not
+  /// happen only fetches again, while one never told about a change that did misses it.
+  func didCommitPendingChanges() {
+    guard hasPendingChanges else { return }
+    didCommit(origin: .local)
   }
 }

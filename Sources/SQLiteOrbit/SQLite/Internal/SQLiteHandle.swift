@@ -187,16 +187,18 @@ struct SQLiteHandle: ~Copyable {
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     try execute("BEGIN IMMEDIATE TRANSACTION")
     statements.invalidateIfSchemaChanged()
+    // The lifecycle is reported through the access's context rather than straight to `observers`,
+    // so that observers scoped to the access see the transaction end as well.
+    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
     do {
-      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
-      try observers?.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
+      try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
       try endTransaction(with: "COMMIT")
-      observers?.didCommit(origin: .local)
+      observations.didCommit(origin: .local)
       return value
     } catch {
       rollbackIgnoringFailure()
-      observers?.didRollback()
+      observations.didRollback()
       throw error
     }
   }

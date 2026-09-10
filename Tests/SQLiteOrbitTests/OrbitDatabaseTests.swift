@@ -228,6 +228,47 @@
     }
   }
 
+  @Suite
+  struct OrbitDatabaseRegionRecorderTests {
+    @Test
+    func recorderKeepsCommittedRegionsApartFromRolledBackAndPendingOnes() {
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let committed = OrbitDatabaseRegion(table: "committed")
+      let rolledBack = OrbitDatabaseRegion(table: "rolled_back")
+      let autocommitted = OrbitDatabaseRegion(table: "autocommitted")
+      let pending = OrbitDatabaseRegion(table: "pending")
+
+      context.withObserver(recorder) {
+        context.didChange(in: committed)
+        context.didCommit(origin: .local)
+        context.didChange(in: rolledBack)
+        context.didRollback()
+        context.didChange(in: autocommitted)
+        context.didCommitPendingChanges()
+        context.didChange(in: pending)
+      }
+
+      #expect(recorder.committedRegion == committed.union(autocommitted))
+      #expect(recorder.changedRegion == committed.union(autocommitted).union(pending))
+    }
+
+    @Test
+    func recorderMissesTheEventsOfTransactionsEndingAfterItsScope() {
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let region = OrbitDatabaseRegion(table: "items")
+
+      context.withObserver(recorder) {
+        context.didChange(in: region)
+      }
+      context.didRollback()
+
+      #expect(recorder.committedRegion == .empty)
+      #expect(recorder.changedRegion == region)
+    }
+  }
+
   private func makeAnnouncingDatabase(
     id: OrbitDatabaseIdentifier? = nil,
     failure: (any Error)? = nil,
