@@ -42,8 +42,9 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// reported by another handle in this process, or by another process, reports its aggregate region
 /// followed immediately by `databaseDidCommit` because it is observed after the commit succeeds.
 ///
-/// A change made through the observed handle outside a transaction, where SQLite commits each
-/// statement on its own as it finishes, is reported in that same shape: its regions followed by
+/// A change made through the observed handle outside a transaction, such as in
+/// ``OrbitDatabaseWriter/writeWithoutTransaction(_:)``, where SQLite commits each statement on its
+/// own as it finishes, is reported in that same shape: its regions followed by
 /// `databaseDidCommit` with a ``OrbitDatabaseTransactionOrigin/local`` origin, and no
 /// `databaseWillCommit`, since there is no moment before the commit to observe. Such a change is
 /// reported as committed even when its statement then fails, because an observer that fetches

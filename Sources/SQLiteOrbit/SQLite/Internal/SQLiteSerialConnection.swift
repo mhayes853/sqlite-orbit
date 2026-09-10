@@ -1,6 +1,6 @@
 import Dispatch
 
-actor SQLiteConnection {
+actor SQLiteSerialConnection {
   // Reached from `performBlocking` without hopping onto the actor: what serializes access to the
   // handle is the connection's queue, which is also this actor's executor.
   private nonisolated(unsafe) let handle: SQLiteHandle
@@ -49,6 +49,34 @@ actor SQLiteConnection {
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     try performBlocking { handle in try handle.write(observers: observers, body) }
+  }
+
+  func readWithoutTransaction<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) async throws -> Result {
+    try await perform { handle in try handle.readWithoutTransaction(observers: observers, body) }
+  }
+
+  func writeWithoutTransaction<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    try await perform { handle in try handle.writeWithoutTransaction(observers: observers, body) }
+  }
+
+  nonisolated func readWithoutTransactionBlocking<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    try performBlocking { handle in try handle.readWithoutTransaction(observers: observers, body) }
+  }
+
+  nonisolated func writeWithoutTransactionBlocking<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    try performBlocking { handle in try handle.writeWithoutTransaction(observers: observers, body) }
   }
 
   private nonisolated func performBlocking<Result: Sendable>(

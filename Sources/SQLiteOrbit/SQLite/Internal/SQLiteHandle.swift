@@ -143,15 +143,44 @@ struct SQLiteHandle: ~Copyable {
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    return try withQueryOnly { try runRead(observations: observations, body) }
+  }
+
+  borrowing func readWithoutTransaction<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    return try withQueryOnly {
+      try withoutTransaction { address, state in
+        try body(
+          SQLiteReadConnection(
+            handle: self,
+            at: address,
+            observations: observations,
+            state: state
+          )
+        )
+      }
+    }
+  }
+
+  private borrowing func withQueryOnly<Result: ~Copyable>(
+    _ body: () throws -> Result
+  ) throws -> Result {
     // A connection opened read-only refuses writes already. One that can write must be told not
-    // to for the duration, so that a read attempting a mutation fails rather than quietly having
-    // it discarded by the rollback below.
-    guard !isReadOnly else { return try runRead(observers: observers, body) }
+    // to for the duration, so that a read attempting a mutation fails rather than having it
+    // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
+    // its own.
+    guard !isReadOnly else { return try body() }
     // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
     // keyword as a different expression kind than the pragma implementation accepts.
     try execute("PRAGMA query_only = 1")
     do {
-      let value = try runRead(observers: observers, body)
+      let value = try body()
       try execute("PRAGMA query_only = 0")
       return value
     } catch {
@@ -160,15 +189,16 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  private borrowing func runRead<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers?,
+  // Every read transaction begins here, whether `read` opens it or a read connection's
+  // `transaction` does.
+  borrowing func runRead<Result: ~Copyable>(
+    observations: OrbitDatabaseTransactionObservationContext,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
-      let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
       value = try body(SQLiteReadTransaction(handle: self, observations: observations))
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
@@ -185,11 +215,72 @@ struct SQLiteHandle: ~Copyable {
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    try execute("BEGIN IMMEDIATE TRANSACTION")
-    statements.invalidateIfSchemaChanged()
     // The lifecycle is reported through the access's context rather than straight to `observers`,
     // so that observers scoped to the access see the transaction end as well.
     let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    return try runWrite(observations: observations, body)
+  }
+
+  borrowing func writeWithoutTransaction<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    // Every statement has finished by the time the access ends, so a change still pending has
+    // committed. One gets here only through a cursor over raw SQL that claimed to read but wrote.
+    defer { observations.didCommitPendingChanges() }
+    return try withoutTransaction { address, state in
+      try body(
+        SQLiteWriteConnection(
+          handle: self,
+          at: address,
+          observations: observations,
+          state: state
+        )
+      )
+    }
+  }
+
+  private borrowing func withoutTransaction<Result: ~Copyable>(
+    _ body: (UnsafePointer<SQLiteHandle>, SQLiteConnectionState) throws -> Result
+  ) throws -> Result {
+    let state = SQLiteConnectionState()
+    defer {
+      // The handler below only sees statements as they are prepared, so one the cache prepared
+      // where transaction control was allowed, such as inside a `transaction`, can still open a
+      // transaction when it is reused outside. A transaction left open would hold its locks, and
+      // whatever it changed, into the next access.
+      if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
+        rollbackIgnoringFailure()
+      }
+    }
+    // Outside a transaction each statement commits on its own, which is what tells the
+    // connection when to report a change as committed. A statement that began or ended a
+    // transaction behind its back would leave it reporting commits that have not happened, so
+    // only the connection's own `transaction` may run one.
+    let handler: SQLiteAuthorizerDispatcher.Handler = { authorization in
+      switch authorization.action {
+      case .transaction, .savepoint: state.isInTransaction ? .allow : .deny
+      default: .allow
+      }
+    }
+    return try authorizer.withHandler(handler) {
+      // The connection reaches back to the handle to run its transactions. The address is only
+      // valid for this call, which the connection, being nonescapable, cannot outlive.
+      try withUnsafePointer(to: self) { address in try body(address, state) }
+    }
+  }
+
+  // Every write transaction begins here, whether `write` opens it or a write connection's
+  // `transaction` does, and reports its lifecycle to the context of the access it belongs to.
+  borrowing func runWrite<Result: ~Copyable>(
+    observations: OrbitDatabaseTransactionObservationContext,
+    _ body: (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    try execute("BEGIN IMMEDIATE TRANSACTION")
+    statements.invalidateIfSchemaChanged()
     do {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))

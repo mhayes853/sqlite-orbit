@@ -4,17 +4,17 @@ import Foundation
 final class SQLitePoolScheduler: Sendable {
   private let state: Lock<State>
 
-  init(readers: [SQLiteConnection]) {
+  init(readers: [SQLiteSerialConnection]) {
     self.state = Lock(State(idleReaders: readers, readerCount: readers.count))
   }
 
   private struct State {
-    var idleReaders: [SQLiteConnection]
+    var idleReaders: [SQLiteSerialConnection]
     let readerCount: Int
     var isWriting = false
     var waiting: [Waiter] = []
 
-    var settled: [Int: Result<SQLiteConnection?, any Error>] = [:]
+    var settled: [Int: Result<SQLiteSerialConnection?, any Error>] = [:]
 
     var blockingHolders: Set<ObjectIdentifier> = []
 
@@ -35,13 +35,13 @@ final class SQLitePoolScheduler: Sendable {
 
     enum Wake {
       case blocking(DispatchSemaphore)
-      case asynchronous(CheckedContinuation<SQLiteConnection?, any Error>?)
+      case asynchronous(CheckedContinuation<SQLiteSerialConnection?, any Error>?)
     }
   }
 
   private struct Wakeup {
     let wake: Waiter.Wake
-    let outcome: Result<SQLiteConnection?, any Error>
+    let outcome: Result<SQLiteSerialConnection?, any Error>
 
     func deliver() {
       switch wake {
@@ -53,13 +53,13 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private enum Admission {
-    case granted(SQLiteConnection?)
+    case granted(SQLiteSerialConnection?)
     case queued(id: Int, semaphore: DispatchSemaphore?)
   }
 
   // MARK: - Acquiring
 
-  func acquireReader() async throws -> SQLiteConnection {
+  func acquireReader() async throws -> SQLiteSerialConnection {
     try Task.checkCancellation()
     switch join(isRead: true, isBlocking: false) {
     case .granted(let reader): return reader!
@@ -73,7 +73,7 @@ final class SQLitePoolScheduler: Sendable {
     _ = try await suspend(untilGranted: id)
   }
 
-  func acquireReaderBlocking() -> SQLiteConnection {
+  func acquireReaderBlocking() -> SQLiteSerialConnection {
     switch join(isRead: true, isBlocking: true) {
     case .granted(let reader): reader!
     case .queued(let id, let semaphore): park(on: semaphore!, until: id)!
@@ -116,7 +116,7 @@ final class SQLitePoolScheduler: Sendable {
     }
   }
 
-  private func suspend(untilGranted id: Int) async throws -> SQLiteConnection? {
+  private func suspend(untilGranted id: Int) async throws -> SQLiteSerialConnection? {
     try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         install(continuation, for: id)
@@ -126,7 +126,7 @@ final class SQLitePoolScheduler: Sendable {
     }
   }
 
-  private func park(on semaphore: DispatchSemaphore, until id: Int) -> SQLiteConnection? {
+  private func park(on semaphore: DispatchSemaphore, until id: Int) -> SQLiteSerialConnection? {
     semaphore.wait()
     return state.withLock { state in
       // A blocking request carries no task, so a grant is the only thing that can settle it.
@@ -143,11 +143,11 @@ final class SQLitePoolScheduler: Sendable {
 
   // MARK: - Releasing
 
-  func releaseReader(_ reader: SQLiteConnection) {
+  func releaseReader(_ reader: SQLiteSerialConnection) {
     release(.reader(reader), blockingHolder: nil)
   }
 
-  func releaseReaderBlocking(_ reader: SQLiteConnection) {
+  func releaseReaderBlocking(_ reader: SQLiteSerialConnection) {
     release(.reader(reader), blockingHolder: Self.currentThread)
   }
 
@@ -160,7 +160,7 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private enum Released {
-    case reader(SQLiteConnection)
+    case reader(SQLiteSerialConnection)
     case writer
   }
 
@@ -198,7 +198,7 @@ final class SQLitePoolScheduler: Sendable {
   private static func settle(
     _ state: inout State,
     _ waiter: Waiter,
-    with outcome: Result<SQLiteConnection?, any Error>
+    with outcome: Result<SQLiteSerialConnection?, any Error>
   ) -> Wakeup {
     switch waiter.wake {
     case .asynchronous(.some):
@@ -212,10 +212,10 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private func install(
-    _ continuation: CheckedContinuation<SQLiteConnection?, any Error>,
+    _ continuation: CheckedContinuation<SQLiteSerialConnection?, any Error>,
     for id: Int
   ) {
-    let granted = state.withLock { state -> Result<SQLiteConnection?, any Error>? in
+    let granted = state.withLock { state -> Result<SQLiteSerialConnection?, any Error>? in
       if let outcome = state.settled.removeValue(forKey: id) { return outcome }
       if let index = state.waiting.firstIndex(where: { $0.id == id }) {
         state.waiting[index].wake = .asynchronous(continuation)

@@ -469,33 +469,21 @@
     }
 
     @Test
-    func localCommitWithoutWillCommitRefetches() async throws {
-      let directory = try makeShortTemporaryDirectory("obs")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
-      let observedDriver = try SQLiteQueue(path: path)
-      try await observedDriver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+    func writeOutsideATransactionRefetchesAsALocalCommit() async throws {
+      let driver = try await itemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .subscribe(
-          to: observedDriver,
+          to: driver,
           onError: recorder.record(error:),
           onChange: recorder.record(change:)
         )
       try await recorder.waitForChangeCount(1)
 
-      // The row is written through a handle the observation does not watch, and the observed
-      // handle then reports it the way it reports a statement run outside a transaction.
-      let silentDriver = try SQLiteQueue(path: path)
-      try await silentDriver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-      }
-      try await observedDriver.read { transaction in
-        transaction.observations.didChange(in: OrbitDatabaseRegion(table: "items"))
-        transaction.observations.didCommitPendingChanges()
+      // Outside a transaction there is no `databaseWillCommit` to fetch in, so the observation
+      // learns of the statement only once it has committed, and fetches again.
+      try await driver.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
