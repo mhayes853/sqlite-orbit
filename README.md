@@ -98,18 +98,19 @@ must commit together:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  try connection.execute("PRAGMA foreign_keys = 0")
-  defer { try? connection.execute("PRAGMA foreign_keys = 1") }
+  try connection.setForeignKeysEnabled(false)
   try connection.transaction { transaction in
     try transaction.execute(Reminder.delete())
   }
 }
 ```
 
-A pragma changed this way stays changed on the connection, so restore it before returning. Outside
-`transaction`, statements that begin or end a transaction or a savepoint are refused, so the
-connection always knows what has committed. Observers see each statement as a commit of its own,
-and an `OrbitDatabase` announces what committed once the access ends, even when it throws.
+Foreign key enforcement and the `busyTimeout` changed through the connection are put back to their
+configured values when the access ends, even when it throws. Any other pragma stays changed on the
+connection, so restore it before returning. Outside `transaction`, statements that begin or end a
+transaction or a savepoint are refused, so the connection always knows what has committed.
+Observers see each statement as a commit of its own, and an `OrbitDatabase` announces what
+committed once the access ends, even when it throws.
 
 ## Using your own SQLite build
 

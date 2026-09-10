@@ -202,7 +202,8 @@ public final class SQLitePool: OrbitObservableDatabase {
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
-  ///   transaction, and a pragma it changes must be restored before it returns.
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
   ///   cancelled while waiting or running.
@@ -227,7 +228,8 @@ public final class SQLitePool: OrbitObservableDatabase {
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
-  ///   transaction, and a pragma it changes must be restored before it returns.
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
   public func readWithoutTransactionBlocking<Result: Sendable>(
@@ -250,8 +252,9 @@ public final class SQLitePool: OrbitObservableDatabase {
   /// }
   /// ```
   ///
-  /// - Parameter body: Receives the connection. Each statement commits on its own, and a pragma
-  ///   it changes must be restored before it returns.
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
   ///   cancelled while waiting or running. Statements that finished before the failure stay
@@ -276,8 +279,9 @@ public final class SQLitePool: OrbitObservableDatabase {
   /// }
   /// ```
   ///
-  /// - Parameter body: Receives the connection. Each statement commits on its own, and a pragma
-  ///   it changes must be restored before it returns.
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError``. Statements that finished before the
   ///   failure stay committed.

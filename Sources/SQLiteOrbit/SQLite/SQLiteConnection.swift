@@ -55,6 +55,29 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
     base.sqlite
   }
 
+  /// How long this connection waits for a lock another connection or process holds before
+  /// reporting `SQLITE_BUSY`.
+  ///
+  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
+  /// access that lent this connection ends, when the configured timeout is put back.
+  ///
+  /// ```swift
+  /// try await database.readWithoutTransaction { connection in
+  ///   connection.busyTimeout = .limit(.seconds(30))
+  ///   return try connection.fetchAll(Reminder.all)
+  /// }
+  /// ```
+  ///
+  /// Setting the timeout, and putting the configured one back, both go through
+  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
+  /// installed. An access that leaves this alone keeps such a handler, since the configured
+  /// timeout is only put back after a change, but once it is set the connection waits by the
+  /// configured timeout rather than the handler.
+  public var busyTimeout: SQLiteBusyTimeout {
+    get { handle.pointee.settings.busyTimeout }
+    nonmutating set { handle.pointee.settings.setBusyTimeout(newValue) }
+  }
+
   /// Creates a cursor over the rows a read query returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does.
@@ -107,8 +130,8 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
 /// A connection lent by a native SQLite driver for writing outside a transaction.
 ///
 /// Each statement commits on its own as it finishes, which is what a few statements need: a
-/// `PRAGMA foreign_keys` change, for example, is ignored inside a transaction, and `VACUUM` cannot
-/// run inside one at all. Call ``transaction(_:)`` to group statements so that they commit or roll
+/// foreign keys change, for example, is ignored inside a transaction, and `VACUUM` cannot run
+/// inside one at all. Call ``transaction(_:)`` to group statements so that they commit or roll
 /// back together. Statements that begin or end a transaction or a savepoint are refused outside
 /// ``transaction(_:)``, so the connection always knows whether it is inside one.
 ///
@@ -120,14 +143,17 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
 ///
 /// ```swift
 /// try await database.writeWithoutTransaction { connection in
-///   try connection.execute("PRAGMA foreign_keys = OFF")
-///   defer { try? connection.execute("PRAGMA foreign_keys = ON") }
+///   try connection.setForeignKeysEnabled(false)
 ///   try connection.transaction { transaction in
 ///     try transaction.execute("ALTER TABLE reminders RENAME TO old_reminders")
 ///     // ...
 ///   }
 /// }
 /// ```
+///
+/// The ``busyTimeout`` and foreign key enforcement this connection changes are put back when the
+/// access that lent it ends, even when it throws. Any other pragma it runs stays changed on the
+/// connection, so restore it before returning.
 public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
   /// The row this connection's cursors lend.
   public typealias Row = SQLiteRow
@@ -165,6 +191,71 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
     base.sqlite
+  }
+
+  /// How long this connection waits for a lock another connection or process holds before
+  /// reporting `SQLITE_BUSY`.
+  ///
+  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
+  /// access that lent this connection ends, when the configured timeout is put back.
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   connection.busyTimeout = .limit(.seconds(30))
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// Setting the timeout, and putting the configured one back, both go through
+  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
+  /// installed. An access that leaves this alone keeps such a handler, since the configured
+  /// timeout is only put back after a change, but once it is set the connection waits by the
+  /// configured timeout rather than the handler.
+  public var busyTimeout: SQLiteBusyTimeout {
+    get { handle.pointee.settings.busyTimeout }
+    nonmutating set { handle.pointee.settings.setBusyTimeout(newValue) }
+  }
+
+  /// Whether this connection enforces foreign keys.
+  ///
+  /// It starts at the configuration's ``SQLiteConfiguration/isForeignKeysEnabled`` and changes
+  /// only through ``setForeignKeysEnabled(_:)``. A `PRAGMA foreign_keys` statement run directly is
+  /// not reflected here, and is not undone when the access ends.
+  public var isForeignKeysEnabled: Bool {
+    handle.pointee.settings.isForeignKeysEnabled
+  }
+
+  /// Turns foreign key enforcement on or off until the access that lent this connection ends, when
+  /// the configured setting is put back.
+  ///
+  /// This is a method rather than a settable ``isForeignKeysEnabled`` because it runs a
+  /// `PRAGMA foreign_keys` statement, which can fail, and a setter cannot throw. The statement
+  /// runs outside any transaction, which is the only place SQLite honors it.
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   try connection.setForeignKeysEnabled(false)
+  ///   try connection.transaction { transaction in
+  ///     try transaction.execute("DROP TABLE reminders")
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Important: Calling this inside this connection's own ``transaction(_:)`` is a programming
+  ///   error and stops the process, since SQLite would silently ignore it there.
+  ///
+  /// - Parameter isEnabled: Whether foreign keys are enforced.
+  /// - Throws: A ``SQLiteError`` when the pragma fails, in which case the setting is unchanged.
+  public borrowing func setForeignKeysEnabled(_ isEnabled: Bool) throws {
+    precondition(
+      !state.isInTransaction,
+      """
+      Foreign keys cannot be turned on or off inside a connection's transaction: SQLite ignores \
+      PRAGMA foreign_keys while a transaction is open. Call setForeignKeysEnabled before the \
+      transaction begins.
+      """
+    )
+    try handle.pointee.settings.setForeignKeysEnabled(isEnabled)
   }
 
   /// Creates a cursor over the rows a read query returns.
@@ -208,7 +299,7 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// are discarded.
   ///
   /// ```swift
-  /// try connection.execute("PRAGMA foreign_keys = OFF")
+  /// try connection.execute("VACUUM")
   /// ```
   ///
   /// - Parameter sql: One or more statements.

@@ -38,8 +38,9 @@ public protocol OrbitDatabaseReader: Sendable {
   ///
   /// Each statement runs in its own implicit transaction, so consecutive statements may see
   /// different states of the database. Call ``SQLiteReadConnection/transaction(_:)`` for a
-  /// consistent snapshot. A pragma that `body` changes stays changed on the connection, so restore
-  /// it before returning.
+  /// consistent snapshot. A ``SQLiteReadConnection/busyTimeout`` that `body` changes is restored
+  /// when the access ends, even when `body` throws. Any other pragma that `body` changes stays
+  /// changed on the connection, so restore it before returning.
   ///
   /// ```swift
   /// let integrity = try await database.readWithoutTransaction { connection in
@@ -117,13 +118,15 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// Each statement commits on its own as it finishes, so a `body` that throws leaves every
   /// statement before the failing one committed. Group statements that must commit together with
   /// ``SQLiteWriteConnection/transaction(_:)``. This is for the work a transaction gets in the way
-  /// of, such as changing `PRAGMA foreign_keys`, which has no effect inside one. A pragma that
-  /// `body` changes stays changed on the connection, so restore it before returning.
+  /// of, such as turning foreign keys off, which has no effect inside one.
+  ///
+  /// The ``SQLiteWriteConnection/busyTimeout`` and foreign key enforcement that `body` changes
+  /// through the connection are restored when the access ends, even when `body` throws. Any other
+  /// pragma that `body` changes stays changed on the connection, so restore it before returning.
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.execute("PRAGMA foreign_keys = OFF")
-  ///   defer { try? connection.execute("PRAGMA foreign_keys = ON") }
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }
@@ -140,8 +143,10 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// Runs `body` with a connection that writes outside a transaction, blocking the calling thread
   /// until it finishes.
   ///
-  /// Each statement commits on its own as it finishes, and a pragma that `body` changes stays
-  /// changed on the connection, so restore it before returning.
+  /// Each statement commits on its own as it finishes. The busy timeout and foreign key
+  /// enforcement that `body` changes through the connection are restored when the access ends;
+  /// any other pragma that `body` changes stays changed on the connection, so restore it before
+  /// returning.
   ///
   /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
   ///   starves the machinery the rest of the database runs on.

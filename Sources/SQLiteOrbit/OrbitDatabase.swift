@@ -155,7 +155,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   /// ```
   ///
   /// - Parameter body: Reads the value from a connection whose statements each run in their own
-  ///   implicit transaction. A pragma it changes must be restored before it returns.
+  ///   implicit transaction. A busy timeout it changes through the connection is restored when
+  ///   the access ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returns.
   /// - Throws: Whatever `body` or the underlying driver throws.
   public func readWithoutTransaction<Result: Sendable>(
@@ -173,7 +174,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   /// ```
   ///
   /// - Parameter body: Reads the value from a connection whose statements each run in their own
-  ///   implicit transaction. A pragma it changes must be restored before it returns.
+  ///   implicit transaction. A busy timeout it changes through the connection is restored when
+  ///   the access ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returns.
   /// - Throws: Whatever `body` or the underlying driver throws.
   public func readWithoutTransactionBlocking<Result: Sendable>(
@@ -193,8 +195,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.execute("PRAGMA foreign_keys = OFF")
-  ///   defer { try? connection.execute("PRAGMA foreign_keys = ON") }
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }
@@ -202,7 +203,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   /// ```
   ///
   /// - Parameter body: Performs the writes on a connection whose statements each commit on their
-  ///   own. A pragma it changes must be restored before it returns.
+  ///   own. The busy timeout and foreign keys it changes through the connection are restored
+  ///   when the access ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returns.
   /// - Throws: Whatever `body` or the underlying driver throws. An announcement failure is
   ///   reported to `onAnnouncementFailure` instead.
@@ -235,7 +237,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   /// ```
   ///
   /// - Parameter body: Performs the writes on a connection whose statements each commit on their
-  ///   own. A pragma it changes must be restored before it returns.
+  ///   own. The busy timeout and foreign keys it changes through the connection are restored
+  ///   when the access ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returns.
   /// - Throws: Whatever `body` or the underlying driver throws.
   public func writeWithoutTransactionBlocking<Result: Sendable>(

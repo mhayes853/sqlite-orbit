@@ -114,7 +114,7 @@
       try await waitForFile(harness.file("held-0"))
 
       var configuration = SQLiteConfiguration.default
-      configuration.busyTimeout = .milliseconds(100)
+      configuration.busyTimeout = .limit(.milliseconds(100))
       let database = try harness.database(configuration: configuration)
       let clock = ContinuousClock()
       let started = clock.now

@@ -267,7 +267,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     let milliseconds: Int32
     switch busyTimeout {
     case .configured: return nil
-    case .limit(let duration): milliseconds = duration.sqliteBusyTimeoutMilliseconds
+    case .limit(let duration): milliseconds = SQLiteBusyTimeout.limit(duration).milliseconds
     case .unlimited: milliseconds = .max
     }
     let configured =

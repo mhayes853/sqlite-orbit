@@ -4,6 +4,7 @@ struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
+  let settings: SQLiteConnectionSettings
 
   let isReadOnly: Bool
 
@@ -16,19 +17,28 @@ struct SQLiteHandle: ~Copyable {
   private init(
     pointer: OpaquePointer,
     libraryStorage: UnsafeMutablePointer<SQLiteLibrary>,
-    maximumCachedStatements: Int,
+    configuration: SQLiteConfiguration,
     isReadOnly: Bool
   ) {
     let authorizer = SQLiteAuthorizerDispatcher()
+    let statements = SQLiteStatementCache(
+      library: UnsafePointer(libraryStorage),
+      connection: pointer,
+      authorizer: authorizer,
+      capacity: configuration.maximumCachedStatements
+    )
     self.pointer = pointer
     self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
     self.authorizer = authorizer
-    self.statements = SQLiteStatementCache(
+    self.statements = statements
+    self.settings = SQLiteConnectionSettings(
       library: UnsafePointer(libraryStorage),
       connection: pointer,
       authorizer: authorizer,
-      capacity: maximumCachedStatements
+      statements: statements,
+      busyTimeout: configuration.busyTimeout,
+      isForeignKeysEnabled: configuration.isForeignKeysEnabled
     )
   }
 
@@ -63,7 +73,7 @@ struct SQLiteHandle: ~Copyable {
     let handle = SQLiteHandle(
       pointer: pointer,
       libraryStorage: libraryStorage,
-      maximumCachedStatements: configuration.maximumCachedStatements,
+      configuration: configuration,
       isReadOnly: flags.contains(.readOnly)
     )
     try handle.configure(configuration)
@@ -88,7 +98,7 @@ struct SQLiteHandle: ~Copyable {
     _ = libraryStorage.pointee.connections.setExtendedResultCodes(pointer, 1)
     _ = libraryStorage.pointee.connections.setBusyTimeout(
       pointer,
-      configuration.busyTimeoutMilliseconds
+      configuration.busyTimeout.milliseconds
     )
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     let connection = SQLiteConnectionAccess(handle: self)
@@ -144,7 +154,10 @@ struct SQLiteHandle: ~Copyable {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try withQueryOnly { try runRead(observations: observations, body) }
+    return try withRestoredSettings {
+      try beginQueryOnly()
+      return try runRead(observations: observations, body)
+    }
   }
 
   borrowing func readWithoutTransaction<Result: ~Copyable>(
@@ -154,8 +167,9 @@ struct SQLiteHandle: ~Copyable {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try withQueryOnly {
-      try withoutTransaction { address, state in
+    return try withRestoredSettings {
+      try beginQueryOnly()
+      return try withoutTransaction { address, state in
         try body(
           SQLiteReadConnection(
             handle: self,
@@ -168,25 +182,37 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  private borrowing func withQueryOnly<Result: ~Copyable>(
-    _ body: () throws -> Result
-  ) throws -> Result {
+  private borrowing func beginQueryOnly() throws {
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than having it
     // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
-    // its own.
-    guard !isReadOnly else { return try body() }
-    // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
-    // keyword as a different expression kind than the pragma implementation accepts.
-    try execute("PRAGMA query_only = 1")
+    // its own. The access turns it back off with the rest of its settings.
+    guard !isReadOnly else { return }
+    try settings.setQueryOnly(true)
+  }
+
+  // Every access runs its body through here, so that none begins under a setting an earlier one
+  // changed, and none ends without putting back what it changed.
+  private borrowing func withRestoredSettings<Result: ~Copyable>(
+    _ body: () throws -> Result
+  ) throws -> Result {
+    // Whatever an earlier access could not restore is retried first. A setting that still cannot
+    // be restored fails this access, rather than letting it run under what the earlier one left.
+    try settings.restore()
+    let value: Result
     do {
-      let value = try body()
-      try execute("PRAGMA query_only = 0")
-      return value
+      value = try body()
     } catch {
-      try? execute("PRAGMA query_only = 0")
+      do {
+        try settings.restore()
+      } catch {
+        // The body's failure is the one worth reporting. The setting stays changed, so the next
+        // access restores it before it begins, and fails if it still cannot.
+      }
       throw error
     }
+    try settings.restore()
+    return value
   }
 
   // Every read transaction begins here, whether `read` opens it or a read connection's
@@ -218,7 +244,7 @@ struct SQLiteHandle: ~Copyable {
     // The lifecycle is reported through the access's context rather than straight to `observers`,
     // so that observers scoped to the access see the transaction end as well.
     let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try runWrite(observations: observations, body)
+    return try withRestoredSettings { try runWrite(observations: observations, body) }
   }
 
   borrowing func writeWithoutTransaction<Result: ~Copyable>(
@@ -231,18 +257,22 @@ struct SQLiteHandle: ~Copyable {
     // Every statement has finished by the time the access ends, so a change still pending has
     // committed. One gets here only through a cursor over raw SQL that claimed to read but wrote.
     defer { observations.didCommitPendingChanges() }
-    return try withoutTransaction { address, state in
-      try body(
-        SQLiteWriteConnection(
-          handle: self,
-          at: address,
-          observations: observations,
-          state: state
+    return try withRestoredSettings {
+      try withoutTransaction { address, state in
+        try body(
+          SQLiteWriteConnection(
+            handle: self,
+            at: address,
+            observations: observations,
+            state: state
+          )
         )
-      )
+      }
     }
   }
 
+  // The caller restores the access's settings once this returns, which is after any transaction
+  // left open has been rolled back: SQLite ignores `PRAGMA foreign_keys` inside one.
   private borrowing func withoutTransaction<Result: ~Copyable>(
     _ body: (UnsafePointer<SQLiteHandle>, SQLiteConnectionState) throws -> Result
   ) throws -> Result {
