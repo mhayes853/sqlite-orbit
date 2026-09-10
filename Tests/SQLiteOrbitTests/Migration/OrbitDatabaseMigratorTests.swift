@@ -21,8 +21,19 @@
 
       #expect(try await log(in: driver) == ["one", "two", "three"])
       #expect(
-        try await driver.read { try migrator.appliedMigrations(in: $0) } == ["one", "two", "three"]
+        try await driver.read { try migrator.appliedMigrations($0) } == ["one", "two", "three"]
       )
+    }
+
+    @Test
+    func migrationsListsTheRegisteredIdentifiersInRegistrationOrder() {
+      var migrator = OrbitDatabaseMigrator()
+      #expect(migrator.migrations.isEmpty)
+      for identifier in ["b", "c", "a"] {
+        migrator.registerMigration(identifier) { _ in }
+      }
+      #expect(migrator.migrations == ["b", "c", "a"])
+      #expect(OrbitDatabaseMigrator.grdb.migrations.isEmpty)
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -125,7 +136,7 @@
 
       #expect(error == OrbitDatabaseMigrationTargetError(target: "missing", reason: .unregistered))
       #expect(error?.description.contains("\"missing\"") == true)
-      #expect(try await driver.read { try migrator.appliedIdentifiers(in: $0) }.isEmpty)
+      #expect(try await driver.read { try migrator.appliedIdentifiers($0) }.isEmpty)
     }
 
     @Test
@@ -210,7 +221,7 @@
       )
       #expect(!ranLast.withLock { $0 })
       #expect(
-        try await driver.read { try migrator.appliedMigrations(in: $0) } == ["Create lists"]
+        try await driver.read { try migrator.appliedMigrations($0) } == ["Create lists"]
       )
       let reminders = try await driver.read { transaction in
         try transaction.fetchOne(#sql("SELECT count(*) FROM reminders", as: Int.self))
@@ -245,12 +256,12 @@
       #expect(error?.primaryCode == .constraint)
       #expect(foreignKeys.withLock { $0 } == [0, 1])
       #expect(
-        try await driver.read { try migrator.appliedMigrations(in: $0) } == ["Create lists"]
+        try await driver.read { try migrator.appliedMigrations($0) } == ["Create lists"]
       )
     }
 
     @Test
-    func disablingDeferredChecksSkipsTheCheckOfLaterMigrationsOnly() async throws {
+    func turningDeferredChecksOffSkipsTheCheckOfLaterMigrationsOnly() async throws {
       let foreignKeys = Lock([Int]())
       var migrator = OrbitDatabaseMigrator()
       migrator.registerMigration("Create lists", migrate: createListsAndReminders)
@@ -258,12 +269,14 @@
       checked.registerMigration("Checked orphan") { transaction in
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
       }
-      migrator.disableDeferredForeignKeyChecks()
+      #expect(migrator.defersForeignKeyChecks)
+      migrator.defersForeignKeyChecks = false
       migrator.registerMigration("Unchecked orphan") { transaction in
         try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
       }
 
+      // Still run with foreign keys off, but not checked.
       let uncheckedDriver = try SQLiteQueue(path: .memory)
       try await migrator.migrate(uncheckedDriver)
       #expect(foreignKeys.withLock { $0 } == [0])
@@ -271,11 +284,36 @@
       let orphans = try await uncheckedDriver.read { try $0.foreignKeyViolations() }
       #expect(orphans.map(\.table) == ["reminders"])
 
-      // A migration registered before the call keeps its check.
-      checked.disableDeferredForeignKeyChecks()
+      // The property is read when a migration is registered, so one registered before it was
+      // turned off keeps its check.
+      checked.defersForeignKeyChecks = false
       let checkedDriver = try SQLiteQueue(path: .memory)
       await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
         try await checked.migrate(checkedDriver)
+      }
+    }
+
+    @Test
+    func disablingDeferredChecksReturnsACopyAndLeavesTheOriginal() async throws {
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create lists", migrate: createListsAndReminders)
+
+      var disabled = original.disablingDeferredForeignKeyChecks()
+      #expect(!disabled.defersForeignKeyChecks)
+      #expect(original.defersForeignKeyChecks)
+      #expect(disabled.migrations == original.migrations)
+
+      let orphan: @Sendable (borrowing SQLiteWriteTransaction) throws -> Void = { transaction in
+        try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+      }
+      disabled.registerMigration("Orphan a reminder", migrate: orphan)
+      original.registerMigration("Orphan a reminder", migrate: orphan)
+
+      let disabledDriver = try SQLiteQueue(path: .memory)
+      try await disabled.migrate(disabledDriver)
+      let originalDriver = try SQLiteQueue(path: .memory)
+      await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
+        try await original.migrate(originalDriver)
       }
     }
 
@@ -296,7 +334,7 @@
 
       #expect(foreignKeys.withLock { $0 } == [0])
       try await expectWriterForeignKeys(false, on: driver)
-      #expect(try await driver.read { try migrator.hasCompletedMigrations(in: $0) })
+      #expect(try await driver.read { try migrator.hasCompletedMigrations($0) })
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -351,7 +389,7 @@
         )
       }
       #expect(tables == [#"app "migrations""#])
-      #expect(try await driver.read { try migrator.appliedIdentifiers(in: $0) } == ["one"])
+      #expect(try await driver.read { try migrator.appliedIdentifiers($0) } == ["one"])
     }
 
     @Test
@@ -377,7 +415,7 @@
 
       try await migrator.migrate(driver)
 
-      #expect(try await driver.read { try migrator.appliedMigrations(in: $0) } == ["v1", "v2"])
+      #expect(try await driver.read { try migrator.appliedMigrations($0) } == ["v1", "v2"])
       let columns = try await driver.read { transaction in
         try transaction.fetchAll(
           #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
@@ -419,7 +457,7 @@
 
       let appliedUpToTarget = try await driver.writeWithoutTransaction { connection in
         try migrator.migrate(connection, upTo: "two")
-        let applied = try migrator.appliedMigrations(in: connection)
+        let applied = try migrator.appliedMigrations(connection)
         try migrator.migrate(connection)
         try migrator.migrate(connection)
         return applied
@@ -486,23 +524,36 @@
       #expect(error == MigrationFailure())
       try await expectWriterForeignKeys(true, on: driver)
       #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
-      #expect(try await driver.read { try migrator.appliedMigrations(in: $0) } == ["one"])
+      #expect(try await driver.read { try migrator.appliedMigrations($0) } == ["one"])
     }
 
-    @Test
-    func foreignKeysStayOffAfterAFailedMigrationUntilTheAccessEnds() async throws {
+    @Test(arguments: [true, false])
+    func failedMigrationPutsBackTheCallersForeignKeys(_ callerValue: Bool) async throws {
       struct MigrationFailure: Error {}
 
       let driver = try SQLiteQueue(path: .memory)
+      let during = Lock<Int?>(nil)
       var migrator = OrbitDatabaseMigrator()
-      migrator.registerMigration("one") { _ in throw MigrationFailure() }
-
-      let isEnabledAfterFailure = try await driver.writeWithoutTransaction { connection in
-        #expect(throws: MigrationFailure.self) { try migrator.migrate(connection) }
-        return connection.isForeignKeysEnabled
+      migrator.registerMigration("one") { transaction in
+        let value = try foreignKeysPragma(in: transaction)
+        during.withLock { $0 = value }
+        throw MigrationFailure()
       }
 
-      #expect(!isEnabledAfterFailure)
+      let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
+        connection.isForeignKeysEnabled = callerValue
+        #expect(throws: MigrationFailure.self) { try migrator.migrate(connection) }
+        return (
+          connection.isForeignKeysEnabled,
+          try connection.fetchOne(#sql("PRAGMA foreign_keys", as: Int.self))
+        )
+      }
+
+      // Off while the failed migration ran, then back to the caller's value before their next
+      // statement, rather than left off until the access ends.
+      #expect(during.withLock { $0 } == 0)
+      #expect(isEnabled == callerValue)
+      #expect(pragma == (callerValue ? 1 : 0))
       try await expectWriterForeignKeys(true, on: driver)
     }
 
@@ -552,7 +603,7 @@
       await #expect(throws: CancellationError.self) {
         try await running.value
       }
-      #expect(try await driver.read { try migrator.appliedMigrations(in: $0) } == ["one"])
+      #expect(try await driver.read { try migrator.appliedMigrations($0) } == ["one"])
       let items = try await driver.read { transaction in
         try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
       }
@@ -751,7 +802,7 @@
       let values = Lock([[String]]())
       let subscription =
         try OrbitValueObservation
-        .tracking { try migrator.appliedMigrations(in: $0) }
+        .tracking { try migrator.appliedMigrations($0) }
         .subscribe(
           to: observingDatabase,
           onError: { _ in },
@@ -799,7 +850,7 @@
         try transaction.fetchAll(
           #sql("SELECT migration FROM runs ORDER BY rowid", as: String.self)
         ),
-        try migrator.appliedMigrations(in: transaction)
+        try migrator.appliedMigrations(transaction)
       )
     }
     let expected = ["Create runs"] + (1...10).map { "Migration \($0)" }
@@ -902,11 +953,11 @@
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      self.identifiers = try migrator.appliedIdentifiers(in: transaction)
-      self.applied = try migrator.appliedMigrations(in: transaction)
-      self.completed = try migrator.completedMigrations(in: transaction)
-      self.hasCompleted = try migrator.hasCompletedMigrations(in: transaction)
-      self.hasBeenSuperseded = try migrator.hasBeenSuperseded(in: transaction)
+      self.identifiers = try migrator.appliedIdentifiers(transaction)
+      self.applied = try migrator.appliedMigrations(transaction)
+      self.completed = try migrator.completedMigrations(transaction)
+      self.hasCompleted = try migrator.hasCompletedMigrations(transaction)
+      self.hasBeenSuperseded = try migrator.hasBeenSuperseded(transaction)
     }
   }
 

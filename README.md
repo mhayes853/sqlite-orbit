@@ -489,10 +489,11 @@ stay applied.
 
 Register a migration with `foreignKeyChecks: .immediate` to keep foreign keys enforced statement by
 statement instead. The check reads every table with a foreign key, which on a large database takes
-time; after `disableDeferredForeignKeyChecks()`, the migrations registered next skip it, trading the
-guarantee for that time. A connection without foreign keys on has nothing to defer or check. A
-rebuild outside the migrator runs the same check itself: `foreignKeyViolations()` is available on
-every transaction and connection, and returns each `OrbitDatabaseForeignKeyViolation` it finds.
+time. Setting `defersForeignKeyChecks` to `false` skips it for the deferred migrations registered
+after that, which still run with foreign keys off, trading the guarantee for that time; the ones
+registered earlier keep their check. A connection without foreign keys on has nothing to defer or
+check. A rebuild outside the migrator runs the same check itself: `foreignKeyViolations()` is
+available on every transaction and connection, and returns each `OrbitDatabaseForeignKeyViolation`.
 
 ### The table of applied migrations
 
@@ -506,9 +507,11 @@ var migrator = OrbitDatabaseMigrator.grdb
 ```
 
 The inspection methods read that table from any read or write transaction, or from a connection
-lent outside one: `appliedIdentifiers(in:)`, `appliedMigrations(in:)`,
-`completedMigrations(in:)`, `hasCompletedMigrations(in:)`, and `hasBeenSuperseded(in:)`. A
-database no migrator has run on has applied nothing, and reading it creates no table.
+lent outside one, and take it unlabeled as GRDB's do: `appliedIdentifiers(_:)`,
+`appliedMigrations(_:)`, `completedMigrations(_:)`, `hasCompletedMigrations(_:)`, and
+`hasBeenSuperseded(_:)`. A database no migrator has run on has applied nothing, and reading it
+creates no table. `migrations` lists the registered identifiers, and GRDB's
+`disablingDeferredForeignKeyChecks()` returns a copy with `defersForeignKeyChecks` off.
 
 ### Several processes
 
@@ -526,11 +529,11 @@ try await database.writeWithoutTransaction { connection in
 ```
 
 A migration applied by a newer build of the application is tolerated: an older build migrates the
-ones it knows and leaves the rest alone. `hasBeenSuperseded(in:)` tells the older build that it is
+ones it knows and leaves the rest alone. `hasBeenSuperseded(_:)` tells the older build that it is
 running against a schema it does not fully know:
 
 ```swift
-if try await database.read({ try migrator.hasBeenSuperseded(in: $0) }) {
+if try await database.read({ try migrator.hasBeenSuperseded($0) }) {
   showUpdateRequiredAlert()
 }
 ```
