@@ -2,8 +2,7 @@ import Foundation
 
 /// Reported when a database cannot be pooled.
 ///
-/// Thrown by ``SQLitePool/init(path:configuration:identifier:coordinationDirectory:)`` for a
-/// database that is private to the connection that opens it.
+/// Thrown by a connection pool for a database that is private to the connection that opens it.
 ///
 /// ```swift
 /// do {
@@ -43,7 +42,6 @@ public final class SQLitePool: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
-  private let writer: SQLiteSerialConnection
   private let scheduler: SQLitePoolScheduler
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
@@ -78,8 +76,7 @@ public final class SQLitePool: OrbitObservableDatabase {
     }
 
     self.defaultIdentifier = identifier
-    self.writer = writer
-    self.scheduler = SQLitePoolScheduler(readers: readers)
+    self.scheduler = SQLitePoolScheduler(readers: readers, writers: [writer])
   }
 
   private static func openConnections(
@@ -137,9 +134,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    let reader = try await scheduler.acquireReader()
-    defer { scheduler.releaseReader(reader) }
-    return try await reader.read(observers: transactionObservers, body)
+    try await scheduler.read(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -153,9 +148,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    let reader = scheduler.acquireReaderBlocking()
-    defer { scheduler.releaseReaderBlocking(reader) }
-    return try reader.readBlocking(observers: transactionObservers, body)
+    try scheduler.readBlocking(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction on the pool's single writer.
@@ -170,9 +163,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await scheduler.acquireWriter()
-    defer { scheduler.releaseWriter() }
-    return try await writer.write(observers: transactionObservers, body)
+    try await scheduler.write(observers: transactionObservers, body)
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -186,9 +177,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    scheduler.acquireWriterBlocking()
-    defer { scheduler.releaseWriterBlocking() }
-    return try writer.writeBlocking(observers: transactionObservers, body)
+    try scheduler.writeBlocking(observers: transactionObservers, body)
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction.
@@ -210,9 +199,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func readWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
-    let reader = try await scheduler.acquireReader()
-    defer { scheduler.releaseReader(reader) }
-    return try await reader.readWithoutTransaction(observers: transactionObservers, body)
+    try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction and blocking the
@@ -235,9 +222,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    let reader = scheduler.acquireReaderBlocking()
-    defer { scheduler.releaseReaderBlocking(reader) }
-    return try reader.readWithoutTransactionBlocking(observers: transactionObservers, body)
+    try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction.
@@ -262,9 +247,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func writeWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.acquireWriter()
-    defer { scheduler.releaseWriter() }
-    return try await writer.writeWithoutTransaction(observers: transactionObservers, body)
+    try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction and blocking the
@@ -288,9 +271,7 @@ public final class SQLitePool: OrbitObservableDatabase {
   public func writeWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    scheduler.acquireWriterBlocking()
-    defer { scheduler.releaseWriterBlocking() }
-    return try writer.writeWithoutTransactionBlocking(observers: transactionObservers, body)
+    try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
   }
 
   /// Registers an observer of the transactions this driver commits.
