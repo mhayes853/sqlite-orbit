@@ -62,7 +62,8 @@
     }
 
     private func checkUpToDateMigrationIsSilent(
-      on writer: some OrbitObservableDatabase
+      on writer: some OrbitObservableDatabase,
+      eraseDatabaseOnSchemaChange: Bool = false
     ) async throws {
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-\(UUID().uuidString)")
@@ -78,7 +79,10 @@
       }
       let observer = MigrationEventObserver()
       let observerSubscription = try database.subscribe(transactionObserver: observer)
-      let migrator = loggingMigrator(["one", "two"])
+      let migrator = loggingMigrator(
+        ["one", "two"],
+        eraseDatabaseOnSchemaChange: eraseDatabaseOnSchemaChange
+      )
 
       try await migrator.migrate(database)
       #expect(announcements.withLock { $0 } == 1)
@@ -816,6 +820,698 @@
       #expect(values.withLock { $0 }.first == [])
       _ = subscription
     }
+
+    // MARK: - Schema changes
+
+    // MARK: hasSchemaChanges
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIsFalseOnAFreshDatabaseAndOnAnUpToDateOne(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      let migrator = loggingMigrator(["one", "two"])
+
+      // Nothing has been applied yet, so there is nothing to compare.
+      #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+
+      try await migrator.migrate(driver)
+
+      #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIsTrueWhenAnAppliedMigrationIsRemoved(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      try await loggingMigrator(["one", "two", "three"]).migrate(driver)
+
+      let withoutTwo = loggingMigrator(["one", "three"])
+
+      #expect(try await driver.read { try withoutTwo.hasSchemaChanges($0) } == true)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIsTrueWhenAnAppliedMigrationIsRenamed(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      try await loggingMigrator(["one", "two"]).migrate(driver)
+
+      let renamed = loggingMigrator(["one", "two renamed"])
+
+      #expect(try await driver.read { try renamed.hasSchemaChanges($0) } == true)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIsTrueWhenAShippedMigrationsBodyChanges(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      try await original.migrate(driver)
+
+      // The identifier never changed, but what it creates now has an extra column.
+      var changed = OrbitDatabaseMigrator()
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      #expect(try await driver.read { try changed.hasSchemaChanges($0) } == true)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIsTrueWhenAMigrationIsRegisteredBetweenTwoAlreadyAppliedOnes(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("one") { transaction in
+        try transaction.execute("CREATE TABLE one_table (id INTEGER PRIMARY KEY)")
+      }
+      original.registerMigration("three") { transaction in
+        try transaction.execute("CREATE TABLE three_table (id INTEGER PRIMARY KEY)")
+      }
+      try await original.migrate(driver)
+
+      // GRDB's semantics: the scratch database migrates up to the last migration this database
+      // has applied, "three", which runs "two" there even though it has never run here.
+      var withInserted = OrbitDatabaseMigrator()
+      withInserted.registerMigration("one") { transaction in
+        try transaction.execute("CREATE TABLE one_table (id INTEGER PRIMARY KEY)")
+      }
+      withInserted.registerMigration("two") { transaction in
+        try transaction.execute("CREATE TABLE two_table (id INTEGER PRIMARY KEY)")
+      }
+      withInserted.registerMigration("three") { transaction in
+        try transaction.execute("CREATE TABLE three_table (id INTEGER PRIMARY KEY)")
+      }
+
+      #expect(try await driver.read { try withInserted.hasSchemaChanges($0) } == true)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesIgnoresWhatSQLiteKeepsForItselfAndTheMigratorsTable(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var migrator = OrbitDatabaseMigrator()
+      migrator.registerMigration("Create counters") { transaction in
+        try transaction.execute("CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+      }
+      try await migrator.migrate(driver)
+
+      // `sqlite_sequence` only appears once a row has been inserted, and the scratch database
+      // this migrates never inserts one, so only the real database gets it.
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO counters DEFAULT VALUES")
+      }
+      #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+
+      #if !Turso
+        // `ANALYZE` similarly leaves `sqlite_stat1` only in the real database; Turso does not
+        // implement `ANALYZE`.
+        try await driver.write { transaction in try transaction.execute("ANALYZE") }
+        #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+      #endif
+    }
+
+    @Test
+    func hasSchemaChangesWorksThroughEveryLentTypeIncludingAPoolsReadTransaction() async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let pool = try SQLitePool(path: .file(directory.appending(component: "database.sqlite")))
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      try await original.migrate(pool)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      // A pool's readers run with `PRAGMA query_only = 1`, which cf66808 kept out of what a
+      // transaction reports as its configuration. Before that fix, the scratch database opened
+      // from a reader's configuration would have inherited it and failed to migrate.
+      #expect(try await pool.read { try changed.hasSchemaChanges($0) } == true)
+      #expect(try await pool.readWithoutTransaction { try changed.hasSchemaChanges($0) } == true)
+      #expect(try await pool.write { try changed.hasSchemaChanges($0) } == true)
+      #expect(try await pool.writeWithoutTransaction { try changed.hasSchemaChanges($0) } == true)
+      // The point-free form, relying on `hasSchemaChanges` specializing to whatever transaction
+      // type the access lends.
+      #expect(try await pool.read(changed.hasSchemaChanges) == true)
+    }
+
+    #if !Turso
+      @Test
+      func hasSchemaChangesCarriesRegisteredCollationsAndFunctionsToTheScratchDatabase()
+        async throws
+      {
+        var configuration = SQLiteConfiguration.default
+        // An index expression is schema-defined, so SQLite refuses a function it cannot trust
+        // was not swapped out from under the schema unless it is told to trust it.
+        configuration.isTrustedSchemaEnabled = true
+        configuration.register(collation: $schemaChangeScratchCollation)
+        configuration.register(function: $schemaChangeScratchDouble)
+        let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration("Create words") { transaction in
+          try transaction.execute(
+            """
+            CREATE TABLE words (
+              id INTEGER PRIMARY KEY,
+              text TEXT NOT NULL,
+              value INTEGER NOT NULL
+            );
+            CREATE INDEX words_text ON words (text COLLATE schemaChangeScratchCollation);
+            CREATE INDEX words_doubled ON words (schemaChangeScratchDouble(value));
+            """
+          )
+        }
+        try await migrator.migrate(driver)
+
+        // The scratch database is opened with the same configuration, so it resolves the
+        // collation and the function without error and reports the same schema back.
+        #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+      }
+    #endif
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func hasSchemaChangesLeavesNoScratchDatabaseFilesBehind(_ kind: SQLiteTestDriver) async throws {
+      let directory = try makeShortTemporaryDirectory("schema")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      try await original.migrate(driver)
+      var changed = OrbitDatabaseMigrator()
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      let before = try scratchDatabaseFileNames()
+      _ = try await driver.read { try changed.hasSchemaChanges($0) }
+
+      // This call's own scratch file is gone by the time it returns. Anything left matching the
+      // pattern belongs to another test running in parallel, so wait for it to clean up its own
+      // rather than assume this call is the only one running.
+      try await waitUntil(timeout: .seconds(5)) {
+        (try? scratchDatabaseFileNames().subtracting(before))?.isEmpty ?? false
+      }
+    }
+
+    // MARK: Erasing
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func erasingRunsEveryMigrationAgainDropsPriorDataAndResetsUserVersion(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+        )
+      }
+      original.registerMigration("Seed") { transaction in
+        try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'first')")
+      }
+      try await original.migrate(driver)
+      // A non-zero value an application might set on its own, to check the erase resets it.
+      try await driver.write { transaction in try transaction.execute("PRAGMA user_version = 7") }
+
+      // The erase drops the log table along with everything else, so what ran is recorded here
+      // instead.
+      let secondRun = Lock([String]())
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create items") { transaction in
+        secondRun.withLock { $0.append("Create items") }
+        try transaction.execute(
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, note TEXT)"
+        )
+      }
+      changed.registerMigration("Seed") { transaction in
+        secondRun.withLock { $0.append("Seed") }
+        try transaction.execute("INSERT INTO items (id, title) VALUES (2, 'second')")
+      }
+
+      try await changed.migrate(driver)
+
+      // Detecting the change first migrates a scratch copy of the database to compare against,
+      // which runs each migration there before the erase runs them again for real, so each
+      // identifier appears rather than a run count pinned to that implementation detail.
+      #expect(Set(secondRun.withLock { $0 }) == ["Create items", "Seed"])
+      let ids = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+      #expect(ids == [2])
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id", "title", "note"])
+      let userVersion = try await driver.read { transaction in
+        try transaction.fetchOne(#sql("PRAGMA user_version", as: Int.self))
+      }
+      #expect(userVersion == 0)
+      #expect(
+        try await driver.read { try changed.appliedMigrations($0) } == ["Create items", "Seed"]
+      )
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func erasingRecreatesViewsTriggersAndIndexesWithoutError(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items", migrate: createItemsWithViewAndTrigger)
+      try await original.migrate(driver)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create items") { transaction in
+        try createItemsWithViewAndTrigger(transaction)
+        try transaction.execute("ALTER TABLE items ADD COLUMN note TEXT")
+      }
+
+      try await changed.migrate(driver)
+
+      let types = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql(
+            "SELECT DISTINCT type FROM sqlite_schema WHERE type IN ('view', 'trigger', 'index')",
+            as: String.self
+          )
+        )
+      }
+      #expect(Set(types) == ["view", "trigger", "index"])
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id", "title", "archived", "note"])
+    }
+
+    // Turso does not implement the FTS5 module: creating the virtual table fails with
+    // "no such module: fts5", so this only runs against a build that has one.
+    #if !Turso
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func erasingRecreatesAnFTS5VirtualTableAndItsShadowTables(
+        _ kind: SQLiteTestDriver
+      ) async throws {
+        let directory = try makeShortTemporaryDirectory("erase")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let driver = try kind.open(in: directory)
+        var original = OrbitDatabaseMigrator()
+        original.registerMigration("Create documents") { transaction in
+          try transaction.execute("CREATE VIRTUAL TABLE documents USING fts5(title)")
+          try transaction.execute("INSERT INTO documents (title) VALUES ('hello world')")
+        }
+        try await original.migrate(driver)
+
+        var changed = OrbitDatabaseMigrator()
+        changed.eraseDatabaseOnSchemaChange = true
+        changed.registerMigration("Create documents") { transaction in
+          try transaction.execute("CREATE VIRTUAL TABLE documents USING fts5(title, body)")
+        }
+
+        try await changed.migrate(driver)
+
+        let columns = try await driver.read { transaction in
+          try transaction.fetchAll(
+            #sql("SELECT name FROM pragma_table_info('documents')", as: String.self)
+          )
+        }
+        #expect(columns == ["title", "body"])
+        // The old row, and the shadow tables that indexed it, are gone along with everything else.
+        let matches = try await driver.read { transaction in
+          try transaction.fetchOne(
+            #sql("SELECT count(*) FROM documents WHERE documents MATCH 'hello'", as: Int.self)
+          )
+        }
+        #expect(matches == 0)
+      }
+    #endif
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func erasingATableOtherTablesReferToDoesNotFailOnForeignKeys(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create lists", migrate: createListsAndReminders)
+      try await original.migrate(driver)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create lists") { transaction in
+        try createListsAndReminders(transaction)
+        try transaction.execute("CREATE INDEX reminders_listID ON reminders (listID)")
+      }
+
+      try await changed.migrate(driver)
+
+      let lists = try await driver.read { transaction in
+        try transaction.fetchOne(#sql("SELECT count(*) FROM lists", as: Int.self))
+      }
+      #expect(lists == 1)
+      try await expectWriterForeignKeys(true, on: driver)
+    }
+
+    @Test
+    func aFailedEraseLeavesTheDatabaseIntactAndRethrows() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+      }
+      try await original.migrate(driver)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      // `PRAGMA query_only` turns the erase's `BEGIN IMMEDIATE` into a deferred transaction,
+      // which fails the moment it tries to drop something, standing in for a disk that refuses
+      // the write.
+      let error = await #expect(throws: SQLiteError.self) {
+        try await driver.writeWithoutTransaction { connection in
+          try connection.execute("PRAGMA query_only = 1")
+          defer { try? connection.execute("PRAGMA query_only = 0") }
+          try changed.migrate(connection)
+        }
+      }
+      #if !Turso
+        #expect(error?.primaryCode == .readOnly)
+      #else
+        // Turso reports the same refusal as a generic error rather than SQLITE_READONLY.
+        _ = error
+      #endif
+
+      let ids = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+      #expect(ids == [1])
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id"])
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func migratingWithTheFlagOffLeavesAChangedSchemaAlone(_ kind: SQLiteTestDriver) async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try kind.open(in: directory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+      }
+      try await original.migrate(driver)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      #expect(!changed.eraseDatabaseOnSchemaChange)
+      try await changed.migrate(driver)
+
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id"])
+      let ids = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+      #expect(ids == [1])
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func migratingAnUpToDateDatabaseWithTheFlagOnStillWritesAndAnnouncesNothing(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      try await checkUpToDateMigrationIsSilent(
+        on: try kind.open(in: directory),
+        eraseDatabaseOnSchemaChange: true
+      )
+    }
+
+    @Test
+    func anUnregisteredTargetWithTheFlagOnThrowsBeforeErasingAnything() async throws {
+      let driver = try SQLiteQueue(path: .memory)
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+      }
+      try await original.migrate(driver)
+
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
+        try await changed.migrate(driver, upTo: "missing")
+      }
+      #expect(error == OrbitDatabaseMigrationTargetError(target: "missing", reason: .unregistered))
+
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id"])
+      let ids = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+      #expect(ids == [1])
+    }
+
+    @Test
+    func anAppliedMigrationThisMigratorDoesNotRegisterErasesWithTheFlagOnAsDocumented()
+      async throws
+    {
+      let driver = try SQLiteQueue(path: .memory)
+      var newerBuild = OrbitDatabaseMigrator()
+      newerBuild.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+      }
+      newerBuild.registerMigration("Add notes") { transaction in
+        try transaction.execute("ALTER TABLE items ADD COLUMN note TEXT")
+      }
+      try await newerBuild.migrate(driver)
+
+      // An older build that has not shipped "Add notes" yet. With the flag on, this is
+      // documented to erase, exactly as a removed migration would.
+      var olderBuild = OrbitDatabaseMigrator()
+      olderBuild.eraseDatabaseOnSchemaChange = true
+      olderBuild.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+
+      try await olderBuild.migrate(driver)
+
+      let ids = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+      #expect(ids == [])
+      let columns = try await driver.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        )
+      }
+      #expect(columns == ["id"])
+      #expect(try await driver.read { try olderBuild.appliedMigrations($0) } == ["Create items"])
+    }
+
+    @Test
+    func twoPoolsMigratingConcurrentlyWithTheFlagOnAgreeOnOneErasedResult() async throws {
+      let directory = try makeShortTemporaryDirectory("erase")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+
+      var original = OrbitDatabaseMigrator()
+      original.registerMigration("Create runs") { transaction in
+        try transaction.execute(
+          "CREATE TABLE runs (migration TEXT NOT NULL); INSERT INTO runs VALUES ('old')"
+        )
+      }
+      do {
+        let seeder = try SQLiteQueue(path: path)
+        try await original.migrate(seeder)
+      }
+
+      var changed = OrbitDatabaseMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create runs") { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE runs (migration TEXT NOT NULL, note TEXT);
+          INSERT INTO runs (migration) VALUES ('Create runs');
+          """
+        )
+      }
+      for index in 1...5 {
+        let identifier = "Migration \(index)"
+        changed.registerMigration(identifier) { transaction in
+          try transaction.execute(
+            #sql("INSERT INTO runs (migration) VALUES (\(bind: identifier))", as: Void.self)
+          )
+        }
+      }
+
+      let first = try SQLitePool(path: path)
+      let second = try SQLitePool(path: path)
+      // A `let` copy, since a mutable variable cannot be sent into two concurrent `async let`s.
+      let migrator = changed
+
+      async let firstRun: Void = migrator.migrate(first)
+      async let secondRun: Void = migrator.migrate(second)
+      _ = try await (firstRun, secondRun)
+
+      let expected = ["Create runs"] + (1...5).map { "Migration \($0)" }
+      let runs = try await first.read { transaction in
+        try transaction.fetchAll(#sql("SELECT migration FROM runs ORDER BY rowid", as: String.self))
+      }
+      #expect(runs == expected)
+      #expect(try await first.read { try migrator.appliedMigrations($0) } == expected)
+      let columns = try await first.read { transaction in
+        try transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('runs')", as: String.self)
+        )
+      }
+      #expect(columns == ["migration", "note"])
+    }
+
+    #if Turso
+      @Test
+      func autoincrementTablesEraseAndRecreateCleanlyOnTurso() async throws {
+        // Turso keeps its own `__turso_internal_seq_<table>` in place of `sqlite_sequence`, which
+        // must be left out of the comparison the same way.
+        let directory = try makeShortTemporaryDirectory("turso-erase")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let driver = try SQLiteQueue(
+          path: .file(directory.appending(component: "database.sqlite"))
+        )
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration("Create counters") { transaction in
+          try transaction.execute("CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT)")
+          try transaction.execute("INSERT INTO counters DEFAULT VALUES")
+        }
+        try await migrator.migrate(driver)
+
+        #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
+
+        var changed = OrbitDatabaseMigrator()
+        changed.eraseDatabaseOnSchemaChange = true
+        changed.registerMigration("Create counters") { transaction in
+          try transaction.execute(
+            "CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT)"
+          )
+          try transaction.execute("INSERT INTO counters DEFAULT VALUES")
+        }
+
+        try await changed.migrate(driver)
+
+        let columns = try await driver.read { transaction in
+          try transaction.fetchAll(
+            #sql("SELECT name FROM pragma_table_info('counters')", as: String.self)
+          )
+        }
+        #expect(columns == ["id", "note"])
+        let ids = try await driver.read { transaction in
+          try transaction.fetchAll(#sql("SELECT id FROM counters", as: Int.self))
+        }
+        #expect(ids == [1])
+      }
+    #endif
+
+    #if SQLCipher
+      @Test
+      func hasSchemaChangesAndEraseWorkOnAnEncryptedDatabase() async throws {
+        let path = temporaryDatabasePath("migrator-cipher")
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
+        let driver = try SQLiteQueue(
+          path: .file(URL(fileURLWithPath: path)),
+          configuration: configuration
+        )
+
+        var original = OrbitDatabaseMigrator()
+        original.registerMigration("Create items") { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+          try transaction.execute("INSERT INTO items (id) VALUES (1)")
+        }
+        try await original.migrate(driver)
+        #expect(try await driver.read { try original.hasSchemaChanges($0) } == false)
+
+        // The scratch database `hasSchemaChanges` opens is keyed the same way, or it could not
+        // even read the real one's schema to compare against.
+        var changed = OrbitDatabaseMigrator()
+        changed.eraseDatabaseOnSchemaChange = true
+        changed.registerMigration("Create items") { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+        }
+        #expect(try await driver.read { try changed.hasSchemaChanges($0) } == true)
+
+        try await changed.migrate(driver)
+
+        let columns = try await driver.read { transaction in
+          try transaction.fetchAll(
+            #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+          )
+        }
+        #expect(columns == ["id", "note"])
+        let ids = try await driver.read { transaction in
+          try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+        }
+        #expect(ids == [])
+      }
+    #endif
   }
 
   // MARK: - Support
@@ -858,8 +1554,12 @@
     #expect(applied == expected)
   }
 
-  private func loggingMigrator(_ identifiers: [String]) -> OrbitDatabaseMigrator {
+  private func loggingMigrator(
+    _ identifiers: [String],
+    eraseDatabaseOnSchemaChange: Bool = false
+  ) -> OrbitDatabaseMigrator {
     var migrator = OrbitDatabaseMigrator()
+    migrator.eraseDatabaseOnSchemaChange = eraseDatabaseOnSchemaChange
     for identifier in identifiers {
       migrator.registerMigration(identifier) { transaction in
         try transaction.execute("CREATE TABLE IF NOT EXISTS log (identifier TEXT NOT NULL)")
@@ -894,6 +1594,48 @@
   private func foreignKeysPragma(in transaction: borrowing SQLiteWriteTransaction) throws -> Int {
     try transaction.fetchOne(#sql("PRAGMA foreign_keys", as: Int.self)) ?? -1
   }
+
+  private func createItemsWithViewAndTrigger(
+    _ transaction: borrowing SQLiteWriteTransaction
+  ) throws {
+    try transaction.execute(
+      """
+      CREATE TABLE items (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX items_title ON items (title);
+      CREATE VIEW active_items AS SELECT * FROM items WHERE archived = 0;
+      CREATE TRIGGER items_archived AFTER UPDATE OF archived ON items WHEN NEW.archived = 1 BEGIN
+        UPDATE items SET title = title || ' (archived)' WHERE id = NEW.id;
+      END;
+      """
+    )
+  }
+
+  /// Every file `hasSchemaChanges` leaves a scratch database under, currently on disk.
+  ///
+  /// - Parameter directory: Where to look; the system temporary directory by default.
+  private func scratchDatabaseFileNames(
+    in directory: URL = FileManager.default.temporaryDirectory
+  ) throws -> Set<String> {
+    let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+    return Set(names.filter { $0.hasPrefix("SQLiteOrbit-migrator-") })
+  }
+
+  #if !Turso
+    // Custom collations and functions are unavailable on Turso, so these exist only for the test
+    // that checks the scratch database `hasSchemaChanges` builds gets the same ones registered.
+
+    @DatabaseCollation
+    private func schemaChangeScratchCollation(_ lhs: String, _ rhs: String) -> CollationOrder {
+      CollationOrder(String(lhs.reversed()), String(rhs.reversed()))
+    }
+
+    @DatabaseFunction(isDeterministic: true)
+    private func schemaChangeScratchDouble(_ value: Int) -> Int { value * 2 }
+  #endif
 
   /// Checks that foreign keys on the connection migrations run on are as `isEnabled` says, both as
   /// the connection tracks them and as SQLite reports them.
