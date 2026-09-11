@@ -174,8 +174,8 @@ the traits exclusive in practice:
 )
 ```
 
-The experimental `Turso` trait drives Turso's local Rust engine through its SQLite-compatible C
-API and vends `SQLiteLibrary.turso`:
+The experimental `Turso` trait downloads Turso's local Rust engine for Linux x86-64, drives it
+through its SQLite-compatible C API, and vends `SQLiteLibrary.turso`:
 
 ```swift
 .package(
@@ -185,11 +185,8 @@ API and vends `SQLiteLibrary.turso`:
 )
 ```
 
-For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
-linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
-SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
-module and the bundle both expose the module as `TursoSQLite3`, so publishing the bundle does not
-change SQLiteOrbit's Swift source.
+The package links a release-hosted SwiftPM artifact bundle built from Turso `v0.8.0-pre.11`.
+`Scripts/build-turso-artifactbundle.sh` reproduces the bundle from an upstream Turso checkout.
 
 Turso's compatibility surface is still smaller than SQLite's. SQLiteOrbit handles that boundary
 explicitly:
