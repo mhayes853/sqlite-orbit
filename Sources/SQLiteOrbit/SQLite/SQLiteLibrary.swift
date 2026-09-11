@@ -58,6 +58,8 @@ public struct SQLiteLibraryFeature: RawRepresentable, Hashable, Sendable {
   public static let encryption = Self(rawValue: "database encryption")
   /// Sharing a database file between multiple processes.
   public static let multiprocessFileSharing = Self(rawValue: "multiprocess file sharing")
+  /// Checking the whole database for foreign key violations with `PRAGMA foreign_key_check`.
+  public static let foreignKeyCheck = Self(rawValue: "foreign key checks")
 }
 
 /// Reported when an operation is not implemented by the selected SQLite library.
@@ -126,6 +128,13 @@ public struct SQLiteLibrary: Sendable {
   public var encryption: Encryption?
   /// How database files opened by this library may be shared.
   public var fileSharing: FileSharing
+  /// Whether the library implements `PRAGMA foreign_key_check`, which finds the rows whose
+  /// foreign keys refer to nothing.
+  ///
+  /// A library can enforce foreign keys statement by statement without it. When this is `false`,
+  /// ``SQLiteTransaction/foreignKeyViolations()`` throws ``SQLiteFeatureUnavailableError`` rather
+  /// than report no violations, and so does a migration the migrator would check.
+  public var isForeignKeyCheckAvailable: Bool
 
   /// Creates a library from its required and optional operation groups.
   public init(
@@ -141,7 +150,8 @@ public struct SQLiteLibrary: Sendable {
     collations: Collations? = nil,
     encryption: Encryption? = nil,
     name: String = "custom SQLite",
-    fileSharing: FileSharing = .multipleProcesses
+    fileSharing: FileSharing = .multipleProcesses,
+    isForeignKeyCheckAvailable: Bool = true
   ) {
     self.name = name
     self.runtime = runtime
@@ -156,6 +166,7 @@ public struct SQLiteLibrary: Sendable {
     self.collations = collations
     self.encryption = encryption
     self.fileSharing = fileSharing
+    self.isForeignKeyCheckAvailable = isForeignKeyCheckAvailable
   }
 }
 
@@ -677,11 +688,13 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     private static func configured(
       _ library: Self,
       name: String,
-      fileSharing: FileSharing
+      fileSharing: FileSharing,
+      isForeignKeyCheckAvailable: Bool
     ) -> Self {
       var library = library
       library.name = name
       library.fileSharing = fileSharing
+      library.isForeignKeyCheckAvailable = isForeignKeyCheckAvailable
       return library
     }
 
@@ -703,7 +716,8 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     public static let system = configured(
       #sqliteLibrary(),
       name: "system SQLite",
-      fileSharing: .multipleProcesses
+      fileSharing: .multipleProcesses,
+      isForeignKeyCheckAvailable: true
     )
   }
 #endif
@@ -714,7 +728,8 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     public static let sqlCipher = configured(
       #sqliteLibrary(apis: [.standard, .encryption]),
       name: "SQLCipher",
-      fileSharing: .multipleProcesses
+      fileSharing: .multipleProcesses,
+      isForeignKeyCheckAvailable: true
     )
   }
 #endif
@@ -725,7 +740,10 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     public static let turso = configured(
       #sqliteLibrary(module: "TursoSQLite3", apis: []),
       name: "Turso",
-      fileSharing: .singleProcess
+      fileSharing: .singleProcess,
+      // Turso enforces foreign keys statement by statement, but has no `PRAGMA foreign_key_check`
+      // and answers it with no rows.
+      isForeignKeyCheckAvailable: false
     )
   }
 #endif

@@ -111,4 +111,42 @@
       }
     #endif
   }
+
+  @Test
+  func tursoRefusesToCheckForeignKeysRatherThanReportNoViolations() async throws {
+    #expect(!SQLiteLibrary.turso.isForeignKeyCheckAvailable)
+    let expected = SQLiteFeatureUnavailableError(libraryName: "Turso", feature: .foreignKeyCheck)
+    #expect(expected.description == "Turso does not support SQLite's foreign key checks.")
+
+    // Turso answers `PRAGMA foreign_key_check` with no rows, even for a row that refers to
+    // nothing, which is what an empty result would wrongly vouch for.
+    let driver = try SQLiteQueue(path: .memory)
+    try await driver.writeWithoutTransaction { connection in
+      connection.isForeignKeysEnabled = false
+      try connection.execute(
+        """
+        CREATE TABLE lists (id INTEGER PRIMARY KEY);
+        CREATE TABLE reminders (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists (id));
+        INSERT INTO reminders VALUES (1, 7);
+        """
+      )
+    }
+
+    let fromTransaction = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.read { try $0.foreignKeyViolations() }
+    }
+    let fromWrite = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.write { try $0.foreignKeyViolations() }
+    }
+    let fromConnection = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.readWithoutTransaction { try $0.foreignKeyViolations() }
+    }
+    let fromWriteConnection = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.writeWithoutTransaction { try $0.foreignKeyViolations() }
+    }
+    #expect(fromTransaction == expected)
+    #expect(fromWrite == expected)
+    #expect(fromConnection == expected)
+    #expect(fromWriteConnection == expected)
+  }
 #endif

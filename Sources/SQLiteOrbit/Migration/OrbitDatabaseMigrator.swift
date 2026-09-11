@@ -54,6 +54,12 @@ public struct OrbitDatabaseMigrator: Sendable {
     /// This is what lets a migration rebuild a table other tables refer to, following SQLite's
     /// procedure for schema changes `ALTER TABLE` cannot make: dropping the old table with foreign
     /// keys on would cascade its deletion to every row that refers to it.
+    ///
+    /// The check needs a library whose ``SQLiteLibrary/isForeignKeyCheckAvailable`` is `true`. On
+    /// one without it, such as Turso, a migration that would be checked fails with
+    /// ``SQLiteFeatureUnavailableError`` before it runs, without taking the write lock. Register it
+    /// as ``ForeignKeyChecks/immediate`` there, which Turso enforces statement by statement, or
+    /// skip the check by setting ``OrbitDatabaseMigrator/defersForeignKeyChecks`` to `false` first.
     case deferred
 
     /// Foreign keys are enforced as the connection enforces them when the migration begins,
@@ -72,7 +78,9 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///
   /// Checking reads every table that has a foreign key, which a large database can take a while
   /// over. Skipping it trades that time for the guarantee: a migration can then leave rows whose
-  /// foreign keys refer to nothing, and nothing reports them.
+  /// foreign keys refer to nothing, and nothing reports them. On a library that cannot check at
+  /// all, such as Turso, a deferred migration registered while this is `true` fails with
+  /// ``SQLiteFeatureUnavailableError`` before it runs.
   ///
   /// ```swift
   /// var migrator = OrbitDatabaseMigrator()
@@ -244,8 +252,9 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///     against the data the ones before it left.
   /// - Throws: ``OrbitDatabaseMigrationTargetError`` when `target` cannot be migrated up to,
   ///   ``OrbitDatabaseForeignKeyViolationError`` when a deferred migration leaves violations,
-  ///   whatever a migration throws, a ``SQLiteError``, or `CancellationError` when the task was
-  ///   cancelled.
+  ///   ``SQLiteFeatureUnavailableError`` when one is to be checked on a library that cannot check
+  ///   foreign keys, whatever a migration throws, a ``SQLiteError``, or `CancellationError` when
+  ///   the task was cancelled.
   public func migrate(
     _ writer: some OrbitDatabaseWriter,
     upTo target: String? = nil
@@ -271,7 +280,8 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///     registered migration.
   /// - Throws: ``OrbitDatabaseMigrationTargetError`` when `target` cannot be migrated up to,
   ///   ``OrbitDatabaseForeignKeyViolationError`` when a deferred migration leaves violations,
-  ///   whatever a migration throws, or a ``SQLiteError``.
+  ///   ``SQLiteFeatureUnavailableError`` when one is to be checked on a library that cannot check
+  ///   foreign keys, whatever a migration throws, or a ``SQLiteError``.
   public func migrateBlocking(
     _ writer: some OrbitDatabaseWriter,
     upTo target: String? = nil
@@ -312,8 +322,9 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///     registered migration.
   /// - Throws: ``OrbitDatabaseMigrationTargetError`` when `target` cannot be migrated up to,
   ///   ``OrbitDatabaseForeignKeyViolationError`` when a deferred migration leaves violations,
-  ///   whatever a migration throws, or a ``SQLiteError``, whose code is `SQLITE_BUSY` when the
-  ///   write lock could not be taken in time.
+  ///   ``SQLiteFeatureUnavailableError`` when one is to be checked on a library that cannot check
+  ///   foreign keys, whatever a migration throws, or a ``SQLiteError``, whose code is
+  ///   `SQLITE_BUSY` when the write lock could not be taken in time.
   public func migrate(
     _ connection: borrowing SQLiteWriteConnection,
     upTo target: String? = nil
@@ -378,6 +389,15 @@ public struct OrbitDatabaseMigrator: Sendable {
     // nothing to defer, and nothing a check would be guarding.
     let wasForeignKeysEnabled = connection.isForeignKeysEnabled
     let disablesForeignKeys = wasForeignKeysEnabled && migration.foreignKeyChecks != .immediate
+    let checksForeignKeys = disablesForeignKeys && migration.foreignKeyChecks == .deferred
+    // A build that cannot check would let the migration commit whatever it left dangling. Failing
+    // here, with the error the check itself throws, runs none of it and takes no write lock.
+    if checksForeignKeys, !connection.sqlite.isForeignKeyCheckAvailable {
+      throw SQLiteFeatureUnavailableError(
+        libraryName: connection.sqlite.name,
+        feature: .foreignKeyCheck
+      )
+    }
     if disablesForeignKeys {
       // Applied just before the transaction begins.
       connection.isForeignKeysEnabled = false
@@ -387,7 +407,6 @@ public struct OrbitDatabaseMigrator: Sendable {
     // a pragma in between; anything else applies it first: an immediate migration's transaction,
     // the caller's next statement, or the end of the access.
     defer { connection.isForeignKeysEnabled = wasForeignKeysEnabled }
-    let checksForeignKeys = disablesForeignKeys && migration.foreignKeyChecks == .deferred
     try connection.transaction { transaction in
       try record(migration, in: transaction, checkingForeignKeys: checksForeignKeys)
     }
@@ -503,8 +522,10 @@ public struct OrbitDatabaseMigrator: Sendable {
   /// - Returns: `true` when a migration the database has applied is no longer registered, or when
   ///   the database's schema differs from the one the registered migrations produce.
   /// - Throws: Whatever a migration throws, ``OrbitDatabaseForeignKeyViolationError`` when a
-  ///   deferred migration leaves violations in the temporary database, or a ``SQLiteError`` when
-  ///   either database cannot be read or the temporary one cannot be created or migrated.
+  ///   deferred migration leaves violations in the temporary database,
+  ///   ``SQLiteFeatureUnavailableError`` when one is to be checked on a library that cannot check
+  ///   foreign keys, or a ``SQLiteError`` when either database cannot be read or the temporary one
+  ///   cannot be created or migrated.
   public func hasSchemaChanges<Transaction>(
     _ transaction: borrowing Transaction
   ) throws -> Bool

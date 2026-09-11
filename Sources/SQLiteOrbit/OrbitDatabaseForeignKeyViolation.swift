@@ -55,7 +55,7 @@ public struct OrbitDatabaseForeignKeyViolation: Hashable, Sendable {
   }
 }
 
-extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
+extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Returns every row in the database whose foreign key refers to a row that does not exist.
   ///
   /// This runs `PRAGMA foreign_key_check`, which reads every table that has a foreign key, so it
@@ -66,10 +66,18 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// let violations = try await database.read { try $0.foreignKeyViolations() }
   /// ```
   ///
+  /// A build without the pragma, whose ``SQLiteLibrary/isForeignKeyCheckAvailable`` is `false`,
+  /// such as Turso, cannot tell a database without violations from one it did not check, so this
+  /// throws there rather than report none.
+  ///
   /// - Returns: The violations in the order SQLite reports them, or an empty array when there are
   ///   none.
-  /// - Throws: A ``SQLiteError`` when the check cannot run.
+  /// - Throws: ``SQLiteFeatureUnavailableError`` with ``SQLiteLibraryFeature/foreignKeyCheck`` when
+  ///   the library does not implement the check, or a ``SQLiteError`` when the check cannot run.
   public borrowing func foreignKeyViolations() throws -> [OrbitDatabaseForeignKeyViolation] {
+    guard sqlite.isForeignKeyCheckAvailable else {
+      throw SQLiteFeatureUnavailableError(libraryName: sqlite.name, feature: .foreignKeyCheck)
+    }
     var violations: [OrbitDatabaseForeignKeyViolation] = []
     var cursor = try rowCursor(SQLQueryExpression("PRAGMA foreign_key_check"))
     while var row = try cursor.next() {

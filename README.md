@@ -204,10 +204,16 @@ explicitly:
 - Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
   cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
   there is no safe client-side substitute for native early finalization.
+- Turso enforces foreign keys statement by statement but has no `PRAGMA foreign_key_check`, so
+  `foreignKeyViolations()` throws `SQLiteFeatureUnavailableError` rather than report no
+  violations. A migration the migrator would check before it commits, which is every migration
+  by default, fails the same way before it runs; register migrations with
+  `foreignKeyChecks: .immediate`, or set `defersForeignKeyChecks` to `false` first.
 
 The unavailable operations are `nil` in `SQLiteLibrary.turso`, while its `fileSharing` value is
-`.singleProcess`. As Turso fills in its compatibility API, each operation can be enabled directly
-without engine-specific branches throughout the driver.
+`.singleProcess` and its `isForeignKeyCheckAvailable` is `false`. As Turso fills in its
+compatibility API, each operation can be enabled directly without engine-specific branches
+throughout the driver.
 
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
@@ -494,6 +500,9 @@ after that, which still run with foreign keys off, trading the guarantee for tha
 registered earlier keep their check. A connection without foreign keys on has nothing to defer or
 check. A rebuild outside the migrator runs the same check itself: `foreignKeyViolations()` is
 available on every transaction and connection, and returns each `OrbitDatabaseForeignKeyViolation`.
+Turso cannot run the check, so there a migration that would be checked throws
+`SQLiteFeatureUnavailableError` before it runs; `.immediate` migrations, which Turso enforces as
+they go, and unchecked ones apply as usual.
 
 ### The table of applied migrations
 

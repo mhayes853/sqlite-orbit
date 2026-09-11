@@ -168,7 +168,7 @@
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("Create lists", migrate: createListsAndReminders)
       migrator.registerMigration("Add list colors") { transaction in
         // SQLite's procedure for a change `ALTER TABLE` cannot make: build the new table, copy
@@ -200,39 +200,43 @@
       try await expectWriterForeignKeys(true, on: driver)
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func violationRollsBackOnlyItsMigration(_ kind: SQLiteTestDriver) async throws {
-      let directory = try makeShortTemporaryDirectory("migrate")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let driver = try kind.open(in: directory)
-      let ranLast = Lock(false)
-      var migrator = OrbitDatabaseMigrator()
-      migrator.registerMigration("Create lists", migrate: createListsAndReminders)
-      migrator.registerMigration("Orphan a reminder") { transaction in
-        try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
-      }
-      migrator.registerMigration("Never reached") { _ in ranLast.withLock { $0 = true } }
+    // Turso cannot find violations; `deferredMigrationsThatWouldBeCheckedFailBeforeRunningOnTurso`
+    // covers what it does instead.
+    #if !Turso
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func violationRollsBackOnlyItsMigration(_ kind: SQLiteTestDriver) async throws {
+        let directory = try makeShortTemporaryDirectory("migrate")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let driver = try kind.open(in: directory)
+        let ranLast = Lock(false)
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration("Create lists", migrate: createListsAndReminders)
+        migrator.registerMigration("Orphan a reminder") { transaction in
+          try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+        }
+        migrator.registerMigration("Never reached") { _ in ranLast.withLock { $0 = true } }
 
-      let error = await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
-        try await migrator.migrate(driver)
-      }
+        let error = await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
+          try await migrator.migrate(driver)
+        }
 
-      #expect(error?.migration == "Orphan a reminder")
-      #expect(
-        error?.violations == [
-          .init(table: "reminders", rowID: 3, parentTable: "lists", foreignKeyIndex: 0)
-        ]
-      )
-      #expect(!ranLast.withLock { $0 })
-      #expect(
-        try await driver.read { try migrator.appliedMigrations($0) } == ["Create lists"]
-      )
-      let reminders = try await driver.read { transaction in
-        try transaction.fetchOne(#sql("SELECT count(*) FROM reminders", as: Int.self))
+        #expect(error?.migration == "Orphan a reminder")
+        #expect(
+          error?.violations == [
+            .init(table: "reminders", rowID: 3, parentTable: "lists", foreignKeyIndex: 0)
+          ]
+        )
+        #expect(!ranLast.withLock { $0 })
+        #expect(
+          try await driver.read { try migrator.appliedMigrations($0) } == ["Create lists"]
+        )
+        let reminders = try await driver.read { transaction in
+          try transaction.fetchOne(#sql("SELECT count(*) FROM reminders", as: Int.self))
+        }
+        #expect(reminders == 2)
+        try await expectWriterForeignKeys(true, on: driver)
       }
-      #expect(reminders == 2)
-      try await expectWriterForeignKeys(true, on: driver)
-    }
+    #endif
 
     @Test(arguments: SQLiteTestDriver.allCases)
     func immediateChecksKeepForeignKeysOnDuringTheMigration(
@@ -242,7 +246,7 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
       let foreignKeys = Lock([Int]())
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("Create lists") { transaction in
         try createListsAndReminders(transaction)
         try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
@@ -268,7 +272,13 @@
     func turningDeferredChecksOffSkipsTheCheckOfLaterMigrationsOnly() async throws {
       let foreignKeys = Lock([Int]())
       var migrator = OrbitDatabaseMigrator()
-      migrator.registerMigration("Create lists", migrate: createListsAndReminders)
+      // Immediate, so that only the orphans' migrations tell checked from unchecked, and so that it
+      // runs on Turso, which cannot check.
+      migrator.registerMigration(
+        "Create lists",
+        foreignKeyChecks: .immediate,
+        migrate: createListsAndReminders
+      )
       var checked = migrator
       checked.registerMigration("Checked orphan") { transaction in
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
@@ -285,22 +295,36 @@
       try await migrator.migrate(uncheckedDriver)
       #expect(foreignKeys.withLock { $0 } == [0])
       try await expectWriterForeignKeys(true, on: uncheckedDriver)
-      let orphans = try await uncheckedDriver.read { try $0.foreignKeyViolations() }
-      #expect(orphans.map(\.table) == ["reminders"])
+      #if !Turso
+        let orphans = try await uncheckedDriver.read { try $0.foreignKeyViolations() }
+        #expect(orphans.map(\.table) == ["reminders"])
+      #endif
 
       // The property is read when a migration is registered, so one registered before it was
-      // turned off keeps its check.
+      // turned off keeps its check, which Turso refuses to run rather than skip.
       checked.defersForeignKeyChecks = false
       let checkedDriver = try SQLiteQueue(path: .memory)
-      await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
-        try await checked.migrate(checkedDriver)
-      }
+      #if Turso
+        await #expect(throws: SQLiteFeatureUnavailableError.self) {
+          try await checked.migrate(checkedDriver)
+        }
+      #else
+        await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
+          try await checked.migrate(checkedDriver)
+        }
+      #endif
     }
 
     @Test
     func disablingDeferredChecksReturnsACopyAndLeavesTheOriginal() async throws {
       var original = OrbitDatabaseMigrator()
-      original.registerMigration("Create lists", migrate: createListsAndReminders)
+      // Immediate, so that only the orphan's migration tells the two apart, and so that it runs on
+      // Turso, which cannot check.
+      original.registerMigration(
+        "Create lists",
+        foreignKeyChecks: .immediate,
+        migrate: createListsAndReminders
+      )
 
       var disabled = original.disablingDeferredForeignKeyChecks()
       #expect(!disabled.defersForeignKeyChecks)
@@ -316,9 +340,15 @@
       let disabledDriver = try SQLiteQueue(path: .memory)
       try await disabled.migrate(disabledDriver)
       let originalDriver = try SQLiteQueue(path: .memory)
-      await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
-        try await original.migrate(originalDriver)
-      }
+      #if Turso
+        await #expect(throws: SQLiteFeatureUnavailableError.self) {
+          try await original.migrate(originalDriver)
+        }
+      #else
+        await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
+          try await original.migrate(originalDriver)
+        }
+      #endif
     }
 
     @Test
@@ -341,37 +371,131 @@
       #expect(try await driver.read { try migrator.hasCompletedMigrations($0) })
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func foreignKeyViolationsAreReadOutsideTheMigrator(_ kind: SQLiteTestDriver) async throws {
-      let directory = try makeShortTemporaryDirectory("migrate")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let driver = try kind.open(in: directory)
-      let orphan = OrbitDatabaseForeignKeyViolation(
-        table: "reminders",
-        rowID: 3,
-        parentTable: "lists",
-        foreignKeyIndex: 0
-      )
-
-      let (before, during) = try await driver.writeWithoutTransaction { connection in
-        try connection.transaction { try createListsAndReminders($0) }
-        let before = try connection.foreignKeyViolations()
-        // A table rebuild outside the migrator: foreign keys off, the change, then the check.
-        connection.isForeignKeysEnabled = false
-        let during = try connection.transaction { transaction in
+    #if Turso
+      @Test
+      func deferredMigrationsThatWouldBeCheckedFailBeforeRunningOnTurso() async throws {
+        let driver = try SQLiteQueue(path: .memory)
+        let ranChecked = Lock(false)
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration(
+          "Create lists",
+          foreignKeyChecks: .immediate,
+          migrate: createListsAndReminders
+        )
+        migrator.registerMigration("Checked") { transaction in
+          ranChecked.withLock { $0 = true }
           try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
-          return try transaction.foreignKeyViolations()
         }
-        return (before, during)
+
+        let error = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+          try await migrator.migrate(driver)
+        }
+
+        #expect(
+          error == SQLiteFeatureUnavailableError(libraryName: "Turso", feature: .foreignKeyCheck)
+        )
+        #expect(!ranChecked.withLock { $0 })
+        #expect(
+          try await driver.read { try migrator.appliedMigrations($0) } == ["Create lists"]
+        )
+        let reminders = try await driver.read { transaction in
+          try transaction.fetchOne(#sql("SELECT count(*) FROM reminders", as: Int.self))
+        }
+        #expect(reminders == 2)
+        try await expectWriterForeignKeys(true, on: driver)
+
+        // The temporary database `hasSchemaChanges` migrates refuses such a migration the same way.
+        var checkedHistory = OrbitDatabaseMigrator()
+        checkedHistory.registerMigration("Create lists", migrate: createListsAndReminders)
+        await #expect(throws: SQLiteFeatureUnavailableError.self) {
+          try await driver.read { try checkedHistory.hasSchemaChanges($0) }
+        }
       }
 
-      #expect(before.isEmpty)
-      #expect(during == [orphan])
-      // Foreign keys are back on for these, and the check finds the orphan all the same.
-      try await expectWriterForeignKeys(true, on: driver)
-      #expect(try await driver.read { try $0.foreignKeyViolations() } == [orphan])
-      #expect(try await driver.readWithoutTransaction { try $0.foreignKeyViolations() } == [orphan])
-    }
+      @Test
+      func immediateAndUncheckedMigrationsApplyOnTurso() async throws {
+        let driver = try SQLiteQueue(path: .memory)
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration(
+          "Create lists",
+          foreignKeyChecks: .immediate,
+          migrate: createListsAndReminders
+        )
+        migrator.defersForeignKeyChecks = false
+        migrator.registerMigration("Unchecked") { transaction in
+          try transaction.execute("INSERT INTO lists VALUES (2, 'Chores')")
+        }
+        var disabled = migrator.disablingDeferredForeignKeyChecks()
+        disabled.registerMigration("Disabled") { transaction in
+          try transaction.execute("INSERT INTO lists VALUES (3, 'Work')")
+        }
+
+        try await disabled.migrate(driver)
+
+        #expect(
+          try await driver.read { try disabled.appliedMigrations($0) }
+            == ["Create lists", "Unchecked", "Disabled"]
+        )
+        // Turso still enforces foreign keys statement by statement in an immediate migration.
+        var orphaning = disabled
+        orphaning.registerMigration("Orphan", foreignKeyChecks: .immediate) { transaction in
+          try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+        }
+        await #expect(throws: SQLiteError.self) { try await orphaning.migrate(driver) }
+        #expect(try await driver.read { try orphaning.hasCompletedMigrations($0) } == false)
+      }
+    #else
+      @Test
+      func everyBuildButTursoCanCheckForeignKeys() {
+        let base = builtInTestLibrary
+        let custom = SQLiteLibrary(
+          runtime: base.runtime,
+          connections: base.connections,
+          statements: base.statements,
+          bindings: base.bindings,
+          columns: base.columns
+        )
+        #expect(base.isForeignKeyCheckAvailable)
+        #expect(custom.isForeignKeyCheckAvailable)
+      }
+    #endif
+
+    // Turso refuses the check; `TursoCompatibilityTests` covers that.
+    #if !Turso
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func foreignKeyViolationsAreReadOutsideTheMigrator(_ kind: SQLiteTestDriver) async throws {
+        let directory = try makeShortTemporaryDirectory("migrate")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let driver = try kind.open(in: directory)
+        let orphan = OrbitDatabaseForeignKeyViolation(
+          table: "reminders",
+          rowID: 3,
+          parentTable: "lists",
+          foreignKeyIndex: 0
+        )
+
+        let (before, during) = try await driver.writeWithoutTransaction { connection in
+          try connection.transaction { try createListsAndReminders($0) }
+          let before = try connection.foreignKeyViolations()
+          // A table rebuild outside the migrator: foreign keys off, the change, then the check.
+          connection.isForeignKeysEnabled = false
+          let during = try connection.transaction { transaction in
+            try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+            return try transaction.foreignKeyViolations()
+          }
+          return (before, during)
+        }
+
+        #expect(before.isEmpty)
+        #expect(during == [orphan])
+        // Foreign keys are back on for these, and the check finds the orphan all the same.
+        try await expectWriterForeignKeys(true, on: driver)
+        #expect(try await driver.read { try $0.foreignKeyViolations() } == [orphan])
+        #expect(
+          try await driver.readWithoutTransaction { try $0.foreignKeyViolations() } == [orphan]
+        )
+      }
+    #endif
 
     // MARK: - The table of applied migrations
 
@@ -382,7 +506,7 @@
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var migrator = OrbitDatabaseMigrator(tableName: #"app "migrations""#)
+      var migrator = makeMigrator(OrbitDatabaseMigrator(tableName: #"app "migrations""#))
       migrator.registerMigration("one") { _ in }
 
       try await migrator.migrate(driver)
@@ -409,7 +533,7 @@
           """
         )
       }
-      var migrator = OrbitDatabaseMigrator.grdb
+      var migrator = makeMigrator(.grdb)
       migrator.registerMigration("v1") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -431,7 +555,7 @@
     @Test
     func grdbMigratorRecordsItsHistoryInGRDBsTable() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      var migrator = OrbitDatabaseMigrator.grdb
+      var migrator = makeMigrator(.grdb)
       migrator.registerMigration("v1") { _ in }
 
       try await migrator.migrate(driver)
@@ -477,7 +601,7 @@
       configuration.isForeignKeysEnabled = false
       let driver = try SQLiteQueue(path: .memory, configuration: configuration)
       let foreignKeys = Lock([Int]())
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("Create lists") { transaction in
         try createListsAndReminders(transaction)
         try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
@@ -511,7 +635,7 @@
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("one") { _ in }
       migrator.registerMigration("two") { transaction in
         try transaction.execute("CREATE TABLE doomed (id INTEGER)")
@@ -537,7 +661,7 @@
 
       let driver = try SQLiteQueue(path: .memory)
       let during = Lock<Int?>(nil)
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("one") { transaction in
         let value = try foreignKeysPragma(in: transaction)
         during.withLock { $0 = value }
@@ -576,7 +700,7 @@
         return base.statements.execution.step(statement)
       }
       let driver = try SQLiteQueue(path: .memory, configuration: configuration)
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("one") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
@@ -877,14 +1001,14 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
       try await original.migrate(driver)
 
       // The identifier never changed, but what it creates now has an extra column.
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
       }
@@ -899,7 +1023,7 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("one") { transaction in
         try transaction.execute("CREATE TABLE one_table (id INTEGER PRIMARY KEY)")
       }
@@ -910,7 +1034,7 @@
 
       // GRDB's semantics: the scratch database migrates up to the last migration this database
       // has applied, "three", which runs "two" there even though it has never run here.
-      var withInserted = OrbitDatabaseMigrator()
+      var withInserted = makeMigrator()
       withInserted.registerMigration("one") { transaction in
         try transaction.execute("CREATE TABLE one_table (id INTEGER PRIMARY KEY)")
       }
@@ -931,7 +1055,7 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var migrator = OrbitDatabaseMigrator()
+      var migrator = makeMigrator()
       migrator.registerMigration("Create counters") { transaction in
         try transaction.execute("CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT)")
       }
@@ -957,13 +1081,13 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let pool = try SQLitePool(path: .file(directory.appending(component: "database.sqlite")))
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
       try await original.migrate(pool)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
       }
@@ -992,7 +1116,7 @@
         configuration.register(collation: $schemaChangeScratchCollation)
         configuration.register(function: $schemaChangeScratchDouble)
         let driver = try SQLiteQueue(path: .memory, configuration: configuration)
-        var migrator = OrbitDatabaseMigrator()
+        var migrator = makeMigrator()
         migrator.registerMigration("Create words") { transaction in
           try transaction.execute(
             """
@@ -1019,12 +1143,12 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
       try await original.migrate(driver)
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
       }
@@ -1049,7 +1173,7 @@
       let directory = try makeShortTemporaryDirectory("erase")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute(
           "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
@@ -1065,7 +1189,7 @@
       // The erase drops the log table along with everything else, so what ran is recorded here
       // instead.
       let secondRun = Lock([String]())
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create items") { transaction in
         secondRun.withLock { $0.append("Create items") }
@@ -1110,11 +1234,11 @@
       let directory = try makeShortTemporaryDirectory("erase")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items", migrate: createItemsWithViewAndTrigger)
       try await original.migrate(driver)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create items") { transaction in
         try createItemsWithViewAndTrigger(transaction)
@@ -1150,14 +1274,14 @@
         let directory = try makeShortTemporaryDirectory("erase")
         defer { try? FileManager.default.removeItem(at: directory) }
         let driver = try kind.open(in: directory)
-        var original = OrbitDatabaseMigrator()
+        var original = makeMigrator()
         original.registerMigration("Create documents") { transaction in
           try transaction.execute("CREATE VIRTUAL TABLE documents USING fts5(title)")
           try transaction.execute("INSERT INTO documents (title) VALUES ('hello world')")
         }
         try await original.migrate(driver)
 
-        var changed = OrbitDatabaseMigrator()
+        var changed = makeMigrator()
         changed.eraseDatabaseOnSchemaChange = true
         changed.registerMigration("Create documents") { transaction in
           try transaction.execute("CREATE VIRTUAL TABLE documents USING fts5(title, body)")
@@ -1188,11 +1312,11 @@
       let directory = try makeShortTemporaryDirectory("erase")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create lists", migrate: createListsAndReminders)
       try await original.migrate(driver)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create lists") { transaction in
         try createListsAndReminders(transaction)
@@ -1211,14 +1335,14 @@
     @Test
     func aFailedEraseLeavesTheDatabaseIntactAndRethrows() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try transaction.execute("INSERT INTO items (id) VALUES (1)")
       }
       try await original.migrate(driver)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
@@ -1258,14 +1382,14 @@
       let directory = try makeShortTemporaryDirectory("erase")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try transaction.execute("INSERT INTO items (id) VALUES (1)")
       }
       try await original.migrate(driver)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
       }
@@ -1300,14 +1424,14 @@
     @Test
     func anUnregisteredTargetWithTheFlagOnThrowsBeforeErasingAnything() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try transaction.execute("INSERT INTO items (id) VALUES (1)")
       }
       try await original.migrate(driver)
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
@@ -1335,7 +1459,7 @@
       async throws
     {
       let driver = try SQLiteQueue(path: .memory)
-      var newerBuild = OrbitDatabaseMigrator()
+      var newerBuild = makeMigrator()
       newerBuild.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try transaction.execute("INSERT INTO items (id) VALUES (1)")
@@ -1347,7 +1471,7 @@
 
       // An older build that has not shipped "Add notes" yet. With the flag on, this is
       // documented to erase, exactly as a removed migration would.
-      var olderBuild = OrbitDatabaseMigrator()
+      var olderBuild = makeMigrator()
       olderBuild.eraseDatabaseOnSchemaChange = true
       olderBuild.registerMigration("Create items") { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
@@ -1374,7 +1498,7 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
 
-      var original = OrbitDatabaseMigrator()
+      var original = makeMigrator()
       original.registerMigration("Create runs") { transaction in
         try transaction.execute(
           "CREATE TABLE runs (migration TEXT NOT NULL); INSERT INTO runs VALUES ('old')"
@@ -1385,7 +1509,7 @@
         try await original.migrate(seeder)
       }
 
-      var changed = OrbitDatabaseMigrator()
+      var changed = makeMigrator()
       changed.eraseDatabaseOnSchemaChange = true
       changed.registerMigration("Create runs") { transaction in
         try transaction.execute(
@@ -1437,7 +1561,7 @@
         let driver = try SQLiteQueue(
           path: .file(directory.appending(component: "database.sqlite"))
         )
-        var migrator = OrbitDatabaseMigrator()
+        var migrator = makeMigrator()
         migrator.registerMigration("Create counters") { transaction in
           try transaction.execute("CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT)")
           try transaction.execute("INSERT INTO counters DEFAULT VALUES")
@@ -1446,7 +1570,7 @@
 
         #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
 
-        var changed = OrbitDatabaseMigrator()
+        var changed = makeMigrator()
         changed.eraseDatabaseOnSchemaChange = true
         changed.registerMigration("Create counters") { transaction in
           try transaction.execute(
@@ -1481,7 +1605,7 @@
           configuration: configuration
         )
 
-        var original = OrbitDatabaseMigrator()
+        var original = makeMigrator()
         original.registerMigration("Create items") { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
           try transaction.execute("INSERT INTO items (id) VALUES (1)")
@@ -1491,7 +1615,7 @@
 
         // The scratch database `hasSchemaChanges` opens is keyed the same way, or it could not
         // even read the real one's schema to compare against.
-        var changed = OrbitDatabaseMigrator()
+        var changed = makeMigrator()
         changed.eraseDatabaseOnSchemaChange = true
         changed.registerMigration("Create items") { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
@@ -1516,10 +1640,25 @@
 
   // MARK: - Support
 
+  /// `base`, set up so that the deferred migrations registered on it run under every trait.
+  ///
+  /// Turso cannot check foreign keys before a migration commits, so it refuses a deferred migration
+  /// that would be checked. A test that is not about the check registers its migrations unchecked
+  /// there, which still runs them with foreign keys off, as on every other build.
+  func makeMigrator(_ base: OrbitDatabaseMigrator = OrbitDatabaseMigrator())
+    -> OrbitDatabaseMigrator
+  {
+    var migrator = base
+    #if Turso
+      migrator.defersForeignKeyChecks = false
+    #endif
+    return migrator
+  }
+
   /// A migrator whose migrations each record that they ran, for checking that concurrent runs
   /// apply every migration exactly once.
   func makeContendedMigrator() -> OrbitDatabaseMigrator {
-    var migrator = OrbitDatabaseMigrator()
+    var migrator = makeMigrator()
     migrator.registerMigration("Create runs") { transaction in
       try transaction.execute(
         """
@@ -1558,7 +1697,7 @@
     _ identifiers: [String],
     eraseDatabaseOnSchemaChange: Bool = false
   ) -> OrbitDatabaseMigrator {
-    var migrator = OrbitDatabaseMigrator()
+    var migrator = makeMigrator()
     migrator.eraseDatabaseOnSchemaChange = eraseDatabaseOnSchemaChange
     for identifier in identifiers {
       migrator.registerMigration(identifier) { transaction in
