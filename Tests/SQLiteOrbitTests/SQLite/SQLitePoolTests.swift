@@ -65,6 +65,22 @@
   }
 
   @Test
+  func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
+    let database = TemporaryDatabase()
+    var configuration = SQLiteConfiguration.default
+    configuration.setupSQL = ["PRAGMA cache_size = 100"]
+    let driver = try SQLitePool(path: database.path, configuration: configuration)
+
+    // The pool's own setup for each role stays out of what its transactions report.
+    let readerSetup = try await driver.read { $0.configuration.setupSQL }
+    let writerSetup = try await driver.write { $0.configuration.setupSQL }
+    let connectionSetup = try await driver.writeWithoutTransaction { $0.configuration.setupSQL }
+    #expect(readerSetup == ["PRAGMA cache_size = 100"])
+    #expect(writerSetup == ["PRAGMA cache_size = 100"])
+    #expect(connectionSetup == ["PRAGMA cache_size = 100"])
+  }
+
+  @Test
   func poolReadersRefuseRawSQLWrites() async throws {
     let database = TemporaryDatabase()
     let driver = try SQLitePool(path: database.path)

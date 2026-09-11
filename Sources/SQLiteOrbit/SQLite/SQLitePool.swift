@@ -86,24 +86,24 @@ public final class SQLitePool: OrbitObservableDatabase {
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration
   ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
-    var writerConfiguration = configuration
-    writerConfiguration.setupSQL.append("PRAGMA journal_mode = WAL")
+    // Each connection's role is set up apart from the caller's configuration, which is what its
+    // transactions report having been opened with.
     let writer = try SQLiteSerialConnection(
       path: path,
       flags: [.readWrite, .create, .noMutex],
-      configuration: writerConfiguration
+      configuration: configuration,
+      driverSetupSQL: ["PRAGMA journal_mode = WAL"]
     )
 
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
     // the raw connection into an error rather than a surprise.
-    var readerConfiguration = configuration
-    readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
     let readers = try (0..<max(1, configuration.readerCount))
       .map { _ in
         try SQLiteSerialConnection(
           path: path,
           flags: [.readOnly, .noMutex],
-          configuration: readerConfiguration
+          configuration: configuration,
+          driverSetupSQL: ["PRAGMA query_only = 1"]
         )
       }
     return (writer, readers)

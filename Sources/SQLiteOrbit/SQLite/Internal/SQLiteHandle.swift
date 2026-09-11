@@ -13,14 +13,22 @@ struct SQLiteHandle: ~Copyable {
 
   private let libraryStorage: UnsafeMutablePointer<SQLiteLibrary>
 
+  // Kept where a transaction can point at it rather than copy it, since it holds arrays of
+  // closures that every copy would retain.
+  private let configurationStorage: UnsafeMutablePointer<SQLiteConfiguration>
+
   var library: UnsafePointer<SQLiteLibrary> {
     UnsafePointer(libraryStorage)
+  }
+
+  var configuration: UnsafePointer<SQLiteConfiguration> {
+    UnsafePointer(configurationStorage)
   }
 
   private init(
     pointer: OpaquePointer,
     libraryStorage: UnsafeMutablePointer<SQLiteLibrary>,
-    configuration: SQLiteConfiguration,
+    configurationStorage: UnsafeMutablePointer<SQLiteConfiguration>,
     isReadOnly: Bool
   ) {
     let authorizer = SQLiteAuthorizerDispatcher()
@@ -28,11 +36,12 @@ struct SQLiteHandle: ~Copyable {
       library: UnsafePointer(libraryStorage),
       connection: pointer,
       authorizer: authorizer,
-      capacity: configuration.maximumCachedStatements
+      capacity: configurationStorage.pointee.maximumCachedStatements
     )
     self.pointer = pointer
     self.isReadOnly = isReadOnly
     self.libraryStorage = libraryStorage
+    self.configurationStorage = configurationStorage
     self.authorizer = authorizer
     self.statements = statements
     // Freed by `deinit`, which also runs when configuring the handle this returns fails.
@@ -43,20 +52,26 @@ struct SQLiteHandle: ~Copyable {
         connection: pointer,
         authorizer: authorizer,
         statements: statements,
-        busyTimeout: configuration.busyTimeout,
-        isForeignKeysEnabled: configuration.isForeignKeysEnabled
+        busyTimeout: configurationStorage.pointee.busyTimeout,
+        isForeignKeysEnabled: configurationStorage.pointee.isForeignKeysEnabled
       )
     )
     self.settings = settings
   }
 
+  // `driverSetupSQL` runs after the configuration's own, and is kept out of the configuration a
+  // transaction reports: it is how a driver sets up a connection for its role, such as a pool's
+  // `query_only` readers, which a caller never asked for.
   static func open(
     path: OrbitDatabasePath,
     flags: SQLiteOpenFlags,
-    configuration: SQLiteConfiguration
+    configuration: SQLiteConfiguration,
+    driverSetupSQL: [String] = []
   ) throws -> SQLiteHandle {
     let libraryStorage = UnsafeMutablePointer<SQLiteLibrary>.allocate(capacity: 1)
     libraryStorage.initialize(to: configuration.library)
+    let configurationStorage = UnsafeMutablePointer<SQLiteConfiguration>.allocate(capacity: 1)
+    configurationStorage.initialize(to: configuration)
 
     var pointer: OpaquePointer?
     let code = path.sqlitePath.withCString {
@@ -73,6 +88,8 @@ struct SQLiteHandle: ~Copyable {
       if let pointer {
         _ = libraryStorage.pointee.connections.close(pointer)
       }
+      configurationStorage.deinitialize(count: 1)
+      configurationStorage.deallocate()
       libraryStorage.deinitialize(count: 1)
       libraryStorage.deallocate()
       throw error
@@ -81,10 +98,10 @@ struct SQLiteHandle: ~Copyable {
     let handle = SQLiteHandle(
       pointer: pointer,
       libraryStorage: libraryStorage,
-      configuration: configuration,
+      configurationStorage: configurationStorage,
       isReadOnly: flags.contains(.readOnly)
     )
-    try handle.configure(configuration)
+    try handle.configure(configuration, driverSetupSQL: driverSetupSQL)
     try handle.authorizer.install(on: pointer, using: handle.library)
     return handle
   }
@@ -97,11 +114,16 @@ struct SQLiteHandle: ~Copyable {
     // way out, so they go once the connection has closed and before the table does.
     settings.deinitialize(count: 1)
     settings.deallocate()
+    configurationStorage.deinitialize(count: 1)
+    configurationStorage.deallocate()
     libraryStorage.deinitialize(count: 1)
     libraryStorage.deallocate()
   }
 
-  private borrowing func configure(_ configuration: SQLiteConfiguration) throws {
+  private borrowing func configure(
+    _ configuration: SQLiteConfiguration,
+    driverSetupSQL: [String]
+  ) throws {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
     // An encrypted database is unreadable until it is keyed, so this comes before every other
@@ -127,7 +149,7 @@ struct SQLiteHandle: ~Copyable {
     for setup in configuration.connectionSetups {
       try setup(connection)
     }
-    for sql in configuration.setupSQL {
+    for sql in configuration.setupSQL + driverSetupSQL {
       try execute(sql)
     }
   }

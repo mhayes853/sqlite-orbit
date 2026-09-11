@@ -646,11 +646,13 @@ extension SQLiteLibrary {
 public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   private let connection: OpaquePointer
   let libraryPointer: UnsafePointer<SQLiteLibrary>
+  let configurationPointer: UnsafePointer<SQLiteConfiguration>
 
   @_lifetime(borrow handle)
   init(handle: borrowing SQLiteHandle) {
     self.connection = handle.pointer
     self.libraryPointer = handle.library
+    self.configurationPointer = handle.configuration
   }
 
   /// The underlying `sqlite3 *`.

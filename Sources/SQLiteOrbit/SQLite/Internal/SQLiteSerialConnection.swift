@@ -11,8 +11,18 @@ actor SQLiteSerialConnection {
     executor.asUnownedSerialExecutor()
   }
 
-  init(path: OrbitDatabasePath, flags: SQLiteOpenFlags, configuration: SQLiteConfiguration) throws {
-    let handle = try SQLiteHandle.open(path: path, flags: flags, configuration: configuration)
+  init(
+    path: OrbitDatabasePath,
+    flags: SQLiteOpenFlags,
+    configuration: SQLiteConfiguration,
+    driverSetupSQL: [String] = []
+  ) throws {
+    let handle = try SQLiteHandle.open(
+      path: path,
+      flags: flags,
+      configuration: configuration,
+      driverSetupSQL: driverSetupSQL
+    )
     // The connection is captured as an address rather than a pointer, which is what lets this
     // closure be shared without an unchecked conformance on `OpaquePointer`. It stays valid
     // because the closure and the handle are released together.

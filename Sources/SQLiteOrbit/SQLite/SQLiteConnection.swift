@@ -17,7 +17,7 @@ public import StructuredQueries
 ///   return (mode, count)
 /// }
 /// ```
-public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
+public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// The row this connection's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -53,6 +53,15 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
     base.sqlite
+  }
+
+  /// The configuration this connection was opened with.
+  ///
+  /// This is the configuration the driver was given. What a driver adds for a connection's role,
+  /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
+  /// change to ``busyTimeout``.
+  public var configuration: SQLiteConfiguration {
+    base.configuration
   }
 
   /// How long this connection waits for a lock another connection or process holds before
@@ -154,7 +163,7 @@ public struct SQLiteReadConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Es
 /// The ``busyTimeout`` and ``isForeignKeysEnabled`` this connection changes are put back when the
 /// access that lent it ends, even when it throws. Any other pragma it runs stays changed on the
 /// connection, so restore it before returning.
-public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
+public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// The row this connection's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -191,6 +200,15 @@ public struct SQLiteWriteConnection: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
     base.sqlite
+  }
+
+  /// The configuration this connection was opened with.
+  ///
+  /// This is the configuration the driver was given. What a driver adds for a connection's role,
+  /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
+  /// change to ``busyTimeout`` or ``isForeignKeysEnabled``.
+  public var configuration: SQLiteConfiguration {
+    base.configuration
   }
 
   /// How long this connection waits for a lock another connection or process holds before
