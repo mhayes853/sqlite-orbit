@@ -1,5 +1,17 @@
 import StructuredQueries
 
+enum SQLiteWriteTransactionMode: Equatable, Sendable {
+  case immediate
+  case concurrent
+
+  var beginSQL: String {
+    switch self {
+    case .immediate: "BEGIN IMMEDIATE TRANSACTION"
+    case .concurrent: "BEGIN CONCURRENT TRANSACTION"
+    }
+  }
+}
+
 struct SQLiteHandle: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
@@ -179,12 +191,13 @@ struct SQLiteHandle: ~Copyable {
   }
 
   borrowing func write<Result: ~Copyable>(
+    mode: SQLiteWriteTransactionMode = .immediate,
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    try execute("BEGIN IMMEDIATE TRANSACTION")
+    try execute(mode.beginSQL)
     do {
       let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))

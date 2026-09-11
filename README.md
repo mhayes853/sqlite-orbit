@@ -65,7 +65,7 @@ let reminders = try await database.read { transaction in
 }
 ```
 
-Two drivers back it:
+Two ordinary SQLite drivers back it:
 
 - `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
@@ -163,6 +163,29 @@ API and vends `SQLiteLibrary.turso`:
 )
 ```
 
+The trait also vends `TursoPool`, which enables Turso's MVCC journal and runs reads and writes on
+separate connection pools. Ordinary writes use `BEGIN CONCURRENT`, while an explicit exclusive
+write waits for every pool access ahead of it and uses `BEGIN IMMEDIATE` for schema work:
+
+```swift
+let driver = try TursoPool(path: databasePath, writerCount: 4)
+let database = OrbitDatabase(writer: driver)
+
+try await database.write { transaction in
+  try transaction.execute(Reminder.insert { reminder })
+}
+
+try await driver.exclusiveWrite { transaction in
+  try transaction.execute("CREATE TABLE archived_reminders (...)")
+}
+```
+
+Concurrent write conflicts are rolled back and surfaced as `SQLiteError`; a transaction body is
+never replayed implicitly. `readBlocking`, `writeBlocking`, and `exclusiveWriteBlocking` use the
+same connection pools and admission order as their asynchronous counterparts. `TursoPool`
+currently implements transaction access only; transaction and value observation remain on the
+ordinary queue and pool drivers.
+
 For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
 linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
 SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
@@ -177,8 +200,8 @@ explicitly:
 - Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
 - Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
   multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
-  unimplemented entry point. Use `OrbitDatabase(localPath:)` for a pooled database confined to one
-  process.
+  unimplemented entry point. Use `TursoPool` for an MVCC database confined to one process, or
+  `OrbitDatabase(localPath:)` for the existing observable, single-writer WAL pool.
 - Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
   cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
   there is no safe client-side substitute for native early finalization.
