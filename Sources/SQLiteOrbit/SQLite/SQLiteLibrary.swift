@@ -689,7 +689,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
       _ library: Self,
       name: String,
       fileSharing: FileSharing,
-      isForeignKeyCheckAvailable: Bool
+      isForeignKeyCheckAvailable: Bool = true
     ) -> Self {
       var library = library
       library.name = name
@@ -716,8 +716,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     public static let system = configured(
       #sqliteLibrary(),
       name: "system SQLite",
-      fileSharing: .multipleProcesses,
-      isForeignKeyCheckAvailable: true
+      fileSharing: .multipleProcesses
     )
   }
 #endif
@@ -728,8 +727,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     public static let sqlCipher = configured(
       #sqliteLibrary(apis: [.standard, .encryption]),
       name: "SQLCipher",
-      fileSharing: .multipleProcesses,
-      isForeignKeyCheckAvailable: true
+      fileSharing: .multipleProcesses
     )
   }
 #endif

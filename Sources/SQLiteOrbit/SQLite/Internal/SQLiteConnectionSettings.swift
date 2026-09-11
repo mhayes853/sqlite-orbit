@@ -53,12 +53,6 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.appliedForeignKeys = isForeignKeysEnabled
   }
 
-  private var hasChanges: Bool {
-    busyTimeout != configuredBusyTimeout
-      || appliedForeignKeys != configuredForeignKeys
-      || isQueryOnly
-  }
-
   mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) {
     // `sqlite3_busy_timeout` only refuses a connection that is not open, and one lent to an access
     // always is. Were it to refuse anyway, the timeout in effect is unchanged, and so is what this
@@ -107,7 +101,6 @@ struct SQLiteConnectionSettings: ~Copyable {
   /// - Throws: The first failure.
   mutating func restore() throws {
     isForeignKeysEnabled = configuredForeignKeys
-    guard hasChanges else { return }
     var failure: (any Error)?
     if busyTimeout != configuredBusyTimeout {
       // Reapplying the timeout replaces any busy handler a connection setup installed, which is

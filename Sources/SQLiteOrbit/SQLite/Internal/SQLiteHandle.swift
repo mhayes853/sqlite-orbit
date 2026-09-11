@@ -185,10 +185,7 @@ struct SQLiteHandle: ~Copyable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    let binding = SQLiteCurrentLibrary.bind(library)
-    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try withRestoredSettings {
+    try withConnectionAccess(observers: observers) { observations in
       try beginQueryOnly()
       return try runRead(observations: observations, body)
     }
@@ -198,10 +195,7 @@ struct SQLiteHandle: ~Copyable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    let binding = SQLiteCurrentLibrary.bind(library)
-    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try withRestoredSettings {
+    try withConnectionAccess(observers: observers) { observations in
       try beginQueryOnly()
       return try withoutTransaction { address, state in
         try body(
@@ -237,12 +231,9 @@ struct SQLiteHandle: ~Copyable {
     do {
       value = try body()
     } catch {
-      do {
-        try settings.pointee.restore()
-      } catch {
-        // The body's failure is the one worth reporting. The setting stays changed, so the next
-        // access restores it before it begins, and fails if it still cannot.
-      }
+      // The body's failure is the one worth reporting. A setting that still cannot be restored
+      // remains changed, so the next access retries it before running.
+      try? settings.pointee.restore()
       throw error
     }
     try settings.pointee.restore()
@@ -273,25 +264,16 @@ struct SQLiteHandle: ~Copyable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    let binding = SQLiteCurrentLibrary.bind(library)
-    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    // The lifecycle is reported through the access's context rather than straight to `observers`,
-    // so that observers scoped to the access see the transaction end as well.
-    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    return try withRestoredSettings { try runWrite(observations: observations, body) }
+    try withConnectionAccess(observers: observers) { observations in
+      try runWrite(observations: observations, body)
+    }
   }
 
   borrowing func writeWithoutTransaction<Result: ~Copyable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    let binding = SQLiteCurrentLibrary.bind(library)
-    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
-    // Every statement has finished by the time the access ends, so a change still pending has
-    // committed. One gets here only through a cursor over raw SQL that claimed to read but wrote.
-    defer { observations.didCommitPendingChanges() }
-    return try withRestoredSettings {
+    try withConnectionAccess(observers: observers, commitsPendingChanges: true) { observations in
       try withoutTransaction { address, state in
         try body(
           SQLiteWriteConnection(
@@ -303,6 +285,24 @@ struct SQLiteHandle: ~Copyable {
         )
       }
     }
+  }
+
+  /// Establishes the invariants shared by every transaction and connection access.
+  private borrowing func withConnectionAccess<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers?,
+    commitsPendingChanges: Bool = false,
+    _ body: (OrbitDatabaseTransactionObservationContext) throws -> Result
+  ) throws -> Result {
+    let binding = SQLiteCurrentLibrary.bind(library)
+    defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
+    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    defer {
+      if commitsPendingChanges {
+        // Every statement has finished by now, so any remaining change has committed.
+        observations.didCommitPendingChanges()
+      }
+    }
+    return try withRestoredSettings { try body(observations) }
   }
 
   // The caller restores the access's settings once this returns, which is after any transaction

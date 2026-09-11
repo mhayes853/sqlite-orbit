@@ -408,43 +408,35 @@ public struct OrbitDatabaseMigrator: Sendable {
     // the caller's next statement, or the end of the access.
     defer { connection.isForeignKeysEnabled = wasForeignKeysEnabled }
     try connection.transaction { transaction in
-      try record(migration, in: transaction, checkingForeignKeys: checksForeignKeys)
-    }
-  }
-
-  private func record(
-    _ migration: Migration,
-    in transaction: borrowing SQLiteWriteTransaction,
-    checkingForeignKeys: Bool
-  ) throws {
-    if try hasMigrationsTable(in: transaction) {
-      // Another process may have applied the migration since it was found pending. Holding the
-      // write lock is what makes this answer final.
-      guard try !isApplied(migration.identifier, in: transaction) else { return }
-    } else {
-      // Creating the table only when it is missing matters: a schema change is announced as a
-      // change to the whole database, and throws away every connection's cached statements.
-      try transaction.execute(
-        SQLQueryExpression(
-          "CREATE TABLE \(quote: tableName) (identifier TEXT NOT NULL PRIMARY KEY)"
-        )
-      )
-    }
-    try migration.migrate(transaction)
-    if checkingForeignKeys {
-      let violations = try transaction.foreignKeyViolations()
-      guard violations.isEmpty else {
-        throw OrbitDatabaseForeignKeyViolationError(
-          migration: migration.identifier,
-          violations: violations
+      if try hasMigrationsTable(in: transaction) {
+        // Another process may have applied the migration since it was found pending. Holding the
+        // write lock is what makes this answer final.
+        guard try !isApplied(migration.identifier, in: transaction) else { return }
+      } else {
+        // Avoid the schema authorizations `IF NOT EXISTS` emits for an existing table: they would
+        // invalidate cached statements and report a full-database change for every migration.
+        try transaction.execute(
+          SQLQueryExpression(
+            "CREATE TABLE \(quote: tableName) (identifier TEXT NOT NULL PRIMARY KEY)"
+          )
         )
       }
-    }
-    try transaction.execute(
-      SQLQueryExpression(
-        "INSERT INTO \(quote: tableName) (identifier) VALUES (\(bind: migration.identifier))"
+      try migration.migrate(transaction)
+      if checksForeignKeys {
+        let violations = try transaction.foreignKeyViolations()
+        guard violations.isEmpty else {
+          throw OrbitDatabaseForeignKeyViolationError(
+            migration: migration.identifier,
+            violations: violations
+          )
+        }
+      }
+      try transaction.execute(
+        SQLQueryExpression(
+          "INSERT INTO \(quote: tableName) (identifier) VALUES (\(bind: migration.identifier))"
+        )
       )
-    )
+    }
   }
 
   private func erase(
@@ -740,39 +732,40 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws -> Bool
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
     // SQLite resolves table names without regard to case, so the lookup does too.
-    let count = try transaction.fetchOne(
+    return try transaction.fetchOne(
       SQLQueryExpression(
         """
-        SELECT count(*) FROM sqlite_schema
-        WHERE type = 'table' AND name = \(bind: tableName) COLLATE NOCASE
+        SELECT EXISTS (
+          SELECT 1 FROM sqlite_schema
+          WHERE type = 'table' AND name = \(bind: tableName) COLLATE NOCASE
+        )
         """,
-        as: Int.self
+        as: Bool.self
       )
-    )
-    return (count ?? 0) > 0
+    ) ?? false
   }
 
   private func isApplied(
     _ identifier: String,
     in transaction: borrowing SQLiteWriteTransaction
   ) throws -> Bool {
-    let count = try transaction.fetchOne(
+    return try transaction.fetchOne(
       SQLQueryExpression(
-        "SELECT count(*) FROM \(quote: tableName) WHERE identifier = \(bind: identifier)",
-        as: Int.self
+        """
+        SELECT EXISTS (
+          SELECT 1 FROM \(quote: tableName) WHERE identifier = \(bind: identifier)
+        )
+        """,
+        as: Bool.self
       )
-    )
-    return (count ?? 0) > 0
+    ) ?? false
   }
 }
 
 // The schema the registered migrations produce up to the last one a database has applied, kept so
 // that the check made again under the write lock reuses it rather than migrating a second
 // temporary database.
-private struct ScratchSchema {
-  let lastApplied: String
-  let objects: Set<SchemaObject>
-}
+private typealias ScratchSchema = (lastApplied: String, objects: Set<SchemaObject>)
 
 // A row of `sqlite_schema`.
 private struct SchemaObject: Hashable {
