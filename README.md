@@ -541,6 +541,30 @@ if try await database.read({ try migrator.hasBeenSuperseded($0) }) {
 The migrations a run commits are announced together once it ends, so observations in other
 processes fetch again after the schema they read has changed.
 
+### Erasing during development
+
+While migrations are still being designed, editing one that has already run is quicker than
+registering another. With `eraseDatabaseOnSchemaChange` on, a migrator that finds a migration it
+applied removed or renamed, or the schema no longer what its migrations produce, erases the database
+and runs every migration from the first. That destroys data, so keep it out of the application you
+ship:
+
+```swift
+var migrator = OrbitDatabaseMigrator()
+#if DEBUG
+migrator.eraseDatabaseOnSchemaChange = true
+#endif
+```
+
+The migrator finds a change by applying the migrations to a temporary database, opened with the
+same configuration, and comparing its schema with the database's; `hasSchemaChanges(_:)` asks the
+same question without erasing anything. A database whose migrations have not changed is still
+neither locked nor announced. The erase drops everything in one transaction and resets
+`user_version` to 0, and observers and other processes see it as a change to the whole database.
+With the flag on, an applied migration the migrator does not register counts as removed, so every
+process that opens the database must register the same migrations: an older build erases what a
+newer one migrated.
+
 ## Database regions
 
 `OrbitDatabaseRegion` describes a set of database columns without opening or inspecting a

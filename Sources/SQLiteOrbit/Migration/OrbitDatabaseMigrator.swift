@@ -1,3 +1,4 @@
+import Foundation
 import StructuredQueries
 
 /// Applies a database's schema migrations in order, each exactly once.
@@ -31,8 +32,9 @@ import StructuredQueries
 /// long as the connection's busy timeout allows. To wait longer, migrate on a connection whose
 /// ``SQLiteWriteConnection/busyTimeout`` has been raised, with
 /// ``migrate(_:upTo:)-(SQLiteWriteConnection,_)``. An applied migration this migrator does not
-/// register is tolerated, which is what an older build of the application sees after a newer one
-/// has migrated the database; ``hasBeenSuperseded(_:)`` detects it.
+/// register, which is what an older build of the application sees after a newer one has migrated
+/// the database, is tolerated unless ``eraseDatabaseOnSchemaChange`` is on;
+/// ``hasBeenSuperseded(_:)`` detects it.
 ///
 /// The applied migrations are kept in a table named `orbit_migrations` by default, laid out as
 /// GRDB lays out its own, so ``grdb`` continues the history of a database that GRDB's
@@ -79,6 +81,46 @@ public struct OrbitDatabaseMigrator: Sendable {
   /// migrator.registerMigration("Rebuild reminders", migrate: rebuildReminders)
   /// ```
   public var defersForeignKeyChecks = true
+
+  /// A boolean value indicating whether the migrator recreates the whole database from scratch if
+  /// it detects a change in the definition of migrations.
+  ///
+  /// - Warning: This flag can destroy your precious users' data!
+  ///
+  /// When true, the database migrator wipes out the full database content, and runs all migrations
+  /// from the start, if one of those conditions is met:
+  ///
+  /// - A migration has been removed, or renamed.
+  /// - A schema change is detected. A schema change is any difference in the `sqlite_master`
+  ///   table, which contains the SQL used to create database tables, indexes, triggers, and views.
+  ///
+  /// This flag is useful during application development: you are still designing migrations, and
+  /// the schema changes often.
+  ///
+  /// It is recommended to not ship it in the distributed application, in order to avoid undesired
+  /// data loss. Use the `DEBUG` compilation condition:
+  ///
+  /// ```swift
+  /// var migrator = OrbitDatabaseMigrator()
+  /// #if DEBUG
+  /// // Speed up development by nuking the database when migrations change
+  /// migrator.eraseDatabaseOnSchemaChange = true
+  /// #endif
+  /// ```
+  ///
+  /// Every process that opens the database must register the same migrations while this flag is
+  /// on; a process running an older build treats newer migrations as removed and erases the
+  /// database.
+  ///
+  /// Whether the database needs erasing is decided before the write lock is taken, so a database
+  /// whose migrations have not changed is still neither locked nor announced to other processes.
+  /// The erase itself is one write transaction, which checks again under the lock, drops every
+  /// table, index, view, and trigger with foreign keys off, and resets `user_version` to 0.
+  /// Observers, and other processes, see it as a change to the whole database, as they see any
+  /// other schema change.
+  ///
+  /// See also ``hasSchemaChanges(_:)``.
+  public var eraseDatabaseOnSchemaChange = false
 
   /// The identifiers of the registered migrations, in the order they were registered.
   ///
@@ -276,6 +318,28 @@ public struct OrbitDatabaseMigrator: Sendable {
     _ connection: borrowing SQLiteWriteConnection,
     upTo target: String? = nil
   ) throws {
+    if eraseDatabaseOnSchemaChange {
+      // A target that is not registered is refused before anything is erased, just as it is
+      // refused before anything is migrated.
+      if let target, !migrations.contains(target) {
+        throw OrbitDatabaseMigrationTargetError(target: target, reason: .unregistered)
+      }
+      // The schema the migrations produce, kept so that checking again under the write lock does
+      // not migrate a second temporary database.
+      var scratch: ScratchSchema?
+      // Read outside a transaction, so an up-to-date database is still neither locked nor
+      // announced.
+      if try schemaChanges(connection, reusing: &scratch) {
+        try erase(connection, reusing: &scratch)
+      }
+    }
+    try runMigrations(connection, upTo: target)
+  }
+
+  private func runMigrations(
+    _ connection: borrowing SQLiteWriteConnection,
+    upTo target: String?
+  ) throws {
     // Reading outside a transaction takes no write lock, which is what lets the launch of an
     // application whose database is up to date leave it alone.
     let pending = try pendingMigrations(applied: appliedIdentifiers(connection), upTo: target)
@@ -363,6 +427,190 @@ public struct OrbitDatabaseMigrator: Sendable {
       )
     )
   }
+
+  private func erase(
+    _ connection: borrowing SQLiteWriteConnection,
+    reusing scratch: inout ScratchSchema?
+  ) throws {
+    // Dropping a table other tables refer to with foreign keys on would first delete its rows, and
+    // fail on the rows that refer to them.
+    let wasForeignKeysEnabled = connection.isForeignKeysEnabled
+    connection.isForeignKeysEnabled = false
+    // Putting the value back only records it, so this cannot fail.
+    defer { connection.isForeignKeysEnabled = wasForeignKeysEnabled }
+    try connection.transaction { transaction in
+      // Another process may have migrated or erased the database since the first check.
+      guard try schemaChanges(transaction, reusing: &scratch) else { return }
+      // Dropping a table also drops its indexes and triggers, and a virtual table its shadow
+      // tables, so the schema is read again after each drop rather than once.
+      while let (type, name) = try firstDroppableObject(in: transaction) {
+        try transaction.execute(SQLQueryExpression("DROP \(raw: type) \(quote: name)"))
+      }
+      try transaction.execute("PRAGMA user_version = 0")
+    }
+  }
+
+  private func firstDroppableObject(
+    in transaction: borrowing SQLiteWriteTransaction
+  ) throws -> (type: String, name: String)? {
+    // The table of applied migrations is dropped with the rest, and the migrations create it
+    // again.
+    var cursor = try transaction.rowCursor(
+      SQLQueryExpression(
+        "SELECT type, name FROM sqlite_schema WHERE \(Self.userObjects) LIMIT 1"
+      )
+    )
+    guard var row = try cursor.next() else { return nil }
+    return (try row.decode(String.self), try row.decode(String.self))
+  }
+
+  // MARK: - Detecting schema changes
+
+  /// Returns a boolean value indicating whether the migrator detects a change in the definition of
+  /// migrations.
+  ///
+  /// The result is true if one of those conditions is met:
+  ///
+  /// - A migration has been removed, or renamed.
+  /// - There exists any difference in the `sqlite_master` table, which contains the SQL used to
+  ///   create database tables, indexes, triggers, and views.
+  ///
+  /// This method supports the ``eraseDatabaseOnSchemaChange`` option. When
+  /// `eraseDatabaseOnSchemaChange` does not exactly fit your needs, you can implement it manually
+  /// as below:
+  ///
+  /// ```swift
+  /// #if DEBUG
+  /// // Speed up development by starting over when migrations change
+  /// if try await database.read(migrator.hasSchemaChanges) {
+  ///   // Keep the old database to look into, and open a new one in its place
+  ///   database = try archiveAndReplace(database)
+  /// }
+  /// #endif
+  /// try await migrator.migrate(database)
+  /// ```
+  ///
+  /// The schema is compared with that of a temporary database, opened with the same
+  /// ``SQLiteTransaction/configuration``, that the registered migrations are applied to up to the
+  /// last one this database has applied. The objects SQLite and Turso keep for themselves, and the
+  /// table of applied migrations, are left out of the comparison. A database no migration has
+  /// been applied to has nothing to compare, and has no schema changes. On a connection outside a
+  /// transaction, the applied migrations and the schema are read in separate statements, so
+  /// another connection may commit in between; read them in a transaction for an answer that
+  /// holds for a single state of the database.
+  ///
+  /// - Parameter transaction: A read or write transaction, or a connection.
+  /// - Returns: `true` when a migration the database has applied is no longer registered, or when
+  ///   the database's schema differs from the one the registered migrations produce.
+  /// - Throws: Whatever a migration throws, ``OrbitDatabaseForeignKeyViolationError`` when a
+  ///   deferred migration leaves violations in the temporary database, or a ``SQLiteError`` when
+  ///   either database cannot be read or the temporary one cannot be created or migrated.
+  public func hasSchemaChanges<Transaction>(
+    _ transaction: borrowing Transaction
+  ) throws -> Bool
+  where Transaction: SQLiteTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
+    var scratch: ScratchSchema?
+    return try schemaChanges(transaction, reusing: &scratch)
+  }
+
+  private func schemaChanges<Transaction>(
+    _ transaction: borrowing Transaction,
+    reusing scratch: inout ScratchSchema?
+  ) throws -> Bool
+  where Transaction: SQLiteTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
+    let applied = try appliedIdentifiers(transaction)
+    guard applied.isSubset(of: migrations) else { return true }
+    guard let lastApplied = migrations.last(where: applied.contains) else { return false }
+    // Migrating up to the last applied migration also runs any registered before it that the
+    // database has not applied, so those count as a change as well, as they do for GRDB.
+    let expected: Set<SchemaObject>
+    if let scratch, scratch.lastApplied == lastApplied {
+      expected = scratch.objects
+    } else {
+      expected = try migratedSchema(upTo: lastApplied, configuration: transaction.configuration)
+      scratch = ScratchSchema(lastApplied: lastApplied, objects: expected)
+    }
+    return try schema(of: transaction) != expected
+  }
+
+  private func migratedSchema(
+    upTo target: String,
+    configuration: SQLiteConfiguration
+  ) throws -> Set<SchemaObject> {
+    // A named file rather than a temporary database SQLite names itself: GRDB found those do not
+    // accept every setup a named file does, in its issue #931, and not every build supports them.
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SQLiteOrbit-migrator-\(UUID().uuidString).sqlite"
+    )
+    defer {
+      // The answer is known by now, and a temporary file left behind is no reason to fail a
+      // migration over.
+      for suffix in ["", "-wal", "-shm", "-journal"] {
+        try? FileManager.default.removeItem(atPath: url.path + suffix)
+      }
+    }
+    // The connection has closed by the time this returns, before its files are deleted.
+    return try migratedSchema(at: url, upTo: target, configuration: configuration)
+  }
+
+  private func migratedSchema(
+    at url: URL,
+    upTo target: String,
+    configuration: SQLiteConfiguration
+  ) throws -> Set<SchemaObject> {
+    // The same build, key, functions, collations, and setups, so the migrations run as they ran
+    // on the database, and whatever data they seed is encrypted at rest as it is there. Nothing
+    // observes it, and it runs on the calling thread: each of its accesses binds its library to
+    // the thread and puts back the binding of the access this runs inside once it ends.
+    let handle = try SQLiteHandle.open(
+      path: .file(url),
+      flags: [.readWrite, .create, .noMutex],
+      configuration: configuration
+    )
+    return try handle.writeWithoutTransaction { connection in
+      try runMigrations(connection, upTo: target)
+      return try schema(of: connection)
+    }
+  }
+
+  private func schema<Transaction>(
+    of transaction: borrowing Transaction
+  ) throws -> Set<SchemaObject>
+  where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
+    // GRDB leaves out `pragma_` names as well, which SQLite's table-valued pragmas are called by.
+    // The table of applied migrations is the migrator's own, compared through its identifiers
+    // instead, and one GRDB created is spelled differently from one this migrator creates.
+    var objects: Set<SchemaObject> = []
+    var cursor = try transaction.rowCursor(
+      SQLQueryExpression(
+        """
+        SELECT type, name, tbl_name, sql FROM sqlite_schema
+        WHERE \(Self.userObjects) AND name NOT LIKE 'pragma\\_%' ESCAPE '\\'
+          AND name <> \(bind: tableName) COLLATE NOCASE
+        """
+      )
+    )
+    while var row = try cursor.next() {
+      objects.insert(
+        SchemaObject(
+          type: try row.decode(String.self),
+          name: try row.decode(String.self),
+          tableName: try row.decode(String.self),
+          sql: try row.decode(String?.self)
+        )
+      )
+    }
+    return objects
+  }
+
+  // Everything but what SQLite and Turso keep for themselves, which neither lets be dropped:
+  // `sqlite_sequence` and automatic indexes, say, or Turso's sequences for `AUTOINCREMENT` and its
+  // MVCC metadata. `_` matches any character in a `LIKE` pattern, so it is escaped to match only
+  // itself.
+  private static let userObjects: QueryFragment = """
+    name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
+    AND name NOT LIKE '\\_\\_turso\\_internal\\_%' ESCAPE '\\'
+    """
 
   // MARK: - Inspecting
 
@@ -495,6 +743,22 @@ public struct OrbitDatabaseMigrator: Sendable {
     )
     return (count ?? 0) > 0
   }
+}
+
+// The schema the registered migrations produce up to the last one a database has applied, kept so
+// that the check made again under the write lock reuses it rather than migrating a second
+// temporary database.
+private struct ScratchSchema {
+  let lastApplied: String
+  let objects: Set<SchemaObject>
+}
+
+// A row of `sqlite_schema`.
+private struct SchemaObject: Hashable {
+  let type: String
+  let name: String
+  let tableName: String
+  let sql: String?
 }
 
 private struct Migration: Sendable {
