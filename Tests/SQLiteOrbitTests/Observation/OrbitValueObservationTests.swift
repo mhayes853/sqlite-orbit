@@ -469,6 +469,31 @@
     }
 
     @Test
+    func writeOutsideATransactionRefetchesAsALocalCommit() async throws {
+      let driver = try await itemsDatabase()
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try itemCountObservation()
+        .subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+      try await recorder.waitForChangeCount(1)
+
+      // Outside a transaction there is no `databaseWillCommit` to fetch in, so the observation
+      // learns of the statement only once it has committed, and fetches again.
+      try await driver.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
     func cancellingValueSubscriptionStopsRefetching() async throws {
       let driver = try await itemsDatabase()
       let fetchCount = Lock(0)
@@ -1168,6 +1193,65 @@
     }
 
     @Test
+    func automaticRegionFollowsAViewRedefinedThroughAnotherConnection() async throws {
+      let directory = try makeShortTemporaryDirectory("obs")
+      defer { try? FileManager.default.removeItem(at: directory) }
+
+      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+      let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
+      var configuration = SQLiteConfiguration.default
+      configuration.readerCount = 1
+      let observingDatabase = OrbitDatabase(
+        writer: try SQLitePool(path: path, configuration: configuration),
+        id: identifier
+      )
+      try await observingDatabase.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE original_items (title TEXT NOT NULL);
+          CREATE TABLE alternate_items (title TEXT NOT NULL);
+          INSERT INTO original_items VALUES ('Original');
+          INSERT INTO alternate_items VALUES ('Alternate');
+          CREATE VIEW current_items AS SELECT title FROM original_items;
+          """
+        )
+      }
+      // The schema changes through a connection outside the pool, as another process's would.
+      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+
+      let recorder = ObservationRecorder<String?>()
+      let subscription = try OrbitValueObservation<String?>
+        .tracking { transaction in
+          try transaction.fetchOne(#sql("SELECT title FROM current_items", as: String.self))
+        }
+        .subscribe(
+          to: observingDatabase,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+      try await recorder.waitForChangeCount(1)
+
+      try await writingDatabase.write { transaction in
+        try transaction.execute(
+          """
+          DROP VIEW current_items;
+          CREATE VIEW current_items AS SELECT title FROM alternate_items;
+          """
+        )
+      }
+      try await recorder.waitForChangeCount(2)
+
+      try await writingDatabase.write { transaction in
+        try transaction.execute("UPDATE alternate_items SET title = 'Changed'")
+      }
+      try await recorder.waitForChangeCount(3)
+
+      #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
     func automaticRegionFollowsTheReadsOfEachSuccessfulFetch() throws {
       let driver = try SQLiteQueue(path: .memory)
       try driver.writeBlocking { transaction in
@@ -1609,6 +1693,12 @@
       try await base.read(body)
     }
 
+    func readWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.readWithoutTransaction(body)
+    }
+
     func write<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
@@ -1619,10 +1709,22 @@
       return result
     }
 
+    func writeWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.writeWithoutTransaction(body)
+    }
+
     func readBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) throws -> Result {
       try base.readBlocking(body)
+    }
+
+    func readWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) throws -> Result {
+      try base.readWithoutTransactionBlocking(body)
     }
 
     func writeBlocking<Result: Sendable>(
@@ -1633,6 +1735,12 @@
       }
       announceCommit(region: region)
       return result
+    }
+
+    func writeWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) throws -> Result {
+      try base.writeWithoutTransactionBlocking(body)
     }
 
     func subscribe(

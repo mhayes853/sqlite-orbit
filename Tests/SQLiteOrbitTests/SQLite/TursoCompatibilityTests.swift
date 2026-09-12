@@ -133,11 +133,30 @@
     let database = TemporaryTursoDatabase("turso-mvcc")
     let driver = try TursoPool(path: database.path)
 
-    let mode = try await driver.read { transaction in
-      try transaction.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+    let mode = try await driver.readWithoutTransaction { connection in
+      try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
     }
 
     #expect(mode?.lowercased() == "mvcc")
+  }
+
+  @Test
+  func tursoPoolSupportsWritesOutsideATransaction() async throws {
+    let database = TemporaryTursoDatabase("turso-without-transaction")
+    let driver = try TursoPool(path: database.path)
+    try await driver.exclusiveWrite { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+
+    try await driver.writeWithoutTransaction { connection in
+      try connection.execute("INSERT INTO items (id) VALUES (1)")
+      try connection.execute("INSERT INTO items (id) VALUES (2)")
+    }
+
+    let count = try await driver.readWithoutTransaction { connection in
+      try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+    }
+    #expect(count == 2)
   }
 
   @Test
@@ -435,11 +454,11 @@
     try driver.exclusiveWriteBlocking { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
-    try driver.writeBlocking { transaction in
-      try transaction.execute("INSERT INTO items (id) VALUES (1)")
+    try driver.writeWithoutTransactionBlocking { connection in
+      try connection.execute("INSERT INTO items (id) VALUES (1)")
     }
-    let count = try driver.readBlocking { transaction in
-      try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+    let count = try driver.readWithoutTransactionBlocking { connection in
+      try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
     }
 
     #expect(count == 1)
@@ -539,5 +558,43 @@
         _ = try OrbitDatabase<SQLitePool>(path: "/tmp/turso-multiprocess.sqlite")
       }
     #endif
+  }
+
+  @Test
+  func tursoRefusesToCheckForeignKeysRatherThanReportNoViolations() async throws {
+    #expect(!SQLiteLibrary.turso.isForeignKeyCheckAvailable)
+    let expected = SQLiteFeatureUnavailableError(libraryName: "Turso", feature: .foreignKeyCheck)
+    #expect(expected.description == "Turso does not support SQLite's foreign key checks.")
+
+    // Turso answers `PRAGMA foreign_key_check` with no rows, even for a row that refers to
+    // nothing, which is what an empty result would wrongly vouch for.
+    let driver = try SQLiteQueue(path: .memory)
+    try await driver.writeWithoutTransaction { connection in
+      connection.isForeignKeysEnabled = false
+      try connection.execute(
+        """
+        CREATE TABLE lists (id INTEGER PRIMARY KEY);
+        CREATE TABLE reminders (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists (id));
+        INSERT INTO reminders VALUES (1, 7);
+        """
+      )
+    }
+
+    let fromTransaction = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.read { try $0.foreignKeyViolations() }
+    }
+    let fromWrite = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.write { try $0.foreignKeyViolations() }
+    }
+    let fromConnection = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.readWithoutTransaction { try $0.foreignKeyViolations() }
+    }
+    let fromWriteConnection = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+      try await driver.writeWithoutTransaction { try $0.foreignKeyViolations() }
+    }
+    #expect(fromTransaction == expected)
+    #expect(fromWrite == expected)
+    #expect(fromConnection == expected)
+    #expect(fromWriteConnection == expected)
   }
 #endif

@@ -19,6 +19,12 @@ final class SQLiteStatementCache {
   private var idle: [String: SQLitePreparedStatement] = [:]
   private var generation: UInt64 = 0
 
+  // The schema version the cached statements were compiled under, or `nil` when that is unknown,
+  // as it is before the first transaction and after this connection changes the schema itself.
+  private var schemaVersion: Int64?
+  private var schemaVersionStatement: OpaquePointer?
+  private var isSchemaVersionUnavailable = false
+
   var currentGeneration: UInt64 { generation }
 
   init(
@@ -91,7 +97,91 @@ final class SQLiteStatementCache {
 
   func invalidate() {
     generation &+= 1
-    finalizeAll()
+    // Statements compiled after this connection's own schema change are compiled against a schema
+    // that a rollback can take back, so the version is only trusted again once it is read afresh.
+    schemaVersion = nil
+    finalizeIdle()
+  }
+
+  /// Drops the cached statements when another connection has changed the schema since they were
+  /// compiled.
+  ///
+  /// This runs at the start of every transaction, so the version read belongs to the transaction's
+  /// snapshot. SQLite recompiles a stale statement on its own, but the regions cached beside it
+  /// describe the schema it was compiled against. Until something steps into the changed schema,
+  /// the connection also keeps compiling new statements, and deriving regions from queries,
+  /// against its old copy. A view redefined by a pool's writer or by another process would
+  /// otherwise leave this connection tracking tables the view no longer reads.
+  func invalidateIfSchemaChanged() {
+    guard !isSchemaVersionUnavailable else { return }
+    guard let version = readSchemaVersion() else {
+      // An unreadable version cannot vouch for the cache, so it is dropped rather than trusted.
+      invalidate()
+      return
+    }
+    guard version != schemaVersion else { return }
+    invalidate()
+    reloadSchema()
+    schemaVersion = version
+  }
+
+  private func readSchemaVersion() -> Int64? {
+    // The pragma is compiled once per connection, so an unchanged schema costs a single step. It
+    // is compiled and stepped outside of any authorization recording, so it is never reported to
+    // observers as a read.
+    if schemaVersionStatement == nil {
+      var statement: OpaquePointer?
+      let code = "PRAGMA schema_version"
+        .withCString {
+          library.pointee.statements.preparation.prepare(
+            connection,
+            $0,
+            -1,
+            SQLitePrepareFlags.persistent.rawValue,
+            &statement,
+            nil
+          )
+        }
+      guard code == SQLiteResultCode.ok.rawValue, let statement else {
+        // A build without the pragma keeps relying on SQLite recompiling a stale statement, which
+        // the cursor notices on its first step.
+        if let statement {
+          _ = library.pointee.statements.execution.finalize(statement)
+        }
+        isSchemaVersionUnavailable = true
+        return nil
+      }
+      schemaVersionStatement = statement
+    }
+    guard let statement = schemaVersionStatement else { return nil }
+    defer { _ = library.pointee.statements.execution.reset(statement) }
+    switch library.pointee.statements.execution.step(statement) {
+    case SQLiteResultCode.row.rawValue:
+      return library.pointee.columns.int64(statement, 0)
+    case SQLiteResultCode.done.rawValue:
+      // A build that accepts the pragma but reports nothing would otherwise empty the cache on
+      // every transaction.
+      isSchemaVersionUnavailable = true
+      return nil
+    default:
+      return nil
+    }
+  }
+
+  private func reloadSchema() {
+    // Compiling only consults the connection's in-memory copy of the schema, and nothing replaces
+    // that copy until a statement steps into the schema cookie that changed. Stepping one here
+    // means the statements the cache compiles next, and the regions derived from queries, see the
+    // schema this transaction reads rather than the one the connection last loaded.
+    var statement: OpaquePointer?
+    let code = "SELECT 1 FROM sqlite_schema LIMIT 0"
+      .withCString {
+        library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
+      }
+    guard let statement else { return }
+    defer { _ = library.pointee.statements.execution.finalize(statement) }
+    guard code == SQLiteResultCode.ok.rawValue else { return }
+    _ = library.pointee.statements.execution.step(statement)
   }
 
   func changedRegion(after authorizations: [SQLiteAuthorization]) -> OrbitDatabaseRegion {
@@ -164,6 +254,14 @@ final class SQLiteStatementCache {
   }
 
   func finalizeAll() {
+    finalizeIdle()
+    if let schemaVersionStatement {
+      _ = library.pointee.statements.execution.finalize(schemaVersionStatement)
+      self.schemaVersionStatement = nil
+    }
+  }
+
+  private func finalizeIdle() {
     for statement in idle.values {
       _ = library.pointee.statements.execution.finalize(statement.pointer)
     }

@@ -1,5 +1,0 @@
-module TursoSQLite3 [system] {
-  header "shim.h"
-  link "turso_sqlite3"
-  export *
-}

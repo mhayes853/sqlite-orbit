@@ -206,7 +206,8 @@
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
-    // Only the fetches count; the transaction's own BEGIN and ROLLBACK are prepared uncached.
+    // Only the fetches count. The transaction's own statements, such as its BEGIN and ROLLBACK and
+    // the check that the schema is unchanged, are not the cache's.
     configuration.library.statements.preparation.prepare = {
       connection,
       sql,
@@ -214,7 +215,7 @@
       flags,
       statement,
       tail in
-      if let sql, String(cString: sql).hasPrefix("SELECT") {
+      if let sql, String(cString: sql).hasPrefix(#"SELECT "items""#) {
         counters.withLock { $0 += 1 }
       }
       return base.statements.preparation.prepare(connection, sql, byteCount, flags, statement, tail)

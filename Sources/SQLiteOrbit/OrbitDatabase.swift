@@ -146,6 +146,124 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     return result
   }
 
+  /// Reads from the database outside a transaction.
+  ///
+  /// ```swift
+  /// let integrity = try await database.readWithoutTransaction { connection in
+  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Reads the value from a connection whose statements each run in their own
+  ///   implicit transaction. A busy timeout it changes through the connection is restored when
+  ///   the access ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returns.
+  /// - Throws: Whatever `body` or the underlying driver throws.
+  public func readWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) async throws -> Result {
+    try await writer.readWithoutTransaction(body)
+  }
+
+  /// Reads from the database outside a transaction, blocking the calling thread.
+  ///
+  /// ```swift
+  /// let integrity = try database.readWithoutTransactionBlocking { connection in
+  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Reads the value from a connection whose statements each run in their own
+  ///   implicit transaction. A busy timeout it changes through the connection is restored when
+  ///   the access ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returns.
+  /// - Throws: Whatever `body` or the underlying driver throws.
+  public func readWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    try writer.readWithoutTransactionBlocking(body)
+  }
+
+  /// Writes to the database outside a transaction and announces what it commits.
+  ///
+  /// Each statement commits on its own, and each ``SQLiteWriteConnection/transaction(_:)`` commits
+  /// as a whole, so the access as a whole is announced once, after `body` is done, as the union of
+  /// the regions that committed. A transaction that rolled back is left out. A `body` that throws
+  /// is announced too, since whatever committed before the failure stays committed, and an access
+  /// that committed nothing is not announced at all. The announcement is complete by the time this
+  /// method returns or throws.
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   connection.isForeignKeysEnabled = false
+  ///   try connection.transaction { transaction in
+  ///     try transaction.execute("DROP TABLE reminders")
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Performs the writes on a connection whose statements each commit on their
+  ///   own. The busy timeout and foreign keys it changes through the connection are restored
+  ///   when the access ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returns.
+  /// - Throws: Whatever `body` or the underlying driver throws. An announcement failure is
+  ///   reported to `onAnnouncementFailure` instead.
+  public func writeWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    let recorder = OrbitDatabaseRegionRecorder()
+    do {
+      let result = try await writer.writeWithoutTransaction { connection in
+        try connection.recordingDatabaseRegion(into: recorder, body)
+      }
+      await announceCommits(recordedBy: recorder)
+      return result
+    } catch {
+      await announceCommits(recordedBy: recorder)
+      throw error
+    }
+  }
+
+  /// Writes to the database outside a transaction synchronously and announces what it commits.
+  ///
+  /// The access is announced as ``writeWithoutTransaction(_:)`` announces it, but since IPC
+  /// transports are asynchronous, the announcement continues in an independent task, so a peer
+  /// may not have been told about it yet when this method returns or throws.
+  ///
+  /// ```swift
+  /// try database.writeWithoutTransactionBlocking { connection in
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Performs the writes on a connection whose statements each commit on their
+  ///   own. The busy timeout and foreign keys it changes through the connection are restored
+  ///   when the access ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returns.
+  /// - Throws: Whatever `body` or the underlying driver throws.
+  public func writeWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    let recorder = OrbitDatabaseRegionRecorder()
+    defer {
+      if recorder.hasCommitted {
+        let region = recorder.committedRegion
+        reportLocalCommit(in: region)
+        Task { await self.announceCommittedTransaction(in: region) }
+      }
+    }
+    return try writer.writeWithoutTransactionBlocking { connection in
+      try connection.recordingDatabaseRegion(into: recorder, body)
+    }
+  }
+
+  private func announceCommits(recordedBy recorder: OrbitDatabaseRegionRecorder) async {
+    guard recorder.hasCommitted else { return }
+    let region = recorder.committedRegion
+    reportLocalCommit(in: region)
+    await Task { await self.announceCommittedTransaction(in: region) }.value
+  }
+
   private func reportLocalCommit(in region: OrbitDatabaseRegion) {
     guard let observableWriter = writer as? any OrbitObservableDatabase else { return }
     OrbitDatabaseObservationHub.shared.didCommit(
@@ -266,13 +384,50 @@ private final class OrbitDatabaseObservationHub: Sendable {
   }
 }
 
+/// Records the regions an access changes, keeping apart those whose transaction has committed from
+/// those whose transaction has not ended yet.
+///
+/// A change is pending until the transaction it was made in commits, when it joins the committed
+/// region, or rolls back, when it is discarded. An access that runs several transactions can then
+/// announce only what actually committed.
 final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
-  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
+  private struct Regions {
+    var committed = OrbitDatabaseRegion.empty
+    var pending = OrbitDatabaseRegion.empty
+    var hasCommitted = false
+  }
 
-  var region: OrbitDatabaseRegion { recordedRegion.withLock { $0 } }
+  private let regions = Lock(Regions())
+
+  /// Whether a transaction committed while this recorder was registered, even one that changed
+  /// nothing.
+  var hasCommitted: Bool { regions.withLock { $0.hasCommitted } }
+
+  /// The union of the changes whose transaction has committed while this recorder was registered.
+  var committedRegion: OrbitDatabaseRegion { regions.withLock { $0.committed } }
+
+  /// Every change not rolled back while this recorder was registered, committed or not.
+  ///
+  /// A write transaction commits after its body returns and so after the recorder scoped to the
+  /// body is gone, which leaves all of its changes pending here.
+  var changedRegion: OrbitDatabaseRegion {
+    regions.withLock { $0.committed.union($0.pending) }
+  }
 
   func databaseDidChange(in region: OrbitDatabaseRegion) {
-    recordedRegion.withLock { $0.formUnion(region) }
+    regions.withLock { $0.pending.formUnion(region) }
+  }
+
+  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
+    regions.withLock { regions in
+      regions.committed.formUnion(regions.pending)
+      regions.pending = .empty
+      regions.hasCommitted = true
+    }
+  }
+
+  func databaseDidRollback() {
+    regions.withLock { $0.pending = .empty }
   }
 }
 
@@ -284,6 +439,21 @@ extension SQLiteWriteTransaction {
     let result = try base.observations.withObserver(recorder) {
       try body(self)
     }
-    return (result, recorder.region)
+    return (result, recorder.changedRegion)
+  }
+}
+
+extension SQLiteWriteConnection {
+  fileprivate borrowing func recordingDatabaseRegion<Result: Sendable>(
+    into recorder: OrbitDatabaseRegionRecorder,
+    _ body: (borrowing SQLiteWriteConnection) throws -> Result
+  ) rethrows -> Result {
+    let observations = base.base.observations
+    return try observations.withObserver(recorder) {
+      // A change still pending once the body is done was made outside a transaction, and so has
+      // committed. The handle would only report that after the access, when the recorder is gone.
+      defer { observations.didCommitPendingChanges() }
+      return try body(self)
+    }
   }
 }

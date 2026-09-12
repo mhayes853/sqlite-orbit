@@ -47,6 +47,9 @@ public struct SQLiteResultCode: RawRepresentable, Hashable, Sendable {
   public static let mismatch = Self(rawValue: 20)
   /// `SQLITE_MISUSE`: the library was used incorrectly.
   public static let misuse = Self(rawValue: 21)
+  /// `SQLITE_AUTH`: the connection refused to prepare the statement, as it does one that begins or
+  /// ends a transaction outside a connection's `transaction` call.
+  public static let auth = Self(rawValue: 23)
   /// `SQLITE_NOTADB`: the file is not a database.
   public static let notADatabase = Self(rawValue: 26)
   /// `SQLITE_ROW`: the statement produced a row.

@@ -23,7 +23,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
-  private let connection: SQLiteConnection
+  private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
   /// Opens the database at `path`, creating it when it does not exist.
@@ -39,7 +39,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
     configuration: SQLiteConfiguration,
     identifier: OrbitDatabaseIdentifier? = nil
   ) throws {
-    self.connection = try SQLiteConnection(
+    self.connection = try SQLiteSerialConnection(
       path: path,
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration
@@ -98,6 +98,93 @@ public final class SQLiteQueue: OrbitObservableDatabase {
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     try connection.writeBlocking(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the driver's one connection, reading outside a transaction.
+  ///
+  /// ```swift
+  /// let mode = try await driver.readWithoutTransaction { connection in
+  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement runs in its own implicit
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled.
+  public func readWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) async throws -> Result {
+    try await connection.readWithoutTransaction(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the driver's one connection, writing outside a transaction.
+  ///
+  /// ```swift
+  /// try await driver.writeWithoutTransaction { connection in
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled. Statements that finished before the failure stay committed.
+  public func writeWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    try await connection.writeWithoutTransaction(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the driver's one connection, reading outside a transaction and blocking the
+  /// calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task, and never from inside another access on this
+  ///   driver.
+  ///
+  /// ```swift
+  /// let mode = try driver.readWithoutTransactionBlocking { connection in
+  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement runs in its own implicit
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
+  public func readWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    try connection.readWithoutTransactionBlocking(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the driver's one connection, writing outside a transaction and blocking the
+  /// calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task, and never from inside another access on this
+  ///   driver.
+  ///
+  /// ```swift
+  /// try driver.writeWithoutTransactionBlocking { connection in
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``. Statements that finished before the
+  ///   failure stay committed.
+  public func writeWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    try connection.writeWithoutTransactionBlocking(observers: transactionObservers, body)
   }
 
   /// Registers an observer of the transactions this driver commits.

@@ -46,7 +46,7 @@
       writerConfiguration.setupSQL.insert("PRAGMA journal_mode = MVCC", at: 0)
       let writers = try (0..<max(1, writerCount))
         .map { _ in
-          try SQLiteConnection(
+          try SQLiteSerialConnection(
             path: path,
             flags: [.readWrite, .create, .noMutex],
             configuration: writerConfiguration
@@ -59,7 +59,7 @@
       readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
       let readers = try (0..<max(1, configuration.readerCount))
         .map { _ in
-          try SQLiteConnection(
+          try SQLiteSerialConnection(
             path: path,
             flags: [.readOnly, .noMutex],
             configuration: readerConfiguration
@@ -78,6 +78,13 @@
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) async throws -> Result {
       try await scheduler.read(observers: transactionObservers, body)
+    }
+
+    /// Runs `body` with one reader connection outside a transaction.
+    public func readWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) async throws -> Result {
+      try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
     }
 
     /// Runs `body` in a concurrent Turso write transaction.
@@ -101,6 +108,16 @@
       return result
     }
 
+    /// Runs `body` with one writer connection outside a transaction.
+    ///
+    /// The access is exclusive so a nested immediate transaction and schema-oriented statements
+    /// cannot overlap another pool access.
+    public func writeWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) async throws -> Result {
+      try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
+    }
+
     /// Runs `body` in an immediate transaction after every ordinary pool access has finished.
     ///
     /// Use this for schema work or another operation that must not overlap concurrent transactions.
@@ -119,6 +136,13 @@
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) throws -> Result {
       try scheduler.readBlocking(observers: transactionObservers, body)
+    }
+
+    /// Runs `body` with one reader connection outside a transaction, blocking the calling thread.
+    public func readWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) throws -> Result {
+      try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
     }
 
     /// Runs `body` in a concurrent write transaction, blocking the calling thread.
@@ -140,6 +164,14 @@
       )
       release.finishPublishing()
       return result
+    }
+
+    /// Runs `body` exclusively with one writer connection outside a transaction, blocking the
+    /// calling thread.
+    public func writeWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) throws -> Result {
+      try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
     }
 
     /// Runs an immediate transaction exclusively, blocking the calling thread until it finishes.

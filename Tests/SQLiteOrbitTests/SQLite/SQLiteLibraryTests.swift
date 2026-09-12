@@ -18,6 +18,7 @@
     #expect(SQLiteResultCode.constraint.rawValue == SQLITE_CONSTRAINT)
     #expect(SQLiteResultCode.mismatch.rawValue == SQLITE_MISMATCH)
     #expect(SQLiteResultCode.misuse.rawValue == SQLITE_MISUSE)
+    #expect(SQLiteResultCode.auth.rawValue == SQLITE_AUTH)
     #expect(SQLiteResultCode.notADatabase.rawValue == SQLITE_NOTADB)
     #expect(SQLiteResultCode.row.rawValue == SQLITE_ROW)
     #expect(SQLiteResultCode.done.rawValue == SQLITE_DONE)

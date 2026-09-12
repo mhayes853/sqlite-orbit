@@ -66,9 +66,11 @@ let package = Package(
         .brew(["sqlite3"])
       ]
     ),
-    .systemLibrary(
+    .binaryTarget(
       name: "TursoSQLite3",
-      path: "Sources/TursoSQLite3"
+      url:
+        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-x86_64-unknown-linux-gnu-r1.artifactbundle.zip",
+      checksum: "4b8ba4baac7a38e2434095ea209eefe29a1be06714cfb8e1d0d44ed060ba6499"
     ),
     .target(
       name: "SQLiteOrbit",
