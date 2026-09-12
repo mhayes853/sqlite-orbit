@@ -182,9 +182,9 @@ try await driver.exclusiveWrite { transaction in
 
 Concurrent write conflicts are rolled back and surfaced as `SQLiteError`; a transaction body is
 never replayed implicitly. `readBlocking`, `writeBlocking`, and `exclusiveWriteBlocking` use the
-same connection pools and admission order as their asynchronous counterparts. `TursoPool`
-currently implements transaction access only; transaction and value observation remain on the
-ordinary queue and pool drivers.
+same connection pools and admission order as their asynchronous counterparts. `TursoPool` also
+supports transaction and value observation. Each successful concurrent writer publishes its own
+committed region; conflicts and rollbacks publish nothing.
 
 For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
 linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
@@ -473,8 +473,9 @@ refetching after unrelated writes.
 
 ## Observation
 
-`SQLiteQueue`, `SQLitePool`, and `OrbitDatabase` are observable databases. A value observation
-fetches an initial value, then fetches again after a committed write that may affect its region.
+`SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitDatabase` are observable databases. A value
+observation fetches an initial value, then fetches again after a committed write that may affect
+its region.
 `trackingAll` and `trackingOne` derive that region directly from a readable query:
 
 ```swift
@@ -534,6 +535,25 @@ include those dependencies by calling `transaction.notifyReads(in:)`.
 Commits from the observed driver, another database handle, or another process carry regions, so
 observations avoid refetching after unrelated writes. A custom observable database that reports a
 commit without a region is handled conservatively.
+
+The default refetch policy starts immediately and retries when a newer invalidation supersedes its
+read. Turso applications with expensive fetches can wait for only the writers that were active
+alongside the triggering commit, then fetch their combined result:
+
+```swift
+let reminders = OrbitValueObservation
+  .trackingAll(Reminder.all)
+  .refetching(.coalesced)
+```
+
+An isolated commit is not delayed, and writers that begin later do not extend the captured wait.
+Use `.once` to perform one fetch for the accumulated database invalidations and publish it even if
+it became stale. An observable dependency invalidated during that fetch still schedules separate
+work to restore its one-shot registration. Custom
+`OrbitValueObservationRefetchPolicy` implementations receive a scoped, noncopyable context whose
+snapshot exposes active-writer state, affected and tracked regions, and accumulated refetch
+reasons. They build on `waitForActiveWriters()` and `fetch(publishing:)`; a policy owns its retry
+loop and must finish with either a published or cancelled result.
 
 Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
 source; a committed transaction reports whether it came from this process or another one:
@@ -667,10 +687,10 @@ For transaction lifecycle events that do not produce a value, register an
 `OrbitDatabaseTransactionObserver` directly with any `OrbitObservableDatabase`. Its
 `databaseDidRead(in:)` hook receives regions read by local transactions.
 `databaseDidChange(in:)` receives each provisional region from a directly observed write, or the
-aggregate committed region from another handle. `databaseWillCommit` receives a read-only view of
-a pending local transaction and may throw to abort the write, and `databaseDidCommit` identifies
-the transaction's local or external origin. Work performed directly through `sqliteConnection`
-can publish its regions explicitly:
+aggregate committed region from another handle or a concurrent-write driver.
+`databaseWillCommit` receives a read-only view of a pending serial transaction and may throw to
+abort the write, and `databaseDidCommit` identifies the transaction's local or external origin.
+Work performed directly through `sqliteConnection` can publish its regions explicitly:
 
 ```swift
 try await database.write { transaction in

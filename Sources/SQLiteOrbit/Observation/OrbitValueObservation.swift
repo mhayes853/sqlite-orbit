@@ -152,11 +152,13 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   private init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable,
+    refetchPolicy: any OrbitValueObservationRefetchPolicy = .immediate,
     makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
   ) {
     self.definition = OrbitValueObservationDefinition(
       regionSource: regionSource,
       fetch: fetch,
+      refetchPolicy: refetchPolicy,
       makeReducer: makeReducer
     )
   }
@@ -456,6 +458,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     return OrbitValueObservation<Output>(
       regionSource: definition.regionSource,
       fetch: definition.fetch,
+      refetchPolicy: definition.refetchPolicy,
       makeReducer: { derive(definition.makeReducer()) }
     )
   }
@@ -579,6 +582,29 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ predicate: @escaping @Sendable (OrbitDatabaseCommit) -> Bool
   ) -> Self {
     filterTransactions { commit, _ in predicate(commit) }
+  }
+
+  /// Returns an observation that uses `policy` for fetches prompted after a commit or observable
+  /// dependency change.
+  ///
+  /// The initial fetch and the transaction-local fetch used by serial SQLite drivers are unchanged.
+  /// Turso commits are handled after commit, so this policy controls their refetch behavior.
+  ///
+  /// ```swift
+  /// let observation = OrbitValueObservation
+  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .refetching(.coalesced)
+  /// ```
+  public func refetching<Policy: OrbitValueObservationRefetchPolicy>(
+    _ policy: Policy
+  ) -> Self {
+    let definition = self.definition
+    return Self(
+      regionSource: definition.regionSource,
+      fetch: definition.fetch,
+      refetchPolicy: policy,
+      makeReducer: definition.makeReducer
+    )
   }
 
   /// Skips fetching after committed transactions for which `predicate` returns `false`, using the
@@ -903,6 +929,7 @@ extension OrbitValueObservation where Value: Equatable {
 private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
   let regionSource: OrbitValueObservationRegionSource
   let fetch: OrbitValueObservationFetch
+  let refetchPolicy: any OrbitValueObservationRefetchPolicy
   let makeReducer: @Sendable () -> OrbitValueObservationReducer<Value>
 
   private struct WeakRuntime: Sendable {
@@ -918,10 +945,12 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
   init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
+    refetchPolicy: any OrbitValueObservationRefetchPolicy,
     makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
   ) {
     self.regionSource = regionSource
     self.fetch = fetch
+    self.refetchPolicy = refetchPolicy
     self.makeReducer = makeReducer
   }
 
@@ -935,6 +964,7 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
       database: database,
       regionSource: regionSource,
       fetch: fetch,
+      refetchPolicy: refetchPolicy,
       reducer: makeReducer()
     )
     try candidate.install(on: database)
@@ -974,8 +1004,13 @@ private struct OrbitValueObservationDelivery: Sendable {
 private struct OrbitValueObservationAcceptance: Sendable {
   let delivery: OrbitValueObservationDelivery
   let acceptedFetch: Bool
+  let requiresObservableRefetch: Bool
 
-  static let rejected = Self(delivery: .idle, acceptedFetch: false)
+  static let rejected = Self(
+    delivery: .idle,
+    acceptedFetch: false,
+    requiresObservableRefetch: false
+  )
 }
 
 private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabaseTransactionObserver
@@ -993,6 +1028,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var pendingLocal: PendingLocal?
 
     var reads = OrbitValueObservationReadCoordinator()
+    var refetches = OrbitValueObservationRefetchCoordinator()
+    var isRefetchPolicyRunning = false
+    var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
+    var affectedRegion: OrbitDatabaseRegion?
+    var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
     var subscribers = OrbitValueObservationSubscriberRegistry<Value>()
     var deliveries = OrbitValueObservationDeliveryQueue<Value>()
 
@@ -1004,6 +1044,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private let fetch: OrbitValueObservationRuntimeFetch
   private let read: @Sendable () async -> Result<OrbitValueObservationFetchOutput, any Error>
   private let readBlocking: @Sendable () -> Result<OrbitValueObservationFetchOutput, any Error>
+  private let refetchPolicy: any OrbitValueObservationRefetchPolicy
   private let reducer: OrbitValueObservationReducer<Value>
   private var events: OrbitValueObservationEvents { reducer.events }
   private let state: Lock<State>
@@ -1014,10 +1055,12 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     database: Database,
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
+    refetchPolicy: any OrbitValueObservationRefetchPolicy,
     reducer: OrbitValueObservationReducer<Value>
   ) {
     let externalTracking = ExternalTracking()
     self.reducer = reducer
+    self.refetchPolicy = refetchPolicy
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
     let resolveDatabaseRegionAndFetch:
@@ -1071,7 +1114,12 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
     }
     externalTracking.onDependencyChange { [weak self] in
-      self?.requestRead(source: .observable)
+      self?.requestRefetch(
+        source: .observable,
+        reason: .observableChange,
+        affectedRegion: nil,
+        activeWriterBarrier: nil
+      )
     }
   }
 
@@ -1167,16 +1215,17 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func databaseWillCommit(
     _ transaction: borrowing SQLiteReadTransaction
   ) throws {
-    let commit = OrbitDatabaseCommit(origin: .local)
-    let regionNeedsFetch = state.withLock { state in
-      guard !state.isStopped else { return false }
+    let affectedRegion = state.withLock { state -> OrbitDatabaseRegion? in
+      guard !state.isStopped else { return nil }
+      let affectedRegion = state.transactionRegion ?? .empty
       let observedRegion = state.observedRegion ?? .fullDatabase
-      let needsFetch = observedRegion.overlaps(state.transactionRegion ?? .empty)
       state.transactionRegion = nil
       state.pendingLocal = .skipped
-      return needsFetch
+      return observedRegion.overlaps(affectedRegion) ? affectedRegion : nil
     }
-    guard regionNeedsFetch, transactionNeedsFetch(commit) else { return }
+    guard let affectedRegion else { return }
+    let commit = OrbitDatabaseCommit(origin: .local, region: affectedRegion)
+    guard transactionNeedsFetch(commit) else { return }
 
     events.willFetch()
     let result = Result { try fetch(transaction) }
@@ -1201,16 +1250,26 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         publishLocal(result)
         return
       case nil:
-        guard committedTransactionNeedsFetch(commit) else { return }
+        guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
         events.databaseDidChange()
-        requestRead(source: .transaction(.local))
+        requestRefetch(
+          source: .transaction(.local),
+          reason: .databaseChange,
+          affectedRegion: affectedRegion,
+          activeWriterBarrier: commit.activeWriterBarrier
+        )
         return
       }
 
     case .external:
-      guard committedTransactionNeedsFetch(commit) else { return }
+      guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
       events.databaseDidChange()
-      requestRead(source: .transaction(.external))
+      requestRefetch(
+        source: .transaction(.external),
+        reason: .externalProcessChange,
+        affectedRegion: affectedRegion,
+        activeWriterBarrier: nil
+      )
     }
   }
 
@@ -1229,14 +1288,17 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     reducer.transactionNeedsFetch(commit)
   }
 
-  private func committedTransactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
-    let regionNeedsFetch = state.withLock { state in
-      guard !state.isStopped else { return false }
-      let region = state.transactionRegion ?? .fullDatabase
+  private func committedTransactionAffectedRegion(
+    _ commit: OrbitDatabaseCommit
+  ) -> OrbitDatabaseRegion? {
+    let affectedRegion = state.withLock { state -> OrbitDatabaseRegion? in
+      guard !state.isStopped else { return nil }
+      let region = state.transactionRegion ?? commit.region
       state.transactionRegion = nil
-      return (state.observedRegion ?? .fullDatabase).overlaps(region)
+      return (state.observedRegion ?? .fullDatabase).overlaps(region) ? region : nil
     }
-    return regionNeedsFetch && transactionNeedsFetch(commit)
+    guard let affectedRegion, transactionNeedsFetch(commit) else { return nil }
+    return affectedRegion
   }
 
   private func publishLocal(
@@ -1250,7 +1312,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let acceptance = accept(result, source: .transaction(.local), state: &state)
       // The fetch inside this transaction includes every commit visible before this one, so it
       // also satisfies an older external invalidation whose read has not completed yet.
-      if acceptance.acceptedFetch { state.reads.supersedePendingRead() }
+      if acceptance.acceptedFetch {
+        state.reads.supersedePendingRead()
+        state.refetches.supersedePendingFetch()
+        state.refetchReasons.removeAll()
+        state.affectedRegion = nil
+        state.activeWriterBarriers.removeAll()
+      }
       return acceptance.delivery
     }
     deliver(delivery, from: nil)
@@ -1258,12 +1326,148 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
   // MARK: - Reads
 
-  private func requestRead(source: OrbitValueObservationSource) {
-    let request = state.withLock { state -> OrbitValueObservationReadRequest? in
-      guard !state.isStopped else { return nil }
-      return state.reads.requireRead(source: source)
+  private func requestRefetch(
+    source: OrbitValueObservationSource,
+    reason: OrbitValueObservationRefetchReason,
+    affectedRegion: OrbitDatabaseRegion?,
+    activeWriterBarrier: SQLitePoolWriterBarrier?
+  ) {
+    let action = state.withLock { state -> (
+      initialRequest: OrbitValueObservationReadRequest?,
+      startPolicy: Bool
+    ) in
+      guard !state.isStopped else { return (nil, false) }
+
+      // Until the initial value is established, the existing revision loop makes that fetch cover
+      // every invalidation and avoids publishing a refetch before the initial value.
+      guard state.reads.initialFetchCompleted else {
+        return (state.reads.requireRead(source: source), false)
+      }
+
+      state.refetches.require(source: source)
+      state.refetchReasons.insert(reason)
+      if let affectedRegion {
+        state.affectedRegion = state.affectedRegion?.union(affectedRegion) ?? affectedRegion
+      }
+      if let activeWriterBarrier {
+        state.activeWriterBarriers.append(activeWriterBarrier)
+      }
+      guard !state.isRefetchPolicyRunning else { return (nil, false) }
+      state.isRefetchPolicyRunning = true
+      return (nil, true)
     }
-    start(request)
+    start(action.initialRequest)
+    if action.startPolicy { startRefetchPolicy() }
+  }
+
+  private func startRefetchPolicy() {
+    let operation = OrbitValueObservationRefetchOperation(
+      snapshot: { [weak self] in
+        self?.refetchSnapshot()
+          ?? OrbitValueObservationRefetchSnapshot(
+            hasActiveWriters: false,
+            affectedRegion: nil,
+            trackedRegion: nil,
+            reasons: []
+          )
+      },
+      wait: { [weak self] in
+        guard let self else { return }
+        await self.waitForActiveWriters()
+      },
+      fetch: { [weak self] behavior in
+        guard let self else { return .cancelled }
+        return await self.performRefetch(publishing: behavior)
+      }
+    )
+    Task { [weak self, refetchPolicy] in
+      let context = OrbitValueObservationRefetchContext(operation: operation)
+      await refetchPolicy.refetch(using: consume context)
+      self?.refetchPolicyDidFinish(conclusively: operation.didConclude)
+    }
+  }
+
+  private func refetchSnapshot() -> OrbitValueObservationRefetchSnapshot {
+    state.withLock { state in
+      OrbitValueObservationRefetchSnapshot(
+        hasActiveWriters: state.activeWriterBarriers.contains { $0.hasActiveWriters },
+        affectedRegion: state.affectedRegion,
+        trackedRegion: state.observedRegion,
+        reasons: state.refetchReasons
+      )
+    }
+  }
+
+  private func waitForActiveWriters() async {
+    let barriers = state.withLock { $0.activeWriterBarriers }
+    for barrier in barriers where barrier.hasActiveWriters {
+      await barrier.wait()
+    }
+  }
+
+  private func performRefetch(
+    publishing behavior: OrbitValueObservationPublicationBehavior
+  ) async -> OrbitValueObservationFetchResult {
+    guard
+      let request = state.withLock({ state -> OrbitValueObservationRefetchRequest? in
+        guard !state.isStopped else { return nil }
+        return state.refetches.beginFetch()
+      })
+    else { return .cancelled }
+
+    events.willFetch()
+    let result = await read()
+    let completed = state.withLock { state -> (
+      result: OrbitValueObservationFetchResult,
+      delivery: OrbitValueObservationDelivery
+    ) in
+      guard !state.isStopped else {
+        discard(result)
+        return (.cancelled, .idle)
+      }
+      if behavior == .ifCurrent, !state.refetches.isCurrent(request) {
+        state.refetches.finishSupersededFetch()
+        discard(result)
+        return (.superseded, .idle)
+      }
+
+      let acceptance = accept(
+        result,
+        source: request.source,
+        forcingPublication: behavior == .force,
+        state: &state
+      )
+      guard acceptance.acceptedFetch else {
+        state.refetches.finishSupersededFetch()
+        return (.superseded, .idle)
+      }
+
+      state.refetches.finishPublishedFetch()
+      state.refetchReasons.removeAll()
+      state.affectedRegion = nil
+      state.activeWriterBarriers.removeAll()
+      if acceptance.requiresObservableRefetch {
+        state.refetches.require(source: .observable)
+        state.refetchReasons.insert(.observableChange)
+      }
+      return (.published, acceptance.delivery)
+    }
+    deliver(completed.delivery, from: nil)
+    return completed.result
+  }
+
+  private func refetchPolicyDidFinish(conclusively: Bool) {
+    let shouldRestart = state.withLock { state in
+      state.isRefetchPolicyRunning = false
+      guard
+        !state.isStopped,
+        conclusively,
+        state.refetches.hasPendingFetch
+      else { return false }
+      state.isRefetchPolicyRunning = true
+      return true
+    }
+    if shouldRestart { startRefetchPolicy() }
   }
 
   private func start(_ request: OrbitValueObservationReadRequest?) {
@@ -1304,17 +1508,25 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private func accept(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
     source: OrbitValueObservationSource,
+    forcingPublication: Bool = false,
     state: inout State
   ) -> OrbitValueObservationAcceptance {
     let outcome: Result<OrbitValueObservationChange<Value>, any Error>
+    var requiresObservableRefetch = false
     switch result {
     case .success(let output):
-      guard externalTracking.accept(output.externalDependencies) else { return .rejected }
+      let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
+      guard dependenciesAreCurrent || forcingPublication else { return .rejected }
+      requiresObservableRefetch = !dependenciesAreCurrent
       state.reads.completeInitialFetch()
       state.observedRegion = output.region
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
-          return OrbitValueObservationAcceptance(delivery: .idle, acceptedFetch: true)
+          return OrbitValueObservationAcceptance(
+            delivery: .idle,
+            acceptedFetch: true,
+            requiresObservableRefetch: requiresObservableRefetch
+          )
         }
         outcome = .success(OrbitValueObservationChange(value: value, source: source))
       } catch {
@@ -1341,7 +1553,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         shouldDrain: state.deliveries.enqueue(publication),
         didFail: didFail
       ),
-      acceptedFetch: true
+      acceptedFetch: true,
+      requiresObservableRefetch: requiresObservableRefetch
     )
   }
 

@@ -79,6 +79,50 @@ struct OrbitValueObservationReadCoordinator: Sendable {
   }
 }
 
+struct OrbitValueObservationRefetchRequest: Sendable {
+  let revision: UInt64
+  let source: OrbitValueObservationSource
+}
+
+struct OrbitValueObservationRefetchCoordinator: Sendable {
+  private var revision: UInt64 = 0
+  private var isRequired = false
+  private var isFetchInFlight = false
+  private var source = OrbitValueObservationSource.observable
+
+  var hasPendingFetch: Bool { isRequired && !isFetchInFlight }
+
+  mutating func require(source: OrbitValueObservationSource) {
+    revision &+= 1
+    isRequired = true
+    self.source = source
+  }
+
+  mutating func beginFetch() -> OrbitValueObservationRefetchRequest? {
+    guard isRequired, !isFetchInFlight else { return nil }
+    isFetchInFlight = true
+    return OrbitValueObservationRefetchRequest(revision: revision, source: source)
+  }
+
+  func isCurrent(_ request: OrbitValueObservationRefetchRequest) -> Bool {
+    request.revision == revision
+  }
+
+  mutating func finishSupersededFetch() {
+    isFetchInFlight = false
+  }
+
+  mutating func finishPublishedFetch() {
+    isFetchInFlight = false
+    isRequired = false
+  }
+
+  mutating func supersedePendingFetch() {
+    revision &+= 1
+    isRequired = false
+  }
+}
+
 struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
   typealias Registration = Result<
     (

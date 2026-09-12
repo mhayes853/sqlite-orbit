@@ -87,7 +87,7 @@
     public func write<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
-      let ((result, region), barrier) = try await scheduler.writeTrackingConcurrentWriters {
+      let ((result, region), release) = try await scheduler.writeTrackingConcurrentWriters {
         transaction in
         try transaction.recordingDatabaseRegion(body)
       }
@@ -95,8 +95,9 @@
       transactionObservers.didCommit(
         origin: .local,
         region: region,
-        activeWriterBarrier: barrier
+        activeWriterBarrier: release.activeWriterBarrier
       )
+      release.finishPublishing()
       return result
     }
 
@@ -127,7 +128,7 @@
     public func writeBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) throws -> Result {
-      let ((result, region), barrier) = try scheduler.writeBlockingTrackingConcurrentWriters {
+      let ((result, region), release) = try scheduler.writeBlockingTrackingConcurrentWriters {
         transaction in
         try transaction.recordingDatabaseRegion(body)
       }
@@ -135,8 +136,9 @@
       transactionObservers.didCommit(
         origin: .local,
         region: region,
-        activeWriterBarrier: barrier
+        activeWriterBarrier: release.activeWriterBarrier
       )
+      release.finishPublishing()
       return result
     }
 

@@ -69,6 +69,20 @@
     }
   }
 
+  private final class TursoValueRecorder<Value: Sendable>: Sendable {
+    private let recordedValues = Lock<[Value]>([])
+
+    var values: [Value] { recordedValues.withLock { $0 } }
+
+    func record(_ change: OrbitValueObservationChange<Value>) {
+      recordedValues.withLock { $0.append(change.value) }
+    }
+
+    func waitForCount(_ count: Int) async throws {
+      try await waitUntil(timeout: .seconds(5)) { self.values.count >= count }
+    }
+  }
+
   @Test
   func tursoRunsBasicQueueTransactions() async throws {
     #expect(SQLiteConfiguration.default.library.name == "Turso")
@@ -203,6 +217,58 @@
     await wait.value
     #expect(barrierFinished.withLock { $0 })
     #expect(observer.commits.count == 2)
+    _ = subscription
+  }
+
+  @Test
+  func coalescedObservationWaitsForTheConcurrentTursoWriterCohort() async throws {
+    let database = TemporaryTursoDatabase("turso-coalesced-observation")
+    let driver = try TursoPool(path: database.path, writerCount: 2)
+    try await driver.exclusiveWrite { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+    let fetchCount = Lock(0)
+    let observation = OrbitValueObservation<Int>
+      .tracking { transaction in
+        fetchCount.withLock { $0 += 1 }
+        return try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+      }
+      .refetching(.coalesced)
+    let recorder = TursoValueRecorder<Int>()
+    let subscription = try observation.subscribe(
+      to: driver,
+      onError: { Issue.record("Unexpected observation error: \($0)") },
+      onChange: recorder.record
+    )
+    try await recorder.waitForCount(1)
+    let firstGate = TursoGate()
+    let secondGate = TursoGate()
+
+    let first = Task {
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (1)")
+        firstGate.hold()
+      }
+    }
+    let second = Task {
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (2)")
+        secondGate.hold()
+      }
+    }
+    await firstGate.waitUntilEntered(1)
+    await secondGate.waitUntilEntered(1)
+
+    firstGate.open()
+    try await first.value
+    for _ in 0..<100 { await Task.yield() }
+    #expect(recorder.values == [0])
+
+    secondGate.open()
+    try await second.value
+    try await recorder.waitForCount(2)
+    #expect(recorder.values == [0, 2])
+    #expect(fetchCount.withLock { $0 } == 2)
     _ = subscription
   }
 

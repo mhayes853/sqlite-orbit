@@ -41,6 +41,16 @@ final class SQLitePoolWriterBarrier: Sendable {
   }
 }
 
+/// Defers satisfying older writer barriers until this commit has been published to observers.
+struct SQLitePoolWriterRelease: Sendable {
+  let activeWriterBarrier: SQLitePoolWriterBarrier
+  let completedBarriers: [SQLitePoolWriterBarrier]
+
+  func finishPublishing() {
+    for barrier in completedBarriers { barrier.writerDidFinish() }
+  }
+}
+
 /// Lends reader and writer connections to asynchronous tasks and blocking threads from one queue.
 final class SQLitePoolScheduler: Sendable {
   private enum Kind: Equatable, Sendable {
@@ -131,7 +141,7 @@ final class SQLitePoolScheduler: Sendable {
   /// Runs a concurrent write and returns the finite cohort of other writers active at commit.
   func writeTrackingConcurrentWriters<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) async throws -> (Result, SQLitePoolWriterBarrier) {
+  ) async throws -> (Result, SQLitePoolWriterRelease) {
     let lease = try await acquire(.write)
     do {
       let result = try await lease.connection.write(mode: .concurrent, body)
@@ -164,7 +174,7 @@ final class SQLitePoolScheduler: Sendable {
   /// Runs a blocking concurrent write and returns the same finite cohort as the async API.
   func writeBlockingTrackingConcurrentWriters<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> (Result, SQLitePoolWriterBarrier) {
+  ) throws -> (Result, SQLitePoolWriterRelease) {
     let lease = acquireBlocking(.write)
     do {
       let result = try lease.connection.writeBlocking(mode: .concurrent, body)
@@ -238,7 +248,7 @@ final class SQLitePoolScheduler: Sendable {
   private func release(
     _ lease: Lease,
     capturingActiveWriters: Bool = false
-  ) -> SQLitePoolWriterBarrier? {
+  ) -> SQLitePoolWriterRelease? {
     let released = state.withLock { state -> (
       wakeups: [Wakeup],
       completedBarriers: [SQLitePoolWriterBarrier],
@@ -271,9 +281,16 @@ final class SQLitePoolScheduler: Sendable {
       }
       return (Self.grant(&state), completedBarriers, capturedBarrier)
     }
-    for barrier in released.completedBarriers { barrier.writerDidFinish() }
+    if !capturingActiveWriters {
+      for barrier in released.completedBarriers { barrier.writerDidFinish() }
+    }
     for wakeup in released.wakeups { wakeup.deliver() }
-    return released.capturedBarrier
+    return released.capturedBarrier.map {
+      SQLitePoolWriterRelease(
+        activeWriterBarrier: $0,
+        completedBarriers: released.completedBarriers
+      )
+    }
   }
 
   // MARK: - Granting
