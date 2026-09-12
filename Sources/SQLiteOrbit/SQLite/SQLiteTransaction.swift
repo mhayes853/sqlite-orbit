@@ -10,7 +10,7 @@ import StructuredQueries
 ///   try transaction.fetchAll(Reminder.select(\.title))
 /// }
 /// ```
-public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
+public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   /// The row this transaction's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -44,6 +44,15 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
     access.sqlite
+  }
+
+  /// The configuration the connection was opened with.
+  ///
+  /// This is the configuration the driver was given. What a driver adds for a connection's role,
+  /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
+  /// change an access makes to the connection's settings, such as its busy timeout.
+  public var configuration: SQLiteConfiguration {
+    access.configurationPointer.pointee
   }
 
   var connection: OpaquePointer { access.sqliteConnection }
@@ -108,7 +117,9 @@ public struct SQLiteReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~E
 ///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
 /// }
 /// ```
-public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~Escapable {
+public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTransaction, ~Copyable,
+  ~Escapable
+{
   /// The row this transaction's cursors lend.
   public typealias Row = SQLiteRow
 
@@ -133,6 +144,15 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, 
   /// The SQLite build this connection runs against, so raw work uses the same one.
   public var sqlite: SQLiteLibrary {
     base.sqlite
+  }
+
+  /// The configuration the connection was opened with.
+  ///
+  /// This is the configuration the driver was given. What a driver adds for a connection's role,
+  /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
+  /// change an access makes to the connection's settings, such as its busy timeout.
+  public var configuration: SQLiteConfiguration {
+    base.configuration
   }
 
   /// Creates a cursor over the rows a read query returns.

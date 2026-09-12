@@ -43,7 +43,12 @@ fi
 variant="$output/$target_triple"
 mkdir -p "$variant/include"
 install -m 0644 "$library" "$variant/libturso_sqlite3.a"
-install -m 0644 "$header" "$variant/include/sqlite3.h"
+# Turso implements SQLite's destructor callback ABI, but its generated declarations spell the
+# callback as an untyped pointer. Preserve the ABI while exposing SQLite's function-pointer type to
+# Clang importers such as Swift's.
+sed 's/void \*_destroy/sqlite3_destructor_type _destroy/g' "$header" > "$variant/include/sqlite3.h"
+chmod 0644 "$variant/include/sqlite3.h"
+install -m 0644 "$turso_checkout/LICENSE.md" "$output/LICENSE.md"
 
 printf '%s\n' \
   'module TursoSQLite3 {' \

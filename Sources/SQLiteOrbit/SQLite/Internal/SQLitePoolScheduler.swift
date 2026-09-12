@@ -11,13 +11,13 @@ final class SQLitePoolScheduler: Sendable {
 
   private struct Lease: Sendable {
     let kind: Kind
-    let connection: SQLiteConnection
+    let connection: SQLiteSerialConnection
     let blockingHolder: ObjectIdentifier?
   }
 
   private struct State {
-    var idleReaders: [SQLiteConnection]
-    var idleWriters: [SQLiteConnection]
+    var idleReaders: [SQLiteSerialConnection]
+    var idleWriters: [SQLiteSerialConnection]
     var activeOrdinaryAccesses = 0
     var isExclusiveWriteActive = false
     var waiting: [Waiter] = []
@@ -58,7 +58,7 @@ final class SQLitePoolScheduler: Sendable {
 
   private let state: Lock<State>
 
-  init(readers: [SQLiteConnection], writers: [SQLiteConnection]) {
+  init(readers: [SQLiteSerialConnection], writers: [SQLiteSerialConnection]) {
     precondition(!readers.isEmpty)
     precondition(!writers.isEmpty)
     self.state = Lock(State(idleReaders: readers, idleWriters: writers))
@@ -104,12 +104,48 @@ final class SQLitePoolScheduler: Sendable {
     return try lease.connection.writeBlocking(mode: mode, observers: observers, body)
   }
 
+  func readWithoutTransaction<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) async throws -> Result {
+    let lease = try await acquire(.read)
+    defer { release(lease) }
+    return try await lease.connection.readWithoutTransaction(observers: observers, body)
+  }
+
+  func writeWithoutTransaction<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    let lease = try await acquire(.exclusiveWrite)
+    defer { release(lease) }
+    return try await lease.connection.writeWithoutTransaction(observers: observers, body)
+  }
+
+  func readWithoutTransactionBlocking<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    let lease = acquireBlocking(.read)
+    defer { release(lease) }
+    return try lease.connection.readWithoutTransactionBlocking(observers: observers, body)
+  }
+
+  func writeWithoutTransactionBlocking<Result: Sendable>(
+    observers: OrbitDatabaseTransactionObservers? = nil,
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    let lease = acquireBlocking(.exclusiveWrite)
+    defer { release(lease) }
+    return try lease.connection.writeWithoutTransactionBlocking(observers: observers, body)
+  }
+
   // MARK: - Acquiring
 
   private func acquire(_ kind: Kind) async throws -> Lease {
     try Task.checkCancellation()
     let request = join(kind, blockingHolder: nil)
-    request.wakeups.forEach { $0.deliver() }
+    for wakeup in request.wakeups { wakeup.deliver() }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { install($0, for: request.id) }
     } onCancel: {
@@ -120,7 +156,7 @@ final class SQLitePoolScheduler: Sendable {
   private func acquireBlocking(_ kind: Kind) -> Lease {
     let semaphore = DispatchSemaphore(value: 0)
     let request = join(kind, blockingHolder: Self.currentThread, semaphore: semaphore)
-    request.wakeups.forEach { $0.deliver() }
+    for wakeup in request.wakeups { wakeup.deliver() }
     semaphore.wait()
     return state.withLock { state in
       guard case .success(let lease) = state.settled.removeValue(forKey: request.id) else {
@@ -181,7 +217,7 @@ final class SQLitePoolScheduler: Sendable {
       }
       return Self.grant(&state)
     }
-    wakeups.forEach { $0.deliver() }
+    for wakeup in wakeups { wakeup.deliver() }
   }
 
   // MARK: - Granting
@@ -287,6 +323,6 @@ final class SQLitePoolScheduler: Sendable {
       return [Self.settle(&state, waiter, with: .failure(CancellationError()))]
         + Self.grant(&state)
     }
-    wakeups.forEach { $0.deliver() }
+    for wakeup in wakeups { wakeup.deliver() }
   }
 }

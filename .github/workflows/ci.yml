@@ -37,6 +37,21 @@ jobs:
       - name: Test
         run: swift test ${{ matrix.traits }}
 
+  test-turso:
+    name: Linux (Turso)
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    steps:
+      - uses: actions/checkout@v4
+
+      # This downloads and links the release-hosted artifact. The rest of the test target includes
+      # cases for SQLite capabilities Turso deliberately reports as unavailable.
+      - name: Test Turso compatibility
+        run: swift test --disable-default-traits --traits Turso --filter TursoCompatibilityTests
+
+      - name: Test migrations with Turso
+        run: swift test --disable-default-traits --traits Turso --filter OrbitDatabaseMigratorTests
+
   test-swiftui:
     name: macOS (SwiftUI)
     runs-on: macos-15

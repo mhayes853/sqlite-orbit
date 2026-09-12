@@ -226,6 +226,209 @@
       #expect(observer.events == [.didChange(region), .didCommit(.local)])
       _ = subscription
     }
+
+    @Test
+    func writeWithoutTransactionAnnouncesTheUnionOfWhatCommittedOnce() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-announcement")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      try await createAnnouncementTables(in: database)
+
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try connection.transaction { transaction in
+          try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+        }
+        try? connection.transaction { transaction in
+          try transaction.execute(#sql("INSERT INTO archive (id) VALUES (1)", as: Void.self))
+          throw WriteFailure()
+        }
+      }
+
+      let committed = OrbitDatabaseRegion(table: "items")
+        .union(OrbitDatabaseRegion(table: "lists"))
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: committed))
+        ]
+      )
+    }
+
+    @Test
+    func writeWithoutTransactionThatThrowsAnnouncesWhatCommittedBeforeTheFailure() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-failure")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      try await createAnnouncementTables(in: database)
+
+      await #expect(throws: WriteFailure.self) {
+        try await database.writeWithoutTransaction { connection in
+          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try connection.transaction { transaction in
+            try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+          }
+          throw WriteFailure()
+        }
+      }
+
+      let committed = OrbitDatabaseRegion(table: "items")
+        .union(OrbitDatabaseRegion(table: "lists"))
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: committed))
+        ]
+      )
+    }
+
+    @Test
+    func writeWithoutTransactionThatCommitsNothingIsNotAnnounced() async throws {
+      let (database, transport) = try makeAnnouncingDatabase()
+      try await createAnnouncementTables(in: database)
+
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute("PRAGMA foreign_keys = OFF")
+        try connection.execute("PRAGMA foreign_keys = ON")
+        _ = try connection.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+        try? connection.transaction { transaction in
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          throw WriteFailure()
+        }
+      }
+      await #expect(throws: WriteFailure.self) {
+        try await database.writeWithoutTransaction { _ in throw WriteFailure() }
+      }
+      try database.writeWithoutTransactionBlocking { _ in }
+      _ = try await database.readWithoutTransaction { connection in
+        try connection.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      }
+
+      #expect(transport.messages.isEmpty)
+    }
+
+    @Test
+    func blockingWriteWithoutTransactionAnnouncesWhatCommittedWhenItThrows() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "blocking-without-transaction")
+      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      try await createAnnouncementTables(in: database)
+
+      #expect(throws: WriteFailure.self) {
+        try database.writeWithoutTransactionBlocking { connection in
+          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          throw WriteFailure()
+        }
+      }
+      try await waitUntil { transport.messages.count == 1 }
+
+      #expect(
+        transport.messages == [
+          .transactionDidCommit(
+            .init(databaseIdentifier: identifier, region: OrbitDatabaseRegion(table: "items"))
+          )
+        ]
+      )
+    }
+
+    @Test
+    func peerReceivesOneAnnouncementForAWriteWithoutTransaction() async throws {
+      let network = InMemoryIPCTransport.Network()
+      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-peer")
+      let database = OrbitDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: InMemoryIPCTransport(network: network)
+      )
+      try await createAnnouncementTables(in: database)
+      let peerTransport = InMemoryIPCTransport(network: network)
+      let received = Lock([OrbitIPCMessage]())
+      let subscription = try peerTransport.subscribe(to: identifier) { message in
+        received.withLock { $0.append(message) }
+      }
+
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try connection.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+      }
+
+      let committed = OrbitDatabaseRegion(table: "items")
+        .union(OrbitDatabaseRegion(table: "lists"))
+      #expect(
+        received.withLock { $0 } == [
+          .transactionDidCommit(.init(databaseIdentifier: identifier, region: committed))
+        ]
+      )
+      _ = subscription
+    }
+
+    @Test
+    func siblingHandleSeesWriteWithoutTransactionAsOneLocalCommit() async throws {
+      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-sibling")
+      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
+      let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
+      let observer = RecordingPeerTransactionObserver()
+      let subscription = try observingDatabase.subscribe(transactionObserver: observer)
+      let region = OrbitDatabaseRegion(table: "items")
+
+      try await writingDatabase.writeWithoutTransaction { connection in
+        connection.notifyChanges(in: region)
+      }
+
+      #expect(observer.events == [.didChange(region), .didCommit(.local)])
+      _ = subscription
+    }
+  }
+
+  private func createAnnouncementTables<Writer>(
+    in database: OrbitDatabase<Writer>
+  ) async throws {
+    // The tables are created through the writer itself, which announces nothing.
+    try await database.writer.write { transaction in
+      try transaction.execute(
+        """
+        CREATE TABLE items (id INTEGER PRIMARY KEY);
+        CREATE TABLE lists (id INTEGER PRIMARY KEY);
+        CREATE TABLE archive (id INTEGER PRIMARY KEY);
+        """
+      )
+    }
+  }
+
+  @Suite
+  struct OrbitDatabaseRegionRecorderTests {
+    @Test
+    func recorderKeepsCommittedRegionsApartFromRolledBackAndPendingOnes() {
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let committed = OrbitDatabaseRegion(table: "committed")
+      let rolledBack = OrbitDatabaseRegion(table: "rolled_back")
+      let autocommitted = OrbitDatabaseRegion(table: "autocommitted")
+      let pending = OrbitDatabaseRegion(table: "pending")
+
+      context.withObserver(recorder) {
+        context.didChange(in: committed)
+        context.didCommit(origin: .local)
+        context.didChange(in: rolledBack)
+        context.didRollback()
+        context.didChange(in: autocommitted)
+        context.didCommitPendingChanges()
+        context.didChange(in: pending)
+      }
+
+      #expect(recorder.committedRegion == committed.union(autocommitted))
+      #expect(recorder.changedRegion == committed.union(autocommitted).union(pending))
+    }
+
+    @Test
+    func recorderMissesTheEventsOfTransactionsEndingAfterItsScope() {
+      let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let region = OrbitDatabaseRegion(table: "items")
+
+      context.withObserver(recorder) {
+        context.didChange(in: region)
+      }
+      context.didRollback()
+
+      #expect(recorder.committedRegion == .empty)
+      #expect(recorder.changedRegion == region)
+    }
   }
 
   private func makeAnnouncingDatabase(

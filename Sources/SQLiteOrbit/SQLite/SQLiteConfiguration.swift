@@ -33,10 +33,14 @@ public struct SQLiteConfiguration: Sendable {
   /// `SQLITE_BUSY`.
   ///
   /// A database shared between processes needs this: without it an overlapping write fails
-  /// outright rather than queueing.
-  public var busyTimeout: Duration
+  /// outright rather than queueing. An access may change it for its own duration through
+  /// ``SQLiteWriteConnection/busyTimeout`` or ``SQLiteReadConnection/busyTimeout``.
+  public var busyTimeout: SQLiteBusyTimeout
 
   /// Whether foreign key enforcement is turned on.
+  ///
+  /// An access may change it for its own duration through
+  /// ``SQLiteWriteConnection/isForeignKeysEnabled``.
   public var isForeignKeysEnabled: Bool
 
   /// Whether SQLite trusts schema-defined functions and virtual tables.
@@ -66,7 +70,7 @@ public struct SQLiteConfiguration: Sendable {
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
-    busyTimeout: Duration = .seconds(5),
+    busyTimeout: SQLiteBusyTimeout = .limit(.seconds(5)),
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
@@ -83,15 +87,6 @@ public struct SQLiteConfiguration: Sendable {
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
     self.connectionSetups = connectionSetups
-  }
-
-  var busyTimeoutMilliseconds: Int32 {
-    let components = busyTimeout.components
-    guard components.seconds > 0 || components.attoseconds > 0 else { return 0 }
-    guard components.seconds < Int64(Int32.max) / 1000 else { return .max }
-    let milliseconds =
-      components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
-    return Int32(clamping: milliseconds)
   }
 }
 
@@ -110,7 +105,7 @@ public struct SQLiteConfiguration: Sendable {
 /// var configuration = SQLiteConfiguration.default
 /// configuration.connectionSetups.append(
 ///   SQLiteConnectionSetup { connection in
-///     connection.sqlite.connections.setBusyTimeout(connection.sqliteConnection, 10_000)
+///     connection.sqlite.connections.setExtendedResultCodes(connection.sqliteConnection, 1)
 ///   }
 /// )
 /// ```

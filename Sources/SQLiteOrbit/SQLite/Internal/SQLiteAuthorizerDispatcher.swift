@@ -74,7 +74,7 @@ final class SQLiteAuthorizerDispatcher {
     }
   }
 
-  private func withHandler<Result>(
+  func withHandler<Result: ~Copyable>(
     _ handler: @escaping Handler,
     perform operation: () throws -> Result
   ) rethrows -> Result {

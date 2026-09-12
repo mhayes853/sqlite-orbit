@@ -82,25 +82,25 @@ public final class SQLitePool: OrbitObservableDatabase {
   private static func openConnections(
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration
-  ) throws -> (writer: SQLiteConnection, readers: [SQLiteConnection]) {
-    var writerConfiguration = configuration
-    writerConfiguration.setupSQL.append("PRAGMA journal_mode = WAL")
-    let writer = try SQLiteConnection(
+  ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
+    // Each connection's role is set up apart from the caller's configuration, which is what its
+    // transactions report having been opened with.
+    let writer = try SQLiteSerialConnection(
       path: path,
       flags: [.readWrite, .create, .noMutex],
-      configuration: writerConfiguration
+      configuration: configuration,
+      driverSetupSQL: ["PRAGMA journal_mode = WAL"]
     )
 
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
     // the raw connection into an error rather than a surprise.
-    var readerConfiguration = configuration
-    readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
     let readers = try (0..<max(1, configuration.readerCount))
       .map { _ in
-        try SQLiteConnection(
+        try SQLiteSerialConnection(
           path: path,
           flags: [.readOnly, .noMutex],
-          configuration: readerConfiguration
+          configuration: configuration,
+          driverSetupSQL: ["PRAGMA query_only = 1"]
         )
       }
     return (writer, readers)
@@ -178,6 +178,100 @@ public final class SQLitePool: OrbitObservableDatabase {
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     try scheduler.writeBlocking(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with one of the pool's readers, reading outside a transaction.
+  ///
+  /// The access waits for any write that is running or already queued, like ``read(_:)``.
+  ///
+  /// ```swift
+  /// let mode = try await driver.readWithoutTransaction { connection in
+  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement runs in its own implicit
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled while waiting or running.
+  public func readWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) async throws -> Result {
+    try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with one of the pool's readers, reading outside a transaction and blocking the
+  /// calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
+  ///   starves the very machinery the rest of the pool runs on.
+  ///
+  /// ```swift
+  /// let mode = try driver.readWithoutTransactionBlocking { connection in
+  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement runs in its own implicit
+  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
+  public func readWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+  ) throws -> Result {
+    try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the pool's single writer, writing outside a transaction.
+  ///
+  /// The access is admitted like ``write(_:)`` and holds the writer for its whole duration, so
+  /// this process's pool reads queued behind it wait until `body` returns, even between its
+  /// statements.
+  ///
+  /// ```swift
+  /// try await driver.writeWithoutTransaction { connection in
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
+  ///   cancelled while waiting or running. Statements that finished before the failure stay
+  ///   committed.
+  public func writeWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
+  }
+
+  /// Runs `body` with the pool's single writer, writing outside a transaction and blocking the
+  /// calling thread until it finishes.
+  ///
+  /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
+  ///   starves the very machinery the rest of the pool runs on.
+  ///
+  /// ```swift
+  /// try driver.writeWithoutTransactionBlocking { connection in
+  ///   try connection.execute("VACUUM")
+  /// }
+  /// ```
+  ///
+  /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
+  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   ends; any other pragma it changes must be restored before it returns.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError``. Statements that finished before the
+  ///   failure stay committed.
+  public func writeWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
   }
 
   /// Registers an observer of the transactions this driver commits.

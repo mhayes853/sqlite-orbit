@@ -91,6 +91,28 @@ A file path resolves to an absolute path, so the same database is the same `Orbi
 however it was spelled. String literals convert, so `try SQLiteQueue(path: ":memory:")` still reads
 the way it always did.
 
+A little work cannot happen inside a transaction: SQLite ignores `PRAGMA foreign_keys` in one, and
+refuses to `VACUUM` in one at all. `readWithoutTransaction` and `writeWithoutTransaction` lend a
+connection whose statements each commit on their own, and whose `transaction` groups the ones that
+must commit together:
+
+```swift
+try await database.writeWithoutTransaction { connection in
+  connection.isForeignKeysEnabled = false
+  try connection.transaction { transaction in
+    try transaction.execute(Reminder.delete())
+  }
+}
+```
+
+Setting `isForeignKeysEnabled` takes effect before the connection's next statement or
+`transaction`, which is also where a failure to apply it is thrown. It and the `busyTimeout` are put
+back to their configured values when the access ends, even when it throws. Any other pragma stays
+changed on the connection, so restore it before returning. Outside `transaction`, statements that
+begin or end a transaction or a savepoint are refused, so the connection always knows what has
+committed. Observers see each statement as a commit of its own, and an `OrbitDatabase` announces
+what committed once the access ends, even when it throws.
+
 ## Using your own SQLite build
 
 The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
@@ -152,8 +174,8 @@ the traits exclusive in practice:
 )
 ```
 
-The experimental `Turso` trait drives Turso's local Rust engine through its SQLite-compatible C
-API and vends `SQLiteLibrary.turso`:
+The experimental `Turso` trait downloads Turso's local Rust engine for Linux x86-64, drives it
+through its SQLite-compatible C API, and vends `SQLiteLibrary.turso`:
 
 ```swift
 .package(
@@ -162,6 +184,9 @@ API and vends `SQLiteLibrary.turso`:
   traits: ["Turso"]
 )
 ```
+
+The package links a release-hosted SwiftPM artifact bundle built from Turso `v0.8.0-pre.11`.
+`Scripts/build-turso-artifactbundle.sh` reproduces the bundle from an upstream Turso checkout.
 
 The trait also vends `TursoPool`, which enables Turso's MVCC journal and runs reads and writes on
 separate connection pools. Ordinary writes use `BEGIN CONCURRENT`, while an explicit exclusive
@@ -183,14 +208,9 @@ try await driver.exclusiveWrite { transaction in
 Concurrent write conflicts are rolled back and surfaced as `SQLiteError`; a transaction body is
 never replayed implicitly. `readBlocking`, `writeBlocking`, and `exclusiveWriteBlocking` use the
 same connection pools and admission order as their asynchronous counterparts. `TursoPool`
-currently implements transaction access only; transaction and value observation remain on the
-ordinary queue and pool drivers.
-
-For local development, build Turso's `turso_sqlite3` crate and put `libturso_sqlite3.a` on the
-linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
-SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
-module and the bundle both expose the module as `TursoSQLite3`, so publishing the bundle does not
-change SQLiteOrbit's Swift source.
+also supports access outside a transaction; those writes are exclusive because they may contain
+immediate transactions or schema-oriented statements. Transaction and value observation remain
+on the ordinary queue and pool drivers.
 
 Turso's compatibility surface is still smaller than SQLite's. SQLiteOrbit handles that boundary
 explicitly:
@@ -205,10 +225,16 @@ explicitly:
 - Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
   cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
   there is no safe client-side substitute for native early finalization.
+- Turso enforces foreign keys statement by statement but has no `PRAGMA foreign_key_check`, so
+  `foreignKeyViolations()` throws `SQLiteFeatureUnavailableError` rather than report no
+  violations. A migration the migrator would check before it commits, which is every migration
+  by default, fails the same way before it runs; register migrations with
+  `foreignKeyChecks: .immediate`, or set `defersForeignKeyChecks` to `false` first.
 
 The unavailable operations are `nil` in `SQLiteLibrary.turso`, while its `fileSharing` value is
-`.singleProcess`. As Turso fills in its compatibility API, each operation can be enabled directly
-without engine-specific branches throughout the driver.
+`.singleProcess` and its `isForeignKeyCheckAvailable` is `false`. As Turso fills in its
+compatibility API, each operation can be enabled directly without engine-specific branches
+throughout the driver.
 
 Because each member is an ordinary closure, a single entry point can be wrapped without disturbing
 the rest — counting statement preparations, or injecting `SQLITE_BUSY` to test how code behaves
@@ -432,6 +458,142 @@ the linked one does.
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their absolute paths; a database private to its connection is not the same
 database as any other, so each one receives a unique identifier.
+
+## Migrations
+
+`OrbitDatabaseMigrator` brings a database's schema up to date, one registered migration at a time.
+Register every migration the application has shipped, oldest first, and migrate when the database
+opens:
+
+```swift
+var migrator = OrbitDatabaseMigrator()
+migrator.registerMigration("Create reminders") { transaction in
+  try transaction.execute(
+    "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+  )
+}
+migrator.registerMigration("Add completion") { transaction in
+  try transaction.execute(
+    "ALTER TABLE reminders ADD COLUMN isCompleted INTEGER NOT NULL DEFAULT 0"
+  )
+}
+
+let database = try OrbitDatabase(path: databasePath)
+try await migrator.migrate(database)
+```
+
+Each pending migration runs in a write transaction of its own, which also records its identifier,
+so a run that stops part way — on an error, or because its task was cancelled — resumes where it
+stopped, and a migration that throws is rolled back with the error rethrown as it was. Whether
+anything is pending is read before the write lock is taken: launching with a database that is
+already up to date locks nothing and announces nothing to other processes. A migration that has
+shipped must never change afterwards; register a new one instead. `migrateBlocking` does the same
+from synchronous code.
+
+`upTo:` stops after a given migration, which is how a test checks one migration against the data
+the migrations before it left behind:
+
+```swift
+try await migrator.migrate(database, upTo: "Create reminders")
+try await database.write { transaction in
+  try transaction.execute(#sql("INSERT INTO reminders (title) VALUES ('Old')", as: Void.self))
+}
+try await migrator.migrate(database, upTo: "Add completion")
+```
+
+A target that is not registered, or one that a later migration has already gone past, throws
+`OrbitDatabaseMigrationTargetError` before anything is written.
+
+### Foreign keys
+
+A migration runs with foreign keys off by default, and the whole database is checked for violations
+just before the migration commits. That is what makes SQLite's procedure for the schema changes
+`ALTER TABLE` cannot make safe to follow — create the new table, copy the rows across, drop the old
+one, rename the new one — since dropping a table other tables refer to with foreign keys on would
+delete, or cascade to, every row that refers to it. A migration that leaves violations is rolled
+back with an `OrbitDatabaseForeignKeyViolationError` listing them, and the migrations before it
+stay applied.
+
+Register a migration with `foreignKeyChecks: .immediate` to keep foreign keys enforced statement by
+statement instead. The check reads every table with a foreign key, which on a large database takes
+time. Setting `defersForeignKeyChecks` to `false` skips it for the deferred migrations registered
+after that, which still run with foreign keys off, trading the guarantee for that time; the ones
+registered earlier keep their check. A connection without foreign keys on has nothing to defer or
+check. A rebuild outside the migrator runs the same check itself: `foreignKeyViolations()` is
+available on every transaction and connection, and returns each `OrbitDatabaseForeignKeyViolation`.
+Turso cannot run the check, so there a migration that would be checked throws
+`SQLiteFeatureUnavailableError` before it runs; `.immediate` migrations, which Turso enforces as
+they go, and unchecked ones apply as usual.
+
+### The table of applied migrations
+
+Applied migrations are recorded in a table named `orbit_migrations`, created by the first migration
+to run. It has the layout GRDB gives its own table, so a database GRDB's `DatabaseMigrator` has been
+migrating can continue its history under the same identifiers. `.grdb` is a migrator that records
+it in GRDB's own `grdb_migrations` table:
+
+```swift
+var migrator = OrbitDatabaseMigrator.grdb
+```
+
+The inspection methods read that table from any read or write transaction, or from a connection
+lent outside one, and take it unlabeled as GRDB's do: `appliedIdentifiers(_:)`,
+`appliedMigrations(_:)`, `completedMigrations(_:)`, `hasCompletedMigrations(_:)`, and
+`hasBeenSuperseded(_:)`. A database no migrator has run on has applied nothing, and reading it
+creates no table. `migrations` lists the registered identifiers, and GRDB's
+`disablingDeferredForeignKeyChecks()` returns a copy with `defersForeignKeyChecks` off.
+
+### Several processes
+
+Processes that share a database may all migrate it as they launch. Each migration's transaction
+checks again, under the write lock, whether another process applied it in the meantime, so every
+migration runs once. It waits for the lock as long as the connection's busy timeout allows, and
+fails with `SQLITE_BUSY` once that runs out. To wait longer, migrate on a connection whose timeout
+you raise, which is put back when the access ends:
+
+```swift
+try await database.writeWithoutTransaction { connection in
+  connection.busyTimeout = .limit(.seconds(30))
+  try migrator.migrate(connection)
+}
+```
+
+A migration applied by a newer build of the application is tolerated: an older build migrates the
+ones it knows and leaves the rest alone. `hasBeenSuperseded(_:)` tells the older build that it is
+running against a schema it does not fully know:
+
+```swift
+if try await database.read({ try migrator.hasBeenSuperseded($0) }) {
+  showUpdateRequiredAlert()
+}
+```
+
+The migrations a run commits are announced together once it ends, so observations in other
+processes fetch again after the schema they read has changed.
+
+### Erasing during development
+
+While migrations are still being designed, editing one that has already run is quicker than
+registering another. With `eraseDatabaseOnSchemaChange` on, a migrator that finds a migration it
+applied removed or renamed, or the schema no longer what its migrations produce, erases the database
+and runs every migration from the first. That destroys data, so keep it out of the application you
+ship:
+
+```swift
+var migrator = OrbitDatabaseMigrator()
+#if DEBUG
+migrator.eraseDatabaseOnSchemaChange = true
+#endif
+```
+
+The migrator finds a change by applying the migrations to a temporary database, opened with the
+same configuration, and comparing its schema with the database's; `hasSchemaChanges(_:)` asks the
+same question without erasing anything. A database whose migrations have not changed is still
+neither locked nor announced. The erase drops everything in one transaction and resets
+`user_version` to 0, and observers and other processes see it as a change to the whole database.
+With the flag on, an applied migration the migrator does not register counts as removed, so every
+process that opens the database must register the same migrations: an older build erases what a
+newer one migrated.
 
 ## Database regions
 
