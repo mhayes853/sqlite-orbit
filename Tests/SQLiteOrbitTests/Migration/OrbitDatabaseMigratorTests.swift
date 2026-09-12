@@ -1,4 +1,5 @@
 #if BuiltInSQLite
+  import Dispatch
   import Foundation
   import StructuredQueriesSQLite
   import Testing
@@ -782,17 +783,30 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
       let holder = try SQLiteQueue(path: path)
+      let beginCount = Lock(0)
+      let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
+      configuration.library = base
+      configuration.library.statements.execution.step = { statement in
+        if let sql = base.statements.inspection.sql(statement),
+          String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
+        {
+          beginCount.withLock { $0 += 1 }
+        }
+        return base.statements.execution.step(statement)
+      }
       configuration.busyTimeout = .limit(.milliseconds(100))
       let driver = try SQLiteQueue(path: path, configuration: configuration)
       let migrator = loggingMigrator(["one"])
 
       let isHeld = Lock(false)
+      let releaseHolder = DispatchSemaphore(value: 0)
+      defer { releaseHolder.signal() }
       let holding = Task {
         try await holder.write { transaction in
           try transaction.execute("CREATE TABLE held (id INTEGER)")
           isHeld.withLock { $0 = true }
-          Thread.sleep(forTimeInterval: 1)
+          releaseHolder.blockingWait()
         }
       }
       try await waitUntil { isHeld.withLock { $0 } }
@@ -805,10 +819,17 @@
 
       let clock = ContinuousClock()
       let started = clock.now
-      try await driver.writeWithoutTransaction { connection in
-        connection.busyTimeout = .limit(.seconds(30))
-        try migrator.migrate(connection)
+      let previousBeginCount = beginCount.withLock { $0 }
+      let migration = Task {
+        try await driver.writeWithoutTransaction { connection in
+          connection.busyTimeout = .limit(.seconds(30))
+          try migrator.migrate(connection)
+        }
       }
+      try await waitUntil { beginCount.withLock { $0 } > previousBeginCount }
+      try await Task.sleep(for: .milliseconds(150))
+      releaseHolder.signal()
+      try await migration.value
       try await holding.value
 
       #expect(clock.now - started > .milliseconds(100))
