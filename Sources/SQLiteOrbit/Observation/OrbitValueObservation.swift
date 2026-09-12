@@ -152,13 +152,13 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   private init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable,
-    refetchPolicy: any OrbitValueObservationRefetchPolicy = .immediate,
+    refetchController: any OrbitValueObservationRefetchController = .immediate,
     makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
   ) {
     self.definition = OrbitValueObservationDefinition(
       regionSource: regionSource,
       fetch: fetch,
-      refetchPolicy: refetchPolicy,
+      refetchController: refetchController,
       makeReducer: makeReducer
     )
   }
@@ -458,7 +458,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     return OrbitValueObservation<Output>(
       regionSource: definition.regionSource,
       fetch: definition.fetch,
-      refetchPolicy: definition.refetchPolicy,
+      refetchController: definition.refetchController,
       makeReducer: { derive(definition.makeReducer()) }
     )
   }
@@ -584,25 +584,25 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     filterTransactions { commit, _ in predicate(commit) }
   }
 
-  /// Returns an observation that uses `policy` for fetches prompted after a commit or observable
-  /// dependency change.
+  /// Returns an observation that uses `controller` for fetches prompted after a commit or
+  /// observable dependency change.
   ///
   /// The initial fetch and the transaction-local fetch used by serial SQLite drivers are unchanged.
-  /// Turso commits are handled after commit, so this policy controls their refetch behavior.
+  /// Turso commits are handled after commit, so this controller controls their refetch behavior.
   ///
   /// ```swift
   /// let observation = OrbitValueObservation
   ///   .tracking { try $0.fetchAll(Reminder.all) }
   ///   .refetching(.coalesced)
   /// ```
-  public func refetching<Policy: OrbitValueObservationRefetchPolicy>(
-    _ policy: Policy
+  public func refetching<Controller: OrbitValueObservationRefetchController>(
+    _ controller: Controller
   ) -> Self {
     let definition = self.definition
     return Self(
       regionSource: definition.regionSource,
       fetch: definition.fetch,
-      refetchPolicy: policy,
+      refetchController: controller,
       makeReducer: definition.makeReducer
     )
   }
@@ -929,7 +929,7 @@ extension OrbitValueObservation where Value: Equatable {
 private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
   let regionSource: OrbitValueObservationRegionSource
   let fetch: OrbitValueObservationFetch
-  let refetchPolicy: any OrbitValueObservationRefetchPolicy
+  let refetchController: any OrbitValueObservationRefetchController
   let makeReducer: @Sendable () -> OrbitValueObservationReducer<Value>
 
   private struct WeakRuntime: Sendable {
@@ -945,12 +945,12 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
   init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
-    refetchPolicy: any OrbitValueObservationRefetchPolicy,
+    refetchController: any OrbitValueObservationRefetchController,
     makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
   ) {
     self.regionSource = regionSource
     self.fetch = fetch
-    self.refetchPolicy = refetchPolicy
+    self.refetchController = refetchController
     self.makeReducer = makeReducer
   }
 
@@ -964,7 +964,7 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
       database: database,
       regionSource: regionSource,
       fetch: fetch,
-      refetchPolicy: refetchPolicy,
+      refetchController: refetchController,
       reducer: makeReducer()
     )
     try candidate.install(on: database)
@@ -1029,7 +1029,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
     var reads = OrbitValueObservationReadCoordinator()
     var refetches = OrbitValueObservationRefetchCoordinator()
-    var isRefetchPolicyRunning = false
+    var isRefetching = false
     var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
     var affectedRegion: OrbitDatabaseRegion?
     var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
@@ -1044,7 +1044,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private let fetch: OrbitValueObservationRuntimeFetch
   private let read: @Sendable () async -> Result<OrbitValueObservationFetchOutput, any Error>
   private let readBlocking: @Sendable () -> Result<OrbitValueObservationFetchOutput, any Error>
-  private let refetchPolicy: any OrbitValueObservationRefetchPolicy
+  private let refetchController: any OrbitValueObservationRefetchController
   private let reducer: OrbitValueObservationReducer<Value>
   private var events: OrbitValueObservationEvents { reducer.events }
   private let state: Lock<State>
@@ -1055,12 +1055,12 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     database: Database,
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
-    refetchPolicy: any OrbitValueObservationRefetchPolicy,
+    refetchController: any OrbitValueObservationRefetchController,
     reducer: OrbitValueObservationReducer<Value>
   ) {
     let externalTracking = ExternalTracking()
     self.reducer = reducer
-    self.refetchPolicy = refetchPolicy
+    self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
     let resolveDatabaseRegionAndFetch:
@@ -1334,7 +1334,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   ) {
     let action = state.withLock { state -> (
       initialRequest: OrbitValueObservationReadRequest?,
-      startPolicy: Bool
+      startController: Bool
     ) in
       guard !state.isStopped else { return (nil, false) }
 
@@ -1352,15 +1352,15 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       if let activeWriterBarrier {
         state.activeWriterBarriers.append(activeWriterBarrier)
       }
-      guard !state.isRefetchPolicyRunning else { return (nil, false) }
-      state.isRefetchPolicyRunning = true
+      guard !state.isRefetching else { return (nil, false) }
+      state.isRefetching = true
       return (nil, true)
     }
     start(action.initialRequest)
-    if action.startPolicy { startRefetchPolicy() }
+    if action.startController { startRefetching() }
   }
 
-  private func startRefetchPolicy() {
+  private func startRefetching() {
     let operation = OrbitValueObservationRefetchOperation(
       snapshot: { [weak self] in
         self?.refetchSnapshot()
@@ -1380,10 +1380,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         return await self.performRefetch(publishing: behavior)
       }
     )
-    Task { [weak self, refetchPolicy] in
+    Task { [weak self, refetchController] in
       let context = OrbitValueObservationRefetchContext(operation: operation)
-      await refetchPolicy.refetch(using: consume context)
-      self?.refetchPolicyDidFinish(conclusively: operation.didConclude)
+      await refetchController.refetch(using: consume context)
+      self?.finishRefetching(conclusively: operation.didConclude)
     }
   }
 
@@ -1456,18 +1456,18 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     return completed.result
   }
 
-  private func refetchPolicyDidFinish(conclusively: Bool) {
+  private func finishRefetching(conclusively: Bool) {
     let shouldRestart = state.withLock { state in
-      state.isRefetchPolicyRunning = false
+      state.isRefetching = false
       guard
         !state.isStopped,
         conclusively,
         state.refetches.hasPendingFetch
       else { return false }
-      state.isRefetchPolicyRunning = true
+      state.isRefetching = true
       return true
     }
-    if shouldRestart { startRefetchPolicy() }
+    if shouldRestart { startRefetching() }
   }
 
   private func start(_ request: OrbitValueObservationReadRequest?) {

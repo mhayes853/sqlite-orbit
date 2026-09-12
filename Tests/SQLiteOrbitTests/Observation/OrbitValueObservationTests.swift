@@ -779,7 +779,7 @@
     }
 
     @Test
-    func immediateRefetchPolicyRetriesAReadSupersededByAnotherCommit() async throws {
+    func immediateRefetchControllerRetriesAReadSupersededByAnotherCommit() async throws {
       let queue = try await itemsDatabase()
       let driver = PostCommitObservableDatabase(queue)
       let value = Lock(0)
@@ -817,7 +817,7 @@
     }
 
     @Test
-    func onceRefetchPolicyPublishesItsSingleFetchWhenSuperseded() async throws {
+    func onceRefetchControllerPublishesItsSingleFetchWhenSuperseded() async throws {
       let queue = try await itemsDatabase()
       let driver = PostCommitObservableDatabase(queue)
       let value = Lock(0)
@@ -857,7 +857,7 @@
     }
 
     @Test
-    func coalescedRefetchPolicyWaitsOnlyForAnActiveWriterCohort() async throws {
+    func coalescedRefetchControllerWaitsOnlyForAnActiveWriterCohort() async throws {
       let queue = try await itemsDatabase()
       let driver = PostCommitObservableDatabase(queue)
       let fetchCount = Lock(0)
@@ -890,14 +890,14 @@
     }
 
     @Test
-    func customRefetchPolicyReceivesRegionsReasonsAndTrackedRegion() async throws {
+    func customRefetchControllerReceivesRegionsReasonsAndTrackedRegion() async throws {
       let queue = try await itemsDatabase()
       let driver = PostCommitObservableDatabase(queue)
-      let policy = RecordingRefetchPolicy()
+      let controller = RecordingRefetchController()
       let trackedRegion = OrbitDatabaseRegion(table: "items")
       let observation = OrbitValueObservation<Int>
         .tracking(region: trackedRegion) { _ in 0 }
-        .refetching(policy)
+        .refetching(controller)
       let recorder = ObservationRecorder<Int>()
       let subscription = try observation.subscribe(
         to: driver,
@@ -907,8 +907,8 @@
       try await recorder.waitForChangeCount(1)
 
       driver.announceCommit(region: trackedRegion, origin: .external)
-      try await policy.waitForSnapshot()
-      let snapshot = try #require(policy.snapshots.first)
+      try await controller.waitForSnapshot()
+      let snapshot = try #require(controller.snapshots.first)
 
       #expect(snapshot.affectedRegion == trackedRegion)
       #expect(snapshot.trackedRegion == trackedRegion)
@@ -1574,7 +1574,7 @@
     }
   }
 
-  private final class RecordingRefetchPolicy: OrbitValueObservationRefetchPolicy, Sendable {
+  private final class RecordingRefetchController: OrbitValueObservationRefetchController, Sendable {
     private let recordedSnapshots = Lock<[OrbitValueObservationRefetchSnapshot]>([])
 
     var snapshots: [OrbitValueObservationRefetchSnapshot] {

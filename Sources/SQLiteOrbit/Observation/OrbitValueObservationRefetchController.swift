@@ -1,8 +1,8 @@
 /// A strategy that decides when an invalidated value observation fetches and publishes again.
 ///
-/// A policy invocation must keep fetching after ``OrbitValueObservationFetchResult/superseded``
-/// until it receives a conclusive result. The built-in ``immediate`` policy is the default.
-public protocol OrbitValueObservationRefetchPolicy: Sendable {
+/// A controller must keep fetching after ``OrbitValueObservationFetchResult/superseded`` until it
+/// receives a conclusive result. The built-in ``immediate`` controller is the default.
+public protocol OrbitValueObservationRefetchController: Sendable {
   /// Handles one or more invalidations accumulated by a running observation.
   func refetch(using context: consuming OrbitValueObservationRefetchContext) async
 }
@@ -19,7 +19,7 @@ public enum OrbitValueObservationRefetchReason: Hashable, Sendable {
   case externalProcessChange
 }
 
-/// Runtime state available to a refetch policy.
+/// Runtime state available to a refetch controller.
 public struct OrbitValueObservationRefetchSnapshot: Sendable {
   /// Whether at least one writer in the commit's finite concurrent cohort is still active.
   public let hasActiveWriters: Bool
@@ -43,7 +43,7 @@ public enum OrbitValueObservationPublicationBehavior: Hashable, Sendable {
   case force
 }
 
-/// The outcome of a refetch policy's fetch attempt.
+/// The outcome of a refetch controller's fetch attempt.
 public enum OrbitValueObservationFetchResult: Hashable, Sendable {
   /// The result was accepted, whether or not downstream operators emitted its value.
   case published
@@ -51,14 +51,15 @@ public enum OrbitValueObservationFetchResult: Hashable, Sendable {
   /// A newer invalidation arrived before the result could be accepted.
   case superseded
 
-  /// The observation stopped or no longer had work for this policy invocation.
+  /// The observation stopped or no longer had work for this controller invocation.
   case cancelled
 }
 
 /// Scoped access to an invalidated observation's state and fetch operation.
 ///
-/// The context cannot be copied or escape the policy invocation. Its primitive operations support
-/// policies that wait, inspect newly accumulated invalidations, and retry their own fetches.
+/// The context cannot be copied or escape the controller invocation. Its primitive operations
+/// support controllers that wait, inspect newly accumulated invalidations, and retry their own
+/// fetches.
 public struct OrbitValueObservationRefetchContext: ~Copyable, ~Escapable, Sendable {
   private let operation: OrbitValueObservationRefetchOperation
 
@@ -75,7 +76,7 @@ public struct OrbitValueObservationRefetchContext: ~Copyable, ~Escapable, Sendab
   /// Waits for the finite cohort of writers currently represented by ``snapshot()``.
   ///
   /// Writers that begin later do not extend this wait. If their commits matter, a subsequent
-  /// conditional fetch is superseded and the policy can decide whether to wait again.
+  /// conditional fetch is superseded and the controller can decide whether to wait again.
   public borrowing func waitForActiveWriters() async {
     await operation.waitForActiveWriters()
   }
@@ -89,9 +90,9 @@ public struct OrbitValueObservationRefetchContext: ~Copyable, ~Escapable, Sendab
   }
 }
 
-/// The default policy, which retries immediately until it publishes a current value.
-public struct OrbitImmediateValueObservationRefetchPolicy:
-  OrbitValueObservationRefetchPolicy
+/// The default controller, which retries immediately until it publishes a current value.
+public struct OrbitImmediateValueObservationRefetchController:
+  OrbitValueObservationRefetchController
 {
   fileprivate init() {}
 
@@ -101,9 +102,9 @@ public struct OrbitImmediateValueObservationRefetchPolicy:
   }
 }
 
-/// A policy that waits only for writers active alongside the commit, then publishes a current value.
-public struct OrbitCoalescedValueObservationRefetchPolicy:
-  OrbitValueObservationRefetchPolicy
+/// A controller that waits only for writers active alongside the commit before fetching.
+public struct OrbitCoalescedValueObservationRefetchController:
+  OrbitValueObservationRefetchController
 {
   fileprivate init() {}
 
@@ -118,11 +119,11 @@ public struct OrbitCoalescedValueObservationRefetchPolicy:
   }
 }
 
-/// A policy that performs one fetch and publishes it even if a newer invalidation made it stale.
+/// A controller that performs one fetch and publishes it even if a newer invalidation made it stale.
 ///
 /// If an observable dependency invalidates its one-shot registration during that fetch, the
 /// runtime schedules separate work to restore observation of that dependency.
-public struct OrbitOnceValueObservationRefetchPolicy: OrbitValueObservationRefetchPolicy {
+public struct OrbitOnceValueObservationRefetchController: OrbitValueObservationRefetchController {
   fileprivate init() {}
 
   public func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
@@ -131,20 +132,20 @@ public struct OrbitOnceValueObservationRefetchPolicy: OrbitValueObservationRefet
   }
 }
 
-extension OrbitValueObservationRefetchPolicy
-where Self == OrbitImmediateValueObservationRefetchPolicy {
+extension OrbitValueObservationRefetchController
+where Self == OrbitImmediateValueObservationRefetchController {
   /// Refetches immediately and retries until the fetched value is current.
   public static var immediate: Self { Self() }
 }
 
-extension OrbitValueObservationRefetchPolicy
-where Self == OrbitCoalescedValueObservationRefetchPolicy {
+extension OrbitValueObservationRefetchController
+where Self == OrbitCoalescedValueObservationRefetchController {
   /// Waits for an active writer cohort before refetching, without delaying isolated commits.
   public static var coalesced: Self { Self() }
 }
 
-extension OrbitValueObservationRefetchPolicy
-where Self == OrbitOnceValueObservationRefetchPolicy {
+extension OrbitValueObservationRefetchController
+where Self == OrbitOnceValueObservationRefetchController {
   /// Refetches once and permits publishing a stale value.
   public static var once: Self { Self() }
 }

@@ -536,8 +536,8 @@ Commits from the observed driver, another database handle, or another process ca
 observations avoid refetching after unrelated writes. A custom observable database that reports a
 commit without a region is handled conservatively.
 
-The default refetch policy starts immediately and retries when a newer invalidation supersedes its
-read. Turso applications with expensive fetches can wait for only the writers that were active
+The default refetch controller starts immediately and retries when a newer invalidation supersedes
+its read. Turso applications with expensive fetches can wait for only the writers that were active
 alongside the triggering commit, then fetch their combined result:
 
 ```swift
@@ -550,10 +550,10 @@ An isolated commit is not delayed, and writers that begin later do not extend th
 Use `.once` to perform one fetch for the accumulated database invalidations and publish it even if
 it became stale. An observable dependency invalidated during that fetch still schedules separate
 work to restore its one-shot registration. Custom
-`OrbitValueObservationRefetchPolicy` implementations receive a scoped, noncopyable context whose
+`OrbitValueObservationRefetchController` implementations receive a scoped, noncopyable context whose
 snapshot exposes active-writer state, affected and tracked regions, and accumulated refetch
-reasons. They build on `waitForActiveWriters()` and `fetch(publishing:)`; a policy owns its retry
-loop and must finish with either a published or cancelled result.
+reasons. They build on `waitForActiveWriters()` and `fetch(publishing:)`; a controller owns its
+retry loop and must finish with either a published or cancelled result.
 
 Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
 source; a committed transaction reports whether it came from this process or another one:
