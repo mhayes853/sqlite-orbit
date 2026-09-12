@@ -203,7 +203,7 @@ struct SQLiteHandle: ~Copyable {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observers?.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
       try endTransaction(with: "COMMIT")
-      observers?.didCommit(origin: .local)
+      observers?.didCommit(origin: .local, region: observations.changedRegion)
       return value
     } catch {
       rollbackIgnoringFailure()

@@ -24,11 +24,21 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   /// Where the transaction was performed.
   public let origin: OrbitDatabaseTransactionOrigin
 
+  /// The database region changed by the transaction.
+  public let region: OrbitDatabaseRegion
+
   /// Creates a commit.
   ///
-  /// - Parameter origin: Where the transaction was performed.
-  public init(origin: OrbitDatabaseTransactionOrigin) {
+  /// - Parameters:
+  ///   - origin: Where the transaction was performed.
+  ///   - region: The database region changed by the transaction. Defaults to the full database
+  ///     for callers that cannot determine a more precise region.
+  public init(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion = .fullDatabase
+  ) {
     self.origin = origin
+    self.region = region
   }
 }
 
@@ -171,8 +181,11 @@ final class OrbitDatabaseTransactionObservers: Sendable {
     }
   }
 
-  func didCommit(origin: OrbitDatabaseTransactionOrigin) {
-    let commit = OrbitDatabaseCommit(origin: origin)
+  func didCommit(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion
+  ) {
+    let commit = OrbitDatabaseCommit(origin: origin, region: region)
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidCommit(commit)
     }
@@ -193,6 +206,7 @@ final class OrbitDatabaseTransactionObservers: Sendable {
 final class OrbitDatabaseTransactionObservationContext {
   private let databaseObservers: OrbitDatabaseTransactionObservers?
   private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
+  private(set) var changedRegion = OrbitDatabaseRegion.empty
 
   init(databaseObservers: OrbitDatabaseTransactionObservers?) {
     self.databaseObservers = databaseObservers
@@ -217,6 +231,7 @@ final class OrbitDatabaseTransactionObservationContext {
 
   func didChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
+    changedRegion.formUnion(region)
     databaseObservers?.didChange(in: region)
     for observer in scopedObservers {
       observer.databaseDidChange(in: region)

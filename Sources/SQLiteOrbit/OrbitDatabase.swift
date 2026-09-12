@@ -193,7 +193,9 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
       writerIdentifier: ObjectIdentifier(writer)
     ) { region in
       transactionObserver.databaseDidChange(in: region)
-      transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .local))
+      transactionObserver.databaseDidCommit(
+        OrbitDatabaseCommit(origin: .local, region: region)
+      )
     }
     guard let transport else {
       return OrbitSubscription {
@@ -206,7 +208,9 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
       let external = try transport.subscribe(to: id) { message in
         guard case .transactionDidCommit(let commit) = message else { return }
         transactionObserver.databaseDidChange(in: commit.region)
-        transactionObserver.databaseDidCommit(OrbitDatabaseCommit(origin: .external))
+        transactionObserver.databaseDidCommit(
+          OrbitDatabaseCommit(origin: .external, region: commit.region)
+        )
       }
       return OrbitSubscription {
         local.cancel()

@@ -27,6 +27,14 @@
           .didCommit(.local)
         ]
       )
+      #expect(
+        observer.commits == [
+          OrbitDatabaseCommit(
+            origin: .local,
+            region: OrbitDatabaseRegion(table: "items")
+          )
+        ]
+      )
       _ = subscription
     }
 
@@ -455,8 +463,10 @@
 
   private final class RecordingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
     private let recordedEvents = Lock([RecordedTransactionEvent]())
+    private let recordedCommits = Lock([OrbitDatabaseCommit]())
 
     var events: [RecordedTransactionEvent] { recordedEvents.withLock { $0 } }
+    var commits: [OrbitDatabaseCommit] { recordedCommits.withLock { $0 } }
 
     func databaseDidChange(in region: OrbitDatabaseRegion) {
       recordedEvents.withLock { $0.append(.didChange(region)) }
@@ -471,6 +481,7 @@
 
     func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
       recordedEvents.withLock { $0.append(.didCommit(commit.origin)) }
+      recordedCommits.withLock { $0.append(commit) }
     }
 
     func databaseDidRollback() {
