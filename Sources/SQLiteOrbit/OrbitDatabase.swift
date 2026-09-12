@@ -266,7 +266,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
   }
 }
 
-private final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
+final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
   private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
 
   var region: OrbitDatabaseRegion { recordedRegion.withLock { $0 } }
@@ -277,7 +277,7 @@ private final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserve
 }
 
 extension SQLiteWriteTransaction {
-  fileprivate borrowing func recordingDatabaseRegion<Result: Sendable>(
+  borrowing func recordingDatabaseRegion<Result: Sendable>(
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) rethrows -> (Result, OrbitDatabaseRegion) {
     let recorder = OrbitDatabaseRegionRecorder()

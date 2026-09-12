@@ -27,6 +27,8 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   /// The database region changed by the transaction.
   public let region: OrbitDatabaseRegion
 
+  let activeWriterBarrier: SQLitePoolWriterBarrier?
+
   /// Creates a commit.
   ///
   /// - Parameters:
@@ -39,6 +41,26 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   ) {
     self.origin = origin
     self.region = region
+    self.activeWriterBarrier = nil
+  }
+
+  init(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion,
+    activeWriterBarrier: SQLitePoolWriterBarrier?
+  ) {
+    self.origin = origin
+    self.region = region
+    self.activeWriterBarrier = activeWriterBarrier
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.origin == rhs.origin && lhs.region == rhs.region
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(origin)
+    hasher.combine(region)
   }
 }
 
@@ -49,8 +71,9 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// for each changed region. After its access closure returns it calls
 /// ``databaseWillCommit(_:)``, while those changes are still visible through the transaction, and
 /// then exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
-/// reported by another handle in this process, or by another process, reports its aggregate region
-/// followed immediately by `databaseDidCommit` because it is observed after the commit succeeds.
+/// reported by another handle in this process, another process, or a driver that supports
+/// overlapping write transactions reports its aggregate region followed immediately by
+/// `databaseDidCommit` because it is observed after the commit succeeds.
 ///
 /// Prefer ``OrbitValueObservation`` for tracking a query; conform to this protocol when you need
 /// the transaction lifecycle itself.
@@ -183,9 +206,14 @@ final class OrbitDatabaseTransactionObservers: Sendable {
 
   func didCommit(
     origin: OrbitDatabaseTransactionOrigin,
-    region: OrbitDatabaseRegion
+    region: OrbitDatabaseRegion,
+    activeWriterBarrier: SQLitePoolWriterBarrier? = nil
   ) {
-    let commit = OrbitDatabaseCommit(origin: origin, region: region)
+    let commit = OrbitDatabaseCommit(
+      origin: origin,
+      region: region,
+      activeWriterBarrier: activeWriterBarrier
+    )
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidCommit(commit)
     }

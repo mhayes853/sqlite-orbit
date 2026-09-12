@@ -1,6 +1,46 @@
 import Dispatch
 import Foundation
 
+/// A finite snapshot of writers that were still active when another writer finished.
+final class SQLitePoolWriterBarrier: Sendable {
+  private struct State {
+    var remainingWriters: Int
+    var continuations: [CheckedContinuation<Void, Never>] = []
+  }
+
+  private let state: Lock<State>
+
+  init(writerCount: Int) {
+    state = Lock(State(remainingWriters: writerCount))
+  }
+
+  var hasActiveWriters: Bool {
+    state.withLock { $0.remainingWriters > 0 }
+  }
+
+  func wait() async {
+    await withCheckedContinuation { continuation in
+      let isFinished = state.withLock { state in
+        guard state.remainingWriters > 0 else { return true }
+        state.continuations.append(continuation)
+        return false
+      }
+      if isFinished { continuation.resume() }
+    }
+  }
+
+  func writerDidFinish() {
+    let continuations = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+      precondition(state.remainingWriters > 0)
+      state.remainingWriters -= 1
+      guard state.remainingWriters == 0 else { return [] }
+      defer { state.continuations.removeAll() }
+      return state.continuations
+    }
+    for continuation in continuations { continuation.resume() }
+  }
+}
+
 /// Lends reader and writer connections to asynchronous tasks and blocking threads from one queue.
 final class SQLitePoolScheduler: Sendable {
   private enum Kind: Equatable, Sendable {
@@ -10,6 +50,7 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private struct Lease: Sendable {
+    let id: Int
     let kind: Kind
     let connection: SQLiteConnection
     let blockingHolder: ObjectIdentifier?
@@ -23,6 +64,8 @@ final class SQLitePoolScheduler: Sendable {
     var waiting: [Waiter] = []
     var settled: [Int: Result<Lease, any Error>] = [:]
     var blockingHolders: Set<ObjectIdentifier> = []
+    var activeWriterIDs: Set<Int> = []
+    var writerBarriers: [Int: [SQLitePoolWriterBarrier]] = [:]
     var nextRequestID = 0
 
     mutating func claimRequestID() -> Int {
@@ -85,6 +128,20 @@ final class SQLitePoolScheduler: Sendable {
     return try await lease.connection.write(mode: mode, observers: observers, body)
   }
 
+  /// Runs a concurrent write and returns the finite cohort of other writers active at commit.
+  func writeTrackingConcurrentWriters<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> (Result, SQLitePoolWriterBarrier) {
+    let lease = try await acquire(.write)
+    do {
+      let result = try await lease.connection.write(mode: .concurrent, body)
+      return (result, release(lease, capturingActiveWriters: true)!)
+    } catch {
+      release(lease)
+      throw error
+    }
+  }
+
   func readBlocking<Result: Sendable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
@@ -102,6 +159,20 @@ final class SQLitePoolScheduler: Sendable {
     let lease = acquireBlocking(mode == .immediate ? .exclusiveWrite : .write)
     defer { release(lease) }
     return try lease.connection.writeBlocking(mode: mode, observers: observers, body)
+  }
+
+  /// Runs a blocking concurrent write and returns the same finite cohort as the async API.
+  func writeBlockingTrackingConcurrentWriters<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> (Result, SQLitePoolWriterBarrier) {
+    let lease = acquireBlocking(.write)
+    do {
+      let result = try lease.connection.writeBlocking(mode: .concurrent, body)
+      return (result, release(lease, capturingActiveWriters: true)!)
+    } catch {
+      release(lease)
+      throw error
+    }
   }
 
   // MARK: - Acquiring
@@ -163,8 +234,18 @@ final class SQLitePoolScheduler: Sendable {
 
   // MARK: - Releasing
 
-  private func release(_ lease: Lease) {
-    let wakeups = state.withLock { state -> [Wakeup] in
+  @discardableResult
+  private func release(
+    _ lease: Lease,
+    capturingActiveWriters: Bool = false
+  ) -> SQLitePoolWriterBarrier? {
+    let released = state.withLock { state -> (
+      wakeups: [Wakeup],
+      completedBarriers: [SQLitePoolWriterBarrier],
+      capturedBarrier: SQLitePoolWriterBarrier?
+    ) in
+      var completedBarriers: [SQLitePoolWriterBarrier] = []
+      var capturedBarrier: SQLitePoolWriterBarrier?
       switch lease.kind {
       case .read:
         state.idleReaders.append(lease.connection)
@@ -172,6 +253,15 @@ final class SQLitePoolScheduler: Sendable {
       case .write:
         state.idleWriters.append(lease.connection)
         state.activeOrdinaryAccesses -= 1
+        precondition(state.activeWriterIDs.remove(lease.id) != nil)
+        completedBarriers = state.writerBarriers.removeValue(forKey: lease.id) ?? []
+        if capturingActiveWriters {
+          let barrier = SQLitePoolWriterBarrier(writerCount: state.activeWriterIDs.count)
+          for writerID in state.activeWriterIDs {
+            state.writerBarriers[writerID, default: []].append(barrier)
+          }
+          capturedBarrier = barrier
+        }
       case .exclusiveWrite:
         state.idleWriters.append(lease.connection)
         state.isExclusiveWriteActive = false
@@ -179,9 +269,11 @@ final class SQLitePoolScheduler: Sendable {
       if let blockingHolder = lease.blockingHolder {
         state.blockingHolders.remove(blockingHolder)
       }
-      return Self.grant(&state)
+      return (Self.grant(&state), completedBarriers, capturedBarrier)
     }
-    wakeups.forEach { $0.deliver() }
+    for barrier in released.completedBarriers { barrier.writerDidFinish() }
+    for wakeup in released.wakeups { wakeup.deliver() }
+    return released.capturedBarrier
   }
 
   // MARK: - Granting
@@ -211,12 +303,16 @@ final class SQLitePoolScheduler: Sendable {
           ? state.idleReaders.removeLast()
           : state.idleWriters.removeLast()
         state.activeOrdinaryAccesses += 1
+        if waiter.kind == .write {
+          state.activeWriterIDs.insert(waiter.id)
+        }
         wakeups.append(
           settle(
             &state,
             waiter,
             with: .success(
               Lease(
+                id: waiter.id,
                 kind: waiter.kind,
                 connection: connection,
                 blockingHolder: waiter.blockingHolder
@@ -241,6 +337,7 @@ final class SQLitePoolScheduler: Sendable {
           waiter,
           with: .success(
             Lease(
+              id: waiter.id,
               kind: .exclusiveWrite,
               connection: connection,
               blockingHolder: waiter.blockingHolder
