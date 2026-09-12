@@ -83,6 +83,7 @@ public struct OrbitValueObservationRefetchContext: ~Copyable, ~Escapable, Sendab
 
   /// Fetches the observation and attempts to publish the result.
   @discardableResult
+  @_lifetime(self: copy self)
   public mutating func fetch(
     publishing behavior: OrbitValueObservationPublicationBehavior
   ) async -> OrbitValueObservationFetchResult {

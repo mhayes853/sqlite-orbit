@@ -297,12 +297,15 @@
 
     let database = TemporaryTursoDatabase("turso-observation-rollback")
     let driver = try TursoPool(path: database.path, writerCount: 1)
+    try await driver.exclusiveWrite { transaction in
+      try transaction.execute("CREATE TABLE discarded (id INTEGER)")
+    }
     let observer = TursoCommitRecorder()
     let subscription = try driver.subscribe(transactionObserver: observer)
 
     await #expect(throws: Abort.self) {
       try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE discarded (id INTEGER)")
+        try transaction.execute("INSERT INTO discarded VALUES (1)")
         throw Abort()
       }
     }
