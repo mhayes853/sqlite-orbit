@@ -24,11 +24,43 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   /// Where the transaction was performed.
   public let origin: OrbitDatabaseTransactionOrigin
 
+  /// The database region changed by the transaction.
+  public let region: OrbitDatabaseRegion
+
+  let activeWriterBarrier: SQLitePoolWriterBarrier?
+
   /// Creates a commit.
   ///
-  /// - Parameter origin: Where the transaction was performed.
-  public init(origin: OrbitDatabaseTransactionOrigin) {
+  /// - Parameters:
+  ///   - origin: Where the transaction was performed.
+  ///   - region: The database region changed by the transaction. Defaults to the full database
+  ///     for callers that cannot determine a more precise region.
+  public init(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion = .fullDatabase
+  ) {
     self.origin = origin
+    self.region = region
+    self.activeWriterBarrier = nil
+  }
+
+  init(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion,
+    activeWriterBarrier: SQLitePoolWriterBarrier?
+  ) {
+    self.origin = origin
+    self.region = region
+    self.activeWriterBarrier = activeWriterBarrier
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.origin == rhs.origin && lhs.region == rhs.region
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(origin)
+    hasher.combine(region)
   }
 }
 
@@ -39,8 +71,9 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
 /// for each changed region. After its access closure returns it calls
 /// ``databaseWillCommit(_:)``, while those changes are still visible through the transaction, and
 /// then exactly one of ``databaseDidCommit(_:)`` and ``databaseDidRollback()``. A transaction
-/// reported by another handle in this process, or by another process, reports its aggregate region
-/// followed immediately by `databaseDidCommit` because it is observed after the commit succeeds.
+/// reported by another handle in this process, another process, or a driver that supports
+/// overlapping write transactions reports its aggregate region followed immediately by
+/// `databaseDidCommit` because it is observed after the commit succeeds.
 ///
 /// A change made through the observed handle outside a transaction, such as in
 /// ``OrbitDatabaseWriter/writeWithoutTransaction(_:)``, where SQLite commits each statement on its
@@ -181,8 +214,16 @@ final class OrbitDatabaseTransactionObservers: Sendable {
     }
   }
 
-  func didCommit(origin: OrbitDatabaseTransactionOrigin) {
-    let commit = OrbitDatabaseCommit(origin: origin)
+  func didCommit(
+    origin: OrbitDatabaseTransactionOrigin,
+    region: OrbitDatabaseRegion,
+    activeWriterBarrier: SQLitePoolWriterBarrier? = nil
+  ) {
+    let commit = OrbitDatabaseCommit(
+      origin: origin,
+      region: region,
+      activeWriterBarrier: activeWriterBarrier
+    )
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidCommit(commit)
     }
@@ -208,10 +249,9 @@ final class OrbitDatabaseTransactionObservationContext {
   private let databaseObservers: OrbitDatabaseTransactionObservers?
   private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
 
-  // Whether a change has been reported since the last commit or rollback. Outside a transaction
-  // SQLite commits each statement on its own, and this is what tells whether one that finished
-  // left anything to report as committed.
-  private var hasPendingChanges = false
+  // Outside a transaction SQLite commits each statement on its own. The pending region tells both
+  // whether one left anything to report and precisely what it changed.
+  private var pendingRegion = OrbitDatabaseRegion.empty
 
   init(databaseObservers: OrbitDatabaseTransactionObservers?) {
     self.databaseObservers = databaseObservers
@@ -236,7 +276,7 @@ final class OrbitDatabaseTransactionObservationContext {
 
   func didChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
-    hasPendingChanges = true
+    pendingRegion.formUnion(region)
     databaseObservers?.didChange(in: region)
     for observer in scopedObservers {
       observer.databaseDidChange(in: region)
@@ -251,16 +291,17 @@ final class OrbitDatabaseTransactionObservationContext {
   }
 
   func didCommit(origin: OrbitDatabaseTransactionOrigin) {
-    hasPendingChanges = false
-    databaseObservers?.didCommit(origin: origin)
-    let commit = OrbitDatabaseCommit(origin: origin)
+    let region = pendingRegion
+    pendingRegion = .empty
+    databaseObservers?.didCommit(origin: origin, region: region)
+    let commit = OrbitDatabaseCommit(origin: origin, region: region)
     for observer in scopedObservers {
       observer.databaseDidCommit(commit)
     }
   }
 
   func didRollback() {
-    hasPendingChanges = false
+    pendingRegion = .empty
     databaseObservers?.didRollback()
     for observer in scopedObservers {
       observer.databaseDidRollback()
@@ -275,7 +316,7 @@ final class OrbitDatabaseTransactionObservationContext {
   /// reported still counts as having committed them: an observer told about a change that did not
   /// happen only fetches again, while one never told about a change that did misses it.
   func didCommitPendingChanges() {
-    guard hasPendingChanges else { return }
+    guard !pendingRegion.isEmpty else { return }
     didCommit(origin: .local)
   }
 }

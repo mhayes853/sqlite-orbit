@@ -804,6 +804,145 @@
     }
 
     @Test
+    func immediateRefetchControllerRetriesAReadSupersededByAnotherCommit() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let value = Lock(0)
+      let fetchCount = Lock(0)
+      let gate = FetchGate()
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: .fullDatabase) { _ in
+          let count = fetchCount.withLock { count in
+            count += 1
+            return count
+          }
+          let fetched = value.withLock { $0 }
+          if count == 2 { gate.hold() }
+          return fetched
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      value.withLock { $0 = 1 }
+      driver.announceCommit(region: .fullDatabase)
+      try await gate.waitUntilEntered()
+      value.withLock { $0 = 2 }
+      driver.announceCommit(region: .fullDatabase)
+      gate.open()
+      try await recorder.waitForChangeCount(2)
+
+      #expect(recorder.changes.map(\.value) == [0, 2])
+      #expect(fetchCount.withLock { $0 } == 3)
+      _ = subscription
+    }
+
+    @Test
+    func onceRefetchControllerPublishesItsSingleFetchWhenSuperseded() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let value = Lock(0)
+      let fetchCount = Lock(0)
+      let gate = FetchGate()
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: .fullDatabase) { _ in
+          let count = fetchCount.withLock { count in
+            count += 1
+            return count
+          }
+          let fetched = value.withLock { $0 }
+          if count == 2 { gate.hold() }
+          return fetched
+        }
+        .refetching(.once)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      value.withLock { $0 = 1 }
+      driver.announceCommit(region: .fullDatabase)
+      try await gate.waitUntilEntered()
+      value.withLock { $0 = 2 }
+      driver.announceCommit(region: .fullDatabase)
+      gate.open()
+      try await recorder.waitForChangeCount(2)
+      for _ in 0..<100 { await Task.yield() }
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(fetchCount.withLock { $0 } == 2)
+      _ = subscription
+    }
+
+    @Test
+    func coalescedRefetchControllerWaitsOnlyForAnActiveWriterCohort() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let fetchCount = Lock(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: .fullDatabase) { _ in fetchCount.withLock { $0 += 1; return $0 } }
+        .refetching(.coalesced)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      let activeWriter = SQLitePoolWriterBarrier(writerCount: 1)
+      driver.announceCommit(region: .fullDatabase, activeWriterBarrier: activeWriter)
+      for _ in 0..<100 { await Task.yield() }
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      activeWriter.writerDidFinish()
+      try await recorder.waitForChangeCount(2)
+      driver.announceCommit(
+        region: .fullDatabase,
+        activeWriterBarrier: SQLitePoolWriterBarrier(writerCount: 0)
+      )
+      try await recorder.waitForChangeCount(3)
+
+      #expect(fetchCount.withLock { $0 } == 3)
+      _ = subscription
+    }
+
+    @Test
+    func customRefetchControllerReceivesRegionsReasonsAndTrackedRegion() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let controller = RecordingRefetchController()
+      let trackedRegion = OrbitDatabaseRegion(table: "items")
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: trackedRegion) { _ in 0 }
+        .refetching(controller)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      driver.announceCommit(region: trackedRegion, origin: .external)
+      try await controller.waitForSnapshot()
+      let snapshot = try #require(controller.snapshots.first)
+
+      #expect(snapshot.affectedRegion == trackedRegion)
+      #expect(snapshot.trackedRegion == trackedRegion)
+      #expect(snapshot.reasons == [.externalProcessChange])
+      #expect(!snapshot.hasActiveWriters)
+      _ = subscription
+    }
+
+    @Test
     func handleEventsReportsTheRuntimeLifecycle() async throws {
       let driver = try await itemsDatabase()
       let events = Lock([String]())
@@ -1499,6 +1638,128 @@
 
     func waitForChangeCount(_ count: Int) async throws {
       try await waitUntil(timeout: .seconds(5)) { self.changes.count >= count }
+    }
+  }
+
+  private final class FetchGate: Sendable {
+    private let state = Lock((entered: false, isOpen: false))
+
+    func hold() {
+      state.withLock { $0.entered = true }
+      while !state.withLock({ $0.isOpen }) {}
+    }
+
+    func waitUntilEntered() async throws {
+      try await waitUntil(timeout: .seconds(5)) { self.state.withLock { $0.entered } }
+    }
+
+    func open() {
+      state.withLock { $0.isOpen = true }
+    }
+  }
+
+  private final class RecordingRefetchController: OrbitValueObservationRefetchController, Sendable {
+    private let recordedSnapshots = Lock<[OrbitValueObservationRefetchSnapshot]>([])
+
+    var snapshots: [OrbitValueObservationRefetchSnapshot] {
+      recordedSnapshots.withLock { $0 }
+    }
+
+    func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
+      var context = context
+      recordedSnapshots.withLock { $0.append(context.snapshot()) }
+      await context.fetch(publishing: .force)
+    }
+
+    func waitForSnapshot() async throws {
+      try await waitUntil(timeout: .seconds(5)) { !self.snapshots.isEmpty }
+    }
+  }
+
+  private final class PostCommitObservableDatabase: OrbitObservableDatabase {
+    let defaultIdentifier: OrbitDatabaseIdentifier
+
+    private let base: SQLiteQueue
+    private let observers = OrbitDatabaseTransactionObservers()
+
+    init(_ base: SQLiteQueue) {
+      self.base = base
+      self.defaultIdentifier = base.defaultIdentifier
+    }
+
+    func read<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) async throws -> Result {
+      try await base.read(body)
+    }
+
+    func readWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.readWithoutTransaction(body)
+    }
+
+    func write<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) async throws -> Result {
+      let (result, region) = try await base.write { transaction in
+        try transaction.recordingDatabaseRegion(body)
+      }
+      announceCommit(region: region)
+      return result
+    }
+
+    func writeWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.writeWithoutTransaction(body)
+    }
+
+    func readBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) throws -> Result {
+      try base.readBlocking(body)
+    }
+
+    func readWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) throws -> Result {
+      try base.readWithoutTransactionBlocking(body)
+    }
+
+    func writeBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) throws -> Result {
+      let (result, region) = try base.writeBlocking { transaction in
+        try transaction.recordingDatabaseRegion(body)
+      }
+      announceCommit(region: region)
+      return result
+    }
+
+    func writeWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) throws -> Result {
+      try base.writeWithoutTransactionBlocking(body)
+    }
+
+    func subscribe(
+      transactionObserver: any OrbitDatabaseTransactionObserver
+    ) throws -> OrbitSubscription {
+      observers.subscribe(transactionObserver)
+    }
+
+    func announceCommit(
+      region: OrbitDatabaseRegion,
+      origin: OrbitDatabaseTransactionOrigin = .local,
+      activeWriterBarrier: SQLitePoolWriterBarrier? = nil
+    ) {
+      observers.didChange(in: region)
+      observers.didCommit(
+        origin: origin,
+        region: region,
+        activeWriterBarrier: activeWriterBarrier
+      )
     }
   }
 
