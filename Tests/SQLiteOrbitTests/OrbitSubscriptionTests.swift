@@ -3,26 +3,28 @@ import Testing
 @testable import SQLiteOrbit
 
 @Test
-func orbitSubscriptionCancelsAtMostOnceAcrossCopies() {
-  let cancellationCount = Lock(0)
-  let subscription = OrbitSubscription {
-    cancellationCount.withLock { $0 += 1 }
-  }
-  let copy = subscription
-
-  subscription.cancel()
-  copy.cancel()
-
-  #expect(cancellationCount.withLock { $0 } == 1)
-}
-
-@Test
 func orbitSubscriptionCancelsWhenItsStorageIsReleased() {
   let cancellationCount = Lock(0)
 
   do {
     _ = OrbitSubscription {
       cancellationCount.withLock { $0 += 1 }
+    }
+  }
+
+  #expect(cancellationCount.withLock { $0 } == 1)
+}
+
+@Test
+func orbitSubscriptionCancelsAtMostOnceUnderConcurrentCancellation() async {
+  let cancellationCount = Lock(0)
+  let subscription = OrbitSubscription {
+    cancellationCount.withLock { $0 += 1 }
+  }
+
+  await withTaskGroup(of: Void.self) { group in
+    for _ in 0..<100 {
+      group.addTask { subscription.cancel() }
     }
   }
 

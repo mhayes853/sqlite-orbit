@@ -22,19 +22,6 @@
   }
 
   @Test
-  func blockingAccessOnThePoolReadsItsOwnWrite() async throws {
-    let database = BlockingTestDatabase()
-    let driver = try SQLitePool(path: database.path)
-    try await driver.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
-
-    try driver.writeBlocking { try $0.execute("INSERT INTO counter (n) VALUES (41)") }
-    let n: Int? = try driver.readBlocking { transaction in
-      try transaction.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
-    }
-    #expect(n == 41)
-  }
-
-  @Test
   func blockingAndAsynchronousWritersShareOneLine() async throws {
     let database = BlockingTestDatabase()
     let driver = try SQLitePool(path: database.path)

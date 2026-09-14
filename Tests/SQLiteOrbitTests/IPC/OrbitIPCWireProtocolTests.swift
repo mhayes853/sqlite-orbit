@@ -79,6 +79,17 @@ func databaseIPCWireProtocolRejectsInvalidAndUnsupportedFields() throws {
 }
 
 @Test
+func databaseIPCWireProtocolRejectsAnUnsupportedKindBeforeParsingItsPayload() throws {
+  var encoded = try OrbitIPCWireProtocol.encode(databaseIPCMessage())
+  encoded[5] = 2
+  encoded[8] = 0xff
+
+  #expect(throws: OrbitIPCWireError.unsupportedMessageKind(2)) {
+    try decodeDatabaseIPCMessage(encoded)
+  }
+}
+
+@Test
 func databaseIPCWireProtocolRejectsDuplicateRegionEntries() throws {
   var encoded = try OrbitIPCWireProtocol.encode(
     databaseIPCMessage(region: OrbitDatabaseRegion(column: "title", in: "items"))

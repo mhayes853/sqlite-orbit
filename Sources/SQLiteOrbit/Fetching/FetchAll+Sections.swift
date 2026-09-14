@@ -47,7 +47,7 @@ extension FetchAll {
     @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (Element.TableColumns) ->
       _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element: Table, Element.QueryOutput == Element {
     guard let sectioning = sectioning(Element.columns) else {
       self.init(wrappedValue: wrappedValue, database: database, scheduler: scheduler)
@@ -82,7 +82,7 @@ extension FetchAll {
     @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (S.From.TableColumns) ->
       _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     guard let sectioning = sectioning(S.From.columns) else {
       self.init(wrappedValue: wrappedValue, statement, database: database, scheduler: scheduler)
@@ -115,7 +115,7 @@ extension FetchAll {
     @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (From.TableColumns) ->
       _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element == V.QueryOutput {
     guard let sectioning = sectioning(From.columns) else {
       self.init(wrappedValue: wrappedValue, statement, database: database, scheduler: scheduler)
@@ -149,7 +149,7 @@ extension FetchAll {
       From.TableColumns, J1.TableColumns, repeat (each J2).TableColumns
     ) -> _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element == V.QueryOutput {
     guard
       let sectioning = sectioning(From.columns, J1.columns, repeat (each J2).columns)
@@ -183,7 +183,7 @@ extension FetchAll {
     @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (S.From.TableColumns) ->
       _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     guard let sectioning = sectioning(S.From.columns) else {
@@ -216,7 +216,7 @@ extension FetchAll {
     @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (From.TableColumns) ->
       _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == V.QueryOutput {
     guard let sectioning = sectioning(From.columns) else {
@@ -250,7 +250,7 @@ extension FetchAll {
       From.TableColumns, J1.TableColumns, repeat (each J2).TableColumns
     ) -> _OrbitFetchSectioning<String?>?,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == V.QueryOutput {
     guard
@@ -284,7 +284,7 @@ extension FetchAll {
       Element.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
     >,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element: Table, Element.QueryOutput == Element {
     self.init(
       wrappedValue: wrappedValue,
@@ -314,7 +314,7 @@ extension FetchAll {
       S.From.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
     >,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     self.init(
       wrappedValue: wrappedValue,
@@ -342,7 +342,7 @@ extension FetchAll {
       S.From.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
     >,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     try await load(
@@ -390,6 +390,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (Element.TableColumns) ->
@@ -414,6 +415,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       sectionBy sectionKeyPath: KeyPath<
@@ -440,6 +442,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -467,6 +470,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -552,6 +556,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -579,6 +584,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,

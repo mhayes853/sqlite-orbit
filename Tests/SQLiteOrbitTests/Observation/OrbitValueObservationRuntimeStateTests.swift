@@ -7,24 +7,6 @@ private struct FetchFailure: Error {}
 @Suite
 struct OrbitValueObservationReadCoordinatorTests {
   @Test
-  func theInitialReadIsIssuedOnce() throws {
-    var coordinator = OrbitValueObservationReadCoordinator()
-    let issued = coordinator.requireInitialRead()
-    let initial = try #require(issued)
-    let repeated = coordinator.requireInitialRead()
-    #expect(initial.source == .initial)
-    #expect(repeated == nil)
-  }
-
-  @Test
-  func noInitialReadIsIssuedOnceOneHasResolved() {
-    var coordinator = OrbitValueObservationReadCoordinator()
-    coordinator.completeInitialFetch()
-    let request = coordinator.requireInitialRead()
-    #expect(request == nil)
-  }
-
-  @Test
   func aReadThatRacedNoInvalidationIsCurrentAndFinishesTheWork() throws {
     var coordinator = OrbitValueObservationReadCoordinator()
     let issued = coordinator.requireInitialRead()
@@ -221,39 +203,20 @@ struct OrbitValueObservationDeliveryQueueTests {
   }
 
   @Test
-  func onlyTheCallerThatFindsTheQueueIdleDrainsIt() {
+  func theQueueHasOneDrainerAndDeliversInOrder() {
     var queue = OrbitValueObservationDeliveryQueue<Int>()
-    let first = queue.enqueue(publication(1))
-    let second = queue.enqueue(publication(2))
-    let third = queue.enqueue(publication(3))
-    #expect(first)
-    #expect(!second)
-    #expect(!third)
-  }
-
-  @Test
-  func theQueueIsDrainedInTheOrderItWasFilled() {
-    var queue = OrbitValueObservationDeliveryQueue<Int>()
-    _ = queue.enqueue(publication(1))
-    _ = queue.enqueue(publication(2))
+    let firstCallerDrains = queue.enqueue(publication(1))
+    let secondCallerDrains = queue.enqueue(publication(2))
 
     let first = value(of: queue.next())
     let second = value(of: queue.next())
     let exhausted = queue.next()
+    #expect(firstCallerDrains)
+    #expect(!secondCallerDrains)
     #expect(first == 1)
     #expect(second == 2)
     #expect(exhausted == nil)
-  }
-
-  @Test
-  func theNextCallerAfterADrainEndsTakesOverDelivering() {
-    var queue = OrbitValueObservationDeliveryQueue<Int>()
-    _ = queue.enqueue(publication(1))
-    let delivered = value(of: queue.next())
-    let exhausted = queue.next()
-    let resumed = queue.enqueue(publication(2))
-    #expect(delivered == 1)
-    #expect(exhausted == nil)
-    #expect(resumed)
+    let nextCallerDrains = queue.enqueue(publication(3))
+    #expect(nextCallerDrains)
   }
 }

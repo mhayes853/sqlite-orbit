@@ -56,9 +56,12 @@ struct SQLiteFunctionDecoder: QueryDecoder {
   }
 
   mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-    // A zero-length text value has no buffer behind it, which is not the same as SQL NULL.
-    try argument(.text, for: columnType)
-      .map { api.text($0).map(String.init(cString:)) ?? "" }
+    guard let value = try argument(.text, for: columnType) else { return nil }
+    // SQLite strings may contain NUL bytes, so they cannot be decoded as C strings. Ask for the
+    // bytes before their count, which is the order SQLite documents as safe after conversion.
+    guard let text = api.text(value) else { return "" }
+    let count = Int(api.byteCount(value))
+    return String(decoding: UnsafeBufferPointer(start: text, count: count), as: UTF8.self)
   }
 
   mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
@@ -115,7 +118,14 @@ extension QueryBinding {
     switch self {
     case .blob(let blob):
       let bytes = Array(blob)
-      bytes.withUnsafeBytes { result.blob(context, $0.baseAddress, Int32($0.count)) }
+      bytes.withUnsafeBytes { buffer in
+        // SQLite interprets a null pointer as SQL NULL even when its byte count is zero.
+        guard let baseAddress = buffer.baseAddress else {
+          var empty: UInt8 = 0
+          return withUnsafeBytes(of: &empty) { result.blob(context, $0.baseAddress, 0) }
+        }
+        result.blob(context, baseAddress, Int32(buffer.count))
+      }
     case .bool(let bool):
       result.int64(context, bool ? 1 : 0)
     case .date(let date):
@@ -127,7 +137,7 @@ extension QueryBinding {
     case .null:
       result.null(context)
     case .text(let text):
-      text.withCString { result.text(context, $0, -1) }
+      text.withCString { result.text(context, $0, Int32(text.utf8.count)) }
     case .uint(let uint) where uint <= UInt64(Int64.max):
       result.int64(context, Int64(uint))
     case .uint(let uint):

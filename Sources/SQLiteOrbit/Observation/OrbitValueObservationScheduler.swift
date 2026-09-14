@@ -55,7 +55,9 @@ public protocol OrbitValueObservationScheduler: Sendable {
 ///   }
 /// // `counts` already holds the initial value here.
 /// ```
-public struct OrbitImmediateValueObservationScheduler: OrbitValueObservationScheduler {
+///
+/// All instances compare equal and have the same hash value.
+public struct OrbitImmediateValueObservationScheduler: OrbitValueObservationScheduler, Hashable {
   /// Creates an immediate scheduler.
   public init() {}
 
@@ -110,8 +112,12 @@ extension OrbitValueObservationScheduler where Self == OrbitImmediateValueObserv
 ///     cache.assumeIsolated { $0.count = change.value }
 ///   }
 /// ```
-public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationScheduler {
+///
+/// Two schedulers compare equal when they target the same actor instance with the same task
+/// priority. Their internal callback queues do not affect identity.
+public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationScheduler, Hashable {
   private let isolation: (any Actor)?
+  private let priority: TaskPriority?
   private let drain: OrbitValueObservationSchedulerDrain
 
   fileprivate init(
@@ -119,7 +125,19 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
     priority: TaskPriority?
   ) {
     self.isolation = isolation
+    self.priority = priority
     self.drain = OrbitValueObservationSchedulerDrain(isolation: isolation, priority: priority)
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    // A drain is mutable delivery machinery. Scheduler identity is only its destination and
+    // priority, so rebuilding the same fetch does not replace its observation.
+    lhs.isolation === rhs.isolation && lhs.priority == rhs.priority
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(isolation.map { ObjectIdentifier($0) })
+    hasher.combine(priority?.rawValue)
   }
 
   /// Reports that the initial value is immediate only when the caller is already isolated to this
@@ -217,13 +235,21 @@ public protocol OrbitValueObservationMainActorScheduler: OrbitValueObservationSc
 ///     reminderCount = change.value
 ///   }
 /// ```
-public struct OrbitMainActorValueObservationScheduler: OrbitValueObservationMainActorScheduler {
+///
+/// All instances compare equal and have the same hash value.
+public struct OrbitMainActorValueObservationScheduler:
+  OrbitValueObservationMainActorScheduler, Hashable
+{
   private let drain = OrbitValueObservationSchedulerDrain(
     isolation: MainActor.shared,
     priority: nil
   )
 
   fileprivate init() {}
+
+  public static func == (lhs: Self, rhs: Self) -> Bool { true }
+
+  public func hash(into hasher: inout Hasher) {}
 
   /// Reports that the initial value is immediate only when subscription started on the main actor.
   ///

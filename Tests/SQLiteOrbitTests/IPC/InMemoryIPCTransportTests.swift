@@ -3,35 +3,19 @@ import Testing
 @testable import SQLiteOrbit
 
 @Test
-func inMemoryTransportDeliversToOnePeerAndNotToItself() async throws {
-  let network = InMemoryIPCTransport.Network()
-  let sender = InMemoryIPCTransport(network: network)
-  let receiver = InMemoryIPCTransport(network: network)
-  let senderMessages = IPCMessageRecorder()
-  let receiverMessages = IPCMessageRecorder()
-  let database = OrbitDatabaseIdentifier(rawValue: "example")
-  let subscriptions = try [
-    sender.subscribe(to: database, onMessage: senderMessages.append),
-    receiver.subscribe(to: database, onMessage: receiverMessages.append)
-  ]
-  let message = commit(database)
-
-  try await sender.send(message)
-
-  #expect(receiverMessages.values == [message])
-  #expect(senderMessages.values.isEmpty)
-  _ = subscriptions
-}
-
-@Test
-func inMemoryTransportBroadcastsToEveryPeer() async throws {
+func inMemoryTransportBroadcastsToEveryPeerButTheSender() async throws {
   let network = InMemoryIPCTransport.Network()
   let sender = InMemoryIPCTransport(network: network)
   let receivers = (0..<8).map { _ in InMemoryIPCTransport(network: network) }
+  let senderRecorder = IPCMessageRecorder()
   let recorders = receivers.map { _ in IPCMessageRecorder() }
   let database = OrbitDatabaseIdentifier(rawValue: "broadcast")
-  let subscriptions = try zip(receivers, recorders)
-    .map { try $0.subscribe(to: database, onMessage: $1.append) }
+  let subscriptions =
+    try [sender.subscribe(to: database, onMessage: senderRecorder.append)]
+    + zip(receivers, recorders)
+    .map {
+      try $0.subscribe(to: database, onMessage: $1.append)
+    }
   let message = commit(database)
 
   try await sender.send(message)
@@ -39,6 +23,7 @@ func inMemoryTransportBroadcastsToEveryPeer() async throws {
   for recorder in recorders {
     #expect(recorder.values == [message])
   }
+  #expect(senderRecorder.values.isEmpty)
   _ = subscriptions
 }
 

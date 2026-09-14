@@ -38,6 +38,8 @@
 ///
 /// The property is populated the first time it is read, and refetches whenever a committed write
 /// touches anything the request read — every region of it, whichever query read it.
+/// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
+/// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
 @propertyWrapper
 public struct Fetch<Value: Sendable>: Sendable {
@@ -134,7 +136,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) {
     self.init(
       storage: .make(
@@ -161,7 +163,7 @@ public struct Fetch<Value: Sendable>: Sendable {
   public func load(
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription {
     try await storage.load(request: request, database: database, scheduler: scheduler)
   }
@@ -200,6 +202,7 @@ extension Fetch: Equatable where Value: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       _ request: some OrbitFetchKeyRequest<Value>,
@@ -222,6 +225,7 @@ extension Fetch: Equatable where Value: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load(
       _ request: some OrbitFetchKeyRequest<Value>,

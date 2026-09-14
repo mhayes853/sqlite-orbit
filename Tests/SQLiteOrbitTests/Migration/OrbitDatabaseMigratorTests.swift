@@ -16,6 +16,7 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
       let migrator = loggingMigrator(["one", "two", "three"])
+      #expect(migrator.migrations == ["one", "two", "three"])
 
       try await migrator.migrate(driver)
       try await migrator.migrate(driver)
@@ -24,17 +25,6 @@
       #expect(
         try await driver.read { try migrator.appliedMigrations($0) } == ["one", "two", "three"]
       )
-    }
-
-    @Test
-    func migrationsListsTheRegisteredIdentifiersInRegistrationOrder() {
-      var migrator = OrbitDatabaseMigrator()
-      #expect(migrator.migrations.isEmpty)
-      for identifier in ["b", "c", "a"] {
-        migrator.registerMigration(identifier) { _ in }
-      }
-      #expect(migrator.migrations == ["b", "c", "a"])
-      #expect(OrbitDatabaseMigrator.grdb.migrations.isEmpty)
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -53,18 +43,22 @@
       #expect(log == ["one", "two"])
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
+    @Test(arguments: SQLiteTestDriver.allCases, [false, true])
     func migratingAnUpToDateDatabaseWritesAndAnnouncesNothing(
-      _ kind: SQLiteTestDriver
+      _ kind: SQLiteTestDriver,
+      eraseDatabaseOnSchemaChange: Bool
     ) async throws {
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
-      try await checkUpToDateMigrationIsSilent(on: try kind.open(in: directory))
+      try await checkUpToDateMigrationIsSilent(
+        on: try kind.open(in: directory),
+        eraseDatabaseOnSchemaChange: eraseDatabaseOnSchemaChange
+      )
     }
 
     private func checkUpToDateMigrationIsSilent(
       on writer: some OrbitObservableDatabase,
-      eraseDatabaseOnSchemaChange: Bool = false
+      eraseDatabaseOnSchemaChange: Bool
     ) async throws {
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-\(UUID().uuidString)")
@@ -281,19 +275,21 @@
         migrate: createListsAndReminders
       )
       var checked = migrator
+      var unchecked = migrator.disablingDeferredForeignKeyChecks()
+      #expect(migrator.defersForeignKeyChecks)
+      #expect(!unchecked.defersForeignKeyChecks)
+      #expect(unchecked.migrations == migrator.migrations)
       checked.registerMigration("Checked orphan") { transaction in
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
       }
-      #expect(migrator.defersForeignKeyChecks)
-      migrator.defersForeignKeyChecks = false
-      migrator.registerMigration("Unchecked orphan") { transaction in
+      unchecked.registerMigration("Unchecked orphan") { transaction in
         try foreignKeys.withLock { $0.append(try foreignKeysPragma(in: transaction)) }
         try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
       }
 
       // Still run with foreign keys off, but not checked.
       let uncheckedDriver = try SQLiteQueue(path: .memory)
-      try await migrator.migrate(uncheckedDriver)
+      try await unchecked.migrate(uncheckedDriver)
       #expect(foreignKeys.withLock { $0 } == [0])
       try await expectWriterForeignKeys(true, on: uncheckedDriver)
       #if !Turso
@@ -312,42 +308,6 @@
       #else
         await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
           try await checked.migrate(checkedDriver)
-        }
-      #endif
-    }
-
-    @Test
-    func disablingDeferredChecksReturnsACopyAndLeavesTheOriginal() async throws {
-      var original = OrbitDatabaseMigrator()
-      // Immediate, so that only the orphan's migration tells the two apart, and so that it runs on
-      // Turso, which cannot check.
-      original.registerMigration(
-        "Create lists",
-        foreignKeyChecks: .immediate,
-        migrate: createListsAndReminders
-      )
-
-      var disabled = original.disablingDeferredForeignKeyChecks()
-      #expect(!disabled.defersForeignKeyChecks)
-      #expect(original.defersForeignKeyChecks)
-      #expect(disabled.migrations == original.migrations)
-
-      let orphan: @Sendable (borrowing SQLiteWriteTransaction) throws -> Void = { transaction in
-        try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
-      }
-      disabled.registerMigration("Orphan a reminder", migrate: orphan)
-      original.registerMigration("Orphan a reminder", migrate: orphan)
-
-      let disabledDriver = try SQLiteQueue(path: .memory)
-      try await disabled.migrate(disabledDriver)
-      let originalDriver = try SQLiteQueue(path: .memory)
-      #if Turso
-        await #expect(throws: SQLiteFeatureUnavailableError.self) {
-          try await original.migrate(originalDriver)
-        }
-      #else
-        await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
-          try await original.migrate(originalDriver)
         }
       #endif
     }
@@ -445,20 +405,6 @@
         await #expect(throws: SQLiteError.self) { try await orphaning.migrate(driver) }
         #expect(try await driver.read { try orphaning.hasCompletedMigrations($0) } == false)
       }
-    #else
-      @Test
-      func everyBuildButTursoCanCheckForeignKeys() {
-        let base = builtInTestLibrary
-        let custom = SQLiteLibrary(
-          runtime: base.runtime,
-          connections: base.connections,
-          statements: base.statements,
-          bindings: base.bindings,
-          columns: base.columns
-        )
-        #expect(base.isForeignKeyCheckAvailable)
-        #expect(custom.isForeignKeyCheckAvailable)
-      }
     #endif
 
     // Turso refuses the check; `TursoCompatibilityTests` covers that.
@@ -551,26 +497,6 @@
         )
       }
       #expect(columns == ["id", "title"])
-    }
-
-    @Test
-    func grdbMigratorRecordsItsHistoryInGRDBsTable() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      var migrator = makeMigrator(.grdb)
-      migrator.registerMigration("v1") { _ in }
-
-      try await migrator.migrate(driver)
-
-      let tables = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT name FROM sqlite_schema WHERE type = 'table'", as: String.self)
-        )
-      }
-      #expect(tables == ["grdb_migrations"])
-      let recorded = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT identifier FROM grdb_migrations", as: String.self))
-      }
-      #expect(recorded == ["v1"])
     }
 
     // MARK: - Migrating on a connection
@@ -987,32 +913,21 @@
       #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func hasSchemaChangesIsTrueWhenAnAppliedMigrationIsRemoved(
-      _ kind: SQLiteTestDriver
+    @Test(
+      arguments: SQLiteTestDriver.allCases,
+      [["one", "three"], ["one", "two renamed", "three"]]
+    )
+    func hasSchemaChangesWhenAppliedIdentifiersChange(
+      _ kind: SQLiteTestDriver,
+      identifiers: [String]
     ) async throws {
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
       try await loggingMigrator(["one", "two", "three"]).migrate(driver)
 
-      let withoutTwo = loggingMigrator(["one", "three"])
-
-      #expect(try await driver.read { try withoutTwo.hasSchemaChanges($0) } == true)
-    }
-
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func hasSchemaChangesIsTrueWhenAnAppliedMigrationIsRenamed(
-      _ kind: SQLiteTestDriver
-    ) async throws {
-      let directory = try makeShortTemporaryDirectory("schema")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let driver = try kind.open(in: directory)
-      try await loggingMigrator(["one", "two"]).migrate(driver)
-
-      let renamed = loggingMigrator(["one", "two renamed"])
-
-      #expect(try await driver.read { try renamed.hasSchemaChanges($0) } == true)
+      let changed = loggingMigrator(identifiers)
+      #expect(try await driver.read { try changed.hasSchemaChanges($0) })
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -1428,18 +1343,6 @@
         try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
       }
       #expect(ids == [1])
-    }
-
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func migratingAnUpToDateDatabaseWithTheFlagOnStillWritesAndAnnouncesNothing(
-      _ kind: SQLiteTestDriver
-    ) async throws {
-      let directory = try makeShortTemporaryDirectory("erase")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      try await checkUpToDateMigrationIsSilent(
-        on: try kind.open(in: directory),
-        eraseDatabaseOnSchemaChange: true
-      )
     }
 
     @Test

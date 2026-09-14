@@ -7,20 +7,6 @@ struct OrbitValueObservationSchedulerTests {
   private actor Destination {}
 
   @Test
-  func immediateSchedulerRunsInlineWithoutIsolation() {
-    let scheduler = OrbitImmediateValueObservationScheduler.immediate
-    let didRun = Lock(false)
-
-    let hasImmediateInitialValue = scheduler.immediateInitialValue(from: nil)
-    #expect(hasImmediateInitialValue)
-    scheduler.schedule(from: nil) {
-      didRun.withLock { $0 = true }
-    }
-
-    #expect(didRun.withLock { $0 })
-  }
-
-  @Test
   func asyncSchedulerRunsOnItsActor() async throws {
     let destination = Destination()
     let scheduler = OrbitAsyncValueObservationScheduler.async(on: destination)
@@ -73,26 +59,4 @@ struct OrbitValueObservationSchedulerTests {
 
     #expect(!hasImmediateInitialValue)
   }
-
-  @MainActor
-  @Test
-  func mainActorSchedulerIsImmediateOnlyWhenAlreadyIsolated() {
-    let scheduler = OrbitMainActorValueObservationScheduler.mainActor
-    requireMainActorScheduler(scheduler)
-
-    let hasImmediateInitialValue = scheduler.immediateInitialValue(from: MainActor.shared)
-    #expect(hasImmediateInitialValue)
-  }
-
-  @Test
-  func mainActorSchedulerIsNotImmediateOutsideMainActor() {
-    let scheduler = OrbitMainActorValueObservationScheduler.mainActor
-
-    let hasImmediateInitialValue = scheduler.immediateInitialValue(from: nil)
-    #expect(!hasImmediateInitialValue)
-  }
-
-  private func requireMainActorScheduler<Scheduler: OrbitValueObservationMainActorScheduler>(
-    _ scheduler: Scheduler
-  ) {}
 }

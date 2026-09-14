@@ -30,6 +30,8 @@
 ///
 /// The database it reads from is ``OrbitDefaultDatabase/current`` unless one is passed as the
 /// `database` argument.
+/// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
+/// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
 @propertyWrapper
 public struct FetchOne<Value: Sendable>: Sendable {
@@ -56,7 +58,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)?,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
     self.init(
       storage: .make(
@@ -152,7 +154,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _Selection, Value.QueryOutput == Value {
     self.init(storage: OrbitFetchStorage(value: wrappedValue))
   }
@@ -170,7 +172,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -191,7 +193,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -215,7 +217,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -245,7 +247,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -272,7 +274,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
     self.init(
@@ -299,7 +301,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == V.QueryOutput {
     self.init(
       wrappedValue: wrappedValue,
@@ -322,7 +324,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = nil,
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == V.QueryOutput? {
     self.init(
       wrappedValue: wrappedValue,
@@ -344,7 +346,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
     self.init(
       wrappedValue: wrappedValue,
@@ -367,7 +369,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where
     Value: _OptionalProtocol,
@@ -398,7 +400,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where
     Value: _OptionalProtocol,
@@ -425,7 +427,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: some Statement<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
     self.init(
       wrappedValue: wrappedValue,
@@ -450,7 +452,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: SelectStatement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -474,7 +476,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<V: QueryRepresentable>(
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == V.QueryOutput {
     return try await storage.load(
@@ -498,7 +500,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<V: QueryRepresentable>(
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == V.QueryOutput? {
     return try await storage.load(
@@ -522,7 +524,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: SelectStatement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where
     Value: _OptionalProtocol,
@@ -553,7 +555,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: Statement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where
     Value: _OptionalProtocol,
@@ -580,7 +582,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load(
     _ statement: some Statement<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
     return try await storage.load(
@@ -618,6 +620,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a table, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
@@ -632,6 +635,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the row the value it is declared with identifies, delivering
     /// changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
@@ -646,6 +650,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a table, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
@@ -660,6 +665,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a primary keyed table, delivering changes
     /// with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
@@ -673,6 +679,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a select statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: Value,
       _ statement: S,
@@ -688,6 +695,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: Value,
       _ statement: some Statement<V>,
@@ -703,6 +711,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: Value = nil,
       _ statement: some Statement<V>,
@@ -718,6 +727,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement<Value>>(
       wrappedValue: Value,
       _ statement: S,
@@ -733,6 +743,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a select statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: Value = ._none,
       _ statement: S,
@@ -755,6 +766,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing a statement of an optional, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement>(
       wrappedValue: Value = ._none,
       _ statement: S,
@@ -776,6 +788,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing a statement of an optional, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       _ statement: some Statement<Value>,
@@ -791,6 +804,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different select statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -806,6 +820,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
@@ -821,6 +836,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
@@ -836,6 +852,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different select statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -857,6 +874,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Observes a different statement of an optional from now on, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: Statement>(
       _ statement: S,
@@ -877,6 +895,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Observes a different statement of an optional from now on, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load(
       _ statement: some Statement<Value>,

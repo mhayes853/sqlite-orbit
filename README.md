@@ -462,8 +462,12 @@ the linked one does.
 
 `OrbitDatabase` is `Identifiable`. Its native writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
-stable identifier from their absolute paths; a database private to its connection is not the same
-database as any other, so each one receives a unique identifier.
+stable identifier from their resolved filesystem paths. Symbolic links in the file and its existing
+parent directories are resolved even before the database file is created, so IPC discovery and
+open locks agree across those aliases. `OrbitDatabasePath` keeps its original standardized spelling;
+explicit identifiers remain application-defined. Identity is path-based, so hard links with different
+names still need an explicit shared identifier. A database private to its connection receives a
+unique identifier.
 
 ## Migrations
 
@@ -995,13 +999,25 @@ stays current with the rest of the property.
 
 By default a property fetches its first value on the thread that first reads it, and delivers later
 ones as the observation produces them. Pass a `scheduler:` to move that elsewhere — any
-`OrbitValueObservationScheduler`, including `.mainActor` — or, in SwiftUI, an `animation:`, which
-delivers every change on the main actor inside that animation:
+`OrbitValueObservationScheduler` that is also `Hashable`, including `.mainActor` — or, in SwiftUI,
+an `animation:`, which delivers every change on the main actor inside that animation:
 
 ```swift
 @FetchAll(Reminder.all, animation: .default) var reminders
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
 ```
+
+Fetch identity follows SQLiteData: it includes the database instance, request type and value, and
+optional scheduler value. Omitting a scheduler is distinct from explicitly supplying `.immediate`.
+SwiftUI remembers the declaration's identity separately from the currently loaded request, so a
+`load()` or projected-value assignment survives an unchanged declaration being rendered again.
+Changing the declaration's query, database, or scheduler replaces the observation; a value-only
+declaration leaves it alone.
+
+Custom schedulers should base equality and hashing on stable configuration (or instance identity),
+not mutable callback queues. The built-in schedulers already provide these conformances. Direct
+value-observation subscriptions do not require a `Hashable` scheduler. Fetch `animation:` overloads
+require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashable` availability.
 
 ### Sections
 

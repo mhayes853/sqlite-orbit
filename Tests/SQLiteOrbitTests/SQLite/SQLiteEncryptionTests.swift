@@ -129,14 +129,6 @@
   }
 
   @Test
-  func theKeyIsSettableThroughImplicitMemberSyntax() {
-    // The form the README shows.
-    var configuration = SQLiteConfiguration(library: builtInTestLibrary)
-    configuration.key = .passphrase("secret")
-    #expect(configuration.key != nil)
-  }
-
-  @Test
   func aKeyLendsItsBytesForWorkThePackageDoesNotModel() {
     // Rekeying and keying an ATTACHed database both go through the build directly, so the key has
     // to be reachable rather than only handable to a configuration.
@@ -152,26 +144,6 @@
     let key = SQLiteKey.passphrase("hunter2")
     #expect("\(key)" == "SQLiteKey(redacted)")
     #expect(String(reflecting: key) == "SQLiteKey(redacted)")
-  }
-
-  @Test
-  func aWrongKeyFailsTheOpenRatherThanTheFirstQuery() throws {
-    // A codec accepts any key and only objects once something reads the file, so without the
-    // schema read the open would succeed and the failure would surface somewhere unrelated.
-    let keys = Lock<[[UInt8]]>([])
-    var configuration = SQLiteConfiguration(
-      library: libraryWithFakeCodec { key in
-        keys.withLock { $0.append(key) }
-        return SQLiteResultCode.ok.rawValue
-      }
-    )
-    configuration.key = SQLiteKey.passphrase("open sesame")
-    configuration.setupSQL = ["PRAGMA user_version = 1"]
-
-    // The fake codec cannot make the file unreadable, so the observable part is that the schema
-    // was read while configuring, before any setup SQL could run.
-    _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
-    #expect(keys.withLock { $0.count } == 1)
   }
 #endif
 

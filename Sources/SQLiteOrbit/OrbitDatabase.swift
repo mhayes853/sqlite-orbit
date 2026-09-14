@@ -315,30 +315,19 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
         OrbitDatabaseCommit(origin: .local, region: region)
       )
     }
-    guard let transport else {
-      return OrbitSubscription {
-        local.cancel()
-        sameProcess.cancel()
-      }
-    }
-
-    do {
-      let external = try transport.subscribe(to: id) { message in
+    let external = try transport?
+      .subscribe(to: id) { message in
         guard case .transactionDidCommit(let commit) = message else { return }
         transactionObserver.databaseDidChange(in: commit.region)
         transactionObserver.databaseDidCommit(
           OrbitDatabaseCommit(origin: .external, region: commit.region)
         )
       }
-      return OrbitSubscription {
-        local.cancel()
-        sameProcess.cancel()
-        external.cancel()
-      }
-    } catch {
+    // If registration throws, the local tokens cancel themselves when this scope unwinds.
+    return OrbitSubscription {
       local.cancel()
       sameProcess.cancel()
-      throw error
+      external?.cancel()
     }
   }
 }

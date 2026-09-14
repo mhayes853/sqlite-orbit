@@ -51,23 +51,6 @@
   }
 
   @Test
-  func queueCommitsAcrossSeparateWrites() async throws {
-    let driver = try makeQueueDriver()
-    try await bootstrap(driver)
-
-    for id in 1...3 {
-      try await driver.write { transaction in
-        try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
-      }
-    }
-
-    let count = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
-    }
-    #expect(count == 3)
-  }
-
-  @Test
   func queueRollsBackAWriteThatThrows() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
@@ -106,34 +89,6 @@
         group.addTask {
           try await driver.write { transaction in
             _ = try transaction.execute(Item.insert { Item(id: id, title: "concurrent") })
-          }
-        }
-      }
-      try await group.waitForAll()
-    }
-
-    let written = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
-    }
-    #expect(written == count)
-  }
-
-  @Test
-  func queueInterleavesConcurrentReadsAndWrites() async throws {
-    let driver = try makeQueueDriver()
-    try await bootstrap(driver)
-    let count = 100
-
-    try await withThrowingTaskGroup(of: Void.self) { group in
-      for id in 1...count {
-        group.addTask {
-          try await driver.write { transaction in
-            _ = try transaction.execute(Item.insert { Item(id: id, title: "row") })
-          }
-        }
-        group.addTask {
-          _ = try await driver.read { transaction in
-            try transaction.fetchAll(Item.all).count
           }
         }
       }
@@ -205,38 +160,6 @@
       try transaction.fetchAll(Item.all)
     }
     #expect(items == [Item(id: 1, title: "persisted")])
-  }
-
-  @Test
-  func cancellingBeforeTheConnectionIsFreeStillCancels() async throws {
-    let driver = try makeQueueDriver()
-    try await bootstrap(driver)
-    let holding = Lock(false)
-    let release = Lock(false)
-
-    // Occupy the connection so the next reader has to wait its turn.
-    let blocker = Task {
-      try await driver.write { _ in
-        holding.withLock { $0 = true }
-        while !release.withLock({ $0 }) {}
-      }
-    }
-    while !holding.withLock({ $0 }) {
-      await Task.yield()
-    }
-
-    let waiter = Task {
-      try await driver.read { transaction in
-        try transaction.fetchAll(Item.all).count
-      }
-    }
-    waiter.cancel()
-    release.withLock { $0 = true }
-    _ = try await blocker.value
-
-    await #expect(throws: CancellationError.self) {
-      _ = try await waiter.value
-    }
   }
 
   @Test

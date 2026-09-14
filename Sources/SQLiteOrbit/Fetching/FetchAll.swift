@@ -36,6 +36,9 @@
 /// ```swift
 /// try await $reminders.load(Reminder.order { $0.createdAt.desc() })
 /// ```
+///
+/// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
+/// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
 @propertyWrapper
 public struct FetchAll<Element: Sendable>: Sendable {
@@ -65,7 +68,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     wrappedValue: [Element],
     request: some OrbitFetchKeyRequest<OrbitFetchSectionCollection<Element, String?>>,
     database: (any OrbitObservableDatabase)?,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
     self.init(
       storage: .make(
@@ -180,7 +183,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   public init(
     wrappedValue: [Element] = [],
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element: _Selection, Element.QueryOutput == Element {
     self.init(
@@ -207,7 +210,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   public init(
     wrappedValue: [Element] = [],
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element: Table, Element.QueryOutput == Element {
     // Spelled out rather than inferred: a statement of every column is a `Select` whose value is
@@ -238,7 +241,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     wrappedValue: [Element] = [],
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -267,7 +270,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     wrappedValue: [Element] = [],
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element == V.QueryOutput {
     self.init(
@@ -290,7 +293,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     wrappedValue: [Element] = [],
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element: QueryRepresentable, Element == S.QueryValue.QueryOutput {
     self.init(
@@ -318,7 +321,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   public func load<S: SelectStatement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -342,7 +345,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   public func load<V: QueryRepresentable>(
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Element == V.QueryOutput {
     return try await storage.load(
@@ -385,6 +388,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
@@ -406,6 +410,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -429,6 +434,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: [Element] = [],
       _ statement: some Statement<V>,
@@ -452,6 +458,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement<Element>>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -475,6 +482,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -497,6 +505,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,

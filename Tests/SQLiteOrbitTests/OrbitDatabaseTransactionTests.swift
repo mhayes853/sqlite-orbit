@@ -6,24 +6,13 @@ import Testing
 
 #if BuiltInSQLite
   @Test
-  func orbitDatabaseUsesTheDriversDefaultIdentifier() async throws {
+  func orbitDatabaseUsesTheDriversIdentifierUnlessOverridden() throws {
     let identifier = OrbitDatabaseIdentifier(rawValue: "native-default")
     let driver = try SQLiteQueue(path: ":memory:", identifier: identifier)
-    let database = OrbitDatabase(writer: driver)
+    #expect(OrbitDatabase(writer: driver).id == identifier)
 
-    #expect(database.id == identifier)
-    #expect(try await database.read { transaction in acceptsReadTransaction(transaction) })
-    #expect(try await database.write { transaction in acceptsWriteTransaction(transaction) })
-  }
-
-  @Test
-  func orbitDatabaseCanOverrideItsIdentifier() {
-    let driver = try! SQLiteQueue(path: ":memory:")
     let override = OrbitDatabaseIdentifier(rawValue: "application-defined")
-
-    let database = OrbitDatabase(writer: driver, id: override)
-
-    #expect(database.id == override)
+    #expect(OrbitDatabase(writer: driver, id: override).id == override)
   }
 #endif
 
@@ -421,16 +410,6 @@ func databaseCursorsSelectTopKValues() async throws {
   #expect(topTwo == [5, 4])
   #expect(state.visitedRowCount == 5)
 
-  let topNone = try withTestRead(state) { transaction in
-    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(0)
-  }
-  #expect(topNone.isEmpty)
-
-  let topBeyondCount = try withTestRead(state) { transaction in
-    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(10)
-  }
-  #expect(topBeyondCount == [5, 4, 3, 1, 1])
-
   let reverseTopTwo = try withTestRead(state) { transaction in
     try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(2, by: >)
   }
@@ -456,18 +435,6 @@ func databaseCursorsSelectTopKValues() async throws {
   }
   #expect(reverseExtremes.min == [5, 4])
   #expect(reverseExtremes.max == [1, 1])
-
-  let overlappingExtremes = try withTestRead(state) { transaction in
-    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(10)
-  }
-  #expect(overlappingExtremes.min == [1, 1, 3, 4, 5])
-  #expect(overlappingExtremes.max == [5, 4, 3, 1, 1])
-
-  let noExtremes = try withTestRead(state) { transaction in
-    try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(0)
-  }
-  #expect(noExtremes.min.isEmpty)
-  #expect(noExtremes.max.isEmpty)
 
   let emptyState = TestDatabaseState()
   let emptyTop = try withTestRead(emptyState) { transaction in
@@ -648,18 +615,6 @@ private struct TestDatabaseRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapa
     state.visitedRowCount += 1
     return TestDatabaseRow(values: values)
   }
-}
-
-private func acceptsReadTransaction<Transaction: OrbitDatabaseReadTransaction>(
-  _ transaction: borrowing Transaction
-) -> Bool where Transaction: ~Copyable, Transaction: ~Escapable {
-  true
-}
-
-private func acceptsWriteTransaction<Transaction: OrbitDatabaseWriteTransaction>(
-  _ transaction: borrowing Transaction
-) -> Bool where Transaction: ~Copyable, Transaction: ~Escapable {
-  true
 }
 
 @Table

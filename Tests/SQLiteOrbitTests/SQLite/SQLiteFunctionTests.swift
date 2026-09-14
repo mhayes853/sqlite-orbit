@@ -20,6 +20,11 @@
   }
 
   @DatabaseFunction
+  func echoedBlob(_ bytes: [UInt8]) -> [UInt8] {
+    bytes
+  }
+
+  @DatabaseFunction
   func describe(
     _ double: Double,
     _ blob: [UInt8],
@@ -80,6 +85,7 @@
     configuration.register(function: $repeated)
     configuration.register(function: $longestTitle)
     configuration.register(function: $rowCount)
+    configuration.register(function: $echoedBlob)
     configuration.register(function: $describe)
     configuration.register(function: FailingFunction())
     configuration.register(function: VariadicSumFunction())
@@ -158,25 +164,22 @@
     )
   }
 
-  @Test
-  func functionArgumentsDecodeEmptyTextAndBlobs() async throws {
+  @Test(arguments: ["", "plain text", "日本語", "before\u{0}after"])
+  func functionTextRoundTripsExactly(_ text: String) async throws {
     let database = try await seededNotes()
-    let date = Date(timeIntervalSince1970: 0)
-    let id = UUID()
-
-    let values = try await database.read { transaction in
-      (
-        try transaction.fetchOne(Select($repeated("", 3))),
-        try transaction.fetchOne(Select($describe(0, [], true, date, id, Int?.none))),
-        try transaction.fetchOne(
-          #sql("SELECT longestTitle(x) FROM (SELECT '' AS x)", as: String?.self)
-        )
-      )
+    let value = try await database.read { transaction in
+      try transaction.fetchOne(Select($repeated(text, 2)))
     }
+    #expect(value == text + text)
+  }
 
-    #expect(values.0 == "")
-    #expect(values.1 == "0.0 [] true 0.0 \(id.uuidString) -1")
-    #expect(values.2 == "")
+  @Test
+  func emptyBlobFunctionResultsStayBlobs() async throws {
+    let database = try await seededNotes()
+    let value = try await database.read { transaction in
+      try transaction.fetchOne(Select($echoedBlob([])))
+    }
+    #expect(value == [])
   }
 
   @Test

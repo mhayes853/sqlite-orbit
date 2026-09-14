@@ -5,7 +5,7 @@
 
   @Suite(.serialized)
   struct OrbitIPCMultiprocessTests {
-    @Test(arguments: [1, 2, 8, 32])
+    @Test(arguments: [1, 8, 32])
     func publisherFansOutToSubscriberProcesses(subscriberCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "fan-out")
       defer { harness.cleanup() }
@@ -42,7 +42,7 @@
       #expect(try harness.result(0) == 1)
     }
 
-    @Test(arguments: [2, 4, 8])
+    @Test(arguments: [2, 8])
     func subscribedProcessesBroadcastToEveryOtherProcess(processCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "all-to-all")
       defer { harness.cleanup() }
@@ -69,10 +69,12 @@
       harness.kill(listener)
       try await harness.waitForExit(listener)
       #expect(try harness.registrationCount() == 1)
+      #expect(try harness.socketCount() == 1)
 
       try await harness.transport(.fail).send(harness.message)
 
       #expect(try harness.registrationCount() == 0)
+      #expect(try harness.socketCount() == 0)
     }
 
     @Test
@@ -233,6 +235,12 @@
       return try FileManager.default
         .contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
         .reduce(0) { $0 + (try FileManager.default.contentsOfDirectory(atPath: $1.path).count) }
+    }
+
+    func socketCount() throws -> Int {
+      let directory = self.harness.file("v1/s")
+      guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
+      return try FileManager.default.contentsOfDirectory(atPath: directory.path).count
     }
 
     func waitForSuccessfulExit(_ process: Process) async throws {

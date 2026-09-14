@@ -231,28 +231,38 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
   }
 
   private static func parseAPIs(_ expression: ExprSyntax) throws -> Set<API> {
-    let source = expression.trimmedDescription.filter { !$0.isWhitespace }
-    if source == ".standard" { return API.standard }
-    if source == ".all" { return Set(API.allCases) }
-    guard source.first == "[", source.last == "]" else {
-      throw MacroExpansionErrorMessage(
-        "'apis' must be '.standard', '.all', '[]', or an array literal of API members"
-      )
+    let invalidExpression = MacroExpansionErrorMessage(
+      "'apis' must be '.standard', '.all', '[]', or an array literal of API members"
+    )
+    if let member = expression.as(MemberAccessExprSyntax.self),
+      member.base == nil, member.declName.argumentNames == nil
+    {
+      switch member.declName.baseName.text {
+      case "standard": return API.standard
+      case "all": return Set(API.allCases)
+      default: throw invalidExpression
+      }
+    }
+    guard let array = expression.as(ArrayExprSyntax.self) else {
+      throw invalidExpression
     }
 
-    let contents = source.dropFirst().dropLast()
-    guard !contents.isEmpty else { return [] }
     var result: Set<API> = []
-    for component in contents.split(separator: ",") {
-      let member = component.drop(while: { $0 == "." })
-      if member == "standard" {
-        result.formUnion(API.standard)
-      } else if member == "all" {
-        result.formUnion(API.allCases)
-      } else if let api = API(rawValue: String(member)) {
+    for element in array.elements {
+      guard let member = element.expression.as(MemberAccessExprSyntax.self),
+        member.base == nil, member.declName.argumentNames == nil
+      else {
+        throw invalidExpression
+      }
+      let name = member.declName.baseName.text
+      switch name {
+      case "standard": result.formUnion(API.standard)
+      case "all": result.formUnion(API.allCases)
+      default:
+        guard let api = API(rawValue: name) else {
+          throw MacroExpansionErrorMessage("unknown SQLite library API '.\(name)'")
+        }
         result.insert(api)
-      } else {
-        throw MacroExpansionErrorMessage("unknown SQLite library API '.\(member)'")
       }
     }
     return result
