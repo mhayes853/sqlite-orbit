@@ -144,14 +144,19 @@ private final class Endpoint: Sendable {
   // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Lock(())
 
+  // Discoverability is changed while the handlers it describes are locked, so that a subscription
+  // added concurrently with the removal of the last one cannot have its registration undone by the
+  // removal that raced it, leaving a live subscriber undiscoverable.
   func add(
     databaseIdentifier: OrbitDatabaseIdentifier,
     handler: @escaping @Sendable (OrbitIPCMessage) -> Void,
     network: InMemoryIPCTransport.Network
   ) -> UInt64 {
-    let added = self.handlers.withLock { $0.insert(handler, for: databaseIdentifier) }
-    if added.isFirstForKey { network.register(self, for: databaseIdentifier) }
-    return added.identifier
+    self.handlers.withLock { handlers in
+      let added = handlers.insert(handler, for: databaseIdentifier)
+      if added.isFirstForKey { network.register(self, for: databaseIdentifier) }
+      return added.identifier
+    }
   }
 
   func remove(
@@ -159,8 +164,11 @@ private final class Endpoint: Sendable {
     databaseIdentifier: OrbitDatabaseIdentifier,
     network: InMemoryIPCTransport.Network
   ) {
-    let becameEmpty = self.handlers.withLock { $0.remove(identifier, for: databaseIdentifier) }
-    if becameEmpty { network.unregister(self, for: databaseIdentifier) }
+    self.handlers.withLock { handlers in
+      if handlers.remove(identifier, for: databaseIdentifier) {
+        network.unregister(self, for: databaseIdentifier)
+      }
+    }
   }
 
   func deliver(_ message: OrbitIPCMessage) {
@@ -172,8 +180,10 @@ private final class Endpoint: Sendable {
   }
 
   func shutdown(network: InMemoryIPCTransport.Network) {
-    for databaseIdentifier in self.handlers.withLock({ $0.removeAll() }) {
-      network.unregister(self, for: databaseIdentifier)
+    self.handlers.withLock { handlers in
+      for databaseIdentifier in handlers.removeAll() {
+        network.unregister(self, for: databaseIdentifier)
+      }
     }
   }
 }
