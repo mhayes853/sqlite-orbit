@@ -2,22 +2,32 @@
 ///
 /// A source is built once, when a property is created or given a new request, and is what the
 /// storage re-subscribes to. Building it renders the request's statement, so two sources compare
-/// equal by ``OrbitFetchRequestID`` exactly when they describe the same read.
+/// equal by ``OrbitFetchRequestID`` exactly when they describe the same read — and two sources
+/// that describe the same read are given the same observation to subscribe to, so that the
+/// properties behind them share one subscription to the database rather than repeating each
+/// other's work.
 struct OrbitFetchSource<Value: Sendable>: Sendable {
   let id: OrbitFetchRequestID
   let database: any OrbitObservableDatabase
   let scheduler: any OrbitValueObservationScheduler
-  let observation: OrbitValueObservation<Value>
+
+  /// Holds the shared observation for as long as this source exists.
+  private let shared: OrbitFetchObservationBox<Value>
+
+  var observation: OrbitValueObservation<Value> { shared.observation }
 
   init(
     request: some OrbitFetchKeyRequest<Value>,
     database: any OrbitObservableDatabase,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
-    self.id = OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
+    let id = OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
+    self.id = id
     self.database = database
     self.scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
-    self.observation = OrbitValueObservation.tracking { try request.fetch($0) }
+    self.shared = OrbitFetchObservationRegistry.shared.box(for: id) {
+      OrbitValueObservation.tracking { try request.fetch($0) }
+    }
   }
 }
 

@@ -436,6 +436,61 @@
     }
 
     @Test
+    func identicalPropertiesShareOneSubscriptionAndItsValues() async throws {
+      let database = try await countingRemindersDatabase(titles: "Milk")
+      let first = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+      let second = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+
+      #expect(first.value == ["Milk"])
+      #expect(second.value == ["Milk"])
+      #expect(database.subscriptionCount == 1)
+
+      try await database.write { transaction in
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+      }
+      try await waitUntil { first.value == ["Milk", "Milk"] }
+      try await waitUntil { second.value == ["Milk", "Milk"] }
+    }
+
+    @Test
+    func sharingEndsWithTheLastPropertyReadingThroughIt() async throws {
+      let database = try await countingRemindersDatabase(titles: "Milk")
+      let first = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+      let second = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+      let id = try #require(first.requestID)
+      #expect(first.value == ["Milk"])
+      #expect(second.value == ["Milk"])
+
+      first.detach()
+      #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
+      try await database.write { transaction in
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+      }
+      try await waitUntil { second.value == ["Milk", "Milk"] }
+      #expect(first.untrackedValue == ["Milk"])
+
+      second.detach()
+      #expect(!OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
+    }
+
+    @Test
+    func propertiesDescribingDifferentReadsDoNotShare() async throws {
+      let database = try await countingRemindersDatabase(titles: "Milk", "Eggs")
+      let milk = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+      let eggs = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Eggs"), database: database, scheduler: nil)
+
+      #expect(milk.value == ["Milk"])
+      #expect(eggs.value == ["Eggs"])
+      #expect(database.subscriptionCount == 2)
+    }
+
+    @Test
     func theDefaultDatabaseIsUsedWhenNoneIsGiven() async throws {
       let database = try await remindersDatabase(titles: "Milk")
 
@@ -982,6 +1037,109 @@
       }
     }
     return database
+  }
+
+  private func countingRemindersDatabase(
+    titles: String...
+  ) async throws -> CountingObservableDatabase {
+    let database = CountingObservableDatabase(try SQLiteQueue(path: ":memory:"))
+    try await database.write { transaction in
+      try transaction.execute(remindersSchema)
+      for title in titles {
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: title) })
+      }
+    }
+    return database
+  }
+
+  /// A database that reports its own commits and counts the observers registered on it.
+  ///
+  /// Nothing else reveals how many subscriptions a pair of fetch properties took out, which is
+  /// the whole question when they are meant to be sharing one.
+  private final class CountingObservableDatabase: OrbitObservableDatabase {
+    let defaultIdentifier: OrbitDatabaseIdentifier
+
+    private let base: SQLiteQueue
+    private let observers = OrbitDatabaseTransactionObservers()
+    private let subscriptions = Lock(0)
+
+    /// How many observers have been registered, whether or not they are still registered.
+    var subscriptionCount: Int {
+      subscriptions.withLock { $0 }
+    }
+
+    init(_ base: SQLiteQueue) {
+      self.base = base
+      self.defaultIdentifier = base.defaultIdentifier
+    }
+
+    func read<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) async throws -> Result {
+      try await base.read(body)
+    }
+
+    func readBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) throws -> Result {
+      try base.readBlocking(body)
+    }
+
+    func readWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.readWithoutTransaction(body)
+    }
+
+    func readWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) throws -> Result {
+      try base.readWithoutTransactionBlocking(body)
+    }
+
+    func write<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) async throws -> Result {
+      let (result, region) = try await base.write { transaction in
+        try transaction.recordingDatabaseRegion(body)
+      }
+      announceCommit(region: region)
+      return result
+    }
+
+    func writeBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) throws -> Result {
+      let (result, region) = try base.writeBlocking { transaction in
+        try transaction.recordingDatabaseRegion(body)
+      }
+      announceCommit(region: region)
+      return result
+    }
+
+    func writeWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) async throws -> Result {
+      try await base.writeWithoutTransaction(body)
+    }
+
+    func writeWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) throws -> Result {
+      try base.writeWithoutTransactionBlocking(body)
+    }
+
+    func subscribe(
+      transactionObserver: any OrbitDatabaseTransactionObserver
+    ) throws -> OrbitSubscription {
+      subscriptions.withLock { $0 += 1 }
+      return observers.subscribe(transactionObserver)
+    }
+
+    private func announceCommit(region: OrbitDatabaseRegion) {
+      observers.didChange(in: region)
+      observers.didCommit(origin: .local, region: region)
+    }
   }
 
   /// A scheduler that holds everything it is given until a test lets it go, and passes
