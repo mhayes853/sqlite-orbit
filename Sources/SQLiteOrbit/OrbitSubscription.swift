@@ -67,7 +67,12 @@ struct IdentifiedRegistry<Value: Sendable>: Sendable {
 
   @discardableResult
   mutating func remove(_ identifier: UInt64) -> Bool {
-    self.values.removeValue(forKey: identifier) != nil
+    self.removeValue(identifier) != nil
+  }
+
+  @discardableResult
+  mutating func removeValue(_ identifier: UInt64) -> Value? {
+    self.values.removeValue(forKey: identifier)
   }
 
   mutating func removeAll() -> [Value] {

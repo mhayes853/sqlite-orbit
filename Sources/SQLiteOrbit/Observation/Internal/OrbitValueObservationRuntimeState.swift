@@ -1,4 +1,19 @@
+/// Whether a subscriber is still subscribed, shared by every copy of it.
+///
+/// A publication takes its recipients from the registry and a scheduler can run their callbacks
+/// long afterwards, so cancellation has to be recognized again at the moment a callback would run.
+final class OrbitValueObservationSubscriberLifetime: Sendable {
+  private let isCancelled = Lock(false)
+
+  var isSubscribed: Bool { self.isCancelled.withLock { !$0 } }
+
+  func cancel() {
+    self.isCancelled.withLock { $0 = true }
+  }
+}
+
 struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
+  let lifetime = OrbitValueObservationSubscriberLifetime()
   let scheduler: any OrbitValueObservationScheduler
   let onError: @Sendable (any Error) -> Void
   let onChange: @Sendable (OrbitValueObservationChange<Value>) -> Void
@@ -7,10 +22,12 @@ struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
     _ outcome: Result<OrbitValueObservationChange<Value>, any Error>,
     from isolation: isolated (any Actor)?
   ) {
-    self.scheduler.schedule(from: isolation) {
+    guard self.lifetime.isSubscribed else { return }
+    self.scheduler.schedule(from: isolation) { [lifetime, onError, onChange] in
+      guard lifetime.isSubscribed else { return }
       switch outcome {
-      case .success(let change): self.onChange(change)
-      case .failure(let error): self.onError(error)
+      case .success(let change): onChange(change)
+      case .failure(let error): onError(error)
       }
     }
   }
@@ -151,8 +168,13 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     )
   }
 
+  /// Unsubscribes a subscriber, so that a publication already on its way to it is dropped.
+  ///
+  /// - Returns: Whether that left the observation with no subscribers at all.
   mutating func remove(_ identifier: UInt64) -> Bool {
-    self.subscribers.remove(identifier) && self.subscribers.isEmpty
+    guard let subscriber = self.subscribers.removeValue(identifier) else { return false }
+    subscriber.lifetime.cancel()
+    return self.subscribers.isEmpty
   }
 
   mutating func publish(
