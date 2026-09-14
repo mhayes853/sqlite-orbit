@@ -1313,6 +1313,54 @@
       #expect(columns == ["id"])
     }
 
+    @Test
+    func anEraseThatCannotDropAnObjectFailsRatherThanSpinning() async throws {
+      // An object that survives its own `DROP` — a virtual table's shadow tables are the ones
+      // SQLite is known to refuse — would otherwise be read from the schema and dropped forever.
+      // A library whose `DROP` compiles to nothing stands in for one, since a build that refuses
+      // to compile the statement fails the erase on its own.
+      var configuration = SQLiteConfiguration.default
+      configuration.library = libraryIgnoringDrops()
+      let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+      var original = makeMigrator()
+      original.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      try await original.migrate(driver)
+
+      var changed = makeMigrator()
+      changed.eraseDatabaseOnSchemaChange = true
+      changed.registerMigration("Create items") { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
+      }
+
+      let error = await #expect(throws: SQLiteError.self) {
+        try await changed.migrate(driver)
+      }
+
+      #expect(error?.message?.contains("still in the schema after being dropped") == true)
+    }
+
+    /// The build under test, with `DROP` statements compiled into a statement that does nothing.
+    private func libraryIgnoringDrops() -> SQLiteLibrary {
+      let base = builtInTestLibrary
+      var library = base
+      library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail
+        in
+        // Only the NUL-terminated form needs handling: that is how a whole statement, which is
+        // what a `DROP` arrives as, reaches the library.
+        guard byteCount < 0, let sql, String(cString: sql).hasPrefix("DROP ") else {
+          return base.statements.preparation
+            .prepare(connection, sql, byteCount, flags, statement, tail)
+        }
+        return "SELECT 1 WHERE 0"
+          .withCString {
+            base.statements.preparation.prepare(connection, $0, -1, flags, statement, tail)
+          }
+      }
+      return library
+    }
+
     @Test(arguments: SQLiteTestDriver.allCases)
     func migratingWithTheFlagOffLeavesAChangedSchemaAlone(_ kind: SQLiteTestDriver) async throws {
       let directory = try makeShortTemporaryDirectory("erase")
