@@ -51,6 +51,7 @@ extension OrbitValueObservationChange: Hashable where Value: Hashable {}
 
 private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
+  case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
   case query(QueryFragment)
 
@@ -90,6 +91,26 @@ private typealias OrbitValueObservationFetch =
 
 private typealias OrbitValueObservationRuntimeFetch =
   @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitValueObservationFetchOutput
+
+/// The region an observation recorded the first time it fetched, for it to reuse afterwards.
+///
+/// One of these belongs to one runtime rather than to the observation it came from, because the
+/// same observation subscribed to two databases is two schemas, and a region recorded against one
+/// says nothing about the other.
+private final class OrbitValueObservationFirstFetchRegion: Sendable {
+  private let recorded = Lock<OrbitDatabaseRegion?>(nil)
+
+  var region: OrbitDatabaseRegion? {
+    recorded.withLock { $0 }
+  }
+
+  func record(_ region: OrbitDatabaseRegion) {
+    recorded.withLock { recorded in
+      guard recorded == nil else { return }
+      recorded = region
+    }
+  }
+}
 
 private enum OrbitValueObservationReduction<Value: Sendable>: Sendable {
   case emit(Value)
@@ -187,6 +208,36 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .automatic, fetch)
+  }
+
+  /// Creates an observation whose value is produced by `fetch`, watching whatever the first
+  /// fetch read.
+  ///
+  /// ``tracking(_:)`` works out the region to watch on every fetch, because a fetch is free to
+  /// read a different part of the database each time it runs. When it is not — when the fetch
+  /// reads the same tables whatever the data says — that is a read authorizer installed and a
+  /// region built for an answer already known. This records the region the first fetch read and
+  /// watches it from then on, so every later fetch is the query and nothing else.
+  ///
+  /// Use it only when the fetch's reads do not depend on what it finds. A fetch that reads one
+  /// table and then, depending on a row it found there, reads a second is not one of these: the
+  /// second table would go unwatched whenever the first fetch happened not to reach it, and a
+  /// write to it would be missed. ``tracking(region:_:)`` says the same thing ahead of time, for
+  /// a fetch whose region you already know.
+  ///
+  /// ```swift
+  /// let incompleteCount = OrbitValueObservation.trackingConstantRegion { transaction in
+  ///   try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
+  /// }
+  /// ```
+  ///
+  /// - Parameter fetch: Reads the observed value from a transaction, reading the same tables
+  ///   every time.
+  /// - Returns: An observation that produces whatever `fetch` returns.
+  public static func trackingConstantRegion(
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .constantOnFirstFetch, fetch)
   }
 
   /// Creates an observation whose value is produced by `fetch` and whose region is supplied by
@@ -1052,6 +1103,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     reducer: OrbitValueObservationReducer<Value>
   ) {
     let externalTracking = ExternalTracking()
+    let firstFetchRegion = OrbitValueObservationFirstFetchRegion()
     self.reducer = reducer
     self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
@@ -1066,6 +1118,22 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
           let payload = try transaction.withObserver(recorder) {
             try fetch(transaction)
           }
+          return OrbitValueObservationUntrackedFetchOutput(
+            payload: payload,
+            region: recorder.region
+          )
+        case .constantOnFirstFetch:
+          if let region = firstFetchRegion.region {
+            return OrbitValueObservationUntrackedFetchOutput(
+              payload: try fetch(transaction),
+              region: region
+            )
+          }
+          let recorder = OrbitValueObservationReadRegionRecorder()
+          let payload = try transaction.withObserver(recorder) {
+            try fetch(transaction)
+          }
+          firstFetchRegion.record(recorder.region)
           return OrbitValueObservationUntrackedFetchOutput(
             payload: payload,
             region: recorder.region

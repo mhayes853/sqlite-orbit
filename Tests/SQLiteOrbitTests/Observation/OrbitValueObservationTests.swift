@@ -181,6 +181,69 @@
     }
 
     @Test
+    func constantRegionObservesTheRegionItsFirstFetchRead() async throws {
+      let driver = try await itemsDatabase()
+      let observation = OrbitValueObservation<Int>
+        .trackingConstantRegion { transaction in
+          try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      try await driver.write { transaction in
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func constantRegionIgnoresATableOnlyALaterFetchReads() async throws {
+      let driver = try await itemsDatabase()
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE labels (id INTEGER PRIMARY KEY)")
+      }
+      // The second table is read only once the first has a row, so the first fetch never reaches
+      // it and the recorded region never mentions it.
+      let observation = OrbitValueObservation<Int>
+        .trackingConstantRegion { transaction in
+          let items = try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+            ?? 0
+          guard items > 0 else { return 0 }
+          return try items
+            + (transaction.fetchOne(#sql("SELECT COUNT(*) FROM labels", as: Int.self)) ?? 0)
+        }
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+      try await driver.write { transaction in
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      try await driver.write { transaction in
+        _ = try transaction.execute(#sql("INSERT INTO labels (id) VALUES (1)", as: Void.self))
+      }
+      try await Task.sleep(for: .milliseconds(100))
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
     func commitFailureDiscardsThePendingValue() async throws {
       let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in
