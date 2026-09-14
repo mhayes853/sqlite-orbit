@@ -5,18 +5,20 @@
   @testable import SQLiteOrbit
 
   @Test
-  func unixDatagramTransportDeliversToOnePeerAndNotToItself() async throws {
+  func unixDatagramTransportBroadcastsToEveryPeerButTheSender() async throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
     let sender = try ipcTransport(directory)
-    let receiver = try ipcTransport(directory)
-    let senderMessages = IPCMessageRecorder()
-    let receiverMessages = IPCMessageRecorder()
-    let database = OrbitDatabaseIdentifier(rawValue: "example")
-    let subscriptions = try [
-      sender.subscribe(to: database, onMessage: senderMessages.append),
-      receiver.subscribe(to: database, onMessage: receiverMessages.append)
-    ]
+    let receivers = try (0..<8).map { _ in try ipcTransport(directory) }
+    let senderRecorder = IPCMessageRecorder()
+    let recorders = receivers.map { _ in IPCMessageRecorder() }
+    let database = OrbitDatabaseIdentifier(rawValue: "broadcast")
+    let subscriptions =
+      try [sender.subscribe(to: database, onMessage: senderRecorder.append)]
+      + zip(receivers, recorders)
+      .map {
+        try $0.subscribe(to: database, onMessage: $1.append)
+      }
     let message = OrbitIPCMessage.transactionDidCommit(
       .init(
         databaseIdentifier: database,
@@ -27,33 +29,12 @@
     )
 
     try await sender.send(message)
-    try await receiverMessages.waitForCount(1)
-    try await Task.sleep(for: .milliseconds(20))
-
-    #expect(receiverMessages.values == [message])
-    #expect(senderMessages.values.isEmpty)
-    _ = subscriptions
-  }
-
-  @Test
-  func unixDatagramTransportBroadcastsToEveryPeer() async throws {
-    let directory = try ipcTestDirectory()
-    defer { remove(directory) }
-    let sender = try ipcTransport(directory)
-    let receivers = try (0..<8).map { _ in try ipcTransport(directory) }
-    let recorders = receivers.map { _ in IPCMessageRecorder() }
-    let database = OrbitDatabaseIdentifier(rawValue: "broadcast")
-    let subscriptions = try zip(receivers, recorders)
-      .map {
-        try $0.subscribe(to: database, onMessage: $1.append)
-      }
-    let message = commit(database)
-
-    try await sender.send(message)
     for recorder in recorders {
       try await recorder.waitForCount(1)
       #expect(recorder.values == [message])
     }
+    try await Task.sleep(for: .milliseconds(20))
+    #expect(senderRecorder.values.isEmpty)
     _ = subscriptions
   }
 
@@ -135,37 +116,24 @@
   }
 
   @Test
-  func sharedReturnsTheSameTransportForRepeatedCallsWithTheSameConfiguration() throws {
+  func sharedReusesOnlyTransportsWithTheSameConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
     let configuration = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .fail
     )
-
-    let first = try UnixDatagramIPCTransport.shared(configuration: configuration)
-    let second = try UnixDatagramIPCTransport.shared(configuration: configuration)
-
-    #expect(first === second)
-  }
-
-  @Test
-  func sharedReturnsDifferentTransportsForDifferentConfigurations() throws {
-    let directory = try ipcTestDirectory()
-    defer { remove(directory) }
-    let fail = UnixDatagramIPCTransport.Configuration(
-      directory: directory,
-      backPressure: .fail
-    )
-    let suspend = UnixDatagramIPCTransport.Configuration(
+    let otherConfiguration = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .suspend(upTo: .milliseconds(1))
     )
 
-    let first = try UnixDatagramIPCTransport.shared(configuration: fail)
-    let second = try UnixDatagramIPCTransport.shared(configuration: suspend)
+    let first = try UnixDatagramIPCTransport.shared(configuration: configuration)
+    let second = try UnixDatagramIPCTransport.shared(configuration: configuration)
+    let other = try UnixDatagramIPCTransport.shared(configuration: otherConfiguration)
 
-    #expect(first !== second)
+    #expect(first === second)
+    #expect(first !== other)
   }
 
   @Test

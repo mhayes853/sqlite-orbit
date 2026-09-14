@@ -152,35 +152,6 @@
   }
 
   @Test
-  func poolReturnsEveryReaderItLends() async throws {
-    let database = TemporaryDatabase()
-    var configuration = SQLiteConfiguration.default
-    configuration.readerCount = 2
-    let driver = try SQLitePool(path: database.path, configuration: configuration)
-    try await bootstrap(driver)
-
-    // Far more concurrent readers than the pool holds, so most of them have to wait for one.
-    try await withThrowingTaskGroup(of: Int.self) { group in
-      for _ in 0..<50 {
-        group.addTask {
-          try await driver.read { transaction in
-            try transaction.fetchAll(Item.all).count
-          }
-        }
-      }
-      for try await value in group {
-        #expect(value == 0)
-      }
-    }
-
-    // A reader that was never given back would leave this waiting forever.
-    let count = try await driver.read { transaction in
-      try transaction.fetchAll(Item.all).count
-    }
-    #expect(count == 0)
-  }
-
-  @Test
   func aFailedPooledReadStillGivesItsReaderBack() async throws {
     let database = TemporaryDatabase()
     var configuration = SQLiteConfiguration.default

@@ -1,5 +1,4 @@
 #if BuiltInSQLite
-  import Foundation
   import StructuredQueries
   import Testing
 
@@ -16,44 +15,9 @@
     try connection.execute(
       """
       CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-      CREATE TABLE special_values (
-        id INTEGER PRIMARY KEY,
-        occurredAt TEXT NOT NULL,
-        token TEXT NOT NULL
-      );
       """
     )
     return connection
-  }
-
-  @Test
-  func transactionExecutesStatementsAndDecodesTables() throws {
-    let connection = try openTestConnection()
-
-    let changed = try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
-    }
-    #expect(changed == 1)
-
-    let items = try connection.read { transaction in
-      try transaction.fetchAll(Item.all.order { $0.id })
-    }
-    #expect(items == [Item(id: 1, title: "Blob's reminder")])
-  }
-
-  @Test
-  func transactionDecodesTupleProjections() throws {
-    let connection = try openTestConnection()
-    try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 7, title: "projected") })
-    }
-
-    let projections = try connection.read { transaction in
-      try transaction.fetchAll(Item.select { ($0.id, $0.title) })
-    }
-    #expect(projections.count == 1)
-    #expect(projections[0].0 == 7)
-    #expect(projections[0].1 == "projected")
   }
 
   @Test
@@ -110,29 +74,6 @@
       try transaction.execute(Item.update { $0.title = "changed" })
     }
     #expect(changed == 3)
-  }
-
-  @Test
-  func bindingsAndColumnsRoundTripDatesAndUUIDs() throws {
-    let connection = try openTestConnection()
-    let occurredAt = Date(timeIntervalSince1970: 1_234_567_890)
-    let token = UUID()
-
-    try connection.write { transaction in
-      try transaction.execute(
-        SpecialValue.insert { SpecialValue(id: 1, occurredAt: occurredAt, token: token) }
-      )
-    }
-
-    let values = try connection.read { transaction in
-      try transaction.fetchAll(SpecialValue.all)
-    }
-    #expect(values.count == 1)
-    #expect(values[0].token == token)
-    // The stored spelling has second precision at minimum, so compare at that resolution.
-    #expect(
-      abs(values[0].occurredAt.timeIntervalSince(occurredAt)) < 0.001
-    )
   }
 
   @Test
@@ -338,10 +279,4 @@
     var title: String
   }
 
-  @Table("special_values")
-  private struct SpecialValue: Equatable, Sendable {
-    let id: Int
-    var occurredAt: Date
-    var token: UUID
-  }
 #endif

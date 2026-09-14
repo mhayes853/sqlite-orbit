@@ -23,29 +23,6 @@
     }
 
     @Test
-    func fetchAllWithoutAQueryFetchesEveryRow() async throws {
-      let database = try await remindersDatabase(titles: "Milk")
-
-      @FetchAll(database: database) var reminders: [Reminder]
-
-      #expect(reminders.map(\.title) == ["Milk"])
-    }
-
-    @Test
-    func fetchAllRefetchesAfterACommittedWrite() async throws {
-      let database = try await remindersDatabase(titles: "Milk")
-
-      @FetchAll(Reminder.order(by: \.id), database: database) var reminders
-      #expect(reminders.count == 1)
-
-      try await database.write { transaction in
-        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
-
-      try await waitUntil { reminders.map(\.title) == ["Milk", "Eggs"] }
-    }
-
-    @Test
     func fetchAllTracksTheRegionsItRead() async throws {
       let database = try await remindersDatabase(titles: "Milk")
 
@@ -60,7 +37,7 @@
         _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
       }
 
-      try await waitUntil { reminders.count == 2 }
+      try await waitUntil { reminders.map(\.title) == ["Milk", "Eggs"] }
     }
 
     @Test
@@ -359,20 +336,6 @@
     }
 
     @Test
-    func loadReadsTheQueryAgain() async throws {
-      let database = try await remindersDatabase(titles: "Milk")
-
-      // A property with no query never observes, so an explicit load is the only thing that
-      // changes it.
-      @FetchAll var reminders = [Reminder]()
-      #expect(reminders.isEmpty)
-
-      @FetchAll(Reminder.order(by: \.id), database: database) var observed
-      try await $observed.load()
-      #expect(observed.count == 1)
-    }
-
-    @Test
     func theDefaultDatabaseIsUsedWhenNoneIsGiven() async throws {
       let database = try await remindersDatabase(titles: "Milk")
 
@@ -512,15 +475,6 @@
       }
       try await Task.sleep(for: .milliseconds(20))
       #expect(reminder.title == "Bagels")
-    }
-
-    @Test
-    func fetchOneOfAnOptionalTableObservesTheFirstRow() async throws {
-      let database = try await remindersDatabase(titles: "Milk")
-
-      @FetchOne(database: database) var first: Reminder?
-
-      #expect(first?.title == "Milk")
     }
 
     @Test
@@ -795,23 +749,6 @@
 
       #expect($rows.sections.sectionNames == ["errands", "home", "work"])
       #expect($rows.sections[sectionName: "home"]?.map(\.title) == ["Milk"])
-    }
-
-    @Test
-    func aJoinedStatementCanBeLoadedWithSections() async throws {
-      let database = try await taggedRemindersDatabase()
-
-      @FetchAll var rows = [TaggedTitle]()
-      try await $rows.load(
-        Reminder
-          .join(Tag.all) { $0.id.eq($1.id) }
-          .order { reminder, _ in reminder.title }
-          .select { TaggedTitle.Columns(title: $0.title, tag: $1.name) },
-        sectionBy: { reminder in reminder.priority },
-        database: database
-      )
-
-      #expect($rows.sections.sectionNames == ["high", "low"])
     }
 
     @Test

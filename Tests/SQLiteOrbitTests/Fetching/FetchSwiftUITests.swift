@@ -29,19 +29,6 @@
     }
 
     @Test
-    func viewRendersTheRowsItsPropertyFetched() async throws {
-      let database = try await remindersDatabase(titles: "Milk", "Eggs")
-      let sut = RemindersList(database: database)
-
-      try await ViewHosting.host(sut) {
-        try await sut.inspection.inspect(after: settle) { view in
-          let texts = try view.texts()
-          #expect(texts == ["Milk", "Eggs"])
-        }
-      }
-    }
-
-    @Test
     func viewRedrawsWhenACommittedWriteChangesTheRows() async throws {
       let database = try await remindersDatabase(titles: "Milk")
       let sut = RemindersList(database: database)

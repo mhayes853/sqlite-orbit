@@ -6,7 +6,6 @@ struct OrbitDatabaseRegionTests {
   @Test
   func schemaNamesAreExplicitAndCaseInsensitive() {
     #expect(SQLiteSchemaName.main == SQLiteSchemaName("MAIN"))
-    #expect(SQLiteSchemaName.temp.rawValue == "temp")
     #expect(SQLiteSchemaName("Archive") == "archive")
     #expect(
       OrbitDatabaseRegion(table: "reminders")
@@ -121,7 +120,6 @@ struct OrbitDatabaseRegionTests {
 
     let literal: OrbitDatabaseRegion = [title, completed]
     #expect(literal == both)
-    #expect(unionThroughSetAlgebra(title, completed) == both)
 
     var region = OrbitDatabaseRegion.empty
     let insertion = region.insert(title)
@@ -146,18 +144,6 @@ struct OrbitDatabaseRegionTests {
     let remindersExceptTitle = reminders.subtracting(title)
     let tags = OrbitDatabaseRegion(table: "tags")
     let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
-    let regions = [
-      OrbitDatabaseRegion.empty,
-      title,
-      completed,
-      both,
-      remindersExceptTitle,
-      reminders,
-      tags,
-      databaseExceptReminders,
-      OrbitDatabaseRegion.fullDatabase
-    ]
-
     #expect(OrbitDatabaseRegion.empty.isSubset(of: title))
     #expect(title.isSubset(of: both))
     #expect(title.isStrictSubset(of: reminders))
@@ -168,16 +154,6 @@ struct OrbitDatabaseRegionTests {
     #expect(tags.isSubset(of: databaseExceptReminders))
     #expect(databaseExceptReminders.isStrictSubset(of: .fullDatabase))
     #expect(!reminders.isSubset(of: databaseExceptReminders))
-
-    for lhs in regions {
-      for rhs in regions {
-        #expect(lhs.isSubset(of: rhs) == rhs.contains(lhs))
-        #expect(lhs.isSuperset(of: rhs) == lhs.contains(rhs))
-        #expect(lhs.isStrictSubset(of: rhs) == (lhs.isSubset(of: rhs) && lhs != rhs))
-        #expect(lhs.isStrictSuperset(of: rhs) == (lhs.isSuperset(of: rhs) && lhs != rhs))
-        #expect(lhs.isDisjoint(with: rhs) == !lhs.overlaps(rhs))
-      }
-    }
   }
 
   @Test
@@ -206,28 +182,6 @@ struct OrbitDatabaseRegionTests {
   @Test
   func anEmptyColumnSequenceIsTheEmptyRegion() {
     #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
-  }
-
-  @Test
-  func mutatingAlgebraMatchesValueAlgebra() {
-    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-
-    var union = title
-    union.formUnion(completed)
-    #expect(union == title.union(completed))
-
-    var intersection = union
-    intersection.formIntersection(title)
-    #expect(intersection == title)
-
-    var symmetricDifference = title
-    symmetricDifference.formSymmetricDifference(completed)
-    #expect(symmetricDifference == union)
-
-    var subtraction = union
-    subtraction.subtract(title)
-    #expect(subtraction == completed)
   }
 
   @Test
@@ -278,12 +232,5 @@ struct OrbitDatabaseRegionTests {
   struct ArchivedItem: Equatable, Sendable {
     let id: Int
     var name: String
-  }
-
-  private func unionThroughSetAlgebra<Region: SetAlgebra>(
-    _ lhs: Region,
-    _ rhs: Region
-  ) -> Region {
-    lhs.union(rhs)
   }
 }

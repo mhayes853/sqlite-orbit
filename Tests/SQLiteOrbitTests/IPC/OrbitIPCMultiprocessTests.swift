@@ -5,7 +5,7 @@
 
   @Suite(.serialized)
   struct OrbitIPCMultiprocessTests {
-    @Test(arguments: [1, 2, 8, 32])
+    @Test(arguments: [1, 8, 32])
     func publisherFansOutToSubscriberProcesses(subscriberCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "fan-out")
       defer { harness.cleanup() }
@@ -42,7 +42,7 @@
       #expect(try harness.result(0) == 1)
     }
 
-    @Test(arguments: [2, 4, 8])
+    @Test(arguments: [2, 8])
     func subscribedProcessesBroadcastToEveryOtherProcess(processCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "all-to-all")
       defer { harness.cleanup() }

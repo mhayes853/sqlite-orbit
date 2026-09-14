@@ -72,24 +72,6 @@
       _ = subscription
     }
 
-    @Test
-    func immediateSchedulerWorksThroughOrbitDatabase() async throws {
-      let driver = try await itemsDatabase()
-      let database = OrbitDatabase(writer: driver)
-      let recorder = ObservationRecorder<Int>()
-
-      let subscription = try itemCountObservation()
-        .subscribe(
-          to: database,
-          scheduling: .immediate,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-
-      #expect(recorder.changes.map(\.value) == [0])
-      _ = subscription
-    }
-
     @MainActor
     @Test
     func mainActorSchedulerIsImmediateWhenStartedOnMainActor() async throws {

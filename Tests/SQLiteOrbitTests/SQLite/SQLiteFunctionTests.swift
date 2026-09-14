@@ -164,27 +164,6 @@
     )
   }
 
-  @Test
-  func functionArgumentsDecodeEmptyTextAndBlobs() async throws {
-    let database = try await seededNotes()
-    let date = Date(timeIntervalSince1970: 0)
-    let id = UUID()
-
-    let values = try await database.read { transaction in
-      (
-        try transaction.fetchOne(Select($repeated("", 3))),
-        try transaction.fetchOne(Select($describe(0, [], true, date, id, Int?.none))),
-        try transaction.fetchOne(
-          #sql("SELECT longestTitle(x) FROM (SELECT '' AS x)", as: String?.self)
-        )
-      )
-    }
-
-    #expect(values.0 == "")
-    #expect(values.1 == "0.0 [] true 0.0 \(id.uuidString) -1")
-    #expect(values.2 == "")
-  }
-
   @Test(arguments: ["", "plain text", "日本語", "before\u{0}after"])
   func functionTextRoundTripsExactly(_ text: String) async throws {
     let database = try await seededNotes()

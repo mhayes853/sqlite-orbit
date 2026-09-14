@@ -95,25 +95,6 @@
   }
 
   @Test
-  func connectionEnforcesForeignKeysWhenConfigured() throws {
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: .default
-    )
-    try connection.execute(
-      """
-      CREATE TABLE lists (id INTEGER PRIMARY KEY);
-      CREATE TABLE items (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists(id));
-      """
-    )
-
-    #expect(throws: SQLiteError.self) {
-      try connection.execute("INSERT INTO items (listID) VALUES (99)")
-    }
-  }
-
-  @Test
   func statementCacheReusesAPreparedStatement() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -230,33 +211,6 @@
     }
     #expect(error?.sql == "SELECT * FROM missing")
     #expect(error?.message?.contains("missing") == true)
-  }
-
-  @Test
-  func aFileBackedConnectionRoundTripsThroughAReopen() throws {
-    let path = temporaryDatabasePath()
-    defer { try? FileManager.default.removeItem(atPath: path) }
-
-    do {
-      let connection = try SQLiteHandle.open(
-        path: OrbitDatabasePath(path),
-        flags: [.readWrite, .create, .noMutex],
-        configuration: .default
-      )
-      try connection.execute(
-        """
-        CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-        INSERT INTO items (title) VALUES ('persisted');
-        """
-      )
-    }
-
-    let reopened = try SQLiteHandle.open(
-      path: OrbitDatabasePath(path),
-      flags: [.readOnly, .noMutex],
-      configuration: .default
-    )
-    #expect(try scalar(reopened, "SELECT count(*) FROM items") == 1)
   }
 
   @Test

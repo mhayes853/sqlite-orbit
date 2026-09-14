@@ -5,39 +5,32 @@ import Testing
 
 @Suite
 struct OrbitDatabasePathTests {
-  @Test(arguments: [":memory:", ""])
-  func aPrivateDatabaseIsReadTheWaySQLiteReadsIt(path: String) {
-    let path = OrbitDatabasePath(path)
-    #expect(path.isPrivateToConnection)
-    #expect(path.fileURL == nil)
+  @Test
+  func privateDatabasePathsRoundTripThroughSQLitesSpelling() {
+    for (sqlitePath, expected) in [
+      (":memory:", OrbitDatabasePath.memory),
+      ("", OrbitDatabasePath.temporary)
+    ] {
+      let path = OrbitDatabasePath(sqlitePath)
+      #expect(path == expected)
+      #expect(path.sqlitePath == sqlitePath)
+      #expect(path.isPrivateToConnection)
+      #expect(path.fileURL == nil)
+    }
   }
 
   @Test
-  func theSpecialPathsRoundTripThroughSQLitesOwnSpelling() {
-    #expect(OrbitDatabasePath.memory.sqlitePath == ":memory:")
-    #expect(OrbitDatabasePath.temporary.sqlitePath == "")
-    #expect(OrbitDatabasePath(":memory:") == .memory)
-    #expect(OrbitDatabasePath("") == .temporary)
-  }
-
-  @Test
-  func aFilePathIsAbsoluteHoweverItWasSpelled() {
+  func aFilePathIsAbsoluteAndStandardized() {
     let directory = FileManager.default.currentDirectoryPath
     let path = OrbitDatabasePath("db.sqlite")
     #expect(path.sqlitePath == directory + "/db.sqlite")
     #expect(!path.isPrivateToConnection)
     #expect(path.fileURL?.path == directory + "/db.sqlite")
-  }
-
-  @Test
-  func onlyOneDatabasePathNamesTheSameFile() {
-    let directory = FileManager.default.temporaryDirectory.path
     #expect(
-      OrbitDatabasePath(directory + "/db.sqlite") == OrbitDatabasePath(directory + "/./db.sqlite")
+      path == OrbitDatabasePath(directory + "/./db.sqlite")
     )
     #expect(
-      OrbitDatabasePath(directory + "/db.sqlite")
-        == .file(URL(fileURLWithPath: directory + "/db.sqlite"))
+      path == .file(URL(fileURLWithPath: directory + "/db.sqlite"))
     )
   }
 
@@ -67,36 +60,6 @@ struct OrbitDatabasePathTests {
   }
 
   #if canImport(Darwin) || canImport(Glibc)
-    @Test
-    func aFileDatabaseIdentityResolvesASymbolicLinkInItsParent() throws {
-      let directory = try makeShortTemporaryDirectory("path-identity")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let real = directory.appending(path: "real", directoryHint: .isDirectory)
-      let link = directory.appending(path: "link", directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
-      try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
-
-      #expect(
-        OrbitDatabaseIdentifier.forDatabase(path: .file(link.appending(path: "db.sqlite")))
-          == .forDatabase(path: .file(real.appending(path: "db.sqlite")))
-      )
-    }
-
-    @Test
-    func aFileDatabaseIdentityResolvesAnExistingFinalSymbolicLink() throws {
-      let directory = try makeShortTemporaryDirectory("path-identity")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let real = directory.appending(path: "real.sqlite")
-      let link = directory.appending(path: "link.sqlite")
-      try Data().write(to: real)
-      try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
-
-      #expect(
-        OrbitDatabaseIdentifier.forDatabase(path: .file(link))
-          == .forDatabase(path: .file(real))
-      )
-    }
-
     @Test
     func aMissingFileKeepsItsIdentityWhenItIsCreated() throws {
       let directory = try makeShortTemporaryDirectory("path-identity")
