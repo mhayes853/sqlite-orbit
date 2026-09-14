@@ -78,7 +78,7 @@
         connection.isForeignKeysEnabled = false
         #expect(wasEnabled && !connection.isForeignKeysEnabled)
         // With enforcement off the orphan is accepted, which the pragma alone would not show.
-        try connection.transaction { transaction in _ = try transaction.execute(orphan) }
+        try connection.transaction { transaction in try transaction.execute(orphan) }
         return try connection.fetchOne(foreignKeys)
       }
       #expect(during == 0)

@@ -77,11 +77,11 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// }
   /// ```
   ///
-  /// Setting the timeout, and putting the configured one back, both go through
-  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
-  /// installed. An access that leaves this alone keeps such a handler, since the configured
-  /// timeout is only put back after a change, but once it is set the connection waits by the
-  /// configured timeout rather than the handler.
+  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
+  /// handler and which therefore replaces whatever handler the connection had. A
+  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
+  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
+  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     get { handle.pointee.settings.pointee.busyTimeout }
     nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
@@ -224,11 +224,11 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// }
   /// ```
   ///
-  /// Setting the timeout, and putting the configured one back, both go through
-  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
-  /// installed. An access that leaves this alone keeps such a handler, since the configured
-  /// timeout is only put back after a change, but once it is set the connection waits by the
-  /// configured timeout rather than the handler.
+  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
+  /// handler and which therefore replaces whatever handler the connection had. A
+  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
+  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
+  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     get { handle.pointee.settings.pointee.busyTimeout }
     nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }

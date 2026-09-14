@@ -11,13 +11,15 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     case aggregateFunctions
     case collations
     case encryption
+    case busyHandler
 
     static let standard: Set<Self> = [
       .trustedSchema,
       .authorizer,
       .scalarFunctions,
       .aggregateFunctions,
-      .collations
+      .collations,
+      .busyHandler
     ]
   }
 
@@ -76,6 +78,10 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     let authorizer = group(
       .authorizer,
       "SQLiteLibrary.Authorizer(install: \(raw: qualifier)sqlite3_set_authorizer)"
+    )
+    let busyHandler = group(
+      .busyHandler,
+      "SQLiteLibrary.BusyHandler(install: \(raw: qualifier)sqlite3_busy_handler)"
     )
     let scalarFunctions = group(
       .scalarFunctions,
@@ -164,6 +170,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           name: \(raw: qualifier)sqlite3_column_name
         ),
         authorizer: \(authorizer),
+        busyHandler: \(busyHandler),
         \(labeledArgument("trustedSchema", trustedSchema)),
         \(labeledArgument("scalarFunctions", scalarFunctions)),
         \(labeledArgument("aggregateFunctions", aggregateFunctions)),

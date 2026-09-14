@@ -8,7 +8,8 @@ struct SQLiteLibraryMacroTests {
     "",
     "apis: . /* defaults */ standard",
     "apis: [.standard, /* trailing comment */]",
-    "apis: [.trustedSchema, .authorizer, .scalarFunctions, .aggregateFunctions, .collations]"
+    "apis: [.trustedSchema, .authorizer, .scalarFunctions, .aggregateFunctions, .collations,"
+      + " .busyHandler]"
   ])
   func unqualifiedLibrary(arguments: String) {
     assertMacro {
@@ -76,6 +77,7 @@ struct SQLiteLibraryMacroTests {
           name: sqlite3_column_name
         ),
         authorizer: SQLiteLibrary.Authorizer(install: sqlite3_set_authorizer),
+        busyHandler: SQLiteLibrary.BusyHandler(install: sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
           try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
         },
@@ -218,6 +220,7 @@ struct SQLiteLibraryMacroTests {
           name: SQLCipher.sqlite3_column_name
         ),
         authorizer: SQLiteLibrary.Authorizer(install: SQLCipher.sqlite3_set_authorizer),
+        busyHandler: SQLiteLibrary.BusyHandler(install: SQLCipher.sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
           try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
         },
@@ -360,6 +363,7 @@ struct SQLiteLibraryMacroTests {
           name: TursoSQLite3.sqlite3_column_name
         ),
         authorizer: nil,
+        busyHandler: nil,
         trustedSchema: nil,
         scalarFunctions: nil,
         aggregateFunctions: nil,

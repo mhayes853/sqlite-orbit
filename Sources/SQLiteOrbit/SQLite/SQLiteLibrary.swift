@@ -24,6 +24,14 @@ public typealias SQLiteComparator =
     UnsafeMutableRawPointer?, Int32, UnsafeRawPointer?, Int32, UnsafeRawPointer?
   ) -> Int32
 
+/// The callback SQLite invokes while a connection waits for a lock another one holds.
+///
+/// It receives the pointer the handler was installed with and how many times it has already been
+/// invoked for this lock, and returns non-zero to wait and try again or zero to give up with
+/// `SQLITE_BUSY`.
+public typealias SQLiteBusyCallback =
+  @convention(c) (UnsafeMutableRawPointer?, Int32) -> Int32
+
 /// The callback SQLite invokes while authorizing statement compilation.
 public typealias SQLiteAuthorizerCallback =
   @convention(c) (
@@ -60,6 +68,8 @@ public struct SQLiteLibraryFeature: RawRepresentable, Hashable, Sendable {
   public static let multiprocessFileSharing = Self(rawValue: "multiprocess file sharing")
   /// Checking the whole database for foreign key violations with `PRAGMA foreign_key_check`.
   public static let foreignKeyCheck = Self(rawValue: "foreign key checks")
+  /// Deciding how long to wait for a lock with a callback rather than a fixed timeout.
+  public static let busyHandler = Self(rawValue: "busy handlers")
 }
 
 /// Reported when an operation is not implemented by the selected SQLite library.
@@ -116,6 +126,11 @@ public struct SQLiteLibrary: Sendable {
   public var columns: Columns
   /// Statement-compilation authorization, when the library implements it faithfully.
   public var authorizer: Authorizer?
+  /// Busy-handler installation, when the library implements it faithfully.
+  ///
+  /// A library without this can still wait for a lock by the connection's busy timeout, so only a
+  /// ``SQLiteConfiguration/busyHandler`` is refused for want of it.
+  public var busyHandler: BusyHandler?
   /// Trusted-schema control, when the library implements it faithfully.
   public var trustedSchema: SQLiteTrustedSchemaControl?
   /// Custom scalar function support, when the library implements it faithfully.
@@ -144,6 +159,7 @@ public struct SQLiteLibrary: Sendable {
     bindings: Bindings,
     columns: Columns,
     authorizer: Authorizer? = nil,
+    busyHandler: BusyHandler? = nil,
     trustedSchema: SQLiteTrustedSchemaControl? = nil,
     scalarFunctions: ScalarFunctions? = nil,
     aggregateFunctions: AggregateFunctions? = nil,
@@ -160,6 +176,7 @@ public struct SQLiteLibrary: Sendable {
     self.bindings = bindings
     self.columns = columns
     self.authorizer = authorizer
+    self.busyHandler = busyHandler
     self.trustedSchema = trustedSchema
     self.scalarFunctions = scalarFunctions
     self.aggregateFunctions = aggregateFunctions
@@ -198,6 +215,8 @@ extension SQLiteLibrary {
     public static let collations = Self(rawValue: 1 << 4)
     /// Codec entry points supplied by SQLCipher-compatible builds.
     public static let encryption = Self(rawValue: 1 << 5)
+    /// Busy-handler installation through `sqlite3_busy_handler`.
+    public static let busyHandler = Self(rawValue: 1 << 6)
 
     /// The optional APIs provided by an ordinary SQLite build.
     public static let standard: Self = [
@@ -205,7 +224,8 @@ extension SQLiteLibrary {
       .authorizer,
       .scalarFunctions,
       .aggregateFunctions,
-      .collations
+      .collations,
+      .busyHandler
     ]
     /// Every optional API known to this version of SQLiteOrbit.
     public static let all: Self = [.standard, .encryption]
@@ -461,6 +481,26 @@ extension SQLiteLibrary {
       install:
         @escaping @Sendable (
           OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?
+        ) -> Int32
+    ) {
+      self.install = install
+    }
+  }
+
+  /// The operation that installs a connection's busy handler.
+  public struct BusyHandler: Sendable {
+    /// Installs the callback a connection consults while a lock is held: `sqlite3_busy_handler`.
+    ///
+    /// SQLite keeps one busy handler per connection, and `sqlite3_busy_timeout` is itself a busy
+    /// handler, so installing either replaces the other.
+    public var install:
+      @Sendable (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32
+
+    /// Creates a busy-handler operation group.
+    public init(
+      install:
+        @escaping @Sendable (
+          OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?
         ) -> Int32
     ) {
       self.install = install

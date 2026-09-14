@@ -64,8 +64,7 @@ struct SQLiteHandle: ~Copyable {
         connection: pointer,
         authorizer: authorizer,
         statements: statements,
-        busyTimeout: configurationStorage.pointee.busyTimeout,
-        isForeignKeysEnabled: configurationStorage.pointee.isForeignKeysEnabled
+        configuration: configurationStorage
       )
     )
     self.settings = settings
@@ -146,6 +145,9 @@ struct SQLiteHandle: ~Copyable {
       pointer,
       configuration.busyTimeout.milliseconds
     )
+    // Last of the two, since SQLite keeps one busy handler and the timeout is one: a configuration
+    // that sets both waits by the handler.
+    try installBusyHandler()
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     let connection = SQLiteConnectionAccess(handle: self)
     if let trustedSchema = libraryStorage.pointee.trustedSchema {
@@ -163,6 +165,24 @@ struct SQLiteHandle: ~Copyable {
     }
     for sql in configuration.setupSQL + driverSetupSQL {
       try execute(sql)
+    }
+  }
+
+  private borrowing func installBusyHandler() throws {
+    guard configurationStorage.pointee.busyHandler != nil else { return }
+    guard libraryStorage.pointee.busyHandler != nil else {
+      throw SQLiteFeatureUnavailableError(
+        libraryName: libraryStorage.pointee.name,
+        feature: .busyHandler
+      )
+    }
+    let code = SQLiteBusyHandlerInstallation.install(
+      on: pointer,
+      library: library,
+      configuration: configurationStorage
+    )
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
     }
   }
 
