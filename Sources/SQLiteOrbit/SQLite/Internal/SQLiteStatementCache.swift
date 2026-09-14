@@ -351,15 +351,13 @@ extension SQLiteAuthorization {
     }
   }
 
-  var changesFullDatabase: Bool {
-    invalidatesStatementCache && action != .attach && action != .detach
-  }
-
   func changedRegion(
     additionalColumnsAffectedByUpdate: (String, SQLiteSchemaName) -> Set<String>?
   ) -> OrbitDatabaseRegion {
     let schema = schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
-    if changesFullDatabase { return .fullDatabase }
+    // Schema changes may have changed anything. Attaching and detaching a database are the two
+    // that do not: they bring a schema along or take it away rather than rewrite one.
+    if invalidatesStatementCache, action != .attach, action != .detach { return .fullDatabase }
     switch action {
     case .delete, .insert:
       guard let table = firstArgument else { return .fullDatabase }

@@ -150,23 +150,13 @@ extension SQLiteConfiguration {
   public mutating func register(
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
   ) {
-    connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.collations != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .collations
-            )
-          }
-          return orbitInstall(
-            collation: collation,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
-          )
-        }
+    register(.collations, providedBy: { $0.collations != nil }) { connection in
+      orbitInstall(
+        collation: collation,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
       )
-    )
+    }
   }
 
   /// Registers a scalar function on every connection opened with this configuration.
@@ -183,23 +173,13 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-    connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.scalarFunctions != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .scalarFunctions
-            )
-          }
-          return orbitInstall(
-            function: function,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
-          )
-        }
+    register(.scalarFunctions, providedBy: { $0.scalarFunctions != nil }) { connection in
+      orbitInstall(
+        function: function,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
       )
-    )
+    }
   }
 
   /// Registers an aggregate function on every connection opened with this configuration.
@@ -211,22 +191,37 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+    register(.aggregateFunctions, providedBy: { $0.aggregateFunctions != nil }) { connection in
+      orbitInstall(
+        function: function,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
+      )
+    }
+  }
+
+  /// Adds a setup that installs something on every connection, on a build that has the entry
+  /// points to install it with.
+  ///
+  /// - Parameters:
+  ///   - feature: The operation the build has to provide, named by the error it is refused with.
+  ///   - providedBy: Answers whether a build provides it.
+  ///   - install: Installs on the connection and returns the build's result code.
+  private mutating func register(
+    _ feature: SQLiteLibraryFeature,
+    providedBy isProvided: @escaping @Sendable (SQLiteLibrary) -> Bool,
+    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
+  ) {
     connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.aggregateFunctions != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .aggregateFunctions
-            )
-          }
-          return orbitInstall(
-            function: function,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
+      SQLiteConnectionSetup { connection in
+        guard isProvided(connection.sqlite) else {
+          throw SQLiteFeatureUnavailableError(
+            libraryName: connection.sqlite.name,
+            feature: feature
           )
         }
-      )
+        return install(connection)
+      }
     )
   }
 }
