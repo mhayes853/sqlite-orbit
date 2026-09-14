@@ -92,6 +92,12 @@
       self.storage.withLock { $0.close() }
     }
 
+    /// Removes the socket's path, which is what a peer finds this endpoint by, while leaving the
+    /// socket itself open to whatever is still reading from it.
+    func removePath() {
+      self.storage.withLock { $0.removePath() }
+    }
+
     func send(_ bytes: [UInt8], to path: String) throws -> Bool {
       try self.storage.withLock { storage in
         guard !storage.isClosed else {
@@ -181,17 +187,26 @@
       let descriptor: Int32
       let path: String
       var isClosed = false
+      var isPathRemoved = false
 
       deinit {
         guard !self.isClosed else { return }
         _ = closeUnixDescriptor(self.descriptor)
-        _ = self.path.withCString(unlinkUnixPath)
+        if !self.isPathRemoved {
+          _ = self.path.withCString(unlinkUnixPath)
+        }
       }
 
       mutating func close() {
+        self.removePath()
         guard !self.isClosed else { return }
         self.isClosed = true
         _ = closeUnixDescriptor(self.descriptor)
+      }
+
+      mutating func removePath() {
+        guard !self.isPathRemoved else { return }
+        self.isPathRemoved = true
         _ = self.path.withCString(unlinkUnixPath)
       }
     }

@@ -108,7 +108,9 @@
     private let registry: OrbitIPCEndpointRegistry
     private let socket: UnixDatagramSocket
     private let handlers: OrbitIPCHandlers
-    private let receiver: Lock<DispatchSourceRead?>
+    // Only `deinit` touches the source after it is resumed, and dispatch sources are safe to
+    // cancel from any thread, so this needs no lock of its own.
+    private nonisolated(unsafe) let receiver: DispatchSourceRead
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -166,21 +168,26 @@
           handlers.receive(message)
         }
       }
+      // Dispatch keeps watching the descriptor until cancellation completes, which happens after
+      // `cancel()` returns. Closing it any earlier would leave the source watching a descriptor
+      // number the process is free to hand to the next file it opens.
+      receiver.setCancelHandler { socket.close() }
+
       self.configuration = configuration
       self.registry = registry
       self.socket = socket
       self.handlers = handlers
+      self.receiver = receiver
       receiver.resume()
-      self.receiver = Lock(receiver)
     }
 
     deinit {
+      // Everything a peer finds this endpoint by goes now, so one that looks in the coordination
+      // directory after this transport is released finds nothing of it. The descriptor itself is
+      // closed by the cancel handler, which dispatch runs once it has stopped watching it.
       self.handlers.shutdown()
-      self.receiver.withLock {
-        $0?.cancel()
-        $0 = nil
-      }
-      self.socket.close()
+      self.socket.removePath()
+      self.receiver.cancel()
     }
 
     /// Subscribes to messages concerning `databaseIdentifier`.
@@ -446,10 +453,9 @@
         state.isShutdown = true
         return state.handlers.removeAll()
       }
-      var unregisteredKeys = Set<String>()
-      for databaseIdentifier in databaseIdentifiers
-      where unregisteredKeys.insert(self.registry.registrationKey(for: databaseIdentifier)).inserted
-      {
+      // Withdrawing the same advertisement twice, as two identifiers sharing a coordination key
+      // do, removes a marker file that is already gone, which the registry treats as done.
+      for databaseIdentifier in databaseIdentifiers {
         try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
       }
     }

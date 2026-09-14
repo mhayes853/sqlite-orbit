@@ -172,6 +172,28 @@
   }
 
   @Test
+  func releasingATransportWithdrawsEverythingAPeerFindsItBy() async throws {
+    // The receive source is only done with the socket's descriptor once dispatch has finished
+    // cancelling it, which is after the transport is gone. Neither of the things a peer looks the
+    // endpoint up by — its marker and its socket path — may wait for that.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let database = OrbitDatabaseIdentifier(rawValue: "socket-lifetime")
+
+    var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
+    var subscription: OrbitSubscription? = try transport?.subscribe(to: database) { _ in }
+    let socketPath = try #require(registry.peers(databaseIdentifier: database).first).socketPath
+    #expect(FileManager.default.fileExists(atPath: socketPath))
+
+    subscription = nil
+    transport = nil
+
+    #expect(try registry.peers(databaseIdentifier: database).isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: socketPath))
+  }
+
+  @Test
   func unixDatagramTransportRejectsInvalidConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
