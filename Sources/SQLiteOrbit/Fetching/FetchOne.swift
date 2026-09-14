@@ -620,6 +620,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a table, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
@@ -634,6 +635,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the row the value it is declared with identifies, delivering
     /// changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
@@ -648,6 +650,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a table, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
@@ -662,6 +665,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing the first row of a primary keyed table, delivering changes
     /// with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
@@ -675,6 +679,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a select statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: Value,
       _ statement: S,
@@ -690,6 +695,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: Value,
       _ statement: some Statement<V>,
@@ -705,6 +711,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: Value = nil,
       _ statement: some Statement<V>,
@@ -720,6 +727,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement<Value>>(
       wrappedValue: Value,
       _ statement: S,
@@ -735,6 +743,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Creates a property observing a select statement, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: Value = ._none,
       _ statement: S,
@@ -757,6 +766,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing a statement of an optional, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement>(
       wrappedValue: Value = ._none,
       _ statement: S,
@@ -778,6 +788,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Creates a property observing a statement of an optional, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value = ._none,
       _ statement: some Statement<Value>,
@@ -793,6 +804,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different select statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -808,6 +820,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
@@ -823,6 +836,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
@@ -838,6 +852,7 @@ extension FetchOne: Equatable where Value: Equatable {
     }
 
     /// Observes a different select statement from now on, delivering changes with an animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -859,6 +874,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Observes a different statement of an optional from now on, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: Statement>(
       _ statement: S,
@@ -879,6 +895,7 @@ extension FetchOne: Equatable where Value: Equatable {
 
     /// Observes a different statement of an optional from now on, delivering changes with an
     /// animation.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load(
       _ statement: some Statement<Value>,

@@ -390,6 +390,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (Element.TableColumns) ->
@@ -414,6 +415,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       sectionBy sectionKeyPath: KeyPath<
@@ -440,6 +442,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -467,6 +470,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -552,6 +556,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -579,6 +584,7 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,

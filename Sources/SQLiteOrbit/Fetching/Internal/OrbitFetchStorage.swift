@@ -14,10 +14,9 @@ struct OrbitFetchSource<Value: Sendable>: Sendable {
     database: any OrbitObservableDatabase,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
-    let scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
     self.id = OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
     self.database = database
-    self.scheduler = scheduler
+    self.scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
     self.observation = OrbitValueObservation.tracking { try request.fetch($0) }
   }
 }
@@ -29,20 +28,20 @@ struct OrbitFetchSource<Value: Sendable>: Sendable {
 /// the newly built property describes the same read — in which case the observation continues
 /// undisturbed — or a different one it should adopt.
 struct OrbitFetchRequestID: Hashable, Sendable {
-  private let database: ObjectIdentifier
+  private let database: ObjectIdentifier?
   private let requestType: ObjectIdentifier
   private let request: OrbitAnyHashableSendable
-  private let scheduler: OrbitAnyHashableSendable
+  private let scheduler: OrbitAnyHashableSendable?
 
   init(
     request: some OrbitFetchKeyRequest,
-    database: any OrbitObservableDatabase,
-    scheduler: any OrbitValueObservationScheduler & Hashable
+    database: (any OrbitObservableDatabase)?,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
-    self.database = ObjectIdentifier(database)
+    self.database = database.map { ObjectIdentifier($0) }
     self.requestType = ObjectIdentifier(type(of: request))
     self.request = OrbitAnyHashableSendable(request)
-    self.scheduler = OrbitAnyHashableSendable(scheduler)
+    self.scheduler = scheduler.map { OrbitAnyHashableSendable($0) }
   }
 }
 
@@ -82,6 +81,9 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     var isLoading = false
     var loadError: (any Error)?
     var source: OrbitFetchSource<Value>?
+    // The declaration key survives explicit loads, assignments, and cancellation. SwiftUI only
+    // replaces a request when the declaration changes, not whenever its current source differs.
+    var requestID: OrbitFetchRequestID?
     var subscription: OrbitSubscription?
     var hasStarted = false
     var generation: UInt64 = 0
@@ -98,9 +100,12 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   init(
     value: Value,
     source: OrbitFetchSource<Value>? = nil,
-    loadError: (any Error)? = nil
+    loadError: (any Error)? = nil,
+    requestID: OrbitFetchRequestID? = nil
   ) {
-    self.state = Lock(State(value: value, loadError: loadError, source: source))
+    self.state = Lock(
+      State(value: value, loadError: loadError, source: source, requestID: requestID ?? source?.id)
+    )
   }
 
   deinit {
@@ -138,7 +143,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   }
 
   var requestID: OrbitFetchRequestID? {
-    state.withLock { $0.source?.id }
+    state.withLock { $0.requestID }
   }
 
   /// Holds the observation that keeps a SwiftUI view without the Observation framework redrawing.
@@ -417,7 +422,11 @@ extension OrbitFetchStorage {
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) -> OrbitFetchStorage<Value> {
     guard let database = database ?? OrbitDefaultDatabase.current else {
-      return OrbitFetchStorage(value: value, loadError: OrbitMissingDefaultDatabaseError())
+      return OrbitFetchStorage(
+        value: value,
+        loadError: OrbitMissingDefaultDatabaseError(),
+        requestID: OrbitFetchRequestID(request: request, database: nil, scheduler: scheduler)
+      )
     }
     return OrbitFetchStorage(
       value: value,
@@ -442,7 +451,13 @@ extension OrbitFetchStorage {
 
   /// Takes over `other`'s request when it describes a different read from this one's.
   func adoptIfNeeded(from other: OrbitFetchStorage<Value>) {
-    guard other.requestID != requestID else { return }
+    guard let requestID = other.requestID else { return }
+    let didChange = state.withLock { state in
+      guard state.requestID != requestID else { return false }
+      state.requestID = requestID
+      return true
+    }
+    guard didChange else { return }
     adopt(from: other)
   }
 }

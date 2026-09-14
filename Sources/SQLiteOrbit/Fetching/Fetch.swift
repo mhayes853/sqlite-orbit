@@ -202,6 +202,7 @@ extension Fetch: Equatable where Value: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: Value,
       _ request: some OrbitFetchKeyRequest<Value>,
@@ -224,6 +225,7 @@ extension Fetch: Equatable where Value: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load(
       _ request: some OrbitFetchKeyRequest<Value>,

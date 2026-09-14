@@ -16,6 +16,7 @@
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct FetchSwiftUITests {
     @Test
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     func animationSchedulerIdentityIncludesTheAnimation() {
       #expect(
         OrbitFetchAnimationScheduler(animation: .default)
@@ -146,6 +147,7 @@
     }
 
     @Test
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     func animatedPropertyDeliversItsRowsToTheView() async throws {
       let database = try await remindersDatabase(titles: "Milk", "Eggs")
       let sut = AnimatedRemindersList(database: database)
@@ -274,6 +276,7 @@
 
   /// Every reminder, delivered with an animation rather than as the read produces them.
   @MainActor
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   private struct AnimatedRemindersList: View {
     @FetchAll var reminders: [Reminder]
     let inspection = Inspection<Self>()

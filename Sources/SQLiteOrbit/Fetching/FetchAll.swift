@@ -388,6 +388,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
@@ -409,6 +410,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -432,6 +434,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
       wrappedValue: [Element] = [],
       _ statement: some Statement<V>,
@@ -455,6 +458,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///   - database: The database to read from, or `nil` to read from
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement<Element>>(
       wrappedValue: [Element] = [],
       _ statement: S,
@@ -478,6 +482,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<S: SelectStatement>(
       _ statement: S,
@@ -500,6 +505,7 @@ extension FetchAll: Equatable where Element: Equatable {
     ///     ``OrbitDefaultDatabase/current``.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @discardableResult
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,

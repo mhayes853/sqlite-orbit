@@ -1007,11 +1007,17 @@ an `animation:`, which delivers every change on the main actor inside that anima
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
 ```
 
-Fetch identity includes the scheduler's value. Rebuilding with an equal scheduler keeps the current
-observation; changing its actor, priority, or animation replaces it. Custom schedulers should base
-equality and hashing on stable configuration (or instance identity), not mutable callback queues.
-The built-in schedulers already provide these conformances. Direct value-observation subscriptions
-do not require a `Hashable` scheduler.
+Fetch identity follows SQLiteData: it includes the database instance, request type and value, and
+optional scheduler value. Omitting a scheduler is distinct from explicitly supplying `.immediate`.
+SwiftUI remembers the declaration's identity separately from the currently loaded request, so a
+`load()` or projected-value assignment survives an unchanged declaration being rendered again.
+Changing the declaration's query, database, or scheduler replaces the observation; a value-only
+declaration leaves it alone.
+
+Custom schedulers should base equality and hashing on stable configuration (or instance identity),
+not mutable callback queues. The built-in schedulers already provide these conformances. Direct
+value-observation subscriptions do not require a `Hashable` scheduler. Fetch `animation:` overloads
+require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashable` availability.
 
 ### Sections
 

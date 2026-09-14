@@ -210,7 +210,12 @@
         storage.adoptIfNeeded(
           from: OrbitFetchStorage(
             value: [],
-            loadError: OrbitMissingDefaultDatabaseError()
+            loadError: OrbitMissingDefaultDatabaseError(),
+            requestID: OrbitFetchRequestID(
+              request: TitleSearch(term: "Milk"),
+              database: nil,
+              scheduler: nil
+            )
           )
         )
       }
@@ -223,7 +228,7 @@
       #expect(error is CancellationError)
       #expect(!storage.isLoading)
       if interruption == .adoptMissingDatabase {
-        #expect(storage.requestID == nil)
+        #expect(storage.requestID != nil)
         #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
       }
     }
@@ -236,11 +241,12 @@
       let secondActor = SchedulerActor()
 
       func id(
-        _ scheduler: any OrbitValueObservationScheduler & Hashable
+        _ scheduler: (any OrbitValueObservationScheduler & Hashable)?
       ) -> OrbitFetchRequestID {
         OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
       }
 
+      #expect(id(nil) != id(.immediate))
       #expect(id(OrbitImmediateValueObservationScheduler()) == id(.immediate))
       #expect(id(.async(priority: .utility)) == id(.async(priority: .utility)))
       #expect(Set([id(.async(priority: .utility)), id(.async(priority: .utility))]).count == 1)
@@ -284,6 +290,72 @@
       original.adoptIfNeeded(from: changedConfiguration)
       #expect(original.untrackedValue == ["changed configuration"])
       #expect(original.requestID == changedConfiguration.requestID)
+    }
+
+    @Test(arguments: ExplicitRequestChange.allCases)
+    func unchangedDeclarationsPreserveExplicitRequestChanges(_ change: ExplicitRequestChange)
+      async throws
+    {
+      let database = try await remindersDatabase(titles: "Milk", "Eggs")
+      func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
+        .make(value: [], request: TitleSearch(term: term), database: database, scheduler: nil)
+      }
+      let storage = declaration("Milk")
+      let declaredID = storage.requestID
+      #expect(storage.value == ["Milk"])
+
+      switch change {
+      case .load:
+        try await storage.load(
+          OrbitFetchSource(request: TitleSearch(term: "Eggs"), database: database, scheduler: nil)
+        )
+      case .assignment:
+        storage.adopt(from: declaration("Eggs"))
+      case .detach:
+        storage.detach()
+      }
+      let expected = change == .detach ? ["Milk"] : ["Eggs"]
+      #expect(storage.value == expected)
+
+      storage.adoptIfNeeded(from: declaration("Milk"))
+      #expect(storage.untrackedValue == expected)
+      #expect(storage.requestID == declaredID)
+      // A value-only declaration also leaves a dynamically loaded request alone.
+      storage.adoptIfNeeded(from: OrbitFetchStorage(value: []))
+      #expect(storage.untrackedValue == expected)
+      #expect(storage.requestID == declaredID)
+
+      let changedDeclaration = declaration("Bread")
+      storage.adoptIfNeeded(from: changedDeclaration)
+      #expect(storage.requestID == changedDeclaration.requestID)
+      #expect(storage.value.isEmpty)
+    }
+
+    @Test
+    func missingDatabaseDeclarationsKeepTheirIdentityAndRecover() async throws {
+      let previous = OrbitDefaultDatabase.current
+      OrbitDefaultDatabase.set(nil)
+      defer { OrbitDefaultDatabase.set(previous) }
+      func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
+        .make(value: [], request: TitleSearch(term: term), database: nil, scheduler: nil)
+      }
+      let storage = declaration("Milk")
+      let missingID = try #require(storage.requestID)
+      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
+      #expect(declaration("Milk").requestID == missingID)
+      #expect(declaration("Eggs").requestID != missingID)
+
+      let database = try await remindersDatabase(titles: "Milk")
+      OrbitDefaultDatabase.set(database)
+      storage.adoptIfNeeded(from: declaration("Milk"))
+      #expect(storage.requestID != missingID)
+      #expect(storage.value == ["Milk"])
+      #expect(storage.loadError == nil)
+
+      OrbitDefaultDatabase.set(nil)
+      storage.adoptIfNeeded(from: declaration("Milk"))
+      #expect(storage.requestID == missingID)
+      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
     }
 
     @Test
@@ -837,6 +909,10 @@
   }
 
   // MARK: - Support
+
+  enum ExplicitRequestChange: CaseIterable, Sendable {
+    case load, assignment, detach
+  }
 
   enum PendingLoadInterruption: CaseIterable, Sendable {
     case detach
