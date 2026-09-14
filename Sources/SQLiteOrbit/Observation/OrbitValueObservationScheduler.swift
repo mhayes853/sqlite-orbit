@@ -153,6 +153,9 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
 
   /// Runs `action` inline when already on this scheduler's actor, and otherwise queues it.
   ///
+  /// An inline callback still runs after the callbacks queued ahead of it, so a scheduler
+  /// reached from more than one context delivers in the order it was given them.
+  ///
   /// - Parameters:
   ///   - isolation: The actor the observation is publishing from, if any.
   ///   - action: The callback to run.
@@ -161,7 +164,7 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
     _ action: @escaping @Sendable () -> Void
   ) {
     if self.isolation != nil && self.isolation === isolation {
-      action()
+      drain.drainInline(action, on: isolation)
     } else {
       drain.enqueue(action)
     }
@@ -263,6 +266,9 @@ public struct OrbitMainActorValueObservationScheduler:
 
   /// Runs `action` inline when already on the main actor, and otherwise queues it for one.
   ///
+  /// An inline callback still runs after the callbacks queued ahead of it, so a scheduler
+  /// reached from more than one context delivers in the order it was given them.
+  ///
   /// - Parameters:
   ///   - isolation: The actor the observation is publishing from, if any.
   ///   - action: The callback to run.
@@ -271,7 +277,7 @@ public struct OrbitMainActorValueObservationScheduler:
     _ action: @escaping @Sendable () -> Void
   ) {
     if isolation === MainActor.shared {
-      action()
+      drain.drainInline(action, on: isolation)
     } else {
       drain.enqueue(action)
     }
@@ -313,6 +319,19 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     }
     guard shouldStart else { return }
     Task(priority: priority) { [self] in await drainActions(on: isolation) }
+  }
+
+  /// Runs `action` without leaving `isolation`, after everything queued ahead of it.
+  ///
+  /// Only the scheduler's own isolation may call this, so a drain started for an earlier callback
+  /// is suspended waiting for it and cannot be running concurrently. Queueing first is what keeps
+  /// an inline callback from overtaking the ones already waiting.
+  func drainInline(
+    _ action: @escaping @Sendable () -> Void,
+    on isolation: isolated (any Actor)?
+  ) {
+    state.withLock { $0.actions.append(action) }
+    drainActions(on: isolation)
   }
 
   private func drainActions(on isolation: isolated (any Actor)?) {
