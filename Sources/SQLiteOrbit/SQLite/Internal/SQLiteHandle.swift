@@ -324,6 +324,8 @@ struct SQLiteHandle: ~Copyable {
     _ body: (UnsafePointer<SQLiteHandle>, SQLiteConnectionState) throws -> Result
   ) throws -> Result {
     let state = SQLiteConnectionState()
+    // Declared before the handler below is installed, so that it runs after the handler has been
+    // taken back off: the rollback is itself transaction control, which the handler would refuse.
     defer {
       // The handler below only sees statements as they are prepared, so one the cache prepared
       // where transaction control was allowed, such as inside a `transaction`, can still open a
