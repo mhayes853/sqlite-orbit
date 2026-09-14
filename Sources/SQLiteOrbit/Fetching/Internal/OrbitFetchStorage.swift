@@ -21,6 +21,30 @@ struct OrbitFetchSource<Value: Sendable>: Sendable {
   }
 }
 
+/// What a storage needs to build its source again against a different database.
+///
+/// A property that was not handed a database at its declaration resolves one later — from the
+/// SwiftUI environment, or from ``OrbitDefaultDatabase/current`` once the process has set one —
+/// and needs its request back to do it. Holding the request as a closure is what lets the storage
+/// forget the request's concrete type and still re-render its statement against whichever database
+/// it ends up reading from.
+struct OrbitFetchRequestBinding<Value: Sendable>: Sendable {
+  /// Whether the property named its database itself, in which case nothing may replace it.
+  let isDatabaseExplicit: Bool
+  let makeSource: @Sendable (any OrbitObservableDatabase) -> OrbitFetchSource<Value>
+
+  init(
+    request: some OrbitFetchKeyRequest<Value>,
+    isDatabaseExplicit: Bool,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) {
+    self.isDatabaseExplicit = isDatabaseExplicit
+    self.makeSource = { database in
+      OrbitFetchSource(request: request, database: database, scheduler: scheduler)
+    }
+  }
+}
+
 /// What makes one fetch property's read the same read as another's.
 ///
 /// A SwiftUI view is re-created constantly, and each time it is, its fetch properties are built
@@ -81,6 +105,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     var isLoading = false
     var loadError: (any Error)?
     var source: OrbitFetchSource<Value>?
+    var binding: OrbitFetchRequestBinding<Value>?
     // The declaration key survives explicit loads, assignments, and cancellation. SwiftUI only
     // replaces a request when the declaration changes, not whenever its current source differs.
     var requestID: OrbitFetchRequestID?
@@ -117,11 +142,18 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   init(
     value: Value,
     source: OrbitFetchSource<Value>? = nil,
+    binding: OrbitFetchRequestBinding<Value>? = nil,
     loadError: (any Error)? = nil,
     requestID: OrbitFetchRequestID? = nil
   ) {
     self.state = Lock(
-      State(value: value, loadError: loadError, source: source, requestID: requestID ?? source?.id)
+      State(
+        value: value,
+        loadError: loadError,
+        source: source,
+        binding: binding,
+        requestID: requestID ?? source?.id
+      )
     )
   }
 
@@ -213,6 +245,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   func detach() {
     let invalidated = state.withLock { state -> State.InvalidatedObservation in
       state.source = nil
+      state.binding = nil
       state.hasStarted = true
       return state.invalidateObservation()
     }
@@ -229,8 +262,8 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   ///   - updatingDeclaration: Adopts only a changed declaration, replacing its identity together
   ///     with the value and source. Explicit assignments leave the declaration identity alone.
   func adopt(from other: OrbitFetchStorage<Value>, updatingDeclaration: Bool = false) {
-    let (value, source, loadError, requestID) = other.state.withLock {
-      ($0.value, $0.source, $0.loadError, $0.requestID)
+    let (value, source, binding, loadError, requestID) = other.state.withLock {
+      ($0.value, $0.source, $0.binding, $0.loadError, $0.requestID)
     }
     let adoption = state.withLock {
       state -> (invalidated: State.InvalidatedObservation, wasObserving: Bool)? in
@@ -241,6 +274,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
       let invalidated = state.invalidateObservation()
       state.value = value
       state.source = source
+      state.binding = binding
       state.loadError = loadError
       state.hasStarted = false
       return (invalidated, !state.observers.isEmpty)
@@ -414,16 +448,23 @@ extension OrbitFetchStorage {
     database: (any OrbitObservableDatabase)?,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) -> OrbitFetchStorage<Value> {
+    let binding = OrbitFetchRequestBinding(
+      request: request,
+      isDatabaseExplicit: database != nil,
+      scheduler: scheduler
+    )
     guard let database = database ?? OrbitDefaultDatabase.current else {
       return OrbitFetchStorage(
         value: value,
+        binding: binding,
         loadError: OrbitMissingDefaultDatabaseError(),
         requestID: OrbitFetchRequestID(request: request, database: nil, scheduler: scheduler)
       )
     }
     return OrbitFetchStorage(
       value: value,
-      source: OrbitFetchSource(request: request, database: database, scheduler: scheduler)
+      source: binding.makeSource(database),
+      binding: binding
     )
   }
 
@@ -435,11 +476,50 @@ extension OrbitFetchStorage {
     database: (any OrbitObservableDatabase)?,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) async throws -> OrbitFetchSubscription {
+    let binding = OrbitFetchRequestBinding(
+      request: request,
+      isDatabaseExplicit: database != nil,
+      scheduler: scheduler
+    )
     guard let database = database ?? OrbitDefaultDatabase.current else {
       throw OrbitMissingDefaultDatabaseError()
     }
-    try await load(OrbitFetchSource(request: request, database: database, scheduler: scheduler))
+    state.withLock { $0.binding = binding }
+    try await load(binding.makeSource(database))
     return OrbitFetchSubscription { [self] in detach() }
+  }
+
+  /// Reads from `database` from now on, unless the property named a database of its own.
+  ///
+  /// This is the second and third of the three places a fetch property's database can come from.
+  /// A property that names one in its declaration is never re-sourced. Otherwise a database
+  /// offered by the SwiftUI environment wins, and a property that has not resolved one at all —
+  /// because the process had no default when it was created — falls back to whatever
+  /// ``OrbitDefaultDatabase/current`` is by now.
+  ///
+  /// Re-sourcing replaces the request's observation, so this does nothing whenever the storage
+  /// already reads from the database it is offered, which is what makes it safe to call on every
+  /// SwiftUI render.
+  ///
+  /// - Parameter database: The database the environment offers, or `nil` when it offers none.
+  func attachIfNeeded(database: (any OrbitObservableDatabase)?) {
+    let resolved = state.withLock { state -> (any OrbitObservableDatabase)? in
+      guard let binding = state.binding, !binding.isDatabaseExplicit else { return nil }
+      guard let database = database ?? (state.source == nil ? OrbitDefaultDatabase.current : nil)
+      else { return nil }
+      guard state.source?.database !== database else { return nil }
+      return database
+    }
+    guard let resolved, let binding = state.withLock({ $0.binding }) else { return }
+    // Building the source renders the request's statement, which is work the lock has no reason
+    // to hold, and adopting takes the lock again for itself.
+    adopt(
+      from: OrbitFetchStorage(
+        value: untrackedValue,
+        source: binding.makeSource(resolved),
+        binding: binding
+      )
+    )
   }
 
   /// Takes over `other`'s request when it describes a different read from this one's.

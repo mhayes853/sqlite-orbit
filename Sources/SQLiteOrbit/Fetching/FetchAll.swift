@@ -3,6 +3,7 @@
   import protocol SwiftUI.DynamicProperty
   import struct SwiftUI.Animation
   import struct SwiftUI.State
+  import struct SwiftUI.Environment
 #endif
 
 /// A property that observes every row a query produces.
@@ -28,8 +29,8 @@
 /// @FetchAll var reminders: [Reminder]
 /// ```
 ///
-/// The database it reads from is ``OrbitDefaultDatabase/current`` unless one is passed as the
-/// `database` argument. The projected value reaches the rest of the property — its
+/// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
+/// argument first, then the SwiftUI environment, then the process-wide default. The projected value reaches the rest of the property — its
 /// ``isLoading`` and ``loadError``, a reader for one of its members, and ``load(_:database:)``,
 /// which swaps the query being observed:
 ///
@@ -47,6 +48,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
     private let state:
       SwiftUI.State<OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>>
     private let generation = SwiftUI.State(wrappedValue: 0)
+    // The environment's database, resolved by SwiftUI before `update()` runs.
+    @Environment(\.orbitDatabase) private var environmentDatabase
 
     var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>> {
       state.wrappedValue
@@ -203,8 +206,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - wrappedValue: The rows to hold until the first read finishes.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered. By default they are delivered as they are
   ///     produced, and the first read happens before the property is first read.
   public init(
@@ -234,8 +237,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: SelectStatement>(
     wrappedValue: [Element] = [],
@@ -263,8 +266,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The values to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<V: QueryRepresentable>(
     wrappedValue: [Element] = [],
@@ -286,8 +289,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The values to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: Statement<Element>>(
     wrappedValue: [Element] = [],
@@ -312,8 +315,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -336,8 +339,8 @@ public struct FetchAll<Element: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -374,15 +377,19 @@ extension FetchAll: Equatable where Element: Equatable {
   extension FetchAll: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      state.wrappedValue.update(declared: box, generation: generation)
+      state.wrappedValue.update(
+        declared: box,
+        database: environmentDatabase,
+        generation: generation
+      )
     }
 
     /// Creates a property observing every row of a table, delivering changes with an animation.
     ///
     /// - Parameters:
     ///   - wrappedValue: The rows to hold until the first read finishes.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
@@ -403,8 +410,8 @@ extension FetchAll: Equatable where Element: Equatable {
     /// - Parameters:
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - statement: The statement to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
@@ -427,8 +434,8 @@ extension FetchAll: Equatable where Element: Equatable {
     /// - Parameters:
     ///   - wrappedValue: The values to hold until the first read finishes.
     ///   - statement: The statement to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable>(
@@ -451,8 +458,8 @@ extension FetchAll: Equatable where Element: Equatable {
     /// - Parameters:
     ///   - wrappedValue: The values to hold until the first read finishes.
     ///   - statement: The statement to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: Statement<Element>>(
@@ -474,8 +481,8 @@ extension FetchAll: Equatable where Element: Equatable {
     ///
     /// - Parameters:
     ///   - statement: The statement to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -497,8 +504,8 @@ extension FetchAll: Equatable where Element: Equatable {
     ///
     /// - Parameters:
     ///   - statement: The statement to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)

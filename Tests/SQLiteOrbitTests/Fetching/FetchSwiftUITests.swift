@@ -150,6 +150,40 @@
     }
   }
 
+    @Test
+    func theEnvironmentSuppliesADatabaseToAPropertyDeclaredWithoutOne() async throws {
+      let previous = OrbitDefaultDatabase.current
+      OrbitDefaultDatabase.set(nil)
+      defer { OrbitDefaultDatabase.set(previous) }
+      let database = try await remindersDatabase(titles: "Milk")
+      let sut = EnvironmentRemindersList()
+
+      try await ViewHosting.host(sut.orbitDatabase(database)) {
+        try await sut.inspection.inspect(after: settle) { view in
+          #expect(try view.texts() == ["Milk"])
+        }
+        try await database.write { transaction in
+          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+        }
+        try await sut.inspection.inspect(after: settle) { view in
+          #expect(try view.texts() == ["Milk", "Eggs"])
+        }
+      }
+    }
+
+    @Test
+    func aDeclaredDatabaseOutranksTheEnvironmentsOne() async throws {
+      let declared = try await remindersDatabase(titles: "Milk")
+      let offered = try await remindersDatabase(titles: "Eggs")
+      let sut = RemindersList(database: declared)
+
+      try await ViewHosting.host(sut.orbitDatabase(offered)) {
+        try await sut.inspection.inspect(after: settle) { view in
+          #expect(try view.texts() == ["Milk"])
+        }
+      }
+    }
+
   // MARK: - Views
 
   /// Every reminder, in insertion order.
@@ -161,6 +195,22 @@
     init(database: any OrbitObservableDatabase) {
       _reminders = FetchAll(Reminder.order(by: \.id), database: database)
     }
+
+    var body: some View {
+      VStack {
+        ForEach(reminders, id: \.id) { reminder in
+          Text(reminder.title)
+        }
+      }
+      .onReceive(inspection.notice) { inspection.visit(self, $0) }
+    }
+  }
+
+  /// Every reminder, from whichever database the view is given by its environment.
+  @MainActor
+  private struct EnvironmentRemindersList: View {
+    @FetchAll(Reminder.order(by: \.id)) var reminders
+    let inspection = Inspection<Self>()
 
     var body: some View {
       VStack {

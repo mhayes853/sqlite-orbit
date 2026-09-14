@@ -9,11 +9,19 @@
     ///
     /// - Parameters:
     ///   - declared: The storage of the property SwiftUI built for this render.
+    ///   - database: The database the environment offers this render, if it offers one.
     ///   - generation: A counter stored in the view, bumped once per change.
-    func update(declared: OrbitFetchStorage<Value>, generation: SwiftUI.State<Int>) {
+    func update(
+      declared: OrbitFetchStorage<Value>,
+      database: (any OrbitObservableDatabase)?,
+      generation: SwiftUI.State<Int>
+    ) {
       if self !== declared {
         adoptIfNeeded(from: declared)
       }
+      // After adoption, because a changed declaration arrives with a source resolved the way the
+      // property was written, which the environment is still entitled to replace.
+      attachIfNeeded(database: database)
       observeForSwiftUI(generation: generation)
     }
 

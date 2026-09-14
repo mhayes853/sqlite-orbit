@@ -1,6 +1,13 @@
 /// The database that ``Fetch``, ``FetchAll``, and ``FetchOne`` read from when they are not given
 /// one.
 ///
+/// A fetch property takes its database from the first of three places that has one: the
+/// `database:` argument it was declared with, the SwiftUI environment value a `.orbitDatabase(_:)`
+/// modifier put above it, and this default. A property declared inside a view keeps looking until
+/// it finds one, so a database that arrives after the property was created — from the environment,
+/// or from a ``set(_:)`` the app had not reached yet — still starts it reading. A property that
+/// named its own database is never re-sourced.
+///
 /// A property wrapper is created wherever the property it wraps lives — inside a view, a model, or
 /// a controller — and those places rarely have a database to hand. Setting the default once, as
 /// early as the process can, is what lets them be written without one:
@@ -94,7 +101,9 @@ public enum OrbitDefaultDatabase {
 /// ``OrbitDefaultDatabase/current`` one to fall back to.
 ///
 /// The property keeps whatever value it was declared with and reports this as its `loadError`
-/// rather than trapping, so a view built before its database exists still renders.
+/// rather than trapping, so a view built before its database exists still renders — and starts
+/// reading by itself once one of the three sources of a database described by
+/// ``OrbitDefaultDatabase`` supplies one.
 ///
 /// ```swift
 /// @FetchAll(Reminder.all) var reminders
@@ -112,8 +121,8 @@ extension OrbitMissingDefaultDatabaseError: CustomStringConvertible {
   public var description: String {
     """
     A fetch property was created without a database, and no default database has been set. Call \
-    'OrbitDefaultDatabase.set(_:)' before creating it, or pass one as the property's 'database' \
-    argument.
+    'OrbitDefaultDatabase.set(_:)' before creating it, pass one as the property's 'database' \
+    argument, or put a '.orbitDatabase(_:)' modifier above the view that declares it.
     """
   }
 }

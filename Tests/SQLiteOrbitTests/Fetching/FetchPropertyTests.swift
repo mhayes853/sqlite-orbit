@@ -349,6 +349,93 @@
     }
 
     @Test
+    func aStorageWithoutADatabaseStartsReadingWhenOneIsAttached() async throws {
+      let previous = OrbitDefaultDatabase.current
+      OrbitDefaultDatabase.set(nil)
+      defer { OrbitDefaultDatabase.set(previous) }
+      let storage = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
+
+      let database = try await remindersDatabase(titles: "Milk")
+      storage.attachIfNeeded(database: database)
+
+      #expect(storage.value == ["Milk"])
+      #expect(storage.loadError == nil)
+    }
+
+    @Test
+    func aStorageWithoutADatabaseFallsBackToADefaultSetAfterwards() async throws {
+      let previous = OrbitDefaultDatabase.current
+      OrbitDefaultDatabase.set(nil)
+      defer { OrbitDefaultDatabase.set(previous) }
+      let storage = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+
+      let database = try await remindersDatabase(titles: "Milk")
+      OrbitDefaultDatabase.set(database)
+      storage.attachIfNeeded(database: nil)
+
+      #expect(storage.value == ["Milk"])
+      #expect(storage.loadError == nil)
+    }
+
+    @Test
+    func aStorageOnTheProcessDefaultMovesToAnAttachedDatabase() async throws {
+      let processDefault = try await remindersDatabase(titles: "Milk")
+      let previous = OrbitDefaultDatabase.current
+      OrbitDefaultDatabase.set(processDefault)
+      defer { OrbitDefaultDatabase.set(previous) }
+      let storage = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+      #expect(storage.value == ["Milk"])
+
+      let attached = try await remindersDatabase(titles: "Milk", "Milk")
+      storage.attachIfNeeded(database: attached)
+      #expect(storage.value == ["Milk", "Milk"])
+
+      // The database it already reads from asks for nothing, and neither does no database at all.
+      storage.attachIfNeeded(database: attached)
+      storage.attachIfNeeded(database: nil)
+      #expect(storage.value == ["Milk", "Milk"])
+
+      // It observes the database it moved to, and no longer the one it left.
+      try await attached.write { transaction in
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+      }
+      try await waitUntil { storage.value == ["Milk", "Milk", "Milk"] }
+      try await processDefault.write { transaction in
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+      }
+      #expect(storage.value == ["Milk", "Milk", "Milk"])
+    }
+
+    @Test
+    func anExplicitDatabaseIsNeverReplacedByAnAttachedOne() async throws {
+      let explicit = try await remindersDatabase(titles: "Milk")
+      let storage = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: explicit, scheduler: nil)
+      #expect(storage.value == ["Milk"])
+
+      let attached = try await remindersDatabase(titles: "Milk", "Milk")
+      storage.attachIfNeeded(database: attached)
+
+      #expect(storage.value == ["Milk"])
+    }
+
+    @Test
+    func aDetachedStorageIgnoresAnAttachedDatabase() async throws {
+      let database = try await remindersDatabase(titles: "Milk")
+      let storage = OrbitFetchStorage<[String]>
+        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+      storage.detach()
+
+      storage.attachIfNeeded(database: database)
+
+      #expect(storage.untrackedValue.isEmpty)
+    }
+
+    @Test
     func theDefaultDatabaseIsUsedWhenNoneIsGiven() async throws {
       let database = try await remindersDatabase(titles: "Milk")
 
