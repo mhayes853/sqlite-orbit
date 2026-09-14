@@ -37,7 +37,7 @@
     let interprocess = OrbitDatabase(writer: driver)
 
     try await interprocess.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
     }
 
     let items = try await interprocess.read { transaction in
@@ -301,7 +301,7 @@
     let writer = Task {
       writerRequested.withLock { $0 = true }
       try await driver.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
+        _ = try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
       }
     }
     while !writerRequested.withLock({ $0 }) { await Task.yield() }

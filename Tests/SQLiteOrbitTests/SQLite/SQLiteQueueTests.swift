@@ -24,7 +24,7 @@
     let database = OrbitDatabase(writer: driver)
 
     try await database.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
     }
 
     let items = try await database.read { transaction in
@@ -70,7 +70,7 @@
 
     // The rolled-back transaction did not leave one open behind it.
     try await driver.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 2, title: "after") })
+      _ = try transaction.execute(Item.insert { Item(id: 2, title: "after") })
     }
     let recovered = try await driver.read { transaction in
       try transaction.fetchAll(Item.all)
@@ -119,7 +119,7 @@
 
     for id in 1...20 {
       try await driver.write { transaction in
-        try transaction.execute(Item.insert { Item(id: id, title: "ordered") })
+        _ = try transaction.execute(Item.insert { Item(id: id, title: "ordered") })
       }
       let count = try await driver.read { transaction in
         try transaction.fetchAll(Item.all).count
@@ -151,7 +151,7 @@
       let driver = try SQLiteQueue(path: OrbitDatabasePath(path))
       try await bootstrap(driver)
       try await driver.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
+        _ = try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
       }
     }
 
@@ -167,7 +167,7 @@
     let driver = try SQLiteQueue(path: .temporary)
     try await bootstrap(driver)
     try await driver.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
     }
     let items = try await driver.read { transaction in
       try transaction.fetchAll(Item.all)

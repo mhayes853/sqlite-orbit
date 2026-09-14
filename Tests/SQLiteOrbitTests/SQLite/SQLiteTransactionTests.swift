@@ -45,7 +45,7 @@
   func writeCursorsReturnRowsFromReturningClauses() throws {
     let connection = try openTestConnection()
     try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "before") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "before") })
     }
 
     let updated = try connection.write { transaction in
@@ -89,7 +89,7 @@
 
     let payload: [UInt8] = [0x00, 0x01, 0xfe, 0xff]
     try connection.write { transaction in
-      try transaction.execute(
+      _ = try transaction.execute(
         #sql(
           """
           INSERT INTO primitives (id, amount, flag, payload, missing)
@@ -123,7 +123,7 @@
 
     let empty: [UInt8] = []
     try connection.write { transaction in
-      try transaction.execute(
+      _ = try transaction.execute(
         #sql(
           "INSERT INTO blobs (payload) VALUES (\(empty, as: [UInt8].self))",
           as: Void.self
@@ -164,7 +164,7 @@
 
     let connection = try openTestConnection(configuration: configuration)
     try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "cached") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "cached") })
     }
 
     try connection.read { transaction in
@@ -233,7 +233,7 @@
   func transactionsExposeTheRawConnectionAndItsLibrary() throws {
     let connection = try openTestConnection()
     try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "raw") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "raw") })
     }
 
     let count = try connection.read { transaction -> Int64 in
@@ -263,7 +263,7 @@
   func decodingReportsATypeMismatchRatherThanReturningGarbage() throws {
     let connection = try openTestConnection()
     try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "text") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "text") })
     }
 
     #expect(throws: (any Error).self) {

@@ -51,7 +51,7 @@
           }
         }
         try connection.transaction { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
+          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
         }
       }
 
@@ -119,7 +119,7 @@
 
       // The connection was handed back with no transaction open, so the next write can begin one.
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       #expect(try await driver.read { try $0.fetchAll(itemIDs) } == [2])
     }
@@ -146,7 +146,7 @@
         _ = try? connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         connection.notifyChanges(in: manual)
         try connection.transaction { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
         }
         try? connection.transaction { transaction in
           try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
@@ -202,7 +202,7 @@
         try connection.execute("PRAGMA foreign_keys = OFF")
         defer { try? connection.execute("PRAGMA foreign_keys = ON") }
         try connection.transaction { transaction in
-          try transaction.execute(orphan)
+          _ = try transaction.execute(orphan)
         }
         return try connection.fetchOne(foreignKeys)
       }
@@ -233,7 +233,7 @@
       #expect(error?.primaryCode == .readOnly)
 
       try await driver.writeWithoutTransaction { connection in
-        try connection.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        _ = try connection.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       let ids = try await driver.readWithoutTransaction { connection in
         try connection.transaction { try $0.fetchAll(itemIDs) }
@@ -251,7 +251,7 @@
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         try connection.transaction { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
         }
       }
       let ids = try driver.readWithoutTransactionBlocking { connection in

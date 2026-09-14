@@ -156,8 +156,9 @@
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
     var subscription: OrbitSubscription? = try first?.subscribe(to: database) { _ in }
-    let firstEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
-      .endpointName
+    let firstEndpoint = try withExtendedLifetime(subscription) {
+      try #require(registry.peers(databaseIdentifier: database).first).endpointName
+    }
 
     subscription = nil
     first = nil
@@ -183,7 +184,9 @@
 
     var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
     var subscription: OrbitSubscription? = try transport?.subscribe(to: database) { _ in }
-    let socketPath = try #require(registry.peers(databaseIdentifier: database).first).socketPath
+    let socketPath = try withExtendedLifetime(subscription) {
+      try #require(registry.peers(databaseIdentifier: database).first).socketPath
+    }
     #expect(FileManager.default.fileExists(atPath: socketPath))
 
     subscription = nil
