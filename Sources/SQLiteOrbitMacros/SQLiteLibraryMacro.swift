@@ -118,7 +118,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           setExtendedResultCodes: \(raw: qualifier)sqlite3_extended_result_codes,
           setBusyTimeout: \(raw: qualifier)sqlite3_busy_timeout,
           interrupt: \(raw: qualifier)sqlite3_interrupt,
-          changes: \(raw: qualifier)sqlite3_changes,
+          changes: \(raw: qualifier)sqlite3_changes64,
           lastInsertedRowID: \(raw: qualifier)sqlite3_last_insert_rowid,
           isAutocommit: \(raw: qualifier)sqlite3_get_autocommit
         ),

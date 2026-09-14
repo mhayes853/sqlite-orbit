@@ -30,7 +30,7 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: sqlite3_extended_result_codes,
           setBusyTimeout: sqlite3_busy_timeout,
           interrupt: sqlite3_interrupt,
-          changes: sqlite3_changes,
+          changes: sqlite3_changes64,
           lastInsertedRowID: sqlite3_last_insert_rowid,
           isAutocommit: sqlite3_get_autocommit
         ),
@@ -172,7 +172,7 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: SQLCipher.sqlite3_extended_result_codes,
           setBusyTimeout: SQLCipher.sqlite3_busy_timeout,
           interrupt: SQLCipher.sqlite3_interrupt,
-          changes: SQLCipher.sqlite3_changes,
+          changes: SQLCipher.sqlite3_changes64,
           lastInsertedRowID: SQLCipher.sqlite3_last_insert_rowid,
           isAutocommit: SQLCipher.sqlite3_get_autocommit
         ),
@@ -314,7 +314,7 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: TursoSQLite3.sqlite3_extended_result_codes,
           setBusyTimeout: TursoSQLite3.sqlite3_busy_timeout,
           interrupt: TursoSQLite3.sqlite3_interrupt,
-          changes: TursoSQLite3.sqlite3_changes,
+          changes: TursoSQLite3.sqlite3_changes64,
           lastInsertedRowID: TursoSQLite3.sqlite3_last_insert_rowid,
           isAutocommit: TursoSQLite3.sqlite3_get_autocommit
         ),

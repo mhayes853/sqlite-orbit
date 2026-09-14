@@ -277,6 +277,45 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     }
   }
 
+  /// How many rows the most recent statement on this connection inserted, updated, or deleted.
+  ///
+  /// This is `sqlite3_changes64`, which counts the last statement rather than everything the
+  /// access has run, so reading it after a second ``execute(_:)-(some Statement)`` reports only
+  /// what that second statement changed. A statement that changes nothing, such as a `SELECT` or a
+  /// `CREATE TABLE`, leaves the previous count in place rather than resetting it to zero.
+  ///
+  /// ```swift
+  /// let deleted = try await database.writeWithoutTransaction { connection in
+  ///   try connection.execute(Reminder.where(\.isCompleted).delete())
+  ///   return connection.changesCount
+  /// }
+  /// ```
+  ///
+  /// - Important: The count belongs to the connection, not to this access, and the next access may
+  ///   be lent a different connection. Read it inside the same access as the write it describes.
+  public var changesCount: Int {
+    base.changesCount
+  }
+
+  /// The rowid of the most recent successful insert on this connection.
+  ///
+  /// This is `sqlite3_last_insert_rowid`, which is how a table with an `INTEGER PRIMARY KEY`
+  /// SQLite filled in reports what it chose. A statement that inserts nothing leaves the previous
+  /// rowid in place, and a connection that has never inserted reports `0`.
+  ///
+  /// ```swift
+  /// let id = try await database.writeWithoutTransaction { connection in
+  ///   try connection.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
+  ///   return connection.lastInsertedRowID
+  /// }
+  /// ```
+  ///
+  /// - Important: The rowid belongs to the connection, not to this access, and the next access may
+  ///   be lent a different connection. Read it inside the same access as the insert it describes.
+  public var lastInsertedRowID: Int64 {
+    base.lastInsertedRowID
+  }
+
   /// Creates a cursor over the rows a read query returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does.
@@ -295,22 +334,21 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     return try base.rowCursor(query, cached: cached)
   }
 
-  /// Runs a statement to completion, committing it, and reports how many rows it changed.
+  /// Runs a statement to completion, committing it and discarding any rows it returns.
   ///
   /// ```swift
-  /// let deleted = try connection.execute(Reminder.where(\.isCompleted).delete())
+  /// try connection.execute(Reminder.where(\.isCompleted).delete())
+  /// let deleted = connection.changesCount
   /// ```
   ///
   /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
   ///   discarded.
-  /// - Returns: The number of rows the statement inserted, updated, or deleted.
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
-  @discardableResult
-  public borrowing func execute(_ statement: some Statement) throws -> Int {
+  public borrowing func execute(_ statement: some Statement) throws {
     try applyPendingSettings()
     defer { commitPendingChanges() }
-    return try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
+    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
   }
 
   /// Runs SQL that the query builder does not model, such as schema changes and pragmas.

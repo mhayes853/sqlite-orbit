@@ -25,6 +25,7 @@ func structuredQueryExecutionPreservesBindings() async throws {
     try transaction.execute(
       #sql("INSERT INTO reminders (title) VALUES (\(title, as: String.self))", as: Void.self)
     )
+    return transaction.changesCount
   }
 
   #expect(changedRowCount == 1)
@@ -586,9 +587,12 @@ private struct TestWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~
     return TestDatabaseRowCursor(state: state)
   }
 
-  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws -> Int {
+  var changesCount: Int { 1 }
+
+  var lastInsertedRowID: Int64 { 1 }
+
+  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
     state.executedQueries.append(query.fragment)
-    return 1
   }
 }
 

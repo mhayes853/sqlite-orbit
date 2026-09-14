@@ -83,13 +83,50 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
     cached: Bool
   ) throws -> RowCursor
 
-  /// Runs a query and returns the number of rows it changed.
+  /// How many rows the most recent statement on this connection inserted, updated, or deleted.
+  ///
+  /// This is `sqlite3_changes64`, which counts the last statement rather than the transaction, so
+  /// reading it after a second ``execute(_:)`` reports only what that second statement changed. A
+  /// statement that changes nothing, such as a `SELECT` or a `CREATE TABLE`, leaves the previous
+  /// count in place rather than resetting it to zero.
+  ///
+  /// ```swift
+  /// let deleted = try await database.write { transaction in
+  ///   try transaction.execute(Reminder.where(\.isCompleted).delete())
+  ///   return transaction.changesCount
+  /// }
+  /// ```
+  ///
+  /// - Important: The count belongs to the connection, not to this transaction, and the next
+  ///   access may be lent a different connection. Read it inside the same access as the write it
+  ///   describes.
+  var changesCount: Int { get }
+
+  /// The rowid of the most recent successful insert on this connection.
+  ///
+  /// This is `sqlite3_last_insert_rowid`, which is how a table with an `INTEGER PRIMARY KEY`
+  /// SQLite filled in reports what it chose. A statement that inserts nothing leaves the previous
+  /// rowid in place, and a connection that has never inserted reports `0`.
+  ///
+  /// ```swift
+  /// let id = try await database.write { transaction in
+  ///   try transaction.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
+  ///   return transaction.lastInsertedRowID
+  /// }
+  /// ```
+  ///
+  /// - Important: The rowid belongs to the connection, not to this transaction, and the next
+  ///   access may be lent a different connection. Read it inside the same access as the insert it
+  ///   describes.
+  var lastInsertedRowID: Int64 { get }
+
+  /// Runs a query, discarding any rows it returns.
+  ///
+  /// Read ``changesCount`` afterwards for how many rows it changed.
   ///
   /// - Parameter query: The query to run. Any rows it returns are discarded.
-  /// - Returns: The number of rows the statement inserted, updated, or deleted.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  @discardableResult
-  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws -> Int
+  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws
 }
 
 extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
@@ -164,17 +201,16 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement), cached: cached)
   }
 
-  /// Executes a statement and returns the number of rows changed by that statement.
+  /// Executes a statement, discarding any rows it returns.
   ///
   /// ```swift
-  /// let deleted = try transaction.execute(Reminder.where(\.isCompleted).delete())
+  /// try transaction.execute(Reminder.where(\.isCompleted).delete())
+  /// let deleted = transaction.changesCount
   /// ```
   ///
   /// - Parameter statement: The statement to run.
-  /// - Returns: The number of rows the statement inserted, updated, or deleted.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  @discardableResult
-  public borrowing func execute(_ statement: some Statement) throws -> Int {
+  public borrowing func execute(_ statement: some Statement) throws {
     try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
   }
 

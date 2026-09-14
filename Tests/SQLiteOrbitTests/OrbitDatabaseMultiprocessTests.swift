@@ -76,7 +76,7 @@
       defer { harness.cleanup() }
       let database = try harness.database()
       try await database.write { transaction in
-        _ = try transaction.execute(
+        try transaction.execute(
           #sql(
             """
             CREATE TABLE writes (
@@ -111,7 +111,7 @@
       defer { harness.cleanup() }
       try await harness.database()
         .write { transaction in
-          _ = try transaction.execute(
+          try transaction.execute(
             #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
           )
         }
@@ -152,7 +152,7 @@
 
       try await harness.database()
         .write { transaction in
-          _ = try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+          try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
         }
 
       try await harness.waitForSuccessfulExit(listener)
@@ -259,7 +259,7 @@
       try await waitForFile(start)
       for sequence in 0..<writeCount {
         try await database.write { transaction in
-          _ = try transaction.execute(
+          try transaction.execute(
             #sql(
               """
               INSERT INTO writes (writer_id, sequence)

@@ -249,9 +249,11 @@
     }
     #expect(empty.isEmpty)
 
-    let changed = try await database.write { transaction in
+    // An insert of nothing builds no SQL, so it runs nothing rather than failing to compile an
+    // empty statement.
+    try await database.write { transaction in
       let noReminders: [Reminder] = []
-      return try transaction.execute(
+      try transaction.execute(
         Reminder.insert {
           for reminder in noReminders {
             reminder
@@ -259,7 +261,6 @@
         }
       )
     }
-    #expect(changed == 0)
 
     // The empty write must not have disturbed the table.
     let count = try await database.read { transaction in

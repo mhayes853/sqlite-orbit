@@ -37,7 +37,7 @@
     let interprocess = OrbitDatabase(writer: driver)
 
     try await interprocess.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
+      try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })
     }
 
     let items = try await interprocess.read { transaction in
@@ -133,7 +133,7 @@
       for id in 1...count {
         group.addTask {
           try await driver.write { transaction in
-            _ = try transaction.execute(Item.insert { Item(id: id, title: "contended") })
+            try transaction.execute(Item.insert { Item(id: id, title: "contended") })
           }
         }
         group.addTask {
@@ -234,7 +234,7 @@
 
     let write = Task {
       try await driver.write { transaction in
-        _ = try transaction.execute(Item.insert { Item(id: 1, title: "in flight") })
+        try transaction.execute(Item.insert { Item(id: 1, title: "in flight") })
         gate.hold()
       }
     }
@@ -268,7 +268,7 @@
     let write = Task {
       try await driver.write { transaction in
         wrote.withLock { $0 = true }
-        _ = try transaction.execute(Item.insert { Item(id: 1, title: "after read") })
+        try transaction.execute(Item.insert { Item(id: 1, title: "after read") })
       }
     }
     for _ in 0..<100 {
@@ -301,7 +301,7 @@
     let writer = Task {
       writerRequested.withLock { $0 = true }
       try await driver.write { transaction in
-        _ = try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
+        try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
       }
     }
     while !writerRequested.withLock({ $0 }) { await Task.yield() }
@@ -342,7 +342,7 @@
 
     let write = Task {
       try await driver.write { transaction in
-        _ = try transaction.execute(Item.insert { Item(id: 1, title: "never") })
+        try transaction.execute(Item.insert { Item(id: 1, title: "never") })
       }
     }
     let trailingRead = Task {

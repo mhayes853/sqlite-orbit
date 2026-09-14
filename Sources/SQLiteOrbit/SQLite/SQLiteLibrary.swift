@@ -256,8 +256,8 @@ extension SQLiteLibrary {
     public var setBusyTimeout: @Sendable (OpaquePointer?, Int32) -> Int32
     /// Interrupts the query running on a connection: `sqlite3_interrupt`.
     public var interrupt: @Sendable (OpaquePointer?) -> Void
-    /// Rows changed by the most recent statement: `sqlite3_changes`.
-    public var changes: @Sendable (OpaquePointer?) -> Int32
+    /// Rows changed by the most recent statement: `sqlite3_changes64`.
+    public var changes: @Sendable (OpaquePointer?) -> Int64
     /// The rowid of the most recent successful insert: `sqlite3_last_insert_rowid`.
     public var lastInsertedRowID: @Sendable (OpaquePointer?) -> Int64
     /// Whether the connection currently has no transaction open: `sqlite3_get_autocommit`.
@@ -275,7 +275,7 @@ extension SQLiteLibrary {
       setExtendedResultCodes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
       setBusyTimeout: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
       interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
-      changes: @escaping @Sendable (OpaquePointer?) -> Int32,
+      changes: @escaping @Sendable (OpaquePointer?) -> Int64,
       lastInsertedRowID: @escaping @Sendable (OpaquePointer?) -> Int64,
       isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32
     ) {

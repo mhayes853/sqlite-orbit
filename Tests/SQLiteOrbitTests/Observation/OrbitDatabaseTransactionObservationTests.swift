@@ -17,7 +17,7 @@
       let subscription = try driver.subscribe(transactionObserver: observer)
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(
@@ -93,7 +93,7 @@
       subscription.cancel()
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(observer.events.isEmpty)
@@ -172,7 +172,7 @@
       let subscription = try driver.subscribe(transactionObserver: observer)
 
       try driver.writeBlocking { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(
@@ -200,7 +200,7 @@
       let subscription = try driver.subscribe(transactionObserver: observer)
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(

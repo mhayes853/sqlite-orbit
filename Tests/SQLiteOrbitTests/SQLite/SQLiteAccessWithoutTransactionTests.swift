@@ -51,7 +51,7 @@
           }
         }
         try connection.transaction { transaction in
-          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
         }
       }
 
@@ -119,7 +119,7 @@
 
       // The connection was handed back with no transaction open, so the next write can begin one.
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       #expect(try await driver.read { try $0.fetchAll(itemIDs) } == [2])
     }
@@ -143,10 +143,10 @@
         try connection.execute("PRAGMA foreign_keys = ON")
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         // A statement that fails after reporting its change still reports it as committed.
-        _ = try? connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try? connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         connection.notifyChanges(in: manual)
         try connection.transaction { transaction in
-          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
         }
         try? connection.transaction { transaction in
           try transaction.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
@@ -202,7 +202,7 @@
         try connection.execute("PRAGMA foreign_keys = OFF")
         defer { try? connection.execute("PRAGMA foreign_keys = ON") }
         try connection.transaction { transaction in
-          _ = try transaction.execute(orphan)
+          try transaction.execute(orphan)
         }
         return try connection.fetchOne(foreignKeys)
       }
@@ -233,7 +233,7 @@
       #expect(error?.primaryCode == .readOnly)
 
       try await driver.writeWithoutTransaction { connection in
-        _ = try connection.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       let ids = try await driver.readWithoutTransaction { connection in
         try connection.transaction { try $0.fetchAll(itemIDs) }
@@ -251,7 +251,7 @@
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         try connection.transaction { transaction in
-          _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
         }
       }
       let ids = try driver.readWithoutTransactionBlocking { connection in
@@ -302,6 +302,31 @@
         try connection.fetchOne(itemCount)
       }
       #expect(count == 0)
+    }
+
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func aConnectionReportsWhatEachStatementChangedAndInserted(
+      _ kind: SQLiteTestDriver
+    ) async throws {
+      let directory = try makeShortTemporaryDirectory("conn")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver = try await kind.openWithItems(in: directory)
+
+      let report = try await driver.writeWithoutTransaction {
+        connection -> (inserted: Int, rowID: Int64, deleted: Int) in
+        try connection.execute(
+          #sql("INSERT INTO items (id) VALUES (1), (2), (3)", as: Void.self)
+        )
+        let inserted = connection.changesCount
+        let rowID = connection.lastInsertedRowID
+        try connection.execute(#sql("DELETE FROM items WHERE id = 2", as: Void.self))
+        return (inserted, rowID, connection.changesCount)
+      }
+
+      #expect(report.inserted == 3)
+      #expect(report.rowID == 3)
+      // Only the delete is counted, not the insert before it.
+      #expect(report.deleted == 1)
     }
   }
 

@@ -363,7 +363,7 @@
 
       probe.isFailing = false
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       let count = try await driver.read { transaction in
         try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))

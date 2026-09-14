@@ -12,7 +12,7 @@
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
 
       try await database.write { transaction in
-        _ = try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+        try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
       }
 
       #expect(
@@ -28,7 +28,7 @@
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
 
       try database.writeBlocking { transaction in
-        _ = try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+        try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
       }
       try await waitUntil { transport.messages.count == 1 }
 
@@ -259,7 +259,7 @@
       try await database.writeWithoutTransaction { connection in
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
         try connection.transaction { transaction in
-          _ = try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
         }
         try? connection.transaction { transaction in
           try transaction.execute(#sql("INSERT INTO archive (id) VALUES (1)", as: Void.self))
@@ -286,7 +286,7 @@
         try await database.writeWithoutTransaction { connection in
           try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
           try connection.transaction { transaction in
-            _ = try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+            try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
           }
           throw WriteFailure()
         }

@@ -23,7 +23,7 @@
     let awkward = "before\u{0}after"
 
     try handle.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: awkward) })
+      try transaction.execute(Item.insert { Item(id: 1, title: awkward) })
     }
 
     let titles = try handle.read { transaction in
@@ -68,7 +68,7 @@
 
     // And the connection is writable again afterwards.
     try handle.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
+      try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -87,7 +87,7 @@
 
     // A read that threw still turned `query_only` back off on its way out.
     try handle.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: "after failure") })
+      try transaction.execute(Item.insert { Item(id: 1, title: "after failure") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -99,7 +99,7 @@
   func aStatementIsReusableAfterTheQueryUsingItFails() throws {
     let handle = try openConnection()
     try handle.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
+      try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
     }
 
     // Decoding the title as an integer fails partway through the cursor's life.
@@ -173,7 +173,7 @@
     let handle = try openConnection(configuration: configuration)
 
     try handle.write { transaction in
-      _ = try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
+      try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -189,7 +189,7 @@
     let extremes: [Int64] = [.min, -1, 0, 1, .max]
     for value in extremes {
       try handle.write { transaction in
-        _ = try transaction.execute(
+        try transaction.execute(
           #sql("INSERT INTO numbers (value) VALUES (\(value, as: Int64.self))", as: Void.self)
         )
       }
@@ -239,7 +239,7 @@
 
     // The statement that failed to bind was given back, so the cache did not leak it.
     try handle.write { transaction in
-      _ = try transaction.execute(
+      try transaction.execute(
         #sql("INSERT INTO numbers (value) VALUES (\(1, as: Int.self))", as: Void.self)
       )
     }
@@ -537,7 +537,7 @@
     let handle = try openConnection()
     try handle.execute("CREATE TABLE numbers (value INTEGER)")
     try handle.write { transaction in
-      _ = try transaction.execute(
+      try transaction.execute(
         #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
       )
     }

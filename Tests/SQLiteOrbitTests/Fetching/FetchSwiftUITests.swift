@@ -39,7 +39,7 @@
           #expect(texts == ["Milk"])
         }
         try await database.write { transaction in
-          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         try await sut.inspection.inspect(after: settle) { view in
           let texts = try view.texts()
@@ -80,7 +80,7 @@
           try view.find(button: "Rebuild").tap()
         }
         try await database.write { transaction in
-          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         // The rebuilt property describes the same read, so the observation the first render
         // started is the one still delivering.
@@ -124,7 +124,7 @@
           #expect(texts == ["1 remaining"])
         }
         try await database.write { transaction in
-          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         try await sut.inspection.inspect(after: settle) { view in
           let texts = try view.texts()
