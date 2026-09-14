@@ -915,17 +915,9 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func max(
     by areInIncreasingOrder: (Element, Element) throws -> Bool
   ) throws -> Element? {
-    var result: Element?
-    try forEach { value in
-      guard let current = result else {
-        result = value
-        return
-      }
-      if try areInIncreasingOrder(current, value) {
-        result = value
-      }
-    }
-    return result
+    // The largest value under an ordering is the smallest under its reverse, and reversing keeps
+    // the first of several equal values, exactly as `min` does.
+    try min { try areInIncreasingOrder($1, $0) }
   }
 
   /// Returns the minimum and maximum remaining values, or `nil` if the cursor is empty.

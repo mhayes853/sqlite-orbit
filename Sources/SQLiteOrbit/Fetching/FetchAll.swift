@@ -374,11 +374,7 @@ extension FetchAll: Equatable where Element: Equatable {
   extension FetchAll: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      let persisted = state.wrappedValue
-      if persisted !== box {
-        persisted.adoptIfNeeded(from: box)
-      }
-      persisted.observeForSwiftUI(generation: generation)
+      state.wrappedValue.update(declared: box, generation: generation)
     }
 
     /// Creates a property observing every row of a table, delivering changes with an animation.

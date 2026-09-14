@@ -195,12 +195,9 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
-    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: statement.limit(1)
-      ),
+      request: Self.firstRowRequest(),
       database: database,
       scheduler: scheduler
     )
@@ -219,15 +216,22 @@ public struct FetchOne<Value: Sendable>: Sendable {
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
-    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: statement.limit(1)
-      ),
+      request: Self.firstRowRequest(),
       database: database,
       scheduler: scheduler
     )
+  }
+
+  /// The request both optional whole-table overloads above describe.
+  ///
+  /// They are written twice only so that an optional primary keyed table is not ambiguous between
+  /// them and the non-optional overload; the read itself is the same one.
+  private static func firstRowRequest() -> OrbitFetchOptionalProtocolStatementRequest<Value>
+  where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
+    return OrbitFetchOptionalProtocolStatementRequest<Value>(statement: statement.limit(1))
   }
 
   /// Creates a property observing the row the value it is declared with identifies.
@@ -611,11 +615,7 @@ extension FetchOne: Equatable where Value: Equatable {
   extension FetchOne: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      let persisted = state.wrappedValue
-      if persisted !== box {
-        persisted.adoptIfNeeded(from: box)
-      }
-      persisted.observeForSwiftUI(generation: generation)
+      state.wrappedValue.update(declared: box, generation: generation)
     }
 
     /// Creates a property observing the first row of a table, delivering changes with an
