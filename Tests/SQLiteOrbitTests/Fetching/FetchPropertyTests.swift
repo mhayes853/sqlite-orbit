@@ -31,7 +31,7 @@
 
       // Writing to a table the query never read must not produce a value.
       try await database.write { transaction in
-        try transaction.execute(Tag.insert { Tag.Draft(name: "home") })
+        _ = try transaction.execute(Tag.insert { Tag.Draft(name: "home") })
       }
       try await database.write { transaction in
         _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
@@ -75,7 +75,7 @@
       #expect($reminder.loadError == nil)
 
       try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
 
       try await waitUntil { reminder?.title == "Milk" }
@@ -90,7 +90,7 @@
       #expect(overview == RemindersOverview.Value(count: 2, titles: ["Milk", "Eggs"]))
 
       try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
       }
 
       try await waitUntil { overview.count == 3 && overview.titles.last == "Bread" }
@@ -116,7 +116,7 @@
       try await waitUntil { reminders.count == 2 }
 
       try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
       }
       try await database.write { transaction in
         _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
@@ -352,7 +352,7 @@
     func theDefaultDatabaseIsUsedWhenNoneIsGiven() async throws {
       let database = try await remindersDatabase(titles: "Milk")
 
-      try await OrbitDefaultDatabase.withValue(database) {
+      OrbitDefaultDatabase.withValue(database) {
         @FetchAll(Reminder.all) var reminders
         #expect(reminders.count == 1)
       }
@@ -405,7 +405,7 @@
       #expect(reminders.count == 2)
 
       try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
       }
       try await waitUntil { reminders.count == 3 }
     }
@@ -458,7 +458,7 @@
         #expect(!didChange.withLock { $0 })
 
         try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
 
         try await waitUntil { didChange.withLock { $0 } }
@@ -474,7 +474,7 @@
       #expect(reminder.title == "Eggs")
 
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.where { $0.id.eq(2) }.update { $0.title = "Bagels" }
         )
       }
@@ -482,7 +482,7 @@
 
       // A write to another row leaves it alone.
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.where { $0.id.eq(1) }.update { $0.title = "Oat milk" }
         )
       }
@@ -520,7 +520,7 @@
       #expect(count == 2)
 
       try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
       }
       try await waitUntil { count == 3 }
     }
@@ -549,7 +549,7 @@
 
       // The retry resumed the observation, so later writes still arrive.
       try await database.write { transaction in
-        try transaction.execute(Note.insert { Note.Draft(title: "Second") })
+        _ = try transaction.execute(Note.insert { Note.Draft(title: "Second") })
       }
       try await waitUntil { titles == ["First", "Second"] }
     }
@@ -560,7 +560,7 @@
     func sectionsGroupRowsByAnExpression() async throws {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert {
             Reminder.Draft(title: "Milk", priority: "low")
             Reminder.Draft(title: "Eggs", priority: "high")
@@ -604,7 +604,7 @@
     func sectionsAreRegroupedAfterAWrite() async throws {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert { Reminder.Draft(title: "Milk", priority: "low") }
         )
       }
@@ -618,7 +618,7 @@
       #expect($reminders.sections.sectionNames == ["low"])
 
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert { Reminder.Draft(title: "Eggs", priority: "high") }
         )
       }
@@ -630,7 +630,7 @@
     func sectioningByAnOrderingTermOrdersTheSections() async throws {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert {
             Reminder.Draft(title: "Milk", priority: "low")
             Reminder.Draft(title: "Eggs", priority: "high")
@@ -662,7 +662,7 @@
     func loadingASectionedQueryReplacesTheSections() async throws {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert {
             Reminder.Draft(title: "Milk", priority: "low")
             Reminder.Draft(title: "Eggs", priority: "high")
@@ -690,7 +690,7 @@
     func aSectionKeepsRowsThatComeBackToIt() async throws {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           Reminder.insert {
             Reminder.Draft(title: "A", priority: "low")
             Reminder.Draft(title: "B", priority: "high")
@@ -788,7 +788,7 @@
       #expect(reminders.isEmpty)
 
       try await writer.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
 
       try await waitUntil { reminders.map(\.title) == ["Milk"] }

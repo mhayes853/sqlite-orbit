@@ -20,7 +20,7 @@
 
       try await recorder.waitForChangeCount(1)
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -65,7 +65,7 @@
         )
 
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(recorder.changes.map(\.value) == [0, 1])
@@ -92,7 +92,7 @@
       // The commit publishes from this thread, and its delivery is queued for the main actor,
       // which nothing here gives up before the subscription is cancelled.
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       subscription.cancel()
 
@@ -122,7 +122,7 @@
       #expect(recorder.changes.map(\.value) == [0])
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -172,7 +172,7 @@
         }
       }
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -236,7 +236,7 @@
       #expect(initial.source == .initial)
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       let local = try #require(try await iterator.next())
       #expect(local.value == 1)
@@ -350,7 +350,7 @@
       try await recorder.waitForChangeCount(1)
 
       try await database.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       #expect(fetchCount.withLock { $0 } == 1)
 
@@ -389,10 +389,10 @@
       try await recorder.waitForChangeCount(1)
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
 
       #expect(previousValues.withLock { $0 } == [0, 0])
@@ -429,7 +429,7 @@
       try await recorder.waitForChangeCount(1)
 
       try await writingDatabase.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -470,7 +470,7 @@
       #expect(fetchCount.withLock { $0 } == 1)
 
       try await writingDatabase.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -494,7 +494,7 @@
       // Outside a transaction there is no `databaseWillCommit` to fetch in, so the observation
       // learns of the statement only once it has committed, and fetches again.
       try await driver.writeWithoutTransaction { connection in
-        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -523,7 +523,7 @@
       subscription.cancel()
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(fetchCount.withLock { $0 } == 1)
@@ -557,7 +557,7 @@
       #expect(fetchCount.withLock { $0 } == 1)
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await first.waitForChangeCount(2)
       try await second.waitForChangeCount(2)
@@ -576,10 +576,10 @@
       #expect(try await iterator.next()?.value == 0)
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("DELETE FROM items", as: Void.self))
+        _ = try transaction.execute(#sql("DELETE FROM items", as: Void.self))
       }
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(try await iterator.next()?.value == 1)
@@ -602,7 +602,7 @@
         )
 
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(recorder.changes.map(\.value) == ["count=0", "count=1"])
@@ -646,7 +646,7 @@
       #expect(fetchCount.withLock { $0 } == 1)
 
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(first.changes.map(\.value) == [1])
@@ -678,7 +678,7 @@
 
       #expect(recorder.changes.isEmpty)
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(recorder.changes.map(\.value) == ["count=1"])
@@ -709,7 +709,7 @@
         )
 
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(recorder.changes.map(\.value) == [0])
@@ -739,10 +739,10 @@
         )
 
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
       }
       let count = try driver.readBlocking { transaction in
         try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
@@ -763,7 +763,7 @@
 
       for id in 1...3 {
         try await driver.write { transaction in
-          try transaction.execute(
+          _ = try transaction.execute(
             #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
           )
         }
@@ -785,7 +785,7 @@
 
       for id in 1...2 {
         try await driver.write { transaction in
-          try transaction.execute(
+          _ = try transaction.execute(
             #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
           )
         }
@@ -1076,7 +1076,7 @@
       #expect(events.withLock { $0 } == ["willStart", "willFetch", "didReceiveValue(0)"])
 
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
       // A local write is fetched inside its own transaction, so its fetch precedes the commit.
@@ -1114,7 +1114,7 @@
 
       try await recorder.waitForChangeCount(1)
       try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
 
       #expect(events.withLock { $0 } == ["willFetch"])
