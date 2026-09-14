@@ -91,15 +91,21 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     var firstResult: OrbitFetchSignal?
     var swiftUIObservation: OrbitSubscription?
 
-    // Return the old observation so cancellation and completion run after unlocking.
-    mutating func invalidateObservation() -> (OrbitSubscription?, OrbitFetchSignal?) {
+    /// What a replaced observation leaves behind, so that cancelling it and completing the load
+    /// that was waiting on it happen after the lock is released.
+    struct InvalidatedObservation {
+      let subscription: OrbitSubscription?
+      let firstResult: OrbitFetchSignal?
+    }
+
+    mutating func invalidateObservation() -> InvalidatedObservation {
       generation &+= 1
       isLoading = false
       defer {
         subscription = nil
         firstResult = nil
       }
-      return (subscription, firstResult)
+      return InvalidatedObservation(subscription: subscription, firstResult: firstResult)
     }
   }
 
@@ -205,15 +211,12 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
 
   /// Stops observing, keeping the value the observation last produced.
   func detach() {
-    let (subscription, signal) = state.withLock {
-      state -> (OrbitSubscription?, OrbitFetchSignal?) in
+    let invalidated = state.withLock { state -> State.InvalidatedObservation in
       state.source = nil
       state.hasStarted = true
       return state.invalidateObservation()
     }
-    subscription?.cancel()
-    signal?.finish(.failure(CancellationError()))
-    publishChange()
+    finish(invalidated)
   }
 
   /// Takes over another storage's value and request.
@@ -230,28 +233,33 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
       ($0.value, $0.source, $0.loadError, $0.requestID)
     }
     let adoption = state.withLock {
-      state -> (OrbitSubscription?, OrbitFetchSignal?, Bool)? in
+      state -> (invalidated: State.InvalidatedObservation, wasObserving: Bool)? in
       if updatingDeclaration {
         guard let requestID, state.requestID != requestID else { return nil }
         state.requestID = requestID
       }
-      let (previous, signal) = state.invalidateObservation()
+      let invalidated = state.invalidateObservation()
       state.value = value
       state.source = source
       state.loadError = loadError
       state.hasStarted = false
-      return (previous, signal, !state.observers.isEmpty)
+      return (invalidated, !state.observers.isEmpty)
     }
-    guard let (previous, signal, wasObserving) = adoption else { return }
-    previous?.cancel()
-    signal?.finish(.failure(CancellationError()))
-    publishChange()
+    guard let (invalidated, wasObserving) = adoption else { return }
+    finish(invalidated)
     // Something is already watching this storage, so its observation cannot wait for the next
     // read to restart it.
     if wasObserving { startIfNeeded() }
   }
 
   // MARK: - Observing
+
+  /// Ends a replaced observation, outside the lock that replaced it.
+  private func finish(_ invalidated: State.InvalidatedObservation) {
+    invalidated.subscription?.cancel()
+    invalidated.firstResult?.finish(.failure(CancellationError()))
+    publishChange()
+  }
 
   private func startIfNeeded() {
     subscribe()
@@ -262,23 +270,25 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     signal: OrbitFetchSignal? = nil
   ) {
     let starting = state.withLock {
-      state -> (OrbitFetchSource<Value>, UInt64, OrbitSubscription?, OrbitFetchSignal?)? in
+      state -> (
+        source: OrbitFetchSource<Value>,
+        generation: UInt64,
+        invalidated: State.InvalidatedObservation
+      )? in
       if let source {
         state.source = source
       } else if state.hasStarted {
         return nil
       }
       guard let source = state.source else { return nil }
-      let (previous, previousSignal) = state.invalidateObservation()
+      let invalidated = state.invalidateObservation()
       state.hasStarted = true
       state.isLoading = true
       state.firstResult = signal
-      return (source, state.generation, previous, previousSignal)
+      return (source, state.generation, invalidated)
     }
-    guard let (source, generation, previous, previousSignal) = starting else { return }
-    previous?.cancel()
-    previousSignal?.finish(.failure(CancellationError()))
-    publishChange()
+    guard let (source, generation, invalidated) = starting else { return }
+    finish(invalidated)
 
     // An explicit load awaits its first result, so its initial read must not block the caller.
     let scheduler: any OrbitValueObservationScheduler =
