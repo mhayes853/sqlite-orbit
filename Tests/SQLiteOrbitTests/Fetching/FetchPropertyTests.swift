@@ -157,7 +157,7 @@
     }
 
     @Test(arguments: PendingLoadInterruption.allCases)
-    func replacingARequestWhileLoadWaitsForItsFirstValueCancelsTheLoad(
+    func interruptingAPendingLoadResumesItWithCancellation(
       _ interruption: PendingLoadInterruption
     ) async throws {
       let database = try await remindersDatabase(titles: "Milk")
@@ -181,6 +181,8 @@
       defer { load.cancel() }
       try await waitUntil { storage.isLoading }
       switch interruption {
+      case .cancel:
+        load.cancel()
       case .detach:
         storage.detach()
       case .adoptMissingDatabase:
@@ -203,7 +205,18 @@
         return
       }
       #expect(error is CancellationError)
-      #expect(!storage.isLoading)
+      if interruption == .cancel {
+        // Cancelling the waiter leaves the observation alive; its eventual result must not
+        // resume the cancelled continuation a second time.
+        #expect(storage.isLoading)
+        scheduler.release()
+        try await waitUntil { !storage.isLoading }
+        #expect(storage.value == ["Milk"])
+      } else {
+        #expect(!storage.isLoading)
+        scheduler.release()
+        #expect(storage.value.isEmpty)
+      }
       if interruption == .adoptMissingDatabase {
         #expect(storage.requestID != nil)
         #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
@@ -852,6 +865,7 @@
   }
 
   enum PendingLoadInterruption: CaseIterable, Sendable {
+    case cancel
     case detach
     case adoptMissingDatabase
   }

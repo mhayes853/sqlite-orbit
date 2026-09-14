@@ -1003,14 +1003,7 @@ private struct OrbitValueObservationDelivery: Sendable {
 
 private struct OrbitValueObservationAcceptance: Sendable {
   let delivery: OrbitValueObservationDelivery
-  let acceptedFetch: Bool
   let requiresObservableRefetch: Bool
-
-  static let rejected = Self(
-    delivery: .idle,
-    acceptedFetch: false,
-    requiresObservableRefetch: false
-  )
 }
 
 private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabaseTransactionObserver
@@ -1198,7 +1191,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         discard(result)
         return .idle
       }
-      return accept(result, source: .initial, state: &state).delivery
+      return accept(result, source: .initial, state: &state)?.delivery ?? .idle
     }
     deliver(delivery, from: isolation)
   }
@@ -1309,16 +1302,16 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         discard(result)
         return .idle
       }
-      let acceptance = accept(result, source: .transaction(.local), state: &state)
+      guard let acceptance = accept(result, source: .transaction(.local), state: &state) else {
+        return .idle
+      }
       // The fetch inside this transaction includes every commit visible before this one, so it
       // also satisfies an older external invalidation whose read has not completed yet.
-      if acceptance.acceptedFetch {
-        state.reads.supersedePendingRead()
-        state.refetches.supersedePendingFetch()
-        state.refetchReasons.removeAll()
-        state.affectedRegion = nil
-        state.activeWriterBarriers.removeAll()
-      }
+      state.reads.supersedePendingRead()
+      state.refetches.supersedePendingFetch()
+      state.refetchReasons.removeAll()
+      state.affectedRegion = nil
+      state.activeWriterBarriers.removeAll()
       return acceptance.delivery
     }
     deliver(delivery, from: nil)
@@ -1437,7 +1430,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         forcingPublication: behavior == .force,
         state: &state
       )
-      guard acceptance.acceptedFetch else {
+      guard let acceptance else {
         state.refetches.finishSupersededFetch()
         return (.superseded, .idle)
       }
@@ -1492,7 +1485,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
       let delivery: OrbitValueObservationDelivery
       if state.reads.completeRead(request) {
-        delivery = accept(result, source: request.source, state: &state).delivery
+        delivery = accept(result, source: request.source, state: &state)?.delivery ?? .idle
       } else {
         discard(result)
         delivery = .idle
@@ -1510,13 +1503,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     source: OrbitValueObservationSource,
     forcingPublication: Bool = false,
     state: inout State
-  ) -> OrbitValueObservationAcceptance {
+  ) -> OrbitValueObservationAcceptance? {
     let outcome: Result<OrbitValueObservationChange<Value>, any Error>
     var requiresObservableRefetch = false
     switch result {
     case .success(let output):
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
-      guard dependenciesAreCurrent || forcingPublication else { return .rejected }
+      guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
       state.reads.completeInitialFetch()
       state.observedRegion = output.region
@@ -1524,7 +1517,6 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
           return OrbitValueObservationAcceptance(
             delivery: .idle,
-            acceptedFetch: true,
             requiresObservableRefetch: requiresObservableRefetch
           )
         }
@@ -1553,7 +1545,6 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         shouldDrain: state.deliveries.enqueue(publication),
         didFail: didFail
       ),
-      acceptedFetch: true,
       requiresObservableRefetch: requiresObservableRefetch
     )
   }
