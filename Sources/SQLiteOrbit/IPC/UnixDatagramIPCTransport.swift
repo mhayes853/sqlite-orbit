@@ -434,7 +434,7 @@
     func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
       self.state.withLock { state in
         // Checked after the handler is gone, so this asks whether anything is subscribed still.
-        guard state.handlers.remove(identifier, for: databaseIdentifier),
+        guard state.handlers.remove(identifier, for: databaseIdentifier).isLastForKey,
           !self.isAdvertised(databaseIdentifier, in: state)
         else { return }
         try? self.registry.unregister(databaseIdentifier: databaseIdentifier)

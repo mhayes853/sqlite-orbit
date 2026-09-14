@@ -165,7 +165,7 @@ private final class Endpoint: Sendable {
     network: InMemoryIPCTransport.Network
   ) {
     self.handlers.withLock { handlers in
-      if handlers.remove(identifier, for: databaseIdentifier) {
+      if handlers.remove(identifier, for: databaseIdentifier).isLastForKey {
         network.unregister(self, for: databaseIdentifier)
       }
     }
