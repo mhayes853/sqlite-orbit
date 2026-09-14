@@ -954,6 +954,63 @@
     }
 
     @Test
+    func aControllerThatReturnsWithoutFetchingRunsAgainForAnInvalidationItMissed() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let value = Lock(0)
+      let controller = SkipFirstRefetchController()
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: .fullDatabase) { _ in value.withLock { $0 } }
+        .refetching(controller)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      value.withLock { $0 = 1 }
+      driver.announceCommit(region: .fullDatabase)
+      try await controller.waitUntilSkipping()
+      // Arrives while the controller is still running, so it cannot start one of its own.
+      value.withLock { $0 = 2 }
+      driver.announceCommit(region: .fullDatabase)
+      controller.stopSkipping()
+
+      try await recorder.waitForChangeCount(2)
+      #expect(recorder.changes.map(\.value) == [0, 2])
+      #expect(controller.runCount == 2)
+      _ = subscription
+    }
+
+    @Test
+    func aControllerThatNeverFetchesIsNotRunAgainForTheSameInvalidation() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let controller = SkipFirstRefetchController(skipsEveryRun: true)
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: .fullDatabase) { _ in 0 }
+        .refetching(controller)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+
+      driver.announceCommit(region: .fullDatabase)
+      try await controller.waitUntilSkipping()
+      controller.stopSkipping()
+      for _ in 0..<100 { await Task.yield() }
+
+      #expect(controller.runCount == 1)
+      #expect(recorder.changes.count == 1)
+      _ = subscription
+    }
+
+    @Test
     func handleEventsReportsTheRuntimeLifecycle() async throws {
       let driver = try await itemsDatabase()
       let events = Lock([String]())
@@ -1684,6 +1741,48 @@
 
     func waitForSnapshot() async throws {
       try await waitUntil(timeout: .seconds(5)) { !self.snapshots.isEmpty }
+    }
+  }
+
+  /// A controller that returns without a conclusive fetch until it is told to stop doing so.
+  private final class SkipFirstRefetchController:
+    OrbitValueObservationRefetchController, Sendable
+  {
+    private struct State: Sendable {
+      var runCount = 0
+      var isSkipping = false
+      var skipsEveryRun: Bool
+    }
+
+    private let state: Lock<State>
+
+    init(skipsEveryRun: Bool = false) {
+      self.state = Lock(State(skipsEveryRun: skipsEveryRun))
+    }
+
+    var runCount: Int { state.withLock { $0.runCount } }
+
+    func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
+      let skips = state.withLock { state -> Bool in
+        state.runCount += 1
+        let skips = state.skipsEveryRun || state.runCount == 1
+        state.isSkipping = skips
+        return skips
+      }
+      guard !skips else {
+        while state.withLock({ $0.isSkipping }) { await Task.yield() }
+        return
+      }
+      var context = context
+      while await context.fetch(publishing: .ifCurrent) == .superseded {}
+    }
+
+    func waitUntilSkipping() async throws {
+      try await waitUntil(timeout: .seconds(5)) { self.state.withLock { $0.isSkipping } }
+    }
+
+    func stopSkipping() {
+      state.withLock { $0.isSkipping = false }
     }
   }
 

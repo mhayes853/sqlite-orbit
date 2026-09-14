@@ -1327,14 +1327,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   ) {
     let action = state.withLock { state -> (
       initialRequest: OrbitValueObservationReadRequest?,
-      startController: Bool
+      controllerRevision: UInt64?
     ) in
-      guard !state.isStopped else { return (nil, false) }
+      guard !state.isStopped else { return (nil, nil) }
 
       // Until the initial value is established, the existing revision loop makes that fetch cover
       // every invalidation and avoids publishing a refetch before the initial value.
       guard state.reads.initialFetchCompleted else {
-        return (state.reads.requireRead(source: source), false)
+        return (state.reads.requireRead(source: source), nil)
       }
 
       state.refetches.require(source: source)
@@ -1345,15 +1345,17 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       if let activeWriterBarrier {
         state.activeWriterBarriers.append(activeWriterBarrier)
       }
-      guard !state.isRefetching else { return (nil, false) }
+      guard !state.isRefetching else { return (nil, nil) }
       state.isRefetching = true
-      return (nil, true)
+      return (nil, state.refetches.invalidationRevision)
     }
     start(action.initialRequest)
-    if action.startController { startRefetching() }
+    if let controllerRevision = action.controllerRevision {
+      startRefetching(startedAt: controllerRevision)
+    }
   }
 
-  private func startRefetching() {
+  private func startRefetching(startedAt invalidationRevision: UInt64) {
     let operation = OrbitValueObservationRefetchOperation(
       snapshot: { [weak self] in
         self?.refetchSnapshot()
@@ -1376,7 +1378,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     Task { [weak self, refetchController] in
       let context = OrbitValueObservationRefetchContext(operation: operation)
       await refetchController.refetch(using: consume context)
-      self?.finishRefetching(conclusively: operation.didConclude)
+      self?.finishRefetching(conclusively: operation.didConclude, startedAt: invalidationRevision)
     }
   }
 
@@ -1449,18 +1451,21 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     return completed.result
   }
 
-  private func finishRefetching(conclusively: Bool) {
-    let shouldRestart = state.withLock { state in
+  private func finishRefetching(conclusively: Bool, startedAt invalidationRevision: UInt64) {
+    let restartRevision = state.withLock { state -> UInt64? in
       state.isRefetching = false
-      guard
-        !state.isStopped,
-        conclusively,
-        state.refetches.hasPendingFetch
-      else { return false }
+      guard !state.isStopped, state.refetches.hasPendingFetch else { return nil }
+      // A controller that reached a conclusive fetch did what it was asked and is run again for
+      // whatever arrived since. One that returned without ever concluding is only run again when
+      // there is something new for it to look at, so a controller that never fetches raises the
+      // invalidation it was given once and then stops, rather than spinning.
+      guard conclusively || state.refetches.invalidationRevision != invalidationRevision else {
+        return nil
+      }
       state.isRefetching = true
-      return true
+      return state.refetches.invalidationRevision
     }
-    if shouldRestart { startRefetching() }
+    if let restartRevision { startRefetching(startedAt: restartRevision) }
   }
 
   private func start(_ request: OrbitValueObservationReadRequest?) {

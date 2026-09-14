@@ -109,6 +109,10 @@ struct OrbitValueObservationRefetchCoordinator: Sendable {
 
   var hasPendingFetch: Bool { isRequired && !isFetchInFlight }
 
+  /// Counts the invalidations raised so far, so that a refetch controller's caller can tell
+  /// whether anything new arrived while the controller ran.
+  var invalidationRevision: UInt64 { revision }
+
   mutating func require(source: OrbitValueObservationSource) {
     revision &+= 1
     isRequired = true
