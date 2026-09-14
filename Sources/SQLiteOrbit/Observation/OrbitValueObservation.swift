@@ -1331,13 +1331,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     ) in
       guard !state.isStopped else { return (nil, nil) }
 
-      // Until the initial value is established, the existing revision loop makes that fetch cover
-      // every invalidation and avoids publishing a refetch before the initial value.
-      guard state.reads.initialFetchCompleted else {
-        return (state.reads.requireRead(source: source), nil)
-      }
-
-      state.refetches.require(source: source)
+      // Recorded whether or not a controller will see them, so that one running later is told the
+      // truth about what is outstanding. Accepting the initial value drops them again.
       state.refetchReasons.insert(reason)
       if let affectedRegion {
         state.affectedRegion = state.affectedRegion?.union(affectedRegion) ?? affectedRegion
@@ -1345,6 +1340,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       if let activeWriterBarrier {
         state.activeWriterBarriers.append(activeWriterBarrier)
       }
+
+      // Until the initial value is established, the existing revision loop makes that fetch cover
+      // every invalidation and avoids publishing a refetch before the initial value.
+      guard state.reads.initialFetchCompleted else {
+        return (state.reads.requireRead(source: source), nil)
+      }
+
+      state.refetches.require(source: source)
       guard !state.isRefetching else { return (nil, nil) }
       state.isRefetching = true
       return (nil, state.refetches.invalidationRevision)
@@ -1516,7 +1519,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
       guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
-      state.reads.completeInitialFetch()
+      completeInitialFetch(state: &state)
       state.observedRegion = output.region
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
@@ -1530,7 +1533,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         outcome = .failure(error)
       }
     case .failure(let error):
-      state.reads.completeInitialFetch()
+      completeInitialFetch(state: &state)
       outcome = .failure(error)
     }
 
@@ -1552,6 +1555,18 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       ),
       requiresObservableRefetch: requiresObservableRefetch
     )
+  }
+
+  /// Marks the initial read done, dropping the invalidations it answered.
+  ///
+  /// Every invalidation raised before the initial value forced that read to run again, so the one
+  /// finally accepted covers all of them and a controller running afterwards must not see them.
+  private func completeInitialFetch(state: inout State) {
+    guard !state.reads.initialFetchCompleted else { return }
+    state.reads.completeInitialFetch()
+    state.refetchReasons.removeAll()
+    state.affectedRegion = nil
+    state.activeWriterBarriers.removeAll()
   }
 
   private func discard(

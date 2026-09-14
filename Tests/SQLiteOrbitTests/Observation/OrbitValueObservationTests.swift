@@ -1011,6 +1011,48 @@
     }
 
     @Test
+    func aControllerDoesNotSeeInvalidationsTheInitialFetchAlreadyAnswered() async throws {
+      let queue = try await itemsDatabase()
+      let driver = PostCommitObservableDatabase(queue)
+      let fetchCount = Lock(0)
+      let gate = FetchGate()
+      let controller = RecordingRefetchController()
+      let trackedRegion = OrbitDatabaseRegion(table: "items")
+      let observation = OrbitValueObservation<Int>
+        .tracking(region: trackedRegion) { _ in
+          let count = fetchCount.withLock { count in
+            count += 1
+            return count
+          }
+          if count == 1 { gate.hold() }
+          return count
+        }
+        .refetching(controller)
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+
+      // Raised before the observation has an initial value, so the initial read answers it rather
+      // than the controller.
+      try await gate.waitUntilEntered()
+      driver.announceCommit(region: trackedRegion, origin: .external)
+      gate.open()
+      try await recorder.waitForChangeCount(1)
+
+      driver.announceCommit(region: trackedRegion)
+      try await controller.waitForSnapshot()
+      let snapshot = try #require(controller.snapshots.first)
+
+      #expect(snapshot.reasons == [.databaseChange])
+      #expect(snapshot.affectedRegion == trackedRegion)
+      #expect(!snapshot.hasActiveWriters)
+      _ = subscription
+    }
+
+    @Test
     func handleEventsReportsTheRuntimeLifecycle() async throws {
       let driver = try await itemsDatabase()
       let events = Lock([String]())
