@@ -23,7 +23,7 @@
     let awkward = "before\u{0}after"
 
     try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: awkward) })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: awkward) })
     }
 
     let titles = try handle.read { transaction in
@@ -68,7 +68,7 @@
 
     // And the connection is writable again afterwards.
     try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -87,7 +87,7 @@
 
     // A read that threw still turned `query_only` back off on its way out.
     try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "after failure") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "after failure") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -99,12 +99,12 @@
   func aStatementIsReusableAfterTheQueryUsingItFails() throws {
     let handle = try openConnection()
     try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
     }
 
     // Decoding the title as an integer fails partway through the cursor's life.
     try handle.read { transaction in
-      #expect(throws: (any Error).self) {
+      _ = #expect(throws: (any Error).self) {
         _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
       }
     }
@@ -139,13 +139,41 @@
   }
 
   @Test
+  func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
+    let handle = try openConnection()
+    try handle.write { transaction in
+      for id in 1...4 {
+        try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+      }
+    }
+
+    // `fetchOne` caches its statement and abandons the cursor after a single row, so the very same
+    // statement comes back for the next call, which binds a different value to it.
+    let first = try handle.read { transaction in
+      try transaction.fetchOne(
+        #sql("SELECT title FROM items WHERE id > \(bind: 1) ORDER BY id", as: String.self)
+      )
+    }
+    let second = try handle.read { transaction in
+      try transaction.fetchOne(
+        #sql("SELECT title FROM items WHERE id > \(bind: 3) ORDER BY id", as: String.self)
+      )
+    }
+
+    #expect(first == "item 2")
+    // A statement still carrying the first call's binding, or still standing on its second row,
+    // would answer with something else.
+    #expect(second == "item 4")
+  }
+
+  @Test
   func aCacheThatHoldsNothingStillRunsQueries() throws {
     var configuration = SQLiteConfiguration.default
     configuration.maximumCachedStatements = 0
     let handle = try openConnection(configuration: configuration)
 
     try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
+      _ = try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
     }
     let titles = try handle.read { transaction in
       try transaction.fetchAll(Item.select(\.title))
@@ -161,7 +189,7 @@
     let extremes: [Int64] = [.min, -1, 0, 1, .max]
     for value in extremes {
       try handle.write { transaction in
-        try transaction.execute(
+        _ = try transaction.execute(
           #sql("INSERT INTO numbers (value) VALUES (\(value, as: Int64.self))", as: Void.self)
         )
       }
@@ -211,7 +239,7 @@
 
     // The statement that failed to bind was given back, so the cache did not leak it.
     try handle.write { transaction in
-      try transaction.execute(
+      _ = try transaction.execute(
         #sql("INSERT INTO numbers (value) VALUES (\(1, as: Int.self))", as: Void.self)
       )
     }
@@ -509,7 +537,7 @@
     let handle = try openConnection()
     try handle.execute("CREATE TABLE numbers (value INTEGER)")
     try handle.write { transaction in
-      try transaction.execute(
+      _ = try transaction.execute(
         #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
       )
     }
@@ -520,7 +548,7 @@
     #expect(asInt64 == [Int64.max])
 
     let asInt = try handle.read { transaction in
-      try Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
+      Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
     }
     if Int.bitWidth == 64 {
       #expect(try asInt.get() == [Int(Int64.max)])

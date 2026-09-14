@@ -140,6 +140,8 @@
           return bytes
         }
         let code = errno
+        // Nothing here retries `EINTR`: the socket is nonblocking, so neither this nor `sendto`
+        // above ever waits in the kernel long enough for a signal to interrupt it.
         if code == EAGAIN || code == EWOULDBLOCK { return nil }
         throw OrbitIPCSystemError(operation: "recv", code: code)
       }
