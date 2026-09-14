@@ -23,6 +23,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 
+  // `preparedStatement.pointer`, kept beside it because stepping and decoding are inlinable and
+  // the metadata the prepared statement carries is not part of that.
   @usableFromInline
   let statement: OpaquePointer
 

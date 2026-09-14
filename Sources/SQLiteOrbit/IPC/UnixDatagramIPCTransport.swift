@@ -422,9 +422,9 @@
         guard !state.isShutdown else {
           throw OrbitIPCSystemError(operation: "transport is closed", code: EBADF)
         }
-        if !state.handlers.contains(databaseIdentifier),
-          !self.isRegistered(databaseIdentifier, in: state)
-        {
+        // Checked before the handler is added, so this asks whether anything was subscribed
+        // before it.
+        if !self.isAdvertised(databaseIdentifier, in: state) {
           try self.registry.register(databaseIdentifier: databaseIdentifier)
         }
         return state.handlers.insert(handler, for: databaseIdentifier).identifier
@@ -433,8 +433,9 @@
 
     func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
       self.state.withLock { state in
+        // Checked after the handler is gone, so this asks whether anything is subscribed still.
         guard state.handlers.remove(identifier, for: databaseIdentifier),
-          !self.isRegistered(databaseIdentifier, in: state)
+          !self.isAdvertised(databaseIdentifier, in: state)
         else { return }
         try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
       }
@@ -460,14 +461,16 @@
       }
     }
 
-    private func isRegistered(
+    /// Whether this endpoint's advertisement for a database is one it owes to some handler.
+    ///
+    /// One marker stands for every identifier sharing a coordination key, so the advertisement
+    /// belongs to all of their handlers rather than to any one of them.
+    private func isAdvertised(
       _ databaseIdentifier: OrbitDatabaseIdentifier,
       in state: State
     ) -> Bool {
       let key = self.registry.registrationKey(for: databaseIdentifier)
-      return state.handlers.keys.contains {
-        $0 != databaseIdentifier && self.registry.registrationKey(for: $0) == key
-      }
+      return state.handlers.keys.contains { self.registry.registrationKey(for: $0) == key }
     }
   }
 
