@@ -12,7 +12,7 @@ struct OrbitFetchSource<Value: Sendable>: Sendable {
   init(
     request: some OrbitFetchKeyRequest<Value>,
     database: any OrbitObservableDatabase,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
     let scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
     self.id = OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
@@ -32,19 +32,17 @@ struct OrbitFetchRequestID: Hashable, Sendable {
   private let database: ObjectIdentifier
   private let requestType: ObjectIdentifier
   private let request: OrbitAnyHashableSendable
-  // Schedulers are not `Hashable`, and two of the same kind are interchangeable often enough that
-  // their type is the most identity that can be read off them.
-  private let schedulerType: ObjectIdentifier
+  private let scheduler: OrbitAnyHashableSendable
 
   init(
     request: some OrbitFetchKeyRequest,
     database: any OrbitObservableDatabase,
-    scheduler: any OrbitValueObservationScheduler
+    scheduler: any OrbitValueObservationScheduler & Hashable
   ) {
     self.database = ObjectIdentifier(database)
     self.requestType = ObjectIdentifier(type(of: request))
     self.request = OrbitAnyHashableSendable(request)
-    self.schedulerType = ObjectIdentifier(type(of: scheduler))
+    self.scheduler = OrbitAnyHashableSendable(scheduler)
   }
 }
 
@@ -193,15 +191,21 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
 
   /// Stops observing, keeping the value the observation last produced.
   func detach() {
-    let subscription = state.withLock { state -> OrbitSubscription? in
+    let (subscription, signal) = state.withLock {
+      state -> (OrbitSubscription?, OrbitFetchSignal?) in
       state.generation &+= 1
       state.source = nil
       state.hasStarted = true
       state.isLoading = false
-      defer { state.subscription = nil }
-      return state.subscription
+      defer {
+        state.subscription = nil
+        state.firstResult = nil
+      }
+      return (state.subscription, state.firstResult)
     }
     subscription?.cancel()
+    signal?.finish(CancellationError())
+    publishChange()
   }
 
   /// Takes over another storage's value and request.
@@ -212,7 +216,8 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   /// - Parameter other: The storage to adopt from. It keeps observing whatever it was observing.
   func adopt(from other: OrbitFetchStorage<Value>) {
     let (value, source, loadError) = other.state.withLock { ($0.value, $0.source, $0.loadError) }
-    let (previous, wasObserving) = state.withLock { state -> (OrbitSubscription?, Bool) in
+    let (previous, signal, wasObserving) = state.withLock {
+      state -> (OrbitSubscription?, OrbitFetchSignal?, Bool) in
       state.generation &+= 1
       state.value = value
       state.source = source
@@ -220,10 +225,13 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
       state.isLoading = false
       state.hasStarted = false
       let previous = state.subscription
+      let signal = state.firstResult
       state.subscription = nil
-      return (previous, !state.observers.isEmpty)
+      state.firstResult = nil
+      return (previous, signal, !state.observers.isEmpty)
     }
     previous?.cancel()
+    signal?.finish(CancellationError())
     publishChange()
     // Something is already watching this storage, so its observation cannot wait for the next
     // read to restart it.
@@ -406,7 +414,7 @@ extension OrbitFetchStorage {
     value: Value,
     request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)?,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) -> OrbitFetchStorage<Value> {
     guard let database = database ?? OrbitDefaultDatabase.current else {
       return OrbitFetchStorage(value: value, loadError: OrbitMissingDefaultDatabaseError())
@@ -423,7 +431,7 @@ extension OrbitFetchStorage {
   func load(
     request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)?,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) async throws -> OrbitFetchSubscription {
     guard let database = database ?? OrbitDefaultDatabase.current else {
       throw OrbitMissingDefaultDatabaseError()
@@ -434,7 +442,7 @@ extension OrbitFetchStorage {
 
   /// Takes over `other`'s request when it describes a different read from this one's.
   func adoptIfNeeded(from other: OrbitFetchStorage<Value>) {
-    guard let otherID = other.requestID, otherID != requestID else { return }
+    guard other.requestID != requestID else { return }
     adopt(from: other)
   }
 }

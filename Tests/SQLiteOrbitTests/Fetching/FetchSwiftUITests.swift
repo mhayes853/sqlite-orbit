@@ -16,6 +16,18 @@
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct FetchSwiftUITests {
     @Test
+    func animationSchedulerIdentityIncludesTheAnimation() {
+      #expect(
+        OrbitFetchAnimationScheduler(animation: .default)
+          == OrbitFetchAnimationScheduler(animation: .default)
+      )
+      #expect(
+        OrbitFetchAnimationScheduler(animation: .default)
+          != OrbitFetchAnimationScheduler(animation: .linear)
+      )
+    }
+
+    @Test
     func viewRendersTheRowsItsPropertyFetched() async throws {
       let database = try await remindersDatabase(titles: "Milk", "Eggs")
       let sut = RemindersList(database: database)

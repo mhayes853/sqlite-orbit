@@ -179,6 +179,113 @@
       #expect(reminders.count == 1)
     }
 
+    @Test(arguments: PendingLoadInterruption.allCases)
+    func replacingARequestWhileLoadWaitsForItsFirstValueCancelsTheLoad(
+      _ interruption: PendingLoadInterruption
+    ) async throws {
+      let database = try await remindersDatabase(titles: "Milk")
+      let scheduler = HeldScheduler()
+      let storage = OrbitFetchStorage<[String]>(value: [])
+      let source = OrbitFetchSource(
+        request: TitleSearch(term: "Milk"),
+        database: database,
+        scheduler: scheduler
+      )
+      let completion = Lock<Result<Void, any Error>?>(nil)
+
+      let load = Task {
+        do {
+          try await storage.load(source)
+          completion.withLock { $0 = .success(()) }
+        } catch {
+          completion.withLock { $0 = .failure(error) }
+        }
+      }
+      defer { load.cancel() }
+      try await waitUntil { storage.isLoading }
+      switch interruption {
+      case .detach:
+        storage.detach()
+      case .adoptMissingDatabase:
+        storage.adoptIfNeeded(
+          from: OrbitFetchStorage(
+            value: [],
+            loadError: OrbitMissingDefaultDatabaseError()
+          )
+        )
+      }
+
+      try await waitUntil { completion.withLock { $0 != nil } }
+      guard case .failure(let error) = completion.withLock({ $0 }) else {
+        Issue.record("The interrupted load succeeded.")
+        return
+      }
+      #expect(error is CancellationError)
+      #expect(!storage.isLoading)
+      if interruption == .adoptMissingDatabase {
+        #expect(storage.requestID == nil)
+        #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
+      }
+    }
+
+    @Test
+    func requestIdentityIncludesTheSchedulersConfiguration() async throws {
+      let database = try await remindersDatabase()
+      let request = TitleSearch(term: "Milk")
+      let firstActor = SchedulerActor()
+      let secondActor = SchedulerActor()
+
+      func id(
+        _ scheduler: any OrbitValueObservationScheduler & Hashable
+      ) -> OrbitFetchRequestID {
+        OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
+      }
+
+      #expect(id(OrbitImmediateValueObservationScheduler()) == id(.immediate))
+      #expect(id(.async(priority: .utility)) == id(.async(priority: .utility)))
+      #expect(Set([id(.async(priority: .utility)), id(.async(priority: .utility))]).count == 1)
+      #expect(id(.async(priority: .utility)) != id(.async(priority: .userInitiated)))
+      #expect(id(.async(on: firstActor)) == id(.async(on: firstActor)))
+      #expect(id(.async(on: firstActor)) != id(.async(on: secondActor)))
+      #expect(id(.async()) != id(.async(on: firstActor)))
+      #expect(Set([id(.mainActor), id(.mainActor)]).count == 1)
+      let held = HeldScheduler()
+      #expect(id(held) == id(held))
+      #expect(id(held) != id(HeldScheduler()))
+
+      let original = OrbitFetchStorage(
+        value: ["original"],
+        source: OrbitFetchSource(
+          request: request,
+          database: database,
+          scheduler: OrbitAsyncValueObservationScheduler.async(priority: .utility)
+        )
+      )
+      let sameConfiguration = OrbitFetchStorage(
+        value: ["same configuration"],
+        source: OrbitFetchSource(
+          request: request,
+          database: database,
+          scheduler: OrbitAsyncValueObservationScheduler.async(priority: .utility)
+        )
+      )
+      let changedConfiguration = OrbitFetchStorage(
+        value: ["changed configuration"],
+        source: OrbitFetchSource(
+          request: request,
+          database: database,
+          scheduler: OrbitAsyncValueObservationScheduler.async(priority: .userInitiated)
+        )
+      )
+
+      original.adoptIfNeeded(from: sameConfiguration)
+      #expect(original.untrackedValue == ["original"])
+      #expect(original.requestID != changedConfiguration.requestID)
+      original.adoptIfNeeded(from: changedConfiguration)
+      #expect(original.untrackedValue == ["changed configuration"])
+      #expect(original.requestID == changedConfiguration.requestID)
+    }
+
     @Test
     func loadReadsTheQueryAgain() async throws {
       let database = try await remindersDatabase(titles: "Milk")
@@ -731,6 +838,13 @@
 
   // MARK: - Support
 
+  enum PendingLoadInterruption: CaseIterable, Sendable {
+    case detach
+    case adoptMissingDatabase
+  }
+
+  private actor SchedulerActor {}
+
   private let remindersSchema = """
     CREATE TABLE IF NOT EXISTS reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -758,13 +872,21 @@
 
   /// A scheduler that holds everything it is given until a test lets it go, and passes
   /// everything after that straight through.
-  private final class HeldScheduler: OrbitValueObservationScheduler {
+  private final class HeldScheduler: OrbitValueObservationScheduler, Hashable {
     private struct State {
       var isHeld = true
       var held: [@Sendable () -> Void] = []
     }
 
     private let state = Lock(State())
+
+    static func == (lhs: HeldScheduler, rhs: HeldScheduler) -> Bool {
+      lhs === rhs
+    }
+
+    func hash(into hasher: inout Hasher) {
+      hasher.combine(ObjectIdentifier(self))
+    }
 
     func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
       false

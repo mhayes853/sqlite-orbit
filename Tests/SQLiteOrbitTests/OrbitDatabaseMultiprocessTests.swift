@@ -34,8 +34,8 @@
       #expect(journalMode == ["wal"])
     }
 
-    @Test
-    func openingWaitsWhileAnotherProcessIsOpening() async throws {
+    @Test(arguments: [false, true])
+    func openingWaitsWhileAnotherProcessIsOpening(throughSymlink: Bool) async throws {
       let harness = try OrbitDatabaseProcessHarness(name: "open-lock")
       defer { harness.cleanup() }
       let identifier = OrbitDatabaseIdentifier.forDatabase(
@@ -53,7 +53,12 @@
         }
       }
       try await waitUntil { isHeld.withLock { $0 } }
-      let opener = try harness.spawn("open", index: 0)
+      defer { mayRelease.withLock { $0 = true } }
+      let opener = try harness.spawn(
+        "open",
+        index: 0,
+        databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
+      )
       try await waitForFile(harness.file("ready-0"))
       try harness.start()
       try await Task.sleep(for: .milliseconds(100))
@@ -132,13 +137,17 @@
       try await harness.waitForSuccessfulExit(holder)
     }
 
-    @Test
-    func writeIsDeliveredToARealSubscriberInAnotherProcess() async throws {
+    @Test(arguments: [false, true])
+    func writeIsDeliveredToARealSubscriberInAnotherProcess(throughSymlink: Bool) async throws {
       // Nothing subscribes through OrbitDatabase itself yet, but the transport it announces
       // through is real, so a peer that subscribes to it directly must still see the commit.
       let harness = try OrbitDatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
-      let listener = try harness.spawn("listen", index: 0)
+      let listener = try harness.spawn(
+        "listen",
+        index: 0,
+        databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
+      )
       try await waitForFile(harness.file("ready-0"))
 
       try await harness.database()
@@ -375,16 +384,23 @@
       )
     }
 
+    func symlinkedDatabasePath() throws -> String {
+      let alias = file("alias")
+      try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: harness.directory)
+      return alias.appending(path: "test.sqlite").path
+    }
+
     func spawn(
       _ mode: String,
       index: Int,
+      databasePath: String? = nil,
       writeCount: Int = 0,
       holdMilliseconds: Int = 0
     ) throws -> Process {
       try self.harness.spawn([
         "MODE": mode,
         "DIRECTORY": self.harness.directory.path,
-        "DATABASE": self.databasePath,
+        "DATABASE": databasePath ?? self.databasePath,
         "READY": self.harness.file("ready-\(index)").path,
         "START": self.harness.file("start").path,
         "HELD": self.harness.file("held-\(index)").path,

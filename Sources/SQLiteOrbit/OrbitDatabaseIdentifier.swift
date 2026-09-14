@@ -34,6 +34,9 @@ public struct OrbitDatabaseIdentifier: RawRepresentable, Codable, Hashable, Send
 extension OrbitDatabaseIdentifier {
   /// The identity a file database shares with every process that opens the same path.
   ///
+  /// Symbolic links in the file or any existing parent directory are resolved. The unresolved
+  /// suffix of a path is preserved, so creating the database does not change its identity.
+  ///
   /// A database private to the connection that opened it is not the same database as any other, so
   /// each one gets a unique identity instead.
   ///
@@ -42,9 +45,57 @@ extension OrbitDatabaseIdentifier {
   /// ```
   ///
   /// - Parameter path: Where the database lives.
-  /// - Returns: The standardized file path, or a unique identity for a private database.
+  /// - Returns: The canonical file path, or a unique identity for a private database.
   public static func forDatabase(path: OrbitDatabasePath) -> Self {
     guard let url = path.fileURL else { return .unique() }
-    return Self(rawValue: url.path)
+    return Self(rawValue: canonicalFileURL(url).path)
+  }
+
+  private static func canonicalFileURL(
+    _ url: URL,
+    remainingSymbolicLinks: Int = 40
+  ) -> URL {
+    guard remainingSymbolicLinks > 0 else { return url.standardizedFileURL }
+
+    var existingPrefix = url
+    var missingComponents: [String] = []
+    while true {
+      do {
+        let values = try existingPrefix.resourceValues(forKeys: [.isSymbolicLinkKey])
+        if values.isSymbolicLink == true,
+          let destination = try? FileManager.default.destinationOfSymbolicLink(
+            atPath: existingPrefix.path
+          )
+        {
+          let parent = canonicalFileURL(
+            existingPrefix.deletingLastPathComponent(),
+            remainingSymbolicLinks: remainingSymbolicLinks - 1
+          )
+          let targetPath =
+            (destination as NSString).isAbsolutePath
+            ? destination
+            : parent.path + "/" + destination
+          var target = URL(fileURLWithPath: targetPath)
+          for component in missingComponents.reversed() {
+            target.append(path: component)
+          }
+          return canonicalFileURL(
+            target,
+            remainingSymbolicLinks: remainingSymbolicLinks - 1
+          )
+        }
+
+        var result = existingPrefix.resolvingSymlinksInPath()
+        for component in missingComponents.reversed() {
+          result.append(path: component)
+        }
+        return result.standardizedFileURL
+      } catch {
+        let parent = existingPrefix.deletingLastPathComponent()
+        guard parent != existingPrefix else { return url.standardizedFileURL }
+        missingComponents.append(existingPrefix.lastPathComponent)
+        existingPrefix = parent
+      }
+    }
   }
 }

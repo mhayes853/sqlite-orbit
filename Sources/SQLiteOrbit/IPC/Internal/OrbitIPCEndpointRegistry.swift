@@ -53,6 +53,7 @@
     func remove(_ peer: OrbitIPCPeer, databaseIdentifier: OrbitDatabaseIdentifier) throws {
       let marker = self.databaseDirectory(for: databaseIdentifier)
         .appending(path: peer.endpointName)
+      try Self.remove(URL(fileURLWithPath: peer.socketPath))
       try Self.remove(marker)
     }
 

@@ -58,11 +58,11 @@ enum OrbitIPCWireProtocol {
     guard bytes[4] == 1 else {
       throw OrbitIPCWireError.unsupportedProtocolVersion(bytes[4])
     }
+    guard bytes[5] == 1 else { throw OrbitIPCWireError.unsupportedMessageKind(bytes[5]) }
 
     var offset = 6
     let database = try readString(from: bytes, at: &offset)
     let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: database)
-    guard bytes[5] == 1 else { throw OrbitIPCWireError.unsupportedMessageKind(bytes[5]) }
     let region = try readRegion(from: bytes, at: &offset)
     guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
     return .transactionDidCommit(

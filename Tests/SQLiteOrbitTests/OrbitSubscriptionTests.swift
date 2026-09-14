@@ -29,6 +29,22 @@ func orbitSubscriptionCancelsWhenItsStorageIsReleased() {
   #expect(cancellationCount.withLock { $0 } == 1)
 }
 
+@Test
+func orbitSubscriptionCancelsAtMostOnceUnderConcurrentCancellation() async {
+  let cancellationCount = Lock(0)
+  let subscription = OrbitSubscription {
+    cancellationCount.withLock { $0 += 1 }
+  }
+
+  await withTaskGroup(of: Void.self) { group in
+    for _ in 0..<100 {
+      group.addTask { subscription.cancel() }
+    }
+  }
+
+  #expect(cancellationCount.withLock { $0 } == 1)
+}
+
 @Suite
 struct HandlerRegistryTests {
   @Test

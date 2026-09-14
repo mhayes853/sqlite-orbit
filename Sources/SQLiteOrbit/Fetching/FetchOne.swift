@@ -30,6 +30,8 @@
 ///
 /// The database it reads from is ``OrbitDefaultDatabase/current`` unless one is passed as the
 /// `database` argument.
+/// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
+/// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
 @propertyWrapper
 public struct FetchOne<Value: Sendable>: Sendable {
@@ -56,7 +58,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)?,
-    scheduler: (any OrbitValueObservationScheduler)?
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
     self.init(
       storage: .make(
@@ -152,7 +154,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _Selection, Value.QueryOutput == Value {
     self.init(storage: OrbitFetchStorage(value: wrappedValue))
   }
@@ -170,7 +172,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -191,7 +193,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -215,7 +217,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -245,7 +247,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public init(
     wrappedValue: Value,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
@@ -272,7 +274,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
     self.init(
@@ -299,7 +301,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == V.QueryOutput {
     self.init(
       wrappedValue: wrappedValue,
@@ -322,7 +324,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = nil,
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value == V.QueryOutput? {
     self.init(
       wrappedValue: wrappedValue,
@@ -344,7 +346,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
     self.init(
       wrappedValue: wrappedValue,
@@ -367,7 +369,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where
     Value: _OptionalProtocol,
@@ -398,7 +400,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where
     Value: _OptionalProtocol,
@@ -425,7 +427,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
     wrappedValue: Value = ._none,
     _ statement: some Statement<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
     self.init(
       wrappedValue: wrappedValue,
@@ -450,7 +452,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: SelectStatement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
     let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -474,7 +476,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<V: QueryRepresentable>(
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == V.QueryOutput {
     return try await storage.load(
@@ -498,7 +500,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<V: QueryRepresentable>(
     _ statement: some Statement<V>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value == V.QueryOutput? {
     return try await storage.load(
@@ -522,7 +524,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: SelectStatement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where
     Value: _OptionalProtocol,
@@ -553,7 +555,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load<S: Statement>(
     _ statement: S,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where
     Value: _OptionalProtocol,
@@ -580,7 +582,7 @@ public struct FetchOne<Value: Sendable>: Sendable {
   public func load(
     _ statement: some Statement<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler)? = nil
+    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) async throws -> OrbitFetchSubscription
   where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
     return try await storage.load(

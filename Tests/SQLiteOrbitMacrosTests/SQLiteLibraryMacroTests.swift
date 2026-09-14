@@ -4,11 +4,16 @@ import Testing
 
 @Suite(.macros(["sqliteLibrary": SQLiteLibraryMacro.self]))
 struct SQLiteLibraryMacroTests {
-  @Test
-  func unqualifiedLibrary() {
+  @Test(arguments: [
+    "",
+    "apis: . /* defaults */ standard",
+    "apis: [.standard, /* trailing comment */]",
+    "apis: [.trustedSchema, .authorizer, .scalarFunctions, .aggregateFunctions, .collations]"
+  ])
+  func unqualifiedLibrary(arguments: String) {
     assertMacro {
       """
-      let library = #sqliteLibrary()
+      let library = #sqliteLibrary(\(arguments))
       """
     } expansion: {
       #"""
@@ -146,11 +151,11 @@ struct SQLiteLibraryMacroTests {
     }
   }
 
-  @Test
-  func qualifiedEncryptedLibrary() {
+  @Test(arguments: [".all", "[.standard, .encryption]"])
+  func qualifiedEncryptedLibrary(apis: String) {
     assertMacro {
       """
-      let library = #sqliteLibrary(module: "SQLCipher", apis: .all)
+      let library = #sqliteLibrary(module: "SQLCipher", apis: \(apis))
       """
     } expansion: {
       #"""
@@ -288,11 +293,11 @@ struct SQLiteLibraryMacroTests {
     }
   }
 
-  @Test
-  func qualifiedLibraryWithOnlyRequiredAPIs() {
+  @Test(arguments: ["[]", "[/* no optional APIs */]"])
+  func qualifiedLibraryWithOnlyRequiredAPIs(apis: String) {
     assertMacro {
       """
-      let library = #sqliteLibrary(module: "TursoSQLite3", apis: [])
+      let library = #sqliteLibrary(module: "TursoSQLite3", apis: \(apis))
       """
     } expansion: {
       """
@@ -394,6 +399,23 @@ struct SQLiteLibraryMacroTests {
       let apis: SQLiteLibrary.APIs = .standard
       let library = #sqliteLibrary(apis: apis)
                                          ┬───
+                                         ╰─ 🛑 'apis' must be '.standard', '.all', '[]', or an array literal of API members
+      """
+    }
+  }
+
+  @Test
+  func apiArrayCannotReferenceVariables() {
+    assertMacro {
+      """
+      let authorizer: SQLiteLibrary.APIs = .encryption
+      let library = #sqliteLibrary(apis: [authorizer])
+      """
+    } diagnostics: {
+      """
+      let authorizer: SQLiteLibrary.APIs = .encryption
+      let library = #sqliteLibrary(apis: [authorizer])
+                                         ┬───────────
                                          ╰─ 🛑 'apis' must be '.standard', '.all', '[]', or an array literal of API members
       """
     }

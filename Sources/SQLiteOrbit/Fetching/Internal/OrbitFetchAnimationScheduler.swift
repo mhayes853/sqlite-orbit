@@ -8,7 +8,7 @@
   /// values can only be delivered on the main actor, so reading the property cannot produce one
   /// synchronously anyway, and blocking the thread that is about to render for a value it will not
   /// see helps nobody.
-  struct OrbitFetchAnimationScheduler: OrbitValueObservationMainActorScheduler {
+  struct OrbitFetchAnimationScheduler: OrbitValueObservationMainActorScheduler, Hashable {
     private let animation: Animation?
     private let base = OrbitMainActorValueObservationScheduler.mainActor
 

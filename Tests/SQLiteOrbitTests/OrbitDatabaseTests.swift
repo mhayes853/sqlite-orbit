@@ -205,6 +205,29 @@
     }
 
     @Test
+    func failedTransportSubscriptionRemovesLocalAndSiblingObservers() async throws {
+      let identifier = OrbitDatabaseIdentifier.unique()
+      let database = OrbitDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: RecordingDatabaseIPCTransport(rejectsSubscriptions: true)
+      )
+      let sibling = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
+      let observer = RecordingPeerTransactionObserver()
+
+      #expect(throws: AnnouncementFailure.self) {
+        try database.subscribe(transactionObserver: observer)
+      }
+      for writer in [database, sibling] {
+        try await writer.write { transaction in
+          transaction.notifyChanges(in: OrbitDatabaseRegion(table: "items"))
+        }
+      }
+
+      #expect(observer.events.isEmpty)
+    }
+
+    @Test
     func siblingHandleReportsItsRegionBeforeItsCommit() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "sibling-region")
       let writingDatabase = OrbitDatabase(
@@ -481,20 +504,27 @@
     private let state = Lock(State())
     private let failure: (any Error)?
     private let delay: Duration?
+    private let rejectsSubscriptions: Bool
 
     var messages: [OrbitIPCMessage] { self.state.withLock { $0.messages } }
     var didBeginSending: Bool { self.state.withLock { $0.didBeginSending } }
 
-    init(failure: (any Error)? = nil, delay: Duration? = nil) {
+    init(
+      failure: (any Error)? = nil,
+      delay: Duration? = nil,
+      rejectsSubscriptions: Bool = false
+    ) {
       self.failure = failure
       self.delay = delay
+      self.rejectsSubscriptions = rejectsSubscriptions
     }
 
     func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitSubscription {
-      OrbitSubscription {}
+      if rejectsSubscriptions { throw AnnouncementFailure() }
+      return OrbitSubscription {}
     }
 
     func send(_ message: OrbitIPCMessage) async throws {
