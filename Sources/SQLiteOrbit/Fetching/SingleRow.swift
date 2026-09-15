@@ -90,13 +90,9 @@ where
   /// - Throws: ``OrbitRowIdentityMismatchError`` when `value` does not have the default row's
   ///   primary key, or whatever opening or executing the transaction throws.
   public func save(_ value: Value) async throws {
-    let expectedKey = Value.defaultValue.primaryKey
-    guard value.primaryKey == expectedKey else {
-      return try await storage.write { _ in throw OrbitRowIdentityMismatchError() }
-    }
     try await storage.write { database in
       try await database.write { transaction in
-        try transaction.execute(Value.upsert { Value.Draft(value) })
+        try value.save(in: transaction)
       }
     }
   }
@@ -110,20 +106,29 @@ where
   public func update<Result: Sendable>(
     _ mutation: @escaping @Sendable (inout Value) throws -> Result
   ) async throws -> Result {
-    let expectedKey = Value.defaultValue.primaryKey
     return try await storage.write { database in
       try await database.write { transaction in
-        let statement: Select<Value, Value, ()> = Value.all.selectStar()
-        var value =
-          try transaction.fetchOne(
-            statement.find(Value.PrimaryKey(queryOutput: expectedKey))
-          ) ?? Value.defaultValue
-        let result = try mutation(&value)
-        guard value.primaryKey == expectedKey else {
-          throw OrbitRowIdentityMismatchError()
-        }
-        try transaction.execute(Value.upsert { Value.Draft(value) })
-        return result
+        try Value.update(in: transaction, mutation)
+      }
+    }
+  }
+
+  @MainActor
+  func saveBlocking(_ value: Value) throws {
+    try storage.writeBlocking { database in
+      try database.writeBlocking { transaction in
+        try value.save(in: transaction)
+      }
+    }
+  }
+
+  @MainActor
+  func updateBlocking<Result: Sendable>(
+    _ mutation: @escaping @Sendable (inout Value) throws -> Result
+  ) throws -> Result {
+    try storage.writeBlocking { database in
+      try database.writeBlocking { transaction in
+        try Value.update(in: transaction, mutation)
       }
     }
   }
@@ -145,7 +150,7 @@ where
   }
 
   func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
-    try transaction.fetchOne(SQLQueryExpression(query, as: Value.self)) ?? Value.defaultValue
+    try Value.find(in: transaction)
   }
 }
 

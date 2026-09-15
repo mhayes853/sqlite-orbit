@@ -71,6 +71,30 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
     }
   }
 
+  /// Runs one blocking write against the same database the fetch side resolved.
+  ///
+  /// This exists for synchronous interfaces such as a SwiftUI `Binding` setter. Callers must obey
+  /// ``OrbitDatabaseWriter/writeBlocking(_:)``'s requirement not to invoke it from a task.
+  func writeBlocking<Result: Sendable>(
+    _ operation: (any OrbitObservableDatabase) throws -> Result
+  ) throws -> Result {
+    guard let database = fetch.databaseForWriting() else {
+      let error = OrbitMissingDefaultDatabaseError()
+      finishWrite(.failure(error), didStart: false)
+      throw error
+    }
+
+    beginWrite()
+    do {
+      let result = try operation(database)
+      finishWrite(.success(()), didStart: true)
+      return result
+    } catch {
+      finishWrite(.failure(error), didStart: true)
+      throw error
+    }
+  }
+
   private func beginWrite() {
     registrar.withMutation {
       writes.withLock {

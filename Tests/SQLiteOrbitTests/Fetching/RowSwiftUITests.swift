@@ -12,6 +12,19 @@
   @Suite(.serialized, .timeLimit(.minutes(1)))
   struct RowSwiftUITests {
     @Test
+    func wholeSingleRowBindingPersistsBeforeTheSetterReturns() async throws {
+      let database = try await bindingDatabase(settings: true)
+      let row = SingleRow(BindingSettings.self, database: database)
+
+      row.binding.wrappedValue = BindingSettings(id: 0, isEnabled: false)
+
+      let persisted = try database.readBlocking { transaction in
+        try transaction.find(BindingSettings.all, key: 0)
+      }
+      #expect(!persisted.isEnabled)
+    }
+
+    @Test
     func singleRowMemberBindingPersistsAndRedraws() async throws {
       let database = try await bindingDatabase(settings: true)
       let sut = SettingsToggle(database: database)
@@ -22,6 +35,10 @@
           let isOn = try toggle.isOn()
           #expect(isOn)
           try toggle.tap()
+          let persisted = try database.readBlocking { transaction in
+            try transaction.find(BindingSettings.all, key: 0)
+          }
+          #expect(!persisted.isEnabled)
         }
         try await waitForSetting(false, in: database)
         try await sut.inspection.inspect(after: settle) { view in
@@ -42,6 +59,10 @@
           let isOn = try toggle.isOn()
           #expect(!isOn)
           try toggle.tap()
+          let persisted = try database.readBlocking { transaction in
+            try transaction.find(BindingReminder.all, key: 1)
+          }
+          #expect(persisted.isCompleted)
         }
         try await waitForReminder(true, in: database)
         try await sut.inspection.inspect(after: settle) { view in
