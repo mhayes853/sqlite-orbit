@@ -1369,7 +1369,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     }
     guard let affectedRegion else { return }
     let commit = OrbitDatabaseCommit(origin: .local, region: affectedRegion)
-    guard transactionNeedsFetch(commit) else { return }
+    guard reducer.transactionNeedsFetch(commit) else { return }
 
     events.willFetch()
     let result = Result { try fetch(transaction) }
@@ -1380,8 +1380,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-    switch commit.origin {
-    case .local:
+    // A local commit this runtime saw coming was either fetched inside its transaction or judged
+    // irrelevant there. Any other commit is refetched after the fact.
+    if commit.origin == .local {
       let pending = state.withLock { state in
         defer { state.pendingLocal = nil }
         return state.pendingLocal
@@ -1394,27 +1395,18 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         publishLocal(result)
         return
       case nil:
-        guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
-        events.databaseDidChange()
-        requestRefetch(
-          source: .transaction(.local),
-          reason: .databaseChange,
-          affectedRegion: affectedRegion,
-          activeWriterBarrier: commit.activeWriterBarrier
-        )
-        return
+        break
       }
-
-    case .external:
-      guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
-      events.databaseDidChange()
-      requestRefetch(
-        source: .transaction(.external),
-        reason: .externalProcessChange,
-        affectedRegion: affectedRegion,
-        activeWriterBarrier: nil
-      )
     }
+
+    guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
+    events.databaseDidChange()
+    requestRefetch(
+      source: .transaction(commit.origin),
+      reason: commit.origin == .local ? .databaseChange : .externalProcessChange,
+      affectedRegion: affectedRegion,
+      activeWriterBarrier: commit.activeWriterBarrier
+    )
   }
 
   func databaseDidRollback() {
@@ -1428,10 +1420,6 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     discard(pending)
   }
 
-  private func transactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
-    reducer.transactionNeedsFetch(commit)
-  }
-
   private func committedTransactionAffectedRegion(
     _ commit: OrbitDatabaseCommit
   ) -> OrbitDatabaseRegion? {
@@ -1441,7 +1429,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.transactionRegion = nil
       return (state.observedRegion ?? .fullDatabase).overlaps(region) ? region : nil
     }
-    guard let affectedRegion, transactionNeedsFetch(commit) else { return nil }
+    guard let affectedRegion, reducer.transactionNeedsFetch(commit) else { return nil }
     return affectedRegion
   }
 
