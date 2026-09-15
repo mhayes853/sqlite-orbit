@@ -401,11 +401,11 @@
 
       // It observes the database it moved to, and no longer the one it left.
       try await attached.write { transaction in
-        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
       try await waitUntil { storage.value == ["Milk", "Milk", "Milk"] }
       try await processDefault.write { transaction in
-        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
       #expect(storage.value == ["Milk", "Milk", "Milk"])
     }
@@ -448,7 +448,7 @@
       #expect(database.subscriptionCount == 1)
 
       try await database.write { transaction in
-        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
       try await waitUntil { first.value == ["Milk", "Milk"] }
       try await waitUntil { second.value == ["Milk", "Milk"] }
@@ -468,7 +468,7 @@
       first.detach()
       #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
       try await database.write { transaction in
-        _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
       }
       try await waitUntil { second.value == ["Milk", "Milk"] }
       #expect(first.untrackedValue == ["Milk"])

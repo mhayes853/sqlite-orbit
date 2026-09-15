@@ -196,7 +196,7 @@
       try await recorder.waitForChangeCount(1)
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -229,12 +229,12 @@
       )
       try await recorder.waitForChangeCount(1)
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO labels (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO labels (id) VALUES (1)", as: Void.self))
       }
       try await Task.sleep(for: .milliseconds(100))
 
@@ -255,7 +255,7 @@
       try await recorder.waitForChangeCount(1)
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await recorder.waitForChangeCount(2)
 
@@ -282,7 +282,7 @@
       #expect(events.withLock { $0 } == ["didCancel"])
 
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await Task.sleep(for: .milliseconds(100))
       #expect(recorder.changes.map(\.value) == [0])

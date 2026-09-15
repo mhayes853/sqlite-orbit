@@ -163,7 +163,7 @@
           #expect(try view.texts() == ["Milk"])
         }
         try await database.write { transaction in
-          _ = try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
         }
         try await sut.inspection.inspect(after: settle) { view in
           #expect(try view.texts() == ["Milk", "Eggs"])
