@@ -30,9 +30,11 @@
 /// ```
 ///
 /// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
-/// argument first, then the SwiftUI environment, then the process-wide default. The projected value reaches the rest of the property — its
-/// ``isLoading`` and ``loadError``, a reader for one of its members, and ``load(_:database:)``,
-/// which swaps the query being observed:
+/// argument first, then the SwiftUI environment, then the process-wide default.
+///
+/// The projected value reaches the rest of the property — its ``isLoading`` and ``loadError``, a
+/// reader for one of its members, and ``load(_:database:scheduler:)``, which swaps the query being
+/// observed:
 ///
 /// ```swift
 /// try await $reminders.load(Reminder.order { $0.createdAt.desc() })

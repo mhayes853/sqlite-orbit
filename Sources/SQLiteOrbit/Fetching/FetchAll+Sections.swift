@@ -266,6 +266,7 @@ extension FetchAll {
       scheduler: scheduler
     )
   }
+
   /// Creates a property observing every row of a table, grouped by one of its columns.
   ///
   /// ```swift
