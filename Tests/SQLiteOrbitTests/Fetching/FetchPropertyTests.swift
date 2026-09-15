@@ -1189,19 +1189,6 @@
     }
   }
 
-  private func waitUntil(
-    timeout: Duration = .seconds(5),
-    _ condition: () -> Bool
-  ) async throws {
-    let clock = ContinuousClock()
-    let deadline = clock.now.advanced(by: timeout)
-    while clock.now < deadline {
-      if condition() { return }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    Issue.record("Timed out waiting for the fetched value to change.")
-  }
-
   private func taggedRemindersDatabase() async throws -> OrbitDatabase<SQLiteQueue> {
     let database = try await remindersDatabase()
     try await database.write { transaction in
