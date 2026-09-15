@@ -349,26 +349,16 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     let connection = base.base.connection
     var logFrameCount: Int32 = -1
     var checkpointedFrameCount: Int32 = -1
-    let code: Int32
-    if let schema {
-      code = schema.rawValue.withCString { name in
-        library.pointee.connections.walCheckpoint(
-          connection,
-          name,
-          mode.rawValue,
-          &logFrameCount,
-          &checkpointedFrameCount
-        )
-      }
-    } else {
-      code = library.pointee.connections.walCheckpoint(
+    func runCheckpoint(_ name: UnsafePointer<CChar>?) -> Int32 {
+      library.pointee.connections.walCheckpoint(
         connection,
-        nil,
+        name,
         mode.rawValue,
         &logFrameCount,
         &checkpointedFrameCount
       )
     }
+    let code = schema.map { $0.rawValue.withCString(runCheckpoint) } ?? runCheckpoint(nil)
     guard code == SQLiteResultCode.ok.rawValue else {
       throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
     }
