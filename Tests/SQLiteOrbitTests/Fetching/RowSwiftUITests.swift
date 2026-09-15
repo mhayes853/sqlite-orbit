@@ -19,12 +19,14 @@
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
           let toggle = try view.find(ViewType.Toggle.self)
-          #expect(try toggle.isOn())
+          let isOn = try toggle.isOn()
+          #expect(isOn)
           try toggle.tap()
         }
         try await waitForSetting(false, in: database)
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try !view.find(ViewType.Toggle.self).isOn())
+          let isOn = try view.find(ViewType.Toggle.self).isOn()
+          #expect(!isOn)
         }
       }
     }
@@ -37,12 +39,14 @@
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
           let toggle = try view.find(ViewType.Toggle.self)
-          #expect(try !toggle.isOn())
+          let isOn = try toggle.isOn()
+          #expect(!isOn)
           try toggle.tap()
         }
         try await waitForReminder(true, in: database)
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(ViewType.Toggle.self).isOn())
+          let isOn = try view.find(ViewType.Toggle.self).isOn()
+          #expect(isOn)
         }
       }
     }
@@ -54,13 +58,15 @@
 
       try await ViewHosting.host(sut) {
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.find(ViewType.Toggle.self).isOn() == false)
+          let isOn = try view.find(ViewType.Toggle.self).isOn()
+          #expect(!isOn)
         }
         try await database.write { transaction in
           try transaction.execute(BindingReminder.find(1).delete())
         }
         try await sut.inspection.inspect(after: settle) { view in
-          #expect(try view.text().string() == "Missing")
+          let text = try view.text().string()
+          #expect(text == "Missing")
         }
       }
     }
