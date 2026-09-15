@@ -116,8 +116,7 @@ extension QueryBinding {
   // call the way `SQLITE_TRANSIENT` would otherwise demand.
   func result(_ context: OpaquePointer?, using result: SQLiteLibrary.FunctionCallbacks.Result) {
     switch self {
-    case .blob(let blob):
-      let bytes = Array(blob)
+    case .blob(let bytes):
       bytes.withUnsafeBytes { buffer in
         // SQLite interprets a null pointer as SQL NULL even when its byte count is zero.
         guard let baseAddress = buffer.baseAddress else {
