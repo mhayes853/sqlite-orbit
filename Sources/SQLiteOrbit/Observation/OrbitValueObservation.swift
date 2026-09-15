@@ -1163,6 +1163,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var refetches = OrbitValueObservationRefetchCoordinator()
     var isRefetching = false
     var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
+    var refetchCommits: [OrbitDatabaseCommit] = []
     var affectedRegion: OrbitDatabaseRegion?
     var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
     var subscribers = OrbitValueObservationSubscriberRegistry<Value>()
@@ -1466,6 +1467,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.reads.supersedePendingRead()
       state.refetches.supersedePendingFetch()
       state.refetchReasons.removeAll()
+      state.refetchCommits.removeAll()
       state.affectedRegion = nil
       state.activeWriterBarriers.removeAll()
       return acceptance.delivery
@@ -1490,6 +1492,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       // Recorded whether or not a controller will see them, so that one running later is told the
       // truth about what is outstanding. Accepting the initial value drops them again.
       state.refetchReasons.insert(reason)
+      if case .transaction(let origin) = source, let affectedRegion {
+        state.refetchCommits.append(OrbitDatabaseCommit(origin: origin, region: affectedRegion))
+      }
       if let affectedRegion {
         state.affectedRegion = state.affectedRegion?.union(affectedRegion) ?? affectedRegion
       }
@@ -1522,7 +1527,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
             hasActiveWriters: false,
             affectedRegion: nil,
             trackedRegion: nil,
-            reasons: []
+            reasons: [],
+            commits: []
           )
       },
       wait: { [weak self] in
@@ -1547,7 +1553,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         hasActiveWriters: state.activeWriterBarriers.contains { $0.hasActiveWriters },
         affectedRegion: state.affectedRegion,
         trackedRegion: state.observedRegion,
-        reasons: state.refetchReasons
+        reasons: state.refetchReasons,
+        commits: state.refetchCommits
       )
     }
   }
@@ -1598,6 +1605,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
       state.refetches.finishPublishedFetch()
       state.refetchReasons.removeAll()
+      state.refetchCommits.removeAll()
       state.affectedRegion = nil
       state.activeWriterBarriers.removeAll()
       if acceptance.requiresObservableRefetch {
@@ -1721,6 +1729,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     guard !state.reads.initialFetchCompleted else { return }
     state.reads.completeInitialFetch()
     state.refetchReasons.removeAll()
+    state.refetchCommits.removeAll()
     state.affectedRegion = nil
     state.activeWriterBarriers.removeAll()
   }

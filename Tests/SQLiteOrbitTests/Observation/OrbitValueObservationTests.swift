@@ -1084,6 +1084,79 @@
     }
 
     @Test
+    func aControllerIsToldALocalWriteCameFromThisProcess() async throws {
+      let (database, _, identifier) = try await announcingItemsDatabase("local-origin")
+      let controller = CommitWaitingRefetchController(commitCount: 1)
+      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
+
+      // Outside a transaction, so no fetch before the commit answers it and the controller runs.
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      let snapshot = try await controller.snapshot()
+
+      #expect(snapshot.commits.map(\.origin) == [.local])
+      #expect(snapshot.commits.allSatisfy { $0.region.overlaps(itemsRegion) })
+      _ = (subscription, identifier)
+    }
+
+    @Test
+    func aControllerIsToldAnAnnouncedWriteCameFromAnotherProcess() async throws {
+      let (database, peer, identifier) = try await announcingItemsDatabase("external-origin")
+      let controller = CommitWaitingRefetchController(commitCount: 1)
+      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
+
+      // What another process's database sends on committing, arriving over the shared network.
+      try await peer.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
+      )
+      let snapshot = try await controller.snapshot()
+
+      #expect(snapshot.commits == [OrbitDatabaseCommit(origin: .external, region: itemsRegion)])
+      _ = subscription
+    }
+
+    @Test
+    func aControllerIsToldTheOriginOfEachCommitItIsCoalescing() async throws {
+      let (database, peer, identifier) = try await announcingItemsDatabase("both-origins")
+      let controller = CommitWaitingRefetchController(commitCount: 2)
+      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
+
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await peer.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
+      )
+      let snapshot = try await controller.snapshot()
+
+      #expect(snapshot.commits.map(\.origin) == [.local, .external])
+      #expect(snapshot.reasons == [.databaseChange, .externalProcessChange])
+      _ = subscription
+    }
+
+    @Test
+    func aControllerDoesNotSeeCommitsAnEarlierFetchAnswered() async throws {
+      let (database, peer, identifier) = try await announcingItemsDatabase("answered-commits")
+      let controller = CommitWaitingRefetchController(commitCount: 1)
+      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
+
+      try await peer.send(
+        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
+      )
+      _ = try await controller.snapshot()
+      try await waitUntil { controller.fetchCount == 1 }
+      controller.reset()
+      try await database.writeWithoutTransaction { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      let snapshot = try await controller.snapshot()
+
+      #expect(snapshot.commits.map(\.origin) == [.local])
+      _ = subscription
+    }
+
+    @Test
     func aControllerThatReturnsWithoutFetchingRunsAgainForAnInvalidationItMissed() async throws {
       let queue = try await itemsDatabase()
       let driver = PostCommitObservableDatabase(queue)
@@ -1915,6 +1988,79 @@
       try await waitUntil(timeout: .seconds(5)) { !self.snapshots.isEmpty }
     }
   }
+
+  /// A controller that waits for a given number of commits to accumulate before it records a
+  /// snapshot and fetches, so that commits arriving one after another are seen together.
+  private final class CommitWaitingRefetchController:
+    OrbitValueObservationRefetchController, Sendable
+  {
+    private let commitCount: Int
+    private let recorded = Lock<OrbitValueObservationRefetchSnapshot?>(nil)
+    private let fetches = Lock(0)
+
+    init(commitCount: Int) {
+      self.commitCount = commitCount
+    }
+
+    var fetchCount: Int { fetches.withLock { $0 } }
+
+    func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
+      var context = context
+      let clock = ContinuousClock()
+      let deadline = clock.now.advanced(by: .seconds(5))
+      while context.snapshot().commits.count < commitCount, clock.now < deadline {
+        try? await Task.sleep(for: .milliseconds(2))
+      }
+      let snapshot = context.snapshot()
+      recorded.withLock { $0 = snapshot }
+      await context.fetch(publishing: .force)
+      fetches.withLock { $0 += 1 }
+    }
+
+    func snapshot() async throws -> OrbitValueObservationRefetchSnapshot {
+      try await waitUntil(timeout: .seconds(10)) { self.recorded.withLock { $0 != nil } }
+      return try #require(recorded.withLock { $0 })
+    }
+
+    func reset() {
+      recorded.withLock { $0 = nil }
+    }
+  }
+
+  /// A database that announces over an in-memory network, and a transport on that network that
+  /// stands in for another process's database.
+  private func announcingItemsDatabase(
+    _ name: String
+  ) async throws -> (OrbitDatabase<SQLiteQueue>, InMemoryIPCTransport, OrbitDatabaseIdentifier) {
+    let network = InMemoryIPCTransport.Network()
+    let identifier = OrbitDatabaseIdentifier(rawValue: name)
+    let database = OrbitDatabase(
+      writer: try await itemsDatabase(),
+      id: identifier,
+      transport: InMemoryIPCTransport(network: network)
+    )
+    return (database, InMemoryIPCTransport(network: network), identifier)
+  }
+
+  /// Subscribes an observation of the items table, returning once its initial value is in.
+  private func subscribeTrackingItems(
+    to database: OrbitDatabase<SQLiteQueue>,
+    refetching controller: some OrbitValueObservationRefetchController
+  ) async throws -> OrbitSubscription {
+    let observation = OrbitValueObservation<Int>
+      .tracking(region: itemsRegion) { _ in 0 }
+      .refetching(controller)
+    let recorder = ObservationRecorder<Int>()
+    let subscription = try observation.subscribe(
+      to: database,
+      onError: recorder.record(error:),
+      onChange: recorder.record(change:)
+    )
+    try await recorder.waitForChangeCount(1)
+    return subscription
+  }
+
+  private let itemsRegion = OrbitDatabaseRegion(table: "items")
 
   /// A controller that returns without a conclusive fetch until it is told to stop doing so.
   private final class SkipFirstRefetchController:
