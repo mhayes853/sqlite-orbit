@@ -29,9 +29,7 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
 
   /// Creates an empty collection.
   public init() {
-    self.elements = []
-    self.sections = []
-    self.positionsByName = [:]
+    self.init(elements: [], sections: [])
   }
 
   /// Creates a collection of one section holding every element.
@@ -40,16 +38,11 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
   ///   - elements: The rows the section holds.
   ///   - sectionName: The name of the section.
   public init(elements: [Element], sectionName: SectionName) {
-    self.elements = elements
-    if elements.isEmpty {
-      self.sections = []
-      self.positionsByName = [:]
-    } else {
-      self.sections = [
-        (sectionName, OrbitFetchElementIndices(range: elements.indices))
-      ]
-      self.positionsByName = [sectionName: 0]
-    }
+    self.init(
+      elements: elements,
+      sections: elements.isEmpty
+        ? [] : [(sectionName, OrbitFetchElementIndices(range: elements.indices))]
+    )
   }
 
   init(
