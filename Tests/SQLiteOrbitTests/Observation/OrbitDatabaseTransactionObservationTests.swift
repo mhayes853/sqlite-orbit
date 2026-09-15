@@ -9,10 +9,7 @@
   struct OrbitDatabaseTransactionObservationTests {
     @Test
     func localDriverReportsCommitLifecycleAndFinalTransactionState() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
 
@@ -61,10 +58,7 @@
     func willCommitFailureAbortsTheWriteAndReportsRollback() async throws {
       struct Abort: Error {}
 
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = FailingTransactionObserver(error: Abort())
       let subscription = try driver.subscribe(transactionObserver: observer)
 
@@ -84,10 +78,7 @@
 
     @Test
     func cancellingSubscriptionStopsTransactionEvents() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
       subscription.cancel()
@@ -215,10 +206,7 @@
 
     @Test
     func publishesEveryExplicitChangedRegion() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
       let region = OrbitDatabaseRegion(column: "id", in: "items")
@@ -403,10 +391,7 @@
 
     @Test
     func attachingADatabasePublishesNoChangedRegion() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
 
@@ -424,10 +409,7 @@
 
     @Test
     func cachedWriteStatementsRetainTheirChangedRegion() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
 
@@ -550,10 +532,7 @@
 
     @Test
     func observerScopedToAWriteBodyDoesNotSeeTheCommitThatFollowsIt() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try await itemsDatabase()
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
       let scopedObserver = RecordingTransactionObserver()
@@ -575,6 +554,14 @@
       #expect(scopedObserver.events == [.didChange(table)])
       _ = subscription
     }
+  }
+
+  private func itemsDatabase() async throws -> SQLiteQueue {
+    let driver = try SQLiteQueue(path: .memory)
+    try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+    return driver
   }
 
   private enum RecordedTransactionEvent: Equatable, Sendable {
