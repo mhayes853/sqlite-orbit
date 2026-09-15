@@ -205,6 +205,15 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     state.withLock { $0.requestID }
   }
 
+  /// The database the current source reads from, after taking a newly available default if needed.
+  ///
+  /// Mutable fetch properties call this instead of resolving the default independently, because a
+  /// SwiftUI environment database may have replaced it after the property was created.
+  func databaseForWriting() -> (any OrbitObservableDatabase)? {
+    attachIfNeeded(database: nil)
+    return state.withLock { $0.source?.database }
+  }
+
   /// Holds the observation that keeps a SwiftUI view without the Observation framework redrawing.
   func setSwiftUIObservation(_ observation: OrbitSubscription?) {
     let previous = state.withLock { state -> OrbitSubscription? in
