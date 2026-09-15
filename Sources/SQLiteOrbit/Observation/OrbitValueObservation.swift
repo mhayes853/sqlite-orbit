@@ -59,17 +59,44 @@ private enum OrbitValueObservationRegionSource: Sendable {
     guard case .constant(let region) = self else { return nil }
     return region
   }
+
+  /// Runs `fetch`, working out the region it read the way this source says to.
+  func fetch(
+    _ fetch: OrbitValueObservationFetch,
+    in transaction: borrowing SQLiteReadTransaction,
+    firstFetchRegion: OrbitValueObservationFirstFetchRegion
+  ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
+    switch self {
+    case .automatic:
+      return try Self.fetchRecordingRegion(fetch, in: transaction)
+    case .constantOnFirstFetch:
+      if let region = firstFetchRegion.region { return (try fetch(transaction), region) }
+      let output = try Self.fetchRecordingRegion(fetch, in: transaction)
+      firstFetchRegion.record(output.region)
+      return output
+    case .constant(let region):
+      return (try fetch(transaction), region)
+    case .query(let query):
+      return (try fetch(transaction), try OrbitDatabaseRegion(query, in: transaction))
+    }
+  }
+
+  private static func fetchRecordingRegion(
+    _ fetch: OrbitValueObservationFetch,
+    in transaction: borrowing SQLiteReadTransaction
+  ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
+    let recorder = OrbitValueObservationReadRegionRecorder()
+    let payload = try transaction.withObserver(recorder) {
+      try fetch(transaction)
+    }
+    return (payload, recorder.region)
+  }
 }
 
 private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
   let externalDependencies: ExternalDependencies?
-}
-
-private struct OrbitValueObservationUntrackedFetchOutput: Sendable {
-  let payload: any Sendable
-  let region: OrbitDatabaseRegion
 }
 
 private final class OrbitValueObservationReadRegionRecorder:
@@ -1197,51 +1224,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
-    let resolveDatabaseRegionAndFetch:
-      @Sendable (
-        borrowing SQLiteReadTransaction
-      ) throws -> OrbitValueObservationUntrackedFetchOutput = { transaction in
-        switch regionSource {
-        case .automatic:
-          let recorder = OrbitValueObservationReadRegionRecorder()
-          let payload = try transaction.withObserver(recorder) {
-            try fetch(transaction)
-          }
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: payload,
-            region: recorder.region
-          )
-        case .constantOnFirstFetch:
-          if let region = firstFetchRegion.region {
-            return OrbitValueObservationUntrackedFetchOutput(
-              payload: try fetch(transaction),
-              region: region
-            )
-          }
-          let recorder = OrbitValueObservationReadRegionRecorder()
-          let payload = try transaction.withObserver(recorder) {
-            try fetch(transaction)
-          }
-          firstFetchRegion.record(recorder.region)
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: payload,
-            region: recorder.region
-          )
-        case .constant(let region):
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: try fetch(transaction),
-            region: region
-          )
-        case .query(let query):
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: try fetch(transaction),
-            region: try OrbitDatabaseRegion(query, in: transaction)
-          )
-        }
-      }
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
       let capture = try externalTracking.capture {
-        try resolveDatabaseRegionAndFetch(transaction)
+        try regionSource.fetch(fetch, in: transaction, firstFetchRegion: firstFetchRegion)
       }
       return OrbitValueObservationFetchOutput(
         payload: capture.output.payload,
