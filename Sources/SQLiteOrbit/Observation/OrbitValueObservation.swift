@@ -1713,7 +1713,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     _ result: Result<OrbitValueObservationFetchOutput, any Error>
   ) {
     guard case .success(let output) = result else { return }
-    externalTracking.discard(output.externalDependencies)
+    output.externalDependencies?.cancel()
   }
 
   private func discard(_ pending: PendingLocal?) {
