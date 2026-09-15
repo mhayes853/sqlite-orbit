@@ -126,7 +126,8 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           interrupt: \(raw: qualifier)sqlite3_interrupt,
           changes: \(raw: qualifier)sqlite3_changes64,
           lastInsertedRowID: \(raw: qualifier)sqlite3_last_insert_rowid,
-          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit
+          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit,
+          walCheckpoint: \(raw: qualifier)sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(

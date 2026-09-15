@@ -282,6 +282,15 @@ extension SQLiteLibrary {
     public var lastInsertedRowID: @Sendable (OpaquePointer?) -> Int64
     /// Whether the connection currently has no transaction open: `sqlite3_get_autocommit`.
     public var isAutocommit: @Sendable (OpaquePointer?) -> Int32
+    /// Moves a write-ahead log back into the database file: `sqlite3_wal_checkpoint_v2`.
+    ///
+    /// Takes the schema to checkpoint, the mode, and out-parameters for the frames in the log and
+    /// the frames moved out of it.
+    public var walCheckpoint:
+      @Sendable (
+        OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
+        UnsafeMutablePointer<Int32>?
+      ) -> Int32
     /// Creates a connection operation group.
     public init(
       open:
@@ -297,7 +306,12 @@ extension SQLiteLibrary {
       interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
       changes: @escaping @Sendable (OpaquePointer?) -> Int64,
       lastInsertedRowID: @escaping @Sendable (OpaquePointer?) -> Int64,
-      isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32
+      isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32,
+      walCheckpoint:
+        @escaping @Sendable (
+          OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
+          UnsafeMutablePointer<Int32>?
+        ) -> Int32
     ) {
       self.open = open
       self.close = close
@@ -309,6 +323,7 @@ extension SQLiteLibrary {
       self.changes = changes
       self.lastInsertedRowID = lastInsertedRowID
       self.isAutocommit = isAutocommit
+      self.walCheckpoint = walCheckpoint
     }
   }
 

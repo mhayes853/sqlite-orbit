@@ -316,6 +316,68 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     base.lastInsertedRowID
   }
 
+  /// Moves the write-ahead log back into the database file.
+  ///
+  /// SQLite checkpoints passively on its own as the log grows, which a steady stream of readers
+  /// can keep from ever finishing. This is how to make it finish, and with
+  /// ``SQLiteCheckpointMode/truncate``, how to give the log's disk space back.
+  ///
+  /// ```swift
+  /// let result = try await database.writeWithoutTransaction { connection in
+  ///   try connection.checkpoint(.truncate)
+  /// }
+  /// ```
+  ///
+  /// A database that is not in WAL mode has no log to move, so the checkpoint succeeds having done
+  /// nothing and reports `-1` for both counts. Every mode but ``SQLiteCheckpointMode/passive``
+  /// waits for other connections by this connection's busy handler or ``busyTimeout``, and one
+  /// that gives up before it could finish throws `SQLITE_BUSY` rather than report the part it
+  /// did.
+  ///
+  /// - Parameters:
+  ///   - mode: How hard to try. Defaults to ``SQLiteCheckpointMode/passive``, which never waits.
+  ///   - schema: The attached database to checkpoint. With `nil`, every attached database in WAL
+  ///     mode is checkpointed, and SQLite does not say which of them the counts describe, so name
+  ///     one when the counts matter.
+  /// - Returns: How many frames the log holds and how many of them are in the database file.
+  /// - Throws: A ``SQLiteError`` when the checkpoint fails or could not finish.
+  public borrowing func checkpoint(
+    _ mode: SQLiteCheckpointMode = .passive,
+    schema: SQLiteSchemaName? = nil
+  ) throws -> SQLiteCheckpointResult {
+    let library = base.base.library
+    let connection = base.base.connection
+    var logFrameCount: Int32 = -1
+    var checkpointedFrameCount: Int32 = -1
+    let code: Int32
+    if let schema {
+      code = schema.rawValue.withCString { name in
+        library.pointee.connections.walCheckpoint(
+          connection,
+          name,
+          mode.rawValue,
+          &logFrameCount,
+          &checkpointedFrameCount
+        )
+      }
+    } else {
+      code = library.pointee.connections.walCheckpoint(
+        connection,
+        nil,
+        mode.rawValue,
+        &logFrameCount,
+        &checkpointedFrameCount
+      )
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+    }
+    return SQLiteCheckpointResult(
+      logFrameCount: Int(logFrameCount),
+      checkpointedFrameCount: Int(checkpointedFrameCount)
+    )
+  }
+
   /// Creates a cursor over the rows a read query returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does.

@@ -33,7 +33,8 @@ struct SQLiteLibraryMacroTests {
           interrupt: sqlite3_interrupt,
           changes: sqlite3_changes64,
           lastInsertedRowID: sqlite3_last_insert_rowid,
-          isAutocommit: sqlite3_get_autocommit
+          isAutocommit: sqlite3_get_autocommit,
+          walCheckpoint: sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -176,7 +177,8 @@ struct SQLiteLibraryMacroTests {
           interrupt: SQLCipher.sqlite3_interrupt,
           changes: SQLCipher.sqlite3_changes64,
           lastInsertedRowID: SQLCipher.sqlite3_last_insert_rowid,
-          isAutocommit: SQLCipher.sqlite3_get_autocommit
+          isAutocommit: SQLCipher.sqlite3_get_autocommit,
+          walCheckpoint: SQLCipher.sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -319,7 +321,8 @@ struct SQLiteLibraryMacroTests {
           interrupt: TursoSQLite3.sqlite3_interrupt,
           changes: TursoSQLite3.sqlite3_changes64,
           lastInsertedRowID: TursoSQLite3.sqlite3_last_insert_rowid,
-          isAutocommit: TursoSQLite3.sqlite3_get_autocommit
+          isAutocommit: TursoSQLite3.sqlite3_get_autocommit,
+          walCheckpoint: TursoSQLite3.sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
