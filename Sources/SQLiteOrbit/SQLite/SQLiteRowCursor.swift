@@ -20,18 +20,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// The row this cursor lends.
   public typealias Row = SQLiteRow
 
-  @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 
-  // `preparedStatement.pointer`, kept beside it because stepping and decoding are inlinable and
-  // the metadata the prepared statement carries is not part of that.
-  @usableFromInline
-  let statement: OpaquePointer
-
-  @usableFromInline
   let connection: OpaquePointer
 
-  @usableFromInline
   let sql: String
 
   let statements: SQLiteStatementCache
@@ -40,11 +32,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   var preparedStatement: SQLitePreparedStatement
 
+  // What SQLite steps. A statement recompiled on its first step keeps its pointer and has only
+  // its metadata replaced.
+  var statement: OpaquePointer { preparedStatement.pointer }
+
   let authorizer: SQLiteAuthorizerDispatcher
 
   let observations: OrbitDatabaseTransactionObservationContext
 
-  @usableFromInline
   var isExhausted = false
 
   var didPublishAccesses = false
@@ -74,7 +69,6 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       throw error
     }
     self.library = library
-    self.statement = statement
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
