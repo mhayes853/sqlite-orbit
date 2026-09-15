@@ -148,7 +148,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   public init<TableType: Table>(_ table: TableType.Type) {
     self.init(
       table: TableType.tableName,
-      schema: TableType.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: TableType.sqliteSchemaName
     )
   }
 
@@ -159,7 +159,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     self.init(
       column: column.name,
       in: Column.Root.tableName,
-      schema: Column.Root.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: Column.Root.sqliteSchemaName
     )
   }
 
@@ -341,7 +341,7 @@ extension Table {
     OrbitDatabaseRegion(
       columns: Self.columns[keyPath: column]._names,
       in: tableName,
-      schema: schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: sqliteSchemaName
     )
   }
 
@@ -364,7 +364,7 @@ extension Table {
     return OrbitDatabaseRegion(
       columns: names,
       in: tableName,
-      schema: schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: sqliteSchemaName
     )
   }
 
@@ -374,6 +374,11 @@ extension Table {
   /// same region.
   public var databaseRegion: OrbitDatabaseRegion {
     Self.databaseRegion
+  }
+
+  /// The schema this table declares, or ``SQLiteSchemaName/main`` when it declares none.
+  static var sqliteSchemaName: SQLiteSchemaName {
+    schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
   }
 }
 
