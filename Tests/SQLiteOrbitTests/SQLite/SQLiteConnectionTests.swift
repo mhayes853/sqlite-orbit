@@ -39,6 +39,16 @@
     return library
   }
 
+  private func openInMemory(
+    _ configuration: SQLiteConfiguration = .default
+  ) throws -> SQLiteHandle {
+    try SQLiteHandle.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: configuration
+    )
+  }
+
   private func scalar(_ connection: borrowing SQLiteHandle, _ sql: String) throws -> Int64 {
     let library = connection.library
     var statement: OpaquePointer?
@@ -55,11 +65,7 @@
 
   @Test
   func connectionOpensAndExecutesStatements() throws {
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: .default
-    )
+    let connection = try openInMemory()
 
     try connection.execute(
       """
@@ -74,22 +80,14 @@
 
   @Test
   func connectionAppliesItsConfiguredPragmas() throws {
-    let enabled = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: .default
-    )
+    let enabled = try openInMemory()
     #expect(try scalar(enabled, "PRAGMA foreign_keys") == 1)
     #expect(try scalar(enabled, "PRAGMA trusted_schema") == 0)
 
     var configuration = SQLiteConfiguration.default
     configuration.isForeignKeysEnabled = false
     configuration.setupSQL = ["PRAGMA application_id = 42"]
-    let disabled = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    let disabled = try openInMemory(configuration)
     #expect(try scalar(disabled, "PRAGMA foreign_keys") == 0)
     #expect(try scalar(disabled, "PRAGMA application_id") == 42)
   }
@@ -100,11 +98,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
 
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    let connection = try openInMemory(configuration)
     let afterOpen = counters.preparedCount
 
     let sql = "SELECT 1"
@@ -123,11 +117,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
 
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    let connection = try openInMemory(configuration)
     let afterOpen = counters.preparedCount
 
     let sql = "SELECT 1"
@@ -147,11 +137,7 @@
     configuration.library = countingLibrary(counters)
     configuration.maximumCachedStatements = 1
 
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    let connection = try openInMemory(configuration)
     let finalizedAfterOpen = counters.finalizedCount
 
     let kept = try connection.statements.checkOut("SELECT 1")
@@ -170,11 +156,7 @@
     configuration.library = countingLibrary(counters)
 
     do {
-      let connection = try SQLiteHandle.open(
-        path: ":memory:",
-        flags: [.readWrite, .create, .memory, .noMutex],
-        configuration: configuration
-      )
+      let connection = try openInMemory(configuration)
       try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       for sql in ["SELECT 1", "SELECT 2", "SELECT 3"] {
         let statement = try connection.statements.checkOut(sql)
@@ -201,11 +183,7 @@
 
   @Test
   func executeReportsTheFailingSQL() throws {
-    let connection = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: .default
-    )
+    let connection = try openInMemory()
     let error = #expect(throws: SQLiteError.self) {
       try connection.execute("SELECT * FROM missing")
     }
@@ -224,22 +202,14 @@
       }
     ]
 
-    _ = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    _ = try openInMemory(configuration)
     #expect(installs.withLock { $0 } == 1)
 
     configuration.connectionSetups.append(
       SQLiteConnectionSetup { _ in SQLiteResultCode.error.rawValue }
     )
     #expect(throws: SQLiteError.self) {
-      _ = try SQLiteHandle.open(
-        path: ":memory:",
-        flags: [.readWrite, .create, .memory, .noMutex],
-        configuration: configuration
-      )
+      _ = try openInMemory(configuration)
     }
   }
 
@@ -250,11 +220,7 @@
     configuration.connectionSetups = [SQLiteConnectionSetup { _ in throw SetupError() }]
 
     #expect(throws: SetupError.self) {
-      _ = try SQLiteHandle.open(
-        path: ":memory:",
-        flags: [.readWrite, .create, .memory, .noMutex],
-        configuration: configuration
-      )
+      _ = try openInMemory(configuration)
     }
   }
 
@@ -270,11 +236,7 @@
       }
     ]
 
-    _ = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    _ = try openInMemory(configuration)
     #expect(seenVersion.withLock { $0 } == 123_456)
   }
 
@@ -291,11 +253,7 @@
       }
     ]
 
-    let handle = try SQLiteHandle.open(
-      path: ":memory:",
-      flags: [.readWrite, .create, .memory, .noMutex],
-      configuration: configuration
-    )
+    let handle = try openInMemory(configuration)
     #expect(
       try scalar(handle, "SELECT count(*) FROM settings WHERE value = 'bound during setup'") == 1
     )
