@@ -178,9 +178,10 @@ private struct OrbitValueObservationEvents: Sendable {
 /// have changed.
 ///
 /// An observation is a description, not a running process: nothing is read until you start it
-/// with ``subscribe(to:onError:onChange:)``, ``changes(in:)``, or ``values(in:)``. Every
-/// subscriber to the same observation value and database shares one runtime, so a chain built
-/// once and started twice fetches once and hands the same value to both.
+/// with ``subscribe(to:isolation:onError:onChange:)``, ``changes(in:bufferingPolicy:)``, or
+/// ``values(in:bufferingPolicy:)``. Every subscriber to the same observation value and database
+/// shares one runtime, so a chain built once and started twice fetches once and hands the same
+/// value to both.
 ///
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
