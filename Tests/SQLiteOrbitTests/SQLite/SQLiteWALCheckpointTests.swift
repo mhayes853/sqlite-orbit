@@ -6,7 +6,7 @@
   @testable import SQLiteOrbit
 
   @Suite
-  struct SQLiteCheckpointTests {
+  struct SQLiteWALCheckpointTests {
     @Test
     func aCheckpointReportsTheFramesItMovedAndATruncateEmptiesTheLog() async throws {
       let directory = try makeShortTemporaryDirectory("ckpt")
@@ -33,7 +33,7 @@
         return try connection.checkpoint(.truncate)
       }
       // The log is emptied, so what it held is counted as it stands afterwards: nothing.
-      #expect(truncate == SQLiteCheckpointResult(logFrameCount: 0, checkpointedFrameCount: 0))
+      #expect(truncate == SQLiteWALCheckpointResult(logFrameCount: 0, checkpointedFrameCount: 0))
       #expect(try fileSize(walURL) == 0)
       let count = try await pool.read { transaction in
         try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
@@ -58,15 +58,15 @@
       #expect(result.checkpointedFrameCount == result.logFrameCount)
     }
 
-    @Test(arguments: [SQLiteCheckpointMode.passive, .full, .restart, .truncate])
-    func aDatabaseNotInWALModeHasNoLogToCheckpoint(_ mode: SQLiteCheckpointMode) async throws {
+    @Test(arguments: [SQLiteWALCheckpointMode.passive, .full, .restart, .truncate])
+    func aDatabaseNotInWALModeHasNoLogToCheckpoint(_ mode: SQLiteWALCheckpointMode) async throws {
       let queue = try SQLiteQueue(path: .memory)
 
       let result = try await queue.writeWithoutTransaction { connection in
         try connection.checkpoint(mode, schema: .main)
       }
 
-      #expect(result == SQLiteCheckpointResult(logFrameCount: -1, checkpointedFrameCount: -1))
+      #expect(result == SQLiteWALCheckpointResult(logFrameCount: -1, checkpointedFrameCount: -1))
     }
 
     @Test

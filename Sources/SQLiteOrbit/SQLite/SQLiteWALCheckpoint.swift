@@ -9,7 +9,7 @@
 ///   try connection.checkpoint(.truncate)
 /// }
 /// ```
-public enum SQLiteCheckpointMode: Hashable, Sendable {
+public enum SQLiteWALCheckpointMode: Hashable, Sendable {
   /// Moves as many frames as it can without waiting for any reader or writer.
   ///
   /// This never reports `SQLITE_BUSY`, and may leave frames behind that a reader still needs.
@@ -41,13 +41,13 @@ public enum SQLiteCheckpointMode: Hashable, Sendable {
 ///
 /// Both counts describe the log as the checkpoint left it, so one that moved every frame reports
 /// them equal and one that left frames behind for a reader reports fewer checkpointed than logged.
-/// A ``SQLiteCheckpointMode/truncate`` checkpoint that succeeds empties the log, so it reports `0`
-/// for both: what it moved is gone along with the log.
+/// A ``SQLiteWALCheckpointMode/truncate`` checkpoint that succeeds empties the log, so it reports
+/// `0` for both: what it moved is gone along with the log.
 ///
 /// Both counts are `-1` when the database is not in WAL mode, which is how SQLite answers a
 /// checkpoint of a database whose journal is a rollback journal or lives in memory: there is no
 /// log, so there is nothing to move and the checkpoint succeeds having done nothing.
-public struct SQLiteCheckpointResult: Hashable, Sendable {
+public struct SQLiteWALCheckpointResult: Hashable, Sendable {
   /// How many frames the write-ahead log held, or `-1` when the database is not in WAL mode.
   public var logFrameCount: Int
 
