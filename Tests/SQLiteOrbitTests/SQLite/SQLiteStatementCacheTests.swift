@@ -75,13 +75,13 @@
         }
         let generation = try await database.read { transaction in
           _ = try transaction.fetchAll(currentTitles)
-          return transaction.statements.currentGeneration
+          return transaction.statements.generation
         }
         try await database.write { transaction in
           try transaction.execute("INSERT INTO original_items VALUES ('Another')")
         }
         let laterGeneration = try await database.read { transaction in
-          transaction.statements.currentGeneration
+          transaction.statements.generation
         }
         #expect(laterGeneration == generation)
       }

@@ -17,15 +17,13 @@ final class SQLiteStatementCache {
   private let capacity: Int
 
   private var idle: [String: SQLitePreparedStatement] = [:]
-  private var generation: UInt64 = 0
+  private(set) var generation: UInt64 = 0
 
   // The schema version the cached statements were compiled under, or `nil` when that is unknown,
   // as it is before the first transaction and after this connection changes the schema itself.
   private var schemaVersion: Int64?
   private var schemaVersionStatement: OpaquePointer?
   private var isSchemaVersionUnavailable = false
-
-  var currentGeneration: UInt64 { generation }
 
   init(
     library: UnsafePointer<SQLiteLibrary>,

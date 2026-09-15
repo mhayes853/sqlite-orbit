@@ -111,7 +111,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
           ?? SQLitePreparedStatement(
             pointer: statement,
             authorizations: authorizations,
-            cacheGeneration: statements.currentGeneration,
+            cacheGeneration: statements.generation,
             statements: statements,
             connection: connection,
             authorizer: authorizer,
