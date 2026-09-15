@@ -173,31 +173,26 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     includesUnspecifiedTables && tableRegions.isEmpty
   }
 
+  /// The region of a table not listed in `tableRegions`.
+  private var unspecifiedTableRegion: TableRegion {
+    includesUnspecifiedTables ? .full : .empty
+  }
+
   private func combining(
     _ other: Self,
     with operation: (Bool, Bool) -> Bool
   ) -> Self {
-    let includesUnspecifiedTables = operation(
-      includesUnspecifiedTables,
-      other.includesUnspecifiedTables
-    )
-    let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
-    let selfDefaultTableRegion: TableRegion = self.includesUnspecifiedTables ? .full : .empty
-    let otherDefaultTableRegion: TableRegion = other.includesUnspecifiedTables ? .full : .empty
-
     var tableRegions: [TableIdentifier: TableRegion] = [:]
     for table in Set(self.tableRegions.keys).union(other.tableRegions.keys) {
-      let tableRegion = (self.tableRegions[table] ?? selfDefaultTableRegion)
-        .combining(
-          other.tableRegions[table] ?? otherDefaultTableRegion,
-          with: operation
-        )
-      if tableRegion != defaultTableRegion {
-        tableRegions[table] = tableRegion
-      }
+      tableRegions[table] = (self.tableRegions[table] ?? unspecifiedTableRegion)
+        .combining(other.tableRegions[table] ?? other.unspecifiedTableRegion, with: operation)
     }
+    // The initializer drops every table that ends up matching the combined default.
     return Self(
-      includesUnspecifiedTables: includesUnspecifiedTables,
+      includesUnspecifiedTables: operation(
+        includesUnspecifiedTables,
+        other.includesUnspecifiedTables
+      ),
       tableRegions: tableRegions
     )
   }
