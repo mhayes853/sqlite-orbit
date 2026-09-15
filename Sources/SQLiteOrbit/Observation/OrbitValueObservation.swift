@@ -1199,6 +1199,15 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     init(observedRegion: OrbitDatabaseRegion?) {
       self.observedRegion = observedRegion
     }
+
+    /// Forgets the invalidations a refetch controller would otherwise be told about, once a fetch
+    /// that covers all of them has been accepted.
+    mutating func dropOutstandingInvalidations() {
+      refetchReasons.removeAll()
+      refetchCommits.removeAll()
+      affectedRegion = nil
+      activeWriterBarriers.removeAll()
+    }
   }
 
   private let fetch: OrbitValueObservationRuntimeFetch
@@ -1451,10 +1460,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       // also satisfies an older external invalidation whose read has not completed yet.
       state.reads.supersedePendingRead()
       state.refetches.supersedePendingFetch()
-      state.refetchReasons.removeAll()
-      state.refetchCommits.removeAll()
-      state.affectedRegion = nil
-      state.activeWriterBarriers.removeAll()
+      state.dropOutstandingInvalidations()
       return acceptance.delivery
     }
     deliver(delivery, from: nil)
@@ -1589,10 +1595,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
 
       state.refetches.finishPublishedFetch()
-      state.refetchReasons.removeAll()
-      state.refetchCommits.removeAll()
-      state.affectedRegion = nil
-      state.activeWriterBarriers.removeAll()
+      state.dropOutstandingInvalidations()
       if acceptance.requiresObservableRefetch {
         state.refetches.require(source: .observable)
         state.refetchReasons.insert(.observableChange)
@@ -1713,10 +1716,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private func completeInitialFetch(state: inout State) {
     guard !state.reads.initialFetchCompleted else { return }
     state.reads.completeInitialFetch()
-    state.refetchReasons.removeAll()
-    state.refetchCommits.removeAll()
-    state.affectedRegion = nil
-    state.activeWriterBarriers.removeAll()
+    state.dropOutstandingInvalidations()
   }
 
   private func discard(
