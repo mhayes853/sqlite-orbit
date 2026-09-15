@@ -52,17 +52,16 @@ final class SQLiteStatementCache {
   }
 
   private func prepare(_ sql: String, flags: UInt32) throws -> SQLitePreparedStatement {
-    var statement: OpaquePointer?
-    let (code, authorizations) = authorizer.recordingAuthorizations {
-      sql.withCString {
-        library.pointee.statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
-      }
+    let (statement, authorizations) = try authorizer.recordingAuthorizations {
+      try library.pointee.prepare(sql, on: connection, flags: flags)
     }
-    guard code == SQLiteResultCode.ok.rawValue, let statement else {
-      if let statement {
-        _ = library.pointee.statements.execution.finalize(statement)
-      }
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+    guard let statement else {
+      throw SQLiteError.reported(
+        by: library.pointee,
+        on: connection,
+        code: SQLiteResultCode.ok.rawValue,
+        sql: sql
+      )
     }
     return SQLitePreparedStatement(
       pointer: statement,
@@ -130,24 +129,14 @@ final class SQLiteStatementCache {
     // is compiled and stepped outside of any authorization recording, so it is never reported to
     // observers as a read.
     if schemaVersionStatement == nil {
-      var statement: OpaquePointer?
-      let code = "PRAGMA schema_version"
-        .withCString {
-          library.pointee.statements.preparation.prepare(
-            connection,
-            $0,
-            -1,
-            SQLitePrepareFlags.persistent.rawValue,
-            &statement,
-            nil
-          )
-        }
-      guard code == SQLiteResultCode.ok.rawValue, let statement else {
+      let statement = try? library.pointee.prepare(
+        "PRAGMA schema_version",
+        on: connection,
+        flags: SQLitePrepareFlags.persistent.rawValue
+      )
+      guard let statement else {
         // A build without the pragma keeps relying on SQLite recompiling a stale statement, which
         // the cursor notices on its first step.
-        if let statement {
-          _ = library.pointee.statements.execution.finalize(statement)
-        }
         isSchemaVersionUnavailable = true
         return nil
       }
@@ -173,14 +162,12 @@ final class SQLiteStatementCache {
     // that copy until a statement steps into the schema cookie that changed. Stepping one here
     // means the statements the cache compiles next, and the regions derived from queries, see the
     // schema this transaction reads rather than the one the connection last loaded.
-    var statement: OpaquePointer?
-    let code = "SELECT 1 FROM sqlite_schema LIMIT 0"
-      .withCString {
-        library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
-      }
+    let statement = try? library.pointee.prepare(
+      "SELECT 1 FROM sqlite_schema LIMIT 0",
+      on: connection
+    )
     guard let statement else { return }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
-    guard code == SQLiteResultCode.ok.rawValue else { return }
     _ = library.pointee.statements.execution.step(statement)
   }
 
@@ -218,16 +205,10 @@ final class SQLiteStatementCache {
         ON tables.type = 'table' AND tables.name = \(bind: table) COLLATE NOCASE
       """
     let (sql, bindings) = prepareQuery(query)
-    var statement: OpaquePointer?
-    let code = sql.withCString {
-      library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
-    }
-    guard code == SQLiteResultCode.ok.rawValue, let statement else { return nil }
+    guard let statement = try? library.pointee.prepare(sql, on: connection) else { return nil }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
     do {
-      for (offset, binding) in bindings.enumerated() {
-        try bind(binding, to: statement, at: Int32(offset + 1), library: library)
-      }
+      try bind(bindings, to: statement, library: library)
     } catch {
       return nil
     }

@@ -63,9 +63,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     let statement = preparedStatement.pointer
     do {
-      for (offset, binding) in bindings.enumerated() {
-        try bind(binding, to: statement, at: Int32(offset + 1), library: library)
-      }
+      try bind(bindings, to: statement, library: library)
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
       if cached {

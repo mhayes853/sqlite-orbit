@@ -127,15 +127,8 @@ private func sqlitePrepare(
   authorizer: SQLiteAuthorizerDispatcher
 ) throws -> (statement: OpaquePointer?, authorizations: [SQLiteAuthorization]) {
   let (sql, _) = query.prepare { _ in "?" }
-  var statement: OpaquePointer?
-  let (code, authorizations) = authorizer.recordingAuthorizations {
-    sql.withCString {
-      library.pointee.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
-    }
-  }
-  guard code == SQLiteResultCode.ok.rawValue else {
-    if let statement { _ = library.pointee.statements.execution.finalize(statement) }
-    throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+  let (statement, authorizations) = try authorizer.recordingAuthorizations {
+    try library.pointee.prepare(sql, on: connection)
   }
   return (statement, authorizations)
 }

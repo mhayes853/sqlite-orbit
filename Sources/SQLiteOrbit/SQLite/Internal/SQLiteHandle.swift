@@ -415,35 +415,17 @@ struct SQLiteHandle: ~Copyable {
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
     let (sql, bindings) = prepareQuery(query)
-    var statement: OpaquePointer?
-    let code = sql.withCString {
-      library.pointee.statements.preparation.prepare(
-        connection,
-        $0,
-        -1,
-        0,
-        &statement,
-        nil
+    guard let statement = try library.pointee.prepare(sql, on: connection) else {
+      throw SQLiteError.reported(
+        by: library.pointee,
+        on: connection,
+        code: SQLiteResultCode.ok.rawValue,
+        sql: sql
       )
     }
-    guard code == SQLiteResultCode.ok.rawValue, let statement else {
-      if let statement {
-        _ = library.pointee.statements.execution.finalize(statement)
-      }
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
-    }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
-
-    for (offset, binding) in bindings.enumerated() {
-      try bind(binding, to: statement, at: Int32(offset + 1), library: library)
-    }
-    var stepCode = library.pointee.statements.execution.step(statement)
-    while stepCode == SQLiteResultCode.row.rawValue {
-      stepCode = library.pointee.statements.execution.step(statement)
-    }
-    guard stepCode == SQLiteResultCode.done.rawValue else {
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)
-    }
+    try bind(bindings, to: statement, library: library)
+    try stepToCompletion(statement, on: connection, library: library, sql: sql)
   }
 
   static func execute(
@@ -511,14 +493,46 @@ struct SQLiteHandle: ~Copyable {
           observations.didChange(in: preparedStatement.changedRegion)
         }
 
-        var stepCode = library.pointee.statements.execution.step(statement)
-        while stepCode == SQLiteResultCode.row.rawValue {
-          stepCode = library.pointee.statements.execution.step(statement)
-        }
-        guard stepCode == SQLiteResultCode.done.rawValue else {
-          throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)
-        }
+        try stepToCompletion(statement, on: connection, library: library, sql: sql)
       }
     }
+  }
+
+  // Steps past every row the statement produces, which is how a statement run for its effect is
+  // run to its end.
+  private static func stepToCompletion(
+    _ statement: OpaquePointer,
+    on connection: OpaquePointer,
+    library: UnsafePointer<SQLiteLibrary>,
+    sql: String
+  ) throws {
+    var code: Int32
+    repeat {
+      code = library.pointee.statements.execution.step(statement)
+    } while code == SQLiteResultCode.row.rawValue
+    guard code == SQLiteResultCode.done.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+    }
+  }
+}
+
+extension SQLiteLibrary {
+  // Compiles the first statement in `sql`, or returns `nil` when it holds none, as a comment or
+  // whitespace does. SQLite can hand back a statement even when it reports a failure, so one is
+  // finalized here rather than left for the caller to leak.
+  func prepare(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32 = 0
+  ) throws -> OpaquePointer? {
+    var statement: OpaquePointer?
+    let code = sql.withCString {
+      statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      if let statement { _ = statements.execution.finalize(statement) }
+      throw SQLiteError.reported(by: self, on: connection, code: code, sql: sql)
+    }
+    return statement
   }
 }

@@ -1,6 +1,16 @@
 import StructuredQueries
 
 func bind(
+  _ bindings: [QueryBinding],
+  to statement: OpaquePointer,
+  library: UnsafePointer<SQLiteLibrary>
+) throws {
+  for (offset, binding) in bindings.enumerated() {
+    try bind(binding, to: statement, at: Int32(offset + 1), library: library)
+  }
+}
+
+private func bind(
   _ binding: QueryBinding,
   to statement: OpaquePointer,
   at index: Int32,
