@@ -1,4 +1,5 @@
-/// A cancellable registration with an interprocess transport.
+/// A cancellable registration: a value observation, a transaction observer, or a handler on an
+/// interprocess transport.
 ///
 /// Copies share the same cancellation state. The cancellation closure runs at most once, either
 /// when ``cancel()`` is first called or when the final copy is released — so holding onto the
