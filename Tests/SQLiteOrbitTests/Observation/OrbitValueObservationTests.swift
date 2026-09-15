@@ -51,10 +51,7 @@
 
     @Test
     func immediateSchedulerIntroducesNoBoundaryForCommittedValues() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .subscribe(
@@ -75,10 +72,7 @@
     @MainActor
     @Test
     func cancelledSubscriberDoesNotReceiveAChangeAlreadyOnItsWay() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .subscribe(
@@ -717,10 +711,7 @@
 
     @Test
     func mapTransformsValuesAndPreservesTheirSources() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<String>()
       let subscription = try itemCountObservation()
         .map { "count=\($0)" }
@@ -743,10 +734,7 @@
 
     @Test
     func filterSuppressesValuesWithoutRepeatingTheSharedInitialFetch() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
@@ -788,10 +776,7 @@
 
     @Test
     func compactMapSuppressesNilAndTransformsNonNilValues() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<String>()
       let subscription = try OrbitValueObservation<Int?>
         .tracking { transaction in
@@ -819,10 +804,7 @@
 
     @Test
     func operatorsRunInTheirWrittenOrder() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let transformCount = Lock(0)
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
@@ -851,10 +833,7 @@
     func throwingTransformEndsObservationAfterTheWriteCommits() throws {
       struct TransformError: Error {}
 
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .map { value in
@@ -1827,10 +1806,7 @@
 
     @Test
     func emptyQueryRegionDoesNotRefetch() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<Int?>()
       let subscription =
         try OrbitValueObservation
@@ -1919,6 +1895,15 @@
   private func itemsDatabase() async throws -> SQLiteQueue {
     let driver = try SQLiteQueue(path: .memory)
     try await driver.write { transaction in
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+    }
+    return driver
+  }
+
+  /// The database ``itemsDatabase()`` makes, made without suspending.
+  private func blockingItemsDatabase() throws -> SQLiteQueue {
+    let driver = try SQLiteQueue(path: .memory)
+    try driver.writeBlocking { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
     return driver
