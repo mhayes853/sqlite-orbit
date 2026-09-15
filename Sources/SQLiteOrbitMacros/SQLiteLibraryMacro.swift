@@ -45,13 +45,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
         module = name
 
       case "apis":
-        do {
-          apis = try parseAPIs(argument.expression)
-        } catch let message as MacroExpansionErrorMessage {
-          throw DiagnosticsError(
-            diagnostics: [Diagnostic(node: argument.expression, message: message)]
-          )
-        }
+        apis = try parseAPIs(argument.expression)
 
       default:
         throw diagnostic(
@@ -231,7 +225,8 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
   }
 
   private static func parseAPIs(_ expression: ExprSyntax) throws -> Set<API> {
-    let invalidExpression = MacroExpansionErrorMessage(
+    let invalidExpression = diagnostic(
+      at: expression,
       "'apis' must be '.standard', '.all', '[]', or an array literal of API members"
     )
     if let member = expression.as(MemberAccessExprSyntax.self),
@@ -260,7 +255,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       case "all": result.formUnion(API.allCases)
       default:
         guard let api = API(rawValue: name) else {
-          throw MacroExpansionErrorMessage("unknown SQLite library API '.\(name)'")
+          throw diagnostic(at: expression, "unknown SQLite library API '.\(name)'")
         }
         result.insert(api)
       }
