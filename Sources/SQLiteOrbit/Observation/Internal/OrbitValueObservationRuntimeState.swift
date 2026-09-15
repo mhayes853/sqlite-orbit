@@ -38,7 +38,9 @@ struct OrbitValueObservationPublication<Value: Sendable>: Sendable {
   let subscribers: [OrbitValueObservationSubscriber<Value>]
 }
 
-struct OrbitValueObservationReadRequest: Sendable {
+/// A fetch a coordinator handed out: the revision it was issued at, which tells whether it is
+/// still current when it completes, and the source its value is reported with.
+struct OrbitValueObservationFetchRequest: Sendable {
   let revision: UInt64
   let source: OrbitValueObservationSource
 }
@@ -54,7 +56,7 @@ struct OrbitValueObservationReadCoordinator: Sendable {
     self.initialFetchCompleted = true
   }
 
-  mutating func requireInitialRead() -> OrbitValueObservationReadRequest? {
+  mutating func requireInitialRead() -> OrbitValueObservationFetchRequest? {
     guard
       !self.initialFetchCompleted,
       !self.readIsInFlight,
@@ -66,7 +68,7 @@ struct OrbitValueObservationReadCoordinator: Sendable {
   }
 
   mutating func requireRead(source: OrbitValueObservationSource)
-    -> OrbitValueObservationReadRequest?
+    -> OrbitValueObservationFetchRequest?
   {
     self.revision &+= 1
     self.readIsRequired = true
@@ -83,22 +85,17 @@ struct OrbitValueObservationReadCoordinator: Sendable {
     self.readIsRequired = false
   }
 
-  mutating func completeRead(_ request: OrbitValueObservationReadRequest) -> Bool {
+  mutating func completeRead(_ request: OrbitValueObservationFetchRequest) -> Bool {
     self.readIsInFlight = false
     return request.revision == self.revision
   }
 
-  mutating func takeRequestIfPossible() -> OrbitValueObservationReadRequest? {
+  mutating func takeRequestIfPossible() -> OrbitValueObservationFetchRequest? {
     guard self.readIsRequired, !self.readIsInFlight else { return nil }
     self.readIsRequired = false
     self.readIsInFlight = true
-    return OrbitValueObservationReadRequest(revision: self.revision, source: self.requiredSource)
+    return OrbitValueObservationFetchRequest(revision: self.revision, source: self.requiredSource)
   }
-}
-
-struct OrbitValueObservationRefetchRequest: Sendable {
-  let revision: UInt64
-  let source: OrbitValueObservationSource
 }
 
 struct OrbitValueObservationRefetchCoordinator: Sendable {
@@ -119,13 +116,13 @@ struct OrbitValueObservationRefetchCoordinator: Sendable {
     self.source = source
   }
 
-  mutating func beginFetch() -> OrbitValueObservationRefetchRequest? {
+  mutating func beginFetch() -> OrbitValueObservationFetchRequest? {
     guard isRequired, !isFetchInFlight else { return nil }
     isFetchInFlight = true
-    return OrbitValueObservationRefetchRequest(revision: revision, source: source)
+    return OrbitValueObservationFetchRequest(revision: revision, source: source)
   }
 
-  func isCurrent(_ request: OrbitValueObservationRefetchRequest) -> Bool {
+  func isCurrent(_ request: OrbitValueObservationFetchRequest) -> Bool {
     request.revision == revision
   }
 

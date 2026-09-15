@@ -1319,7 +1319,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   // MARK: - Initial value
 
   func fetchInitialValueIfNeeded() {
-    let request = state.withLock { state -> OrbitValueObservationReadRequest? in
+    let request = state.withLock { state -> OrbitValueObservationFetchRequest? in
       guard !state.isStopped else { return nil }
       return state.reads.requireInitialRead()
     }
@@ -1465,7 +1465,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     activeWriterBarrier: SQLitePoolWriterBarrier?
   ) {
     let action = state.withLock { state -> (
-      initialRequest: OrbitValueObservationReadRequest?,
+      initialRequest: OrbitValueObservationFetchRequest?,
       controllerRevision: UInt64?
     ) in
       guard !state.isStopped else { return (nil, nil) }
@@ -1551,7 +1551,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     publishing behavior: OrbitValueObservationPublicationBehavior
   ) async -> OrbitValueObservationFetchResult {
     guard
-      let request = state.withLock({ state -> OrbitValueObservationRefetchRequest? in
+      let request = state.withLock({ state -> OrbitValueObservationFetchRequest? in
         guard !state.isStopped else { return nil }
         return state.refetches.beginFetch()
       })
@@ -1613,7 +1613,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     if let restartRevision { startRefetching(startedAt: restartRevision) }
   }
 
-  private func start(_ request: OrbitValueObservationReadRequest?) {
+  private func start(_ request: OrbitValueObservationFetchRequest?) {
     guard let request else { return }
     Task { [weak self] in
       guard let self else { return }
@@ -1625,10 +1625,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
   private func completeRead(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
-    request: OrbitValueObservationReadRequest
+    request: OrbitValueObservationFetchRequest
   ) {
     let completed = state.withLock {
-      state -> (OrbitValueObservationDelivery, OrbitValueObservationReadRequest?) in
+      state -> (OrbitValueObservationDelivery, OrbitValueObservationFetchRequest?) in
       guard !state.isStopped else {
         discard(result)
         return (.idle, nil)
