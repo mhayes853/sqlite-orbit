@@ -123,14 +123,14 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     var hasStarted = false
     var generation: UInt64 = 0
     var observers = IdentifiedRegistry<@Sendable () -> Void>()
-    var firstResult: OrbitFetchSignal?
+    var firstResult: OrbitOneShotSignal?
     var swiftUIObservation: OrbitSubscription?
 
     /// What a replaced observation leaves behind, so that cancelling it and completing the load
     /// that was waiting on it happen after the lock is released.
     struct InvalidatedObservation {
       let subscription: OrbitSubscription?
-      let firstResult: OrbitFetchSignal?
+      let firstResult: OrbitOneShotSignal?
     }
 
     mutating func invalidateObservation() -> InvalidatedObservation {
@@ -246,9 +246,13 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   /// - Parameter source: The request, database, and scheduler to observe.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
   func load(_ source: OrbitFetchSource<Value>) async throws {
-    let signal = OrbitFetchSignal()
+    let signal = OrbitOneShotSignal()
     subscribe(to: source, signal: signal)
-    try await signal.wait()
+    try await withTaskCancellationHandler {
+      try await signal.wait()
+    } onCancel: {
+      signal.finish(.failure(CancellationError()))
+    }
   }
 
   /// Stops observing, keeping the value the observation last produced.
@@ -311,7 +315,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
 
   private func subscribe(
     to source: OrbitFetchSource<Value>? = nil,
-    signal: OrbitFetchSignal? = nil
+    signal: OrbitOneShotSignal? = nil
   ) {
     let starting = state.withLock {
       state -> (
@@ -361,7 +365,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   }
 
   private func receive(_ result: Result<Value, any Error>, generation: UInt64) {
-    var signal: OrbitFetchSignal?
+    var signal: OrbitOneShotSignal?
     let didAccept = registrar.withMutation {
       state.withLock { state -> Bool in
         guard state.generation == generation else { return false }
@@ -409,40 +413,6 @@ struct OrbitDeferredFetchScheduler: OrbitValueObservationScheduler {
     _ action: @escaping @Sendable () -> Void
   ) {
     base.schedule(from: isolation, action)
-  }
-}
-
-/// A one-shot signal that a fetch has produced its first result.
-final class OrbitFetchSignal: Sendable {
-  private enum State {
-    case waiting(CheckedContinuation<Void, any Error>?)
-    case finished(Result<Void, any Error>)
-  }
-
-  private let state = Lock(State.waiting(nil))
-
-  func wait() async throws {
-    try await withTaskCancellationHandler {
-      try await withCheckedThrowingContinuation { continuation in
-        let result = state.withLock { state -> Result<Void, any Error>? in
-          if case .finished(let result) = state { return result }
-          state = .waiting(continuation)
-          return nil
-        }
-        if let result { continuation.resume(with: result) }
-      }
-    } onCancel: {
-      finish(.failure(CancellationError()))
-    }
-  }
-
-  func finish(_ result: Result<Void, any Error>) {
-    let continuation = state.withLock { state -> CheckedContinuation<Void, any Error>? in
-      guard case .waiting(let continuation) = state else { return nil }
-      state = .finished(result)
-      return continuation
-    }
-    continuation?.resume(with: result)
   }
 }
 

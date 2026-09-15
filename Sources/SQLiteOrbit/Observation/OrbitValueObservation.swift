@@ -967,7 +967,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     isolation: isolated (any Actor)? = #isolation,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) async throws {
-    let completion = OrbitValueObservationCompletion()
+    let completion = OrbitOneShotSignal()
     let subscription = try subscribe(
       to: database,
       scheduling: scheduler,
@@ -1058,12 +1058,14 @@ extension OrbitValueObservation where Value: Equatable {
   }
 }
 
-/// How a task-scoped observation ends: with the error that ended it, or with the cancellation
-/// that ended its task.
+/// A one-shot signal that something waited on has finished, and how.
 ///
-/// Both can arrive at once — an observation can fail while its task is being cancelled — so the
-/// first is the one the caller sees and the other is dropped.
-private final class OrbitValueObservationCompletion: Sendable {
+/// A task-scoped observation ends with the error that ended it or with the cancellation that
+/// ended its task, and a fetch property's explicit load ends with its first result or with the
+/// cancellation of the task awaiting it. Either can race the other, so the first to finish the
+/// signal is the one the waiter sees and the other is dropped. Waiting does not watch for
+/// cancellation itself, because what a cancellation means is up to the waiter.
+final class OrbitOneShotSignal: Sendable {
   private enum State {
     case waiting(CheckedContinuation<Void, any Error>?)
     case finished(Result<Void, any Error>)
