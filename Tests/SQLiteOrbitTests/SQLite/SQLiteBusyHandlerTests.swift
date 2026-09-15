@@ -7,87 +7,91 @@
 
   @Suite
   struct SQLiteBusyHandlerTests {
-    @Test
-    func theHandlerIsAskedAgainWithARisingAttemptUntilItGivesUp() async throws {
-      try await withContendedDatabases { holder, open in
-        let attempts = Lock([Int]())
-        let waiter = try open(.limit(.seconds(30))) { attempt in
-          attempts.withLock { $0.append(attempt) }
-          // Giving up is what turns the wait into the `SQLITE_BUSY` the caller sees.
-          return attempt < 3
-        }
+    // Turso's header does not declare `sqlite3_busy_handler`, so its library has no busy handler to
+    // install and refuses the configuration, as the last test here checks for any such library.
+    #if !Turso
+      @Test
+      func theHandlerIsAskedAgainWithARisingAttemptUntilItGivesUp() async throws {
+        try await withContendedDatabases { holder, open in
+          let attempts = Lock([Int]())
+          let waiter = try open(.limit(.seconds(30))) { attempt in
+            attempts.withLock { $0.append(attempt) }
+            // Giving up is what turns the wait into the `SQLITE_BUSY` the caller sees.
+            return attempt < 3
+          }
 
-        let error = try await holder.holdingTheWriteLock {
-          await #expect(throws: SQLiteError.self) {
-            try await waiter.write { transaction in
-              try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          let error = try await holder.holdingTheWriteLock {
+            await #expect(throws: SQLiteError.self) {
+              try await waiter.write { transaction in
+                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+              }
             }
           }
-        }
 
-        #expect(error?.isBusy == true)
-        #expect(attempts.withLock { $0 } == [1, 2, 3])
+          #expect(error?.isBusy == true)
+          #expect(attempts.withLock { $0 } == [1, 2, 3])
+        }
       }
-    }
 
-    @Test
-    func theHandlerIsConsultedInsteadOfTheConfiguredBusyTimeout() async throws {
-      try await withContendedDatabases { holder, open in
-        let attempts = Lock(0)
-        // A timeout long enough that waiting by it rather than by the handler would hang the test.
-        let waiter = try open(.limit(.seconds(30))) { _ in
-          attempts.withLock { $0 += 1 }
-          return false
-        }
+      @Test
+      func theHandlerIsConsultedInsteadOfTheConfiguredBusyTimeout() async throws {
+        try await withContendedDatabases { holder, open in
+          let attempts = Lock(0)
+          // A timeout long enough that waiting by it rather than the handler would hang the test.
+          let waiter = try open(.limit(.seconds(30))) { _ in
+            attempts.withLock { $0 += 1 }
+            return false
+          }
 
-        let clock = ContinuousClock()
-        let started = clock.now
-        let error = try await holder.holdingTheWriteLock {
-          await #expect(throws: SQLiteError.self) {
-            try await waiter.write { transaction in
-              try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          let clock = ContinuousClock()
+          let started = clock.now
+          let error = try await holder.holdingTheWriteLock {
+            await #expect(throws: SQLiteError.self) {
+              try await waiter.write { transaction in
+                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+              }
             }
           }
-        }
 
-        #expect(error?.isBusy == true)
-        #expect(attempts.withLock { $0 } == 1)
-        #expect(clock.now - started < .seconds(5))
+          #expect(error?.isBusy == true)
+          #expect(attempts.withLock { $0 } == 1)
+          #expect(clock.now - started < .seconds(5))
+        }
       }
-    }
 
-    @Test
-    func theHandlerIsBackAfterAnAccessThatChangedTheBusyTimeout() async throws {
-      try await withContendedDatabases { holder, open in
-        let attempts = Lock(0)
-        let waiter = try open(.limit(.seconds(30))) { _ in
-          attempts.withLock { $0 += 1 }
-          return false
-        }
+      @Test
+      func theHandlerIsBackAfterAnAccessThatChangedTheBusyTimeout() async throws {
+        try await withContendedDatabases { holder, open in
+          let attempts = Lock(0)
+          let waiter = try open(.limit(.seconds(30))) { _ in
+            attempts.withLock { $0 += 1 }
+            return false
+          }
 
-        // Setting the timeout is how SQLite replaces the handler, since it keeps only one.
-        try await waiter.writeWithoutTransaction { connection in
-          connection.busyTimeout = .limit(.seconds(42))
-          let inEffect = try connection.fetchOne(busyTimeoutPragma)
-          #expect(inEffect == 42_000)
-        }
+          // Setting the timeout is how SQLite replaces the handler, since it keeps only one.
+          try await waiter.writeWithoutTransaction { connection in
+            connection.busyTimeout = .limit(.seconds(42))
+            let inEffect = try connection.fetchOne(busyTimeoutPragma)
+            #expect(inEffect == 42_000)
+          }
 
-        let clock = ContinuousClock()
-        let started = clock.now
-        let error = try await holder.holdingTheWriteLock {
-          await #expect(throws: SQLiteError.self) {
-            try await waiter.write { transaction in
-              try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+          let clock = ContinuousClock()
+          let started = clock.now
+          let error = try await holder.holdingTheWriteLock {
+            await #expect(throws: SQLiteError.self) {
+              try await waiter.write { transaction in
+                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+              }
             }
           }
-        }
 
-        // Had the handler not come back, the restored 30 second timeout would have waited instead.
-        #expect(error?.isBusy == true)
-        #expect(attempts.withLock { $0 } == 1)
-        #expect(clock.now - started < .seconds(5))
+          // Had the handler not come back, the restored 30 second timeout would have waited.
+          #expect(error?.isBusy == true)
+          #expect(attempts.withLock { $0 } == 1)
+          #expect(clock.now - started < .seconds(5))
+        }
       }
-    }
+    #endif
 
     @Test
     func aHandlerIsRefusedByALibraryThatCannotInstallOne() throws {

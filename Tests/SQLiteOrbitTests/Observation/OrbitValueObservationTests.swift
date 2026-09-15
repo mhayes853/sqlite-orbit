@@ -215,11 +215,11 @@
       // it and the recorded region never mentions it.
       let observation = OrbitValueObservation<Int>
         .trackingConstantRegion { transaction in
-          let items = try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
-            ?? 0
+          let itemCount = #sql("SELECT COUNT(*) FROM items", as: Int.self)
+          let labelCount = #sql("SELECT COUNT(*) FROM labels", as: Int.self)
+          let items = try transaction.fetchOne(itemCount) ?? 0
           guard items > 0 else { return 0 }
-          return try items
-            + (transaction.fetchOne(#sql("SELECT COUNT(*) FROM labels", as: Int.self)) ?? 0)
+          return try items + (transaction.fetchOne(labelCount) ?? 0)
         }
       let recorder = ObservationRecorder<Int>()
       let subscription = try observation.subscribe(
