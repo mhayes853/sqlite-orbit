@@ -188,7 +188,7 @@ extension SQLiteConfiguration {
   public mutating func register(
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
   ) {
-    register(.collations, providedBy: { $0.collations != nil }) { connection in
+    register(.collations, providedBy: \.collations) { connection in
       orbitInstall(
         collation: collation,
         on: connection.sqliteConnection,
@@ -211,7 +211,7 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-    register(.scalarFunctions, providedBy: { $0.scalarFunctions != nil }) { connection in
+    register(.scalarFunctions, providedBy: \.scalarFunctions) { connection in
       orbitInstall(
         function: function,
         on: connection.sqliteConnection,
@@ -229,7 +229,7 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-    register(.aggregateFunctions, providedBy: { $0.aggregateFunctions != nil }) { connection in
+    register(.aggregateFunctions, providedBy: \.aggregateFunctions) { connection in
       orbitInstall(
         function: function,
         on: connection.sqliteConnection,
@@ -243,16 +243,16 @@ extension SQLiteConfiguration {
   ///
   /// - Parameters:
   ///   - feature: The operation the build has to provide, named by the error it is refused with.
-  ///   - providedBy: Answers whether a build provides it.
+  ///   - group: The entry points it installs with, which a build without them leaves `nil`.
   ///   - install: Installs on the connection and returns the build's result code.
-  private mutating func register(
+  private mutating func register<Group>(
     _ feature: SQLiteLibraryFeature,
-    providedBy isProvided: @escaping @Sendable (SQLiteLibrary) -> Bool,
+    providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
     install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
   ) {
     connectionSetups.append(
       SQLiteConnectionSetup { connection in
-        guard isProvided(connection.sqlite) else {
+        guard connection.sqlite[keyPath: group] != nil else {
           throw SQLiteFeatureUnavailableError(
             libraryName: connection.sqlite.name,
             feature: feature
