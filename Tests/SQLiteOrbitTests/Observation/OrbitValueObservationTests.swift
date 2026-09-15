@@ -244,6 +244,73 @@
     }
 
     @Test
+    func taskScopedSubscribeDeliversChanges() async throws {
+      let driver = try await itemsDatabase()
+      let recorder = ObservationRecorder<Int>()
+      let observing = Task {
+        try await itemCountObservation()
+          .subscribe(to: driver, scheduling: .async(), onChange: recorder.record(change:))
+      }
+      defer { observing.cancel() }
+      try await recorder.waitForChangeCount(1)
+
+      try await driver.write { transaction in
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await recorder.waitForChangeCount(2)
+
+      #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+    }
+
+    @Test
+    func taskScopedSubscribeReturnsAndStopsObservingWhenItsTaskIsCancelled() async throws {
+      let driver = try await itemsDatabase()
+      let events = Lock([String]())
+      let recorder = ObservationRecorder<Int>()
+      let observation = itemCountObservation()
+        .handleEvents(didCancel: { events.withLock { $0.append("didCancel") } })
+      let observing = Task {
+        try await observation
+          .subscribe(to: driver, scheduling: .async(), onChange: recorder.record(change:))
+      }
+      try await recorder.waitForChangeCount(1)
+
+      observing.cancel()
+      // Cancellation is how it ends, so it returns rather than throwing.
+      try await observing.value
+      #expect(events.withLock { $0 } == ["didCancel"])
+
+      try await driver.write { transaction in
+        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(recorder.changes.map(\.value) == [0])
+    }
+
+    @Test
+    func taskScopedSubscribeReturnsAtOnceInAnAlreadyCancelledTask() async throws {
+      let driver = try await itemsDatabase()
+      let observing = Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        try await itemCountObservation().subscribe(to: driver, scheduling: .async()) { _ in }
+      }
+
+      try await observing.value
+    }
+
+    @Test
+    func taskScopedSubscribeThrowsTheErrorThatEndsTheObservation() async throws {
+      struct Abort: Error {}
+      let driver = try await itemsDatabase()
+      let observation = OrbitValueObservation<Int>.tracking { _ in throw Abort() }
+
+      await #expect(throws: Abort.self) {
+        try await observation.subscribe(to: driver, scheduling: .async()) { _ in }
+      }
+    }
+
+    @Test
     func commitFailureDiscardsThePendingValue() async throws {
       let driver = try SQLiteQueue(path: .memory)
       try await driver.write { transaction in

@@ -904,6 +904,60 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
+  /// Observes for as long as the calling task runs, delivering each change to `onChange`.
+  ///
+  /// This is the observation as a piece of work rather than as a token or a sequence: it belongs
+  /// to the task that called it, it keeps that task busy, and cancelling the task ends both. That
+  /// is what makes it the shape to hand a task group or a `.task` modifier, which have a task to
+  /// spend and nowhere to store a subscription.
+  ///
+  /// ``values(in:bufferingPolicy:)`` describes the same observation as a sequence, and differs in
+  /// who waits on whom: its consumer asks for the next value and the sequence buffers whatever
+  /// arrives in between, while this delivers every change through `scheduler` the moment the
+  /// observation produces it, with nothing buffered and no consumer to fall behind.
+  ///
+  /// ```swift
+  /// .task {
+  ///   try? await observation.subscribe(to: database, scheduling: .mainActor) { change in
+  ///     reminders = change.value
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - scheduler: Decides where and when `onChange` runs.
+  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - onChange: Receives each observed change.
+  /// - Throws: Whatever registering a transaction observer on `database` throws, or the error that
+  ///   ends the observation. Cancelling the calling task returns rather than throwing.
+  public func subscribe<
+    Database: OrbitObservableDatabase,
+    Scheduler: OrbitValueObservationScheduler
+  >(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)? = #isolation,
+    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
+  ) async throws {
+    let completion = OrbitValueObservationCompletion()
+    let subscription = try subscribe(
+      to: database,
+      scheduling: scheduler,
+      isolation: isolation,
+      onError: { error in completion.finish(.failure(error)) },
+      onChange: onChange
+    )
+    defer { subscription.cancel() }
+    try await withTaskCancellationHandler {
+      try await completion.wait()
+    } onCancel: {
+      // Stop observing the moment the task is cancelled, not when it gets around to returning.
+      subscription.cancel()
+      completion.finish(.success(()))
+    }
+  }
+
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
   /// The observation starts when iteration begins and ends when the iterator is released.
@@ -974,6 +1028,40 @@ extension OrbitValueObservation where Value: Equatable {
   /// - Returns: An observation that emits a value only when it differs from the last one emitted.
   public func removeDuplicates() -> Self {
     removeDuplicates(by: ==)
+  }
+}
+
+/// How a task-scoped observation ends: with the error that ended it, or with the cancellation
+/// that ended its task.
+///
+/// Both can arrive at once — an observation can fail while its task is being cancelled — so the
+/// first is the one the caller sees and the other is dropped.
+private final class OrbitValueObservationCompletion: Sendable {
+  private enum State {
+    case waiting(CheckedContinuation<Void, any Error>?)
+    case finished(Result<Void, any Error>)
+  }
+
+  private let state = Lock(State.waiting(nil))
+
+  func wait() async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      let result = state.withLock { state -> Result<Void, any Error>? in
+        if case .finished(let result) = state { return result }
+        state = .waiting(continuation)
+        return nil
+      }
+      if let result { continuation.resume(with: result) }
+    }
+  }
+
+  func finish(_ result: Result<Void, any Error>) {
+    let continuation = state.withLock { state -> CheckedContinuation<Void, any Error>? in
+      guard case .waiting(let continuation) = state else { return nil }
+      state = .finished(result)
+      return continuation
+    }
+    continuation?.resume(with: result)
   }
 }
 
