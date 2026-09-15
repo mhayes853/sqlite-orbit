@@ -469,8 +469,8 @@
       _ databaseIdentifier: OrbitDatabaseIdentifier,
       in state: State
     ) -> Bool {
-      let key = self.registry.registrationKey(for: databaseIdentifier)
-      return state.handlers.keys.contains { self.registry.registrationKey(for: $0) == key }
+      let key = databaseIdentifier.coordinationKey
+      return state.handlers.keys.contains { $0.coordinationKey == key }
     }
   }
 
