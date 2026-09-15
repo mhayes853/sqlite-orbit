@@ -174,7 +174,8 @@ the traits exclusive in practice:
 )
 ```
 
-The experimental `Turso` trait downloads Turso's local Rust engine for Linux x86-64, drives it
+The experimental `Turso` trait downloads Turso's local Rust engine for Apple platforms and Linux
+x86-64, drives it
 through its SQLite-compatible C API, and vends `SQLiteLibrary.turso`:
 
 ```swift
@@ -185,8 +186,10 @@ through its SQLite-compatible C API, and vends `SQLiteLibrary.turso`:
 )
 ```
 
-The package links a release-hosted SwiftPM artifact bundle built from Turso `v0.8.0-pre.11`.
-`Scripts/build-turso-artifactbundle.sh` reproduces the bundle from an upstream Turso checkout.
+The package links a release-hosted, indexed SwiftPM artifact bundle built from Turso
+`v0.8.0-pre.11`. `Scripts/build-turso-artifactbundle.sh` reproduces a platform slice from an
+upstream Turso checkout; the release workflow merges the slices and partitions them into the
+host-family archives referenced by the index.
 
 The trait also vends `TursoPool`, which enables Turso's MVCC journal and runs reads and writes on
 separate connection pools. Ordinary writes use `BEGIN CONCURRENT`, while an explicit exclusive

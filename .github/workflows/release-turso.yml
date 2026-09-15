@@ -1,0 +1,121 @@
+name: Release Turso artifact bundle
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TURSO_VERSION: 0.8.0-pre.11
+  ARTIFACT_REVISION: r4
+  TURSO_STABLE_TOOLCHAIN: 1.94.0
+  TURSO_NIGHTLY_TOOLCHAIN: nightly
+
+jobs:
+  build-linux:
+    name: Build Linux artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Check out Turso
+        uses: actions/checkout@v4
+        with:
+          repository: tursodatabase/turso
+          ref: v${{ env.TURSO_VERSION }}
+          path: turso
+
+      - name: Build
+        env:
+          TURSO_ARTIFACT_VERSION: ${{ env.TURSO_VERSION }}
+          TURSO_TARGETS: x86_64-unknown-linux-gnu
+        run: Scripts/build-turso-artifactbundle.sh turso TursoSQLite3-linux.artifactbundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turso-linux
+          path: TursoSQLite3-linux.artifactbundle
+
+  build-apple:
+    name: Build Apple artifacts
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-ios-macabi,x86_64-apple-ios-macabi
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Check out Turso
+        uses: actions/checkout@v4
+        with:
+          repository: tursodatabase/turso
+          ref: v${{ env.TURSO_VERSION }}
+          path: turso
+
+      - name: Build
+        env:
+          TURSO_ARTIFACT_VERSION: ${{ env.TURSO_VERSION }}
+          TURSO_TARGETS: >-
+            aarch64-apple-darwin
+            x86_64-apple-darwin
+            aarch64-apple-ios
+            aarch64-apple-ios-sim
+            x86_64-apple-ios
+            aarch64-apple-ios-macabi
+            x86_64-apple-ios-macabi
+            aarch64-apple-tvos
+            aarch64-apple-tvos-sim
+            x86_64-apple-tvos
+            aarch64-apple-watchos
+            arm64_32-apple-watchos
+            aarch64-apple-watchos-sim
+            x86_64-apple-watchos-sim
+            aarch64-apple-visionos
+            aarch64-apple-visionos-sim
+        run: Scripts/build-turso-artifactbundle.sh turso TursoSQLite3-apple.artifactbundle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turso-apple
+          path: TursoSQLite3-apple.artifactbundle
+
+  publish:
+    name: Publish release assets
+    needs: [build-linux, build-apple]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: turso-*
+          path: bundles
+
+      - name: Assemble indexed artifact bundle
+        env:
+          OUTPUT: bin/TursoSQLite3-${{ env.TURSO_VERSION }}-${{ env.ARTIFACT_REVISION }}.artifactbundle.zip
+        run: |
+          mkdir -p bin
+          Scripts/merge-turso-artifactbundles.py \
+            TursoSQLite3.artifactbundle \
+            bundles/turso-linux/TursoSQLite3-linux.artifactbundle \
+            bundles/turso-apple/TursoSQLite3-apple.artifactbundle
+          Scripts/partition-artifact-bundle.py TursoSQLite3.artifactbundle "$OUTPUT"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "turso-${TURSO_VERSION}" >/dev/null || \
+            gh release create \
+              "turso-${TURSO_VERSION}" \
+              --title "Turso SQLite ${TURSO_VERSION} for Apple platforms and Linux" \
+              --notes "Prebuilt Turso SQLite static libraries distributed through a SwiftPM artifact bundle index."
+          gh release upload \
+            "turso-${TURSO_VERSION}" \
+            bin/*.artifactbundle.zip \
+            bin/*.artifactbundleindex

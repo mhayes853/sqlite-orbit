@@ -69,8 +69,8 @@ let package = Package(
     .binaryTarget(
       name: "TursoSQLite3",
       url:
-        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-x86_64-unknown-linux-gnu-r1.artifactbundle.zip",
-      checksum: "4b8ba4baac7a38e2434095ea209eefe29a1be06714cfb8e1d0d44ed060ba6499"
+        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r4.artifactbundleindex",
+      checksum: "ecaae3ea882953b3fb074ae60599c0e3e4944acb66190d64dee1b2b9a3b0d543"
     ),
     .target(
       name: "SQLiteOrbit",
