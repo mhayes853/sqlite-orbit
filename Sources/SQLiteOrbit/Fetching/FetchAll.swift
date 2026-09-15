@@ -69,6 +69,15 @@ public struct FetchAll<Element: Sendable>: Sendable {
     #endif
   }
 
+  /// Creates a property holding rows that no query keeps current.
+  private init(unobserved wrappedValue: [Element]) {
+    self.init(
+      storage: OrbitFetchStorage(
+        value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
+      )
+    )
+  }
+
   init(
     wrappedValue: [Element],
     request: some OrbitFetchKeyRequest<OrbitFetchSectionCollection<Element, String?>>,
@@ -155,11 +164,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   /// - Parameter wrappedValue: The rows the property holds.
   @_disfavoredOverload
   public init(wrappedValue: [Element] = []) {
-    self.init(
-      storage: OrbitFetchStorage(
-        value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
-      )
-    )
+    self.init(unobserved: wrappedValue)
   }
 
   /// Creates a property holding rows that no query keeps current.
@@ -170,11 +175,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
   /// - Parameter wrappedValue: The rows the property holds.
   public init(wrappedValue: [Element] = [])
   where Element: _Selection, Element.QueryOutput == Element {
-    self.init(
-      storage: OrbitFetchStorage(
-        value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
-      )
-    )
+    self.init(unobserved: wrappedValue)
   }
 
   @available(
@@ -191,11 +192,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   )
   where Element: _Selection, Element.QueryOutput == Element {
-    self.init(
-      storage: OrbitFetchStorage(
-        value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
-      )
-    )
+    self.init(unobserved: wrappedValue)
   }
 
   // MARK: - Queries
