@@ -24,6 +24,61 @@ public protocol SingleRowTable: PrimaryKeyedTable where QueryOutput == Self {
   static var defaultValue: Self { get }
 }
 
+extension SingleRowTable where PrimaryKey.QueryOutput: Equatable {
+  /// Finds the singleton in a read transaction, returning ``defaultValue`` when it has not been
+  /// persisted yet.
+  public static func find(
+    in transaction: borrowing SQLiteReadTransaction
+  ) throws -> Self {
+    try findSingleton(in: transaction)
+  }
+
+  /// Finds the singleton in a write transaction, returning ``defaultValue`` when it has not been
+  /// persisted yet.
+  public static func find(
+    in transaction: borrowing SQLiteWriteTransaction
+  ) throws -> Self {
+    try findSingleton(in: transaction)
+  }
+
+  /// Inserts or replaces the singleton in a write transaction.
+  ///
+  /// - Throws: ``OrbitRowIdentityMismatchError`` when this value does not have
+  ///   ``defaultValue``'s primary key, or whatever executing the statement throws.
+  public func save(in transaction: borrowing SQLiteWriteTransaction) throws {
+    guard primaryKey == Self.defaultValue.primaryKey else {
+      throw OrbitRowIdentityMismatchError()
+    }
+    try transaction.execute(Self.upsert { Self.Draft(self) })
+  }
+
+  /// Mutates the latest singleton and saves it in the same write transaction.
+  ///
+  /// When the row has not been persisted, `update` starts from ``defaultValue``.
+  @discardableResult
+  public static func update<Result>(
+    in transaction: borrowing SQLiteWriteTransaction,
+    _ update: (inout Self) throws -> Result
+  ) throws -> Result {
+    var value = try find(in: transaction)
+    let result = try update(&value)
+    try value.save(in: transaction)
+    return result
+  }
+
+  private static func findSingleton<Transaction>(
+    in transaction: borrowing Transaction
+  ) throws -> Self
+  where
+    Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable
+  {
+    let statement: Select<Self, Self, ()> = all.selectStar()
+    return try transaction.fetchOne(
+      statement.find(PrimaryKey(queryOutput: defaultValue.primaryKey))
+    ) ?? defaultValue
+  }
+}
+
 /// Thrown when a value being saved has a different primary key from the row its property observes.
 ///
 /// A mutable row's identity is fixed when its property is created. Rejecting a changed key keeps

@@ -6,6 +6,43 @@
   @Suite
   struct SingleRowTests {
     @Test
+    func queryHelpersFindSaveAndUpdateTheSingleton() async throws {
+      let database = try await settingsDatabase()
+
+      let initial = try await database.read { try Settings.find(in: $0) }
+      #expect(initial == .defaultValue)
+
+      try await database.write { transaction in
+        try Settings(id: 0, theme: "dark", launchCount: 2).save(in: transaction)
+      }
+      let persisted = try await database.read { try Settings.find(in: $0) }
+      #expect(persisted == Settings(id: 0, theme: "dark", launchCount: 2))
+
+      let previousTheme = try await database.write { transaction in
+        try Settings.update(in: transaction) { settings in
+          let previousTheme = settings.theme
+          settings.theme = "light"
+          settings.launchCount += 1
+          return previousTheme
+        }
+      }
+      #expect(previousTheme == "dark")
+      let updated = try await database.read { try Settings.find(in: $0) }
+      #expect(updated == Settings(id: 0, theme: "light", launchCount: 3))
+    }
+
+    @Test
+    func saveHelperRejectsADifferentPrimaryKey() async throws {
+      let database = try await settingsDatabase(enforceSingleton: false)
+
+      await #expect(throws: OrbitRowIdentityMismatchError.self) {
+        try await database.write { transaction in
+          try Settings(id: 1, theme: "dark", launchCount: 0).save(in: transaction)
+        }
+      }
+    }
+
+    @Test
     func anEmptyTableReadsItsDefaultWithoutInsertingIt() async throws {
       let database = try await settingsDatabase()
 
