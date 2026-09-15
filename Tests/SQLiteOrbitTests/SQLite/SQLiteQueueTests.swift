@@ -88,7 +88,7 @@
       for id in 1...count {
         group.addTask {
           try await driver.write { transaction in
-            _ = try transaction.execute(Item.insert { Item(id: id, title: "concurrent") })
+            try transaction.execute(Item.insert { Item(id: id, title: "concurrent") })
           }
         }
       }

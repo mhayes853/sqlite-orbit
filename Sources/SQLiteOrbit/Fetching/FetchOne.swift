@@ -3,6 +3,7 @@
   import protocol SwiftUI.DynamicProperty
   import struct SwiftUI.Animation
   import struct SwiftUI.State
+  import struct SwiftUI.Environment
 #endif
 
 /// A property that observes a single value a query produces.
@@ -28,8 +29,8 @@
 /// @FetchOne(Reminder.find(id)) var reminder: Reminder?
 /// ```
 ///
-/// The database it reads from is ``OrbitDefaultDatabase/current`` unless one is passed as the
-/// `database` argument.
+/// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
+/// argument first, then the SwiftUI environment, then the process-wide default.
 /// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
 /// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
@@ -39,6 +40,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
     private let box: OrbitFetchStorage<Value>
     private let state: SwiftUI.State<OrbitFetchStorage<Value>>
     private let generation = SwiftUI.State(wrappedValue: 0)
+    // The environment's database, resolved by SwiftUI before `update()` runs.
+    @Environment(\.orbitDatabase) private var environmentDatabase
 
     private var storage: OrbitFetchStorage<Value> { state.wrappedValue }
   #else
@@ -165,8 +168,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered. By default they are delivered as they are
   ///     produced, and the first read happens before the property is first read.
   public init(
@@ -187,20 +190,17 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
-    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: statement.limit(1)
-      ),
+      request: Self.firstRowRequest(),
       database: database,
       scheduler: scheduler
     )
@@ -211,23 +211,30 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: Value = ._none,
     database: (any OrbitObservableDatabase)? = nil,
     scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
   ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
-    let statement: Select<Value, Value, ()> = Value.all.selectStar()
     self.init(
       wrappedValue: wrappedValue,
-      request: OrbitFetchOptionalProtocolStatementRequest<Value>(
-        statement: statement.limit(1)
-      ),
+      request: Self.firstRowRequest(),
       database: database,
       scheduler: scheduler
     )
+  }
+
+  /// The request both optional whole-table overloads above describe.
+  ///
+  /// They are written twice only so that an optional primary keyed table is not ambiguous between
+  /// them and the non-optional overload; the read itself is the same one.
+  private static func firstRowRequest() -> OrbitFetchOptionalProtocolStatementRequest<Value>
+  where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
+    let statement: Select<Value, Value, ()> = Value.all.selectStar()
+    return OrbitFetchOptionalProtocolStatementRequest<Value>(statement: statement.limit(1))
   }
 
   /// Creates a property observing the row the value it is declared with identifies.
@@ -241,8 +248,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - wrappedValue: The row whose primary key identifies the row to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: Value,
@@ -267,8 +274,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: SelectStatement>(
     wrappedValue: Value,
@@ -294,8 +301,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<V: QueryRepresentable>(
     wrappedValue: Value,
@@ -317,8 +324,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<V: QueryRepresentable>(
     wrappedValue: Value = nil,
@@ -339,8 +346,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: Statement<Value>>(
     wrappedValue: Value,
@@ -362,8 +369,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: SelectStatement>(
     wrappedValue: Value = ._none,
@@ -393,8 +400,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: Statement>(
     wrappedValue: Value = ._none,
@@ -420,8 +427,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: Value = ._none,
@@ -443,8 +450,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -467,8 +474,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -491,8 +498,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -515,8 +522,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -546,8 +553,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -573,8 +580,8 @@ public struct FetchOne<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - statement: The statement to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -611,11 +618,11 @@ extension FetchOne: Equatable where Value: Equatable {
   extension FetchOne: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      let persisted = state.wrappedValue
-      if persisted !== box {
-        persisted.adoptIfNeeded(from: box)
-      }
-      persisted.observeForSwiftUI(generation: generation)
+      state.wrappedValue.update(
+        declared: box,
+        database: environmentDatabase,
+        generation: generation
+      )
     }
 
     /// Creates a property observing the first row of a table, delivering changes with an

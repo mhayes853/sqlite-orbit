@@ -185,21 +185,33 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
     try base.cursor(for: query.fragment, cached: cached)
   }
 
-  /// Runs a query to completion and reports how many rows it changed.
+  /// How many rows the most recent statement on this connection inserted, updated, or deleted.
+  ///
+  /// See ``OrbitDatabaseWriteTransaction/changesCount``: the count belongs to the connection this
+  /// transaction borrows, so read it inside the access that wrote.
+  public var changesCount: Int {
+    Int(base.library.pointee.connections.changes(base.connection))
+  }
+
+  /// The rowid of the most recent successful insert on this connection.
+  ///
+  /// See ``OrbitDatabaseWriteTransaction/lastInsertedRowID``: the rowid belongs to the connection
+  /// this transaction borrows, so read it inside the access that inserted.
+  public var lastInsertedRowID: Int64 {
+    base.library.pointee.connections.lastInsertedRowID(base.connection)
+  }
+
+  /// Runs a query to completion, discarding any rows it returns.
+  ///
+  /// A query that builds no SQL runs nothing at all, so it leaves ``changesCount`` reporting
+  /// whatever the statement before it changed.
   ///
   /// - Parameter query: The query to run. Any rows it returns are stepped past and discarded.
-  /// - Returns: The number of rows inserted, updated, or deleted, and `0` for a query that builds
-  ///   no SQL at all.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  @discardableResult
-  public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws -> Int
-  {
-    // A statement that builds no SQL changes nothing. Running the empty-query stand-in would leave
-    // `changes` reporting whatever the previous statement changed.
-    guard !query.fragment.isEmpty else { return 0 }
+  public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
+    guard !query.fragment.isEmpty else { return }
     var cursor = try base.cursor(for: query.fragment, cached: false)
     while try cursor.next() != nil {}
-    return Int(base.library.pointee.connections.changes(base.connection))
   }
 
   /// Runs SQL that the query builder does not model, such as schema changes.

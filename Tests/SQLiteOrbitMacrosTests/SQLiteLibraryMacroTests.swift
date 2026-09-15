@@ -8,7 +8,8 @@ struct SQLiteLibraryMacroTests {
     "",
     "apis: . /* defaults */ standard",
     "apis: [.standard, /* trailing comment */]",
-    "apis: [.trustedSchema, .authorizer, .scalarFunctions, .aggregateFunctions, .collations]"
+    "apis: [.trustedSchema, .authorizer, .scalarFunctions, .aggregateFunctions, .collations,"
+      + " .busyHandler]"
   ])
   func unqualifiedLibrary(arguments: String) {
     assertMacro {
@@ -30,9 +31,10 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: sqlite3_extended_result_codes,
           setBusyTimeout: sqlite3_busy_timeout,
           interrupt: sqlite3_interrupt,
-          changes: sqlite3_changes,
+          changes: sqlite3_changes64,
           lastInsertedRowID: sqlite3_last_insert_rowid,
-          isAutocommit: sqlite3_get_autocommit
+          isAutocommit: sqlite3_get_autocommit,
+          walCheckpoint: sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -76,6 +78,7 @@ struct SQLiteLibraryMacroTests {
           name: sqlite3_column_name
         ),
         authorizer: SQLiteLibrary.Authorizer(install: sqlite3_set_authorizer),
+        busyHandler: SQLiteLibrary.BusyHandler(install: sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
           try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
         },
@@ -172,9 +175,10 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: SQLCipher.sqlite3_extended_result_codes,
           setBusyTimeout: SQLCipher.sqlite3_busy_timeout,
           interrupt: SQLCipher.sqlite3_interrupt,
-          changes: SQLCipher.sqlite3_changes,
+          changes: SQLCipher.sqlite3_changes64,
           lastInsertedRowID: SQLCipher.sqlite3_last_insert_rowid,
-          isAutocommit: SQLCipher.sqlite3_get_autocommit
+          isAutocommit: SQLCipher.sqlite3_get_autocommit,
+          walCheckpoint: SQLCipher.sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -218,6 +222,7 @@ struct SQLiteLibraryMacroTests {
           name: SQLCipher.sqlite3_column_name
         ),
         authorizer: SQLiteLibrary.Authorizer(install: SQLCipher.sqlite3_set_authorizer),
+        busyHandler: SQLiteLibrary.BusyHandler(install: SQLCipher.sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
           try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
         },
@@ -314,9 +319,10 @@ struct SQLiteLibraryMacroTests {
           setExtendedResultCodes: TursoSQLite3.sqlite3_extended_result_codes,
           setBusyTimeout: TursoSQLite3.sqlite3_busy_timeout,
           interrupt: TursoSQLite3.sqlite3_interrupt,
-          changes: TursoSQLite3.sqlite3_changes,
+          changes: TursoSQLite3.sqlite3_changes64,
           lastInsertedRowID: TursoSQLite3.sqlite3_last_insert_rowid,
-          isAutocommit: TursoSQLite3.sqlite3_get_autocommit
+          isAutocommit: TursoSQLite3.sqlite3_get_autocommit,
+          walCheckpoint: TursoSQLite3.sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -360,6 +366,7 @@ struct SQLiteLibraryMacroTests {
           name: TursoSQLite3.sqlite3_column_name
         ),
         authorizer: nil,
+        busyHandler: nil,
         trustedSchema: nil,
         scalarFunctions: nil,
         aggregateFunctions: nil,

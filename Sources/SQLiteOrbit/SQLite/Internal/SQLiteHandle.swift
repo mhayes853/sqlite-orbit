@@ -64,8 +64,7 @@ struct SQLiteHandle: ~Copyable {
         connection: pointer,
         authorizer: authorizer,
         statements: statements,
-        busyTimeout: configurationStorage.pointee.busyTimeout,
-        isForeignKeysEnabled: configurationStorage.pointee.isForeignKeysEnabled
+        configuration: configurationStorage
       )
     )
     self.settings = settings
@@ -146,6 +145,9 @@ struct SQLiteHandle: ~Copyable {
       pointer,
       configuration.busyTimeout.milliseconds
     )
+    // Last of the two, since SQLite keeps one busy handler and the timeout is one: a configuration
+    // that sets both waits by the handler.
+    try installBusyHandler()
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     let connection = SQLiteConnectionAccess(handle: self)
     if let trustedSchema = libraryStorage.pointee.trustedSchema {
@@ -163,6 +165,24 @@ struct SQLiteHandle: ~Copyable {
     }
     for sql in configuration.setupSQL + driverSetupSQL {
       try execute(sql)
+    }
+  }
+
+  private borrowing func installBusyHandler() throws {
+    guard configurationStorage.pointee.busyHandler != nil else { return }
+    guard libraryStorage.pointee.busyHandler != nil else {
+      throw SQLiteFeatureUnavailableError(
+        libraryName: libraryStorage.pointee.name,
+        feature: .busyHandler
+      )
+    }
+    let code = SQLiteBusyHandlerInstallation.install(
+      on: pointer,
+      library: library,
+      configuration: configurationStorage
+    )
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
     }
   }
 
@@ -324,6 +344,8 @@ struct SQLiteHandle: ~Copyable {
     _ body: (UnsafePointer<SQLiteHandle>, SQLiteConnectionState) throws -> Result
   ) throws -> Result {
     let state = SQLiteConnectionState()
+    // Declared before the handler below is installed, so that it runs after the handler has been
+    // taken back off: the rollback is itself transaction control, which the handler would refuse.
     defer {
       // The handler below only sees statements as they are prepared, so one the cache prepared
       // where transaction control was allowed, such as inside a `transaction`, can still open a
@@ -393,35 +415,17 @@ struct SQLiteHandle: ~Copyable {
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
     let (sql, bindings) = prepareQuery(query)
-    var statement: OpaquePointer?
-    let code = sql.withCString {
-      library.pointee.statements.preparation.prepare(
-        connection,
-        $0,
-        -1,
-        0,
-        &statement,
-        nil
+    guard let statement = try library.pointee.prepare(sql, on: connection) else {
+      throw SQLiteError.reported(
+        by: library.pointee,
+        on: connection,
+        code: SQLiteResultCode.ok.rawValue,
+        sql: sql
       )
     }
-    guard code == SQLiteResultCode.ok.rawValue, let statement else {
-      if let statement {
-        _ = library.pointee.statements.execution.finalize(statement)
-      }
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
-    }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
-
-    for (offset, binding) in bindings.enumerated() {
-      try bind(binding, to: statement, at: Int32(offset + 1), library: library)
-    }
-    var stepCode = library.pointee.statements.execution.step(statement)
-    while stepCode == SQLiteResultCode.row.rawValue {
-      stepCode = library.pointee.statements.execution.step(statement)
-    }
-    guard stepCode == SQLiteResultCode.done.rawValue else {
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)
-    }
+    try bind(bindings, to: statement, library: library)
+    try stepToCompletion(statement, on: connection, library: library, sql: sql)
   }
 
   static func execute(
@@ -489,14 +493,46 @@ struct SQLiteHandle: ~Copyable {
           observations.didChange(in: preparedStatement.changedRegion)
         }
 
-        var stepCode = library.pointee.statements.execution.step(statement)
-        while stepCode == SQLiteResultCode.row.rawValue {
-          stepCode = library.pointee.statements.execution.step(statement)
-        }
-        guard stepCode == SQLiteResultCode.done.rawValue else {
-          throw SQLiteError.reported(by: library.pointee, on: connection, code: stepCode, sql: sql)
-        }
+        try stepToCompletion(statement, on: connection, library: library, sql: sql)
       }
     }
+  }
+
+  // Steps past every row the statement produces, which is how a statement run for its effect is
+  // run to its end.
+  private static func stepToCompletion(
+    _ statement: OpaquePointer,
+    on connection: OpaquePointer,
+    library: UnsafePointer<SQLiteLibrary>,
+    sql: String
+  ) throws {
+    var code: Int32
+    repeat {
+      code = library.pointee.statements.execution.step(statement)
+    } while code == SQLiteResultCode.row.rawValue
+    guard code == SQLiteResultCode.done.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: sql)
+    }
+  }
+}
+
+extension SQLiteLibrary {
+  // Compiles the first statement in `sql`, or returns `nil` when it holds none, as a comment or
+  // whitespace does. SQLite can hand back a statement even when it reports a failure, so one is
+  // finalized here rather than left for the caller to leak.
+  func prepare(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32 = 0
+  ) throws -> OpaquePointer? {
+    var statement: OpaquePointer?
+    let code = sql.withCString {
+      statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      if let statement { _ = statements.execution.finalize(statement) }
+      throw SQLiteError.reported(by: self, on: connection, code: code, sql: sql)
+    }
+    return statement
   }
 }

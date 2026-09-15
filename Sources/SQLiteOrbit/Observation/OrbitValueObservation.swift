@@ -51,6 +51,7 @@ extension OrbitValueObservationChange: Hashable where Value: Hashable {}
 
 private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
+  case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
   case query(QueryFragment)
 
@@ -58,17 +59,44 @@ private enum OrbitValueObservationRegionSource: Sendable {
     guard case .constant(let region) = self else { return nil }
     return region
   }
+
+  /// Runs `fetch`, working out the region it read the way this source says to.
+  func fetch(
+    _ fetch: OrbitValueObservationFetch,
+    in transaction: borrowing SQLiteReadTransaction,
+    firstFetchRegion: OrbitValueObservationFirstFetchRegion
+  ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
+    switch self {
+    case .automatic:
+      return try Self.fetchRecordingRegion(fetch, in: transaction)
+    case .constantOnFirstFetch:
+      if let region = firstFetchRegion.region { return (try fetch(transaction), region) }
+      let output = try Self.fetchRecordingRegion(fetch, in: transaction)
+      firstFetchRegion.record(output.region)
+      return output
+    case .constant(let region):
+      return (try fetch(transaction), region)
+    case .query(let query):
+      return (try fetch(transaction), try OrbitDatabaseRegion(query, in: transaction))
+    }
+  }
+
+  private static func fetchRecordingRegion(
+    _ fetch: OrbitValueObservationFetch,
+    in transaction: borrowing SQLiteReadTransaction
+  ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
+    let recorder = OrbitValueObservationReadRegionRecorder()
+    let payload = try transaction.withObserver(recorder) {
+      try fetch(transaction)
+    }
+    return (payload, recorder.region)
+  }
 }
 
 private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
   let externalDependencies: ExternalDependencies?
-}
-
-private struct OrbitValueObservationUntrackedFetchOutput: Sendable {
-  let payload: any Sendable
-  let region: OrbitDatabaseRegion
 }
 
 private final class OrbitValueObservationReadRegionRecorder:
@@ -90,6 +118,26 @@ private typealias OrbitValueObservationFetch =
 
 private typealias OrbitValueObservationRuntimeFetch =
   @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitValueObservationFetchOutput
+
+/// The region an observation recorded the first time it fetched, for it to reuse afterwards.
+///
+/// One of these belongs to one runtime rather than to the observation it came from, because the
+/// same observation subscribed to two databases is two schemas, and a region recorded against one
+/// says nothing about the other.
+private final class OrbitValueObservationFirstFetchRegion: Sendable {
+  private let recorded = Lock<OrbitDatabaseRegion?>(nil)
+
+  var region: OrbitDatabaseRegion? {
+    recorded.withLock { $0 }
+  }
+
+  func record(_ region: OrbitDatabaseRegion) {
+    recorded.withLock { recorded in
+      guard recorded == nil else { return }
+      recorded = region
+    }
+  }
+}
 
 private enum OrbitValueObservationReduction<Value: Sendable>: Sendable {
   case emit(Value)
@@ -130,9 +178,10 @@ private struct OrbitValueObservationEvents: Sendable {
 /// have changed.
 ///
 /// An observation is a description, not a running process: nothing is read until you start it
-/// with ``subscribe(to:onError:onChange:)``, ``changes(in:)``, or ``values(in:)``. Every
-/// subscriber to the same observation value and database shares one runtime, so a chain built
-/// once and started twice fetches once and hands the same value to both.
+/// with ``subscribe(to:isolation:onError:onChange:)``, ``changes(in:bufferingPolicy:)``, or
+/// ``values(in:bufferingPolicy:)``. Every subscriber to the same observation value and database
+/// shares one runtime, so a chain built once and started twice fetches once and hands the same
+/// value to both.
 ///
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
@@ -187,6 +236,36 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .automatic, fetch)
+  }
+
+  /// Creates an observation whose value is produced by `fetch`, watching whatever the first
+  /// fetch read.
+  ///
+  /// ``tracking(_:)`` works out the region to watch on every fetch, because a fetch is free to
+  /// read a different part of the database each time it runs. When it is not — when the fetch
+  /// reads the same tables whatever the data says — that is a read authorizer installed and a
+  /// region built for an answer already known. This records the region the first fetch read and
+  /// watches it from then on, so every later fetch is the query and nothing else.
+  ///
+  /// Use it only when the fetch's reads do not depend on what it finds. A fetch that reads one
+  /// table and then, depending on a row it found there, reads a second is not one of these: the
+  /// second table would go unwatched whenever the first fetch happened not to reach it, and a
+  /// write to it would be missed. ``tracking(region:_:)`` says the same thing ahead of time, for
+  /// a fetch whose region you already know.
+  ///
+  /// ```swift
+  /// let incompleteCount = OrbitValueObservation.trackingConstantRegion { transaction in
+  ///   try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
+  /// }
+  /// ```
+  ///
+  /// - Parameter fetch: Reads the observed value from a transaction, reading the same tables
+  ///   every time.
+  /// - Returns: An observation that produces whatever `fetch` returns.
+  public static func trackingConstantRegion(
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .constantOnFirstFetch, fetch)
   }
 
   /// Creates an observation whose value is produced by `fetch` and whose region is supplied by
@@ -853,6 +932,60 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
+  /// Observes for as long as the calling task runs, delivering each change to `onChange`.
+  ///
+  /// This is the observation as a piece of work rather than as a token or a sequence: it belongs
+  /// to the task that called it, it keeps that task busy, and cancelling the task ends both. That
+  /// is what makes it the shape to hand a task group or a `.task` modifier, which have a task to
+  /// spend and nowhere to store a subscription.
+  ///
+  /// ``values(in:bufferingPolicy:)`` describes the same observation as a sequence, and differs in
+  /// who waits on whom: its consumer asks for the next value and the sequence buffers whatever
+  /// arrives in between, while this delivers every change through `scheduler` the moment the
+  /// observation produces it, with nothing buffered and no consumer to fall behind.
+  ///
+  /// ```swift
+  /// .task {
+  ///   try? await observation.subscribe(to: database, scheduling: .mainActor) { change in
+  ///     reminders = change.value
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - scheduler: Decides where and when `onChange` runs.
+  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - onChange: Receives each observed change.
+  /// - Throws: Whatever registering a transaction observer on `database` throws, or the error that
+  ///   ends the observation. Cancelling the calling task returns rather than throwing.
+  public func subscribe<
+    Database: OrbitObservableDatabase,
+    Scheduler: OrbitValueObservationScheduler
+  >(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)? = #isolation,
+    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
+  ) async throws {
+    let completion = OrbitOneShotSignal()
+    let subscription = try subscribe(
+      to: database,
+      scheduling: scheduler,
+      isolation: isolation,
+      onError: { error in completion.finish(.failure(error)) },
+      onChange: onChange
+    )
+    defer { subscription.cancel() }
+    try await withTaskCancellationHandler {
+      try await completion.wait()
+    } onCancel: {
+      // Stop observing the moment the task is cancelled, not when it gets around to returning.
+      subscription.cancel()
+      completion.finish(.success(()))
+    }
+  }
+
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
   /// The observation starts when iteration begins and ends when the iterator is released.
@@ -923,6 +1056,42 @@ extension OrbitValueObservation where Value: Equatable {
   /// - Returns: An observation that emits a value only when it differs from the last one emitted.
   public func removeDuplicates() -> Self {
     removeDuplicates(by: ==)
+  }
+}
+
+/// A one-shot signal that something waited on has finished, and how.
+///
+/// A task-scoped observation ends with the error that ended it or with the cancellation that
+/// ended its task, and a fetch property's explicit load ends with its first result or with the
+/// cancellation of the task awaiting it. Either can race the other, so the first to finish the
+/// signal is the one the waiter sees and the other is dropped. Waiting does not watch for
+/// cancellation itself, because what a cancellation means is up to the waiter.
+final class OrbitOneShotSignal: Sendable {
+  private enum State {
+    case waiting(CheckedContinuation<Void, any Error>?)
+    case finished(Result<Void, any Error>)
+  }
+
+  private let state = Lock(State.waiting(nil))
+
+  func wait() async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      let result = state.withLock { state -> Result<Void, any Error>? in
+        if case .finished(let result) = state { return result }
+        state = .waiting(continuation)
+        return nil
+      }
+      if let result { continuation.resume(with: result) }
+    }
+  }
+
+  func finish(_ result: Result<Void, any Error>) {
+    let continuation = state.withLock { state -> CheckedContinuation<Void, any Error>? in
+      guard case .waiting(let continuation) = state else { return nil }
+      state = .finished(result)
+      return continuation
+    }
+    continuation?.resume(with: result)
   }
 }
 
@@ -1024,6 +1193,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var refetches = OrbitValueObservationRefetchCoordinator()
     var isRefetching = false
     var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
+    var refetchCommits: [OrbitDatabaseCommit] = []
     var affectedRegion: OrbitDatabaseRegion?
     var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
     var subscribers = OrbitValueObservationSubscriberRegistry<Value>()
@@ -1031,6 +1201,15 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
     init(observedRegion: OrbitDatabaseRegion?) {
       self.observedRegion = observedRegion
+    }
+
+    /// Forgets the invalidations a refetch controller would otherwise be told about, once a fetch
+    /// that covers all of them has been accepted.
+    mutating func dropOutstandingInvalidations() {
+      refetchReasons.removeAll()
+      refetchCommits.removeAll()
+      affectedRegion = nil
+      activeWriterBarriers.removeAll()
     }
   }
 
@@ -1052,39 +1231,14 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     reducer: OrbitValueObservationReducer<Value>
   ) {
     let externalTracking = ExternalTracking()
+    let firstFetchRegion = OrbitValueObservationFirstFetchRegion()
     self.reducer = reducer
     self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
-    let resolveDatabaseRegionAndFetch:
-      @Sendable (
-        borrowing SQLiteReadTransaction
-      ) throws -> OrbitValueObservationUntrackedFetchOutput = { transaction in
-        switch regionSource {
-        case .automatic:
-          let recorder = OrbitValueObservationReadRegionRecorder()
-          let payload = try transaction.withObserver(recorder) {
-            try fetch(transaction)
-          }
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: payload,
-            region: recorder.region
-          )
-        case .constant(let region):
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: try fetch(transaction),
-            region: region
-          )
-        case .query(let query):
-          return OrbitValueObservationUntrackedFetchOutput(
-            payload: try fetch(transaction),
-            region: try OrbitDatabaseRegion(query, in: transaction)
-          )
-        }
-      }
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
       let capture = try externalTracking.capture {
-        try resolveDatabaseRegionAndFetch(transaction)
+        try regionSource.fetch(fetch, in: transaction, firstFetchRegion: firstFetchRegion)
       }
       return OrbitValueObservationFetchOutput(
         payload: capture.output.payload,
@@ -1166,7 +1320,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   // MARK: - Initial value
 
   func fetchInitialValueIfNeeded() {
-    let request = state.withLock { state -> OrbitValueObservationReadRequest? in
+    let request = state.withLock { state -> OrbitValueObservationFetchRequest? in
       guard !state.isStopped else { return nil }
       return state.reads.requireInitialRead()
     }
@@ -1218,7 +1372,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     }
     guard let affectedRegion else { return }
     let commit = OrbitDatabaseCommit(origin: .local, region: affectedRegion)
-    guard transactionNeedsFetch(commit) else { return }
+    guard reducer.transactionNeedsFetch(commit) else { return }
 
     events.willFetch()
     let result = Result { try fetch(transaction) }
@@ -1229,8 +1383,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-    switch commit.origin {
-    case .local:
+    // A local commit this runtime saw coming was either fetched inside its transaction or judged
+    // irrelevant there. Any other commit is refetched after the fact.
+    if commit.origin == .local {
       let pending = state.withLock { state in
         defer { state.pendingLocal = nil }
         return state.pendingLocal
@@ -1243,27 +1398,18 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         publishLocal(result)
         return
       case nil:
-        guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
-        events.databaseDidChange()
-        requestRefetch(
-          source: .transaction(.local),
-          reason: .databaseChange,
-          affectedRegion: affectedRegion,
-          activeWriterBarrier: commit.activeWriterBarrier
-        )
-        return
+        break
       }
-
-    case .external:
-      guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
-      events.databaseDidChange()
-      requestRefetch(
-        source: .transaction(.external),
-        reason: .externalProcessChange,
-        affectedRegion: affectedRegion,
-        activeWriterBarrier: nil
-      )
     }
+
+    guard let affectedRegion = committedTransactionAffectedRegion(commit) else { return }
+    events.databaseDidChange()
+    requestRefetch(
+      source: .transaction(commit.origin),
+      reason: commit.origin == .local ? .databaseChange : .externalProcessChange,
+      affectedRegion: affectedRegion,
+      activeWriterBarrier: commit.activeWriterBarrier
+    )
   }
 
   func databaseDidRollback() {
@@ -1277,10 +1423,6 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     discard(pending)
   }
 
-  private func transactionNeedsFetch(_ commit: OrbitDatabaseCommit) -> Bool {
-    reducer.transactionNeedsFetch(commit)
-  }
-
   private func committedTransactionAffectedRegion(
     _ commit: OrbitDatabaseCommit
   ) -> OrbitDatabaseRegion? {
@@ -1290,7 +1432,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.transactionRegion = nil
       return (state.observedRegion ?? .fullDatabase).overlaps(region) ? region : nil
     }
-    guard let affectedRegion, transactionNeedsFetch(commit) else { return nil }
+    guard let affectedRegion, reducer.transactionNeedsFetch(commit) else { return nil }
     return affectedRegion
   }
 
@@ -1309,9 +1451,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       // also satisfies an older external invalidation whose read has not completed yet.
       state.reads.supersedePendingRead()
       state.refetches.supersedePendingFetch()
-      state.refetchReasons.removeAll()
-      state.affectedRegion = nil
-      state.activeWriterBarriers.removeAll()
+      state.dropOutstandingInvalidations()
       return acceptance.delivery
     }
     deliver(delivery, from: nil)
@@ -1326,34 +1466,42 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     activeWriterBarrier: SQLitePoolWriterBarrier?
   ) {
     let action = state.withLock { state -> (
-      initialRequest: OrbitValueObservationReadRequest?,
-      startController: Bool
+      initialRequest: OrbitValueObservationFetchRequest?,
+      controllerRevision: UInt64?
     ) in
-      guard !state.isStopped else { return (nil, false) }
+      guard !state.isStopped else { return (nil, nil) }
 
-      // Until the initial value is established, the existing revision loop makes that fetch cover
-      // every invalidation and avoids publishing a refetch before the initial value.
-      guard state.reads.initialFetchCompleted else {
-        return (state.reads.requireRead(source: source), false)
-      }
-
-      state.refetches.require(source: source)
+      // Recorded whether or not a controller will see them, so that one running later is told the
+      // truth about what is outstanding. Accepting the initial value drops them again.
       state.refetchReasons.insert(reason)
+      if case .transaction(let origin) = source, let affectedRegion {
+        state.refetchCommits.append(OrbitDatabaseCommit(origin: origin, region: affectedRegion))
+      }
       if let affectedRegion {
         state.affectedRegion = state.affectedRegion?.union(affectedRegion) ?? affectedRegion
       }
       if let activeWriterBarrier {
         state.activeWriterBarriers.append(activeWriterBarrier)
       }
-      guard !state.isRefetching else { return (nil, false) }
+
+      // Until the initial value is established, the existing revision loop makes that fetch cover
+      // every invalidation and avoids publishing a refetch before the initial value.
+      guard state.reads.initialFetchCompleted else {
+        return (state.reads.requireRead(source: source), nil)
+      }
+
+      state.refetches.require(source: source)
+      guard !state.isRefetching else { return (nil, nil) }
       state.isRefetching = true
-      return (nil, true)
+      return (nil, state.refetches.invalidationRevision)
     }
     start(action.initialRequest)
-    if action.startController { startRefetching() }
+    if let controllerRevision = action.controllerRevision {
+      startRefetching(startedAt: controllerRevision)
+    }
   }
 
-  private func startRefetching() {
+  private func startRefetching(startedAt invalidationRevision: UInt64) {
     let operation = OrbitValueObservationRefetchOperation(
       snapshot: { [weak self] in
         self?.refetchSnapshot()
@@ -1361,7 +1509,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
             hasActiveWriters: false,
             affectedRegion: nil,
             trackedRegion: nil,
-            reasons: []
+            reasons: [],
+            commits: []
           )
       },
       wait: { [weak self] in
@@ -1376,7 +1525,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     Task { [weak self, refetchController] in
       let context = OrbitValueObservationRefetchContext(operation: operation)
       await refetchController.refetch(using: consume context)
-      self?.finishRefetching(conclusively: operation.didConclude)
+      self?.finishRefetching(conclusively: operation.didConclude, startedAt: invalidationRevision)
     }
   }
 
@@ -1386,7 +1535,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         hasActiveWriters: state.activeWriterBarriers.contains { $0.hasActiveWriters },
         affectedRegion: state.affectedRegion,
         trackedRegion: state.observedRegion,
-        reasons: state.refetchReasons
+        reasons: state.refetchReasons,
+        commits: state.refetchCommits
       )
     }
   }
@@ -1402,7 +1552,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     publishing behavior: OrbitValueObservationPublicationBehavior
   ) async -> OrbitValueObservationFetchResult {
     guard
-      let request = state.withLock({ state -> OrbitValueObservationRefetchRequest? in
+      let request = state.withLock({ state -> OrbitValueObservationFetchRequest? in
         guard !state.isStopped else { return nil }
         return state.refetches.beginFetch()
       })
@@ -1436,9 +1586,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
 
       state.refetches.finishPublishedFetch()
-      state.refetchReasons.removeAll()
-      state.affectedRegion = nil
-      state.activeWriterBarriers.removeAll()
+      state.dropOutstandingInvalidations()
       if acceptance.requiresObservableRefetch {
         state.refetches.require(source: .observable)
         state.refetchReasons.insert(.observableChange)
@@ -1449,21 +1597,24 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     return completed.result
   }
 
-  private func finishRefetching(conclusively: Bool) {
-    let shouldRestart = state.withLock { state in
+  private func finishRefetching(conclusively: Bool, startedAt invalidationRevision: UInt64) {
+    let restartRevision = state.withLock { state -> UInt64? in
       state.isRefetching = false
-      guard
-        !state.isStopped,
-        conclusively,
-        state.refetches.hasPendingFetch
-      else { return false }
+      guard !state.isStopped, state.refetches.hasPendingFetch else { return nil }
+      // A controller that reached a conclusive fetch did what it was asked and is run again for
+      // whatever arrived since. One that returned without ever concluding is only run again when
+      // there is something new for it to look at, so a controller that never fetches raises the
+      // invalidation it was given once and then stops, rather than spinning.
+      guard conclusively || state.refetches.invalidationRevision != invalidationRevision else {
+        return nil
+      }
       state.isRefetching = true
-      return true
+      return state.refetches.invalidationRevision
     }
-    if shouldRestart { startRefetching() }
+    if let restartRevision { startRefetching(startedAt: restartRevision) }
   }
 
-  private func start(_ request: OrbitValueObservationReadRequest?) {
+  private func start(_ request: OrbitValueObservationFetchRequest?) {
     guard let request else { return }
     Task { [weak self] in
       guard let self else { return }
@@ -1475,10 +1626,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
   private func completeRead(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
-    request: OrbitValueObservationReadRequest
+    request: OrbitValueObservationFetchRequest
   ) {
     let completed = state.withLock {
-      state -> (OrbitValueObservationDelivery, OrbitValueObservationReadRequest?) in
+      state -> (OrbitValueObservationDelivery, OrbitValueObservationFetchRequest?) in
       guard !state.isStopped else {
         discard(result)
         return (.idle, nil)
@@ -1511,7 +1662,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
       guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
-      state.reads.completeInitialFetch()
+      completeInitialFetch(state: &state)
       state.observedRegion = output.region
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
@@ -1525,7 +1676,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         outcome = .failure(error)
       }
     case .failure(let error):
-      state.reads.completeInitialFetch()
+      completeInitialFetch(state: &state)
       outcome = .failure(error)
     }
 
@@ -1549,11 +1700,21 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     )
   }
 
+  /// Marks the initial read done, dropping the invalidations it answered.
+  ///
+  /// Every invalidation raised before the initial value forced that read to run again, so the one
+  /// finally accepted covers all of them and a controller running afterwards must not see them.
+  private func completeInitialFetch(state: inout State) {
+    guard !state.reads.initialFetchCompleted else { return }
+    state.reads.completeInitialFetch()
+    state.dropOutstandingInvalidations()
+  }
+
   private func discard(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>
   ) {
     guard case .success(let output) = result else { return }
-    externalTracking.discard(output.externalDependencies)
+    output.externalDependencies?.cancel()
   }
 
   private func discard(_ pending: PendingLocal?) {

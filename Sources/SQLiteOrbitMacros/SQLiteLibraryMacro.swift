@@ -11,13 +11,15 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     case aggregateFunctions
     case collations
     case encryption
+    case busyHandler
 
     static let standard: Set<Self> = [
       .trustedSchema,
       .authorizer,
       .scalarFunctions,
       .aggregateFunctions,
-      .collations
+      .collations,
+      .busyHandler
     ]
   }
 
@@ -43,13 +45,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
         module = name
 
       case "apis":
-        do {
-          apis = try parseAPIs(argument.expression)
-        } catch let message as MacroExpansionErrorMessage {
-          throw DiagnosticsError(
-            diagnostics: [Diagnostic(node: argument.expression, message: message)]
-          )
-        }
+        apis = try parseAPIs(argument.expression)
 
       default:
         throw diagnostic(
@@ -60,63 +56,54 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     }
 
     let qualifier = module.map { "\($0)." } ?? ""
-    let trustedSchema: ExprSyntax =
-      if apis.contains(.trustedSchema) {
-        """
-        { connection, enabled in
-          try connection.execute("PRAGMA trusted_schema = \\(raw: enabled ? 1 : 0)")
-        }
-        """
-      } else {
-        "nil"
+    // An API the build was not said to implement is left out, which is what makes its group `nil`.
+    func group(_ api: API, _ expression: @autoclosure () -> ExprSyntax) -> ExprSyntax {
+      apis.contains(api) ? expression() : "nil"
+    }
+    let callbacksArgument = labeledArgument("callbacks", functionCallbacks(qualifier: qualifier))
+    let trustedSchema = group(
+      .trustedSchema,
+      """
+      { connection, enabled in
+        try connection.execute("PRAGMA trusted_schema = \\(raw: enabled ? 1 : 0)")
       }
-    let authorizer: ExprSyntax =
-      if apis.contains(.authorizer) {
-        "SQLiteLibrary.Authorizer(install: \(raw: qualifier)sqlite3_set_authorizer)"
-      } else {
-        "nil"
-      }
-    let callbacks = functionCallbacks(qualifier: qualifier)
-    let callbacksArgument = labeledArgument("callbacks", callbacks)
-    let scalarFunctions: ExprSyntax =
-      if apis.contains(.scalarFunctions) {
-        """
-        SQLiteLibrary.ScalarFunctions(
-          register: \(raw: qualifier)sqlite3_create_function_v2,
-          \(callbacksArgument)
-        )
-        """
-      } else {
-        "nil"
-      }
-    let aggregateFunctions: ExprSyntax =
-      if apis.contains(.aggregateFunctions) {
-        """
-        SQLiteLibrary.AggregateFunctions(
-          register: \(raw: qualifier)sqlite3_create_function_v2,
-          context: \(raw: qualifier)sqlite3_aggregate_context,
-          \(callbacksArgument)
-        )
-        """
-      } else {
-        "nil"
-      }
-    let collation: ExprSyntax =
-      if apis.contains(.collations) {
-        "SQLiteLibrary.Collations(create: \(raw: qualifier)sqlite3_create_collation_v2)"
-      } else {
-        "nil"
-      }
-    let encryption: ExprSyntax =
-      if apis.contains(.encryption) {
-        "SQLiteLibrary.Encryption(key: \(raw: qualifier)sqlite3_key_v2, rekey: \(raw: qualifier)sqlite3_rekey_v2)"
-      } else {
-        "nil"
-      }
-    let trustedSchemaArgument = labeledArgument("trustedSchema", trustedSchema)
-    let scalarFunctionsArgument = labeledArgument("scalarFunctions", scalarFunctions)
-    let aggregateFunctionsArgument = labeledArgument("aggregateFunctions", aggregateFunctions)
-
+      """
+    )
+    let authorizer = group(
+      .authorizer,
+      "SQLiteLibrary.Authorizer(install: \(raw: qualifier)sqlite3_set_authorizer)"
+    )
+    let busyHandler = group(
+      .busyHandler,
+      "SQLiteLibrary.BusyHandler(install: \(raw: qualifier)sqlite3_busy_handler)"
+    )
+    let scalarFunctions = group(
+      .scalarFunctions,
+      """
+      SQLiteLibrary.ScalarFunctions(
+        register: \(raw: qualifier)sqlite3_create_function_v2,
+        \(callbacksArgument)
+      )
+      """
+    )
+    let aggregateFunctions = group(
+      .aggregateFunctions,
+      """
+      SQLiteLibrary.AggregateFunctions(
+        register: \(raw: qualifier)sqlite3_create_function_v2,
+        context: \(raw: qualifier)sqlite3_aggregate_context,
+        \(callbacksArgument)
+      )
+      """
+    )
+    let collation = group(
+      .collations,
+      "SQLiteLibrary.Collations(create: \(raw: qualifier)sqlite3_create_collation_v2)"
+    )
+    let encryption = group(
+      .encryption,
+      "SQLiteLibrary.Encryption(key: \(raw: qualifier)sqlite3_key_v2, rekey: \(raw: qualifier)sqlite3_rekey_v2)"
+    )
     return """
       SQLiteLibrary(
         runtime: SQLiteLibrary.Runtime(
@@ -131,9 +118,10 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           setExtendedResultCodes: \(raw: qualifier)sqlite3_extended_result_codes,
           setBusyTimeout: \(raw: qualifier)sqlite3_busy_timeout,
           interrupt: \(raw: qualifier)sqlite3_interrupt,
-          changes: \(raw: qualifier)sqlite3_changes,
+          changes: \(raw: qualifier)sqlite3_changes64,
           lastInsertedRowID: \(raw: qualifier)sqlite3_last_insert_rowid,
-          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit
+          isAutocommit: \(raw: qualifier)sqlite3_get_autocommit,
+          walCheckpoint: \(raw: qualifier)sqlite3_wal_checkpoint_v2
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
@@ -177,9 +165,10 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
           name: \(raw: qualifier)sqlite3_column_name
         ),
         authorizer: \(authorizer),
-        \(trustedSchemaArgument),
-        \(scalarFunctionsArgument),
-        \(aggregateFunctionsArgument),
+        busyHandler: \(busyHandler),
+        \(labeledArgument("trustedSchema", trustedSchema)),
+        \(labeledArgument("scalarFunctions", scalarFunctions)),
+        \(labeledArgument("aggregateFunctions", aggregateFunctions)),
         collations: \(collation),
         encryption: \(encryption)
       )
@@ -220,6 +209,11 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       """
   }
 
+  /// An argument built as syntax rather than interpolated as text.
+  ///
+  /// A multi-line expression interpolated into a call keeps the indentation it was written with,
+  /// which is not the indentation it lands at. Handing the argument over as a node is what lets
+  /// the printer lay it out where it goes.
   private static func labeledArgument(_ label: String, _ expression: ExprSyntax)
     -> LabeledExprSyntax
   {
@@ -231,7 +225,8 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
   }
 
   private static func parseAPIs(_ expression: ExprSyntax) throws -> Set<API> {
-    let invalidExpression = MacroExpansionErrorMessage(
+    let invalidExpression = diagnostic(
+      at: expression,
       "'apis' must be '.standard', '.all', '[]', or an array literal of API members"
     )
     if let member = expression.as(MemberAccessExprSyntax.self),
@@ -260,7 +255,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       case "all": result.formUnion(API.allCases)
       default:
         guard let api = API(rawValue: name) else {
-          throw MacroExpansionErrorMessage("unknown SQLite library API '.\(name)'")
+          throw diagnostic(at: expression, "unknown SQLite library API '.\(name)'")
         }
         result.insert(api)
       }

@@ -32,6 +32,40 @@ public struct OrbitValueObservationRefetchSnapshot: Sendable {
 
   /// The reasons accumulated since the last accepted fetch.
   public let reasons: Set<OrbitValueObservationRefetchReason>
+
+  /// The commits that invalidated the observation since the last accepted fetch, oldest first.
+  ///
+  /// Each says where it was performed, ``OrbitDatabaseTransactionOrigin/local`` for this process
+  /// and ``OrbitDatabaseTransactionOrigin/external`` for a write another process announced, along
+  /// with the part of the database it changed that the observation tracks. ``affectedRegion`` is
+  /// the union of those regions and ``reasons`` says only which kinds arrived, so this is what a
+  /// controller reads to treat the two sources differently: to know whether this process's own
+  /// write is waiting on it, or which source touched what.
+  ///
+  /// A controller that lets this process's writes through at once, but waits out a burst of other
+  /// processes' writes so it costs one fetch, looks like this:
+  ///
+  /// ```swift
+  /// struct DebouncingExternalRefetchController: OrbitValueObservationRefetchController {
+  ///   var delay = Duration.milliseconds(250)
+  ///
+  ///   func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
+  ///     var context = context
+  ///     let commits = context.snapshot().commits
+  ///     if !commits.isEmpty, commits.allSatisfy({ $0.origin == .external }) {
+  ///       try? await Task.sleep(for: delay)
+  ///     }
+  ///     while await context.fetch(publishing: .ifCurrent) == .superseded {}
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// A write made inside a transaction through the handle the observation subscribed to is
+  /// usually answered by a fetch taken just before it commits, so it never reaches a controller.
+  /// The local commits listed here are the rest: writes by another handle on the same database in
+  /// this process, and writes made outside a transaction. A change to an observable value is not a
+  /// commit and is listed only in ``reasons``.
+  public let commits: [OrbitDatabaseCommit]
 }
 
 /// Whether a completed fetch may publish after another invalidation arrives.

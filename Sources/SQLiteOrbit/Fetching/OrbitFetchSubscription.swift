@@ -21,11 +21,12 @@ public struct OrbitFetchSubscription: Sendable {
   /// The property keeps the value it last observed.
   public var task: Void {
     get async throws {
-      let signal = OrbitFetchSignal()
+      let signal = OrbitOneShotSignal()
       try await withTaskCancellationHandler {
         try await signal.wait()
       } onCancel: {
         onCancel()
+        signal.finish(.failure(CancellationError()))
       }
     }
   }

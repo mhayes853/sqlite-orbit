@@ -104,7 +104,7 @@
 
     // Decoding the title as an integer fails partway through the cursor's life.
     try handle.read { transaction in
-      #expect(throws: (any Error).self) {
+      _ = #expect(throws: (any Error).self) {
         _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
       }
     }
@@ -136,6 +136,34 @@
     }
     // A statement that was not reset would start from the second row.
     #expect(titles == ["item 1", "item 2", "item 3"])
+  }
+
+  @Test
+  func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
+    let handle = try openConnection()
+    try handle.write { transaction in
+      for id in 1...4 {
+        try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+      }
+    }
+
+    // `fetchOne` caches its statement and abandons the cursor after a single row, so the very same
+    // statement comes back for the next call, which binds a different value to it.
+    let first = try handle.read { transaction in
+      try transaction.fetchOne(
+        #sql("SELECT title FROM items WHERE id > \(bind: 1) ORDER BY id", as: String.self)
+      )
+    }
+    let second = try handle.read { transaction in
+      try transaction.fetchOne(
+        #sql("SELECT title FROM items WHERE id > \(bind: 3) ORDER BY id", as: String.self)
+      )
+    }
+
+    #expect(first == "item 2")
+    // A statement still carrying the first call's binding, or still standing on its second row,
+    // would answer with something else.
+    #expect(second == "item 4")
   }
 
   @Test
@@ -520,7 +548,7 @@
     #expect(asInt64 == [Int64.max])
 
     let asInt = try handle.read { transaction in
-      try Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
+      Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
     }
     if Int.bitWidth == 64 {
       #expect(try asInt.get() == [Int(Int64.max)])

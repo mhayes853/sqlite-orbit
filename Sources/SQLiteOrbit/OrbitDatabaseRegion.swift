@@ -148,7 +148,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   public init<TableType: Table>(_ table: TableType.Type) {
     self.init(
       table: TableType.tableName,
-      schema: TableType.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: TableType.sqliteSchemaName
     )
   }
 
@@ -159,7 +159,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     self.init(
       column: column.name,
       in: Column.Root.tableName,
-      schema: Column.Root.schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: Column.Root.sqliteSchemaName
     )
   }
 
@@ -173,31 +173,26 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     includesUnspecifiedTables && tableRegions.isEmpty
   }
 
+  /// The region of a table not listed in `tableRegions`.
+  private var unspecifiedTableRegion: TableRegion {
+    includesUnspecifiedTables ? .full : .empty
+  }
+
   private func combining(
     _ other: Self,
     with operation: (Bool, Bool) -> Bool
   ) -> Self {
-    let includesUnspecifiedTables = operation(
-      includesUnspecifiedTables,
-      other.includesUnspecifiedTables
-    )
-    let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
-    let selfDefaultTableRegion: TableRegion = self.includesUnspecifiedTables ? .full : .empty
-    let otherDefaultTableRegion: TableRegion = other.includesUnspecifiedTables ? .full : .empty
-
     var tableRegions: [TableIdentifier: TableRegion] = [:]
     for table in Set(self.tableRegions.keys).union(other.tableRegions.keys) {
-      let tableRegion = (self.tableRegions[table] ?? selfDefaultTableRegion)
-        .combining(
-          other.tableRegions[table] ?? otherDefaultTableRegion,
-          with: operation
-        )
-      if tableRegion != defaultTableRegion {
-        tableRegions[table] = tableRegion
-      }
+      tableRegions[table] = (self.tableRegions[table] ?? unspecifiedTableRegion)
+        .combining(other.tableRegions[table] ?? other.unspecifiedTableRegion, with: operation)
     }
+    // The initializer drops every table that ends up matching the combined default.
     return Self(
-      includesUnspecifiedTables: includesUnspecifiedTables,
+      includesUnspecifiedTables: operation(
+        includesUnspecifiedTables,
+        other.includesUnspecifiedTables
+      ),
       tableRegions: tableRegions
     )
   }
@@ -215,7 +210,6 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The region to add.
   public mutating func formUnion(_ other: Self) {
-    guard self != other, !other.isEmpty, !isFullDatabase else { return }
     self = union(other)
   }
 
@@ -347,7 +341,7 @@ extension Table {
     OrbitDatabaseRegion(
       columns: Self.columns[keyPath: column]._names,
       in: tableName,
-      schema: schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: sqliteSchemaName
     )
   }
 
@@ -370,7 +364,7 @@ extension Table {
     return OrbitDatabaseRegion(
       columns: names,
       in: tableName,
-      schema: schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
+      schema: sqliteSchemaName
     )
   }
 
@@ -380,6 +374,11 @@ extension Table {
   /// same region.
   public var databaseRegion: OrbitDatabaseRegion {
     Self.databaseRegion
+  }
+
+  /// The schema this table declares, or ``SQLiteSchemaName/main`` when it declares none.
+  static var sqliteSchemaName: SQLiteSchemaName {
+    schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
   }
 }
 

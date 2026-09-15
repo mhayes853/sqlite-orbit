@@ -765,12 +765,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func contains(
     where predicate: (Element) throws -> Bool
   ) throws -> Bool {
-    while let value = try next() {
-      if try predicate(value) {
-        return true
-      }
-    }
-    return false
+    try first(where: predicate) != nil
   }
 
   /// Returns whether every remaining value matches a predicate.
@@ -782,12 +777,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func allSatisfy(
     _ predicate: (Element) throws -> Bool
   ) throws -> Bool {
-    while let value = try next() {
-      if try !predicate(value) {
-        return false
-      }
-    }
-    return true
+    try !contains { try !predicate($0) }
   }
 
   /// Returns the number of remaining values.
@@ -915,17 +905,9 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func max(
     by areInIncreasingOrder: (Element, Element) throws -> Bool
   ) throws -> Element? {
-    var result: Element?
-    try forEach { value in
-      guard let current = result else {
-        result = value
-        return
-      }
-      if try areInIncreasingOrder(current, value) {
-        result = value
-      }
-    }
-    return result
+    // The largest value under an ordering is the smallest under its reverse, and reversing keeps
+    // the first of several equal values, exactly as `min` does.
+    try min { try areInIncreasingOrder($1, $0) }
   }
 
   /// Returns the minimum and maximum remaining values, or `nil` if the cursor is empty.

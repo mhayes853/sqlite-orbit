@@ -51,6 +51,34 @@ struct OrbitValueObservationSchedulerTests {
     #expect(didRun.withLock { $0 })
   }
 
+  @MainActor
+  @Test
+  func asyncSchedulerDoesNotRunAnInlineCallbackAheadOfQueuedOnes() async throws {
+    let scheduler = OrbitAsyncValueObservationScheduler.async(on: MainActor.shared)
+    let values = Lock([Int]())
+
+    // Nothing here suspends, so the task draining the queued callback cannot reach the main actor
+    // before the inline one is scheduled.
+    scheduler.schedule(from: nil) { values.withLock { $0.append(1) } }
+    scheduler.schedule(from: MainActor.shared) { values.withLock { $0.append(2) } }
+
+    try await waitUntil { values.withLock { $0.count == 2 } }
+    #expect(values.withLock { $0 } == [1, 2])
+  }
+
+  @MainActor
+  @Test
+  func mainActorSchedulerDoesNotRunAnInlineCallbackAheadOfQueuedOnes() async throws {
+    let scheduler = OrbitMainActorValueObservationScheduler.mainActor
+    let values = Lock([Int]())
+
+    scheduler.schedule(from: nil) { values.withLock { $0.append(1) } }
+    scheduler.schedule(from: MainActor.shared) { values.withLock { $0.append(2) } }
+
+    try await waitUntil { values.withLock { $0.count == 2 } }
+    #expect(values.withLock { $0 } == [1, 2])
+  }
+
   @Test
   func asyncSchedulerWithoutAnActorDefersItsInitialValue() {
     let scheduler = OrbitAsyncValueObservationScheduler.async()

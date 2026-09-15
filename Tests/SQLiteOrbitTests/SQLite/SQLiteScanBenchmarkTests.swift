@@ -26,7 +26,7 @@
         "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
       )
       for id in 1...rowCount {
-        _ = try transaction.execute(
+        try transaction.execute(
           Item.insert { Item(id: id, title: "row \(id)", amount: Double(id) / 3) }
         )
       }

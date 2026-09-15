@@ -39,6 +39,45 @@ public struct SQLiteError: Error, Hashable, Sendable {
     code.primary
   }
 
+  /// Whether the statement failed because another connection held a lock it needed.
+  ///
+  /// This is the error worth retrying: nothing was wrong with the statement, it simply lost a race
+  /// for the database, and the same work may succeed once the other connection finishes. It covers
+  /// `SQLITE_BUSY`, which another connection or process causes, and `SQLITE_LOCKED`, which a
+  /// conflict within the same connection or with one sharing its cache causes, along with every
+  /// extended code of either, such as the `SQLITE_BUSY_SNAPSHOT` a stale WAL read transaction
+  /// gets on trying to write.
+  ///
+  /// ```swift
+  /// do {
+  ///   try await database.write { try $0.execute(Reminder.delete()) }
+  /// } catch let error as SQLiteError where error.isBusy {
+  ///   // Try again later.
+  /// }
+  /// ```
+  ///
+  /// A connection's busy timeout or busy handler has already waited before this is thrown, so a
+  /// retry that happens at once is unlikely to fare better.
+  public var isBusy: Bool {
+    primaryCode == .busy || primaryCode == .locked
+  }
+
+  /// Whether the statement stopped because it was interrupted with `sqlite3_interrupt`.
+  ///
+  /// Unlike ``isBusy``, this is not a failure to retry: something asked for the work to stop, and
+  /// it did. A database's own accesses already report their task's cancellation as a
+  /// `CancellationError` instead, so this is seen from work run through
+  /// ``SQLiteTransaction/sqliteConnection`` or a connection interrupted by other means.
+  ///
+  /// ```swift
+  /// catch let error as SQLiteError where error.isInterruption {
+  ///   // The work was cancelled, not failed. Report nothing.
+  /// }
+  /// ```
+  public var isInterruption: Bool {
+    primaryCode == .interrupt
+  }
+
   @usableFromInline
   static func reported(
     by library: borrowing SQLiteLibrary,

@@ -20,16 +20,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// The row this cursor lends.
   public typealias Row = SQLiteRow
 
-  @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 
-  @usableFromInline
-  let statement: OpaquePointer
-
-  @usableFromInline
   let connection: OpaquePointer
 
-  @usableFromInline
   let sql: String
 
   let statements: SQLiteStatementCache
@@ -38,11 +32,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   var preparedStatement: SQLitePreparedStatement
 
+  // What SQLite steps. A statement recompiled on its first step keeps its pointer and has only
+  // its metadata replaced.
+  var statement: OpaquePointer { preparedStatement.pointer }
+
   let authorizer: SQLiteAuthorizerDispatcher
 
   let observations: OrbitDatabaseTransactionObservationContext
 
-  @usableFromInline
   var isExhausted = false
 
   var didPublishAccesses = false
@@ -61,9 +58,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     let statement = preparedStatement.pointer
     do {
-      for (offset, binding) in bindings.enumerated() {
-        try bind(binding, to: statement, at: Int32(offset + 1), library: library)
-      }
+      try bind(bindings, to: statement, library: library)
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
       if cached {
@@ -74,7 +69,6 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       throw error
     }
     self.library = library
-    self.statement = statement
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
@@ -117,7 +111,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
           ?? SQLitePreparedStatement(
             pointer: statement,
             authorizations: authorizations,
-            cacheGeneration: statements.currentGeneration,
+            cacheGeneration: statements.generation,
             statements: statements,
             connection: connection,
             authorizer: authorizer,

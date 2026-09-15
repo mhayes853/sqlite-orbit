@@ -120,7 +120,7 @@ func waitUntil(
       // Kept rather than discarded: a helper that fails says why here, and the test waiting on it
       // can only say that nothing happened.
       let log = self.file("h-\(self.processes.count).log")
-      FileManager.default.createFile(atPath: log.path, contents: nil)
+      _ = FileManager.default.createFile(atPath: log.path, contents: nil)
       let output = try FileHandle(forWritingTo: log)
       process.standardOutput = output
       process.standardError = output

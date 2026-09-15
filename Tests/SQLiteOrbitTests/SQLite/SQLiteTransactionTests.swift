@@ -62,7 +62,7 @@
   }
 
   @Test
-  func executeReportsTheNumberOfChangedRows() throws {
+  func changesCountReportsTheRowsTheLastStatementChanged() throws {
     let connection = try openTestConnection()
     try connection.write { transaction in
       for id in 1...3 {
@@ -72,8 +72,46 @@
 
     let changed = try connection.write { transaction in
       try transaction.execute(Item.update { $0.title = "changed" })
+      return transaction.changesCount
     }
     #expect(changed == 3)
+  }
+
+  @Test
+  func changesCountForgetsWhatTheStatementBeforeTheLastOneChanged() throws {
+    let connection = try openTestConnection()
+    let counts = try connection.write { transaction -> [Int] in
+      var counts: [Int] = []
+      try transaction.execute(
+        #sql("INSERT INTO items (id, title) VALUES (1, 'a'), (2, 'b'), (3, 'c')", as: Void.self)
+      )
+      counts.append(transaction.changesCount)
+      try transaction.execute(Item.where { $0.id.eq(1) }.delete())
+      counts.append(transaction.changesCount)
+      return counts
+    }
+    #expect(counts == [3, 1])
+  }
+
+  @Test
+  func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
+    let connection = try openTestConnection()
+    let (before, first, second, afterDelete) = try connection.write {
+      transaction -> (Int64, Int64, Int64, Int64) in
+      // A connection that has never inserted has no rowid to report.
+      let before = transaction.lastInsertedRowID
+      try transaction.execute(#sql("INSERT INTO items (title) VALUES ('a')", as: Void.self))
+      let first = transaction.lastInsertedRowID
+      try transaction.execute(#sql("INSERT INTO items (title) VALUES ('b')", as: Void.self))
+      let second = transaction.lastInsertedRowID
+      // A statement that inserts nothing leaves the previous rowid in place.
+      try transaction.execute(Item.where { $0.id.eq(1) }.delete())
+      return (before, first, second, transaction.lastInsertedRowID)
+    }
+    #expect(before == 0)
+    #expect(first == 1)
+    #expect(second == 2)
+    #expect(afterDelete == 2)
   }
 
   @Test

@@ -108,7 +108,9 @@
     private let registry: OrbitIPCEndpointRegistry
     private let socket: UnixDatagramSocket
     private let handlers: OrbitIPCHandlers
-    private let receiver: Lock<DispatchSourceRead?>
+    // Only `deinit` touches the source after it is resumed, and dispatch sources are safe to
+    // cancel from any thread, so this needs no lock of its own.
+    private nonisolated(unsafe) let receiver: DispatchSourceRead
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -166,21 +168,26 @@
           handlers.receive(message)
         }
       }
+      // Dispatch keeps watching the descriptor until cancellation completes, which happens after
+      // `cancel()` returns. Closing it any earlier would leave the source watching a descriptor
+      // number the process is free to hand to the next file it opens.
+      receiver.setCancelHandler { socket.close() }
+
       self.configuration = configuration
       self.registry = registry
       self.socket = socket
       self.handlers = handlers
+      self.receiver = receiver
       receiver.resume()
-      self.receiver = Lock(receiver)
     }
 
     deinit {
+      // Everything a peer finds this endpoint by goes now, so one that looks in the coordination
+      // directory after this transport is released finds nothing of it. The descriptor itself is
+      // closed by the cancel handler, which dispatch runs once it has stopped watching it.
       self.handlers.shutdown()
-      self.receiver.withLock {
-        $0?.cancel()
-        $0 = nil
-      }
-      self.socket.close()
+      self.socket.removePath()
+      self.receiver.cancel()
     }
 
     /// Subscribes to messages concerning `databaseIdentifier`.
@@ -415,9 +422,9 @@
         guard !state.isShutdown else {
           throw OrbitIPCSystemError(operation: "transport is closed", code: EBADF)
         }
-        if !state.handlers.contains(databaseIdentifier),
-          !self.isRegistered(databaseIdentifier, in: state)
-        {
+        // Checked before the handler is added, so this asks whether anything was subscribed
+        // before it.
+        if !self.isAdvertised(databaseIdentifier, in: state) {
           try self.registry.register(databaseIdentifier: databaseIdentifier)
         }
         return state.handlers.insert(handler, for: databaseIdentifier).identifier
@@ -426,8 +433,9 @@
 
     func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
       self.state.withLock { state in
-        guard state.handlers.remove(identifier, for: databaseIdentifier),
-          !self.isRegistered(databaseIdentifier, in: state)
+        // Checked after the handler is gone, so this asks whether anything is subscribed still.
+        guard state.handlers.remove(identifier, for: databaseIdentifier).isLastForKey,
+          !self.isAdvertised(databaseIdentifier, in: state)
         else { return }
         try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
       }
@@ -446,22 +454,23 @@
         state.isShutdown = true
         return state.handlers.removeAll()
       }
-      var unregisteredKeys = Set<String>()
-      for databaseIdentifier in databaseIdentifiers
-      where unregisteredKeys.insert(self.registry.registrationKey(for: databaseIdentifier)).inserted
-      {
+      // Withdrawing the same advertisement twice, as two identifiers sharing a coordination key
+      // do, removes a marker file that is already gone, which the registry treats as done.
+      for databaseIdentifier in databaseIdentifiers {
         try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
       }
     }
 
-    private func isRegistered(
+    /// Whether this endpoint's advertisement for a database is one it owes to some handler.
+    ///
+    /// One marker stands for every identifier sharing a coordination key, so the advertisement
+    /// belongs to all of their handlers rather than to any one of them.
+    private func isAdvertised(
       _ databaseIdentifier: OrbitDatabaseIdentifier,
       in state: State
     ) -> Bool {
-      let key = self.registry.registrationKey(for: databaseIdentifier)
-      return state.handlers.keys.contains {
-        $0 != databaseIdentifier && self.registry.registrationKey(for: $0) == key
-      }
+      let key = databaseIdentifier.coordinationKey
+      return state.handlers.keys.contains { $0.coordinationKey == key }
     }
   }
 

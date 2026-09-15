@@ -35,7 +35,41 @@ public struct SQLiteConfiguration: Sendable {
   /// A database shared between processes needs this: without it an overlapping write fails
   /// outright rather than queueing. An access may change it for its own duration through
   /// ``SQLiteWriteConnection/busyTimeout`` or ``SQLiteReadConnection/busyTimeout``.
+  ///
+  /// A ``busyHandler`` takes precedence over this. SQLite implements the timeout as a busy handler
+  /// of its own and keeps only one per connection, so a configuration that sets both waits by the
+  /// handler and never by the timeout.
   public var busyTimeout: SQLiteBusyTimeout
+
+  /// Decides, each time a lock is still held, whether to keep waiting for it.
+  ///
+  /// This is the general form of ``busyTimeout``: rather than a fixed deadline, the handler is
+  /// asked again on every attempt and answers `true` to wait and try once more or `false` to give
+  /// up, which is what surfaces `SQLITE_BUSY` to the statement. It is the hook for backing off,
+  /// for giving up on a deadline of the caller's own, and for reporting contention.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.busyHandler = { attempt in
+  ///   guard attempt <= 50 else { return false }
+  ///   Thread.sleep(forTimeInterval: 0.01)
+  ///   return true
+  /// }
+  /// ```
+  ///
+  /// The handler is invoked on the thread that is running the blocked statement, with `attempt`
+  /// counting from `1` and rising for as long as that one statement keeps waiting. It must not
+  /// touch the connection it was blocked on.
+  ///
+  /// Since SQLite keeps a single busy handler per connection and implements `busyTimeout` as one,
+  /// setting this takes precedence: a connection opened with both installs the handler last, so
+  /// the timeout never applies. An access that changes
+  /// ``SQLiteWriteConnection/busyTimeout`` replaces the handler for its own duration, and the
+  /// handler is reinstalled when the access ends along with the configured timeout.
+  ///
+  /// Setting this for a ``SQLiteLibrary`` without ``SQLiteLibrary/busyHandler`` fails the open with
+  /// ``SQLiteFeatureUnavailableError``.
+  public var busyHandler: (@Sendable (_ attempt: Int) -> Bool)?
 
   /// Whether foreign key enforcement is turned on.
   ///
@@ -67,6 +101,8 @@ public struct SQLiteConfiguration: Sendable {
   ///   - setupSQL: SQL run on every connection once it has been configured.
   ///   - connectionSetups: Native callbacks installed on every connection.
   ///   - key: The key an encrypted database is unlocked with.
+  ///   - busyHandler: Decides on each attempt whether to keep waiting for a lock, in place of
+  ///     `busyTimeout`.
   public init(
     library: SQLiteLibrary,
     readerCount: Int = 5,
@@ -76,12 +112,14 @@ public struct SQLiteConfiguration: Sendable {
     maximumCachedStatements: Int = 64,
     setupSQL: [String] = [],
     connectionSetups: [SQLiteConnectionSetup] = [],
-    key: SQLiteKey? = nil
+    key: SQLiteKey? = nil,
+    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil
   ) {
     self.library = library
     self.key = key
     self.readerCount = readerCount
     self.busyTimeout = busyTimeout
+    self.busyHandler = busyHandler
     self.isForeignKeysEnabled = isForeignKeysEnabled
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
@@ -150,23 +188,13 @@ extension SQLiteConfiguration {
   public mutating func register(
     collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
   ) {
-    connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.collations != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .collations
-            )
-          }
-          return orbitInstall(
-            collation: collation,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
-          )
-        }
+    register(.collations, providedBy: \.collations) { connection in
+      orbitInstall(
+        collation: collation,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
       )
-    )
+    }
   }
 
   /// Registers a scalar function on every connection opened with this configuration.
@@ -183,23 +211,13 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-    connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.scalarFunctions != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .scalarFunctions
-            )
-          }
-          return orbitInstall(
-            function: function,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
-          )
-        }
+    register(.scalarFunctions, providedBy: \.scalarFunctions) { connection in
+      orbitInstall(
+        function: function,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
       )
-    )
+    }
   }
 
   /// Registers an aggregate function on every connection opened with this configuration.
@@ -211,22 +229,37 @@ extension SQLiteConfiguration {
   ///
   /// - Parameter function: The function to install. Its name is what SQL calls it by.
   public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+    register(.aggregateFunctions, providedBy: \.aggregateFunctions) { connection in
+      orbitInstall(
+        function: function,
+        on: connection.sqliteConnection,
+        library: connection.sqlite
+      )
+    }
+  }
+
+  /// Adds a setup that installs something on every connection, on a build that has the entry
+  /// points to install it with.
+  ///
+  /// - Parameters:
+  ///   - feature: The operation the build has to provide, named by the error it is refused with.
+  ///   - group: The entry points it installs with, which a build without them leaves `nil`.
+  ///   - install: Installs on the connection and returns the build's result code.
+  private mutating func register<Group>(
+    _ feature: SQLiteLibraryFeature,
+    providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
+    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
+  ) {
     connectionSetups.append(
-      SQLiteConnectionSetup(
-        install: { connection in
-          guard connection.sqlite.aggregateFunctions != nil else {
-            throw SQLiteFeatureUnavailableError(
-              libraryName: connection.sqlite.name,
-              feature: .aggregateFunctions
-            )
-          }
-          return orbitInstall(
-            function: function,
-            on: connection.sqliteConnection,
-            library: connection.sqlite
+      SQLiteConnectionSetup { connection in
+        guard connection.sqlite[keyPath: group] != nil else {
+          throw SQLiteFeatureUnavailableError(
+            libraryName: connection.sqlite.name,
+            feature: feature
           )
         }
-      )
+        return install(connection)
+      }
     )
   }
 }

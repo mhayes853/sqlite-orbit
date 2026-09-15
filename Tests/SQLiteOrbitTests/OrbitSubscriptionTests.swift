@@ -68,10 +68,13 @@ struct HandlerRegistryTests {
     // Identifiers are unique across keys, so one key's removal cannot disturb another's.
     #expect(first.identifier != other.identifier)
     #expect(handlers == [1, 2])
-    #expect(!afterFirst)
-    #expect(afterSecond)
+    #expect(afterFirst.didRemove)
+    #expect(!afterFirst.isLastForKey)
+    #expect(afterSecond.didRemove)
+    #expect(afterSecond.isLastForKey)
     // A removal that finds nothing never reports the key as newly emptied.
-    #expect(!afterRepeat)
+    #expect(!afterRepeat.didRemove)
+    #expect(!afterRepeat.isLastForKey)
     #expect(!stillRegistered)
     #expect(remaining == ["b"])
   }

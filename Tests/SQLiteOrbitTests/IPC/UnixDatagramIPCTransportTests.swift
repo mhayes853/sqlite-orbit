@@ -156,8 +156,9 @@
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
     var subscription: OrbitSubscription? = try first?.subscribe(to: database) { _ in }
-    let firstEndpoint = try #require(registry.peers(databaseIdentifier: database).first)
-      .endpointName
+    let firstEndpoint = try withExtendedLifetime(subscription) {
+      try #require(registry.peers(databaseIdentifier: database).first).endpointName
+    }
 
     subscription = nil
     first = nil
@@ -169,6 +170,30 @@
 
     #expect(secondEndpoint != firstEndpoint)
     _ = secondSubscription
+  }
+
+  @Test
+  func releasingATransportWithdrawsEverythingAPeerFindsItBy() async throws {
+    // The receive source is only done with the socket's descriptor once dispatch has finished
+    // cancelling it, which is after the transport is gone. Neither of the things a peer looks the
+    // endpoint up by — its marker and its socket path — may wait for that.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let database = OrbitDatabaseIdentifier(rawValue: "socket-lifetime")
+
+    var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
+    var subscription: OrbitSubscription? = try transport?.subscribe(to: database) { _ in }
+    let socketPath = try withExtendedLifetime(subscription) {
+      try #require(registry.peers(databaseIdentifier: database).first).socketPath
+    }
+    #expect(FileManager.default.fileExists(atPath: socketPath))
+
+    subscription = nil
+    transport = nil
+
+    #expect(try registry.peers(databaseIdentifier: database).isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: socketPath))
   }
 
   @Test

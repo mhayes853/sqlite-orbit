@@ -175,7 +175,7 @@
       }
       try await waitUntil { transport.didBeginSending }
       write.cancel()
-      try await write.value
+      _ = try await write.value
 
       #expect(transport.messages.count == 1)
       #expect(failures.withLock { $0 } == 0)

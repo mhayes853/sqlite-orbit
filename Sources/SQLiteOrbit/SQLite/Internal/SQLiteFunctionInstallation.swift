@@ -5,13 +5,14 @@ func orbitInstall(
   on connection: OpaquePointer?,
   library: SQLiteLibrary
 ) -> Int32 {
-  collation.name.withCString { name in
+  let box = Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation)
+  let code = collation.name.withCString { name in
     library.collations!
       .create(
         connection,
         name,
         SQLiteFunctionFlags.utf8.rawValue,
-        Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation),
+        box,
         { box, lhsCount, lhs, rhsCount, rhs in
           // A comparator is handed its user data directly, so it is the one callback that needs
           // nothing from the build that called it.
@@ -28,6 +29,12 @@ func orbitInstall(
         { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
       )
   }
+  // A registration that fails takes the collation with it, and SQLite only calls the destructor
+  // of one that succeeded — unlike `sqlite3_create_function_v2`, which calls it either way.
+  if code != SQLiteResultCode.ok.rawValue {
+    Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release(box)
+  }
+  return code
 }
 
 func orbitInstall(

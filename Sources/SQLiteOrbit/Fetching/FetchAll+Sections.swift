@@ -39,8 +39,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: [Element] = [],
@@ -73,8 +73,8 @@ extension FetchAll {
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: SelectStatement>(
     wrappedValue: [Element] = [],
@@ -105,8 +105,8 @@ extension FetchAll {
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   public init<V: QueryRepresentable, From: Table, each J: Table>(
@@ -138,8 +138,8 @@ extension FetchAll {
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   public init<V: QueryRepresentable, From: Table, J1: Table, each J2: Table>(
@@ -172,8 +172,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -204,8 +204,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -237,8 +237,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - statement: The statement to observe.
   ///   - sectioning: The expression, or an ordering of one, to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -266,6 +266,7 @@ extension FetchAll {
       scheduler: scheduler
     )
   }
+
   /// Creates a property observing every row of a table, grouped by one of its columns.
   ///
   /// ```swift
@@ -275,8 +276,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - sectionKeyPath: A key path to the column to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init(
     wrappedValue: [Element] = [],
@@ -304,8 +305,8 @@ extension FetchAll {
   ///   - wrappedValue: The rows to hold until the first read finishes.
   ///   - statement: The statement to observe.
   ///   - sectionKeyPath: A key path to the column to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   public init<S: SelectStatement>(
     wrappedValue: [Element] = [],
@@ -330,8 +331,8 @@ extension FetchAll {
   /// - Parameters:
   ///   - statement: The statement to observe.
   ///   - sectionKeyPath: A key path to the column to group rows by.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -387,8 +388,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
@@ -412,8 +413,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - sectionKeyPath: A key path to the column to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
@@ -439,8 +440,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
@@ -467,8 +468,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - statement: The statement to observe.
     ///   - sectionKeyPath: A key path to the column to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<S: SelectStatement>(
@@ -496,8 +497,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable, From: Table, each J: Table>(
@@ -524,8 +525,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     ///   - wrappedValue: The rows to hold until the first read finishes.
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init<V: QueryRepresentable, From: Table, J1: Table, each J2: Table>(
@@ -552,8 +553,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -580,8 +581,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - statement: The statement to observe.
     ///   - sectionKeyPath: A key path to the column to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -609,8 +610,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -637,8 +638,8 @@ private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Tab
     /// - Parameters:
     ///   - statement: The statement to observe.
     ///   - sectioning: The expression, or an ordering of one, to group rows by.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)

@@ -3,6 +3,7 @@
   import protocol SwiftUI.DynamicProperty
   import struct SwiftUI.Animation
   import struct SwiftUI.State
+  import struct SwiftUI.Environment
 #endif
 
 /// A property that observes whatever a request reads from a database.
@@ -38,6 +39,8 @@
 ///
 /// The property is populated the first time it is read, and refetches whenever a committed write
 /// touches anything the request read — every region of it, whichever query read it.
+/// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
+/// argument first, then the SwiftUI environment, then the process-wide default.
 /// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
 /// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
@@ -47,6 +50,8 @@ public struct Fetch<Value: Sendable>: Sendable {
     private let box: OrbitFetchStorage<Value>
     private let state: SwiftUI.State<OrbitFetchStorage<Value>>
     private let generation = SwiftUI.State(wrappedValue: 0)
+    // The environment's database, resolved by SwiftUI before `update()` runs.
+    @Environment(\.orbitDatabase) private var environmentDatabase
 
     private var storage: OrbitFetchStorage<Value> { state.wrappedValue }
   #else
@@ -128,8 +133,8 @@ public struct Fetch<Value: Sendable>: Sendable {
   /// - Parameters:
   ///   - wrappedValue: The value to hold until the first read finishes.
   ///   - request: The request to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered. By default they are delivered as they are
   ///     produced, and the first read happens before the property is first read.
   public init(
@@ -154,8 +159,8 @@ public struct Fetch<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - request: The request to observe.
-  ///   - database: The database to read from, or `nil` to read from
-  ///     ``OrbitDefaultDatabase/current``.
+  ///   - database: The database to read from, or `nil` to resolve one the way
+  ///     ``OrbitDefaultDatabase`` describes.
   ///   - scheduler: Where values are delivered.
   /// - Returns: The observation this started.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
@@ -187,11 +192,11 @@ extension Fetch: Equatable where Value: Equatable {
   extension Fetch: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      let persisted = state.wrappedValue
-      if persisted !== box {
-        persisted.adoptIfNeeded(from: box)
-      }
-      persisted.observeForSwiftUI(generation: generation)
+      state.wrappedValue.update(
+        declared: box,
+        database: environmentDatabase,
+        generation: generation
+      )
     }
 
     /// Creates a property observing a request, delivering changes with an animation.
@@ -199,8 +204,8 @@ extension Fetch: Equatable where Value: Equatable {
     /// - Parameters:
     ///   - wrappedValue: The value to hold until the first read finishes.
     ///   - request: The request to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public init(
@@ -221,8 +226,8 @@ extension Fetch: Equatable where Value: Equatable {
     ///
     /// - Parameters:
     ///   - request: The request to observe.
-    ///   - database: The database to read from, or `nil` to read from
-    ///     ``OrbitDefaultDatabase/current``.
+    ///   - database: The database to read from, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
     ///   - animation: The animation applied to every change.
     /// - Returns: The observation this started.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)

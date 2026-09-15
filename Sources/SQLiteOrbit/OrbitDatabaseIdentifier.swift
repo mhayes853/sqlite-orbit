@@ -58,7 +58,11 @@ extension OrbitDatabaseIdentifier {
     guard remainingSymbolicLinks > 0 else { return url.standardizedFileURL }
 
     var existingPrefix = url
+    // Collected from the leaf up, so they go back on in reverse.
     var missingComponents: [String] = []
+    func reattachingMissingComponents(to base: URL) -> URL {
+      missingComponents.reversed().reduce(base) { $0.appending(path: $1) }
+    }
     while true {
       do {
         let values = try existingPrefix.resourceValues(forKeys: [.isSymbolicLinkKey])
@@ -75,21 +79,14 @@ extension OrbitDatabaseIdentifier {
             (destination as NSString).isAbsolutePath
             ? destination
             : parent.path + "/" + destination
-          var target = URL(fileURLWithPath: targetPath)
-          for component in missingComponents.reversed() {
-            target.append(path: component)
-          }
           return canonicalFileURL(
-            target,
+            reattachingMissingComponents(to: URL(fileURLWithPath: targetPath)),
             remainingSymbolicLinks: remainingSymbolicLinks - 1
           )
         }
 
-        var result = existingPrefix.resolvingSymlinksInPath()
-        for component in missingComponents.reversed() {
-          result.append(path: component)
-        }
-        return result.standardizedFileURL
+        return reattachingMissingComponents(to: existingPrefix.resolvingSymlinksInPath())
+          .standardizedFileURL
       } catch {
         let parent = existingPrefix.deletingLastPathComponent()
         guard parent != existingPrefix else { return url.standardizedFileURL }

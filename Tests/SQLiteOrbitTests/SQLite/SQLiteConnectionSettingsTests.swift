@@ -78,7 +78,7 @@
         connection.isForeignKeysEnabled = false
         #expect(wasEnabled && !connection.isForeignKeysEnabled)
         // With enforcement off the orphan is accepted, which the pragma alone would not show.
-        try connection.transaction { transaction in _ = try transaction.execute(orphan) }
+        try connection.transaction { transaction in try transaction.execute(orphan) }
         return try connection.fetchOne(foreignKeys)
       }
       #expect(during == 0)
@@ -363,7 +363,7 @@
 
       probe.isFailing = false
       try await driver.write { transaction in
-        _ = try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       let count = try await driver.read { transaction in
         try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))

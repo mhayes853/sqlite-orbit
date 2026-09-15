@@ -2,10 +2,11 @@
 /// configuration gave it.
 ///
 /// A setting counts as changed for as long as the value in effect on the connection differs from
-/// its configured one. The handle restores every changed setting when an access ends and again,
-/// for whatever could not be restored then, before the next access begins, so no access runs under
-/// a setting an earlier one left behind. Only changes made through here are known: a raw `PRAGMA`
-/// is not tracked.
+/// its configured one. The configuration's busy handler counts too, since setting the busy timeout
+/// is what SQLite replaces it with. The handle restores every changed setting when an access ends
+/// and again, for whatever could not be restored then, before the next access begins, so no access
+/// runs under a setting an earlier one left behind. Only changes made through here are known: a
+/// raw `PRAGMA` is not tracked.
 ///
 /// The handle keeps this in storage of its own rather than inline, since the handle is only ever
 /// borrowed and the settings still have to change.
@@ -14,9 +15,15 @@ struct SQLiteConnectionSettings: ~Copyable {
   private let connection: OpaquePointer
   private let authorizer: SQLiteAuthorizerDispatcher
   private let statements: SQLiteStatementCache
+  private let configuration: UnsafeMutablePointer<SQLiteConfiguration>
 
   private let configuredBusyTimeout: SQLiteBusyTimeout
   private let configuredForeignKeys: Bool
+
+  // Setting the busy timeout replaces the configured busy handler, since SQLite keeps only one of
+  // the two. Restoring the timeout is not enough to undo that, and a timeout set to the configured
+  // value is not a change to restore at all, so the replacement is tracked on its own.
+  private var isBusyHandlerReplaced = false
 
   private(set) var busyTimeout: SQLiteBusyTimeout
 
@@ -39,18 +46,18 @@ struct SQLiteConnectionSettings: ~Copyable {
     connection: OpaquePointer,
     authorizer: SQLiteAuthorizerDispatcher,
     statements: SQLiteStatementCache,
-    busyTimeout: SQLiteBusyTimeout,
-    isForeignKeysEnabled: Bool
+    configuration: UnsafeMutablePointer<SQLiteConfiguration>
   ) {
     self.library = library
     self.connection = connection
     self.authorizer = authorizer
     self.statements = statements
-    self.configuredBusyTimeout = busyTimeout
-    self.configuredForeignKeys = isForeignKeysEnabled
-    self.busyTimeout = busyTimeout
-    self.isForeignKeysEnabled = isForeignKeysEnabled
-    self.appliedForeignKeys = isForeignKeysEnabled
+    self.configuration = configuration
+    self.configuredBusyTimeout = configuration.pointee.busyTimeout
+    self.configuredForeignKeys = configuration.pointee.isForeignKeysEnabled
+    self.busyTimeout = configuration.pointee.busyTimeout
+    self.isForeignKeysEnabled = configuration.pointee.isForeignKeysEnabled
+    self.appliedForeignKeys = configuration.pointee.isForeignKeysEnabled
   }
 
   mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) {
@@ -59,6 +66,7 @@ struct SQLiteConnectionSettings: ~Copyable {
     // reports.
     guard applyBusyTimeout(timeout) == SQLiteResultCode.ok.rawValue else { return }
     busyTimeout = timeout
+    if configuration.pointee.busyHandler != nil { isBusyHandlerReplaced = true }
   }
 
   /// Puts a pending foreign keys change into effect.
@@ -110,6 +118,22 @@ struct SQLiteConnectionSettings: ~Copyable {
         busyTimeout = configuredBusyTimeout
       } else {
         failure = SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+      }
+    }
+    if isBusyHandlerReplaced {
+      // Installed after the timeout, exactly as the open did it, so the connection waits by the
+      // configured handler again rather than by the timeout underneath it.
+      let code = SQLiteBusyHandlerInstallation.install(
+        on: connection,
+        library: library,
+        configuration: configuration
+      )
+      if code == SQLiteResultCode.ok.rawValue {
+        isBusyHandlerReplaced = false
+      } else {
+        failure =
+          failure
+          ?? SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
       }
     }
     if appliedForeignKeys != configuredForeignKeys {

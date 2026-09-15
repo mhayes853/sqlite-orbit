@@ -25,6 +25,7 @@ func structuredQueryExecutionPreservesBindings() async throws {
     try transaction.execute(
       #sql("INSERT INTO reminders (title) VALUES (\(title, as: String.self))", as: Void.self)
     )
+    return transaction.changesCount
   }
 
   #expect(changedRowCount == 1)
@@ -551,7 +552,6 @@ private struct TestReadTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~Es
     self.state = copy state
   }
 
-  @_lifetime(borrow self)
   borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
@@ -571,7 +571,6 @@ private struct TestWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~
     self.state = copy state
   }
 
-  @_lifetime(borrow self)
   borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
@@ -580,7 +579,6 @@ private struct TestWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~
     return TestDatabaseRowCursor(state: state)
   }
 
-  @_lifetime(borrow self)
   borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
     cached: Bool
@@ -589,21 +587,27 @@ private struct TestWriteTransaction: OrbitDatabaseWriteTransaction, ~Copyable, ~
     return TestDatabaseRowCursor(state: state)
   }
 
-  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws -> Int {
+  var changesCount: Int { 1 }
+
+  var lastInsertedRowID: Int64 { 1 }
+
+  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
     state.executedQueries.append(query.fragment)
-    return 1
   }
 }
 
-private struct TestDatabaseRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
+// Escapable and copyable, unlike the cursor a real driver lends: it reads from a class rather than
+// from a statement borrowed from the transaction, so it has no lifetime to depend on. A `~Escapable`
+// conformance would have to give `next()` the protocol's `@_lifetime(&self)`, which an escapable
+// `Row` cannot carry.
+private struct TestDatabaseRowCursor: OrbitDatabaseRowCursor {
   typealias Row = TestDatabaseRow
 
   let state: TestDatabaseState
   var nextIndex = 0
 
-  @_lifetime(borrow state)
-  init(state: borrowing TestDatabaseState) {
-    self.state = copy state
+  init(state: TestDatabaseState) {
+    self.state = state
   }
 
   mutating func next() throws -> TestDatabaseRow? {

@@ -130,4 +130,47 @@
     #expect(ordered == ["ba", "ab"])
     #expect(registrations.withLock { $0 } == 1)
   }
+
+  @Test
+  func aCollationTheLibraryRefusesIsReleasedRatherThanLeaked() {
+    // `sqlite3_create_collation_v2` only calls the destructor of a registration that succeeded,
+    // unlike `sqlite3_create_function_v2`, which calls it either way.
+    let flag = CollationReleaseFlag()
+    openRefusingCollations(CollationReleaseProbe(flag: flag))
+    #expect(flag.isSet)
+  }
+
+  // Everything the failed registration could still be holding onto is local to this function, so
+  // whatever is alive once it returns is alive because SQLite's side of the handshake kept it.
+  private func openRefusingCollations(_ probe: CollationReleaseProbe) {
+    var configuration = SQLiteConfiguration.default
+    configuration.library.collations!.create = { _, _, _, _, _, _ in
+      SQLiteResultCode.error.rawValue
+    }
+    configuration.register(collation: ProbeCollation(probe: probe))
+
+    #expect(throws: (any Error).self) {
+      _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    }
+  }
+
+  private final class CollationReleaseFlag: Sendable {
+    private let released = Lock(false)
+    var isSet: Bool { self.released.withLock { $0 } }
+    func set() { self.released.withLock { $0 = true } }
+  }
+
+  private final class CollationReleaseProbe: Sendable {
+    private let flag: CollationReleaseFlag
+    init(flag: CollationReleaseFlag) { self.flag = flag }
+    deinit { self.flag.set() }
+  }
+
+  private struct ProbeCollation: DatabaseCollation, Sendable {
+    let probe: CollationReleaseProbe
+    var name: String { "probe" }
+    func compare(_ lhs: UnsafeRawBufferPointer, _ rhs: UnsafeRawBufferPointer) -> CollationOrder {
+      .same
+    }
+  }
 #endif

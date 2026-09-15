@@ -98,13 +98,7 @@
         transaction in
         try transaction.recordingDatabaseRegion(body)
       }
-      transactionObservers.didChange(in: region)
-      transactionObservers.didCommit(
-        origin: .local,
-        region: region,
-        activeWriterBarrier: release.activeWriterBarrier
-      )
-      release.finishPublishing()
+      publishCommit(of: region, release: release)
       return result
     }
 
@@ -156,13 +150,7 @@
         transaction in
         try transaction.recordingDatabaseRegion(body)
       }
-      transactionObservers.didChange(in: region)
-      transactionObservers.didCommit(
-        origin: .local,
-        region: region,
-        activeWriterBarrier: release.activeWriterBarrier
-      )
-      release.finishPublishing()
+      publishCommit(of: region, release: release)
       return result
     }
 
@@ -189,6 +177,18 @@
       transactionObserver: any OrbitDatabaseTransactionObserver
     ) throws -> OrbitSubscription {
       transactionObservers.subscribe(transactionObserver)
+    }
+
+    // A concurrent write reports what it changed only once it has committed, and holds back the
+    // older writers' barriers until observers have heard of it.
+    private func publishCommit(of region: OrbitDatabaseRegion, release: SQLitePoolWriterRelease) {
+      transactionObservers.didChange(in: region)
+      transactionObservers.didCommit(
+        origin: .local,
+        region: region,
+        activeWriterBarrier: release.activeWriterBarrier
+      )
+      release.finishPublishing()
     }
   }
 #endif

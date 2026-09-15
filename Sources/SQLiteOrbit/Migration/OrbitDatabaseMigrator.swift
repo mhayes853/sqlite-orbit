@@ -454,8 +454,25 @@ public struct OrbitDatabaseMigrator: Sendable {
       guard try schemaChanges(transaction, reusing: &scratch) else { return }
       // Dropping a table also drops its indexes and triggers, and a virtual table its shadow
       // tables, so the schema is read again after each drop rather than once.
-      while let (type, name) = try firstDroppableObject(in: transaction) {
-        try transaction.execute(SQLQueryExpression("DROP \(raw: type) \(quote: name)"))
+      var dropped: (type: String, name: String)?
+      while let object = try firstDroppableObject(in: transaction) {
+        // An object a `DROP` reports having removed, yet which is still in the schema, would
+        // otherwise be read and dropped forever. A shadow table of a virtual table is the one
+        // SQLite is known to keep, and only while it is willing to compile the statement at all.
+        if let dropped, dropped == object {
+          throw SQLiteError(
+            code: .error,
+            message: """
+              The database cannot be erased: \(object.type) "\(object.name)" is still in the \
+              schema after being dropped.
+              """,
+            sql: "DROP \(object.type) \(object.name)"
+          )
+        }
+        dropped = object
+        try transaction.execute(
+          SQLQueryExpression("DROP \(raw: object.type) \(quote: object.name)")
+        )
       }
       try transaction.execute("PRAGMA user_version = 0")
     }

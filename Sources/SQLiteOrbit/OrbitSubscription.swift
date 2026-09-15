@@ -1,4 +1,5 @@
-/// A cancellable registration with an interprocess transport.
+/// A cancellable registration: a value observation, a transaction observer, or a handler on an
+/// interprocess transport.
 ///
 /// Copies share the same cancellation state. The cancellation closure runs at most once, either
 /// when ``cancel()`` is first called or when the final copy is released — so holding onto the
@@ -67,7 +68,12 @@ struct IdentifiedRegistry<Value: Sendable>: Sendable {
 
   @discardableResult
   mutating func remove(_ identifier: UInt64) -> Bool {
-    self.values.removeValue(forKey: identifier) != nil
+    self.removeValue(identifier) != nil
+  }
+
+  @discardableResult
+  mutating func removeValue(_ identifier: UInt64) -> Value? {
+    self.values.removeValue(forKey: identifier)
   }
 
   mutating func removeAll() -> [Value] {
@@ -99,17 +105,27 @@ struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendab
     return (identifier, isFirstForKey)
   }
 
+  /// Removes a handler.
+  ///
+  /// - Parameters:
+  ///   - identifier: The handler to remove.
+  ///   - key: The key it was inserted for.
+  /// - Returns: Whether a handler was removed, and whether it was the key's last, which is when
+  ///   the key leaves the registry.
   @discardableResult
-  mutating func remove(_ identifier: UInt64, for key: Key) -> Bool {
+  mutating func remove(
+    _ identifier: UInt64,
+    for key: Key
+  ) -> (didRemove: Bool, isLastForKey: Bool) {
     guard var group = self.groups[key], group.removeValue(forKey: identifier) != nil else {
-      return false
+      return (false, false)
     }
     guard group.isEmpty else {
       self.groups[key] = group
-      return false
+      return (true, false)
     }
     self.groups.removeValue(forKey: key)
-    return true
+    return (true, true)
   }
 
   mutating func removeAll() -> [Key] {

@@ -57,22 +57,18 @@
       try Self.remove(marker)
     }
 
-    private static func remove(_ marker: URL) throws {
+    private static func remove(_ url: URL) throws {
       do {
-        try FileManager.default.removeItem(at: marker)
+        try FileManager.default.removeItem(at: url)
       } catch CocoaError.fileNoSuchFile {
       }
-    }
-
-    func registrationKey(for databaseIdentifier: OrbitDatabaseIdentifier) -> String {
-      databaseIdentifier.coordinationKey
     }
 
     private func databaseDirectory(
       for databaseIdentifier: OrbitDatabaseIdentifier
     ) -> URL {
       self.databasesDirectory.appending(
-        path: self.registrationKey(for: databaseIdentifier),
+        path: databaseIdentifier.coordinationKey,
         directoryHint: .isDirectory
       )
     }

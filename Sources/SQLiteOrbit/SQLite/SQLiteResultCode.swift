@@ -2,7 +2,7 @@
 ///
 /// SQLite's numeric codes are part of its stable ABI, so they are declared here rather than
 /// imported. That is what lets ``SQLiteOrbit`` talk to a SQLite build it does not link against.
-/// ``systemConstantsMatchTheSQLiteHeaders()`` checks these values against the linked library.
+/// The package's tests check these values against the headers of the SQLite it links.
 ///
 /// ```swift
 /// catch let error as SQLiteError where error.primaryCode == .constraint {

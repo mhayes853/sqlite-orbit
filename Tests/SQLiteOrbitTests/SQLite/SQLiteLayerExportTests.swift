@@ -9,7 +9,7 @@
     let database = try inMemoryDatabase()
 
     try await database.write { transaction in
-      _ = try transaction.execute(
+      try transaction.execute(
         #sql(
           "CREATE TABLE probes (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)",
           as: Void.self

@@ -35,13 +35,9 @@
     }
   }
 
-  private func makeTempDirectory() throws -> URL {
-    try makeShortTemporaryDirectory("lock")
-  }
-
   @Test
   func openLockMakesASecondAcquisitionWaitForTheFirst() async throws {
-    let directory = try makeTempDirectory()
+    let directory = try makeShortTemporaryDirectory("lock")
     defer { try? FileManager.default.removeItem(at: directory) }
     let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
     let order = Lock([String]())
@@ -72,7 +68,7 @@
 
   @Test
   func openLockDoesNotBlockDifferentDatabases() throws {
-    let directory = try makeTempDirectory()
+    let directory = try makeShortTemporaryDirectory("lock")
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let holder = OpenLockHolder(OrbitDatabaseIdentifier(rawValue: "one"), in: directory)

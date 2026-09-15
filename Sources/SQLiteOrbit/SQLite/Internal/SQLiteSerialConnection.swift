@@ -116,7 +116,7 @@ actor SQLiteSerialConnection {
       } onCancel: {
         token.fire()
       }
-    } catch let error as SQLiteError where error.primaryCode == .interrupt {
+    } catch let error as SQLiteError where error.isInterruption {
       throw CancellationError()
     }
   }

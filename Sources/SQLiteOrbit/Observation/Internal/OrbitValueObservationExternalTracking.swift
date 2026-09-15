@@ -44,10 +44,6 @@ final class ExternalTracking: Sendable {
     return true
   }
 
-  func discard(_ dependencies: ExternalDependencies?) {
-    dependencies?.cancel()
-  }
-
   func stop() {
     let dependencies = activeDependencies.withLock { active in
       defer { active = nil }

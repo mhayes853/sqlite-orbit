@@ -77,11 +77,11 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// }
   /// ```
   ///
-  /// Setting the timeout, and putting the configured one back, both go through
-  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
-  /// installed. An access that leaves this alone keeps such a handler, since the configured
-  /// timeout is only put back after a change, but once it is set the connection waits by the
-  /// configured timeout rather than the handler.
+  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
+  /// handler and which therefore replaces whatever handler the connection had. A
+  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
+  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
+  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     get { handle.pointee.settings.pointee.busyTimeout }
     nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
@@ -224,11 +224,11 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// }
   /// ```
   ///
-  /// Setting the timeout, and putting the configured one back, both go through
-  /// `sqlite3_busy_timeout`, which replaces any busy handler a ``SQLiteConnectionSetup``
-  /// installed. An access that leaves this alone keeps such a handler, since the configured
-  /// timeout is only put back after a change, but once it is set the connection waits by the
-  /// configured timeout rather than the handler.
+  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
+  /// handler and which therefore replaces whatever handler the connection had. A
+  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
+  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
+  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     get { handle.pointee.settings.pointee.busyTimeout }
     nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
@@ -277,6 +277,97 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     }
   }
 
+  /// How many rows the most recent statement on this connection inserted, updated, or deleted.
+  ///
+  /// This is `sqlite3_changes64`, which counts the last statement rather than everything the
+  /// access has run, so reading it after a second ``execute(_:)-(some Statement)`` reports only
+  /// what that second statement changed. A statement that changes nothing, such as a `SELECT` or a
+  /// `CREATE TABLE`, leaves the previous count in place rather than resetting it to zero.
+  ///
+  /// ```swift
+  /// let deleted = try await database.writeWithoutTransaction { connection in
+  ///   try connection.execute(Reminder.where(\.isCompleted).delete())
+  ///   return connection.changesCount
+  /// }
+  /// ```
+  ///
+  /// - Important: The count belongs to the connection, not to this access, and the next access may
+  ///   be lent a different connection. Read it inside the same access as the write it describes.
+  public var changesCount: Int {
+    base.changesCount
+  }
+
+  /// The rowid of the most recent successful insert on this connection.
+  ///
+  /// This is `sqlite3_last_insert_rowid`, which is how a table with an `INTEGER PRIMARY KEY`
+  /// SQLite filled in reports what it chose. A statement that inserts nothing leaves the previous
+  /// rowid in place, and a connection that has never inserted reports `0`.
+  ///
+  /// ```swift
+  /// let id = try await database.writeWithoutTransaction { connection in
+  ///   try connection.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
+  ///   return connection.lastInsertedRowID
+  /// }
+  /// ```
+  ///
+  /// - Important: The rowid belongs to the connection, not to this access, and the next access may
+  ///   be lent a different connection. Read it inside the same access as the insert it describes.
+  public var lastInsertedRowID: Int64 {
+    base.lastInsertedRowID
+  }
+
+  /// Moves the write-ahead log back into the database file.
+  ///
+  /// SQLite checkpoints passively on its own as the log grows, which a steady stream of readers
+  /// can keep from ever finishing. This is how to make it finish, and with
+  /// ``SQLiteWALCheckpointMode/truncate``, how to give the log's disk space back.
+  ///
+  /// ```swift
+  /// let result = try await database.writeWithoutTransaction { connection in
+  ///   try connection.checkpoint(.truncate)
+  /// }
+  /// ```
+  ///
+  /// A database that is not in WAL mode has no log to move, so the checkpoint succeeds having done
+  /// nothing and reports `-1` for both counts. Every mode but ``SQLiteWALCheckpointMode/passive``
+  /// waits for other connections by this connection's busy handler or ``busyTimeout``, and one
+  /// that gives up before it could finish throws `SQLITE_BUSY` rather than report the part it
+  /// did.
+  ///
+  /// - Parameters:
+  ///   - mode: How hard to try. Defaults to ``SQLiteWALCheckpointMode/passive``, which never waits.
+  ///   - schema: The attached database to checkpoint. With `nil`, every attached database in WAL
+  ///     mode is checkpointed, and SQLite does not say which of them the counts describe, so name
+  ///     one when the counts matter.
+  /// - Returns: How many frames the log holds and how many of them are in the database file.
+  /// - Throws: A ``SQLiteError`` when the checkpoint fails or could not finish.
+  public borrowing func checkpoint(
+    _ mode: SQLiteWALCheckpointMode = .passive,
+    schema: SQLiteSchemaName? = nil
+  ) throws -> SQLiteWALCheckpointResult {
+    let library = base.base.library
+    let connection = base.base.connection
+    var logFrameCount: Int32 = -1
+    var checkpointedFrameCount: Int32 = -1
+    func runCheckpoint(_ name: UnsafePointer<CChar>?) -> Int32 {
+      library.pointee.connections.walCheckpoint(
+        connection,
+        name,
+        mode.rawValue,
+        &logFrameCount,
+        &checkpointedFrameCount
+      )
+    }
+    let code = schema.map { $0.rawValue.withCString(runCheckpoint) } ?? runCheckpoint(nil)
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+    }
+    return SQLiteWALCheckpointResult(
+      logFrameCount: Int(logFrameCount),
+      checkpointedFrameCount: Int(checkpointedFrameCount)
+    )
+  }
+
   /// Creates a cursor over the rows a read query returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does.
@@ -295,22 +386,21 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     return try base.rowCursor(query, cached: cached)
   }
 
-  /// Runs a statement to completion, committing it, and reports how many rows it changed.
+  /// Runs a statement to completion, committing it and discarding any rows it returns.
   ///
   /// ```swift
-  /// let deleted = try connection.execute(Reminder.where(\.isCompleted).delete())
+  /// try connection.execute(Reminder.where(\.isCompleted).delete())
+  /// let deleted = connection.changesCount
   /// ```
   ///
   /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
   ///   discarded.
-  /// - Returns: The number of rows the statement inserted, updated, or deleted.
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
-  @discardableResult
-  public borrowing func execute(_ statement: some Statement) throws -> Int {
+  public borrowing func execute(_ statement: some Statement) throws {
     try applyPendingSettings()
     defer { commitPendingChanges() }
-    return try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
+    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
   }
 
   /// Runs SQL that the query builder does not model, such as schema changes and pragmas.

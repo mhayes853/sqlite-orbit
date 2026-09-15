@@ -115,8 +115,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     let (result, region) = try await writer.write { transaction in
       try transaction.recordingDatabaseRegion(body)
     }
-    reportLocalCommit(in: region)
-    await Task { await self.announceCommittedTransaction(in: region) }.value
+    await announce(region)
     return result
   }
 
@@ -141,8 +140,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     let (result, region) = try writer.writeBlocking { transaction in
       try transaction.recordingDatabaseRegion(body)
     }
-    reportLocalCommit(in: region)
-    Task { await self.announceCommittedTransaction(in: region) }
+    announceWithoutWaiting(region)
     return result
   }
 
@@ -212,16 +210,20 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
     let recorder = OrbitDatabaseRegionRecorder()
+    // Whatever committed before a failure stays committed, so the outcome is held rather than
+    // returned or rethrown until the announcement is made. `defer` cannot await.
+    let outcome: Swift.Result<Result, any Error>
     do {
-      let result = try await writer.writeWithoutTransaction { connection in
-        try connection.recordingDatabaseRegion(into: recorder, body)
-      }
-      await announceCommits(recordedBy: recorder)
-      return result
+      outcome = .success(
+        try await writer.writeWithoutTransaction { connection in
+          try connection.recordingDatabaseRegion(into: recorder, body)
+        }
+      )
     } catch {
-      await announceCommits(recordedBy: recorder)
-      throw error
+      outcome = .failure(error)
     }
+    if recorder.hasCommitted { await announce(recorder.committedRegion) }
+    return try outcome.get()
   }
 
   /// Writes to the database outside a transaction synchronously and announces what it commits.
@@ -246,22 +248,30 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ) throws -> Result {
     let recorder = OrbitDatabaseRegionRecorder()
     defer {
-      if recorder.hasCommitted {
-        let region = recorder.committedRegion
-        reportLocalCommit(in: region)
-        Task { await self.announceCommittedTransaction(in: region) }
-      }
+      if recorder.hasCommitted { announceWithoutWaiting(recorder.committedRegion) }
     }
     return try writer.writeWithoutTransactionBlocking { connection in
       try connection.recordingDatabaseRegion(into: recorder, body)
     }
   }
 
-  private func announceCommits(recordedBy recorder: OrbitDatabaseRegionRecorder) async {
-    guard recorder.hasCommitted else { return }
-    let region = recorder.committedRegion
+  /// Tells this process's other handles about a commit, and then this database's peers.
+  ///
+  /// The peer announcement runs in a task of its own because by the time there is anything to
+  /// announce the write is already durable, and cancelling the caller must not be able to leave a
+  /// committed write that no peer ever hears about.
+  private func announce(_ region: OrbitDatabaseRegion) async {
     reportLocalCommit(in: region)
     await Task { await self.announceCommittedTransaction(in: region) }.value
+  }
+
+  /// Announces a commit without waiting for its peers to be told.
+  ///
+  /// This is what a blocking write uses, since transports are asynchronous and it has no
+  /// suspension point to wait at.
+  private func announceWithoutWaiting(_ region: OrbitDatabaseRegion) {
+    reportLocalCommit(in: region)
+    Task { await self.announceCommittedTransaction(in: region) }
   }
 
   private func reportLocalCommit(in region: OrbitDatabaseRegion) {

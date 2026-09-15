@@ -1,4 +1,19 @@
+/// Whether a subscriber is still subscribed, shared by every copy of it.
+///
+/// A publication takes its recipients from the registry and a scheduler can run their callbacks
+/// long afterwards, so cancellation has to be recognized again at the moment a callback would run.
+final class OrbitValueObservationSubscriberLifetime: Sendable {
+  private let isCancelled = Lock(false)
+
+  var isSubscribed: Bool { self.isCancelled.withLock { !$0 } }
+
+  func cancel() {
+    self.isCancelled.withLock { $0 = true }
+  }
+}
+
 struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
+  let lifetime = OrbitValueObservationSubscriberLifetime()
   let scheduler: any OrbitValueObservationScheduler
   let onError: @Sendable (any Error) -> Void
   let onChange: @Sendable (OrbitValueObservationChange<Value>) -> Void
@@ -7,10 +22,12 @@ struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
     _ outcome: Result<OrbitValueObservationChange<Value>, any Error>,
     from isolation: isolated (any Actor)?
   ) {
-    self.scheduler.schedule(from: isolation) {
+    guard self.lifetime.isSubscribed else { return }
+    self.scheduler.schedule(from: isolation) { [lifetime, onError, onChange] in
+      guard lifetime.isSubscribed else { return }
       switch outcome {
-      case .success(let change): self.onChange(change)
-      case .failure(let error): self.onError(error)
+      case .success(let change): onChange(change)
+      case .failure(let error): onError(error)
       }
     }
   }
@@ -21,7 +38,9 @@ struct OrbitValueObservationPublication<Value: Sendable>: Sendable {
   let subscribers: [OrbitValueObservationSubscriber<Value>]
 }
 
-struct OrbitValueObservationReadRequest: Sendable {
+/// A fetch a coordinator handed out: the revision it was issued at, which tells whether it is
+/// still current when it completes, and the source its value is reported with.
+struct OrbitValueObservationFetchRequest: Sendable {
   let revision: UInt64
   let source: OrbitValueObservationSource
 }
@@ -37,7 +56,7 @@ struct OrbitValueObservationReadCoordinator: Sendable {
     self.initialFetchCompleted = true
   }
 
-  mutating func requireInitialRead() -> OrbitValueObservationReadRequest? {
+  mutating func requireInitialRead() -> OrbitValueObservationFetchRequest? {
     guard
       !self.initialFetchCompleted,
       !self.readIsInFlight,
@@ -49,7 +68,7 @@ struct OrbitValueObservationReadCoordinator: Sendable {
   }
 
   mutating func requireRead(source: OrbitValueObservationSource)
-    -> OrbitValueObservationReadRequest?
+    -> OrbitValueObservationFetchRequest?
   {
     self.revision &+= 1
     self.readIsRequired = true
@@ -66,22 +85,17 @@ struct OrbitValueObservationReadCoordinator: Sendable {
     self.readIsRequired = false
   }
 
-  mutating func completeRead(_ request: OrbitValueObservationReadRequest) -> Bool {
+  mutating func completeRead(_ request: OrbitValueObservationFetchRequest) -> Bool {
     self.readIsInFlight = false
     return request.revision == self.revision
   }
 
-  mutating func takeRequestIfPossible() -> OrbitValueObservationReadRequest? {
+  mutating func takeRequestIfPossible() -> OrbitValueObservationFetchRequest? {
     guard self.readIsRequired, !self.readIsInFlight else { return nil }
     self.readIsRequired = false
     self.readIsInFlight = true
-    return OrbitValueObservationReadRequest(revision: self.revision, source: self.requiredSource)
+    return OrbitValueObservationFetchRequest(revision: self.revision, source: self.requiredSource)
   }
-}
-
-struct OrbitValueObservationRefetchRequest: Sendable {
-  let revision: UInt64
-  let source: OrbitValueObservationSource
 }
 
 struct OrbitValueObservationRefetchCoordinator: Sendable {
@@ -92,19 +106,23 @@ struct OrbitValueObservationRefetchCoordinator: Sendable {
 
   var hasPendingFetch: Bool { isRequired && !isFetchInFlight }
 
+  /// Counts the invalidations raised so far, so that a refetch controller's caller can tell
+  /// whether anything new arrived while the controller ran.
+  var invalidationRevision: UInt64 { revision }
+
   mutating func require(source: OrbitValueObservationSource) {
     revision &+= 1
     isRequired = true
     self.source = source
   }
 
-  mutating func beginFetch() -> OrbitValueObservationRefetchRequest? {
+  mutating func beginFetch() -> OrbitValueObservationFetchRequest? {
     guard isRequired, !isFetchInFlight else { return nil }
     isFetchInFlight = true
-    return OrbitValueObservationRefetchRequest(revision: revision, source: source)
+    return OrbitValueObservationFetchRequest(revision: revision, source: source)
   }
 
-  func isCurrent(_ request: OrbitValueObservationRefetchRequest) -> Bool {
+  func isCurrent(_ request: OrbitValueObservationFetchRequest) -> Bool {
     request.revision == revision
   }
 
@@ -151,8 +169,13 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     )
   }
 
+  /// Unsubscribes a subscriber, so that a publication already on its way to it is dropped.
+  ///
+  /// - Returns: Whether that left the observation with no subscribers at all.
   mutating func remove(_ identifier: UInt64) -> Bool {
-    self.subscribers.remove(identifier) && self.subscribers.isEmpty
+    guard let subscriber = self.subscribers.removeValue(identifier) else { return false }
+    subscriber.lifetime.cancel()
+    return self.subscribers.isEmpty
   }
 
   mutating func publish(
