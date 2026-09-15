@@ -25,7 +25,7 @@
           }
         }
 
-        #expect(error?.primaryCode == .busy)
+        #expect(error?.isBusy == true)
         #expect(attempts.withLock { $0 } == [1, 2, 3])
       }
     }
@@ -50,7 +50,7 @@
           }
         }
 
-        #expect(error?.primaryCode == .busy)
+        #expect(error?.isBusy == true)
         #expect(attempts.withLock { $0 } == 1)
         #expect(clock.now - started < .seconds(5))
       }
@@ -83,7 +83,7 @@
         }
 
         // Had the handler not come back, the restored 30 second timeout would have waited instead.
-        #expect(error?.primaryCode == .busy)
+        #expect(error?.isBusy == true)
         #expect(attempts.withLock { $0 } == 1)
         #expect(clock.now - started < .seconds(5))
       }
