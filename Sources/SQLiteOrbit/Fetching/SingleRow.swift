@@ -138,7 +138,8 @@ where
 
   init() {
     let statement: Select<Value, Value, ()> = Value.all.selectStar()
-    self.query = statement
+    self.query =
+      statement
       .find(Value.PrimaryKey(queryOutput: Value.defaultValue.primaryKey))
       .query
   }

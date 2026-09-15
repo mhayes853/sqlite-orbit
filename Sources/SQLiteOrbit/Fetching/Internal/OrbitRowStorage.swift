@@ -49,9 +49,10 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
 
   /// Runs one write against the same database the fetch side resolved.
   func write<Result: Sendable>(
-    _ operation: sending @escaping @Sendable (
-      any OrbitObservableDatabase
-    ) async throws -> sending Result
+    _ operation:
+      sending @escaping @Sendable (
+        any OrbitObservableDatabase
+      ) async throws -> sending Result
   ) async throws -> Result {
     guard let database = fetch.databaseForWriting() else {
       let error = OrbitMissingDefaultDatabaseError()
