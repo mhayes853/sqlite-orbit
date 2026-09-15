@@ -765,12 +765,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func contains(
     where predicate: (Element) throws -> Bool
   ) throws -> Bool {
-    while let value = try next() {
-      if try predicate(value) {
-        return true
-      }
-    }
-    return false
+    try first(where: predicate) != nil
   }
 
   /// Returns whether every remaining value matches a predicate.
@@ -782,12 +777,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   public consuming func allSatisfy(
     _ predicate: (Element) throws -> Bool
   ) throws -> Bool {
-    while let value = try next() {
-      if try !predicate(value) {
-        return false
-      }
-    }
-    return true
+    try !contains { try !predicate($0) }
   }
 
   /// Returns the number of remaining values.
