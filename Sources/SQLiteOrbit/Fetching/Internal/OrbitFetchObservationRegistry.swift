@@ -64,7 +64,9 @@ final class OrbitFetchObservationRegistry: Sendable {
     for id: OrbitFetchRequestID,
     makeObservation: () -> OrbitValueObservation<Value>
   ) -> OrbitFetchObservationBox<Value> {
-    if let existing = existingBox(for: id) as OrbitFetchObservationBox<Value>? { return existing }
+    if let existing = boxes.withLock({ $0[id]?.object() as? OrbitFetchObservationBox<Value> }) {
+      return existing
+    }
     // Built before the lock is taken, and released after it is given back, because releasing a box
     // is what asks the registry to forget one.
     let candidate = OrbitFetchObservationBox(id: id, observation: makeObservation())
@@ -86,11 +88,5 @@ final class OrbitFetchObservationRegistry: Sendable {
       guard boxes[id]?.object() == nil else { return }
       boxes.removeValue(forKey: id)
     }
-  }
-
-  private func existingBox<Value: Sendable>(
-    for id: OrbitFetchRequestID
-  ) -> OrbitFetchObservationBox<Value>? {
-    boxes.withLock { boxes in boxes[id]?.object() as? OrbitFetchObservationBox<Value> }
   }
 }
