@@ -64,11 +64,6 @@ final class RemindersListFormModel {
   }
 }
 
-struct RemindersListFormContext: Identifiable {
-  let id = UUID()
-  var remindersList: RemindersList?
-}
-
 struct RemindersListForm: View {
   @State private var model: RemindersListFormModel
   @State private var photoItem: PhotosPickerItem?

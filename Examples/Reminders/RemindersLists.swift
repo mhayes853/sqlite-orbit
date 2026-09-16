@@ -5,6 +5,19 @@ import TipKit
 
 typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
 
+enum RemindersListsSheet: Identifiable {
+  case reminder(RemindersList)
+  case remindersList(RemindersList?)
+
+  var id: String {
+    switch self {
+    case .reminder(let list): "new-reminder-\(list.id)"
+    case .remindersList(.some(let list)): "edit-list-\(list.id)"
+    case .remindersList(.none): "new-list"
+    }
+  }
+}
+
 @Selection
 nonisolated struct RemindersListSummary: Identifiable, Sendable {
   var id: RemindersList.ID { remindersList.id }
@@ -28,6 +41,7 @@ final class RemindersListsModel {
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
   var errorMessage: String?
+  var presentedSheet: RemindersListsSheet?
   var selectedDetail: RemindersDetailType?
   let seedDatabaseTip = SeedDatabaseTip()
 
@@ -101,6 +115,22 @@ final class RemindersListsModel {
         try RemindersList.find(id).update { $0.position = position }.execute(transaction)
       }
     }
+  }
+
+  func addListButtonTapped() {
+    presentedSheet = .remindersList(nil)
+  }
+
+  func editListButtonTapped(_ list: RemindersList) {
+    presentedSheet = .remindersList(list)
+  }
+
+  func newReminderButtonTapped() {
+    guard let list = remindersLists.first?.remindersList else {
+      presentedSheet = .remindersList(nil)
+      return
+    }
+    presentedSheet = .reminder(list)
   }
 
   func selectDetail(_ detailType: RemindersDetailType) {
@@ -178,8 +208,6 @@ final class RemindersListsModel {
 
 struct RemindersListsView: View {
   @State private var model: RemindersListsModel
-  @State private var listForm: RemindersListFormContext?
-  @State private var reminderForm: ReminderFormContext?
   @State private var searchModel: SearchRemindersModel
   @State private var searchText = ""
   private let database: RemindersDatabase
@@ -223,9 +251,7 @@ struct RemindersListsView: View {
               remindersCount: summary.remindersCount,
               remindersList: summary.remindersList,
               onDelete: { Task { await model.deleteList(summary.remindersList) } },
-              onEdit: {
-                listForm = RemindersListFormContext(remindersList: summary.remindersList)
-              }
+              onEdit: { model.editListButtonTapped(summary.remindersList) }
             )
           }
         }
@@ -264,34 +290,28 @@ struct RemindersListsView: View {
           .popoverTip(model.seedDatabaseTip)
         }
       }
-      ToolbarItem(placement: .bottomBar) {
-        HStack {
-          Button {
-            guard let list = model.remindersLists.first?.remindersList else {
-              listForm = RemindersListFormContext(remindersList: nil)
-              return
-            }
-            reminderForm = ReminderFormContext(remindersList: list)
-          } label: {
-            Label("New Reminder", systemImage: "plus.circle.fill")
-              .font(.title3.bold())
-          }
-          Spacer()
-          Button("Add List") {
-            listForm = RemindersListFormContext(remindersList: nil)
-          }
-          .font(.title3)
+      ToolbarItemGroup(placement: .bottomBar) {
+        Button {
+          model.newReminderButtonTapped()
+        } label: {
+          Label("New Reminder", systemImage: "plus.circle.fill")
+            .font(.title3.bold())
         }
+        Spacer()
+        Button("Add List") {
+          model.addListButtonTapped()
+        }
+        .font(.title3)
       }
     }
-    .sheet(item: $listForm) { context in
+    .sheet(item: $model.presentedSheet) { sheet in
       NavigationStack {
-        RemindersListForm(database: database, remindersList: context.remindersList)
-      }
-    }
-    .sheet(item: $reminderForm) { context in
-      NavigationStack {
-        ReminderFormView(database: database, remindersList: context.remindersList)
+        switch sheet {
+        case .reminder(let list):
+          ReminderFormView(database: database, remindersList: list)
+        case .remindersList(let list):
+          RemindersListForm(database: database, remindersList: list)
+        }
       }
     }
     .navigationDestination(for: RemindersDetailType.self) { detailType in

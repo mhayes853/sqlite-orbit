@@ -8,6 +8,37 @@ import Testing
 @Suite
 struct RemindersFeatureTests {
   @Test
+  func newReminderPresentationUsesTheFirstInsertedList() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+    }
+    let model = RemindersListsModel(database: database)
+    await model.load()
+
+    model.newReminderButtonTapped()
+
+    guard case .reminder(let presentedList) = model.presentedSheet else {
+      Issue.record("Expected the reminder form to be presented")
+      return
+    }
+    #expect(presentedList.id == list.id)
+  }
+
+  @Test
+  func listDetailPresentsNewReminderForItsList() throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Work")
+    let model = RemindersDetailModel(database: database, detailType: .list(list))
+
+    model.newReminderButtonTapped()
+
+    #expect(model.reminderForm?.remindersList.id == list.id)
+    #expect(model.reminderForm?.reminder == nil)
+  }
+
+  @Test
   func selectingSmartListSetsOnlyThatDestination() throws {
     let database = try makeTestDatabase()
     let model = RemindersListsModel(database: database)

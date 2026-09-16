@@ -85,6 +85,7 @@ final class RemindersDetailModel {
 
   let detailType: RemindersDetailType
   var ordering: ReminderOrdering
+  var reminderForm: ReminderFormContext?
   var showCompleted: Bool
   var errorMessage: String?
 
@@ -173,6 +174,11 @@ final class RemindersDetailModel {
     }
   }
 
+  func newReminderButtonTapped() {
+    guard let list = detailType.remindersList else { return }
+    reminderForm = ReminderFormContext(remindersList: list)
+  }
+
   private func persistSettingsAndReload() async {
     let settings = RemindersDetailSettings(
       id: detailType.id,
@@ -254,9 +260,10 @@ final class RemindersDetailModel {
 
 struct RemindersDetailView: View {
   @State var model: RemindersDetailModel
-  @State private var reminderForm: ReminderFormContext?
 
   var body: some View {
+    @Bindable var model = model
+
     List {
       detailHeader
 
@@ -280,11 +287,11 @@ struct RemindersDetailView: View {
     .task { await model.load() }
     .toolbarTitleDisplayMode(.inline)
     .toolbar {
-      if let list = model.detailType.remindersList {
+      if model.detailType.remindersList != nil {
         ToolbarItem(placement: .bottomBar) {
           HStack {
             Button {
-              reminderForm = ReminderFormContext(remindersList: list)
+              model.newReminderButtonTapped()
             } label: {
               Label("New Reminder", systemImage: "plus.circle.fill")
                 .font(.title3.bold())
@@ -322,7 +329,7 @@ struct RemindersDetailView: View {
         }
       }
     }
-    .sheet(item: $reminderForm) { context in
+    .sheet(item: $model.reminderForm) { context in
       NavigationStack {
         ReminderFormView(database: model.databaseForView, remindersList: context.remindersList)
       }
