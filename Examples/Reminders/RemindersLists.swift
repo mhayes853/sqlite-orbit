@@ -28,6 +28,7 @@ final class RemindersListsModel {
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
   var errorMessage: String?
+  var selectedDetail: RemindersDetailType?
   let seedDatabaseTip = SeedDatabaseTip()
 
   @ObservationIgnored private let database: RemindersDatabase
@@ -100,6 +101,10 @@ final class RemindersListsModel {
         try RemindersList.find(id).update { $0.position = position }.execute(transaction)
       }
     }
+  }
+
+  func selectDetail(_ detailType: RemindersDetailType) {
+    selectedDetail = detailType
   }
 
   func seedSampleData() async {
@@ -186,6 +191,8 @@ struct RemindersListsView: View {
   }
 
   var body: some View {
+    @Bindable var model = model
+
     List {
       if !searchText.isEmpty {
         SearchRemindersView(database: database, model: searchModel, searchText: searchText)
@@ -290,6 +297,9 @@ struct RemindersListsView: View {
     .navigationDestination(for: RemindersDetailType.self) { detailType in
       RemindersDetailView(model: RemindersDetailModel(database: database, detailType: detailType))
     }
+    .navigationDestination(item: $model.selectedDetail) { detailType in
+      RemindersDetailView(model: RemindersDetailModel(database: database, detailType: detailType))
+    }
     .alert(
       "Database Error",
       isPresented: Binding(
@@ -304,7 +314,9 @@ struct RemindersListsView: View {
   }
 
   private func statCell(_ detailType: RemindersDetailType, count: Int?) -> some View {
-    NavigationLink(value: detailType) {
+    Button {
+      model.selectDetail(detailType)
+    } label: {
       HStack(alignment: .firstTextBaseline) {
         VStack(alignment: .leading, spacing: 8) {
           Image(systemName: detailType.iconName)

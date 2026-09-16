@@ -8,6 +8,18 @@ import Testing
 @Suite
 struct RemindersFeatureTests {
   @Test
+  func selectingSmartListSetsOnlyThatDestination() throws {
+    let database = try makeTestDatabase()
+    let model = RemindersListsModel(database: database)
+
+    #expect(model.selectedDetail == nil)
+
+    model.selectDetail(.flagged)
+
+    #expect(model.selectedDetail == .flagged)
+  }
+
+  @Test
   func dashboardCountsInsertedReminders() async throws {
     let database = try makeTestDatabase()
     let listID = UUID()
