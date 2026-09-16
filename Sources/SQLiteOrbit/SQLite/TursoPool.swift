@@ -29,7 +29,7 @@
     ///   - configuration: Settings applied to every connection. Its library should be Turso.
     ///   - writerCount: The number of concurrent write connections to open. Values below one are
     ///     treated as one.
-    ///   - identifier: The identity used by an ``OrbitDatabase`` when one is not supplied.
+    ///   - identifier: An identity applications can associate with this process-local database.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened or configured for MVCC.
     public init(

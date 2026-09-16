@@ -85,9 +85,6 @@ public protocol OrbitDatabaseReader: Sendable {
 /// }
 /// ```
 public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
-  /// The identifier used when an ``OrbitDatabase`` does not receive an explicit one.
-  var defaultIdentifier: OrbitDatabaseIdentifier { get }
-
   /// Runs `body` in a barrier write transaction, committing it when `body` returns.
   ///
   /// A `body` that throws rolls the transaction back, so nothing it wrote is kept.

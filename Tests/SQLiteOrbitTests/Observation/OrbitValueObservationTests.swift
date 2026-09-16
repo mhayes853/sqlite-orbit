@@ -374,7 +374,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = OrbitDatabaseIdentifier(rawValue: "external-observation")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -400,7 +400,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = OrbitDatabaseIdentifier(rawValue: "external-region-filtering")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -453,7 +453,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = OrbitDatabaseIdentifier(rawValue: "filtered-observation")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -532,16 +532,18 @@
 
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
       let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-observation")
-      let writingDatabase = OrbitDatabase(
+      let writingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
-        id: identifier
+        id: identifier,
+        transport: InMemoryIPCTransport()
       )
       try await writingDatabase.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      let observingDatabase = OrbitDatabase(
+      let observingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
-        id: identifier
+        id: identifier,
+        transport: InMemoryIPCTransport()
       )
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
@@ -569,11 +571,19 @@
 
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
       let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-region-filtering")
-      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      let writingDatabase = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: path),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
       try await writingDatabase.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      let observingDatabase = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: path),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
       let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
         .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
@@ -1493,9 +1503,10 @@
       let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
       var configuration = SQLiteConfiguration.default
       configuration.readerCount = 1
-      let observingDatabase = OrbitDatabase(
+      let observingDatabase = OrbitIPCDatabase(
         writer: try SQLitePool(path: path, configuration: configuration),
-        id: identifier
+        id: identifier,
+        transport: InMemoryIPCTransport()
       )
       try await observingDatabase.write { transaction in
         try transaction.execute(
@@ -1509,7 +1520,11 @@
         )
       }
       // The schema changes through a connection outside the pool, as another process's would.
-      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: path), id: identifier)
+      let writingDatabase = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: path),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
 
       let recorder = ObservationRecorder<String?>()
       let subscription = try OrbitValueObservation<String?>
@@ -1832,7 +1847,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = OrbitDatabaseIdentifier(rawValue: "query-region-external-observation")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: driver,
         id: identifier,
         transport: receivingTransport
@@ -2016,10 +2031,10 @@
   /// stands in for another process's database.
   private func announcingItemsDatabase(
     _ name: String
-  ) async throws -> (OrbitDatabase<SQLiteQueue>, InMemoryIPCTransport, OrbitDatabaseIdentifier) {
+  ) async throws -> (OrbitIPCDatabase, InMemoryIPCTransport, OrbitDatabaseIdentifier) {
     let network = InMemoryIPCTransport.Network()
     let identifier = OrbitDatabaseIdentifier(rawValue: name)
-    let database = OrbitDatabase(
+    let database = OrbitIPCDatabase(
       writer: try await itemsDatabase(),
       id: identifier,
       transport: InMemoryIPCTransport(network: network)
@@ -2029,7 +2044,7 @@
 
   /// Subscribes an observation of the items table, returning once its initial value is in.
   private func subscribeTrackingItems(
-    to database: OrbitDatabase<SQLiteQueue>,
+    to database: OrbitIPCDatabase,
     refetching controller: some OrbitValueObservationRefetchController
   ) async throws -> OrbitSubscription {
     let observation = OrbitValueObservation<Int>
@@ -2090,14 +2105,11 @@
   }
 
   private final class PostCommitObservableDatabase: OrbitObservableDatabase {
-    let defaultIdentifier: OrbitDatabaseIdentifier
-
     private let base: SQLiteQueue
     private let observers = OrbitDatabaseTransactionObservers()
 
     init(_ base: SQLiteQueue) {
       self.base = base
-      self.defaultIdentifier = base.defaultIdentifier
     }
 
     func read<Result: Sendable>(

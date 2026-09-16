@@ -21,7 +21,7 @@
   func queueWritesAndReadsThroughTheDriverProtocol() async throws {
     let driver = try makeQueueDriver()
     try await bootstrap(driver)
-    let database = OrbitDatabase(writer: driver)
+    let database = driver
 
     try await database.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })

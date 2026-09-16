@@ -28,7 +28,7 @@ private var orbitEraseBytes: OrbitEraseBytes { memset }
 /// ```swift
 /// var configuration = SQLiteConfiguration(library: myCipherBuild)
 /// configuration.key = .passphrase(secret)
-/// let database = try OrbitDatabase(path: .file(url), configuration: configuration)
+/// let database = try OrbitIPCDatabase(path: .file(url), configuration: configuration)
 /// ```
 ///
 /// The bytes this value holds are wiped when the last copy of it goes away. That limits how long

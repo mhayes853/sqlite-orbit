@@ -368,7 +368,7 @@
 
   private func remindersDatabase(
     titles: String...
-  ) async throws -> OrbitDatabase<SQLiteQueue> {
+  ) async throws -> SQLiteQueue {
     let database = try inMemoryDatabase()
     try await database.write { transaction in
       try transaction.execute(

@@ -7,10 +7,7 @@ import Foundation
 /// ``unique()`` deliberately does not.
 ///
 /// ```swift
-/// let database = OrbitDatabase(
-///   writer: try SQLiteQueue(path: ":memory:"),
-///   id: OrbitDatabaseIdentifier(rawValue: "reminders")
-/// )
+/// let identifier = OrbitDatabaseIdentifier(rawValue: "reminders")
 /// ```
 public struct OrbitDatabaseIdentifier: RawRepresentable, Codable, Hashable, Sendable {
   /// The identity itself, compared verbatim.

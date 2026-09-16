@@ -183,7 +183,7 @@
   private func bindingDatabase(
     settings isEnabled: Bool? = nil,
     reminderCompleted isCompleted: Bool? = nil
-  ) async throws -> OrbitDatabase<SQLiteQueue> {
+  ) async throws -> SQLiteQueue {
     let database = try inMemoryDatabase()
     try await database.write { transaction in
       try transaction.execute(

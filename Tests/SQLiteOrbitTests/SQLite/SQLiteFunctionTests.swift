@@ -80,7 +80,7 @@
     }
   }
 
-  private func seededNotes() async throws -> OrbitDatabase<SQLiteQueue> {
+  private func seededNotes() async throws -> SQLiteQueue {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
     configuration.register(function: $longestTitle)
@@ -90,9 +90,7 @@
     configuration.register(function: FailingFunction())
     configuration.register(function: VariadicSumFunction())
     configuration.register(function: FailingTotalFunction())
-    let database = OrbitDatabase(
-      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
-    )
+    let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
     try await database.write { transaction in
       try transaction.execute(
         #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
@@ -238,9 +236,7 @@
   func aggregatesSpanManyRowsAndManyGroups() async throws {
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $longestTitle)
-    let database = OrbitDatabase(
-      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
-    )
+    let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     try await database.write { transaction in
       try transaction.execute(
@@ -313,7 +309,7 @@
     var configuration = SQLiteConfiguration.default
     configuration.register(function: $repeated)
 
-    let database = try OrbitDatabase(
+    let database = try OrbitIPCDatabase(
       path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration,
       coordination: .init(directory: directory, backPressure: .fail)

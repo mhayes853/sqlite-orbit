@@ -186,7 +186,7 @@ private struct OrbitValueObservationEvents: Sendable {
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
 ///
-/// let database = try OrbitDatabase(path: OrbitDatabasePath("reminders.sqlite"))
+/// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
 /// let observation = OrbitValueObservation
 ///   .trackingAll(Reminder.where { !$0.isCompleted })
 ///   .removeDuplicates()
@@ -893,7 +893,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   private(set) var count = 0
   ///   private var subscription: OrbitSubscription?
   ///
-  ///   func start(observing database: OrbitDatabase<SQLitePool>) throws {
+  ///   func start(observing database: OrbitIPCDatabase) throws {
   ///     subscription = try OrbitValueObservation
   ///       .tracking { try $0.fetchCount(Reminder.all) }
   ///       .subscribe(to: database, scheduling: .mainActor) { _ in

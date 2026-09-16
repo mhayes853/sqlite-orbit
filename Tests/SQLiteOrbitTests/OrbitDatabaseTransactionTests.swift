@@ -6,13 +6,26 @@ import Testing
 
 #if BuiltInSQLite
   @Test
-  func orbitDatabaseUsesTheDriversIdentifierUnlessOverridden() throws {
+  func orbitIPCDatabaseUsesTheDriversDefaultIdentifier() throws {
     let identifier = OrbitDatabaseIdentifier(rawValue: "native-default")
     let driver = try SQLiteQueue(path: ":memory:", identifier: identifier)
-    #expect(OrbitDatabase(writer: driver).id == identifier)
+    let database = OrbitIPCDatabase(writer: driver, transport: InMemoryIPCTransport())
 
+    #expect(database.id == identifier)
+  }
+
+  @Test
+  func orbitIPCDatabaseCanOverrideItsIdentifier() {
+    let driver = try! SQLiteQueue(path: ":memory:")
     let override = OrbitDatabaseIdentifier(rawValue: "application-defined")
-    #expect(OrbitDatabase(writer: driver, id: override).id == override)
+
+    let database = OrbitIPCDatabase(
+      writer: driver,
+      id: override,
+      transport: InMemoryIPCTransport()
+    )
+
+    #expect(database.id == override)
   }
 #endif
 

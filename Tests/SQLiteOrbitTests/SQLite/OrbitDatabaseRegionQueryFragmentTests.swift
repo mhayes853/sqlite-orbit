@@ -161,7 +161,7 @@
 
     private func regionDatabase(
       configuration: SQLiteConfiguration = .default
-    ) throws -> OrbitDatabase<SQLiteQueue> {
+    ) throws -> SQLiteQueue {
       let database = try inMemoryDatabase(configuration: configuration)
       try database.writeBlocking { transaction in
         try transaction.execute(

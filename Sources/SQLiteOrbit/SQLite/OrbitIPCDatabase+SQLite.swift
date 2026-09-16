@@ -1,6 +1,6 @@
 #if BuiltInSQLite && (canImport(Darwin) || canImport(Glibc))
 
-  extension OrbitDatabase where Writer == SQLitePool {
+  extension OrbitIPCDatabase {
     /// Opens the SQLite database at `path` for access from any process using the same coordination
     /// directory.
     ///
@@ -22,7 +22,7 @@
     /// ```swift
     /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
     ///
-    /// let database = try OrbitDatabase(path: OrbitDatabasePath("reminders.sqlite"))
+    /// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
     /// try await database.write { transaction in
     ///   try #sql("CREATE TABLE IF NOT EXISTS reminders (...)", as: Void.self).execute(transaction)
     /// }
@@ -54,28 +54,6 @@
         id: identifier,
         transport: try UnixDatagramIPCTransport.shared(configuration: coordination),
         onAnnouncementFailure: onAnnouncementFailure
-      )
-    }
-  }
-#endif
-
-#if BuiltInSQLite
-  extension OrbitDatabase where Writer == SQLitePool {
-    /// Opens a pooled SQLite database confined to this process.
-    ///
-    /// This is the supported `OrbitDatabase` convenience for a library such as Turso that permits
-    /// concurrent connections within one process but cannot coordinate ordinary file access with
-    /// another process.
-    public convenience init(
-      localPath path: OrbitDatabasePath,
-      configuration: SQLiteConfiguration = .default,
-      id: OrbitDatabaseIdentifier? = nil
-    ) throws {
-      let identifier = id ?? .forDatabase(path: path)
-      self.init(
-        writer: try SQLitePool(path: path, configuration: configuration, identifier: identifier),
-        id: identifier,
-        transport: nil
       )
     }
   }

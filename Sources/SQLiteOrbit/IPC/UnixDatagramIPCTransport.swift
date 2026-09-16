@@ -12,7 +12,7 @@
   ///
   /// Each transport binds a socket in a shared coordination directory and drops a marker file for
   /// every database it subscribes to, so peers discover each other through the filesystem without
-  /// a broker process. This is the transport ``OrbitDatabase`` uses.
+  /// a broker process. This is the transport ``OrbitIPCDatabase`` uses.
   ///
   /// ```swift
   /// let transport = try UnixDatagramIPCTransport.shared()
@@ -50,7 +50,7 @@
     ///   directory: appGroupDirectory.appending(path: "coordination"),
     ///   backPressure: .suspend(upTo: .milliseconds(250))
     /// )
-    /// let database = try OrbitDatabase(
+    /// let database = try OrbitIPCDatabase(
     ///   path: OrbitDatabasePath("reminders.sqlite"), coordination: coordination
     /// )
     /// ```

@@ -5,7 +5,7 @@
   import Testing
 
   @Suite(.serialized)
-  struct OrbitDatabaseMultiprocessTests {
+  struct OrbitIPCDatabaseMultiprocessTests {
     @Test
     func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
       let harness = try OrbitDatabaseProcessHarness(name: "open")
@@ -139,7 +139,7 @@
 
     @Test(arguments: [false, true])
     func writeIsDeliveredToARealSubscriberInAnotherProcess(throughSymlink: Bool) async throws {
-      // Nothing subscribes through OrbitDatabase itself yet, but the transport it announces
+      // Nothing subscribes through OrbitIPCDatabase itself yet, but the transport it announces
       // through is real, so a peer that subscribes to it directly must still see the commit.
       let harness = try OrbitDatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
@@ -223,7 +223,7 @@
       let coordination = harness.coordination
       let didOpen = Lock(false)
       Thread.detachNewThread {
-        _ = try? OrbitDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
+        _ = try? OrbitIPCDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
         didOpen.withLock { $0 = true }
       }
       try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
@@ -232,7 +232,7 @@
   }
 
   @Test
-  func orbitDatabasePeer() async throws {
+  func orbitIPCDatabasePeer() async throws {
     let environment = ProcessInfo.processInfo.environment
     guard let mode = environment[OrbitDatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
@@ -248,11 +248,11 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      _ = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
       try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.opened)))
 
     case "write":
-      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      let database = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
       let writerID = try #require(Int(try value(OrbitDatabaseProcessEnvironment.writerID)))
       let writeCount = try #require(Int(try value(OrbitDatabaseProcessEnvironment.writeCount)))
       try touch(ready)
@@ -272,13 +272,13 @@
       }
 
     case "migrate":
-      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      let database = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
       try touch(ready)
       try await waitForFile(start)
       try await makeContendedMigrator().migrate(database)
 
     case "hold":
-      let database = try OrbitDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      let database = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
       let held = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.held))
       let milliseconds = try #require(
         Int(try value(OrbitDatabaseProcessEnvironment.holdMilliseconds))
@@ -365,7 +365,7 @@
 
     init(name: String) throws {
       self.harness = try ProcessTestHarness(
-        helper: "orbitDatabasePeer",
+        helper: "orbitIPCDatabasePeer",
         environmentPrefix: OrbitDatabaseProcessEnvironment.prefix,
         name: name
       )
@@ -376,8 +376,8 @@
 
     func database(
       configuration: SQLiteConfiguration = .default
-    ) throws -> OrbitDatabase<SQLitePool> {
-      try OrbitDatabase(
+    ) throws -> OrbitIPCDatabase {
+      try OrbitIPCDatabase(
         path: OrbitDatabasePath(self.databasePath),
         configuration: configuration,
         coordination: self.coordination

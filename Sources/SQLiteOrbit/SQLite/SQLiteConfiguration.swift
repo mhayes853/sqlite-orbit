@@ -303,7 +303,7 @@ extension SQLiteConfiguration {
     /// against a build without one would be.
     ///
     /// ```swift
-    /// let database = try OrbitDatabase(
+    /// let database = try OrbitIPCDatabase(
     ///   path: .file(url),
     ///   configuration: .sqlCipher(key: .passphrase(secret))
     /// )

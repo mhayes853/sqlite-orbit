@@ -10,7 +10,7 @@ and react to each other's writes.
 ```swift
 import SQLiteOrbit
 
-let database = try OrbitDatabase(path: databasePath)
+let database = try OrbitIPCDatabase(path: databasePath)
 
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -54,7 +54,7 @@ The package ships its own SQLite driver, which is the default and needs no third
 ```swift
 import SQLiteOrbit
 
-let database = try OrbitDatabase(path: databasePath)
+let database = try OrbitIPCDatabase(path: databasePath)
 
 try await database.write { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -65,7 +65,8 @@ let reminders = try await database.read { transaction in
 }
 ```
 
-Two ordinary SQLite drivers back it:
+Two ordinary SQLite drivers provide process-local access, and the multiprocess-capable pool backs
+`OrbitIPCDatabase`:
 
 - `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
@@ -110,7 +111,7 @@ Setting `isForeignKeysEnabled` takes effect before the connection's next stateme
 back to their configured values when the access ends, even when it throws. Any other pragma stays
 changed on the connection, so restore it before returning. Outside `transaction`, statements that
 begin or end a transaction or a savepoint are refused, so the connection always knows what has
-committed. Observers see each statement as a commit of its own, and an `OrbitDatabase` announces
+committed. Observers see each statement as a commit of its own, and an `OrbitIPCDatabase` announces
 what committed once the access ends, even when it throws.
 
 ## Using your own SQLite build
@@ -126,7 +127,7 @@ compiled in:
 let library = #sqliteLibrary(module: "MySQLite")
 
 var configuration = SQLiteConfiguration(library: library)
-let database = try OrbitDatabase(path: databasePath, configuration: configuration)
+let database = try OrbitIPCDatabase(path: databasePath, configuration: configuration)
 ```
 
 The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
@@ -197,9 +198,8 @@ for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for sc
 
 ```swift
 let driver = try TursoPool(path: databasePath, writerCount: 4)
-let database = OrbitDatabase(writer: driver)
 
-try await database.concurrentWrite { transaction in
+try await driver.concurrentWrite { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
 
@@ -229,8 +229,9 @@ explicitly:
 - Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
 - Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
   multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
-  unimplemented entry point. Use `TursoPool` for an MVCC database confined to one process, or
-  `OrbitDatabase(localPath:)` for the existing observable, single-writer WAL pool.
+  unimplemented entry point. Use `TursoPool` directly for an observable MVCC database confined to
+  one process. It cannot back an `OrbitIPCDatabase` because it does not conform to
+  `OrbitMultiprocessDatabaseWriter`.
 - Turso currently finishes an executing statement when its C API resets or finalizes it. A lazy
   cursor still returns early to its caller, but cleanup may scan the statement's remaining rows;
   there is no safe client-side substitute for native early finalization.
@@ -364,7 +365,7 @@ visit every remaining value. `minMax` computes both extrema in one traversal.
 With the `SQLCipher` trait enabled, an encrypted database needs only a key:
 
 ```swift
-let database = try OrbitDatabase(
+let database = try OrbitIPCDatabase(
   path: databasePath,
   configuration: .sqlCipher(key: .passphrase(secret))
 )
@@ -385,7 +386,7 @@ library.encryption = SQLiteLibrary.Encryption(
 var configuration = SQLiteConfiguration(library: library)
 configuration.key = .passphrase(secret)
 
-let database = try OrbitDatabase(path: databasePath, configuration: configuration)
+let database = try OrbitIPCDatabase(path: databasePath, configuration: configuration)
 ```
 
 The key is applied before every other thing a connection does — before the first statement, and
@@ -443,7 +444,7 @@ extension Collation where Self == NamedCollation {
 var configuration = SQLiteConfiguration.default
 configuration.register(collation: $localized)
 
-let database = try OrbitDatabase(
+let database = try OrbitIPCDatabase(
   path: databasePath,
   configuration: configuration
 )
@@ -463,14 +464,15 @@ directly, and a function's callbacks read their arguments and write their result
 `SQLiteLibrary` the connection was opened with, so a caller-supplied build drives them exactly as
 the linked one does.
 
-`OrbitDatabase` is `Identifiable`. Its native writer supplies the default database
+`OrbitIPCDatabase` is `Identifiable`. Its multiprocess writer supplies the default database
 identifier, and callers can override it when constructing the database. File databases derive a
 stable identifier from their resolved filesystem paths. Symbolic links in the file and its existing
 parent directories are resolved even before the database file is created, so IPC discovery and
 open locks agree across those aliases. `OrbitDatabasePath` keeps its original standardized spelling;
 explicit identifiers remain application-defined. Identity is path-based, so hard links with different
 names still need an explicit shared identifier. A database private to its connection receives a
-unique identifier.
+unique identifier. Process-local drivers use their own identifiers but cannot be passed to
+`OrbitIPCDatabase`.
 
 ## Migrations
 
@@ -491,7 +493,7 @@ migrator.registerMigration("Add completion") { transaction in
   )
 }
 
-let database = try OrbitDatabase(path: databasePath)
+let database = try OrbitIPCDatabase(path: databasePath)
 try await migrator.migrate(database)
 ```
 
@@ -648,7 +650,7 @@ refetching after unrelated writes.
 
 ## Observation
 
-`SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitDatabase` are observable databases. A value
+`SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitIPCDatabase` are observable databases. A value
 observation fetches an initial value, then fetches again after a committed write that may affect
 its region.
 `trackingAll` and `trackingOne` derive that region directly from a readable query:
@@ -1106,10 +1108,10 @@ the library can add coordination messages in future versions.
 
 ## Opening a database for several processes
 
-`OrbitDatabase(path:)` owns opening the database, which is what lets it coordinate:
+`OrbitIPCDatabase(path:)` owns opening the database, which is what lets it coordinate:
 
 ```swift
-let database = try OrbitDatabase(path: databasePath)
+let database = try OrbitIPCDatabase(path: databasePath)
 ```
 
 The database is opened by `SQLitePool`, so it runs in WAL mode with concurrent readers and a
@@ -1128,7 +1130,7 @@ temporary directory; sandboxed applications must supply one both processes can r
 Group container:
 
 ```swift
-let database = try OrbitDatabase(
+let database = try OrbitIPCDatabase(
   path: databasePath,
   coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
 )
@@ -1137,9 +1139,10 @@ let database = try OrbitDatabase(
 A database private to its connection cannot be shared between processes, or pooled, so
 `SQLitePool` rejects one; use `SQLiteQueue` for those.
 
-Constructing a driver yourself remains available for a database you configure and open on your own.
-That cannot coordinate opening, so pass a transport explicitly if the database is also opened
-elsewhere.
+Constructing an `OrbitMultiprocessDatabaseWriter` yourself remains available for a database you
+configure and open on your own. That cannot coordinate opening, so pass a transport explicitly if
+the database is also opened elsewhere. Process-local writers such as `SQLiteQueue` and `TursoPool`
+do not satisfy that initializer.
 
 ## Announcing committed writes
 
@@ -1161,5 +1164,5 @@ Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise 
 writing task's cancellation, since peers still need to learn about a commit that happened. A write
 that throws is rolled back by its driver and is not announced.
 
-An observed `OrbitDatabase` also subscribes to its peers. Incoming announcements are exposed
+An observed `OrbitIPCDatabase` also subscribes to its peers. Incoming announcements are exposed
 as external transaction events and cause active value observations to refetch.

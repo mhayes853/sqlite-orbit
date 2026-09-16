@@ -54,9 +54,7 @@
   func collationsCompareTextAsUnicode() async throws {
     var configuration = SQLiteConfiguration.default
     configuration.register(collation: $characterCount)
-    let database = OrbitDatabase(
-      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
-    )
+    let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     try await database.write { transaction in
       try transaction.execute(

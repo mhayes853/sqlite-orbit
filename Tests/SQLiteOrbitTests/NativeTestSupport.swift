@@ -2,6 +2,10 @@
   import Foundation
   import SQLiteOrbit
 
+  // IPC tests use an in-memory queue to isolate the announcement machinery from filesystem IPC.
+  // Production SQLiteQueue does not make this promise because it can represent a private database.
+  extension SQLiteQueue: OrbitMultiprocessDatabaseWriter {}
+
   /// The build the enabled trait supplied, which tests interpose on to observe individual entry
   /// points. Naming it once here is what lets the suite run under any of them.
   var builtInTestLibrary: SQLiteLibrary {
@@ -20,16 +24,14 @@
 
   func inMemoryDatabase(
     configuration: SQLiteConfiguration = .default
-  ) throws -> OrbitDatabase<SQLiteQueue> {
-    OrbitDatabase(
-      writer: try SQLiteQueue(path: ":memory:", configuration: configuration)
-    )
+  ) throws -> SQLiteQueue {
+    try SQLiteQueue(path: ":memory:", configuration: configuration)
   }
 
   func withPooledDatabase<Result>(
     configuration: SQLiteConfiguration,
     maximumReaderCount: Int = 4,
-    _ body: (OrbitDatabase<SQLitePool>) async throws -> Result
+    _ body: (SQLitePool) async throws -> Result
   ) async throws -> Result {
     let directory = try makeShortTemporaryDirectory("pool")
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -40,12 +42,12 @@
       path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration
     )
-    return try await body(OrbitDatabase(writer: pool))
+    return try await body(pool)
   }
 
   func concurrentReads<Result: Sendable>(
     _ count: Int,
-    of database: OrbitDatabase<SQLitePool>,
+    of database: SQLitePool,
     _ body: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> sending Result
   ) async throws -> [Result] {
     try await withThrowingTaskGroup(of: Result.self) { group in

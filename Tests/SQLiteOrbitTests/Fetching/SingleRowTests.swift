@@ -140,7 +140,7 @@
 
   private func settingsDatabase(
     enforceSingleton: Bool = true
-  ) async throws -> OrbitDatabase<SQLiteQueue> {
+  ) async throws -> SQLiteQueue {
     let database = try inMemoryDatabase()
     let constraint = enforceSingleton ? " CHECK (id = 0)" : ""
     try await database.write { transaction in

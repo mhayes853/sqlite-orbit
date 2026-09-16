@@ -165,7 +165,7 @@ extension OrbitDatabaseTransactionObserver {
 
 /// A database whose reads and write transactions can be observed.
 ///
-/// This is what ``OrbitValueObservation`` needs from a database, and what ``OrbitDatabase``
+/// This is what ``OrbitValueObservation`` needs from a database, and what ``OrbitIPCDatabase``
 /// provides.
 ///
 /// ```swift
@@ -180,6 +180,17 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
   func subscribe(
     transactionObserver: any OrbitDatabaseTransactionObserver
   ) throws -> OrbitSubscription
+}
+
+/// An observable writer whose database file can be opened and coordinated across processes.
+///
+/// ``OrbitIPCDatabase`` accepts only writers with this capability. Conformance promises that the
+/// writer type can share a database with another process. When such a type also has process-local
+/// configurations, callers of the low-level initializer that accepts a writer must supply a
+/// multiprocess-capable instance.
+public protocol OrbitMultiprocessDatabaseWriter: OrbitObservableDatabase {
+  /// The identifier an ``OrbitIPCDatabase`` uses when its caller does not supply one.
+  var defaultIdentifier: OrbitDatabaseIdentifier { get }
 }
 
 final class OrbitDatabaseTransactionObservers: Sendable {

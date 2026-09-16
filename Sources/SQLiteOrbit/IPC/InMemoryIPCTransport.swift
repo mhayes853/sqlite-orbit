@@ -8,8 +8,8 @@
 ///
 /// ```swift
 /// let network = InMemoryIPCTransport.Network()
-/// let database = OrbitDatabase(
-///   writer: try SQLiteQueue(path: .memory),
+/// let database = OrbitIPCDatabase(
+///   writer: try SQLitePool(path: .file(url)),
 ///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
 ///   transport: InMemoryIPCTransport(network: network)
 /// )

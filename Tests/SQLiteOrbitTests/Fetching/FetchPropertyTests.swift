@@ -912,12 +912,12 @@
       let path = OrbitDatabasePath(temporaryDatabasePath("fetch-ipc"))
       let identifier = OrbitDatabaseIdentifier(rawValue: "fetch-ipc")
 
-      let reader = OrbitDatabase(
+      let reader = OrbitIPCDatabase(
         writer: try SQLitePool(path: path),
         id: identifier,
         transport: InMemoryIPCTransport(network: network)
       )
-      let writer = OrbitDatabase(
+      let writer = OrbitIPCDatabase(
         writer: try SQLitePool(path: path),
         id: identifier,
         transport: InMemoryIPCTransport(network: network)
@@ -1025,7 +1025,7 @@
 
   private func remindersDatabase(
     titles: String...
-  ) async throws -> OrbitDatabase<SQLiteQueue> {
+  ) async throws -> SQLiteQueue {
     let database = try inMemoryDatabase()
     try await database.write { transaction in
       try transaction.execute(remindersSchema)
@@ -1189,7 +1189,7 @@
     }
   }
 
-  private func taggedRemindersDatabase() async throws -> OrbitDatabase<SQLiteQueue> {
+  private func taggedRemindersDatabase() async throws -> SQLiteQueue {
     let database = try await remindersDatabase()
     try await database.write { transaction in
       try transaction.execute(

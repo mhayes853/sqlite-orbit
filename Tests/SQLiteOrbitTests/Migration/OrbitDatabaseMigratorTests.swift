@@ -57,12 +57,12 @@
     }
 
     private func checkUpToDateMigrationIsSilent(
-      on writer: some OrbitObservableDatabase,
+      on writer: some OrbitMultiprocessDatabaseWriter,
       eraseDatabaseOnSchemaChange: Bool
     ) async throws {
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-\(UUID().uuidString)")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: writer,
         id: identifier,
         transport: InMemoryIPCTransport(network: network)
@@ -863,12 +863,12 @@
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-peer-\(UUID().uuidString)")
-      let migratingDatabase = OrbitDatabase(
+      let migratingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
         id: identifier,
         transport: InMemoryIPCTransport(network: network)
       )
-      let observingDatabase = OrbitDatabase(
+      let observingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
         id: identifier,
         transport: InMemoryIPCTransport(network: network)

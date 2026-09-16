@@ -34,7 +34,7 @@
     let database = TemporaryDatabase()
     let driver = try SQLitePool(path: database.path)
     try await bootstrap(driver)
-    let interprocess = OrbitDatabase(writer: driver)
+    let interprocess = driver
 
     try await interprocess.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "Blob's reminder") })

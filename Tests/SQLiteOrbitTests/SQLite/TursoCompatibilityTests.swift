@@ -113,7 +113,7 @@
       }
     }
 
-    let database = try OrbitDatabase<SQLitePool>(localPath: path)
+    let database = try TursoPool(path: path)
     try await database.write { transaction in
       try transaction.execute(
         #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
@@ -162,7 +162,7 @@
   @Test
   func tursoPoolRunsConcurrentWritesOnDistinctConnections() async throws {
     let storage = TemporaryTursoDatabase("turso-writers")
-    let database = OrbitDatabase(writer: try TursoPool(path: storage.path, writerCount: 2))
+    let database = try TursoPool(path: storage.path, writerCount: 2)
     try await database.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
@@ -558,7 +558,7 @@
 
     #if canImport(Darwin) || canImport(Glibc)
       #expect(throws: SQLiteFeatureUnavailableError.self) {
-        _ = try OrbitDatabase<SQLitePool>(path: "/tmp/turso-multiprocess.sqlite")
+        _ = try OrbitIPCDatabase(path: "/tmp/turso-multiprocess.sqlite")
       }
     #endif
   }

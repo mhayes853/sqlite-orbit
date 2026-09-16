@@ -38,7 +38,7 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// }
 /// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
 /// ```
-public final class SQLitePool: OrbitObservableDatabase {
+public final class SQLitePool: OrbitMultiprocessDatabaseWriter {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 

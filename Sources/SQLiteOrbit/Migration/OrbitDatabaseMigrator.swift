@@ -23,7 +23,7 @@ import StructuredQueries
 ///   )
 /// }
 ///
-/// let database = try OrbitDatabase(path: databasePath)
+/// let database = try OrbitIPCDatabase(path: databasePath)
 /// try await migrator.migrate(database)
 /// ```
 ///

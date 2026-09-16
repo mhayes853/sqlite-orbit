@@ -1,22 +1,21 @@
-/// The public database handle that coordinates local transactions with other processes.
+/// A database handle that coordinates local transactions with other processes over IPC.
 ///
 /// A database announces every write it commits so that processes sharing the same SQLite file can
-/// react to each other's work. When its writer is observable, it also combines the writer's local
-/// transaction events with committed writes announced by its peers.
+/// react to each other's work. It combines the writer's local transaction events with committed
+/// writes announced by its peers.
 ///
-/// Opening one by path alone gives an `OrbitDatabase<SQLitePool>` reaching its peers over the
-/// package's own transport, which is what all but a caller supplying their own writer or transport
-/// wants.
+/// Opening one by path alone uses ``SQLitePool`` to reach its peers over the package's own
+/// transport, which is what all but a caller supplying their own writer or transport wants.
 ///
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
 ///
-/// let database = try OrbitDatabase(path: OrbitDatabasePath("reminders.sqlite"))
+/// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
 /// try await database.write { transaction in
 ///   try Reminder.insert { Reminder.Draft(title: "Buy milk") }.execute(transaction)
 /// }
 /// ```
-public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
+public final class OrbitIPCDatabase:
   Identifiable,
   OrbitDatabaseWriter,
   Sendable
@@ -24,13 +23,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   /// The identity shared by every process that opens this database.
   public let id: OrbitDatabaseIdentifier
 
-  /// The driver that lends this database its read and write transactions.
-  public let writer: Writer
-
-  /// The identifier this database uses when one is not supplied, which is ``id``.
-  public var defaultIdentifier: OrbitDatabaseIdentifier { id }
-
-  private let transport: (any OrbitIPCTransport)?
+  private let writer: any OrbitMultiprocessDatabaseWriter
+  private let transport: any OrbitIPCTransport
   private let onAnnouncementFailure: (@Sendable (any Error) -> Void)?
 
   /// Creates a database that announces its committed writes through `transport`.
@@ -39,22 +33,21 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   ///   - writer: The driver that lends read and write transactions.
   ///   - id: The identity shared by every process that opens this database. Defaults to the
   ///     writer's own identifier.
-  ///   - transport: The transport used to announce committed writes. A `nil` transport confines the
-  ///     database to the current process.
+  ///   - transport: The transport used to announce committed writes.
   ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails. The
   ///     write has already committed by then, so the failure is never surfaced to its caller.
   ///
   /// ```swift
-  /// let database = OrbitDatabase(
-  ///   writer: try SQLiteQueue(path: .memory),
+  /// let database = OrbitIPCDatabase(
+  ///   writer: try SQLitePool(path: .file(url)),
   ///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
   ///   transport: InMemoryIPCTransport(network: network)
   /// )
   /// ```
   public init(
-    writer: Writer,
+    writer: some OrbitMultiprocessDatabaseWriter,
     id: OrbitDatabaseIdentifier? = nil,
-    transport: (any OrbitIPCTransport)? = nil,
+    transport: some OrbitIPCTransport,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
   ) {
     self.writer = writer
@@ -276,16 +269,14 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   }
 
   private func reportLocalCommit(in region: OrbitDatabaseRegion) {
-    guard let observableWriter = writer as? any OrbitObservableDatabase else { return }
     OrbitDatabaseObservationHub.shared.didCommit(
       databaseIdentifier: id,
-      writerIdentifier: ObjectIdentifier(observableWriter),
+      writerIdentifier: ObjectIdentifier(writer),
       region: region
     )
   }
 
   private func announceCommittedTransaction(in region: OrbitDatabaseRegion) async {
-    guard let transport else { return }
     let message = OrbitIPCMessage.transactionDidCommit(
       OrbitDatabaseTransactionDidCommit(databaseIdentifier: id, region: region)
     )
@@ -297,39 +288,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
   }
 }
 
-extension OrbitDatabase: OrbitConcurrentDatabaseWriter where Writer: OrbitConcurrentDatabaseWriter {
-  /// Writes to the database concurrently and announces the transaction it commits.
-  ///
-  /// The transaction may overlap reads and other concurrent writes through the underlying writer.
-  /// A conflicting write is rolled back and thrown without replaying `body`.
-  public func concurrentWrite<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) async throws -> Result {
-    let (result, region) = try await writer.concurrentWrite { transaction in
-      try transaction.recordingDatabaseRegion(body)
-    }
-    reportLocalCommit(in: region)
-    await Task { await self.announceCommittedTransaction(in: region) }.value
-    return result
-  }
-
-  /// Writes to the database concurrently, blocking the calling thread, and announces the commit.
-  ///
-  /// Calls made from different threads may run concurrently. The durable write completes before
-  /// this method returns; its asynchronous IPC announcement may still be in progress.
-  public func concurrentWriteBlocking<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> Result {
-    let (result, region) = try writer.concurrentWriteBlocking { transaction in
-      try transaction.recordingDatabaseRegion(body)
-    }
-    reportLocalCommit(in: region)
-    Task { await self.announceCommittedTransaction(in: region) }
-    return result
-  }
-}
-
-extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDatabase {
+extension OrbitIPCDatabase: OrbitObservableDatabase {
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///
@@ -358,19 +317,23 @@ extension OrbitDatabase: OrbitObservableDatabase where Writer: OrbitObservableDa
         OrbitDatabaseCommit(origin: .local, region: region)
       )
     }
-    let external = try transport?
-      .subscribe(to: id) { message in
+    do {
+      let external = try transport.subscribe(to: id) { message in
         guard case .transactionDidCommit(let commit) = message else { return }
         transactionObserver.databaseDidChange(in: commit.region)
         transactionObserver.databaseDidCommit(
           OrbitDatabaseCommit(origin: .external, region: commit.region)
         )
       }
-    // If registration throws, the local tokens cancel themselves when this scope unwinds.
-    return OrbitSubscription {
+      return OrbitSubscription {
+        local.cancel()
+        sameProcess.cancel()
+        external.cancel()
+      }
+    } catch {
       local.cancel()
       sameProcess.cancel()
-      external?.cancel()
+      throw error
     }
   }
 }

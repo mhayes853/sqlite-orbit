@@ -5,7 +5,7 @@
   import Testing
 
   @Suite
-  struct OrbitDatabaseAnnouncementTests {
+  struct OrbitIPCDatabaseAnnouncementTests {
     @Test
     func writeAnnouncesTheTransactionItCommits() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "announced")
@@ -81,12 +81,13 @@
     func writeAnnouncesAutomaticallyTrackedColumns() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "automatic-region-announcement")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
-      try await database.writer.write { transaction in
+      try await database.write { transaction in
         try transaction.execute(
           "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
         )
         try transaction.execute("INSERT INTO items VALUES (1, 'Before', 0)")
       }
+      transport.removeAllMessages()
 
       try await database.write { transaction in
         try transaction.execute(
@@ -187,7 +188,7 @@
       let receivingTransport = InMemoryIPCTransport(network: network)
       let sendingTransport = InMemoryIPCTransport(network: network)
       let identifier = OrbitDatabaseIdentifier(rawValue: "external-region")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
         id: identifier,
         transport: receivingTransport
@@ -207,12 +208,16 @@
     @Test
     func failedTransportSubscriptionRemovesLocalAndSiblingObservers() async throws {
       let identifier = OrbitDatabaseIdentifier.unique()
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
         id: identifier,
         transport: RecordingDatabaseIPCTransport(rejectsSubscriptions: true)
       )
-      let sibling = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
+      let sibling = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
       let observer = RecordingPeerTransactionObserver()
 
       #expect(throws: AnnouncementFailure.self) {
@@ -230,13 +235,15 @@
     @Test
     func siblingHandleReportsItsRegionBeforeItsCommit() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "sibling-region")
-      let writingDatabase = OrbitDatabase(
+      let writingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
-        id: identifier
+        id: identifier,
+        transport: InMemoryIPCTransport()
       )
-      let observingDatabase = OrbitDatabase(
+      let observingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
-        id: identifier
+        id: identifier,
+        transport: InMemoryIPCTransport()
       )
       let observer = RecordingPeerTransactionObserver()
       let subscription = try observingDatabase.subscribe(transactionObserver: observer)
@@ -255,6 +262,7 @@
       let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-announcement")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
       try await createAnnouncementTables(in: database)
+      transport.removeAllMessages()
 
       try await database.writeWithoutTransaction { connection in
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
@@ -281,6 +289,7 @@
       let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-failure")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
       try await createAnnouncementTables(in: database)
+      transport.removeAllMessages()
 
       await #expect(throws: WriteFailure.self) {
         try await database.writeWithoutTransaction { connection in
@@ -305,6 +314,7 @@
     func writeWithoutTransactionThatCommitsNothingIsNotAnnounced() async throws {
       let (database, transport) = try makeAnnouncingDatabase()
       try await createAnnouncementTables(in: database)
+      transport.removeAllMessages()
 
       try await database.writeWithoutTransaction { connection in
         try connection.execute("PRAGMA foreign_keys = OFF")
@@ -331,6 +341,7 @@
       let identifier = OrbitDatabaseIdentifier(rawValue: "blocking-without-transaction")
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
       try await createAnnouncementTables(in: database)
+      transport.removeAllMessages()
 
       #expect(throws: WriteFailure.self) {
         try database.writeWithoutTransactionBlocking { connection in
@@ -353,7 +364,7 @@
     func peerReceivesOneAnnouncementForAWriteWithoutTransaction() async throws {
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-peer")
-      let database = OrbitDatabase(
+      let database = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
         id: identifier,
         transport: InMemoryIPCTransport(network: network)
@@ -383,8 +394,16 @@
     @Test
     func siblingHandleSeesWriteWithoutTransactionAsOneLocalCommit() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-sibling")
-      let writingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
-      let observingDatabase = OrbitDatabase(writer: try SQLiteQueue(path: .memory), id: identifier)
+      let writingDatabase = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
+      let observingDatabase = OrbitIPCDatabase(
+        writer: try SQLiteQueue(path: .memory),
+        id: identifier,
+        transport: InMemoryIPCTransport()
+      )
       let observer = RecordingPeerTransactionObserver()
       let subscription = try observingDatabase.subscribe(transactionObserver: observer)
       let region = OrbitDatabaseRegion(table: "items")
@@ -398,11 +417,8 @@
     }
   }
 
-  private func createAnnouncementTables<Writer>(
-    in database: OrbitDatabase<Writer>
-  ) async throws {
-    // The tables are created through the writer itself, which announces nothing.
-    try await database.writer.write { transaction in
+  private func createAnnouncementTables(in database: OrbitIPCDatabase) async throws {
+    try await database.write { transaction in
       try transaction.execute(
         """
         CREATE TABLE items (id INTEGER PRIMARY KEY);
@@ -459,9 +475,9 @@
     failure: (any Error)? = nil,
     delay: Duration? = nil,
     onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
-  ) throws -> (OrbitDatabase<SQLiteQueue>, RecordingDatabaseIPCTransport) {
+  ) throws -> (OrbitIPCDatabase, RecordingDatabaseIPCTransport) {
     let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
-    let database = OrbitDatabase(
+    let database = OrbitIPCDatabase(
       writer: try SQLiteQueue(path: ":memory:"),
       id: id,
       transport: transport,
@@ -508,6 +524,10 @@
 
     var messages: [OrbitIPCMessage] { self.state.withLock { $0.messages } }
     var didBeginSending: Bool { self.state.withLock { $0.didBeginSending } }
+
+    func removeAllMessages() {
+      self.state.withLock { $0.messages.removeAll() }
+    }
 
     init(
       failure: (any Error)? = nil,
