@@ -192,24 +192,24 @@ upstream Turso checkout; the release workflow merges the slices and partitions t
 host-family archives referenced by the index.
 
 The trait also vends `TursoPool`, which enables Turso's MVCC journal and runs reads and writes on
-separate connection pools. Ordinary writes use `BEGIN CONCURRENT`, while an explicit exclusive
-write waits for every pool access ahead of it and uses `BEGIN IMMEDIATE` for schema work:
+separate connection pools. Explicit concurrent writes use `BEGIN CONCURRENT`, while `write` waits
+for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for schema work:
 
 ```swift
 let driver = try TursoPool(path: databasePath, writerCount: 4)
 let database = OrbitDatabase(writer: driver)
 
-try await database.write { transaction in
+try await database.concurrentWrite { transaction in
   try transaction.execute(Reminder.insert { reminder })
 }
 
-try await driver.exclusiveWrite { transaction in
+try await driver.write { transaction in
   try transaction.execute("CREATE TABLE archived_reminders (...)")
 }
 ```
 
 Concurrent write conflicts are rolled back and surfaced as `SQLiteError`; a transaction body is
-never replayed implicitly. `readBlocking`, `writeBlocking`, and `exclusiveWriteBlocking` use the
+never replayed implicitly. `readBlocking`, `writeBlocking`, and `concurrentWriteBlocking` use the
 same connection pools and admission order as their asynchronous counterparts. `TursoPool` also
 supports access outside a transaction, plus transaction and value observation. Each successful
 concurrent writer publishes its own committed region; conflicts and rollbacks publish nothing.
@@ -218,7 +218,7 @@ For local development, build Turso's `turso_sqlite3` crate and put `libturso_sql
 linker's search path. `Scripts/build-turso-artifactbundle.sh` turns a Turso checkout into the
 SwiftPM static-library artifact bundle intended for release distribution. The checked-in system
 module and the bundle both expose the module as `TursoSQLite3`, so publishing the bundle does not
-change SQLiteOrbit's Swift source. Turso writes outside a transaction are exclusive because they
+change SQLiteOrbit's Swift source. Turso writes outside a transaction are barriers because they
 may contain immediate transactions or schema-oriented statements.
 
 Turso's compatibility surface is still smaller than SQLite's. SQLiteOrbit handles that boundary

@@ -88,9 +88,11 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// The identifier used when an ``OrbitDatabase`` does not receive an explicit one.
   var defaultIdentifier: OrbitDatabaseIdentifier { get }
 
-  /// Runs `body` in a write transaction, committing it when `body` returns.
+  /// Runs `body` in a barrier write transaction, committing it when `body` returns.
   ///
   /// A `body` that throws rolls the transaction back, so nothing it wrote is kept.
+  /// The write waits for earlier accesses through this database writer to finish and prevents
+  /// later accesses through it from beginning until the transaction completes.
   ///
   /// - Parameter body: Receives the transaction. It cannot escape the call.
   /// - Returns: Whatever `body` returned.
@@ -100,7 +102,7 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result
 
-  /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
+  /// Runs `body` in a barrier write transaction, blocking the calling thread until it finishes.
   ///
   /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
   ///   starves the machinery the rest of the database runs on.
@@ -119,6 +121,7 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// statement before the failing one committed. Group statements that must commit together with
   /// ``SQLiteWriteConnection/transaction(_:)``. This is for the work a transaction gets in the way
   /// of, such as turning foreign keys off, which has no effect inside one.
+  /// The access is a barrier like ``write(_:)``.
   ///
   /// The ``SQLiteWriteConnection/busyTimeout`` and foreign key enforcement that `body` changes
   /// through the connection are restored when the access ends, even when `body` throws. Any other
@@ -146,7 +149,7 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// Each statement commits on its own as it finishes. The busy timeout and foreign key
   /// enforcement that `body` changes through the connection are restored when the access ends;
   /// any other pragma that `body` changes stays changed on the connection, so restore it before
-  /// returning.
+  /// returning. The access is a barrier like ``writeBlocking(_:)``.
   ///
   /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
   ///   starves the machinery the rest of the database runs on.
@@ -162,5 +165,37 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when a statement fails.
   func writeWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result
+}
+
+/// A native SQLite database that can run explicitly concurrent write transactions.
+///
+/// Concurrent writes may overlap reads and other concurrent writes through the same database
+/// writer. A conflict between overlapping writes is surfaced as an error; transaction bodies are
+/// never replayed implicitly.
+public protocol OrbitConcurrentDatabaseWriter: OrbitDatabaseWriter {
+  /// Runs `body` in a concurrent write transaction, committing it when `body` returns.
+  ///
+  /// - Parameter body: Receives the transaction. It cannot escape the call.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened
+  ///   or committed, including when it conflicts with another concurrent write.
+  func concurrentWrite<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result
+
+  /// Runs `body` in a concurrent write transaction, blocking the calling thread until it finishes.
+  ///
+  /// Calls made from different threads may run concurrently.
+  ///
+  /// - Important: Never call this from a task. Blocking a thread of Swift's cooperative pool
+  ///   starves the machinery the rest of the database runs on.
+  ///
+  /// - Parameter body: Receives the transaction. It cannot escape the call.
+  /// - Returns: Whatever `body` returned.
+  /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened
+  ///   or committed, including when it conflicts with another concurrent write.
+  func concurrentWriteBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result
 }

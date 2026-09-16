@@ -1,19 +1,21 @@
 #if Turso
-  /// An ``OrbitDatabaseWriter`` that runs reads and writes concurrently using Turso's MVCC mode.
+  /// An ``OrbitConcurrentDatabaseWriter`` that can run explicitly concurrent writes using Turso's
+  /// MVCC mode.
   ///
   /// Reads use a fixed set of read-only connections, while writes use a separate fixed set of
-  /// writable connections and `BEGIN CONCURRENT`. Reads and writes may overlap, and writes that
-  /// modify distinct rows may commit concurrently. Turso reports a conflict between overlapping
-  /// writes as a ``SQLiteError``; the driver rolls the failed transaction back but does not replay
-  /// its body.
+  /// writable connections. ``concurrentWrite(_:)`` uses `BEGIN CONCURRENT`; reads and concurrent
+  /// writes may overlap, and writes that modify distinct rows may commit concurrently. Turso
+  /// reports a conflict between overlapping writes as a ``SQLiteError``; the driver rolls the
+  /// failed transaction back but does not replay its body. ``write(_:)`` is a barrier for every
+  /// access through this pool and uses `BEGIN IMMEDIATE`.
   ///
   /// ```swift
   /// let driver = try TursoPool(path: .file(url))
-  /// try await driver.write { transaction in
+  /// try await driver.concurrentWrite { transaction in
   ///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
   /// }
   /// ```
-  public final class TursoPool: OrbitObservableDatabase {
+  public final class TursoPool: OrbitConcurrentDatabaseWriter, OrbitObservableDatabase {
     /// The identity this driver's database is known by within the process.
     public let defaultIdentifier: OrbitDatabaseIdentifier
 
@@ -72,8 +74,8 @@
 
     /// Runs `body` in a read transaction on one of the pool's reader connections.
     ///
-    /// The read may overlap writes already in flight and sees a consistent Turso snapshot. A read
-    /// begun after an awaited write completes observes that write.
+    /// The read may overlap concurrent writes already in flight and sees a consistent Turso
+    /// snapshot. A read begun after an awaited write completes observes that write.
     public func read<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) async throws -> Result {
@@ -87,11 +89,21 @@
       try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
     }
 
+    /// Runs `body` in an immediate transaction after every earlier pool access has finished.
+    ///
+    /// Requests issued after this one wait behind it until it completes. Use this for schema work
+    /// or another operation that must not overlap concurrent transactions.
+    public func write<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) async throws -> Result {
+      try await scheduler.write(observers: transactionObservers, body)
+    }
+
     /// Runs `body` in a concurrent Turso write transaction.
     ///
     /// A commit conflict is rolled back and thrown as a ``SQLiteError``. The body is never retried
     /// implicitly.
-    public func write<Result: Sendable>(
+    public func concurrentWrite<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
       let ((result, region), release) = try await scheduler.writeTrackingConcurrentWriters {
@@ -104,22 +116,12 @@
 
     /// Runs `body` with one writer connection outside a transaction.
     ///
-    /// The access is exclusive so a nested immediate transaction and schema-oriented statements
+    /// The access is a barrier so a nested immediate transaction and schema-oriented statements
     /// cannot overlap another pool access.
     public func writeWithoutTransaction<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
     ) async throws -> Result {
       try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
-    }
-
-    /// Runs `body` in an immediate transaction after every ordinary pool access has finished.
-    ///
-    /// Use this for schema work or another operation that must not overlap concurrent transactions.
-    /// Requests issued after this one wait behind it until it completes.
-    public func exclusiveWrite<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) async throws -> Result {
-      try await scheduler.write(observers: transactionObservers, body)
     }
 
     /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -139,11 +141,18 @@
       try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
     }
 
+    /// Runs an immediate transaction as a barrier, blocking the calling thread until it finishes.
+    public func writeBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) throws -> Result {
+      try scheduler.writeBlocking(observers: transactionObservers, body)
+    }
+
     /// Runs `body` in a concurrent write transaction, blocking the calling thread.
     ///
     /// Calls made from different threads may run concurrently. A conflict is thrown without
     /// replaying `body`.
-    public func writeBlocking<Result: Sendable>(
+    public func concurrentWriteBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) throws -> Result {
       let ((result, region), release) = try scheduler.writeBlockingTrackingConcurrentWriters {
@@ -154,19 +163,12 @@
       return result
     }
 
-    /// Runs `body` exclusively with one writer connection outside a transaction, blocking the
+    /// Runs `body` as a barrier with one writer connection outside a transaction, blocking the
     /// calling thread.
     public func writeWithoutTransactionBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
     ) throws -> Result {
       try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
-    }
-
-    /// Runs an immediate transaction exclusively, blocking the calling thread until it finishes.
-    public func exclusiveWriteBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) throws -> Result {
-      try scheduler.writeBlocking(observers: transactionObservers, body)
     }
 
     /// Registers an observer of reads and successfully committed writes.

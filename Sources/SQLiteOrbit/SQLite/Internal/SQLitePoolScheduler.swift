@@ -55,8 +55,8 @@ struct SQLitePoolWriterRelease: Sendable {
 final class SQLitePoolScheduler: Sendable {
   private enum Kind: Equatable, Sendable {
     case read
-    case write
-    case exclusiveWrite
+    case concurrentWrite
+    case barrierWrite
   }
 
   private struct Lease: Sendable {
@@ -70,7 +70,7 @@ final class SQLitePoolScheduler: Sendable {
     var idleReaders: [SQLiteSerialConnection]
     var idleWriters: [SQLiteSerialConnection]
     var activeOrdinaryAccesses = 0
-    var isExclusiveWriteActive = false
+    var isBarrierWriteActive = false
     var waiting: [Waiter] = []
     var settled: [Int: Result<Lease, any Error>] = [:]
     var blockingHolders: Set<ObjectIdentifier> = []
@@ -132,7 +132,7 @@ final class SQLitePoolScheduler: Sendable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    let lease = try await acquire(.exclusiveWrite)
+    let lease = try await acquire(.barrierWrite)
     defer { release(lease) }
     return try await lease.connection.write(observers: observers, body)
   }
@@ -141,7 +141,7 @@ final class SQLitePoolScheduler: Sendable {
   func writeTrackingConcurrentWriters<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> (Result, SQLitePoolWriterRelease) {
-    let lease = try await acquire(.write)
+    let lease = try await acquire(.concurrentWrite)
     do {
       let result = try await lease.connection.write(mode: .concurrent, body)
       return (result, release(lease, capturingActiveWriters: true)!)
@@ -164,7 +164,7 @@ final class SQLitePoolScheduler: Sendable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    let lease = acquireBlocking(.exclusiveWrite)
+    let lease = acquireBlocking(.barrierWrite)
     defer { release(lease) }
     return try lease.connection.writeBlocking(observers: observers, body)
   }
@@ -173,7 +173,7 @@ final class SQLitePoolScheduler: Sendable {
   func writeBlockingTrackingConcurrentWriters<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> (Result, SQLitePoolWriterRelease) {
-    let lease = acquireBlocking(.write)
+    let lease = acquireBlocking(.concurrentWrite)
     do {
       let result = try lease.connection.writeBlocking(mode: .concurrent, body)
       return (result, release(lease, capturingActiveWriters: true)!)
@@ -196,7 +196,7 @@ final class SQLitePoolScheduler: Sendable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    let lease = try await acquire(.exclusiveWrite)
+    let lease = try await acquire(.barrierWrite)
     defer { release(lease) }
     return try await lease.connection.writeWithoutTransaction(observers: observers, body)
   }
@@ -214,7 +214,7 @@ final class SQLitePoolScheduler: Sendable {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    let lease = acquireBlocking(.exclusiveWrite)
+    let lease = acquireBlocking(.barrierWrite)
     defer { release(lease) }
     return try lease.connection.writeWithoutTransactionBlocking(observers: observers, body)
   }
@@ -295,7 +295,7 @@ final class SQLitePoolScheduler: Sendable {
       case .read:
         state.idleReaders.append(lease.connection)
         state.activeOrdinaryAccesses -= 1
-      case .write:
+      case .concurrentWrite:
         state.idleWriters.append(lease.connection)
         state.activeOrdinaryAccesses -= 1
         precondition(state.activeWriterIDs.remove(lease.id) != nil)
@@ -307,9 +307,9 @@ final class SQLitePoolScheduler: Sendable {
           }
           capturedBarrier = barrier
         }
-      case .exclusiveWrite:
+      case .barrierWrite:
         state.idleWriters.append(lease.connection)
-        state.isExclusiveWriteActive = false
+        state.isBarrierWriteActive = false
       }
       if let blockingHolder = lease.blockingHolder {
         state.blockingHolders.remove(blockingHolder)
@@ -331,20 +331,20 @@ final class SQLitePoolScheduler: Sendable {
   // MARK: - Granting
 
   private static func grant(_ state: inout State) -> [Wakeup] {
-    guard !state.isExclusiveWriteActive else { return [] }
+    guard !state.isBarrierWriteActive else { return [] }
     var wakeups: [Wakeup] = []
 
     while true {
-      // An exclusive write is a fairness boundary: accesses behind it cannot keep it waiting.
+      // A barrier write is a fairness boundary: accesses behind it cannot keep it waiting.
       let boundary =
-        state.waiting.firstIndex { $0.kind == .exclusiveWrite }
+        state.waiting.firstIndex { $0.kind == .barrierWrite }
         ?? state.waiting.endIndex
       let grantable = state.waiting.indices.first { index in
         guard index < boundary else { return false }
         switch state.waiting[index].kind {
         case .read: return !state.idleReaders.isEmpty
-        case .write: return !state.idleWriters.isEmpty
-        case .exclusiveWrite: return false
+        case .concurrentWrite: return !state.idleWriters.isEmpty
+        case .barrierWrite: return false
         }
       }
 
@@ -355,7 +355,7 @@ final class SQLitePoolScheduler: Sendable {
           ? state.idleReaders.removeLast()
           : state.idleWriters.removeLast()
         state.activeOrdinaryAccesses += 1
-        if waiter.kind == .write {
+        if waiter.kind == .concurrentWrite {
           state.activeWriterIDs.insert(waiter.id)
         }
         wakeups.append(lend(connection, to: waiter, in: &state))
@@ -363,13 +363,13 @@ final class SQLitePoolScheduler: Sendable {
       }
 
       guard
-        state.waiting.first?.kind == .exclusiveWrite,
+        state.waiting.first?.kind == .barrierWrite,
         state.activeOrdinaryAccesses == 0,
         let connection = state.idleWriters.popLast()
       else { break }
 
       let waiter = state.waiting.removeFirst()
-      state.isExclusiveWriteActive = true
+      state.isBarrierWriteActive = true
       wakeups.append(lend(connection, to: waiter, in: &state))
       break
     }

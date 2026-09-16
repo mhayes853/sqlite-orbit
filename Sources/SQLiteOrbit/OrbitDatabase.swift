@@ -93,7 +93,7 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     try writer.readBlocking(body)
   }
 
-  /// Writes to the database and announces the transaction it commits.
+  /// Writes to the database through a barrier and announces the transaction it commits.
   ///
   /// A write that throws is rolled back by its writer and is not announced. The announcement is
   /// complete by the time this method returns, so a peer that observes the database has already
@@ -119,7 +119,8 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     return result
   }
 
-  /// Writes to the database synchronously and announces the transaction it commits.
+  /// Writes to the database synchronously through a barrier and announces the transaction it
+  /// commits.
   ///
   /// The durable write completes before this method returns. Since IPC transports are
   /// asynchronous, its announcement continues in an independent task, so a peer may not have been
@@ -293,6 +294,38 @@ public final class OrbitDatabase<Writer: OrbitDatabaseWriter>:
     } catch {
       onAnnouncementFailure?(error)
     }
+  }
+}
+
+extension OrbitDatabase: OrbitConcurrentDatabaseWriter where Writer: OrbitConcurrentDatabaseWriter {
+  /// Writes to the database concurrently and announces the transaction it commits.
+  ///
+  /// The transaction may overlap reads and other concurrent writes through the underlying writer.
+  /// A conflicting write is rolled back and thrown without replaying `body`.
+  public func concurrentWrite<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) async throws -> Result {
+    let (result, region) = try await writer.concurrentWrite { transaction in
+      try transaction.recordingDatabaseRegion(body)
+    }
+    reportLocalCommit(in: region)
+    await Task { await self.announceCommittedTransaction(in: region) }.value
+    return result
+  }
+
+  /// Writes to the database concurrently, blocking the calling thread, and announces the commit.
+  ///
+  /// Calls made from different threads may run concurrently. The durable write completes before
+  /// this method returns; its asynchronous IPC announcement may still be in progress.
+  public func concurrentWriteBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+  ) throws -> Result {
+    let (result, region) = try writer.concurrentWriteBlocking { transaction in
+      try transaction.recordingDatabaseRegion(body)
+    }
+    reportLocalCommit(in: region)
+    Task { await self.announceCommittedTransaction(in: region) }
+    return result
   }
 }
 
