@@ -9,15 +9,24 @@
     @Test
     func writeAnnouncesTheTransactionItCommits() async throws {
       let identifier = OrbitDatabaseIdentifier(rawValue: "announced")
-      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
+      let delegate = RecordingOrbitIPCDatabaseDelegate()
+      let (database, transport) = try makeAnnouncingDatabase(
+        id: identifier,
+        delegate: delegate
+      )
 
       try await database.write { transaction in
         try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
       }
 
+      let message = OrbitIPCMessage.transactionDidCommit(
+        .init(databaseIdentifier: identifier, region: .fullDatabase)
+      )
+      #expect(transport.messages == [message])
       #expect(
-        transport.messages == [
-          .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+        delegate.events == [
+          .willAnnounce(message),
+          .didSuccessfullyAnnounce(message)
         ]
       )
     }
@@ -157,11 +166,12 @@
 
       #expect(value == [1])
       #expect(
-        delegate.failures == [
-          .init(
-            message: .transactionDidCommit(
-              .init(databaseIdentifier: database.id, region: .empty)
-            ),
+        delegate.events == [
+          .willAnnounce(
+            .transactionDidCommit(.init(databaseIdentifier: database.id, region: .empty))
+          ),
+          .didFailToAnnounce(
+            .transactionDidCommit(.init(databaseIdentifier: database.id, region: .empty)),
             errorType: "AnnouncementFailure"
           )
         ]
@@ -188,7 +198,39 @@
       _ = try await write.value
 
       #expect(transport.messages.count == 1)
-      #expect(delegate.failures.isEmpty)
+      #expect(
+        delegate.events == [
+          .willAnnounce(transport.messages[0]),
+          .didSuccessfullyAnnounce(transport.messages[0])
+        ]
+      )
+    }
+
+    @Test
+    func announcementUsesOneDelegateSnapshot() async throws {
+      let originalDelegate = RecordingOrbitIPCDatabaseDelegate()
+      let replacementDelegate = RecordingOrbitIPCDatabaseDelegate()
+      let (database, transport) = try makeAnnouncingDatabase(
+        delay: .milliseconds(50),
+        delegate: originalDelegate
+      )
+
+      let write = Task {
+        try await database.write { transaction in
+          try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+        }
+      }
+      try await waitUntil { transport.didBeginSending }
+      database.delegate = replacementDelegate
+      try await write.value
+
+      #expect(
+        originalDelegate.events == [
+          .willAnnounce(transport.messages[0]),
+          .didSuccessfullyAnnounce(transport.messages[0])
+        ]
+      )
+      #expect(replacementDelegate.events.isEmpty)
     }
 
     @Test
@@ -497,7 +539,7 @@
     id: OrbitDatabaseIdentifier? = nil,
     failure: (any Error)? = nil,
     delay: Duration? = nil,
-    delegate: (any OrbitIPCDatabaseDelegate)? = nil
+    delegate: (any OrbitIPCDatabase.Delegate)? = nil
   ) throws -> (OrbitIPCDatabase, RecordingDatabaseIPCTransport) {
     let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
     let database = OrbitIPCDatabase(
@@ -512,23 +554,38 @@
   private struct WriteFailure: Error {}
   private struct AnnouncementFailure: Error {}
 
-  private struct RecordedAnnouncementFailure: Equatable, Sendable {
-    let message: OrbitIPCMessage
-    let errorType: String
+  private enum RecordedAnnouncementEvent: Equatable, Sendable {
+    case willAnnounce(OrbitIPCMessage)
+    case didSuccessfullyAnnounce(OrbitIPCMessage)
+    case didFailToAnnounce(OrbitIPCMessage, errorType: String)
   }
 
-  private final class RecordingOrbitIPCDatabaseDelegate: OrbitIPCDatabaseDelegate, Sendable {
-    private let recordedFailures = Lock([RecordedAnnouncementFailure]())
+  private final class RecordingOrbitIPCDatabaseDelegate: OrbitIPCDatabase.Delegate, Sendable {
+    private let recordedEvents = Lock([RecordedAnnouncementEvent]())
 
-    var failures: [RecordedAnnouncementFailure] { recordedFailures.withLock { $0 } }
+    var events: [RecordedAnnouncementEvent] { recordedEvents.withLock { $0 } }
+
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      willAnnounce message: OrbitIPCMessage
+    ) {
+      recordedEvents.withLock { $0.append(.willAnnounce(message)) }
+    }
+
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      didSuccessfullyAnnounce message: OrbitIPCMessage
+    ) {
+      recordedEvents.withLock { $0.append(.didSuccessfullyAnnounce(message)) }
+    }
 
     func orbitIPCDatabase(
       _ database: OrbitIPCDatabase,
       didFailToAnnounce message: OrbitIPCMessage,
       error: any Error
     ) {
-      recordedFailures.withLock {
-        $0.append(.init(message: message, errorType: "\(type(of: error))"))
+      recordedEvents.withLock {
+        $0.append(.didFailToAnnounce(message, errorType: "\(type(of: error))"))
       }
     }
   }

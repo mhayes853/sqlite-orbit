@@ -1,33 +1,3 @@
-/// Receives important events that an ``OrbitIPCDatabase`` cannot report through its operations.
-///
-/// Delegate methods can be called from any executor and should return promptly. Every method has a
-/// default implementation so delegates can implement only the events they need.
-public protocol OrbitIPCDatabaseDelegate: AnyObject, Sendable {
-  /// Reports that a committed write could not be announced to every peer.
-  ///
-  /// The write is already durable and is not rolled back. A failed send may have reached some
-  /// peers, so this callback is informational and the database does not retry it automatically.
-  ///
-  /// - Parameters:
-  ///   - database: The database that made the announcement.
-  ///   - message: The announcement that could not be sent to every peer.
-  ///   - error: The error reported by the IPC transport.
-  func orbitIPCDatabase(
-    _ database: OrbitIPCDatabase,
-    didFailToAnnounce message: OrbitIPCMessage,
-    error: any Error
-  )
-}
-
-extension OrbitIPCDatabaseDelegate {
-  /// Ignores a failed announcement.
-  public func orbitIPCDatabase(
-    _ database: OrbitIPCDatabase,
-    didFailToAnnounce message: OrbitIPCMessage,
-    error: any Error
-  ) {}
-}
-
 /// A database handle that coordinates local transactions with other processes over IPC.
 ///
 /// A database announces every write it commits so that processes sharing the same SQLite file can
@@ -50,11 +20,52 @@ public final class OrbitIPCDatabase:
   OrbitDatabaseWriter,
   Sendable
 {
+  /// Receives important announcement events that the database cannot report through its
+  /// operations.
+  ///
+  /// Delegate methods can be called from any executor and should return promptly. Announcements
+  /// made concurrently can interleave, but each message's callbacks preserve their lifecycle
+  /// order. Every method has a default implementation so delegates can implement only the events
+  /// they need.
+  public protocol Delegate: AnyObject, Sendable {
+    /// Reports that the database is about to ask its transport to announce a committed write.
+    ///
+    /// The write is already durable. This callback runs immediately before the transport attempt.
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      willAnnounce message: OrbitIPCMessage
+    )
+
+    /// Reports that every currently discoverable peer accepted an announcement into its transport
+    /// receive queue.
+    ///
+    /// This does not mean that peer handlers have processed the message.
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      didSuccessfullyAnnounce message: OrbitIPCMessage
+    )
+
+    /// Reports that a committed write could not be announced to every peer.
+    ///
+    /// The write is already durable and is not rolled back. A failed send may have reached some
+    /// peers, so this callback is informational and the database does not retry it automatically.
+    ///
+    /// - Parameters:
+    ///   - database: The database that made the announcement.
+    ///   - message: The announcement that could not be sent to every peer.
+    ///   - error: The error reported by the IPC transport.
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      didFailToAnnounce message: OrbitIPCMessage,
+      error: any Error
+    )
+  }
+
   /// The identity shared by every process that opens this database.
   public let id: OrbitDatabaseIdentifier
 
   private struct WeakDelegate: Sendable {
-    weak var value: (any OrbitIPCDatabaseDelegate)?
+    weak var value: (any Delegate)?
   }
 
   private let writer: any OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase
@@ -65,7 +76,7 @@ public final class OrbitIPCDatabase:
   ///
   /// The database holds this value weakly. Access is synchronized, so the delegate can be replaced
   /// while the database is being used from other tasks.
-  public var delegate: (any OrbitIPCDatabaseDelegate)? {
+  public var delegate: (any Delegate)? {
     get { delegateStorage.withLock { $0.value } }
     set { delegateStorage.withLock { $0.value = newValue } }
   }
@@ -91,7 +102,7 @@ public final class OrbitIPCDatabase:
     writer: some OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase,
     id: OrbitDatabaseIdentifier? = nil,
     transport: some OrbitIPCTransport,
-    delegate: (any OrbitIPCDatabaseDelegate)? = nil
+    delegate: (any Delegate)? = nil
   ) {
     self.writer = writer
     self.id = id ?? writer.defaultIdentifier
@@ -323,13 +334,36 @@ public final class OrbitIPCDatabase:
     let message = OrbitIPCMessage.transactionDidCommit(
       OrbitDatabaseTransactionDidCommit(databaseIdentifier: id, region: region)
     )
+    let delegate = delegateStorage.withLock { $0.value }
+    delegate?.orbitIPCDatabase(self, willAnnounce: message)
     do {
       try await transport.send(message)
+      delegate?.orbitIPCDatabase(self, didSuccessfullyAnnounce: message)
     } catch {
-      let delegate = delegateStorage.withLock { $0.value }
       delegate?.orbitIPCDatabase(self, didFailToAnnounce: message, error: error)
     }
   }
+}
+
+extension OrbitIPCDatabase.Delegate {
+  /// Ignores an announcement that is about to begin.
+  public func orbitIPCDatabase(
+    _ database: OrbitIPCDatabase,
+    willAnnounce message: OrbitIPCMessage
+  ) {}
+
+  /// Ignores a successful announcement.
+  public func orbitIPCDatabase(
+    _ database: OrbitIPCDatabase,
+    didSuccessfullyAnnounce message: OrbitIPCMessage
+  ) {}
+
+  /// Ignores a failed announcement.
+  public func orbitIPCDatabase(
+    _ database: OrbitIPCDatabase,
+    didFailToAnnounce message: OrbitIPCMessage,
+    error: any Error
+  ) {}
 }
 
 extension OrbitIPCDatabase: OrbitObservableDatabase {

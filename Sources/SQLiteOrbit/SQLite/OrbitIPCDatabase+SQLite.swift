@@ -36,7 +36,7 @@
       configuration: SQLiteConfiguration = .default,
       id: OrbitDatabaseIdentifier? = nil,
       coordination: UnixDatagramIPCTransport.Configuration = .default,
-      delegate: (any OrbitIPCDatabaseDelegate)? = nil
+      delegate: (any OrbitIPCDatabase.Delegate)? = nil
     ) throws {
       guard case .multipleProcesses = configuration.library.fileSharing else {
         throw SQLiteFeatureUnavailableError(
