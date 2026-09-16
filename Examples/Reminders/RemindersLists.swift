@@ -1,6 +1,7 @@
 import Observation
 import SQLiteOrbit
 import SwiftUI
+import TipKit
 
 typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
 
@@ -27,6 +28,7 @@ final class RemindersListsModel {
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
   var errorMessage: String?
+  let seedDatabaseTip = SeedDatabaseTip()
 
   @ObservationIgnored private let database: RemindersDatabase
 
@@ -100,6 +102,64 @@ final class RemindersListsModel {
     }
   }
 
+  func seedSampleData() async {
+    guard remindersLists.isEmpty else { return }
+    let personalID = UUID()
+    let workID = UUID()
+    let groceriesID = UUID()
+    let presentationID = UUID()
+    let now = Date.now
+    await performDatabaseWrite { transaction in
+      guard try RemindersList.count().fetchOne(transaction) == 0 else { return }
+      try RemindersList.insert {
+        [
+          RemindersList(id: personalID, color: .blue, position: 0, title: "Personal"),
+          RemindersList(id: workID, color: .orange, position: 1, title: "Work"),
+        ]
+      }
+      .execute(transaction)
+      try Reminder.insert {
+        [
+          Reminder(
+            id: groceriesID,
+            dueDate: now,
+            notes: "Milk, coffee, and apples",
+            position: 0,
+            remindersListID: personalID,
+            title: "Pick up groceries"
+          ),
+          Reminder(
+            id: presentationID,
+            dueDate: now.addingTimeInterval(86_400),
+            isFlagged: true,
+            notes: "Add the latest launch numbers",
+            position: 1,
+            priority: .high,
+            remindersListID: workID,
+            title: "Finish presentation"
+          ),
+          Reminder(
+            id: UUID(),
+            position: 2,
+            remindersListID: personalID,
+            status: .completed,
+            title: "Book dentist appointment"
+          ),
+        ]
+      }
+      .execute(transaction)
+      try Tag.insert { [Tag(title: "errands"), Tag(title: "focus")] }.execute(transaction)
+      try ReminderTag.insert {
+        [
+          ReminderTag(id: UUID(), reminderID: groceriesID, tagID: "errands"),
+          ReminderTag(id: UUID(), reminderID: presentationID, tagID: "focus"),
+        ]
+      }
+      .execute(transaction)
+    }
+    seedDatabaseTip.invalidate(reason: .actionPerformed)
+  }
+
   private func performDatabaseWrite(
     _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) async {
@@ -113,16 +173,24 @@ final class RemindersListsModel {
 
 struct RemindersListsView: View {
   @State private var model: RemindersListsModel
+  @State private var listForm: RemindersListFormContext?
+  @State private var reminderForm: ReminderFormContext?
+  @State private var searchModel: SearchRemindersModel
+  @State private var searchText = ""
   private let database: RemindersDatabase
 
   init(database: RemindersDatabase) {
     self.database = database
     _model = State(initialValue: RemindersListsModel(database: database))
+    _searchModel = State(initialValue: SearchRemindersModel(database: database))
   }
 
   var body: some View {
     List {
-      Section {
+      if !searchText.isEmpty {
+        SearchRemindersView(database: database, model: searchModel, searchText: searchText)
+      } else {
+        Section {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 16) {
           GridRow {
             statCell(.today, count: model.stats.todayCount)
@@ -147,7 +215,10 @@ struct RemindersListsView: View {
             RemindersListRow(
               remindersCount: summary.remindersCount,
               remindersList: summary.remindersList,
-              onDelete: { Task { await model.deleteList(summary.remindersList) } }
+              onDelete: { Task { await model.deleteList(summary.remindersList) } },
+              onEdit: {
+                listForm = RemindersListFormContext(remindersList: summary.remindersList)
+              }
             )
           }
         }
@@ -156,15 +227,16 @@ struct RemindersListsView: View {
         }
       }
 
-      if !model.tags.isEmpty {
-        Section("Tags") {
-          ForEach(model.tags) { tag in
-            NavigationLink(value: RemindersDetailType.tags([tag])) {
-              TagRow(tag: tag)
+        if !model.tags.isEmpty {
+          Section("Tags") {
+            ForEach(model.tags) { tag in
+              NavigationLink(value: RemindersDetailType.tags([tag])) {
+                TagRow(tag: tag)
+              }
             }
-          }
-          .onDelete { offsets in
-            Task { await model.deleteTags(at: offsets) }
+            .onDelete { offsets in
+              Task { await model.deleteTags(at: offsets) }
+            }
           }
         }
       }
@@ -172,6 +244,49 @@ struct RemindersListsView: View {
     .listStyle(.insetGrouped)
     .navigationTitle("Reminders")
     .task { await model.load() }
+    .searchable(text: $searchText, prompt: "Search reminders and tags")
+    .onChange(of: searchText) { _, newValue in
+      searchModel.search(newValue)
+    }
+    .toolbar {
+      if model.remindersLists.isEmpty {
+        ToolbarItem(placement: .primaryAction) {
+          Button("Add Sample Data", systemImage: "leaf") {
+            Task { await model.seedSampleData() }
+          }
+          .popoverTip(model.seedDatabaseTip)
+        }
+      }
+      ToolbarItem(placement: .bottomBar) {
+        HStack {
+          Button {
+            guard let list = model.remindersLists.first?.remindersList else {
+              listForm = RemindersListFormContext(remindersList: nil)
+              return
+            }
+            reminderForm = ReminderFormContext(remindersList: list)
+          } label: {
+            Label("New Reminder", systemImage: "plus.circle.fill")
+              .font(.title3.bold())
+          }
+          Spacer()
+          Button("Add List") {
+            listForm = RemindersListFormContext(remindersList: nil)
+          }
+          .font(.title3)
+        }
+      }
+    }
+    .sheet(item: $listForm) { context in
+      NavigationStack {
+        RemindersListForm(database: database, remindersList: context.remindersList)
+      }
+    }
+    .sheet(item: $reminderForm) { context in
+      NavigationStack {
+        ReminderFormView(database: database, remindersList: context.remindersList)
+      }
+    }
     .navigationDestination(for: RemindersDetailType.self) { detailType in
       RemindersDetailView(model: RemindersDetailModel(database: database, detailType: detailType))
     }
@@ -211,4 +326,10 @@ struct RemindersListsView: View {
       .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
     }
   }
+}
+
+struct SeedDatabaseTip: Tip {
+  var title: Text { Text("Explore with sample data") }
+  var message: Text? { Text("Add a few lists, reminders, and tags to see SQLite Orbit in action.") }
+  var image: Image? { Image(systemName: "leaf") }
 }

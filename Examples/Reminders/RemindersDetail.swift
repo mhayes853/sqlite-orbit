@@ -254,6 +254,7 @@ final class RemindersDetailModel {
 
 struct RemindersDetailView: View {
   @State var model: RemindersDetailModel
+  @State private var reminderForm: ReminderFormContext?
 
   var body: some View {
     List {
@@ -279,6 +280,20 @@ struct RemindersDetailView: View {
     .task { await model.load() }
     .toolbarTitleDisplayMode(.inline)
     .toolbar {
+      if let list = model.detailType.remindersList {
+        ToolbarItem(placement: .bottomBar) {
+          HStack {
+            Button {
+              reminderForm = ReminderFormContext(remindersList: list)
+            } label: {
+              Label("New Reminder", systemImage: "plus.circle.fill")
+                .font(.title3.bold())
+            }
+            .tint(model.detailType.color)
+            Spacer()
+          }
+        }
+      }
       ToolbarItem(placement: .primaryAction) {
         Menu {
           Menu("Sort By") {
@@ -305,6 +320,11 @@ struct RemindersDetailView: View {
         } label: {
           Image(systemName: "ellipsis.circle")
         }
+      }
+    }
+    .sheet(item: $reminderForm) { context in
+      NavigationStack {
+        ReminderFormView(database: model.databaseForView, remindersList: context.remindersList)
       }
     }
     .overlay {

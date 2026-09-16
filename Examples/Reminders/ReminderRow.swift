@@ -11,6 +11,7 @@ struct ReminderRow: View {
   let tags: String
 
   @State private var errorMessage: String?
+  @State private var isEditing = false
 
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
@@ -61,6 +62,11 @@ struct ReminderRow: View {
       if reminder.isFlagged && !reminder.isCompleted {
         Image(systemName: "flag.fill").foregroundStyle(.orange)
       }
+      if !reminder.isCompleted {
+        Button("Details", systemImage: "info.circle") { isEditing = true }
+          .labelStyle(.iconOnly)
+          .tint(color)
+      }
     }
     .buttonStyle(.borderless)
     .swipeActions {
@@ -75,6 +81,16 @@ struct ReminderRow: View {
         }
       }
       .tint(.orange)
+      Button("Details", systemImage: "info.circle") { isEditing = true }
+    }
+    .sheet(isPresented: $isEditing) {
+      NavigationStack {
+        ReminderFormView(
+          database: database,
+          remindersList: remindersList,
+          reminder: reminder
+        )
+      }
     }
     .alert(
       "Database Error",

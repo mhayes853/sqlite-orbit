@@ -16,6 +16,15 @@ tests.add_dependency(feature)
 app.frameworks_build_phase.add_file_reference(feature.product_reference)
 tests.frameworks_build_phase.add_file_reference(feature.product_reference)
 
+embed_frameworks = project.new(Xcodeproj::Project::Object::PBXCopyFilesBuildPhase)
+embed_frameworks.name = "Embed Frameworks"
+embed_frameworks.dst_subfolder_spec = "10"
+app.build_phases << embed_frameworks
+embedded_feature = embed_frameworks.add_file_reference(feature.product_reference)
+embedded_feature.settings = {
+  "ATTRIBUTES" => ["CodeSignOnCopy", "RemoveHeadersOnCopy"]
+}
+
 feature.build_configurations.each do |configuration|
   configuration.build_settings["PRODUCT_BUNDLE_IDENTIFIER"] = "co.sqlite-orbit.RemindersFeature"
   configuration.build_settings["GENERATE_INFOPLIST_FILE"] = "YES"
