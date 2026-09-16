@@ -17,7 +17,8 @@
     ///     database's standardized path.
     ///   - coordination: Describes the directory and back pressure this process uses to reach its
     ///     peers. Processes coordinate only when they share a coordination directory.
-    ///   - onAnnouncementFailure: Receives the error when announcing a committed write fails.
+    ///   - delegate: Receives important events that cannot be surfaced through an operation. The
+    ///     database holds it weakly.
     ///
     /// ```swift
     /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
@@ -35,7 +36,7 @@
       configuration: SQLiteConfiguration = .default,
       id: OrbitDatabaseIdentifier? = nil,
       coordination: UnixDatagramIPCTransport.Configuration = .default,
-      onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
+      delegate: (any OrbitIPCDatabaseDelegate)? = nil
     ) throws {
       guard case .multipleProcesses = configuration.library.fileSharing else {
         throw SQLiteFeatureUnavailableError(
@@ -53,7 +54,7 @@
         ),
         id: identifier,
         transport: try UnixDatagramIPCTransport.shared(configuration: coordination),
-        onAnnouncementFailure: onAnnouncementFailure
+        delegate: delegate
       )
     }
   }

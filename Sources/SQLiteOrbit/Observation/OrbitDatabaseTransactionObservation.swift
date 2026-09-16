@@ -182,13 +182,13 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
   ) throws -> OrbitSubscription
 }
 
-/// An observable writer whose database file can be opened and coordinated across processes.
+/// A writer whose database file can be opened and coordinated across processes.
 ///
-/// ``OrbitIPCDatabase`` accepts only writers with this capability. Conformance promises that the
-/// writer type can share a database with another process. When such a type also has process-local
-/// configurations, callers of the low-level initializer that accepts a writer must supply a
-/// multiprocess-capable instance.
-public protocol OrbitMultiprocessDatabaseWriter: OrbitObservableDatabase {
+/// Conformance promises that the writer type can share a database with another process. When such
+/// a type also has process-local configurations, callers must supply a multiprocess-capable
+/// instance. ``OrbitIPCDatabase`` additionally requires the writer to conform to
+/// ``OrbitObservableDatabase`` so it can combine local transaction events with peer announcements.
+public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter {
   /// The identifier an ``OrbitIPCDatabase`` uses when its caller does not supply one.
   var defaultIdentifier: OrbitDatabaseIdentifier { get }
 }

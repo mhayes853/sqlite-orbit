@@ -145,10 +145,10 @@
 
     @Test
     func failedAnnouncementDoesNotFailTheWriteItFollows() async throws {
-      let failures = Lock([String]())
+      let delegate = RecordingOrbitIPCDatabaseDelegate()
       let (database, _) = try makeAnnouncingDatabase(
         failure: AnnouncementFailure(),
-        onAnnouncementFailure: { error in failures.withLock { $0.append("\(type(of: error))") } }
+        delegate: delegate
       )
 
       let value = try await database.write { transaction in
@@ -156,17 +156,26 @@
       }
 
       #expect(value == [1])
-      #expect(failures.withLock { $0 } == ["AnnouncementFailure"])
+      #expect(
+        delegate.failures == [
+          .init(
+            message: .transactionDidCommit(
+              .init(databaseIdentifier: database.id, region: .empty)
+            ),
+            errorType: "AnnouncementFailure"
+          )
+        ]
+      )
     }
 
     @Test
     func announcementIsNotCancelledAlongWithTheWritingTask() async throws {
       // The transaction is already durable once the announcement starts, so cancelling the writer
       // must not stop peers from being told about a commit that happened.
-      let failures = Lock(0)
+      let delegate = RecordingOrbitIPCDatabaseDelegate()
       let (database, transport) = try makeAnnouncingDatabase(
         delay: .milliseconds(50),
-        onAnnouncementFailure: { _ in failures.withLock { $0 += 1 } }
+        delegate: delegate
       )
 
       let write = Task {
@@ -179,7 +188,21 @@
       _ = try await write.value
 
       #expect(transport.messages.count == 1)
-      #expect(failures.withLock { $0 } == 0)
+      #expect(delegate.failures.isEmpty)
+    }
+
+    @Test
+    func databaseHoldsItsDelegateWeakly() throws {
+      let (database, _) = try makeAnnouncingDatabase()
+      var delegate: RecordingOrbitIPCDatabaseDelegate? = .init()
+      weak let weakDelegate = delegate
+
+      database.delegate = delegate
+      #expect(database.delegate === delegate)
+      delegate = nil
+
+      #expect(weakDelegate == nil)
+      #expect(database.delegate == nil)
     }
 
     @Test
@@ -474,20 +497,41 @@
     id: OrbitDatabaseIdentifier? = nil,
     failure: (any Error)? = nil,
     delay: Duration? = nil,
-    onAnnouncementFailure: (@Sendable (any Error) -> Void)? = nil
+    delegate: (any OrbitIPCDatabaseDelegate)? = nil
   ) throws -> (OrbitIPCDatabase, RecordingDatabaseIPCTransport) {
     let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
     let database = OrbitIPCDatabase(
       writer: try SQLiteQueue(path: ":memory:"),
       id: id,
       transport: transport,
-      onAnnouncementFailure: onAnnouncementFailure
+      delegate: delegate
     )
     return (database, transport)
   }
 
   private struct WriteFailure: Error {}
   private struct AnnouncementFailure: Error {}
+
+  private struct RecordedAnnouncementFailure: Equatable, Sendable {
+    let message: OrbitIPCMessage
+    let errorType: String
+  }
+
+  private final class RecordingOrbitIPCDatabaseDelegate: OrbitIPCDatabaseDelegate, Sendable {
+    private let recordedFailures = Lock([RecordedAnnouncementFailure]())
+
+    var failures: [RecordedAnnouncementFailure] { recordedFailures.withLock { $0 } }
+
+    func orbitIPCDatabase(
+      _ database: OrbitIPCDatabase,
+      didFailToAnnounce message: OrbitIPCMessage,
+      error: any Error
+    ) {
+      recordedFailures.withLock {
+        $0.append(.init(message: message, errorType: "\(type(of: error))"))
+      }
+    }
+  }
 
   private enum RecordedPeerTransactionEvent: Equatable, Sendable {
     case didChange(OrbitDatabaseRegion)

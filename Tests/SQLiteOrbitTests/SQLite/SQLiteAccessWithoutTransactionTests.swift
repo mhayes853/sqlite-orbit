@@ -338,14 +338,18 @@
       .file(directory.appending(component: "database.sqlite"))
     }
 
-    func open(in directory: URL) throws -> any OrbitMultiprocessDatabaseWriter {
+    func open(in directory: URL) throws
+      -> any OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase
+    {
       switch self {
       case .queue: try SQLiteQueue(path: path(in: directory))
       case .pool: try SQLitePool(path: path(in: directory))
       }
     }
 
-    func openWithItems(in directory: URL) async throws -> any OrbitMultiprocessDatabaseWriter {
+    func openWithItems(in directory: URL) async throws
+      -> any OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase
+    {
       let driver = try open(in: directory)
       try await driver.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")

@@ -1160,9 +1160,11 @@ told about a commit must be able to read it, and holding SQLite's write lock whi
 backpressured peer would turn one stalled process into a stalled database.
 
 By the time a write commits it is already durable, so a failed announcement never fails the write.
-Pass `onAnnouncementFailure:` to observe those failures. Announcing is likewise shielded from the
-writing task's cancellation, since peers still need to learn about a commit that happened. A write
-that throws is rolled back by its driver and is not announced.
+Set an `OrbitIPCDatabaseDelegate` to observe those failures. The delegate receives the message that
+could not reach every peer and the transport's error; the database does not retry because a failed
+send may already have reached some peers. Announcing is likewise shielded from the writing task's
+cancellation, since peers still need to learn about a commit that happened. A write that throws is
+rolled back by its driver and is not announced.
 
 An observed `OrbitIPCDatabase` also subscribes to its peers. Incoming announcements are exposed
 as external transaction events and cause active value observations to refetch.

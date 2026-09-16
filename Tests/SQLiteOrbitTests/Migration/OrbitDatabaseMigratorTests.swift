@@ -57,7 +57,7 @@
     }
 
     private func checkUpToDateMigrationIsSilent(
-      on writer: some OrbitMultiprocessDatabaseWriter,
+      on writer: some OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase,
       eraseDatabaseOnSchemaChange: Bool
     ) async throws {
       let network = InMemoryIPCTransport.Network()
