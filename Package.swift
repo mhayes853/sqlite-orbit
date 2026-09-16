@@ -13,9 +13,19 @@ import PackageDescription
   let swiftUITestDependencies: [Target.Dependency] = [
     .product(name: "ViewInspector", package: "ViewInspector")
   ]
+  // Apple-platform builds must use the SQLite library in the active SDK. Consulting pkg-config
+  // on the macOS host can otherwise inject a Homebrew macOS dylib into an iOS simulator build.
+  let sqlitePkgConfig: String? = nil
+  let sqliteProviders: [SystemPackageProvider]? = nil
 #else
   let swiftUITestPackages: [Package.Dependency] = []
   let swiftUITestDependencies: [Target.Dependency] = []
+  let sqlitePkgConfig: String? = "sqlite3"
+  let sqliteProviders: [SystemPackageProvider]? = [
+    .apt(["libsqlite3-dev"]),
+    .yum(["sqlite-devel"]),
+    .brew(["sqlite3"])
+  ]
 #endif
 
 let package = Package(
@@ -59,12 +69,8 @@ let package = Package(
     .systemLibrary(
       name: "CSQLite3",
       path: "Sources/CSQLite3",
-      pkgConfig: "sqlite3",
-      providers: [
-        .apt(["libsqlite3-dev"]),
-        .yum(["sqlite-devel"]),
-        .brew(["sqlite3"])
-      ]
+      pkgConfig: sqlitePkgConfig,
+      providers: sqliteProviders
     ),
     .binaryTarget(
       name: "TursoSQLite3",
