@@ -55,8 +55,36 @@ struct FormAndSearchTests {
     )
 
     let search = SearchRemindersModel(database: database)
-    await search.loadResults(for: "groceries")
+    await search.loadResults(for: "groceries", showCompleted: false)
     #expect(search.results.map(\.reminder.id) == [reminderID])
+  }
+
+  @Test
+  func persistedSearchSettingIncludesCompletedResults() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert {
+        [
+          Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob"),
+          Reminder(
+            id: UUID(),
+            remindersListID: list.id,
+            status: .completed,
+            title: "Email Blob"
+          ),
+        ]
+      }
+      .execute(transaction)
+    }
+    @SingleRow(SearchSettings.self, database: database) var settings
+    try await $settings.update { $0.showCompleted = true }
+
+    let search = SearchRemindersModel(database: database)
+    await search.loadResults(for: "Blob", showCompleted: settings.showCompleted)
+
+    #expect(search.results.map(\.reminder.title).sorted() == ["Call Blob", "Email Blob"])
   }
 
   @Test

@@ -14,6 +14,7 @@ The app demonstrates:
 - list and reminder creation and editing, including tags, priorities, due dates, and cover photos;
 - transactional writes and cascade deletion;
 - full-text reminder search;
+- a search preference persisted with `SingleRowTable` and bound with `@SingleRow`;
 - TipKit-driven sample data discovery; and
 - detail sorting and completed-item preferences stored directly in the database.
 

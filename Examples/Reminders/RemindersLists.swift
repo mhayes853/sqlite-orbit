@@ -278,9 +278,6 @@ struct RemindersListsView: View {
     .navigationTitle("Reminders")
     .task { await model.load() }
     .searchable(text: $searchText, prompt: "Search reminders and tags")
-    .onChange(of: searchText) { _, newValue in
-      searchModel.search(newValue)
-    }
     .toolbar {
       if model.remindersLists.isEmpty {
         ToolbarItem(placement: .primaryAction) {

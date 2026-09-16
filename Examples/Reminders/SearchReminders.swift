@@ -6,7 +6,6 @@ import SwiftUI
 @Observable
 final class SearchRemindersModel {
   @ObservationIgnored @FetchAll var results: [ReminderDetailRow]
-  var showCompleted = false
   var errorMessage: String?
 
   @ObservationIgnored private let database: RemindersDatabase
@@ -19,7 +18,7 @@ final class SearchRemindersModel {
     _results = FetchAll(wrappedValue: [])
   }
 
-  func search(_ text: String, debounce: Bool = true) {
+  func search(_ text: String, showCompleted: Bool, debounce: Bool = true) {
     searchTask?.cancel()
     searchTask = Task { [weak self] in
       guard let self else { return }
@@ -27,11 +26,11 @@ final class SearchRemindersModel {
         try? await Task.sleep(for: .milliseconds(250))
       }
       guard !Task.isCancelled else { return }
-      await loadResults(for: text)
+      await loadResults(for: text, showCompleted: showCompleted)
     }
   }
 
-  func loadResults(for text: String) async {
+  func loadResults(for text: String, showCompleted: Bool) async {
     do {
       try await $results.load(
         Self.query(
@@ -46,11 +45,6 @@ final class SearchRemindersModel {
     } catch {
       errorMessage = error.localizedDescription
     }
-  }
-
-  func toggleCompleted(searchText: String) {
-    showCompleted.toggle()
-    search(searchText, debounce: false)
   }
 
   private static func query(
@@ -91,18 +85,42 @@ final class SearchRemindersModel {
 }
 
 struct SearchRemindersView: View {
+  @SingleRow private var settings: SearchSettings
   let database: RemindersDatabase
   let model: SearchRemindersModel
   let searchText: String
+
+  init(
+    database: RemindersDatabase,
+    model: SearchRemindersModel,
+    searchText: String
+  ) {
+    self.database = database
+    self.model = model
+    self.searchText = searchText
+    _settings = SingleRow(SearchSettings.self, database: database)
+  }
 
   var body: some View {
     Section {
       Toggle(
         "Show completed",
-        isOn: Binding(
-          get: { model.showCompleted },
-          set: { _ in model.toggleCompleted(searchText: searchText) }
-        )
+        isOn: $settings.binding(\.showCompleted)
+      )
+    }
+    .task(id: searchText) {
+      do {
+        try await $settings.load()
+        model.search(searchText, showCompleted: settings.showCompleted)
+      } catch {
+        model.errorMessage = error.localizedDescription
+      }
+    }
+    .onChange(of: settings.showCompleted) {
+      model.search(
+        searchText,
+        showCompleted: settings.showCompleted,
+        debounce: false
       )
     }
 

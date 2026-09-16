@@ -15,7 +15,8 @@ struct SchemaTests {
         RemindersList.count().fetchOne(transaction) ?? -1,
         Reminder.count().fetchOne(transaction) ?? -1,
         Tag.count().fetchOne(transaction) ?? -1,
-        RemindersDetailSettings.count().fetchOne(transaction) ?? -1
+        RemindersDetailSettings.count().fetchOne(transaction) ?? -1,
+        SearchSettings.count().fetchOne(transaction) ?? -1
       )
     }
 
@@ -23,6 +24,24 @@ struct SchemaTests {
     #expect(counts.1 == 0)
     #expect(counts.2 == 0)
     #expect(counts.3 == 0)
+    #expect(counts.4 == 0)
+  }
+
+  @Test
+  func searchSettingsReadTheirDefaultWithoutInsertingAndPersistOneRow() async throws {
+    let database = try makeTestDatabase()
+
+    let initial = try await database.read { try SearchSettings.find(in: $0) }
+    #expect(initial == .defaultValue)
+    #expect(try await database.read { try SearchSettings.count().fetchOne($0) } == 0)
+
+    try await database.write { transaction in
+      try SearchSettings.update(in: transaction) { $0.showCompleted = true }
+    }
+
+    let persisted = try await database.read { try SearchSettings.find(in: $0) }
+    #expect(persisted.showCompleted)
+    #expect(try await database.read { try SearchSettings.count().fetchOne($0) } == 1)
   }
 
   @Test

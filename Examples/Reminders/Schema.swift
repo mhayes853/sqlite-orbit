@@ -99,6 +99,15 @@ nonisolated struct RemindersDetailSettings: Hashable, Identifiable, Sendable {
   var showCompleted = false
 }
 
+@Table("searchSettings")
+nonisolated struct SearchSettings: Hashable, Sendable, SingleRowTable {
+  @Column(primaryKey: true)
+  let id: Int
+  var showCompleted = false
+
+  static let defaultValue = SearchSettings(id: 0)
+}
+
 extension Reminder {
   static let withTags = group(by: \.id)
     .leftJoin(ReminderTag.all) { $0.id.eq($1.reminderID) }
@@ -277,6 +286,16 @@ func remindersMigrator(erasesDatabaseOnSchemaChange: Bool = false) -> OrbitDatab
         ), '')
         WHERE "rowid" = (SELECT "rowid" FROM "reminders" WHERE "id" = old."reminderID");
       END
+      """
+    )
+  }
+  migrator.registerMigration("Add search settings") { transaction in
+    try transaction.execute(
+      """
+      CREATE TABLE "searchSettings" (
+        "id" INTEGER PRIMARY KEY NOT NULL CHECK ("id" = 0),
+        "showCompleted" INTEGER NOT NULL DEFAULT 0
+      ) STRICT
       """
     )
   }
