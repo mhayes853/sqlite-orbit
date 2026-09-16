@@ -37,6 +37,7 @@ end
 app.build_configurations.each do |configuration|
   configuration.build_settings["PRODUCT_BUNDLE_IDENTIFIER"] = "co.sqlite-orbit.Reminders"
   configuration.build_settings["GENERATE_INFOPLIST_FILE"] = "YES"
+  configuration.build_settings["INFOPLIST_KEY_UILaunchScreen_Generation"] = "YES"
   configuration.build_settings["SWIFT_VERSION"] = "6.0"
   configuration.build_settings["SWIFT_STRICT_CONCURRENCY"] = "complete"
   configuration.build_settings["IPHONEOS_DEPLOYMENT_TARGET"] = "17.0"

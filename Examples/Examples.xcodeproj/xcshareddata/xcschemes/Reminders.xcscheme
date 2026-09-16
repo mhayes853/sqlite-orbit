@@ -3,28 +3,28 @@
   <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
     <BuildActionEntries>
       <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
-        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="56087B33215059DE5D728F3E" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="397FAF3FE96A6260701F2479" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
       </BuildActionEntry>
       <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES">
-        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="7B8C5F513569AC2FB878ACAF" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="1DC118BAA5497F709ACCF5FE" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
       </BuildActionEntry>
     </BuildActionEntries>
   </BuildAction>
   <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES">
     <Testables>
       <TestableReference skipped="NO">
-        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="7B8C5F513569AC2FB878ACAF" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
+        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="1DC118BAA5497F709ACCF5FE" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
       </TestableReference>
     </Testables>
   </TestAction>
   <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
     <BuildableProductRunnable runnableDebuggingMode="0">
-      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="56087B33215059DE5D728F3E" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="397FAF3FE96A6260701F2479" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
     </BuildableProductRunnable>
   </LaunchAction>
   <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES">
     <BuildableProductRunnable runnableDebuggingMode="0">
-      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="56087B33215059DE5D728F3E" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+      <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="397FAF3FE96A6260701F2479" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
     </BuildableProductRunnable>
   </ProfileAction>
   <AnalyzeAction buildConfiguration="Debug"/>
