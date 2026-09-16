@@ -54,6 +54,14 @@ nonisolated struct Reminder: Hashable, Identifiable, Sendable {
 
 extension Reminder.Draft: Identifiable {}
 
+extension Updates<Reminder> {
+  mutating func toggleCompletion() {
+    self.status = Case(self.status)
+      .when(#bind(.incomplete), then: #bind(.completed))
+      .else(#bind(.incomplete))
+  }
+}
+
 @Table
 nonisolated struct Tag: Hashable, Identifiable, Sendable {
   @Column(primaryKey: true)
