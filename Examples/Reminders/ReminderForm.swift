@@ -328,13 +328,16 @@ private struct ReminderDateAndTimeSection: View {
         .padding()
 
         if model.isDateEnabled {
-          Divider().padding(.leading, 62)
-          DatePicker(
-            "Due Date",
-            selection: $model.dueDate,
-            displayedComponents: .date
-          )
-          .padding()
+          VStack(spacing: 0) {
+            Divider().padding(.leading, 62)
+            DatePicker(
+              "Due Date",
+              selection: $model.dueDate,
+              displayedComponents: .date
+            )
+            .padding()
+          }
+          .transition(optionTransition)
         }
 
         Divider().padding(.leading, 62)
@@ -348,17 +351,26 @@ private struct ReminderDateAndTimeSection: View {
         .padding()
 
         if model.isTimeEnabled {
-          Divider().padding(.leading, 62)
-          DatePicker(
-            "Due Time",
-            selection: $model.dueDate,
-            displayedComponents: .hourAndMinute
-          )
-          .padding()
+          VStack(spacing: 0) {
+            Divider().padding(.leading, 62)
+            DatePicker(
+              "Due Time",
+              selection: $model.dueDate,
+              displayedComponents: .hourAndMinute
+            )
+            .padding()
+          }
+          .transition(optionTransition)
         }
       }
       .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+      .animation(.smooth(duration: 0.25), value: model.isDateEnabled)
+      .animation(.smooth(duration: 0.25), value: model.isTimeEnabled)
     }
+  }
+
+  private var optionTransition: AnyTransition {
+    .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
   }
 }
 
