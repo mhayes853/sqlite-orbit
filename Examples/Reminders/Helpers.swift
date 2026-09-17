@@ -1,6 +1,107 @@
 import SQLiteOrbit
 import SwiftUI
 
+extension Optional {
+  var isPresented: Bool {
+    get { self != nil }
+    set {
+      guard !newValue else { return }
+      self = nil
+    }
+  }
+}
+
+extension Optional where Wrapped == Date {
+  var isEnabled: Bool {
+    get { self != nil }
+    set { self = newValue ? (self ?? .now) : nil }
+  }
+
+  var value: Date {
+    get { self ?? .now }
+    set { self = newValue }
+  }
+}
+
+struct RemindersListIcon: View {
+  let color: Color
+  var size: CGFloat = 38
+
+  var body: some View {
+    Image(systemName: "list.bullet")
+      .font(.system(size: size * 0.46, weight: .bold))
+      .foregroundStyle(.white)
+      .frame(width: size, height: size)
+      .background(color.gradient, in: .circle)
+      .accessibilityHidden(true)
+  }
+}
+
+struct FloatingAddButton: View {
+  let tint: Color
+  let title: String
+  let action: () -> Void
+
+  var body: some View {
+    if #available(iOS 26, *) {
+      Button(title, systemImage: "plus", action: action)
+        .labelStyle(.iconOnly)
+        .font(.title2)
+        .buttonStyle(.glassProminent)
+        .controlSize(.extraLarge)
+        .tint(tint)
+    } else {
+      Button(title, systemImage: "plus", action: action)
+        .labelStyle(.iconOnly)
+        .font(.title2)
+        .buttonStyle(.borderedProminent)
+        .buttonBorderShape(.circle)
+        .controlSize(.large)
+        .tint(tint)
+    }
+  }
+}
+
+private struct RemindersSearchToolbar: ViewModifier {
+  @Binding var text: String
+  @Binding var isPresented: Bool
+  var isFocused: FocusState<Bool>.Binding
+  let prompt: String
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if isPresented {
+      if #available(iOS 18, *) {
+        content
+          .searchable(text: $text, placement: .toolbar, prompt: prompt)
+          .searchFocused(isFocused)
+      } else {
+        content.searchable(text: $text, prompt: prompt)
+      }
+    } else {
+      content
+    }
+  }
+}
+
+extension View {
+  func remindersSearchable(
+    text: Binding<String>,
+    isPresented: Binding<Bool>,
+    isFocused: FocusState<Bool>.Binding,
+    prompt: String
+  ) -> some View {
+    modifier(
+      RemindersSearchToolbar(
+        text: text,
+        isPresented: isPresented,
+        isFocused: isFocused,
+        prompt: prompt
+      )
+    )
+  }
+}
+
 extension Color {
   nonisolated struct HexRepresentation: QueryBindable, QueryDecodable, QueryRepresentable {
     var queryOutput: Color
@@ -47,4 +148,3 @@ extension Color {
     }
   }
 }
-

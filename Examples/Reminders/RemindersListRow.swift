@@ -7,16 +7,16 @@ struct RemindersListRow: View {
   let onEdit: () -> Void
 
   var body: some View {
-    HStack {
-      Image(systemName: "list.bullet.circle.fill")
-        .font(.largeTitle)
-        .foregroundStyle(remindersList.color)
-        .background(Color.white.clipShape(Circle()).padding(4))
+    HStack(spacing: 14) {
+      RemindersListIcon(color: remindersList.color)
       Text(remindersList.title)
+        .font(.body)
       Spacer()
       Text(remindersCount, format: .number)
         .foregroundStyle(.secondary)
     }
+    .frame(minHeight: 48)
+    .accessibilityElement(children: .combine)
     .swipeActions {
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
       Button("Details", systemImage: "info.circle", action: onEdit)

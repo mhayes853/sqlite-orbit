@@ -13,7 +13,7 @@ enum RemindersListsSheet: Identifiable {
     switch self {
     case .reminder(let list): "new-reminder-\(list.id)"
     case .remindersList(.some(let list)): "edit-list-\(list.id)"
-    case .remindersList(.none): "new-list"
+    case .remindersList(nil): "new-list"
     }
   }
 }
@@ -149,7 +149,7 @@ final class RemindersListsModel {
       try RemindersList.insert {
         [
           RemindersList(id: personalID, color: .blue, position: 0, title: "Personal"),
-          RemindersList(id: workID, color: .orange, position: 1, title: "Work"),
+          RemindersList(id: workID, color: .orange, position: 1, title: "Work")
         ]
       }
       .execute(transaction)
@@ -179,7 +179,7 @@ final class RemindersListsModel {
             remindersListID: personalID,
             status: .completed,
             title: "Book dentist appointment"
-          ),
+          )
         ]
       }
       .execute(transaction)
@@ -187,7 +187,7 @@ final class RemindersListsModel {
       try ReminderTag.insert {
         [
           ReminderTag(id: UUID(), reminderID: groceriesID, tagID: "errands"),
-          ReminderTag(id: UUID(), reminderID: presentationID, tagID: "focus"),
+          ReminderTag(id: UUID(), reminderID: presentationID, tagID: "focus")
         ]
       }
       .execute(transaction)
@@ -210,6 +210,8 @@ struct RemindersListsView: View {
   @State private var model: RemindersListsModel
   @State private var searchModel: SearchRemindersModel
   @State private var searchText = ""
+  @State private var isSearchPresented = false
+  @FocusState private var isSearchFocused: Bool
   private let database: RemindersDatabase
 
   init(database: RemindersDatabase) {
@@ -226,42 +228,68 @@ struct RemindersListsView: View {
         SearchRemindersView(database: database, model: searchModel, searchText: searchText)
       } else {
         Section {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 16) {
-          GridRow {
-            statCell(.today, count: model.stats.todayCount)
-            statCell(.scheduled, count: model.stats.scheduledCount)
+          Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
+            GridRow {
+              RemindersStatCell(
+                count: model.stats.todayCount,
+                detailType: .today,
+                select: model.selectDetail
+              )
+              RemindersStatCell(
+                count: model.stats.scheduledCount,
+                detailType: .scheduled,
+                select: model.selectDetail
+              )
+            }
+            GridRow {
+              RemindersStatCell(
+                count: model.stats.allCount,
+                detailType: .all,
+                select: model.selectDetail
+              )
+              RemindersStatCell(
+                count: model.stats.flaggedCount,
+                detailType: .flagged,
+                select: model.selectDetail
+              )
+            }
+            GridRow {
+              RemindersStatCell(
+                count: nil,
+                detailType: .completed,
+                select: model.selectDetail
+              )
+              Color.clear
+            }
           }
-          GridRow {
-            statCell(.all, count: model.stats.allCount)
-            statCell(.flagged, count: model.stats.flaggedCount)
-          }
-          GridRow {
-            statCell(.completed, count: nil)
-          }
+          .buttonStyle(.plain)
+          .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 12, trailing: 0))
+          .listRowBackground(Color.clear)
+          .listRowSeparator(.hidden)
         }
-        .buttonStyle(.plain)
-        .listRowBackground(Color.clear)
-        .padding(.horizontal, -20)
-      }
 
-      Section("My Lists") {
-        ForEach(model.remindersLists) { summary in
-          NavigationLink(value: RemindersDetailType.list(summary.remindersList)) {
-            RemindersListRow(
-              remindersCount: summary.remindersCount,
-              remindersList: summary.remindersList,
-              onDelete: { Task { await model.deleteList(summary.remindersList) } },
-              onEdit: { model.editListButtonTapped(summary.remindersList) }
-            )
+        RemindersSectionTitle("My Lists")
+
+        Section {
+          ForEach(model.remindersLists) { summary in
+            NavigationLink(value: RemindersDetailType.list(summary.remindersList)) {
+              RemindersListRow(
+                remindersCount: summary.remindersCount,
+                remindersList: summary.remindersList,
+                onDelete: { Task { await model.deleteList(summary.remindersList) } },
+                onEdit: { model.editListButtonTapped(summary.remindersList) }
+              )
+            }
+          }
+          .onMove { source, destination in
+            Task { await model.moveLists(from: source, to: destination) }
           }
         }
-        .onMove { source, destination in
-          Task { await model.moveLists(from: source, to: destination) }
-        }
-      }
 
         if !model.tags.isEmpty {
-          Section("Tags") {
+          RemindersSectionTitle("Tags")
+
+          Section {
             ForEach(model.tags) { tag in
               NavigationLink(value: RemindersDetailType.tags([tag])) {
                 TagRow(tag: tag)
@@ -275,31 +303,67 @@ struct RemindersListsView: View {
       }
     }
     .listStyle(.insetGrouped)
-    .navigationTitle("Reminders")
+    .scrollContentBackground(.hidden)
+    .background(Color(.systemGroupedBackground))
+    .navigationTitle("")
+    .toolbarTitleDisplayMode(.inline)
     .task { await model.load() }
-    .searchable(text: $searchText, prompt: "Search reminders and tags")
+    .remindersSearchable(
+      text: $searchText,
+      isPresented: $isSearchPresented,
+      isFocused: $isSearchFocused,
+      prompt: "Search reminders and tags"
+    )
+    .task(id: isSearchPresented) {
+      if isSearchPresented { isSearchFocused = true }
+    }
+    .onChange(of: isSearchFocused) {
+      if !isSearchFocused && searchText.isEmpty { isSearchPresented = false }
+    }
+    .onChange(of: searchText) {
+      if searchText.isEmpty && !isSearchFocused { isSearchPresented = false }
+    }
     .toolbar {
       if model.remindersLists.isEmpty {
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .topBarTrailing) {
           Button("Add Sample Data", systemImage: "leaf") {
             Task { await model.seedSampleData() }
           }
           .popoverTip(model.seedDatabaseTip)
         }
       }
-      ToolbarItemGroup(placement: .bottomBar) {
-        Button {
-          model.newReminderButtonTapped()
-        } label: {
-          Label("New Reminder", systemImage: "plus.circle.fill")
-            .font(.title3.bold())
-        }
-        Spacer()
-        Button("Add List") {
-          model.addListButtonTapped()
-        }
-        .font(.title3)
+      ToolbarItem(placement: .topBarTrailing) {
+        Button("Search", systemImage: "magnifyingglass") { isSearchPresented = true }
+          .labelStyle(.iconOnly)
       }
+      ToolbarItem(placement: .topBarTrailing) {
+        Button {
+          model.addListButtonTapped()
+        } label: {
+          Image(systemName: "list.bullet.rectangle")
+            .overlay(alignment: .bottomTrailing) {
+              Image(systemName: "plus.circle.fill")
+                .font(.caption2)
+                .offset(x: 3, y: 3)
+            }
+        }
+        .accessibilityLabel("Add List")
+      }
+      ToolbarItem(placement: .topBarTrailing) {
+        EditButton()
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      Color.clear.frame(height: 72)
+    }
+    .overlay(alignment: .bottomTrailing) {
+      FloatingAddButton(tint: .blue, title: "Add List") {
+        model.addListButtonTapped()
+      }
+      .padding(24)
+      .opacity(isSearchPresented ? 0 : 1)
+      .allowsHitTesting(!isSearchPresented)
+      .accessibilityHidden(isSearchPresented)
     }
     .sheet(item: $model.presentedSheet) { sheet in
       NavigationStack {
@@ -319,10 +383,7 @@ struct RemindersListsView: View {
     }
     .alert(
       "Database Error",
-      isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
-      )
+      isPresented: $model.errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -330,30 +391,55 @@ struct RemindersListsView: View {
     }
   }
 
-  private func statCell(_ detailType: RemindersDetailType, count: Int?) -> some View {
+}
+
+private struct RemindersSectionTitle: View {
+  let title: String
+
+  init(_ title: String) {
+    self.title = title
+  }
+
+  var body: some View {
+    Text(title)
+      .font(.title2.bold())
+      .foregroundStyle(.primary)
+      .listRowInsets(EdgeInsets(top: 24, leading: 16, bottom: 0, trailing: 16))
+      .listRowBackground(Color.clear)
+      .listRowSeparator(.hidden)
+  }
+}
+
+private struct RemindersStatCell: View {
+  let count: Int?
+  let detailType: RemindersDetailType
+  let select: (RemindersDetailType) -> Void
+
+  var body: some View {
     Button {
-      model.selectDetail(detailType)
+      select(detailType)
     } label: {
-      HStack(alignment: .firstTextBaseline) {
-        VStack(alignment: .leading, spacing: 8) {
+      VStack(alignment: .leading, spacing: 14) {
+        HStack(alignment: .top) {
           Image(systemName: detailType.iconName)
-            .font(.largeTitle.bold())
-            .foregroundStyle(detailType.color)
-            .background(Color.white.clipShape(Circle()).padding(4))
-          Text(detailType.navigationTitle)
-            .font(.headline.bold())
-            .foregroundStyle(.secondary)
+            .font(.title2.bold())
+          Spacer(minLength: 8)
+          if let count {
+            Text(count, format: .number)
+              .font(.title.bold())
+              .fontDesign(.rounded)
+          }
         }
-        Spacer()
-        if let count {
-          Text(count, format: .number)
-            .font(.largeTitle.bold())
-            .fontDesign(.rounded)
-        }
+        Text(detailType.navigationTitle)
+          .font(.title3.bold())
       }
-      .padding(12)
-      .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
+      .foregroundStyle(.white)
+      .padding(14)
+      .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+      .background(detailType.color.gradient, in: .rect(cornerRadius: 18))
     }
+    .accessibilityLabel(detailType.navigationTitle)
+    .accessibilityValue(count.map(String.init) ?? "")
   }
 }
 

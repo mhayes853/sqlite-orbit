@@ -52,12 +52,12 @@ enum RemindersDetailType: Hashable, Sendable {
 
   var iconName: String {
     switch self {
-    case .all: "tray.circle.fill"
-    case .completed: "checkmark.circle.fill"
-    case .flagged: "flag.circle.fill"
-    case .list: "list.bullet.circle.fill"
-    case .scheduled, .today: "calendar.circle.fill"
-    case .tags: "number.circle.fill"
+    case .all: "tray.fill"
+    case .completed: "checkmark"
+    case .flagged: "flag.fill"
+    case .list: "list.bullet"
+    case .scheduled, .today: "calendar"
+    case .tags: "number"
     }
   }
 
@@ -259,13 +259,21 @@ final class RemindersDetailModel {
 }
 
 struct RemindersDetailView: View {
-  @State var model: RemindersDetailModel
+  @State private var model: RemindersDetailModel
+
+  init(model: RemindersDetailModel) {
+    _model = State(initialValue: model)
+  }
 
   var body: some View {
     @Bindable var model = model
 
     List {
-      detailHeader
+      RemindersDetailHeader(
+        color: model.detailType.color,
+        coverImageData: model.coverImageData,
+        title: model.detailType.navigationTitle
+      )
 
       ForEach(model.reminderRows) { row in
         ReminderRow(
@@ -277,31 +285,20 @@ struct RemindersDetailView: View {
           remindersList: row.remindersList,
           tags: row.tags
         )
+        .listRowSeparator(.hidden)
       }
       .onMove { source, destination in
         Task { await model.moveReminders(from: source, to: destination) }
       }
     }
     .listStyle(.plain)
-    .navigationTitle(model.detailType.navigationTitle)
+    .scrollContentBackground(.hidden)
+    .background(Color(.systemBackground))
+    .navigationTitle("")
     .task { await model.load() }
     .toolbarTitleDisplayMode(.inline)
     .toolbar {
-      if model.detailType.remindersList != nil {
-        ToolbarItem(placement: .bottomBar) {
-          HStack {
-            Button {
-              model.newReminderButtonTapped()
-            } label: {
-              Label("New Reminder", systemImage: "plus.circle.fill")
-                .font(.title3.bold())
-            }
-            .tint(model.detailType.color)
-            Spacer()
-          }
-        }
-      }
-      ToolbarItem(placement: .primaryAction) {
+      ToolbarItem(placement: .topBarTrailing) {
         Menu {
           Menu("Sort By") {
             ForEach(ReminderOrdering.allCases, id: \.self) { ordering in
@@ -325,8 +322,19 @@ struct RemindersDetailView: View {
             )
           }
         } label: {
-          Image(systemName: "ellipsis.circle")
+          Image(systemName: "ellipsis")
         }
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      Color.clear.frame(height: model.detailType.remindersList == nil ? 0 : 72)
+    }
+    .overlay(alignment: .bottomTrailing) {
+      if model.detailType.remindersList != nil {
+        FloatingAddButton(tint: model.detailType.color, title: "New Reminder") {
+          model.newReminderButtonTapped()
+        }
+        .padding(24)
       }
     }
     .sheet(item: $model.reminderForm) { context in
@@ -341,10 +349,7 @@ struct RemindersDetailView: View {
     }
     .alert(
       "Database Error",
-      isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
-      )
+      isPresented: $model.errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
@@ -352,27 +357,35 @@ struct RemindersDetailView: View {
     }
   }
 
-  @ViewBuilder
-  private var detailHeader: some View {
-    if let data = model.coverImageData, let image = UIImage(data: data) {
+}
+
+private struct RemindersDetailHeader: View {
+  let color: Color
+  let coverImageData: Data?
+  let title: String
+
+  var body: some View {
+    if let coverImageData, let image = UIImage(data: coverImageData) {
       ZStack(alignment: .bottomLeading) {
         Image(uiImage: image)
           .resizable()
           .scaledToFill()
           .frame(height: 200)
           .clipped()
-        Text(model.detailType.navigationTitle)
+        Text(title)
           .font(.largeTitle.bold())
-          .foregroundStyle(model.detailType.color)
+          .foregroundStyle(.white)
           .padding(10)
           .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
           .padding()
       }
       .listRowInsets(EdgeInsets())
+      .listRowSeparator(.hidden)
     } else {
-      Text(model.detailType.navigationTitle)
+      Text(title)
         .font(.largeTitle.bold())
-        .foregroundStyle(model.detailType.color)
+        .foregroundStyle(color)
+        .padding(.top, 12)
         .listRowSeparator(.hidden)
     }
   }
