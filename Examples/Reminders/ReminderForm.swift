@@ -70,6 +70,12 @@ final class ReminderFormModel {
     dueDateMode = isTimeEnabled ? .date : .dateAndTime
   }
 
+  func dateOptionButtonTapped() {
+    if !isDateEnabled {
+      dueDateMode = .date
+    }
+  }
+
   func save() async -> Bool {
     let title = reminder.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !title.isEmpty else {
@@ -141,7 +147,6 @@ struct ReminderFormView: View {
 
   fileprivate enum Field: Hashable {
     case notes
-    case tags
     case title
   }
 
@@ -173,43 +178,18 @@ struct ReminderFormView: View {
 
         ReminderDateAndTimeSection(model: model)
 
-        ReminderOrganizationSection(model: model, remindersLists: remindersLists)
-
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Tags & Flags")
-            .font(.title3.bold())
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 18)
-
-          VStack(spacing: 0) {
-            Label {
-              TextField("Tags", text: $model.tagText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .focused($focusedField, equals: .tags)
-            } icon: {
-              Image(systemName: "number")
-                .foregroundStyle(.secondary)
-                .frame(width: 30)
-            }
-            .padding()
-
-            Divider().padding(.leading, 62)
-
-            Toggle(isOn: $model.reminder.isFlagged) {
-              Label("Flag", systemImage: "flag")
-                .labelStyle(RemindersFormLabelStyle())
-            }
-            .padding()
-          }
-          .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
-        }
+        ReminderMoreOptionsSection(model: model, remindersLists: remindersLists)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 22)
     }
     .scrollDismissesKeyboard(.interactively)
     .background(Color(.systemGroupedBackground))
+    .safeAreaInset(edge: .bottom) {
+      ReminderFormToolbar(model: model)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
     .navigationTitle(model.isNew ? "New Reminder" : "Details")
     .toolbarTitleDisplayMode(.inline)
     .toolbar {
@@ -239,6 +219,71 @@ struct ReminderFormView: View {
     Task {
       if await model.save() { dismiss() }
     }
+  }
+}
+
+private struct ReminderMoreOptionsSection: View {
+  @Bindable var model: ReminderFormModel
+  let remindersLists: [RemindersList]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Text("More Options")
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+
+      ReminderListPicker(model: model, remindersLists: remindersLists)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+
+      NavigationLink {
+        ReminderDetailsFormView(model: model, remindersLists: remindersLists)
+      } label: {
+        HStack(spacing: 14) {
+          Image(systemName: "info.circle")
+            .font(.title3)
+            .foregroundStyle(.secondary)
+            .frame(width: 34, height: 34)
+            .accessibilityHidden(true)
+          Text("Details")
+            .foregroundStyle(.primary)
+          Spacer(minLength: 12)
+          Image(systemName: "chevron.right")
+            .font(.footnote.bold())
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 36)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+        .contentShape(.rect)
+      }
+      .buttonStyle(.plain)
+    }
+  }
+}
+
+private struct ReminderDetailsFormView: View {
+  @Bindable var model: ReminderFormModel
+  let remindersLists: [RemindersList]
+
+  var body: some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 26) {
+        ReminderDateAndTimeSection(model: model)
+        ReminderOrganizationSection(model: model, remindersLists: remindersLists)
+        ReminderTagsAndFlagsSection(model: model)
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 22)
+    }
+    .scrollDismissesKeyboard(.interactively)
+    .background(Color(.systemGroupedBackground))
+    .navigationTitle("Details")
+    .toolbarTitleDisplayMode(.inline)
   }
 }
 
@@ -354,40 +399,9 @@ private struct ReminderOrganizationSection: View {
         .padding(.horizontal, 18)
 
       VStack(spacing: 0) {
-        Menu {
-          ForEach(remindersLists) { list in
-            Button {
-              model.reminder.remindersListID = list.id
-            } label: {
-              if list.id == model.reminder.remindersListID {
-                Label(list.title, systemImage: "checkmark")
-              } else {
-                Text(list.title)
-              }
-            }
-          }
-        } label: {
-          HStack(spacing: 14) {
-            RemindersListIcon(color: selectedListColor, size: 34)
-            Text("List")
-              .foregroundStyle(.primary)
-            Spacer(minLength: 12)
-            Text(selectedListTitle)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-            Image(systemName: "chevron.right")
-              .font(.footnote.bold())
-              .foregroundStyle(.tertiary)
-              .accessibilityHidden(true)
-          }
-          .frame(maxWidth: .infinity, minHeight: 36)
-          .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("List")
-        .accessibilityValue(selectedListTitle)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        ReminderListPicker(model: model, remindersLists: remindersLists)
+          .padding(.horizontal, 16)
+          .padding(.vertical, 12)
 
         Divider().padding(.leading, 62)
 
@@ -435,14 +449,6 @@ private struct ReminderOrganizationSection: View {
     }
   }
 
-  private var selectedListColor: Color {
-    remindersLists.first { $0.id == model.reminder.remindersListID }?.color ?? .blue
-  }
-
-  private var selectedListTitle: String {
-    remindersLists.first { $0.id == model.reminder.remindersListID }?.title ?? "None"
-  }
-
   private func priorityButton(
     _ title: String,
     priority: Reminder.Priority?
@@ -456,6 +462,144 @@ private struct ReminderOrganizationSection: View {
         Text(title)
       }
     }
+  }
+}
+
+private struct ReminderListPicker: View {
+  @Bindable var model: ReminderFormModel
+  let remindersLists: [RemindersList]
+
+  var body: some View {
+    Menu {
+      ForEach(remindersLists) { list in
+        Button {
+          model.reminder.remindersListID = list.id
+        } label: {
+          if list.id == model.reminder.remindersListID {
+            Label(list.title, systemImage: "checkmark")
+          } else {
+            Text(list.title)
+          }
+        }
+      }
+    } label: {
+      HStack(spacing: 14) {
+        RemindersListIcon(color: selectedListColor, size: 34)
+        Text("List")
+          .foregroundStyle(.primary)
+        Spacer(minLength: 12)
+        Text(selectedListTitle)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+        Image(systemName: "chevron.right")
+          .font(.footnote.bold())
+          .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
+      }
+      .frame(maxWidth: .infinity, minHeight: 36)
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("List")
+    .accessibilityValue(selectedListTitle)
+  }
+
+  private var selectedListColor: Color {
+    remindersLists.first { $0.id == model.reminder.remindersListID }?.color ?? .blue
+  }
+
+  private var selectedListTitle: String {
+    remindersLists.first { $0.id == model.reminder.remindersListID }?.title ?? "None"
+  }
+}
+
+private struct ReminderTagsAndFlagsSection: View {
+  @Bindable var model: ReminderFormModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Tags & Flags")
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+
+      VStack(spacing: 0) {
+        Label {
+          TextField("Tags", text: $model.tagText)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        } icon: {
+          Image(systemName: "number")
+            .foregroundStyle(.secondary)
+            .frame(width: 30)
+        }
+        .padding()
+
+        Divider().padding(.leading, 62)
+
+        Toggle(isOn: $model.reminder.isFlagged) {
+          Label("Flag", systemImage: "flag")
+            .labelStyle(RemindersFormLabelStyle())
+        }
+        .padding()
+      }
+      .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+    }
+  }
+}
+
+private struct ReminderFormToolbar: View {
+  @Bindable var model: ReminderFormModel
+
+  var body: some View {
+    HStack {
+      Button("Date and Time", systemImage: "calendar.badge.clock") {
+        model.dateOptionButtonTapped()
+      }
+      .foregroundStyle(model.isDateEnabled ? Color.accentColor : .primary)
+
+      Spacer()
+
+      Button("Location", systemImage: "location") {}
+        .disabled(true)
+
+      Spacer()
+
+      Button(
+        model.reminder.isFlagged ? "Remove Flag" : "Flag",
+        systemImage: model.reminder.isFlagged ? "flag.fill" : "flag"
+      ) {
+        model.reminder.isFlagged.toggle()
+      }
+      .foregroundStyle(model.reminder.isFlagged ? Color.orange : .secondary)
+
+      Spacer()
+
+      Button("Add Photo", systemImage: "camera") {}
+        .disabled(true)
+    }
+    .labelStyle(.iconOnly)
+    .font(.title2)
+    .padding(.horizontal, 24)
+    .frame(height: 58)
+    .reminderFormToolbarBackground()
+  }
+}
+
+private struct ReminderFormToolbarBackground: ViewModifier {
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if #available(iOS 26, *) {
+      content.glassEffect(.regular, in: .capsule)
+    } else {
+      content.background(.regularMaterial, in: .capsule)
+    }
+  }
+}
+
+extension View {
+  fileprivate func reminderFormToolbarBackground() -> some View {
+    modifier(ReminderFormToolbarBackground())
   }
 }
 

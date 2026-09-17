@@ -93,6 +93,11 @@ struct FormAndSearchTests {
     #expect(!form.isDateEnabled)
     #expect(!form.isTimeEnabled)
 
+    form.dateOptionButtonTapped()
+    #expect(form.isDateEnabled)
+    #expect(!form.isTimeEnabled)
+
+    form.dateToggleTapped()
     form.timeToggleTapped()
     #expect(form.isDateEnabled)
     #expect(form.isTimeEnabled)

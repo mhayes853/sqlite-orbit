@@ -27,6 +27,17 @@ struct RemindersFeatureTests {
   }
 
   @Test
+  func newReminderDoesNotPresentTheListFormWhenThereAreNoLists() throws {
+    let database = try makeTestDatabase()
+    let model = RemindersListsModel(database: database)
+
+    model.newReminderButtonTapped()
+
+    #expect(model.presentedSheet == nil)
+    #expect(model.errorMessage == "Create a list before adding a reminder.")
+  }
+
+  @Test
   func listDetailPresentsNewReminderForItsList() throws {
     let database = try makeTestDatabase()
     let list = RemindersList(id: UUID(), title: "Work")

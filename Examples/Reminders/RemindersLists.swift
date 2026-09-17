@@ -127,7 +127,7 @@ final class RemindersListsModel {
 
   func newReminderButtonTapped() {
     guard let list = remindersLists.first?.remindersList else {
-      presentedSheet = .remindersList(nil)
+      errorMessage = "Create a list before adding a reminder."
       return
     }
     presentedSheet = .reminder(list)
