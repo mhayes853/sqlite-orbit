@@ -1,5 +1,47 @@
+import Observation
 import SQLiteOrbit
 import SwiftUI
+
+@MainActor
+@Observable
+final class ReminderCompletionModel {
+  typealias Sleep = @Sendable (Duration) async throws -> Void
+
+  var isPending = false
+
+  @ObservationIgnored private let delay: Duration
+  @ObservationIgnored private let sleep: Sleep
+
+  init(
+    delay: Duration = .seconds(3),
+    sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
+  ) {
+    self.delay = delay
+    self.sleep = sleep
+  }
+
+  func completionStarted() {
+    isPending = true
+  }
+
+  func completionCancelled() {
+    isPending = false
+  }
+
+  func finishCompletion(
+    _ reminder: Reminder,
+    database: RemindersDatabase
+  ) async throws {
+    defer { isPending = false }
+    try await sleep(delay)
+    try Task.checkCancellation()
+    try await database.write { transaction in
+      try Reminder.find(reminder.id)
+        .update { $0.status = Reminder.Status.completed }
+        .execute(transaction)
+    }
+  }
+}
 
 struct ReminderRow: View {
   let color: Color
@@ -10,16 +52,21 @@ struct ReminderRow: View {
   let remindersList: RemindersList
   let tags: String
 
+  @State private var completionModel = ReminderCompletionModel()
+  @State private var completionTask: Task<Void, Never>?
   @State private var errorMessage: String?
   @State private var reminderForm: ReminderFormContext?
 
   var body: some View {
+    let isCompleted = reminder.isCompleted || completionModel.isPending
+
     HStack(alignment: .firstTextBaseline, spacing: 16) {
       Button(action: completionButtonTapped) {
-        Image(systemName: reminder.isCompleted ? "circle.inset.filled" : "circle")
-          .foregroundStyle(reminder.isCompleted ? color : .secondary)
+        Image(systemName: isCompleted ? "circle.inset.filled" : "circle")
+          .foregroundStyle(isCompleted ? color : .secondary)
           .font(.title2)
       }
+      .accessibilityLabel(isCompleted ? "Mark incomplete" : "Mark complete")
 
       VStack(alignment: .leading, spacing: 3) {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -28,8 +75,8 @@ struct ReminderRow: View {
               .foregroundStyle(color)
           }
           Text(reminder.title)
-            .foregroundStyle(reminder.isCompleted ? .secondary : .primary)
-            .strikethrough(reminder.isCompleted)
+            .foregroundStyle(isCompleted ? .secondary : .primary)
+            .strikethrough(isCompleted)
         }
         .font(.title3)
 
@@ -53,10 +100,10 @@ struct ReminderRow: View {
       }
 
       Spacer()
-      if reminder.isFlagged && !reminder.isCompleted {
+      if reminder.isFlagged && !isCompleted {
         Image(systemName: "flag.fill").foregroundStyle(.orange)
       }
-      if !reminder.isCompleted {
+      if !isCompleted {
         Button("Details", systemImage: "info.circle", action: detailsButtonTapped)
           .labelStyle(.iconOnly)
           .tint(color)
@@ -93,10 +140,28 @@ struct ReminderRow: View {
   }
 
   private func completionButtonTapped() {
-    write {
-      try Reminder.find(reminder.id)
-        .update { $0.toggleCompletion() }
-        .execute($0)
+    completionTask?.cancel()
+    if completionModel.isPending {
+      withAnimation { completionModel.completionCancelled() }
+      completionTask = nil
+      return
+    }
+    guard !reminder.isCompleted else {
+      write {
+        try Reminder.find(reminder.id)
+          .update { $0.toggleCompletion() }
+          .execute($0)
+      }
+      return
+    }
+    withAnimation { completionModel.completionStarted() }
+    completionTask = Task {
+      do {
+        try await completionModel.finishCompletion(reminder, database: database)
+      } catch is CancellationError {
+      } catch {
+        errorMessage = error.localizedDescription
+      }
     }
   }
 

@@ -180,6 +180,69 @@ struct FormAndSearchTests {
   }
 
   @Test
+  func completingReminderWaitsForTheUIGracePeriod() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let gate = CompletionDelayGate()
+    let model = ReminderCompletionModel(sleep: { _ in try await gate.wait() })
+
+    model.completionStarted()
+    let completion = Task {
+      try await model.finishCompletion(reminder, database: database)
+    }
+
+    #expect(model.isPending)
+    let beforeDelay = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(!beforeDelay.isCompleted)
+
+    await gate.open()
+    try await completion.value
+
+    #expect(!model.isPending)
+    let afterDelay = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(afterDelay.isCompleted)
+  }
+
+  @Test
+  func cancellingPendingCompletionLeavesReminderIncomplete() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let gate = CompletionDelayGate()
+    let model = ReminderCompletionModel(sleep: { _ in try await gate.wait() })
+
+    model.completionStarted()
+    let completion = Task {
+      try await model.finishCompletion(reminder, database: database)
+    }
+    completion.cancel()
+    model.completionCancelled()
+    await gate.open()
+
+    await #expect(throws: CancellationError.self) {
+      try await completion.value
+    }
+    #expect(!model.isPending)
+    let stored = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(!stored.isCompleted)
+  }
+
+  @Test
   func sampleDataPopulatesOnlyABlankDatabase() async throws {
     let database = try makeTestDatabase()
     let model = RemindersListsModel(database: database)
@@ -205,5 +268,25 @@ struct FormAndSearchTests {
     #expect(ReminderFormModel.parseTags("#work, HOME work") == ["work", "HOME"])
     #expect(ReminderFormModel.parseTags("  #one   #two ") == ["one", "two"])
     #expect(ReminderFormModel.parseTags("").isEmpty)
+  }
+}
+
+private actor CompletionDelayGate {
+  private var continuations: [CheckedContinuation<Void, Never>] = []
+  private var isOpen = false
+
+  func wait() async throws {
+    guard !isOpen else { return }
+    await withCheckedContinuation { continuation in
+      continuations.append(continuation)
+    }
+  }
+
+  func open() {
+    isOpen = true
+    for continuation in continuations {
+      continuation.resume()
+    }
+    continuations.removeAll()
   }
 }
