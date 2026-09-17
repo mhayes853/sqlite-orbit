@@ -246,16 +246,14 @@ struct ReminderRow: View {
       }
 
       Spacer()
-      if reminder.isFlagged && !isCompleted {
+      if reminder.isFlagged {
         Image(systemName: "flag.fill").foregroundStyle(.orange)
       }
-      if !isCompleted {
-        Button("Details", systemImage: "info.circle") {
-          model.detailsButtonTapped(reminder, remindersList: remindersList)
-        }
-        .labelStyle(.iconOnly)
-        .tint(color)
+      Button("Details", systemImage: "info.circle") {
+        model.detailsButtonTapped(reminder, remindersList: remindersList)
       }
+      .labelStyle(.iconOnly)
+      .tint(color)
     }
     .buttonStyle(.borderless)
     .swipeActions {
