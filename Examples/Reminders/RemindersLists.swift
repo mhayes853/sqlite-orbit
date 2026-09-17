@@ -45,6 +45,10 @@ final class RemindersListsModel {
   var selectedDetail: RemindersDetailType?
   let seedDatabaseTip = SeedDatabaseTip()
 
+  var allRemindersLists: [RemindersList] {
+    remindersLists.map(\.remindersList)
+  }
+
   @ObservationIgnored private let database: RemindersDatabase
 
   init(database: RemindersDatabase, now: Date = .now) {
@@ -224,7 +228,12 @@ struct RemindersListsView: View {
 
     List {
       if !searchText.isEmpty {
-        SearchRemindersView(database: database, model: searchModel, searchText: searchText)
+        SearchRemindersView(
+          database: database,
+          model: searchModel,
+          remindersLists: model.allRemindersLists,
+          searchText: searchText
+        )
       } else {
         Section {
           Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {

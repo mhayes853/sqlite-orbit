@@ -52,11 +52,13 @@ final class SearchRemindersModel {
     showCompleted: Bool,
     now: Date
   ) -> some Statement<ReminderDetailRow> {
-    let match = text
+    let match =
+      text
       .split(separator: " ")
       .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
       .joined(separator: " ")
-    return ReminderText
+    return
+      ReminderText
       .where {
         if match.isEmpty {
           false
@@ -88,15 +90,18 @@ struct SearchRemindersView: View {
   @SingleRow private var settings: SearchSettings
   let database: RemindersDatabase
   let model: SearchRemindersModel
+  let remindersLists: [RemindersList]
   let searchText: String
 
   init(
     database: RemindersDatabase,
     model: SearchRemindersModel,
+    remindersLists: [RemindersList],
     searchText: String
   ) {
     self.database = database
     self.model = model
+    self.remindersLists = remindersLists
     self.searchText = searchText
     _settings = SingleRow(SearchSettings.self, database: database)
   }
@@ -133,6 +138,7 @@ struct SearchRemindersView: View {
           notes: row.notes,
           reminder: row.reminder,
           remindersList: row.remindersList,
+          remindersLists: remindersLists,
           tags: row.tags
         )
       }

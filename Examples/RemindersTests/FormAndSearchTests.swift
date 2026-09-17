@@ -266,6 +266,51 @@ struct FormAndSearchTests {
   }
 
   @Test
+  func reminderRowContextMenuActionsPersistChanges() async throws {
+    let database = try makeTestDatabase()
+    let personal = RemindersList(id: UUID(), position: 0, title: "Personal")
+    let work = RemindersList(id: UUID(), position: 1, title: "Work")
+    let reminder = Reminder(id: UUID(), remindersListID: personal.id, title: "Call Blob")
+    try await database.write { transaction in
+      try RemindersList.insert { [personal, work] }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+    let now = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 13))
+    )
+    let model = ReminderRowModel(
+      database: database,
+      calendar: calendar,
+      now: now
+    )
+
+    await model.dueDateButtonTapped(reminder, daysFromToday: 1).value
+    await model.moveToListButtonTapped(reminder, remindersList: work).value
+    await model.priorityButtonTapped(reminder, priority: .high).value
+
+    let updated = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(
+      updated.dueDate
+        == calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+    )
+    #expect(updated.remindersListID == work.id)
+    #expect(updated.priority == .high)
+
+    await model.clearDueDateButtonTapped(updated).value
+    await model.priorityButtonTapped(updated, priority: nil).value
+
+    let cleared = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(cleared.dueDate == nil)
+    #expect(cleared.priority == nil)
+  }
+
+  @Test
   func sampleDataPopulatesOnlyABlankDatabase() async throws {
     let database = try makeTestDatabase()
     let model = RemindersListsModel(database: database)

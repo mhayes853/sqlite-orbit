@@ -81,6 +81,7 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
 @Observable
 final class RemindersDetailModel {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
+  @ObservationIgnored @FetchAll var remindersLists: [RemindersList]
   @ObservationIgnored @FetchOne var coverImageData: Data? = nil
 
   let detailType: RemindersDetailType
@@ -127,6 +128,11 @@ final class RemindersDetailModel {
       database: database,
       animation: .default
     )
+    _remindersLists = FetchAll(
+      RemindersList.order(by: \.position),
+      database: database,
+      animation: .default
+    )
     if let listID = detailType.remindersList?.id {
       _coverImageData = FetchOne(
         RemindersListAsset
@@ -148,6 +154,7 @@ final class RemindersDetailModel {
   func load() async {
     do {
       try await $reminderRows.load()
+      try await $remindersLists.load()
       if detailType.remindersList != nil {
         try await $coverImageData.load()
       }
@@ -297,6 +304,7 @@ struct RemindersDetailView: View {
           notes: row.notes,
           reminder: row.reminder,
           remindersList: row.remindersList,
+          remindersLists: model.remindersLists,
           tags: row.tags
         )
         .listRowSeparator(.hidden)
