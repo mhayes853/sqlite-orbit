@@ -171,6 +171,7 @@ final class ReminderRowModel {
 
 struct ReminderRow: View {
   let color: Color
+  let highlightedTitle: String?
   let isPastDue: Bool
   let notes: String
   let reminder: Reminder
@@ -183,6 +184,7 @@ struct ReminderRow: View {
   init(
     color: Color,
     database: RemindersDatabase,
+    highlightedTitle: String? = nil,
     isPastDue: Bool,
     notes: String,
     reminder: Reminder,
@@ -191,6 +193,7 @@ struct ReminderRow: View {
     tags: String
   ) {
     self.color = color
+    self.highlightedTitle = highlightedTitle
     self.isPastDue = isPastDue
     self.notes = notes
     self.reminder = reminder
@@ -220,14 +223,14 @@ struct ReminderRow: View {
             Text(String(repeating: "!", count: priority.rawValue))
               .foregroundStyle(color)
           }
-          Text(reminder.title)
+          highlightedText(highlightedTitle ?? reminder.title)
             .foregroundStyle(isCompleted ? .secondary : .primary)
             .strikethrough(isCompleted)
         }
         .font(.title3)
 
         if !notes.isEmpty {
-          Text(notes)
+          highlightedText(notes)
             .font(.subheadline)
             .foregroundStyle(.secondary)
             .lineLimit(2)
@@ -239,7 +242,7 @@ struct ReminderRow: View {
               .foregroundStyle(isPastDue ? .red : .secondary)
           }
           if !tags.isEmpty {
-            Text(tags).foregroundStyle(.secondary)
+            highlightedText(tags).foregroundStyle(.secondary)
           }
         }
         .font(.callout)
@@ -296,6 +299,15 @@ struct ReminderRow: View {
     } message: {
       Text(model.errorMessage ?? "Unknown error")
     }
+  }
+
+  private func highlightedText(_ text: String) -> Text {
+    guard highlightedTitle != nil,
+      let attributedText = try? AttributedString(markdown: text)
+    else {
+      return Text(text)
+    }
+    return Text(attributedText)
   }
 }
 

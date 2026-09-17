@@ -57,6 +57,13 @@ struct FormAndSearchTests {
     let search = SearchRemindersModel(database: database)
     await search.loadResults(for: "groceries", showCompleted: false)
     #expect(search.results.map(\.reminder.id) == [reminderID])
+    #expect(search.results.first?.highlightedTitle == "Pick up **groceries**")
+
+    await search.loadResults(for: "coffee", showCompleted: false)
+    #expect(search.results.first?.highlightedNotes == "Milk and **coffee**")
+
+    await search.loadResults(for: "errands", showCompleted: false)
+    #expect(search.results.first?.highlightedTags == "#**errands** #weekly")
   }
 
   @Test

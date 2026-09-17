@@ -2,10 +2,21 @@ import Observation
 import SQLiteOrbit
 import SwiftUI
 
+@Selection
+nonisolated struct SearchReminderRow: Identifiable, Sendable {
+  var id: Reminder.ID { reminder.id }
+  let highlightedNotes: String
+  let highlightedTags: String
+  let highlightedTitle: String
+  let isPastDue: Bool
+  let reminder: Reminder
+  let remindersList: RemindersList
+}
+
 @MainActor
 @Observable
 final class SearchRemindersModel {
-  @ObservationIgnored @FetchAll var results: [ReminderDetailRow]
+  @ObservationIgnored @FetchAll var results: [SearchReminderRow]
   var errorMessage: String?
 
   @ObservationIgnored private let database: RemindersDatabase
@@ -51,7 +62,7 @@ final class SearchRemindersModel {
     text: String,
     showCompleted: Bool,
     now: Date
-  ) -> some Statement<ReminderDetailRow> {
+  ) -> some Statement<SearchReminderRow> {
     let match =
       text
       .split(separator: " ")
@@ -75,12 +86,13 @@ final class SearchRemindersModel {
       .order { ($1.isCompleted, $1.dueDate) }
       .join(RemindersList.all) { $1.remindersListID.eq($2.id) }
       .select {
-        ReminderDetailRow.Columns(
-          reminder: $1,
-          remindersList: $2,
+        SearchReminderRow.Columns(
+          highlightedNotes: $0.notes.snippet("**", "**", "...", 64).replace("\n", " "),
+          highlightedTags: $0.tags.highlight("**", "**"),
+          highlightedTitle: $0.title.highlight("**", "**"),
           isPastDue: $1.isPastDue(relativeTo: now),
-          notes: $0.notes.substr(0, 200),
-          tags: $0.tags
+          reminder: $1,
+          remindersList: $2
         )
       }
   }
@@ -134,12 +146,13 @@ struct SearchRemindersView: View {
         ReminderRow(
           color: row.remindersList.color,
           database: database,
+          highlightedTitle: row.highlightedTitle,
           isPastDue: row.isPastDue,
-          notes: row.notes,
+          notes: row.highlightedNotes,
           reminder: row.reminder,
           remindersList: row.remindersList,
           remindersLists: remindersLists,
-          tags: row.tags
+          tags: row.highlightedTags
         )
       }
     } header: {
