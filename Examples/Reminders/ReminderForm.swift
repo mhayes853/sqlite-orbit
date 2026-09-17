@@ -294,7 +294,7 @@ private struct ReminderTextFields: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       TextField("Title", text: $model.reminder.title)
-        .font(.title)
+        .font(.title.bold())
         .focused(focusedField, equals: .title)
       TextField("Notes", text: $model.reminder.notes, axis: .vertical)
         .font(.body)
