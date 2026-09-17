@@ -189,23 +189,23 @@ struct FormAndSearchTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
     let gate = CompletionDelayGate()
-    let model = ReminderCompletionModel(sleep: { _ in try await gate.wait() })
+    let model = ReminderRowModel(
+      database: database,
+      sleep: { _ in try await gate.wait() }
+    )
 
-    model.completionStarted()
-    let completion = Task {
-      try await model.finishCompletion(reminder, database: database)
-    }
+    let completion = try #require(model.completionButtonTapped(reminder))
 
-    #expect(model.isPending)
+    #expect(model.isCompletionPending)
     let beforeDelay = try #require(
       await database.read { try Reminder.find(reminder.id).fetchOne($0) }
     )
     #expect(!beforeDelay.isCompleted)
 
     await gate.open()
-    try await completion.value
+    await completion.value
 
-    #expect(!model.isPending)
+    #expect(!model.isCompletionPending)
     let afterDelay = try #require(
       await database.read { try Reminder.find(reminder.id).fetchOne($0) }
     )
@@ -222,24 +222,47 @@ struct FormAndSearchTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
     let gate = CompletionDelayGate()
-    let model = ReminderCompletionModel(sleep: { _ in try await gate.wait() })
+    let model = ReminderRowModel(
+      database: database,
+      sleep: { _ in try await gate.wait() }
+    )
 
-    model.completionStarted()
-    let completion = Task {
-      try await model.finishCompletion(reminder, database: database)
-    }
-    completion.cancel()
-    model.completionCancelled()
+    let completion = try #require(model.completionButtonTapped(reminder))
+    #expect(model.completionButtonTapped(reminder) == nil)
     await gate.open()
+    await completion.value
 
-    await #expect(throws: CancellationError.self) {
-      try await completion.value
-    }
-    #expect(!model.isPending)
+    #expect(!model.isCompletionPending)
     let stored = try #require(
       await database.read { try Reminder.find(reminder.id).fetchOne($0) }
     )
     #expect(!stored.isCompleted)
+  }
+
+  @Test
+  func reminderRowModelHandlesDetailsFlaggingAndDeletion() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let model = ReminderRowModel(database: database)
+
+    model.detailsButtonTapped(reminder, remindersList: list)
+    #expect(model.reminderForm?.reminder == reminder)
+    #expect(model.reminderForm?.remindersList == list)
+
+    await model.flagButtonTapped(reminder).value
+    let flagged = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(flagged.isFlagged)
+
+    await model.deleteButtonTapped(reminder).value
+    let deleted = try await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    #expect(deleted == nil)
   }
 
   @Test

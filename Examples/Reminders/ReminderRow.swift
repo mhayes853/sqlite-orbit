@@ -4,64 +4,151 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class ReminderCompletionModel {
+final class ReminderRowModel {
   typealias Sleep = @Sendable (Duration) async throws -> Void
 
-  var isPending = false
+  var errorMessage: String?
+  var isCompletionPending = false
+  var reminderForm: ReminderFormContext?
 
+  @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private let delay: Duration
   @ObservationIgnored private let sleep: Sleep
+  @ObservationIgnored private var completionGeneration = 0
+  @ObservationIgnored private var completionTask: Task<Void, Never>?
 
   init(
+    database: RemindersDatabase,
     delay: Duration = .seconds(3),
     sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
   ) {
+    self.database = database
     self.delay = delay
     self.sleep = sleep
   }
 
-  func completionStarted() {
-    isPending = true
+  func isCompleted(_ reminder: Reminder) -> Bool {
+    reminder.isCompleted || isCompletionPending
   }
 
-  func completionCancelled() {
-    isPending = false
+  @discardableResult
+  func completionButtonTapped(_ reminder: Reminder) -> Task<Void, Never>? {
+    completionGeneration += 1
+    let generation = completionGeneration
+    completionTask?.cancel()
+    if isCompletionPending {
+      withAnimation { isCompletionPending = false }
+      completionTask = nil
+      return nil
+    }
+    guard !reminder.isCompleted else {
+      return write {
+        try Reminder.find(reminder.id)
+          .update { $0.toggleCompletion() }
+          .execute($0)
+      }
+    }
+    withAnimation { isCompletionPending = true }
+    completionTask = Task { [weak self] in
+      guard let self else { return }
+      await finishCompletion(reminder, generation: generation)
+    }
+    return completionTask
   }
 
-  func finishCompletion(
+  @discardableResult
+  func deleteButtonTapped(_ reminder: Reminder) -> Task<Void, Never> {
+    write { try Reminder.delete(reminder).execute($0) }
+  }
+
+  func detailsButtonTapped(
     _ reminder: Reminder,
-    database: RemindersDatabase
-  ) async throws {
-    defer { isPending = false }
-    try await sleep(delay)
-    try Task.checkCancellation()
-    try await database.write { transaction in
+    remindersList: RemindersList
+  ) {
+    reminderForm = ReminderFormContext(remindersList: remindersList, reminder: reminder)
+  }
+
+  @discardableResult
+  func flagButtonTapped(_ reminder: Reminder) -> Task<Void, Never> {
+    write {
       try Reminder.find(reminder.id)
-        .update { $0.status = Reminder.Status.completed }
-        .execute(transaction)
+        .update { $0.isFlagged.toggle() }
+        .execute($0)
     }
   }
+
+  private func finishCompletion(_ reminder: Reminder, generation: Int) async {
+    defer {
+      if completionGeneration == generation {
+        withAnimation { isCompletionPending = false }
+        completionTask = nil
+      }
+    }
+    do {
+      try await sleep(delay)
+      try Task.checkCancellation()
+      try await database.write { transaction in
+        try Reminder.find(reminder.id)
+          .update { $0.status = Reminder.Status.completed }
+          .execute(transaction)
+      }
+    } catch is CancellationError {
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func write(
+    _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
+  ) -> Task<Void, Never> {
+    Task {
+      do {
+        try await database.write(operation)
+      } catch {
+        errorMessage = error.localizedDescription
+      }
+    }
+  }
+
+  fileprivate var databaseForView: RemindersDatabase { database }
 }
 
 struct ReminderRow: View {
   let color: Color
-  let database: RemindersDatabase
   let isPastDue: Bool
   let notes: String
   let reminder: Reminder
   let remindersList: RemindersList
   let tags: String
 
-  @State private var completionModel = ReminderCompletionModel()
-  @State private var completionTask: Task<Void, Never>?
-  @State private var errorMessage: String?
-  @State private var reminderForm: ReminderFormContext?
+  @State private var model: ReminderRowModel
+
+  init(
+    color: Color,
+    database: RemindersDatabase,
+    isPastDue: Bool,
+    notes: String,
+    reminder: Reminder,
+    remindersList: RemindersList,
+    tags: String
+  ) {
+    self.color = color
+    self.isPastDue = isPastDue
+    self.notes = notes
+    self.reminder = reminder
+    self.remindersList = remindersList
+    self.tags = tags
+    _model = State(initialValue: ReminderRowModel(database: database))
+  }
 
   var body: some View {
-    let isCompleted = reminder.isCompleted || completionModel.isPending
+    @Bindable var model = model
+    let isCompleted = model.isCompleted(reminder)
 
     HStack(alignment: .firstTextBaseline, spacing: 16) {
-      Button(action: completionButtonTapped) {
+      Button {
+        model.completionButtonTapped(reminder)
+      } label: {
         Image(systemName: isCompleted ? "circle.inset.filled" : "circle")
           .foregroundStyle(isCompleted ? color : .secondary)
           .font(.title2)
@@ -104,26 +191,33 @@ struct ReminderRow: View {
         Image(systemName: "flag.fill").foregroundStyle(.orange)
       }
       if !isCompleted {
-        Button("Details", systemImage: "info.circle", action: detailsButtonTapped)
-          .labelStyle(.iconOnly)
-          .tint(color)
+        Button("Details", systemImage: "info.circle") {
+          model.detailsButtonTapped(reminder, remindersList: remindersList)
+        }
+        .labelStyle(.iconOnly)
+        .tint(color)
       }
     }
     .buttonStyle(.borderless)
     .swipeActions {
-      Button("Delete", systemImage: "trash", role: .destructive, action: deleteButtonTapped)
+      Button("Delete", systemImage: "trash", role: .destructive) {
+        model.deleteButtonTapped(reminder)
+      }
       Button(
         reminder.isFlagged ? "Unflag" : "Flag",
-        systemImage: "flag",
-        action: flagButtonTapped
-      )
+        systemImage: "flag"
+      ) {
+        model.flagButtonTapped(reminder)
+      }
       .tint(.orange)
-      Button("Details", systemImage: "info.circle", action: detailsButtonTapped)
+      Button("Details", systemImage: "info.circle") {
+        model.detailsButtonTapped(reminder, remindersList: remindersList)
+      }
     }
-    .sheet(item: $reminderForm) { context in
+    .sheet(item: $model.reminderForm) { context in
       NavigationStack {
         ReminderFormView(
-          database: database,
+          database: model.databaseForView,
           remindersList: remindersList,
           reminder: context.reminder
         )
@@ -131,65 +225,11 @@ struct ReminderRow: View {
     }
     .alert(
       "Database Error",
-      isPresented: $errorMessage.isPresented
+      isPresented: $model.errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
-      Text(errorMessage ?? "Unknown error")
-    }
-  }
-
-  private func completionButtonTapped() {
-    completionTask?.cancel()
-    if completionModel.isPending {
-      withAnimation { completionModel.completionCancelled() }
-      completionTask = nil
-      return
-    }
-    guard !reminder.isCompleted else {
-      write {
-        try Reminder.find(reminder.id)
-          .update { $0.toggleCompletion() }
-          .execute($0)
-      }
-      return
-    }
-    withAnimation { completionModel.completionStarted() }
-    completionTask = Task {
-      do {
-        try await completionModel.finishCompletion(reminder, database: database)
-      } catch is CancellationError {
-      } catch {
-        errorMessage = error.localizedDescription
-      }
-    }
-  }
-
-  private func deleteButtonTapped() {
-    write { try Reminder.delete(reminder).execute($0) }
-  }
-
-  private func detailsButtonTapped() {
-    reminderForm = ReminderFormContext(remindersList: remindersList, reminder: reminder)
-  }
-
-  private func flagButtonTapped() {
-    write {
-      try Reminder.find(reminder.id)
-        .update { $0.isFlagged.toggle() }
-        .execute($0)
-    }
-  }
-
-  private func write(
-    _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
-  ) {
-    Task {
-      do {
-        try await database.write(operation)
-      } catch {
-        errorMessage = error.localizedDescription
-      }
+      Text(model.errorMessage ?? "Unknown error")
     }
   }
 }
