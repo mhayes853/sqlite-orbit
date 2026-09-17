@@ -302,6 +302,7 @@ struct RemindersListsView: View {
       }
     }
     .listStyle(.insetGrouped)
+    .listSectionSpacing(8)
     .scrollContentBackground(.hidden)
     .background(Color(.systemGroupedBackground))
     .navigationTitle("")
