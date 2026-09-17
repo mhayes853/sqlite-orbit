@@ -346,8 +346,8 @@ struct RemindersListsView: View {
       Color.clear.frame(height: 72)
     }
     .overlay(alignment: .bottomTrailing) {
-      FloatingAddButton(tint: .blue, title: "Add List") {
-        model.addListButtonTapped()
+      FloatingAddButton(tint: .blue, title: "New Reminder") {
+        model.newReminderButtonTapped()
       }
       .padding(24)
       .opacity(isSearchPresented ? 0 : 1)

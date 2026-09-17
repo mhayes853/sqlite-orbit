@@ -39,6 +39,37 @@ struct RemindersFeatureTests {
   }
 
   @Test
+  func smartListsPresentNewRemindersForTheFirstListExceptCompleted() async throws {
+    let database = try makeTestDatabase()
+    let firstList = RemindersList(id: UUID(), position: 0, title: "Personal")
+    let secondList = RemindersList(id: UUID(), position: 1, title: "Work")
+    try await database.write {
+      try RemindersList.insert { [firstList, secondList] }.execute($0)
+    }
+
+    let detailTypes: [RemindersDetailType] = [
+      .all,
+      .flagged,
+      .scheduled,
+      .tags([Tag(title: "errands")]),
+      .today
+    ]
+    for detailType in detailTypes {
+      let model = RemindersDetailModel(database: database, detailType: detailType)
+
+      #expect(model.canAddReminder)
+      model.newReminderButtonTapped()
+
+      #expect(model.reminderForm?.remindersList.id == firstList.id)
+    }
+
+    let completed = RemindersDetailModel(database: database, detailType: .completed)
+    #expect(!completed.canAddReminder)
+    completed.newReminderButtonTapped()
+    #expect(completed.reminderForm == nil)
+  }
+
+  @Test
   func selectingSmartListSetsOnlyThatDestination() throws {
     let database = try makeTestDatabase()
     let model = RemindersListsModel(database: database)
@@ -172,7 +203,7 @@ struct RemindersFeatureTests {
     let reminders = [
       Reminder(id: UUID(), position: 0, remindersListID: list.id, title: "A"),
       Reminder(id: UUID(), position: 1, remindersListID: list.id, title: "B"),
-      Reminder(id: UUID(), position: 2, remindersListID: list.id, title: "C"),
+      Reminder(id: UUID(), position: 2, remindersListID: list.id, title: "C")
     ]
 
     try await database.write { transaction in

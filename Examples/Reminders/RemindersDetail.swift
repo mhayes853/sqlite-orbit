@@ -89,6 +89,10 @@ final class RemindersDetailModel {
   var showCompleted: Bool
   var errorMessage: String?
 
+  var canAddReminder: Bool {
+    detailType != .completed
+  }
+
   @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private let now: Date
 
@@ -175,8 +179,18 @@ final class RemindersDetailModel {
   }
 
   func newReminderButtonTapped() {
-    guard let list = detailType.remindersList else { return }
+    guard canAddReminder else { return }
+    guard let list = detailType.remindersList ?? firstRemindersList else {
+      errorMessage = "Create a list before adding a reminder."
+      return
+    }
     reminderForm = ReminderFormContext(remindersList: list)
+  }
+
+  private var firstRemindersList: RemindersList? {
+    (try? database.readBlocking {
+      try RemindersList.order(by: \.position).fetchOne($0)
+    }) ?? nil
   }
 
   private func persistSettingsAndReload() async {
@@ -327,10 +341,10 @@ struct RemindersDetailView: View {
       }
     }
     .safeAreaInset(edge: .bottom) {
-      Color.clear.frame(height: model.detailType.remindersList == nil ? 0 : 72)
+      Color.clear.frame(height: model.canAddReminder ? 72 : 0)
     }
     .overlay(alignment: .bottomTrailing) {
-      if model.detailType.remindersList != nil {
+      if model.canAddReminder {
         FloatingAddButton(tint: model.detailType.color, title: "New Reminder") {
           model.newReminderButtonTapped()
         }
