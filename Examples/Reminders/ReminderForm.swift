@@ -345,35 +345,108 @@ private struct ReminderOrganizationSection: View {
         .padding(.horizontal, 18)
 
       VStack(spacing: 0) {
-        Picker(selection: $model.remindersListID) {
+        Menu {
           ForEach(remindersLists) { list in
-            Text(list.title).tag(list.id)
+            Button {
+              model.remindersListID = list.id
+            } label: {
+              if list.id == model.remindersListID {
+                Label(list.title, systemImage: "checkmark")
+              } else {
+                Text(list.title)
+              }
+            }
           }
         } label: {
-          Label("List", systemImage: "list.bullet")
-            .labelStyle(RemindersFormLabelStyle(color: selectedListColor))
+          HStack(spacing: 14) {
+            RemindersListIcon(color: selectedListColor, size: 34)
+            Text("List")
+              .foregroundStyle(.primary)
+            Spacer(minLength: 12)
+            Text(selectedListTitle)
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+            Image(systemName: "chevron.right")
+              .font(.footnote.bold())
+              .foregroundStyle(.tertiary)
+              .accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 36)
+          .contentShape(.rect)
         }
-        .padding()
+        .buttonStyle(.plain)
+        .accessibilityLabel("List")
+        .accessibilityValue(selectedListTitle)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
 
         Divider().padding(.leading, 62)
 
-        Picker(selection: $model.priority) {
-          Text("None").tag(nil as Reminder.Priority?)
-          Text("High").tag(Reminder.Priority.high as Reminder.Priority?)
-          Text("Medium").tag(Reminder.Priority.medium as Reminder.Priority?)
-          Text("Low").tag(Reminder.Priority.low as Reminder.Priority?)
+        Menu {
+          priorityButton("None", priority: nil)
+          priorityButton("High", priority: .high)
+          priorityButton("Medium", priority: .medium)
+          priorityButton("Low", priority: .low)
         } label: {
-          Label("Priority", systemImage: "exclamationmark")
-            .labelStyle(RemindersFormLabelStyle())
+          HStack(spacing: 14) {
+            Image(systemName: "exclamationmark")
+              .font(.body.weight(.medium))
+              .foregroundStyle(.secondary)
+              .frame(width: 34, height: 34)
+              .accessibilityHidden(true)
+            Text("Priority")
+              .foregroundStyle(.primary)
+            Spacer(minLength: 12)
+            Text(priorityTitle)
+              .foregroundStyle(.secondary)
+            Image(systemName: "chevron.up.chevron.down")
+              .font(.caption2.bold())
+              .foregroundStyle(.tertiary)
+              .accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 36)
+          .contentShape(.rect)
         }
-        .padding()
+        .buttonStyle(.plain)
+        .accessibilityLabel("Priority")
+        .accessibilityValue(priorityTitle)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
       }
       .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
     }
   }
 
+  private var priorityTitle: String {
+    switch model.priority {
+    case nil: "None"
+    case .high: "High"
+    case .medium: "Medium"
+    case .low: "Low"
+    }
+  }
+
   private var selectedListColor: Color {
     remindersLists.first { $0.id == model.remindersListID }?.color ?? .blue
+  }
+
+  private var selectedListTitle: String {
+    remindersLists.first { $0.id == model.remindersListID }?.title ?? "None"
+  }
+
+  private func priorityButton(
+    _ title: String,
+    priority: Reminder.Priority?
+  ) -> some View {
+    Button {
+      model.priority = priority
+    } label: {
+      if model.priority == priority {
+        Label(title, systemImage: "checkmark")
+      } else {
+        Text(title)
+      }
+    }
   }
 }
 
