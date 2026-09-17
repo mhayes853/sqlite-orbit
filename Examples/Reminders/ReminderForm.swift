@@ -241,8 +241,7 @@ struct ReminderFormView: View {
 
         ReminderMoreOptionsSection(
           model: model,
-          remindersLists: remindersLists,
-          availableTagTitles: availableTags.map(\.title)
+          remindersLists: remindersLists
         )
 
         ReminderTagsSection(
@@ -289,80 +288,6 @@ struct ReminderFormView: View {
     Task {
       if await model.save() { dismiss() }
     }
-  }
-}
-
-private struct ReminderMoreOptionsSection: View {
-  @Bindable var model: ReminderFormModel
-  let remindersLists: [RemindersList]
-  let availableTagTitles: [String]
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("More Options")
-        .font(.title3.bold())
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-
-      ReminderListPicker(model: model, remindersLists: remindersLists)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
-
-      NavigationLink {
-        ReminderDetailsFormView(
-          model: model,
-          remindersLists: remindersLists,
-          availableTagTitles: availableTagTitles
-        )
-      } label: {
-        HStack(spacing: 14) {
-          Image(systemName: "info.circle")
-            .font(.title3)
-            .foregroundStyle(.secondary)
-            .frame(width: 34, height: 34)
-            .accessibilityHidden(true)
-          Text("Details")
-            .foregroundStyle(.primary)
-          Spacer(minLength: 12)
-          Image(systemName: "chevron.right")
-            .font(.footnote.bold())
-            .foregroundStyle(.tertiary)
-            .accessibilityHidden(true)
-        }
-        .frame(maxWidth: .infinity, minHeight: 36)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
-        .contentShape(.rect)
-      }
-      .buttonStyle(.plain)
-    }
-  }
-}
-
-private struct ReminderDetailsFormView: View {
-  @Bindable var model: ReminderFormModel
-  let remindersLists: [RemindersList]
-  let availableTagTitles: [String]
-
-  var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 26) {
-        ReminderDateAndTimeSection(model: model)
-        ReminderOrganizationSection(model: model, remindersLists: remindersLists)
-        ReminderTagsAndFlagsSection(
-          model: model,
-          availableTagTitles: availableTagTitles
-        )
-      }
-      .padding(.horizontal, 16)
-      .padding(.vertical, 22)
-    }
-    .scrollDismissesKeyboard(.interactively)
-    .background(Color(.systemGroupedBackground))
-    .navigationTitle("Details")
-    .toolbarTitleDisplayMode(.inline)
   }
 }
 
@@ -478,13 +403,13 @@ private struct ReminderToggleButton: View {
   }
 }
 
-private struct ReminderOrganizationSection: View {
+private struct ReminderMoreOptionsSection: View {
   @Bindable var model: ReminderFormModel
   let remindersLists: [RemindersList]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
-      Text("Organization")
+      Text("More Options")
         .font(.title3.bold())
         .foregroundStyle(.secondary)
         .padding(.horizontal, 18)
@@ -601,34 +526,6 @@ private struct ReminderListPicker: View {
 
   private var selectedListTitle: String {
     remindersLists.first { $0.id == model.reminder.remindersListID }?.title ?? "None"
-  }
-}
-
-private struct ReminderTagsAndFlagsSection: View {
-  @Bindable var model: ReminderFormModel
-  let availableTagTitles: [String]
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Tags & Flags")
-        .font(.title3.bold())
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-
-      VStack(spacing: 0) {
-        ReminderTagsField(model: model, availableTagTitles: availableTagTitles)
-          .padding()
-
-        Divider().padding(.leading, 62)
-
-        Toggle(isOn: $model.reminder.isFlagged) {
-          Label("Flag", systemImage: "flag")
-            .labelStyle(RemindersFormLabelStyle())
-        }
-        .padding()
-      }
-      .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
-    }
   }
 }
 
