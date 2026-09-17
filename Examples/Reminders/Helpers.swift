@@ -76,6 +76,7 @@ private struct RemindersSearchModifier: ViewModifier {
         placement: .toolbar,
         prompt: prompt
       )
+      .searchDictationBehavior(.inline(activation: .onSelect))
     } else {
       content
     }
