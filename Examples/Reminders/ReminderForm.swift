@@ -168,8 +168,13 @@ final class ReminderFormModel {
   nonisolated static func parseTags(_ text: String) -> [String] {
     uniquedTags(
       text
-        .split { $0 == "," || $0.isWhitespace }
-        .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+        .split(separator: ",")
+        .map {
+          $0
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
     )
   }
 

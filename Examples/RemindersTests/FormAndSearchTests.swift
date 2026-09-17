@@ -59,14 +59,14 @@ struct FormAndSearchTests {
     form.tagText = "#errands,"
     form.tagTextChanged()
     #expect(form.tagTitles == ["errands"])
-    form.tagText = "weekly"
+    form.tagText = "weekly plan"
     #expect(await form.save())
     let reminderID = form.id
 
     let tags = try await database.read {
       try Tag.order(by: \.title).fetchAll($0)
     }
-    #expect(tags.map(\.title) == ["errands", "weekly"])
+    #expect(tags.map(\.title) == ["errands", "weekly plan"])
     #expect(
       try await database.read { try ReminderTag.count().fetchOne($0) } == 2
     )
@@ -80,7 +80,7 @@ struct FormAndSearchTests {
     #expect(search.results.first?.highlightedNotes == "Milk and **coffee**")
 
     await search.loadResults(for: "errands", showCompleted: false)
-    #expect(search.results.first?.highlightedTags == "#**errands** #weekly")
+    #expect(search.results.first?.highlightedTags == "#**errands** #weekly plan")
   }
 
   @Test
@@ -111,15 +111,20 @@ struct FormAndSearchTests {
     #expect(form.tagTitles == ["work", "home"])
     #expect(form.tagText.isEmpty)
 
+    form.tagText = "this is a test,"
+    form.tagTextChanged()
+    #expect(form.tagTitles == ["work", "home", "this is a test"])
+    #expect(form.tagText.isEmpty)
+
     form.tagText = "wor"
     #expect(form.tagSuggestions(from: availableTagTitles) == ["workout"])
 
     form.tagSuggestionTapped("workout")
-    #expect(form.tagTitles == ["work", "home", "workout"])
+    #expect(form.tagTitles == ["work", "home", "this is a test", "workout"])
     #expect(form.tagText.isEmpty)
 
     form.removeTagButtonTapped("HOME")
-    #expect(form.tagTitles == ["work", "workout"])
+    #expect(form.tagTitles == ["work", "this is a test", "workout"])
   }
 
   @Test
@@ -396,8 +401,12 @@ struct FormAndSearchTests {
 
   @Test
   func tagParsing() {
-    #expect(ReminderFormModel.parseTags("#work, HOME work") == ["work", "HOME"])
-    #expect(ReminderFormModel.parseTags("  #one   #two ") == ["one", "two"])
+    #expect(ReminderFormModel.parseTags("#work, HOME work") == ["work", "HOME work"])
+    #expect(
+      ReminderFormModel.parseTags("  #one two, #three four ") == ["one two", "three four"]
+    )
+    #expect(ReminderFormModel.parseTags("#this is a test") == ["this is a test"])
+    #expect(ReminderFormModel.parseTags("#work, WORK") == ["work"])
     #expect(ReminderFormModel.parseTags("").isEmpty)
   }
 }
