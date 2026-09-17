@@ -14,7 +14,7 @@ struct ReminderRow: View {
   @State private var reminderForm: ReminderFormContext?
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline) {
+    HStack(alignment: .firstTextBaseline, spacing: 16) {
       Button(action: completionButtonTapped) {
         Image(systemName: reminder.isCompleted ? "circle.inset.filled" : "circle")
           .foregroundStyle(reminder.isCompleted ? color : .secondary)
