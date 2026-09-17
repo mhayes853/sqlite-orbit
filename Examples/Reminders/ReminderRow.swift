@@ -303,11 +303,24 @@ struct ReminderRow: View {
 
   private func highlightedText(_ text: String) -> Text {
     guard highlightedTitle != nil,
-      let attributedText = try? AttributedString(markdown: text)
+      let attributedText = Self.highlightedAttributedString(text)
     else {
       return Text(text)
     }
     return Text(attributedText)
+  }
+
+  static func highlightedAttributedString(_ text: String) -> AttributedString? {
+    guard var attributedText = try? AttributedString(markdown: text) else { return nil }
+    let highlightedRanges = attributedText.runs.compactMap { run in
+      run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        ? run.range
+        : nil
+    }
+    for range in highlightedRanges {
+      attributedText[range].backgroundColor = .yellow.opacity(0.35)
+    }
+    return attributedText
   }
 }
 

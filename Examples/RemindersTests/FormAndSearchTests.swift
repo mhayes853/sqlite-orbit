@@ -1,5 +1,6 @@
 import Foundation
 import SQLiteOrbit
+import SwiftUI
 import Testing
 
 @testable import RemindersFeature
@@ -7,6 +8,19 @@ import Testing
 @MainActor
 @Suite
 struct FormAndSearchTests {
+  @Test
+  func searchHighlightUsesBoldTextAndABackgroundColor() throws {
+    let text = try #require(ReminderRow.highlightedAttributedString("Call **Blob** today"))
+    let highlightedRun = try #require(
+      text.runs.first {
+        $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+      }
+    )
+
+    #expect(String(text.characters) == "Call Blob today")
+    #expect(highlightedRun.backgroundColor != nil)
+  }
+
   @Test
   func listFormCreatesThenEditsAList() async throws {
     let database = try makeTestDatabase()
