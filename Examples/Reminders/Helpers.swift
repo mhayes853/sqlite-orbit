@@ -62,22 +62,20 @@ struct FloatingAddButton: View {
   }
 }
 
-private struct RemindersSearchToolbar: ViewModifier {
+private struct RemindersSearchModifier: ViewModifier {
   @Binding var text: String
   @Binding var isPresented: Bool
-  var isFocused: FocusState<Bool>.Binding
   let prompt: String
 
   @ViewBuilder
   func body(content: Content) -> some View {
     if isPresented {
-      if #available(iOS 18, *) {
-        content
-          .searchable(text: $text, placement: .toolbar, prompt: prompt)
-          .searchFocused(isFocused)
-      } else {
-        content.searchable(text: $text, prompt: prompt)
-      }
+      content.searchable(
+        text: $text,
+        isPresented: $isPresented,
+        placement: .toolbar,
+        prompt: prompt
+      )
     } else {
       content
     }
@@ -88,14 +86,12 @@ extension View {
   func remindersSearchable(
     text: Binding<String>,
     isPresented: Binding<Bool>,
-    isFocused: FocusState<Bool>.Binding,
     prompt: String
   ) -> some View {
     modifier(
-      RemindersSearchToolbar(
+      RemindersSearchModifier(
         text: text,
         isPresented: isPresented,
-        isFocused: isFocused,
         prompt: prompt
       )
     )

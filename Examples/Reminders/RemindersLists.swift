@@ -211,7 +211,6 @@ struct RemindersListsView: View {
   @State private var searchModel: SearchRemindersModel
   @State private var searchText = ""
   @State private var isSearchPresented = false
-  @FocusState private var isSearchFocused: Bool
   private let database: RemindersDatabase
 
   init(database: RemindersDatabase) {
@@ -311,18 +310,8 @@ struct RemindersListsView: View {
     .remindersSearchable(
       text: $searchText,
       isPresented: $isSearchPresented,
-      isFocused: $isSearchFocused,
       prompt: "Search reminders and tags"
     )
-    .task(id: isSearchPresented) {
-      if isSearchPresented { isSearchFocused = true }
-    }
-    .onChange(of: isSearchFocused) {
-      if !isSearchFocused && searchText.isEmpty { isSearchPresented = false }
-    }
-    .onChange(of: searchText) {
-      if searchText.isEmpty && !isSearchFocused { isSearchPresented = false }
-    }
     .toolbar {
       if model.remindersLists.isEmpty {
         ToolbarItem(placement: .topBarTrailing) {
