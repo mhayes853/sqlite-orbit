@@ -14,6 +14,7 @@ public struct RemindersRoot: View {
     NavigationStack {
       RemindersListsView(database: database)
     }
+    .fontDesign(.rounded)
     .orbitDatabase(database)
   }
 }

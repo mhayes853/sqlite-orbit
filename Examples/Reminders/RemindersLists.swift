@@ -426,7 +426,6 @@ private struct RemindersStatCell: View {
           if let count {
             Text(count, format: .number)
               .font(.title.bold())
-              .fontDesign(.rounded)
           }
         }
         Text(detailType.navigationTitle)
