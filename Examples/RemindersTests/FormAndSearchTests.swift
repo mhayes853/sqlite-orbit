@@ -60,6 +60,31 @@ struct FormAndSearchTests {
   }
 
   @Test
+  func reminderFormPersistsADateWithoutATimeAtTheStartOfDay() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+    }
+    let calendar = Calendar(identifier: .gregorian)
+    let dueDate = try #require(
+      calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 15, minute: 30))
+    )
+    let form = ReminderFormModel(database: database, remindersList: list)
+    form.title = "Date only"
+    form.dueDate = dueDate
+    form.isTimeEnabled = false
+
+    #expect(await form.save())
+    let reminderID = form.id
+
+    let reminder = try #require(
+      await database.read { try Reminder.find(reminderID).fetchOne($0) }
+    )
+    #expect(reminder.dueDate == Calendar.current.startOfDay(for: dueDate))
+  }
+
+  @Test
   func persistedSearchSettingIncludesCompletedResults() async throws {
     let database = try makeTestDatabase()
     let list = RemindersList(id: UUID(), title: "Personal")
@@ -73,7 +98,7 @@ struct FormAndSearchTests {
             remindersListID: list.id,
             status: .completed,
             title: "Email Blob"
-          ),
+          )
         ]
       }
       .execute(transaction)

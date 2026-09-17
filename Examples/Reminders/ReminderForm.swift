@@ -15,6 +15,23 @@ final class ReminderFormModel {
   var tagText: String
   var title: String
   var errorMessage: String?
+  private var includesTime: Bool
+
+  var isDateEnabled: Bool {
+    get { dueDate != nil }
+    set {
+      dueDate = newValue ? (dueDate ?? .now) : nil
+      if !newValue { includesTime = false }
+    }
+  }
+
+  var isTimeEnabled: Bool {
+    get { includesTime }
+    set {
+      includesTime = newValue
+      if newValue && dueDate == nil { dueDate = .now }
+    }
+  }
 
   @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private let originalStatus: Reminder.Status
@@ -34,6 +51,12 @@ final class ReminderFormModel {
     remindersListID = reminder?.remindersListID ?? remindersList.id
     title = reminder?.title ?? ""
     originalStatus = reminder?.status ?? .incomplete
+    if let dueDate = reminder?.dueDate {
+      let components = Calendar.current.dateComponents([.hour, .minute], from: dueDate)
+      includesTime = components.hour != 0 || components.minute != 0
+    } else {
+      includesTime = false
+    }
     if let reminder {
       let tags = try? database.readBlocking { transaction in
         try Tag
@@ -58,7 +81,9 @@ final class ReminderFormModel {
     let tagTitles = Self.parseTags(tagText)
     let id = id
     let isNew = isNew
-    let dueDate = dueDate
+    let dueDate = dueDate.map {
+      includesTime ? $0 : Calendar.current.startOfDay(for: $0)
+    }
     let isFlagged = isFlagged
     let notes = notes
     let priority = priority
@@ -113,7 +138,9 @@ final class ReminderFormModel {
 
   nonisolated static func parseTags(_ text: String) -> [String] {
     var seen = Set<String>()
-    return text
+
+    return
+      text
       .split { $0 == "," || $0.isWhitespace }
       .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
       .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
@@ -129,7 +156,14 @@ struct ReminderFormContext: Identifiable {
 struct ReminderFormView: View {
   @FetchAll private var remindersLists: [RemindersList]
   @State private var model: ReminderFormModel
+  @FocusState private var focusedField: Field?
   @Environment(\.dismiss) private var dismiss
+
+  fileprivate enum Field: Hashable {
+    case notes
+    case tags
+    case title
+  }
 
   init(
     database: RemindersDatabase,
@@ -151,77 +185,208 @@ struct ReminderFormView: View {
   }
 
   var body: some View {
-    Form {
-      TextField("Title", text: $model.title)
+    @Bindable var model = model
 
-      Section("Notes") {
-        TextEditor(text: $model.notes).frame(minHeight: 90)
-      }
+    ScrollView {
+      VStack(alignment: .leading, spacing: 26) {
+        ReminderTextFields(model: model, focusedField: $focusedField)
 
-      Section {
-        TextField("Tags, separated by spaces or commas", text: $model.tagText)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-      } header: {
-        Label("Tags", systemImage: "number")
-      }
+        ReminderDateAndTimeSection(model: model)
 
-      Section {
-        Toggle("Date", isOn: Binding(
-          get: { model.dueDate != nil },
-          set: { model.dueDate = $0 ? (model.dueDate ?? .now) : nil }
-        ))
-        if model.dueDate != nil {
-          DatePicker(
-            "Due",
-            selection: Binding(
-              get: { model.dueDate ?? .now },
-              set: { model.dueDate = $0 }
-            ),
-            displayedComponents: [.date, .hourAndMinute]
-          )
-        }
-      }
+        ReminderOrganizationSection(model: model, remindersLists: remindersLists)
 
-      Section {
-        Toggle("Flag", isOn: $model.isFlagged)
-        Picker("Priority", selection: $model.priority) {
-          Text("None").tag(nil as Reminder.Priority?)
-          Text("High").tag(Reminder.Priority.high as Reminder.Priority?)
-          Text("Medium").tag(Reminder.Priority.medium as Reminder.Priority?)
-          Text("Low").tag(Reminder.Priority.low as Reminder.Priority?)
-        }
-        Picker("List", selection: $model.remindersListID) {
-          ForEach(remindersLists) { list in
-            Label(list.title, systemImage: "list.bullet").tag(list.id)
+        VStack(alignment: .leading, spacing: 10) {
+          Text("Tags & Flags")
+            .font(.title3.bold())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 18)
+
+          VStack(spacing: 0) {
+            Label {
+              TextField("Tags", text: $model.tagText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .focused($focusedField, equals: .tags)
+            } icon: {
+              Image(systemName: "number")
+                .foregroundStyle(.secondary)
+                .frame(width: 30)
+            }
+            .padding()
+
+            Divider().padding(.leading, 62)
+
+            Toggle(isOn: $model.isFlagged) {
+              Label("Flag", systemImage: "flag")
+                .labelStyle(RemindersFormLabelStyle())
+            }
+            .padding()
           }
+          .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
         }
       }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 22)
     }
+    .scrollDismissesKeyboard(.interactively)
+    .background(Color(.systemGroupedBackground))
     .navigationTitle(model.isNew ? "New Reminder" : "Details")
-    .navigationBarTitleDisplayMode(.inline)
+    .toolbarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .cancellationAction) {
-        Button("Cancel") { dismiss() }
+        Button("Cancel", systemImage: "xmark") { dismiss() }
+          .labelStyle(.iconOnly)
       }
       ToolbarItem(placement: .confirmationAction) {
-        Button("Save") {
-          Task {
-            if await model.save() { dismiss() }
-          }
-        }
+        Button("Save", systemImage: "checkmark", action: saveButtonTapped)
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderedProminent)
+          .disabled(model.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
+    .defaultFocus($focusedField, model.isNew ? .title : nil)
     .alert(
       "Could Not Save Reminder",
-      isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
-      )
+      isPresented: $model.errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(model.errorMessage ?? "Unknown error")
+    }
+  }
+
+  private func saveButtonTapped() {
+    Task {
+      if await model.save() { dismiss() }
+    }
+  }
+}
+
+private struct ReminderTextFields: View {
+  @Bindable var model: ReminderFormModel
+  var focusedField: FocusState<ReminderFormView.Field?>.Binding
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 16) {
+      TextField("Title", text: $model.title)
+        .font(.title)
+        .focused(focusedField, equals: .title)
+      TextField("Notes", text: $model.notes, axis: .vertical)
+        .font(.body)
+        .foregroundStyle(.secondary)
+        .lineLimit(2...5)
+        .focused(focusedField, equals: .notes)
+    }
+    .padding(20)
+    .frame(maxWidth: .infinity, minHeight: 126, alignment: .topLeading)
+    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+  }
+}
+
+private struct ReminderDateAndTimeSection: View {
+  @Bindable var model: ReminderFormModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Date & Time")
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+
+      VStack(spacing: 0) {
+        Toggle(isOn: $model.isDateEnabled) {
+          Label("Date", systemImage: "calendar")
+            .labelStyle(RemindersFormLabelStyle())
+        }
+        .padding()
+
+        if model.isDateEnabled {
+          Divider().padding(.leading, 62)
+          DatePicker(
+            "Due Date",
+            selection: $model.dueDate.value,
+            displayedComponents: .date
+          )
+          .padding()
+        }
+
+        Divider().padding(.leading, 62)
+
+        Toggle(isOn: $model.isTimeEnabled) {
+          Label("Time", systemImage: "clock")
+            .labelStyle(RemindersFormLabelStyle())
+        }
+        .padding()
+
+        if model.isTimeEnabled {
+          Divider().padding(.leading, 62)
+          DatePicker(
+            "Due Time",
+            selection: $model.dueDate.value,
+            displayedComponents: .hourAndMinute
+          )
+          .padding()
+        }
+      }
+      .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+    }
+  }
+}
+
+private struct ReminderOrganizationSection: View {
+  @Bindable var model: ReminderFormModel
+  let remindersLists: [RemindersList]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Organization")
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+
+      VStack(spacing: 0) {
+        Picker(selection: $model.remindersListID) {
+          ForEach(remindersLists) { list in
+            Text(list.title).tag(list.id)
+          }
+        } label: {
+          Label("List", systemImage: "list.bullet")
+            .labelStyle(RemindersFormLabelStyle(color: selectedListColor))
+        }
+        .padding()
+
+        Divider().padding(.leading, 62)
+
+        Picker(selection: $model.priority) {
+          Text("None").tag(nil as Reminder.Priority?)
+          Text("High").tag(Reminder.Priority.high as Reminder.Priority?)
+          Text("Medium").tag(Reminder.Priority.medium as Reminder.Priority?)
+          Text("Low").tag(Reminder.Priority.low as Reminder.Priority?)
+        } label: {
+          Label("Priority", systemImage: "exclamationmark")
+            .labelStyle(RemindersFormLabelStyle())
+        }
+        .padding()
+      }
+      .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+    }
+  }
+
+  private var selectedListColor: Color {
+    remindersLists.first { $0.id == model.remindersListID }?.color ?? .blue
+  }
+}
+
+private struct RemindersFormLabelStyle: LabelStyle {
+  var color: Color = .secondary
+
+  func makeBody(configuration: Configuration) -> some View {
+    HStack(spacing: 14) {
+      configuration.icon
+        .foregroundStyle(color)
+        .frame(width: 30)
+      configuration.title
+        .foregroundStyle(.primary)
     }
   }
 }

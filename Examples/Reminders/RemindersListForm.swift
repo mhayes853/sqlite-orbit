@@ -67,6 +67,7 @@ final class RemindersListFormModel {
 struct RemindersListForm: View {
   @State private var model: RemindersListFormModel
   @State private var photoItem: PhotosPickerItem?
+  @FocusState private var isTitleFocused: Bool
   @Environment(\.dismiss) private var dismiss
 
   init(database: RemindersDatabase, remindersList: RemindersList?) {
@@ -76,70 +77,166 @@ struct RemindersListForm: View {
   }
 
   var body: some View {
-    Form {
-      Section {
-        TextField("List Name", text: $model.title)
-          .font(.title2.bold())
-          .foregroundStyle(model.color)
-          .multilineTextAlignment(.center)
-      }
+    @Bindable var model = model
+    let photoButtonTitle = model.coverImageData == nil ? "Choose Photo" : "Replace Photo"
 
-      ColorPicker("Color", selection: $model.color)
+    ScrollView {
+      VStack(spacing: 20) {
+        VStack(spacing: 28) {
+          RemindersListIcon(color: model.color, size: 112)
 
-      Section("Cover Image") {
-        if let data = model.coverImageData, let image = UIImage(data: data) {
-          Image(uiImage: image)
-            .resizable()
-            .scaledToFill()
-            .frame(height: 160)
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+          TextField("List Name", text: $model.title)
+            .font(.title2.bold())
+            .foregroundStyle(model.color)
+            .multilineTextAlignment(.center)
+            .focused($isTitleFocused)
+            .submitLabel(.done)
+            .padding(.horizontal, 18)
+            .frame(minHeight: 64)
+            .background(Color(.systemGray5), in: .rect(cornerRadius: 16))
         }
-        PhotosPicker(selection: $photoItem, matching: .images) {
-          Label(
-            model.coverImageData == nil ? "Choose Photo" : "Replace Photo",
-            systemImage: "photo"
-          )
-        }
-        if model.coverImageData != nil {
-          Button("Remove Photo", role: .destructive) { model.coverImageData = nil }
-        }
-      }
-    }
-    .navigationTitle(model.isNew ? "New List" : "Edit List")
-    .navigationBarTitleDisplayMode(.inline)
-    .toolbar {
-      ToolbarItem(placement: .cancellationAction) {
-        Button("Cancel") { dismiss() }
-      }
-      ToolbarItem(placement: .confirmationAction) {
-        Button("Save") {
-          Task {
-            if await model.save() { dismiss() }
+        .padding(24)
+        .frame(maxWidth: .infinity)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+
+        RemindersColorPalette(selection: $model.color)
+
+        VStack(alignment: .leading, spacing: 14) {
+          Text("Cover Image")
+            .font(.headline)
+
+          if let data = model.coverImageData, let image = UIImage(data: data) {
+            Image(uiImage: image)
+              .resizable()
+              .scaledToFill()
+              .frame(height: 160)
+              .frame(maxWidth: .infinity)
+              .clipped()
+              .compositingGroup()
+              .clipShape(.rect(cornerRadius: 16))
+          }
+
+          HStack {
+            PhotosPicker(selection: $photoItem, matching: .images) {
+              Label(photoButtonTitle, systemImage: "photo")
+            }
+            .buttonStyle(.bordered)
+
+            if model.coverImageData != nil {
+              Button("Remove", systemImage: "trash", role: .destructive) {
+                model.coverImageData = nil
+              }
+              .buttonStyle(.bordered)
+            }
           }
         }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+      }
+      .padding(16)
+    }
+    .scrollDismissesKeyboard(.interactively)
+    .background(Color(.systemGroupedBackground))
+    .navigationTitle(model.isNew ? "New List" : "Edit List")
+    .toolbarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .cancellationAction) {
+        Button("Cancel", systemImage: "xmark") { dismiss() }
+          .labelStyle(.iconOnly)
+      }
+      ToolbarItem(placement: .confirmationAction) {
+        Button("Save", systemImage: "checkmark", action: saveButtonTapped)
+          .labelStyle(.iconOnly)
+          .buttonStyle(.borderedProminent)
+          .disabled(model.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
+    .defaultFocus($isTitleFocused, model.isNew)
     .onChange(of: photoItem) {
-      guard let photoItem else { return }
-      Task {
-        if let data = try? await photoItem.loadTransferable(type: Data.self) {
-          model.coverImageData = resizedImageData(from: data)
-        }
-        self.photoItem = nil
-      }
+      photoItemChanged()
     }
     .alert(
       "Could Not Save List",
-      isPresented: Binding(
-        get: { model.errorMessage != nil },
-        set: { if !$0 { model.errorMessage = nil } }
-      )
+      isPresented: $model.errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(model.errorMessage ?? "Unknown error")
     }
+  }
+
+  private func photoItemChanged() {
+    guard let photoItem else { return }
+    Task {
+      if let data = try? await photoItem.loadTransferable(type: Data.self) {
+        model.coverImageData = resizedImageData(from: data)
+      }
+      self.photoItem = nil
+    }
+  }
+
+  private func saveButtonTapped() {
+    Task {
+      if await model.save() { dismiss() }
+    }
+  }
+}
+
+private struct RemindersColorChoice: Identifiable {
+  let id: String
+  let color: Color
+}
+
+private struct RemindersColorPalette: View {
+  @Binding var selection: Color
+
+  private static let choices = [
+    RemindersColorChoice(id: "red", color: .red),
+    RemindersColorChoice(id: "orange", color: .orange),
+    RemindersColorChoice(id: "yellow", color: .yellow),
+    RemindersColorChoice(id: "green", color: .green),
+    RemindersColorChoice(id: "blue", color: .blue),
+    RemindersColorChoice(id: "purple", color: .purple),
+    RemindersColorChoice(id: "brown", color: .brown)
+  ]
+
+  var body: some View {
+    LazyVGrid(columns: [GridItem(.adaptive(minimum: 52), spacing: 14)], spacing: 14) {
+      ForEach(Self.choices) { choice in
+        RemindersColorButton(choice: choice, selection: $selection)
+      }
+    }
+    .padding(20)
+    .frame(maxWidth: .infinity)
+    .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
+  }
+}
+
+private struct RemindersColorButton: View {
+  let choice: RemindersColorChoice
+  @Binding var selection: Color
+
+  private var isSelected: Bool { selection == choice.color }
+
+  var body: some View {
+    Button {
+      selection = choice.color
+    } label: {
+      Circle()
+        .fill(choice.color.gradient)
+        .frame(width: 46, height: 46)
+        .padding(5)
+        .overlay {
+          if isSelected {
+            Circle()
+              .strokeBorder(.secondary, lineWidth: 3)
+          }
+        }
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(choice.id.capitalized)
+    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }
 

@@ -9,6 +9,7 @@ simulator.
 
 The app demonstrates:
 
+- an iOS 27-inspired interface built with adaptive SwiftUI and Liquid Glass controls;
 - schema migrations, foreign keys, triggers, and FTS5;
 - live dashboard aggregates and observed reminder queries;
 - list and reminder creation and editing, including tags, priorities, due dates, and cover photos;

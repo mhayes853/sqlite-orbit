@@ -11,17 +11,11 @@ struct ReminderRow: View {
   let tags: String
 
   @State private var errorMessage: String?
-  @State private var isEditing = false
+  @State private var reminderForm: ReminderFormContext?
 
   var body: some View {
     HStack(alignment: .firstTextBaseline) {
-      Button {
-        write {
-          try Reminder.find(reminder.id)
-            .update { $0.toggleCompletion() }
-            .execute($0)
-        }
-      } label: {
+      Button(action: completionButtonTapped) {
         Image(systemName: reminder.isCompleted ? "circle.inset.filled" : "circle")
           .foregroundStyle(reminder.isCompleted ? color : .secondary)
           .font(.title2)
@@ -63,45 +57,62 @@ struct ReminderRow: View {
         Image(systemName: "flag.fill").foregroundStyle(.orange)
       }
       if !reminder.isCompleted {
-        Button("Details", systemImage: "info.circle") { isEditing = true }
+        Button("Details", systemImage: "info.circle", action: detailsButtonTapped)
           .labelStyle(.iconOnly)
           .tint(color)
       }
     }
     .buttonStyle(.borderless)
     .swipeActions {
-      Button("Delete", systemImage: "trash", role: .destructive) {
-        write { try Reminder.delete(reminder).execute($0) }
-      }
-      Button(reminder.isFlagged ? "Unflag" : "Flag", systemImage: "flag") {
-        write {
-          try Reminder.find(reminder.id)
-            .update { $0.isFlagged.toggle() }
-            .execute($0)
-        }
-      }
+      Button("Delete", systemImage: "trash", role: .destructive, action: deleteButtonTapped)
+      Button(
+        reminder.isFlagged ? "Unflag" : "Flag",
+        systemImage: "flag",
+        action: flagButtonTapped
+      )
       .tint(.orange)
-      Button("Details", systemImage: "info.circle") { isEditing = true }
+      Button("Details", systemImage: "info.circle", action: detailsButtonTapped)
     }
-    .sheet(isPresented: $isEditing) {
+    .sheet(item: $reminderForm) { context in
       NavigationStack {
         ReminderFormView(
           database: database,
           remindersList: remindersList,
-          reminder: reminder
+          reminder: context.reminder
         )
       }
     }
     .alert(
       "Database Error",
-      isPresented: Binding(
-        get: { errorMessage != nil },
-        set: { if !$0 { errorMessage = nil } }
-      )
+      isPresented: $errorMessage.isPresented
     ) {
       Button("OK", role: .cancel) {}
     } message: {
       Text(errorMessage ?? "Unknown error")
+    }
+  }
+
+  private func completionButtonTapped() {
+    write {
+      try Reminder.find(reminder.id)
+        .update { $0.toggleCompletion() }
+        .execute($0)
+    }
+  }
+
+  private func deleteButtonTapped() {
+    write { try Reminder.delete(reminder).execute($0) }
+  }
+
+  private func detailsButtonTapped() {
+    reminderForm = ReminderFormContext(remindersList: remindersList, reminder: reminder)
+  }
+
+  private func flagButtonTapped() {
+    write {
+      try Reminder.find(reminder.id)
+        .update { $0.isFlagged.toggle() }
+        .execute($0)
     }
   }
 
