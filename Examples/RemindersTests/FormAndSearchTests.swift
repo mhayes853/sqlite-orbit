@@ -56,7 +56,10 @@ struct FormAndSearchTests {
     let form = ReminderFormModel(database: database, remindersList: list)
     form.reminder.title = "Pick up groceries"
     form.reminder.notes = "Milk and coffee"
-    form.tagText = "#errands, weekly errands"
+    form.tagText = "#errands,"
+    form.tagTextChanged()
+    #expect(form.tagTitles == ["errands"])
+    form.tagText = "weekly"
     #expect(await form.save())
     let reminderID = form.id
 
@@ -78,6 +81,45 @@ struct FormAndSearchTests {
 
     await search.loadResults(for: "errands", showCompleted: false)
     #expect(search.results.first?.highlightedTags == "#**errands** #weekly")
+  }
+
+  @Test
+  func reminderFormCompletesAndSuggestsTags() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+      try Tag.insert {
+        Tag.Draft(title: "home")
+        Tag.Draft(title: "work")
+        Tag.Draft(title: "workout")
+      }
+      .execute($0)
+    }
+    let availableTagTitles = try await database.read {
+      try Tag.order(by: \.title).select(\.title).fetchAll($0)
+    }
+    let form = ReminderFormModel(database: database, remindersList: list)
+
+    form.tagText = "work, home"
+    form.tagTextChanged()
+    #expect(form.tagTitles == ["work"])
+    #expect(form.tagText == "home")
+
+    form.tagText = "home,"
+    form.tagTextChanged()
+    #expect(form.tagTitles == ["work", "home"])
+    #expect(form.tagText.isEmpty)
+
+    form.tagText = "wor"
+    #expect(form.tagSuggestions(from: availableTagTitles) == ["workout"])
+
+    form.tagSuggestionTapped("workout")
+    #expect(form.tagTitles == ["work", "home", "workout"])
+    #expect(form.tagText.isEmpty)
+
+    form.removeTagButtonTapped("HOME")
+    #expect(form.tagTitles == ["work", "workout"])
   }
 
   @Test

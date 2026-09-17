@@ -10,6 +10,7 @@ final class ReminderFormModel {
   var dueDate: Date
   var reminder: Reminder.Draft
   var tagText: String
+  private(set) var tagTitles: [String]
   var errorMessage: String?
   private var dueDateMode: DueDateMode
 
@@ -56,10 +57,11 @@ final class ReminderFormModel {
           .select { tag, _ in tag.title }
           .fetchAll(transaction)
       }
-      tagText = tags?.map { "#\($0)" }.joined(separator: " ") ?? ""
+      tagTitles = tags ?? []
     } else {
-      tagText = ""
+      tagTitles = []
     }
+    tagText = ""
   }
 
   func dateToggleTapped() {
@@ -76,13 +78,54 @@ final class ReminderFormModel {
     }
   }
 
+  func tagTextChanged() {
+    guard tagText.contains(",") else { return }
+
+    let components = tagText.components(separatedBy: ",")
+    for component in components.dropLast() {
+      addTagTitles(Self.parseTags(component))
+    }
+    tagText = components.last?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  func tagTextSubmitted() {
+    addTagTitles(Self.parseTags(tagText))
+    tagText = ""
+  }
+
+  func tagSuggestionTapped(_ title: String) {
+    addTagTitles([title])
+    tagText = ""
+  }
+
+  func removeTagButtonTapped(_ title: String) {
+    tagTitles.removeAll { $0.caseInsensitiveCompare(title) == .orderedSame }
+  }
+
+  func tagSuggestions(from availableTagTitles: [String]) -> [String] {
+    let query = tagText.trimmingCharacters(
+      in: .whitespacesAndNewlines.union(.init(charactersIn: "#"))
+    )
+    guard !query.isEmpty else { return [] }
+
+    let selectedTags = Set(tagTitles.map { $0.lowercased() })
+    return Array(
+      availableTagTitles
+        .filter {
+          !selectedTags.contains($0.lowercased())
+            && $0.localizedCaseInsensitiveContains(query)
+        }
+        .prefix(5)
+    )
+  }
+
   func save() async -> Bool {
     let title = reminder.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !title.isEmpty else {
       errorMessage = "Give the reminder a title before saving."
       return false
     }
-    let tagTitles = Self.parseTags(tagText)
+    let tagTitles = Self.uniquedTags(tagTitles + Self.parseTags(tagText))
     let id = id
     let isNew = isNew
     var reminder = reminder
@@ -123,13 +166,20 @@ final class ReminderFormModel {
   }
 
   nonisolated static func parseTags(_ text: String) -> [String] {
-    var seen = Set<String>()
-
-    return
+    uniquedTags(
       text
-      .split { $0 == "," || $0.isWhitespace }
-      .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
-      .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+        .split { $0 == "," || $0.isWhitespace }
+        .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "#")) }
+    )
+  }
+
+  private func addTagTitles(_ titles: [String]) {
+    tagTitles = Self.uniquedTags(tagTitles + titles)
+  }
+
+  private nonisolated static func uniquedTags(_ titles: [String]) -> [String] {
+    var seen = Set<String>()
+    return titles.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
   }
 }
 
@@ -140,6 +190,7 @@ struct ReminderFormContext: Identifiable {
 }
 
 struct ReminderFormView: View {
+  @FetchAll private var availableTags: [Tag]
   @FetchAll private var remindersLists: [RemindersList]
   @State private var model: ReminderFormModel
   @FocusState private var focusedField: Field?
@@ -155,6 +206,11 @@ struct ReminderFormView: View {
     remindersList: RemindersList,
     reminder: Reminder? = nil
   ) {
+    _availableTags = FetchAll(
+      Tag.order(by: \.title),
+      database: database,
+      animation: .default
+    )
     _remindersLists = FetchAll(
       RemindersList.order(by: \.title),
       database: database,
@@ -178,9 +234,16 @@ struct ReminderFormView: View {
 
         ReminderDateAndTimeSection(model: model)
 
-        ReminderMoreOptionsSection(model: model, remindersLists: remindersLists)
+        ReminderMoreOptionsSection(
+          model: model,
+          remindersLists: remindersLists,
+          availableTagTitles: availableTags.map(\.title)
+        )
 
-        ReminderTagsSection(model: model)
+        ReminderTagsSection(
+          model: model,
+          availableTagTitles: availableTags.map(\.title)
+        )
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 22)
@@ -227,6 +290,7 @@ struct ReminderFormView: View {
 private struct ReminderMoreOptionsSection: View {
   @Bindable var model: ReminderFormModel
   let remindersLists: [RemindersList]
+  let availableTagTitles: [String]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -241,7 +305,11 @@ private struct ReminderMoreOptionsSection: View {
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
 
       NavigationLink {
-        ReminderDetailsFormView(model: model, remindersLists: remindersLists)
+        ReminderDetailsFormView(
+          model: model,
+          remindersLists: remindersLists,
+          availableTagTitles: availableTagTitles
+        )
       } label: {
         HStack(spacing: 14) {
           Image(systemName: "info.circle")
@@ -271,13 +339,17 @@ private struct ReminderMoreOptionsSection: View {
 private struct ReminderDetailsFormView: View {
   @Bindable var model: ReminderFormModel
   let remindersLists: [RemindersList]
+  let availableTagTitles: [String]
 
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
         ReminderDateAndTimeSection(model: model)
         ReminderOrganizationSection(model: model, remindersLists: remindersLists)
-        ReminderTagsAndFlagsSection(model: model)
+        ReminderTagsAndFlagsSection(
+          model: model,
+          availableTagTitles: availableTagTitles
+        )
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 22)
@@ -529,6 +601,7 @@ private struct ReminderListPicker: View {
 
 private struct ReminderTagsAndFlagsSection: View {
   @Bindable var model: ReminderFormModel
+  let availableTagTitles: [String]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -538,7 +611,7 @@ private struct ReminderTagsAndFlagsSection: View {
         .padding(.horizontal, 18)
 
       VStack(spacing: 0) {
-        ReminderTagsField(model: model)
+        ReminderTagsField(model: model, availableTagTitles: availableTagTitles)
           .padding()
 
         Divider().padding(.leading, 62)
@@ -556,6 +629,7 @@ private struct ReminderTagsAndFlagsSection: View {
 
 private struct ReminderTagsSection: View {
   @Bindable var model: ReminderFormModel
+  let availableTagTitles: [String]
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -564,7 +638,7 @@ private struct ReminderTagsSection: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 18)
 
-      ReminderTagsField(model: model)
+      ReminderTagsField(model: model, availableTagTitles: availableTagTitles)
         .padding()
         .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
     }
@@ -573,17 +647,84 @@ private struct ReminderTagsSection: View {
 
 private struct ReminderTagsField: View {
   @Bindable var model: ReminderFormModel
+  let availableTagTitles: [String]
 
   var body: some View {
-    Label {
-      TextField("Add Tags", text: $model.tagText)
-        .textInputAutocapitalization(.never)
-        .autocorrectionDisabled()
-    } icon: {
-      Image(systemName: "number")
-        .foregroundStyle(.secondary)
-        .frame(width: 30)
+    VStack(alignment: .leading, spacing: 12) {
+      if !model.tagTitles.isEmpty {
+        ScrollView(.horizontal) {
+          HStack(spacing: 8) {
+            ForEach(model.tagTitles, id: \.self) { title in
+              ReminderTagChip(model: model, title: title)
+            }
+          }
+        }
+        .scrollIndicators(.hidden)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      }
+
+      Label {
+        TextField("Add Tags", text: $model.tagText)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .submitLabel(.done)
+          .onSubmit(model.tagTextSubmitted)
+          .onChange(of: model.tagText) { model.tagTextChanged() }
+      } icon: {
+        Image(systemName: "number")
+          .foregroundStyle(.secondary)
+          .frame(width: 30)
+      }
+
+      let suggestions = model.tagSuggestions(from: availableTagTitles)
+      if !suggestions.isEmpty {
+        ScrollView(.horizontal) {
+          HStack(spacing: 8) {
+            ForEach(suggestions, id: \.self) { title in
+              Button {
+                model.tagSuggestionTapped(title)
+              } label: {
+                Label(title, systemImage: "plus")
+              }
+              .buttonStyle(.bordered)
+              .buttonBorderShape(.capsule)
+              .controlSize(.small)
+              .accessibilityLabel("Add tag \(title)")
+            }
+          }
+        }
+        .scrollIndicators(.hidden)
+        .transition(.opacity.combined(with: .move(edge: .top)))
+      }
     }
+    .animation(.smooth(duration: 0.2), value: model.tagTitles)
+    .animation(.smooth(duration: 0.2), value: model.tagText)
+  }
+}
+
+private struct ReminderTagChip: View {
+  @Bindable var model: ReminderFormModel
+  let title: String
+
+  var body: some View {
+    Button {
+      model.removeTagButtonTapped(title)
+    } label: {
+      HStack(spacing: 6) {
+        Text("#\(title)")
+          .lineLimit(1)
+        Image(systemName: "xmark")
+          .font(.caption2.bold())
+          .accessibilityHidden(true)
+      }
+      .font(.subheadline.weight(.medium))
+      .foregroundStyle(Color.accentColor)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 6)
+      .background(Color.accentColor.opacity(0.12), in: .capsule)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Remove tag \(title)")
   }
 }
 
