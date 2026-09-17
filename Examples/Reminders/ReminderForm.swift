@@ -302,7 +302,6 @@ private struct ReminderTextFields: View {
         .focused(focusedField, equals: .title)
       TextField("Notes", text: $model.reminder.notes, axis: .vertical)
         .font(.body)
-        .foregroundStyle(.secondary)
         .lineLimit(2...5)
         .focused(focusedField, equals: .notes)
     }
