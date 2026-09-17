@@ -1,4 +1,5 @@
 import Foundation
+import RemindersData
 import SQLiteOrbit
 import SwiftUI
 import Testing
@@ -90,9 +91,9 @@ struct FormAndSearchTests {
     try await database.write {
       try RemindersList.insert { list }.execute($0)
       try Tag.insert {
-        Tag.Draft(title: "home")
-        Tag.Draft(title: "work")
-        Tag.Draft(title: "workout")
+        Tag.Draft(Tag(title: "home"))
+        Tag.Draft(Tag(title: "work"))
+        Tag.Draft(Tag(title: "workout"))
       }
       .execute($0)
     }

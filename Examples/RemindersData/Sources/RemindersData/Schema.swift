@@ -3,59 +3,101 @@ import SQLiteOrbit
 import SwiftUI
 
 @Table
-nonisolated struct RemindersList: Hashable, Identifiable, Sendable {
-  let id: UUID
+public nonisolated struct RemindersList: Hashable, Identifiable, Sendable {
+  public let id: UUID
   @Column(as: Color.HexRepresentation.self)
-  var color: Color = Self.defaultColor
-  var position = 0
-  var title = ""
+  public var color: Color = Self.defaultColor
+  public var position = 0
+  public var title = ""
 
-  static var defaultColor: Color {
+  public init(
+    id: UUID,
+    color: Color = Self.defaultColor,
+    position: Int = 0,
+    title: String = ""
+  ) {
+    self.id = id
+    self.color = color
+    self.position = position
+    self.title = title
+  }
+
+  public static var defaultColor: Color {
     Color(red: 0x4a / 255, green: 0x99 / 255, blue: 0xef / 255)
   }
 }
 
-extension RemindersList.Draft: Identifiable {}
+extension RemindersList.Draft: Identifiable, Sendable {}
 
 @Table
-nonisolated struct RemindersListAsset: Hashable, Identifiable, Sendable {
+public nonisolated struct RemindersListAsset: Hashable, Identifiable, Sendable {
   @Column(primaryKey: true)
-  let remindersListID: RemindersList.ID
-  var coverImage: Data?
-  var id: RemindersList.ID { remindersListID }
+  public let remindersListID: RemindersList.ID
+  public var coverImage: Data?
+  public var id: RemindersList.ID { remindersListID }
+
+  public init(remindersListID: RemindersList.ID, coverImage: Data? = nil) {
+    self.remindersListID = remindersListID
+    self.coverImage = coverImage
+  }
 }
 
 @Table
-nonisolated struct Reminder: Hashable, Identifiable, Sendable {
-  let id: UUID
-  var dueDate: Date?
-  var isFlagged = false
-  var notes = ""
-  var position = 0
-  var priority: Priority?
-  var remindersListID: RemindersList.ID
-  var status: Status = .incomplete
-  var title = ""
+public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
+  public let id: UUID
+  public var createdAt = Date()
+  public var dueDate: Date?
+  public var isFlagged = false
+  public var notes = ""
+  public var position = 0
+  public var priority: Priority?
+  public var remindersListID: RemindersList.ID
+  public var status: Status = .incomplete
+  public var title = ""
 
-  var isCompleted: Bool { status != .incomplete }
+  public init(
+    id: UUID,
+    createdAt: Date = .now,
+    dueDate: Date? = nil,
+    isFlagged: Bool = false,
+    notes: String = "",
+    position: Int = 0,
+    priority: Priority? = nil,
+    remindersListID: RemindersList.ID,
+    status: Status = .incomplete,
+    title: String = ""
+  ) {
+    self.id = id
+    self.createdAt = createdAt
+    self.dueDate = dueDate
+    self.isFlagged = isFlagged
+    self.notes = notes
+    self.position = position
+    self.priority = priority
+    self.remindersListID = remindersListID
+    self.status = status
+    self.title = title
+  }
 
-  enum Priority: Int, CaseIterable, QueryBindable, Sendable {
+  public var isCompleted: Bool { status != .incomplete }
+
+  public enum Priority: Int, CaseIterable, QueryBindable, Sendable {
     case low = 1
     case medium
     case high
   }
 
-  enum Status: Int, QueryBindable, Sendable {
+  public enum Status: Int, QueryBindable, Sendable {
     case incomplete
     case completed
     case completing
   }
 }
 
-extension Reminder.Draft: Identifiable {}
+extension Reminder.Draft: Identifiable, Sendable {}
 
 extension Updates<Reminder> {
-  mutating func toggleCompletion() {
+  public mutating func toggleCompletion() {
     self.status = Case(self.status)
       .when(#bind(.incomplete), then: #bind(.completed))
       .else(#bind(.incomplete))
@@ -63,28 +105,38 @@ extension Updates<Reminder> {
 }
 
 @Table
-nonisolated struct Tag: Hashable, Identifiable, Sendable {
+public nonisolated struct Tag: Hashable, Identifiable, Sendable {
   @Column(primaryKey: true)
-  var title: String
-  var id: String { title }
+  public var title: String
+  public var id: String { title }
+
+  public init(title: String) {
+    self.title = title
+  }
 }
 
 @Table("remindersTags")
-nonisolated struct ReminderTag: Hashable, Identifiable, Sendable {
-  let id: UUID
-  let reminderID: Reminder.ID
-  let tagID: Tag.ID
+public nonisolated struct ReminderTag: Hashable, Identifiable, Sendable {
+  public let id: UUID
+  public let reminderID: Reminder.ID
+  public let tagID: Tag.ID
+
+  public init(id: UUID, reminderID: Reminder.ID, tagID: Tag.ID) {
+    self.id = id
+    self.reminderID = reminderID
+    self.tagID = tagID
+  }
 }
 
 @Table
-nonisolated struct ReminderText: FTS5, Sendable {
-  let rowid: Int
-  let title: String
-  let notes: String
-  let tags: String
+public nonisolated struct ReminderText: FTS5, Sendable {
+  public let rowid: Int
+  public let title: String
+  public let notes: String
+  public let tags: String
 }
 
-enum ReminderOrdering: String, CaseIterable, QueryBindable, Sendable {
+public enum ReminderOrdering: String, CaseIterable, QueryBindable, Sendable {
   case dueDate = "Due Date"
   case manual = "Manual"
   case priority = "Priority"
@@ -92,47 +144,66 @@ enum ReminderOrdering: String, CaseIterable, QueryBindable, Sendable {
 }
 
 @Table("remindersDetailSettings")
-nonisolated struct RemindersDetailSettings: Hashable, Identifiable, Sendable {
+public nonisolated struct RemindersDetailSettings: Hashable, Identifiable, Sendable {
   @Column(primaryKey: true)
-  let id: String
-  var ordering: ReminderOrdering = .dueDate
-  var showCompleted = false
+  public let id: String
+  public var ordering: ReminderOrdering = .dueDate
+  public var showCompleted = false
+
+  public init(
+    id: String,
+    ordering: ReminderOrdering = .dueDate,
+    showCompleted: Bool = false
+  ) {
+    self.id = id
+    self.ordering = ordering
+    self.showCompleted = showCompleted
+  }
 }
 
 @Table("searchSettings")
-nonisolated struct SearchSettings: Hashable, Sendable, SingleRowTable {
+public nonisolated struct SearchSettings: Hashable, Sendable, SingleRowTable {
   @Column(primaryKey: true)
-  let id: Int
-  var showCompleted = false
+  public let id: Int
+  public var showCompleted = false
 
-  static let defaultValue = SearchSettings(id: 0)
+  public init(id: Int, showCompleted: Bool = false) {
+    self.id = id
+    self.showCompleted = showCompleted
+  }
+
+  public static let defaultValue = SearchSettings(id: 0)
 }
 
-extension Reminder {
-  static let withTags = group(by: \.id)
-    .leftJoin(ReminderTag.all) { $0.id.eq($1.reminderID) }
-    .leftJoin(Tag.all) { $1.tagID.eq($2.primaryKey) }
+public extension Reminder {
+  static var withTags: Select<(), Reminder, (ReminderTag?, Tag?)> {
+    group(by: \.id)
+      .leftJoin(ReminderTag.all) { $0.id.eq($1.reminderID) }
+      .leftJoin(Tag.all) { $1.tagID.eq($2.primaryKey) }
+  }
 }
 
 nonisolated extension Reminder.TableColumns {
-  var isCompleted: some QueryExpression<Bool> {
+  public var isCompleted: some QueryExpression<Bool> {
     status.neq(Reminder.Status.incomplete)
   }
 
-  func isPastDue(relativeTo date: Date) -> some QueryExpression<Bool> {
+  public func isPastDue(relativeTo date: Date) -> some QueryExpression<Bool> {
     !isCompleted && #sql("coalesce(date(\(dueDate)) < date(\(date)), 0)")
   }
 
-  func isToday(relativeTo date: Date) -> some QueryExpression<Bool> {
+  public func isToday(relativeTo date: Date) -> some QueryExpression<Bool> {
     !isCompleted && #sql("coalesce(date(\(dueDate)) = date(\(date)), 0)")
   }
 
-  var isScheduled: some QueryExpression<Bool> {
+  public var isScheduled: some QueryExpression<Bool> {
     !isCompleted && dueDate.isNot(nil)
   }
 }
 
-func remindersMigrator(erasesDatabaseOnSchemaChange: Bool = false) -> OrbitDatabaseMigrator {
+public func remindersMigrator(
+  erasesDatabaseOnSchemaChange: Bool = false
+) -> OrbitDatabaseMigrator {
   var migrator = OrbitDatabaseMigrator()
   migrator.eraseDatabaseOnSchemaChange = erasesDatabaseOnSchemaChange
   migrator.registerMigration("Create reminders schema") { transaction in
@@ -296,6 +367,20 @@ func remindersMigrator(erasesDatabaseOnSchemaChange: Bool = false) -> OrbitDatab
         "id" INTEGER PRIMARY KEY NOT NULL CHECK ("id" = 0),
         "showCompleted" INTEGER NOT NULL DEFAULT 0
       ) STRICT
+      """
+    )
+  }
+  migrator.registerMigration("Add reminder creation date") { transaction in
+    try transaction.execute(
+      """
+      ALTER TABLE "reminders"
+      ADD COLUMN "createdAt" TEXT NOT NULL DEFAULT '1970-01-01 00:00:00.000'
+      """
+    )
+    try transaction.execute(
+      """
+      UPDATE "reminders"
+      SET "createdAt" = strftime('%Y-%m-%d %H:%M:%f', 'now')
       """
     )
   }

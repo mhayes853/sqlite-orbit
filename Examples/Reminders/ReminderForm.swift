@@ -1,4 +1,5 @@
 import Observation
+import RemindersData
 import SQLiteOrbit
 import SwiftUI
 
@@ -140,9 +141,11 @@ final class ReminderFormModel {
 
         try ReminderTag.where { $0.reminderID.eq(id) }.delete().execute(transaction)
         for tagTitle in tagTitles {
-          try Tag.upsert { Tag.Draft(title: tagTitle) }.execute(transaction)
+          try Tag.upsert { Tag.Draft(Tag(title: tagTitle)) }.execute(transaction)
           try ReminderTag.insert {
-            ReminderTag.Draft(id: UUID(), reminderID: id, tagID: tagTitle)
+            ReminderTag.Draft(
+              ReminderTag(id: UUID(), reminderID: id, tagID: tagTitle)
+            )
           }
           .execute(transaction)
         }

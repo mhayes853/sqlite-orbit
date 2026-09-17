@@ -1,5 +1,6 @@
 import Observation
 import PhotosUI
+import RemindersData
 import SQLiteOrbit
 import SwiftUI
 
@@ -52,7 +53,9 @@ final class RemindersListFormModel {
         }
         .execute(transaction)
         try RemindersListAsset.upsert {
-          RemindersListAsset.Draft(remindersListID: id, coverImage: coverImageData)
+          RemindersListAsset.Draft(
+            RemindersListAsset(remindersListID: id, coverImage: coverImageData)
+          )
         }
         .execute(transaction)
       }
