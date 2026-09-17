@@ -179,6 +179,8 @@ struct ReminderFormView: View {
         ReminderDateAndTimeSection(model: model)
 
         ReminderMoreOptionsSection(model: model, remindersLists: remindersLists)
+
+        ReminderTagsSection(model: model)
       }
       .padding(.horizontal, 16)
       .padding(.vertical, 22)
@@ -536,16 +538,8 @@ private struct ReminderTagsAndFlagsSection: View {
         .padding(.horizontal, 18)
 
       VStack(spacing: 0) {
-        Label {
-          TextField("Tags", text: $model.tagText)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-        } icon: {
-          Image(systemName: "number")
-            .foregroundStyle(.secondary)
-            .frame(width: 30)
-        }
-        .padding()
+        ReminderTagsField(model: model)
+          .padding()
 
         Divider().padding(.leading, 62)
 
@@ -556,6 +550,39 @@ private struct ReminderTagsAndFlagsSection: View {
         .padding()
       }
       .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+    }
+  }
+}
+
+private struct ReminderTagsSection: View {
+  @Bindable var model: ReminderFormModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Tags")
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+
+      ReminderTagsField(model: model)
+        .padding()
+        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+    }
+  }
+}
+
+private struct ReminderTagsField: View {
+  @Bindable var model: ReminderFormModel
+
+  var body: some View {
+    Label {
+      TextField("Add Tags", text: $model.tagText)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+    } icon: {
+      Image(systemName: "number")
+        .foregroundStyle(.secondary)
+        .frame(width: 30)
     }
   }
 }
