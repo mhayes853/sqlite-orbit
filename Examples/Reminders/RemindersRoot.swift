@@ -5,9 +5,14 @@ import TipKit
 
 public struct RemindersRoot: View {
   private let database: OrbitIPCDatabase
+  private let widgetReloader: RemindersWidgetReloader
 
   public init() {
-    database = try! makeAppDatabase()
+    let database = try! makeAppDatabase()
+    let widgetReloader = try! RemindersWidgetReloader(database: database)
+    self.database = database
+    self.widgetReloader = widgetReloader
+    database.delegate = widgetReloader
     try? Tips.configure()
   }
 

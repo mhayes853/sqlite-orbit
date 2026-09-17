@@ -24,6 +24,12 @@
 		AF61DBBBC0533986CD07787D /* ReminderRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 341F2170219F6C7F5877E717 /* ReminderRow.swift */; };
 		A10000000000000000000003 /* RemindersData in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersData */; };
 		A10000000000000000000004 /* RemindersData in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersData */; };
+		B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
+		B10000000000000000000002 /* CompleteReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteReminderIntent.swift */; };
+		B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* RecentRemindersWidget.swift */; };
+		B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* RemindersWidgetBundle.swift */; };
+		B10000000000000000000005 /* RemindersData in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersData */; };
+		B10000000000000000000006 /* RemindersWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = B10000000000000000000016 /* RemindersWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		CAD8E286C848B1FAC4491CCD /* RemindersApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */; };
 		CB445D035AC1D7CED392216A /* SchemaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1B0AC373E35B14B0D0C89C /* SchemaTests.swift */; };
 		D62383DC2F27F30593EF4894 /* FormAndSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9563F2EA4E07B6AF6DBE06 /* FormAndSearchTests.swift */; };
@@ -48,6 +54,13 @@
 			remoteGlobalIDString = 5B0B0A94CCCB9A00CB146AED;
 			remoteInfo = RemindersFeature;
 		};
+		B10000000000000000000041 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7BCA9F9BF985BCAF3AB5B459 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B10000000000000000000040;
+			remoteInfo = RemindersWidget;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -60,6 +73,17 @@
 				0AA225B36FE9CF002EA521D5 /* RemindersFeature.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000033 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				B10000000000000000000006 /* RemindersWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -84,6 +108,14 @@
 		EA5DE327EEFD11AFB6870672 /* Reminders.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Reminders.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		F3563D78F50635334631EB41 /* ReminderForm.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderForm.swift; sourceTree = "<group>"; };
 		F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersApp.swift; sourceTree = "<group>"; };
+		B10000000000000000000010 /* RemindersWidgetReloader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetReloader.swift; sourceTree = "<group>"; };
+		B10000000000000000000011 /* CompleteReminderIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CompleteReminderIntent.swift; sourceTree = "<group>"; };
+		B10000000000000000000012 /* RecentRemindersWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecentRemindersWidget.swift; sourceTree = "<group>"; };
+		B10000000000000000000013 /* RemindersWidgetBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetBundle.swift; sourceTree = "<group>"; };
+		B10000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		B10000000000000000000015 /* RemindersWidget.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = RemindersWidget.entitlements; sourceTree = "<group>"; };
+		B10000000000000000000016 /* RemindersWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RemindersWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000017 /* Reminders.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Reminders.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -116,6 +148,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000030 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000005 /* RemindersData in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -126,6 +166,7 @@
 				9F4A75A80D244212A7F2A09A /* Frameworks */,
 				A6B79AA538299F9338C8E358 /* Reminders */,
 				E874666C5CE589FD4191ED5B /* RemindersApp */,
+				B10000000000000000000020 /* RemindersWidget */,
 				38A0E44EB1742AF1459ABCC6 /* RemindersTests */,
 			);
 			sourceTree = "<group>";
@@ -161,6 +202,7 @@
 				65FD0E728ABCDE1C00748C4D /* RemindersListRow.swift */,
 				3C51905997693B9560285072 /* RemindersLists.swift */,
 				C4CFE0842EF8DCAECBCF41A0 /* RemindersRoot.swift */,
+				B10000000000000000000010 /* RemindersWidgetReloader.swift */,
 				6D651376890B540F1E4D0E20 /* SearchReminders.swift */,
 				C46C98AFB2BB09B1DD5ED406 /* TagRow.swift */,
 			);
@@ -181,6 +223,7 @@
 			children = (
 				D3812AA3B99A34861D695680 /* RemindersFeature.framework */,
 				EA5DE327EEFD11AFB6870672 /* Reminders.app */,
+				B10000000000000000000016 /* RemindersWidget.appex */,
 				AE6702A092C6F26EBC9A82F8 /* RemindersTests.xctest */,
 			);
 			name = Products;
@@ -190,9 +233,23 @@
 			isa = PBXGroup;
 			children = (
 				F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */,
+				B10000000000000000000017 /* Reminders.entitlements */,
 			);
 			name = RemindersApp;
 			path = RemindersApp;
+			sourceTree = "<group>";
+		};
+		B10000000000000000000020 /* RemindersWidget */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000011 /* CompleteReminderIntent.swift */,
+				B10000000000000000000012 /* RecentRemindersWidget.swift */,
+				B10000000000000000000013 /* RemindersWidgetBundle.swift */,
+				B10000000000000000000014 /* Info.plist */,
+				B10000000000000000000015 /* RemindersWidget.entitlements */,
+			);
+			name = RemindersWidget;
+			path = RemindersWidget;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -237,11 +294,13 @@
 				841540D8EA279882C1523420 /* Frameworks */,
 				6EE08B02471A92A4BCB0F07B /* Resources */,
 				9C46C98997B447B178A920E0 /* Embed Frameworks */,
+				B10000000000000000000033 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				E80330BBEB6E2E95D0FDEFD2 /* PBXTargetDependency */,
+				B10000000000000000000042 /* PBXTargetDependency */,
 			);
 			name = Reminders;
 			productName = Reminders;
@@ -269,6 +328,26 @@
 			productName = RemindersFeature;
 			productReference = D3812AA3B99A34861D695680 /* RemindersFeature.framework */;
 			productType = "com.apple.product-type.framework";
+		};
+		B10000000000000000000040 /* RemindersWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000052 /* Build configuration list for PBXNativeTarget "RemindersWidget" */;
+			buildPhases = (
+				B10000000000000000000031 /* Sources */,
+				B10000000000000000000030 /* Frameworks */,
+				B10000000000000000000032 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = RemindersWidget;
+			packageProductDependencies = (
+				A10000000000000000000002 /* RemindersData */,
+			);
+			productName = RemindersWidget;
+			productReference = B10000000000000000000016 /* RemindersWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -298,6 +377,7 @@
 			targets = (
 				5B0B0A94CCCB9A00CB146AED /* RemindersFeature */,
 				397FAF3FE96A6260701F2479 /* Reminders */,
+				B10000000000000000000040 /* RemindersWidget */,
 				1DC118BAA5497F709ACCF5FE /* RemindersTests */,
 			);
 		};
@@ -325,6 +405,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		B10000000000000000000032 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -340,8 +427,19 @@
 				D6E62FD98B47B1BD4E75A58C /* RemindersListRow.swift in Sources */,
 				02874ECBB75E0F87E5B04F1E /* RemindersLists.swift in Sources */,
 				3E2B10D6DCFB12181B09195F /* RemindersRoot.swift in Sources */,
+				B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */,
 				86E8274F1D85BF6CABCE1347 /* SearchReminders.swift in Sources */,
 				4DD4F74F159A149F4D07A13C /* TagRow.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000031 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000000002 /* CompleteReminderIntent.swift in Sources */,
+				B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */,
+				B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -378,6 +476,12 @@
 			name = RemindersFeature;
 			target = 5B0B0A94CCCB9A00CB146AED /* RemindersFeature */;
 			targetProxy = 6F92ACB3B0A3CA30457EB857 /* PBXContainerItemProxy */;
+		};
+		B10000000000000000000042 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = RemindersWidget;
+			target = B10000000000000000000040 /* RemindersWidget */;
+			targetProxy = B10000000000000000000041 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -585,11 +689,13 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = RemindersApp/Reminders.entitlements;
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.Reminders";
 				SDKROOT = iphoneos;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -607,11 +713,13 @@
 				CLANG_ENABLE_OBJC_WEAK = NO;
 				CODE_SIGN_ENTITLEMENTS = RemindersApp/Reminders.entitlements;
 				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.Reminders";
 				SDKROOT = iphoneos;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -619,6 +727,53 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
+		};
+		B10000000000000000000050 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = RemindersWidget/RemindersWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RemindersWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.Reminders.Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B10000000000000000000051 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_ENTITLEMENTS = RemindersWidget/RemindersWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = RemindersWidget/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.Reminders.Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
@@ -655,6 +810,15 @@
 			buildConfigurations = (
 				B2774A69E2348353DE5CD307 /* Release */,
 				EAD57E5BBB0567D0863E36BE /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000052 /* Build configuration list for PBXNativeTarget "RemindersWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000051 /* Release */,
+				B10000000000000000000050 /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

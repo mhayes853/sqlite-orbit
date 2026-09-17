@@ -66,4 +66,50 @@ struct RemindersWidgetStoreTests {
     #expect(persisted?.status == .completed)
     #expect(try await store.recentReminders(limit: 8).isEmpty)
   }
+
+  @Test
+  func widgetWriteRefreshesAnObservingAppProcess() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: UUID().uuidString,
+      directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let network = InMemoryIPCTransport.Network()
+    let path = OrbitDatabasePath.file(directory.appending(path: "reminders.sqlite"))
+    let identifier = OrbitDatabaseIdentifier(rawValue: "reminders-widget-test")
+    let appDatabase = OrbitIPCDatabase(
+      writer: try SQLitePool(path: path),
+      id: identifier,
+      transport: InMemoryIPCTransport(network: network)
+    )
+    let widgetDatabase = OrbitIPCDatabase(
+      writer: try SQLitePool(path: path),
+      id: identifier,
+      transport: InMemoryIPCTransport(network: network)
+    )
+    try remindersMigrator().migrateBlocking(appDatabase)
+
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(
+      id: UUID(),
+      remindersListID: list.id,
+      title: "Buy milk"
+    )
+    try await appDatabase.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+
+    let observation = OrbitValueObservation<[WidgetReminder]>.trackingAll(
+      WidgetReminder.recent(limit: RemindersWidgetConfiguration.maximumReminderCount)
+    )
+    var values = observation.values(in: appDatabase).makeAsyncIterator()
+    #expect(try await values.next()?.map(\.title) == ["Buy milk"])
+
+    try await RemindersWidgetStore(database: widgetDatabase).completeReminder(id: reminder.id)
+
+    #expect(try await values.next()?.isEmpty == true)
+  }
 }

@@ -2,6 +2,11 @@ import Foundation
 import SQLiteOrbit
 import SwiftUI
 
+public enum RemindersWidgetConfiguration {
+  public static let kind = "RecentRemindersWidget"
+  public static let maximumReminderCount = 8
+}
+
 @Selection
 public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
   public let id: Reminder.ID
