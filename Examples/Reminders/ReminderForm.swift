@@ -7,34 +7,27 @@ import SwiftUI
 final class ReminderFormModel {
   let id: Reminder.ID
   let isNew: Bool
-  var dueDate: Date?
-  var isFlagged: Bool
-  var notes: String
-  var priority: Reminder.Priority?
-  var remindersListID: RemindersList.ID
+  var dueDate: Date
+  var reminder: Reminder.Draft
   var tagText: String
-  var title: String
   var errorMessage: String?
-  private var includesTime: Bool
+  private var dueDateMode: DueDateMode
 
   var isDateEnabled: Bool {
-    get { dueDate != nil }
-    set {
-      dueDate = newValue ? (dueDate ?? .now) : nil
-      if !newValue { includesTime = false }
-    }
+    dueDateMode != .none
   }
 
   var isTimeEnabled: Bool {
-    get { includesTime }
-    set {
-      includesTime = newValue
-      if newValue && dueDate == nil { dueDate = .now }
-    }
+    dueDateMode == .dateAndTime
   }
 
   @ObservationIgnored private let database: RemindersDatabase
-  @ObservationIgnored private let originalStatus: Reminder.Status
+
+  private enum DueDateMode {
+    case none
+    case date
+    case dateAndTime
+  }
 
   init(
     database: RemindersDatabase,
@@ -44,18 +37,15 @@ final class ReminderFormModel {
     self.database = database
     id = reminder?.id ?? UUID()
     isNew = reminder == nil
-    dueDate = reminder?.dueDate
-    isFlagged = reminder?.isFlagged ?? false
-    notes = reminder?.notes ?? ""
-    priority = reminder?.priority
-    remindersListID = reminder?.remindersListID ?? remindersList.id
-    title = reminder?.title ?? ""
-    originalStatus = reminder?.status ?? .incomplete
+    self.reminder = Reminder.Draft(
+      reminder ?? Reminder(id: id, remindersListID: remindersList.id)
+    )
+    dueDate = reminder?.dueDate ?? .now
     if let dueDate = reminder?.dueDate {
       let components = Calendar.current.dateComponents([.hour, .minute], from: dueDate)
-      includesTime = components.hour != 0 || components.minute != 0
+      dueDateMode = components.hour != 0 || components.minute != 0 ? .dateAndTime : .date
     } else {
-      includesTime = false
+      dueDateMode = .none
     }
     if let reminder {
       let tags = try? database.readBlocking { transaction in
@@ -72,8 +62,16 @@ final class ReminderFormModel {
     }
   }
 
+  func dateToggleTapped() {
+    dueDateMode = isDateEnabled ? .none : .date
+  }
+
+  func timeToggleTapped() {
+    dueDateMode = isTimeEnabled ? .date : .dateAndTime
+  }
+
   func save() async -> Bool {
-    let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let title = reminder.title.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !title.isEmpty else {
       errorMessage = "Give the reminder a title before saving."
       return false
@@ -81,44 +79,15 @@ final class ReminderFormModel {
     let tagTitles = Self.parseTags(tagText)
     let id = id
     let isNew = isNew
-    let dueDate = dueDate.map {
-      includesTime ? $0 : Calendar.current.startOfDay(for: $0)
-    }
-    let isFlagged = isFlagged
-    let notes = notes
-    let priority = priority
-    let remindersListID = remindersListID
-    let status = originalStatus
+    var reminder = reminder
+    reminder.dueDate = dueDateToSave
+    reminder.title = title
     do {
       try await database.write { transaction in
         if isNew {
-          let position = try Reminder.count().fetchOne(transaction) ?? 0
-          try Reminder.insert {
-            Reminder(
-              id: id,
-              dueDate: dueDate,
-              isFlagged: isFlagged,
-              notes: notes,
-              position: position,
-              priority: priority,
-              remindersListID: remindersListID,
-              status: status,
-              title: title
-            )
-          }
-          .execute(transaction)
-        } else {
-          try Reminder.find(id)
-            .update {
-              $0.dueDate = dueDate
-              $0.isFlagged = isFlagged
-              $0.notes = notes
-              $0.priority = priority
-              $0.remindersListID = remindersListID
-              $0.title = title
-            }
-            .execute(transaction)
+          reminder.position = try Reminder.count().fetchOne(transaction) ?? 0
         }
+        try Reminder.upsert { reminder }.execute(transaction)
 
         try ReminderTag.where { $0.reminderID.eq(id) }.delete().execute(transaction)
         for tagTitle in tagTitles {
@@ -133,6 +102,17 @@ final class ReminderFormModel {
     } catch {
       errorMessage = error.localizedDescription
       return false
+    }
+  }
+
+  private var dueDateToSave: Date? {
+    switch dueDateMode {
+    case .none:
+      nil
+    case .date:
+      Calendar.current.startOfDay(for: dueDate)
+    case .dateAndTime:
+      dueDate
     }
   }
 
@@ -216,7 +196,7 @@ struct ReminderFormView: View {
 
             Divider().padding(.leading, 62)
 
-            Toggle(isOn: $model.isFlagged) {
+            Toggle(isOn: $model.reminder.isFlagged) {
               Label("Flag", systemImage: "flag")
                 .labelStyle(RemindersFormLabelStyle())
             }
@@ -241,7 +221,7 @@ struct ReminderFormView: View {
         Button("Save", systemImage: "checkmark", action: saveButtonTapped)
           .labelStyle(.iconOnly)
           .buttonStyle(.borderedProminent)
-          .disabled(model.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .disabled(model.reminder.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       }
     }
     .defaultFocus($focusedField, model.isNew ? .title : nil)
@@ -268,10 +248,10 @@ private struct ReminderTextFields: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
-      TextField("Title", text: $model.title)
+      TextField("Title", text: $model.reminder.title)
         .font(.title)
         .focused(focusedField, equals: .title)
-      TextField("Notes", text: $model.notes, axis: .vertical)
+      TextField("Notes", text: $model.reminder.notes, axis: .vertical)
         .font(.body)
         .foregroundStyle(.secondary)
         .lineLimit(2...5)
@@ -294,17 +274,19 @@ private struct ReminderDateAndTimeSection: View {
         .padding(.horizontal, 18)
 
       VStack(spacing: 0) {
-        Toggle(isOn: $model.isDateEnabled) {
-          Label("Date", systemImage: "calendar")
-            .labelStyle(RemindersFormLabelStyle())
-        }
+        ReminderToggleButton(
+          title: "Date",
+          systemImage: "calendar",
+          isOn: model.isDateEnabled,
+          action: model.dateToggleTapped
+        )
         .padding()
 
         if model.isDateEnabled {
           Divider().padding(.leading, 62)
           DatePicker(
             "Due Date",
-            selection: $model.dueDate.value,
+            selection: $model.dueDate,
             displayedComponents: .date
           )
           .padding()
@@ -312,17 +294,19 @@ private struct ReminderDateAndTimeSection: View {
 
         Divider().padding(.leading, 62)
 
-        Toggle(isOn: $model.isTimeEnabled) {
-          Label("Time", systemImage: "clock")
-            .labelStyle(RemindersFormLabelStyle())
-        }
+        ReminderToggleButton(
+          title: "Time",
+          systemImage: "clock",
+          isOn: model.isTimeEnabled,
+          action: model.timeToggleTapped
+        )
         .padding()
 
         if model.isTimeEnabled {
           Divider().padding(.leading, 62)
           DatePicker(
             "Due Time",
-            selection: $model.dueDate.value,
+            selection: $model.dueDate,
             displayedComponents: .hourAndMinute
           )
           .padding()
@@ -330,6 +314,31 @@ private struct ReminderDateAndTimeSection: View {
       }
       .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
     }
+  }
+}
+
+private struct ReminderToggleButton: View {
+  let title: String
+  let systemImage: String
+  let isOn: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack {
+        Label(title, systemImage: systemImage)
+          .labelStyle(RemindersFormLabelStyle())
+        Spacer()
+        Toggle("", isOn: .constant(isOn))
+          .labelsHidden()
+          .allowsHitTesting(false)
+          .accessibilityHidden(true)
+      }
+      .contentShape(.rect)
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(title)
+    .accessibilityValue(isOn ? "On" : "Off")
   }
 }
 
@@ -348,9 +357,9 @@ private struct ReminderOrganizationSection: View {
         Menu {
           ForEach(remindersLists) { list in
             Button {
-              model.remindersListID = list.id
+              model.reminder.remindersListID = list.id
             } label: {
-              if list.id == model.remindersListID {
+              if list.id == model.reminder.remindersListID {
                 Label(list.title, systemImage: "checkmark")
               } else {
                 Text(list.title)
@@ -418,7 +427,7 @@ private struct ReminderOrganizationSection: View {
   }
 
   private var priorityTitle: String {
-    switch model.priority {
+    switch model.reminder.priority {
     case nil: "None"
     case .high: "High"
     case .medium: "Medium"
@@ -427,11 +436,11 @@ private struct ReminderOrganizationSection: View {
   }
 
   private var selectedListColor: Color {
-    remindersLists.first { $0.id == model.remindersListID }?.color ?? .blue
+    remindersLists.first { $0.id == model.reminder.remindersListID }?.color ?? .blue
   }
 
   private var selectedListTitle: String {
-    remindersLists.first { $0.id == model.remindersListID }?.title ?? "None"
+    remindersLists.first { $0.id == model.reminder.remindersListID }?.title ?? "None"
   }
 
   private func priorityButton(
@@ -439,9 +448,9 @@ private struct ReminderOrganizationSection: View {
     priority: Reminder.Priority?
   ) -> some View {
     Button {
-      model.priority = priority
+      model.reminder.priority = priority
     } label: {
-      if model.priority == priority {
+      if model.reminder.priority == priority {
         Label(title, systemImage: "checkmark")
       } else {
         Text(title)

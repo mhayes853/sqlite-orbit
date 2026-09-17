@@ -40,8 +40,8 @@ struct FormAndSearchTests {
     }
 
     let form = ReminderFormModel(database: database, remindersList: list)
-    form.title = "Pick up groceries"
-    form.notes = "Milk and coffee"
+    form.reminder.title = "Pick up groceries"
+    form.reminder.notes = "Milk and coffee"
     form.tagText = "#errands, weekly errands"
     #expect(await form.save())
     let reminderID = form.id
@@ -71,9 +71,9 @@ struct FormAndSearchTests {
       calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 15, minute: 30))
     )
     let form = ReminderFormModel(database: database, remindersList: list)
-    form.title = "Date only"
+    form.reminder.title = "Date only"
     form.dueDate = dueDate
-    form.isTimeEnabled = false
+    form.dateToggleTapped()
 
     #expect(await form.save())
     let reminderID = form.id
@@ -82,6 +82,68 @@ struct FormAndSearchTests {
       await database.read { try Reminder.find(reminderID).fetchOne($0) }
     )
     #expect(reminder.dueDate == Calendar.current.startOfDay(for: dueDate))
+  }
+
+  @Test
+  func reminderFormDateAndTimeModesMaintainTheirInvariants() throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let form = ReminderFormModel(database: database, remindersList: list)
+
+    #expect(!form.isDateEnabled)
+    #expect(!form.isTimeEnabled)
+
+    form.timeToggleTapped()
+    #expect(form.isDateEnabled)
+    #expect(form.isTimeEnabled)
+
+    form.dateToggleTapped()
+    #expect(!form.isDateEnabled)
+    #expect(!form.isTimeEnabled)
+
+    form.dateToggleTapped()
+    #expect(form.isDateEnabled)
+    #expect(!form.isTimeEnabled)
+  }
+
+  @Test
+  func reminderFormEditsUsingADraftWithoutResettingOtherFields() async throws {
+    let database = try makeTestDatabase()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(
+      id: UUID(),
+      dueDate: Date(timeIntervalSince1970: 1_800_000_000),
+      isFlagged: true,
+      notes: "Original notes",
+      position: 42,
+      priority: .high,
+      remindersListID: list.id,
+      status: .completed,
+      title: "Original title"
+    )
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+
+    let form = ReminderFormModel(
+      database: database,
+      remindersList: list,
+      reminder: reminder
+    )
+    form.reminder.title = "Updated title"
+    #expect(await form.save())
+
+    let updated = try #require(
+      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    )
+    #expect(updated.title == "Updated title")
+    #expect(updated.notes == reminder.notes)
+    #expect(updated.isFlagged == reminder.isFlagged)
+    #expect(updated.position == reminder.position)
+    #expect(updated.priority == reminder.priority)
+    #expect(updated.remindersListID == reminder.remindersListID)
+    #expect(updated.status == reminder.status)
   }
 
   @Test
