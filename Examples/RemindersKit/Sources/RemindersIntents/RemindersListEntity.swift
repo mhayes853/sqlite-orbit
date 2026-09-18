@@ -40,12 +40,14 @@ public struct RemindersListEntity: AppEntity, Sendable {
 
 public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
   @Dependency
-  private var database: RemindersDatabase
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
 
   public init() {}
 
   init(database: RemindersDatabase) {
-    _database = .reminders(database)
+    _databaseDependency = .reminders(database)
   }
 
   public func entities(

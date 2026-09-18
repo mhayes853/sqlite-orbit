@@ -32,7 +32,9 @@ public struct CreateReminderIntent: AppIntent {
   public var tags: [String]?
 
   @Dependency
-  private var database: RemindersDatabase
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
 
   public init() {
     reminderTitle = ""
@@ -61,7 +63,7 @@ public struct CreateReminderIntent: AppIntent {
     self.isFlagged = isFlagged
     self.priority = priority
     self.tags = tags
-    _database = .reminders(database)
+    _databaseDependency = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -137,7 +139,9 @@ public struct CompleteReminderIntent: AppIntent {
   public var reminder: ReminderEntity
 
   @Dependency
-  private var database: RemindersDatabase
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -149,7 +153,7 @@ public struct CompleteReminderIntent: AppIntent {
 
   init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
-    _database = .reminders(database)
+    _databaseDependency = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -179,7 +183,9 @@ public struct ReopenReminderIntent: AppIntent {
   public var reminder: ReminderEntity
 
   @Dependency
-  private var database: RemindersDatabase
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -191,7 +197,7 @@ public struct ReopenReminderIntent: AppIntent {
 
   init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
-    _database = .reminders(database)
+    _databaseDependency = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -221,7 +227,9 @@ public struct DeleteRemindersIntent: DeleteIntent {
   public var entities: [ReminderEntity]
 
   @Dependency
-  private var database: RemindersDatabase
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
 
   public init() {
     entities = []
@@ -229,7 +237,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
 
   init(entities: [ReminderEntity], database: RemindersDatabase) {
     self.entities = entities
-    _database = .reminders(database)
+    _databaseDependency = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {

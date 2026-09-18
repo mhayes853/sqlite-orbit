@@ -1,4 +1,3 @@
-import AppIntents
 import RemindersData
 import RemindersIntents
 import SQLiteOrbit
@@ -17,11 +16,5 @@ struct RemindersWidgetBundle: WidgetBundle {
 
   var body: some Widget {
     RecentRemindersWidget(database: database)
-  }
-}
-
-struct RemindersWidgetAppIntentsPackage: AppIntentsPackage {
-  static var includedPackages: [any AppIntentsPackage.Type] {
-    [RemindersIntentsPackage.self]
   }
 }
