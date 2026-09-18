@@ -54,7 +54,7 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQueries(database: database)
+    let query = ReminderEntityQuery(database: database)
     let entities = try await query.entities(for: [newer.id, older.id])
 
     #expect(entities.map(\.id) == [newer.id, older.id])
@@ -108,7 +108,7 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQueries(database: database)
+    let query = ReminderEntityQuery(database: database)
 
     let suggestions = try await query.suggestedEntities()
     let matches = try await query.entities(matching: "travel plans")
@@ -128,7 +128,7 @@ struct ReminderEntityQueryTests {
       }
       .execute(transaction)
     }
-    let query = RemindersListEntityQueries(database: database)
+    let query = RemindersListEntityQuery(database: database)
 
     let resolved = try await query.entities(for: [work.id, personal.id])
     let matches = try await query.entities(matching: "project")

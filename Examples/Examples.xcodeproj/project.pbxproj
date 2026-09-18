@@ -28,10 +28,6 @@
 		A20000000000000000000005 /* RemindersIntents in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* RemindersIntents */; };
 		A20000000000000000000006 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
 		A20000000000000000000007 /* SQLiteOrbit in Frameworks */ = {isa = PBXBuildFile; productRef = E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */; };
-		C10000000000000000000002 /* ReminderIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* ReminderIntents.swift */; };
-		C10000000000000000000007 /* AppIntentEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000007 /* AppIntentEntities.swift */; };
-		C10000000000000000000012 /* ReminderIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* ReminderIntents.swift */; };
-		C10000000000000000000017 /* AppIntentEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000007 /* AppIntentEntities.swift */; };
 		C10000000000000000000031 /* SQLiteOrbit in Frameworks */ = {isa = PBXBuildFile; productRef = E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */; };
 		A30000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* Assets.xcassets */; };
 		B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
@@ -125,8 +121,6 @@
 		B10000000000000000000016 /* RemindersWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RemindersWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000017 /* Reminders.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Reminders.entitlements; sourceTree = "<group>"; };
 		A30000000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		C20000000000000000000002 /* ReminderIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderIntents.swift; sourceTree = "<group>"; };
-		C20000000000000000000007 /* AppIntentEntities.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AppIntentEntities.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -248,22 +242,12 @@
 		E874666C5CE589FD4191ED5B /* RemindersApp */ = {
 			isa = PBXGroup;
 			children = (
-				C30000000000000000000001 /* AppIntents */,
 				F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */,
 				B10000000000000000000017 /* Reminders.entitlements */,
 				A30000000000000000000002 /* Assets.xcassets */,
 			);
 			name = RemindersApp;
 			path = RemindersApp;
-			sourceTree = "<group>";
-		};
-		C30000000000000000000001 /* AppIntents */ = {
-			isa = PBXGroup;
-			children = (
-				C20000000000000000000007 /* AppIntentEntities.swift */,
-				C20000000000000000000002 /* ReminderIntents.swift */,
-			);
-			path = AppIntents;
 			sourceTree = "<group>";
 		};
 		B10000000000000000000020 /* RemindersWidget */ = {
@@ -471,8 +455,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C10000000000000000000017 /* AppIntentEntities.swift in Sources */,
-				C10000000000000000000012 /* ReminderIntents.swift in Sources */,
 				B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */,
 				B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */,
 			);
@@ -493,8 +475,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C10000000000000000000007 /* AppIntentEntities.swift in Sources */,
-				C10000000000000000000002 /* ReminderIntents.swift in Sources */,
 				CAD8E286C848B1FAC4491CCD /* RemindersApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

@@ -1,7 +1,6 @@
 import AppIntents
 import Foundation
 import RemindersData
-import RemindersIntents
 
 public struct CreateReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Create Reminder"
@@ -26,7 +25,7 @@ public struct CreateReminderIntent: AppIntent {
   public var isFlagged: Bool
 
   @Parameter(title: "Priority")
-  public var priority: ReminderPriorityParameter?
+  public var priority: ReminderPriority?
 
   @Parameter(title: "Tags")
   public var tags: [String]?
@@ -52,7 +51,7 @@ public struct CreateReminderIntent: AppIntent {
     notes: String? = nil,
     dueDate: Date? = nil,
     isFlagged: Bool = false,
-    priority: ReminderPriorityParameter? = nil,
+    priority: ReminderPriority? = nil,
     tags: [String]? = nil,
     database: RemindersDatabase
   ) {
@@ -78,7 +77,7 @@ public struct CreateReminderIntent: AppIntent {
         notes: notes,
         dueDate: dueDate,
         isFlagged: isFlagged,
-        priority: priority?.value,
+        priority: priority,
         tags: tags
       ),
       in: database
@@ -89,7 +88,6 @@ public struct CreateReminderIntent: AppIntent {
       view: ReminderSnippetView(reminder: reminder)
     )
   }
-
 }
 
 public struct CompleteReminderIntent: AppIntent {

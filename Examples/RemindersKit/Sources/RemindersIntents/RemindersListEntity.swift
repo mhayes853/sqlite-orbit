@@ -1,13 +1,27 @@
+import AppIntents
 import RemindersData
 import SQLiteOrbit
 import SwiftUI
 
-public struct RemindersListEntity: Identifiable, Sendable {
+public struct RemindersListEntity: AppEntity, Sendable {
+  public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+    name: "Reminders List"
+  )
+  public static let defaultQuery = RemindersListEntityQuery()
+
   public let id: RemindersList.ID
 
+  @Property(title: "Title")
   public var title: String
 
   public let colorHex: Int64
+
+  public var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(
+      title: "\(title)",
+      image: .init(systemName: "list.bullet")
+    )
+  }
 
   public init(id: RemindersList.ID, title: String, colorHex: Int64) {
     self.id = id
@@ -24,11 +38,16 @@ public struct RemindersListEntity: Identifiable, Sendable {
   }
 }
 
-public struct RemindersListEntityQueries: Sendable {
-  private let database: RemindersDatabase
+public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+  @Dependency
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
+
+  public init() {}
 
   public init(database: RemindersDatabase) {
-    self.database = database
+    _databaseDependency = .reminders(database)
   }
 
   public func entities(

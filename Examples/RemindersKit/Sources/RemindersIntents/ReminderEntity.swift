@@ -1,28 +1,51 @@
+import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
 import SwiftUI
 
-public struct ReminderEntity: Identifiable, Sendable {
+public struct ReminderEntity: AppEntity, Sendable {
+  public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+    name: "Reminder"
+  )
+  public static let defaultQuery = ReminderEntityQuery()
+
   public let id: Reminder.ID
 
+  @Property(title: "Title")
   public var title: String
 
+  @Property(title: "Notes")
   public var notes: String
 
+  @Property(title: "List")
   public var list: RemindersListEntity
 
+  @Property(title: "Due Date")
   public var dueDate: Date?
 
+  @Property(title: "Completed")
   public var isCompleted: Bool
 
+  @Property(title: "Flagged")
   public var isFlagged: Bool
 
+  @Property(title: "Priority")
   public var priority: ReminderPriority?
 
+  @Property(title: "Tags")
   public var tags: [String]
 
+  @Property(title: "Created")
   public var createdAt: Date
+
+  public var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(
+      title: "\(title)",
+      subtitle: "\(list.title)",
+      image: .init(systemName: systemImageName)
+    )
+  }
 
   public init(
     id: Reminder.ID,
@@ -83,7 +106,7 @@ public struct ReminderEntity: Identifiable, Sendable {
     )
   }
 
-  public var systemImageName: String {
+  private var systemImageName: String {
     if isCompleted {
       "checkmark.circle.fill"
     } else if isFlagged {
@@ -106,11 +129,16 @@ private nonisolated struct ReminderEntityTag: Sendable {
   let title: String
 }
 
-public struct ReminderEntityQueries: Sendable {
-  private let database: RemindersDatabase
+public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+  @Dependency
+  private var databaseDependency: RemindersIntentDatabase
+
+  private var database: RemindersDatabase { databaseDependency.value }
+
+  public init() {}
 
   public init(database: RemindersDatabase) {
-    self.database = database
+    _databaseDependency = .reminders(database)
   }
 
   public func entities(
@@ -181,7 +209,7 @@ public struct ReminderEntityQueries: Sendable {
     id: Reminder.ID,
     database: RemindersDatabase
   ) async throws -> ReminderEntity? {
-    try await ReminderEntityQueries(database: database).entities(for: [id]).first
+    try await ReminderEntityQuery(database: database).entities(for: [id]).first
   }
 
   private static func entities(

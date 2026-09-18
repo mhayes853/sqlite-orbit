@@ -80,7 +80,7 @@ public enum ReminderIntentOperations {
     }
 
     guard
-      let reminder = try await ReminderEntityQueries.entity(
+      let reminder = try await ReminderEntityQuery.entity(
         id: reminderID,
         database: database
       )
@@ -95,7 +95,7 @@ public enum ReminderIntentOperations {
   ) async throws -> ReminderEntity {
     try await Reminder.setStatus(status, id: reminder.id, in: database)
     guard
-      let reminder = try await ReminderEntityQueries.entity(
+      let reminder = try await ReminderEntityQuery.entity(
         id: reminder.id,
         database: database
       )

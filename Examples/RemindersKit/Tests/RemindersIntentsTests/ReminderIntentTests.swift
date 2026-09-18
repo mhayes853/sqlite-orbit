@@ -5,7 +5,7 @@ import Testing
 
 @testable import RemindersIntents
 
-struct ReminderIntentOperationsTests {
+struct ReminderIntentTests {
   @Test
   func createReminderPersistsAllDetailsAndExplicitTags() async throws {
     let database = try SQLiteQueue.reminders()
@@ -14,18 +14,18 @@ struct ReminderIntentOperationsTests {
       try RemindersList.insert { RemindersList.Draft(list) }.execute($0)
     }
     let dueDate = Date(timeIntervalSince1970: 12_345)
-    _ = try await ReminderIntentOperations.create(
-      ReminderIntentDraft(
-        title: "  Book flights  ",
-        list: RemindersListEntity(list),
-        notes: "Use points",
-        dueDate: dueDate,
-        isFlagged: true,
-        priority: .high,
-        tags: ["travel plans, #Work", "work"]
-      ),
-      in: database
+    let intent = CreateReminderIntent(
+      title: "  Book flights  ",
+      list: RemindersListEntity(list),
+      notes: "Use points",
+      dueDate: dueDate,
+      isFlagged: true,
+      priority: .high,
+      tags: ["travel plans, #Work", "work"],
+      database: database
     )
+
+    _ = try await intent.perform()
 
     let reminders = try await database.read {
       try Reminder.all.fetchAll($0)
@@ -56,10 +56,11 @@ struct ReminderIntentOperationsTests {
       .execute($0)
     }
 
-    _ = try await ReminderIntentOperations.create(
-      ReminderIntentDraft(title: "Call home"),
-      in: database
+    _ = try await CreateReminderIntent(
+      title: "Call home",
+      database: database
     )
+    .perform()
 
     let reminder = try await database.read {
       try Reminder.all.fetchOne($0)
@@ -71,10 +72,11 @@ struct ReminderIntentOperationsTests {
   func createReminderRequiresAnExistingList() async throws {
     let database = try SQLiteQueue.reminders()
     do {
-      _ = try await ReminderIntentOperations.create(
-        ReminderIntentDraft(title: "Call home"),
-        in: database
+      _ = try await CreateReminderIntent(
+        title: "Call home",
+        database: database
       )
+      .perform()
       Issue.record("Expected reminder creation to fail without a list")
     } catch {
       #expect(error.localizedDescription == "Create a reminders list before adding a reminder.")
@@ -94,28 +96,14 @@ struct ReminderIntentOperationsTests {
       list: RemindersListEntity(list)
     )
 
-    _ = try await ReminderIntentOperations.setStatus(
-      .completed,
-      for: entity,
-      in: database
-    )
-    _ = try await ReminderIntentOperations.setStatus(
-      .completed,
-      for: entity,
-      in: database
-    )
+    let complete = CompleteReminderIntent(reminder: entity, database: database)
+    _ = try await complete.perform()
+    _ = try await complete.perform()
     #expect(try await status(of: reminder.id, in: database) == .completed)
 
-    _ = try await ReminderIntentOperations.setStatus(
-      .incomplete,
-      for: entity,
-      in: database
-    )
-    _ = try await ReminderIntentOperations.setStatus(
-      .incomplete,
-      for: entity,
-      in: database
-    )
+    let reopen = ReopenReminderIntent(reminder: entity, database: database)
+    _ = try await reopen.perform()
+    _ = try await reopen.perform()
     #expect(try await status(of: reminder.id, in: database) == .incomplete)
   }
 
@@ -134,7 +122,11 @@ struct ReminderIntentOperationsTests {
       list: RemindersListEntity(list)
     )
 
-    try await ReminderIntentOperations.delete([entity], in: database)
+    _ = try await DeleteRemindersIntent(
+      entities: [entity],
+      database: database
+    )
+    .perform()
 
     let remainingIDs = try await database.read {
       try Reminder.select(\.id).fetchAll($0)
