@@ -15,26 +15,42 @@ final class OrbitValueObservationSubscriberLifetime: Sendable {
 struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
   let lifetime = OrbitValueObservationSubscriberLifetime()
   let scheduler: any OrbitValueObservationScheduler
+  let onInitialFetchCompletedWithoutValue: (@Sendable () -> Void)?
   let onError: @Sendable (any Error) -> Void
   let onChange: @Sendable (OrbitValueObservationChange<Value>) -> Void
 
   func receive(
-    _ outcome: Result<OrbitValueObservationChange<Value>, any Error>,
+    _ event: OrbitValueObservationPublicationEvent<Value>,
     from isolation: isolated (any Actor)?
   ) {
     guard self.lifetime.isSubscribed else { return }
-    self.scheduler.schedule(from: isolation) { [lifetime, onError, onChange] in
+    if case .initialFetchCompletedWithoutValue = event,
+      onInitialFetchCompletedWithoutValue == nil
+    {
+      return
+    }
+    self.scheduler.schedule(from: isolation) {
+      [lifetime, onInitialFetchCompletedWithoutValue, onError, onChange] in
       guard lifetime.isSubscribed else { return }
-      switch outcome {
-      case .success(let change): onChange(change)
-      case .failure(let error): onError(error)
+      switch event {
+      case .initialFetchCompletedWithoutValue:
+        onInitialFetchCompletedWithoutValue?()
+      case .outcome(.success(let change)):
+        onChange(change)
+      case .outcome(.failure(let error)):
+        onError(error)
       }
     }
   }
 }
 
+enum OrbitValueObservationPublicationEvent<Value: Sendable>: Sendable {
+  case initialFetchCompletedWithoutValue
+  case outcome(Result<OrbitValueObservationChange<Value>, any Error>)
+}
+
 struct OrbitValueObservationPublication<Value: Sendable>: Sendable {
-  let outcome: Result<OrbitValueObservationChange<Value>, any Error>
+  let event: OrbitValueObservationPublicationEvent<Value>
   let subscribers: [OrbitValueObservationSubscriber<Value>]
 }
 
@@ -183,6 +199,10 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
   ) -> [OrbitValueObservationSubscriber<Value>] {
     self.latest = change
     return self.subscribers.all
+  }
+
+  var awaitingInitialFetchCompletion: [OrbitValueObservationSubscriber<Value>] {
+    subscribers.all.filter { $0.onInitialFetchCompletedWithoutValue != nil }
   }
 
   mutating func fail(_ error: any Error) -> [OrbitValueObservationSubscriber<Value>] {

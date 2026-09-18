@@ -198,6 +198,10 @@ private struct OrbitValueObservationEvents: Sendable {
 public struct OrbitValueObservation<Value: Sendable>: Sendable {
   private let definition: OrbitValueObservationDefinition<Value>
 
+  /// Identity shared by every copy of this observation, used by fetch properties to reconcile
+  /// declarations without trying to compare captured closures.
+  var identity: ObjectIdentifier { ObjectIdentifier(definition) }
+
   private init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable,
@@ -868,10 +872,35 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
+    try subscribeForFetchProperty(
+      to: database,
+      scheduling: scheduler,
+      isolation: isolation,
+      onInitialFetchCompletedWithoutValue: nil,
+      onError: onError,
+      onChange: onChange
+    )
+  }
+
+  /// The subscriber shape fetch properties need in order to finish loading when a reducer
+  /// suppresses the initial value. Ordinary observation subscribers have no event to handle in
+  /// that case.
+  func subscribeForFetchProperty<
+    Database: OrbitObservableDatabase,
+    Scheduler: OrbitValueObservationScheduler
+  >(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)?,
+    onInitialFetchCompletedWithoutValue: (@Sendable () -> Void)?,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
+  ) throws -> OrbitSubscription {
     let runtime = try definition.runtime(for: database)
     let subscription = runtime.addSubscriber(
       scheduling: scheduler,
       isolation: isolation,
+      onInitialFetchCompletedWithoutValue: onInitialFetchCompletedWithoutValue,
       onError: onError,
       onChange: onChange
     )
@@ -1261,12 +1290,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
     }
     externalTracking.onDependencyChange { [weak self] in
-      self?.requestRefetch(
-        source: .observable,
-        reason: .observableChange,
-        affectedRegion: nil,
-        activeWriterBarrier: nil
-      )
+      self?
+        .requestRefetch(
+          source: .observable,
+          reason: .observableChange,
+          affectedRegion: nil,
+          activeWriterBarrier: nil
+        )
     }
   }
 
@@ -1285,27 +1315,30 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func addSubscriber<Scheduler: OrbitValueObservationScheduler>(
     scheduling scheduler: Scheduler,
     isolation: isolated (any Actor)?,
+    onInitialFetchCompletedWithoutValue: (@Sendable () -> Void)?,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) -> OrbitSubscription {
     let subscriber = OrbitValueObservationSubscriber(
       scheduler: scheduler,
+      onInitialFetchCompletedWithoutValue: onInitialFetchCompletedWithoutValue,
       onError: onError,
       onChange: onChange
     )
-    let registration = state.withLock {
-      state -> OrbitValueObservationSubscriberRegistry<Value>.Registration in
-      state.subscribers.add(subscriber)
+    let registration = state.withLock { state in
+      (state.subscribers.add(subscriber), state.reads.initialFetchCompleted)
     }
-    switch registration {
+    switch registration.0 {
     case .success(let (identifier, latest, isFirstEver)):
       if isFirstEver { events.willStart() }
       if let latest {
-        subscriber.receive(.success(latest), from: isolation)
+        subscriber.receive(.outcome(.success(latest)), from: isolation)
+      } else if registration.1 {
+        subscriber.receive(.initialFetchCompletedWithoutValue, from: isolation)
       }
       return OrbitSubscription { [self] in removeSubscriber(identifier) }
     case .failure(let error):
-      subscriber.receive(.failure(error), from: isolation)
+      subscriber.receive(.outcome(.failure(error)), from: isolation)
       return OrbitSubscription {}
     }
   }
@@ -1465,10 +1498,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     affectedRegion: OrbitDatabaseRegion?,
     activeWriterBarrier: SQLitePoolWriterBarrier?
   ) {
-    let action = state.withLock { state -> (
-      initialRequest: OrbitValueObservationFetchRequest?,
-      controllerRevision: UInt64?
-    ) in
+    let action = state.withLock {
+      state -> (
+        initialRequest: OrbitValueObservationFetchRequest?,
+        controllerRevision: UInt64?
+      ) in
       guard !state.isStopped else { return (nil, nil) }
 
       // Recorded whether or not a controller will see them, so that one running later is told the
@@ -1560,10 +1594,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
     events.willFetch()
     let result = await read()
-    let completed = state.withLock { state -> (
-      result: OrbitValueObservationFetchResult,
-      delivery: OrbitValueObservationDelivery
-    ) in
+    let completed = state.withLock {
+      state -> (
+        result: OrbitValueObservationFetchResult,
+        delivery: OrbitValueObservationDelivery
+      ) in
       guard !state.isStopped else {
         discard(result)
         return (.cancelled, .idle)
@@ -1662,12 +1697,28 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
       guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
-      completeInitialFetch(state: &state)
+      let didCompleteInitialFetch = completeInitialFetch(state: &state)
       state.observedRegion = output.region
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
+          let delivery: OrbitValueObservationDelivery
+          if didCompleteInitialFetch {
+            let subscribers = state.subscribers.awaitingInitialFetchCompletion
+            let publication = OrbitValueObservationPublication<Value>(
+              event: .initialFetchCompletedWithoutValue,
+              subscribers: subscribers
+            )
+            delivery =
+              subscribers.isEmpty
+              ? .idle
+              : OrbitValueObservationDelivery(
+                shouldDrain: state.deliveries.enqueue(publication)
+              )
+          } else {
+            delivery = .idle
+          }
           return OrbitValueObservationAcceptance(
-            delivery: .idle,
+            delivery: delivery,
             requiresObservableRefetch: requiresObservableRefetch
           )
         }
@@ -1676,7 +1727,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         outcome = .failure(error)
       }
     case .failure(let error):
-      completeInitialFetch(state: &state)
+      _ = completeInitialFetch(state: &state)
       outcome = .failure(error)
     }
 
@@ -1690,7 +1741,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       didFail = true
       owed = state.subscribers.fail(error)
     }
-    let publication = OrbitValueObservationPublication(outcome: outcome, subscribers: owed)
+    let publication = OrbitValueObservationPublication(
+      event: .outcome(outcome),
+      subscribers: owed
+    )
     return OrbitValueObservationAcceptance(
       delivery: OrbitValueObservationDelivery(
         shouldDrain: state.deliveries.enqueue(publication),
@@ -1704,10 +1758,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   ///
   /// Every invalidation raised before the initial value forced that read to run again, so the one
   /// finally accepted covers all of them and a controller running afterwards must not see them.
-  private func completeInitialFetch(state: inout State) {
-    guard !state.reads.initialFetchCompleted else { return }
+  private func completeInitialFetch(state: inout State) -> Bool {
+    guard !state.reads.initialFetchCompleted else { return false }
     state.reads.completeInitialFetch()
     state.dropOutstandingInvalidations()
+    return true
   }
 
   private func discard(
@@ -1734,9 +1789,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     }
     guard delivery.shouldDrain else { return }
     while let publication = state.withLock({ $0.deliveries.next() }) {
-      if case .failure(let error) = publication.outcome { events.didFail(error) }
+      if case .outcome(.failure(let error)) = publication.event { events.didFail(error) }
       for subscriber in publication.subscribers {
-        subscriber.receive(publication.outcome, from: isolation)
+        subscriber.receive(publication.event, from: isolation)
       }
     }
   }

@@ -1,33 +1,50 @@
-/// Everything a fetch property needs to observe one request against one database.
+/// Everything a fetch property needs to observe one source against one database.
 ///
-/// A source is built once, when a property is created or given a new request, and is what the
-/// storage re-subscribes to. Building it renders the request's statement, so two sources compare
-/// equal by ``OrbitFetchRequestID`` exactly when they describe the same read — and two sources
-/// that describe the same read are given the same observation to subscribe to, so that the
-/// properties behind them share one subscription to the database rather than repeating each
-/// other's work.
+/// A source is built once, when a property is created or given a new request or observation, and
+/// is what the storage re-subscribes to. Request-backed sources share the observation the request
+/// describes. Observation-backed sources retain the exact observation they were given, whose
+/// definition already shares one runtime between its subscribers.
 struct OrbitFetchSource<Value: Sendable>: Sendable {
-  let id: OrbitFetchRequestID
+  let id: OrbitFetchSourceID
   let database: any OrbitObservableDatabase
   let scheduler: any OrbitValueObservationScheduler
+  let observation: OrbitValueObservation<Value>
 
-  /// Holds the shared observation for as long as this source exists.
-  private let shared: OrbitFetchObservationBox<Value>
-
-  var observation: OrbitValueObservation<Value> { shared.observation }
+  /// Keeps a request's registry entry alive. An observation-backed source needs no entry because
+  /// the observation itself owns its shared definition.
+  private let sharedRequestObservation: OrbitFetchObservationBox<Value>?
 
   init(
     request: some OrbitFetchKeyRequest<Value>,
     database: any OrbitObservableDatabase,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
-    let id = OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
+    let id = OrbitFetchSourceID(request: request, database: database, scheduler: scheduler)
+    let shared = OrbitFetchObservationRegistry.shared.box(for: id) {
+      OrbitValueObservation.tracking { try request.fetch($0) }
+    }
     self.id = id
     self.database = database
     self.scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
-    self.shared = OrbitFetchObservationRegistry.shared.box(for: id) {
-      OrbitValueObservation.tracking { try request.fetch($0) }
-    }
+    self.observation = shared.observation
+    self.sharedRequestObservation = shared
+  }
+
+  init(
+    observation: OrbitValueObservation<Value>,
+    identity: OrbitFetchObservationIdentity,
+    database: any OrbitObservableDatabase,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) {
+    self.id = OrbitFetchSourceID(
+      observation: identity,
+      database: database,
+      scheduler: scheduler
+    )
+    self.database = database
+    self.scheduler = scheduler ?? OrbitImmediateValueObservationScheduler()
+    self.observation = observation
+    self.sharedRequestObservation = nil
   }
 }
 
@@ -35,13 +52,14 @@ struct OrbitFetchSource<Value: Sendable>: Sendable {
 ///
 /// A property that was not handed a database at its declaration resolves one later — from the
 /// SwiftUI environment, or from ``OrbitDefaultDatabase/current`` once the process has set one —
-/// and needs its request back to do it. Holding the request as a closure is what lets the storage
-/// forget the request's concrete type and still re-render its statement against whichever database
-/// it ends up reading from.
-struct OrbitFetchRequestBinding<Value: Sendable>: Sendable {
+/// and needs its request or observation back to do it. Holding source construction as a closure is
+/// what lets the storage forget its concrete input while retaining everything needed to observe
+/// whichever database it ends up reading from.
+struct OrbitFetchSourceBinding<Value: Sendable>: Sendable {
   /// Whether the property named its database itself, in which case nothing may replace it.
   let isDatabaseExplicit: Bool
   let makeSource: @Sendable (any OrbitObservableDatabase) -> OrbitFetchSource<Value>
+  let makeID: @Sendable ((any OrbitObservableDatabase)?) -> OrbitFetchSourceID
 
   init(
     request: some OrbitFetchKeyRequest<Value>,
@@ -52,6 +70,40 @@ struct OrbitFetchRequestBinding<Value: Sendable>: Sendable {
     self.makeSource = { database in
       OrbitFetchSource(request: request, database: database, scheduler: scheduler)
     }
+    self.makeID = { database in
+      OrbitFetchSourceID(request: request, database: database, scheduler: scheduler)
+    }
+  }
+
+  init(
+    observation: OrbitValueObservation<Value>,
+    identity: OrbitFetchObservationIdentity,
+    isDatabaseExplicit: Bool,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) {
+    self.isDatabaseExplicit = isDatabaseExplicit
+    self.makeSource = { database in
+      OrbitFetchSource(
+        observation: observation,
+        identity: identity,
+        database: database,
+        scheduler: scheduler
+      )
+    }
+    self.makeID = { database in
+      OrbitFetchSourceID(observation: identity, database: database, scheduler: scheduler)
+    }
+  }
+}
+
+/// The identity of an observation declaration, either the observation's definition or an explicit
+/// value supplied by a caller whose declaration rebuilds the observation.
+enum OrbitFetchObservationIdentity: Hashable, Sendable {
+  case intrinsic(ObjectIdentifier)
+  case explicit(type: ObjectIdentifier, value: OrbitAnyHashableSendable)
+
+  init<ID: Hashable & Sendable>(_ id: ID) {
+    self = .explicit(type: ObjectIdentifier(ID.self), value: OrbitAnyHashableSendable(id))
   }
 }
 
@@ -61,10 +113,14 @@ struct OrbitFetchRequestBinding<Value: Sendable>: Sendable {
 /// again. Comparing identifiers is how the storage that survived the re-creation decides whether
 /// the newly built property describes the same read — in which case the observation continues
 /// undisturbed — or a different one it should adopt.
-struct OrbitFetchRequestID: Hashable, Sendable {
+struct OrbitFetchSourceID: Hashable, Sendable {
+  private enum Input: Hashable, Sendable {
+    case request(type: ObjectIdentifier, value: OrbitAnyHashableSendable)
+    case observation(OrbitFetchObservationIdentity)
+  }
+
   private let database: ObjectIdentifier?
-  private let requestType: ObjectIdentifier
-  private let request: OrbitAnyHashableSendable
+  private let input: Input
   private let scheduler: OrbitAnyHashableSendable?
 
   init(
@@ -73,8 +129,20 @@ struct OrbitFetchRequestID: Hashable, Sendable {
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) {
     self.database = database.map { ObjectIdentifier($0) }
-    self.requestType = ObjectIdentifier(type(of: request))
-    self.request = OrbitAnyHashableSendable(request)
+    self.input = .request(
+      type: ObjectIdentifier(type(of: request)),
+      value: OrbitAnyHashableSendable(request)
+    )
+    self.scheduler = scheduler.map { OrbitAnyHashableSendable($0) }
+  }
+
+  init(
+    observation: OrbitFetchObservationIdentity,
+    database: (any OrbitObservableDatabase)?,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) {
+    self.database = database.map { ObjectIdentifier($0) }
+    self.input = .observation(observation)
     self.scheduler = scheduler.map { OrbitAnyHashableSendable($0) }
   }
 }
@@ -115,10 +183,10 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     var isLoading = false
     var loadError: (any Error)?
     var source: OrbitFetchSource<Value>?
-    var binding: OrbitFetchRequestBinding<Value>?
+    var binding: OrbitFetchSourceBinding<Value>?
     // The declaration key survives explicit loads, assignments, and cancellation. SwiftUI only
-    // replaces a request when the declaration changes, not whenever its current source differs.
-    var requestID: OrbitFetchRequestID?
+    // replaces a source when the declaration changes, not whenever its current source differs.
+    var sourceID: OrbitFetchSourceID?
     var subscription: OrbitSubscription?
     var hasStarted = false
     var generation: UInt64 = 0
@@ -152,9 +220,9 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   init(
     value: Value,
     source: OrbitFetchSource<Value>? = nil,
-    binding: OrbitFetchRequestBinding<Value>? = nil,
+    binding: OrbitFetchSourceBinding<Value>? = nil,
     loadError: (any Error)? = nil,
-    requestID: OrbitFetchRequestID? = nil
+    sourceID: OrbitFetchSourceID? = nil
   ) {
     self.state = Lock(
       State(
@@ -162,7 +230,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
         loadError: loadError,
         source: source,
         binding: binding,
-        requestID: requestID ?? source?.id
+        sourceID: sourceID ?? source?.id
       )
     )
   }
@@ -201,8 +269,8 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     return state.withLock { $0.loadError }
   }
 
-  var requestID: OrbitFetchRequestID? {
-    state.withLock { $0.requestID }
+  var sourceID: OrbitFetchSourceID? {
+    state.withLock { $0.sourceID }
   }
 
   /// The database the current source reads from, after taking a newly available default if needed.
@@ -238,11 +306,11 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
 
   // MARK: - Loading
 
-  /// Reads the current request again.
+  /// Reads the current source again.
   ///
   /// Reading again means observing again from scratch, which is what lets this start a property
   /// nothing has read yet, and resume one whose observation a failed read ended. A detached
-  /// property, which has no request left to read, does nothing.
+  /// property, which has no source left to read, does nothing.
   ///
   /// - Throws: Whatever the read throws, which also becomes ``loadError``.
   func load() async throws {
@@ -250,9 +318,9 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     try await load(source)
   }
 
-  /// Reads a request, and observes it from now on.
+  /// Reads a source, and observes it from now on.
   ///
-  /// - Parameter source: The request, database, and scheduler to observe.
+  /// - Parameter source: The observation, database, and scheduler to use.
   /// - Throws: Whatever the first read throws, which also becomes ``loadError``.
   func load(_ source: OrbitFetchSource<Value>) async throws {
     let signal = OrbitOneShotSignal()
@@ -275,7 +343,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     finish(invalidated)
   }
 
-  /// Takes over another storage's value and request.
+  /// Takes over another storage's value and source.
   ///
   /// This is what assigning one projected value to another does, and what a SwiftUI view's
   /// surviving storage does when the view is re-created with a different query.
@@ -285,14 +353,14 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   ///   - updatingDeclaration: Adopts only a changed declaration, replacing its identity together
   ///     with the value and source. Explicit assignments leave the declaration identity alone.
   func adopt(from other: OrbitFetchStorage<Value>, updatingDeclaration: Bool = false) {
-    let (value, source, binding, loadError, requestID) = other.state.withLock {
-      ($0.value, $0.source, $0.binding, $0.loadError, $0.requestID)
+    let (value, source, binding, loadError, sourceID) = other.state.withLock {
+      ($0.value, $0.source, $0.binding, $0.loadError, $0.sourceID)
     }
     let adoption = state.withLock {
       state -> (invalidated: State.InvalidatedObservation, wasObserving: Bool)? in
       if updatingDeclaration {
-        guard let requestID, state.requestID != requestID else { return nil }
-        state.requestID = requestID
+        guard let sourceID, state.sourceID != sourceID else { return nil }
+        state.sourceID = sourceID
       }
       let invalidated = state.invalidateObservation()
       state.value = value
@@ -351,10 +419,13 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     let scheduler: any OrbitValueObservationScheduler =
       signal == nil ? source.scheduler : OrbitDeferredFetchScheduler(base: source.scheduler)
     do {
-      let subscription = try source.observation.subscribe(
+      let subscription = try source.observation.subscribeForFetchProperty(
         to: source.database,
         scheduling: scheduler,
         isolation: nil,
+        onInitialFetchCompletedWithoutValue: { [weak self] in
+          self?.receiveInitialFetchCompletion(generation: generation)
+        },
         onError: { [weak self] error in
           self?.receive(.failure(error), generation: generation)
         },
@@ -393,6 +464,24 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     }
     guard didAccept else { return }
     signal?.finish(result.map { _ in () })
+    notifyObservers()
+  }
+
+  /// Finishes a successful initial read whose observation reducer suppressed its value.
+  private func receiveInitialFetchCompletion(generation: UInt64) {
+    var signal: OrbitOneShotSignal?
+    let didAccept = registrar.withMutation {
+      state.withLock { state -> Bool in
+        guard state.generation == generation, state.isLoading else { return false }
+        state.isLoading = false
+        state.loadError = nil
+        signal = state.firstResult
+        state.firstResult = nil
+        return true
+      }
+    }
+    guard didAccept else { return }
+    signal?.finish(.success(()))
     notifyObservers()
   }
 
@@ -437,17 +526,42 @@ extension OrbitFetchStorage {
     database: (any OrbitObservableDatabase)?,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) -> OrbitFetchStorage<Value> {
-    let binding = OrbitFetchRequestBinding(
+    let binding = OrbitFetchSourceBinding(
       request: request,
       isDatabaseExplicit: database != nil,
       scheduler: scheduler
     )
+    return make(value: value, binding: binding, database: database)
+  }
+
+  /// Creates a storage that subscribes to `observation`, resolving the database it observes.
+  static func make(
+    value: Value,
+    observation: OrbitValueObservation<Value>,
+    identity: OrbitFetchObservationIdentity,
+    database: (any OrbitObservableDatabase)?,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) -> OrbitFetchStorage<Value> {
+    let binding = OrbitFetchSourceBinding(
+      observation: observation,
+      identity: identity,
+      isDatabaseExplicit: database != nil,
+      scheduler: scheduler
+    )
+    return make(value: value, binding: binding, database: database)
+  }
+
+  private static func make(
+    value: Value,
+    binding: OrbitFetchSourceBinding<Value>,
+    database: (any OrbitObservableDatabase)?
+  ) -> OrbitFetchStorage<Value> {
     guard let database = database ?? OrbitDefaultDatabase.current else {
       return OrbitFetchStorage(
         value: value,
         binding: binding,
         loadError: OrbitMissingDefaultDatabaseError(),
-        requestID: OrbitFetchRequestID(request: request, database: nil, scheduler: scheduler)
+        sourceID: binding.makeID(nil)
       )
     }
     return OrbitFetchStorage(
@@ -465,11 +579,34 @@ extension OrbitFetchStorage {
     database: (any OrbitObservableDatabase)?,
     scheduler: (any OrbitValueObservationScheduler & Hashable)?
   ) async throws -> OrbitFetchSubscription {
-    let binding = OrbitFetchRequestBinding(
+    let binding = OrbitFetchSourceBinding(
       request: request,
       isDatabaseExplicit: database != nil,
       scheduler: scheduler
     )
+    return try await load(binding: binding, database: database)
+  }
+
+  /// Subscribes to `observation` from now on, resolving the database it observes.
+  func load(
+    observation: OrbitValueObservation<Value>,
+    identity: OrbitFetchObservationIdentity,
+    database: (any OrbitObservableDatabase)?,
+    scheduler: (any OrbitValueObservationScheduler & Hashable)?
+  ) async throws -> OrbitFetchSubscription {
+    let binding = OrbitFetchSourceBinding(
+      observation: observation,
+      identity: identity,
+      isDatabaseExplicit: database != nil,
+      scheduler: scheduler
+    )
+    return try await load(binding: binding, database: database)
+  }
+
+  private func load(
+    binding: OrbitFetchSourceBinding<Value>,
+    database: (any OrbitObservableDatabase)?
+  ) async throws -> OrbitFetchSubscription {
     guard let database = database ?? OrbitDefaultDatabase.current else {
       throw OrbitMissingDefaultDatabaseError()
     }
@@ -486,7 +623,7 @@ extension OrbitFetchStorage {
   /// because the process had no default when it was created — falls back to whatever
   /// ``OrbitDefaultDatabase/current`` is by now.
   ///
-  /// Re-sourcing replaces the request's observation, so this does nothing whenever the storage
+  /// Re-sourcing replaces the current observation, so this does nothing whenever the storage
   /// already reads from the database it is offered, which is what makes it safe to call on every
   /// SwiftUI render.
   ///
@@ -500,8 +637,8 @@ extension OrbitFetchStorage {
       return database
     }
     guard let resolved, let binding = state.withLock({ $0.binding }) else { return }
-    // Building the source renders the request's statement, which is work the lock has no reason
-    // to hold, and adopting takes the lock again for itself.
+    // Building a request-backed source may render its statement, which is work the lock has no
+    // reason to hold, and adopting takes the lock again for itself.
     adopt(
       from: OrbitFetchStorage(
         value: untrackedValue,
@@ -511,7 +648,7 @@ extension OrbitFetchStorage {
     )
   }
 
-  /// Takes over `other`'s request when it describes a different read from this one's.
+  /// Takes over `other`'s source when it describes a different read from this one's.
   func adoptIfNeeded(from other: OrbitFetchStorage<Value>) {
     adopt(from: other, updatingDeclaration: true)
   }
