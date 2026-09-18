@@ -368,6 +368,77 @@
     }
 
     @Test
+    func updatesSequenceIncludesFetchesThatEmitNoValue() async throws {
+      let driver = try await itemsDatabase()
+      let updates = itemCountObservation()
+        .filter { $0.isMultiple(of: 2) == false }
+        .updates(in: driver)
+        .prefix(3)
+      var iterator = updates.makeAsyncIterator()
+
+      #expect(try await iterator.next() == .noEmission(source: .initial))
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      #expect(
+        try await iterator.next()
+          == .emitted(
+            OrbitValueObservationChange(value: 1, source: .transaction(.local))
+          )
+      )
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+      }
+      #expect(try await iterator.next() == .noEmission(source: .transaction(.local)))
+    }
+
+    @Test
+    func updatesSequenceCatchesUpWithoutRefetchingOrErasingTheLatestValue() async throws {
+      let driver = try await itemsDatabase()
+      let fetchCount = Lock(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        }
+        .filter { $0 > 0 }
+
+      var first = observation.updates(in: driver).makeAsyncIterator()
+      #expect(try await first.next() == .noEmission(source: .initial))
+
+      var second = observation.updates(in: driver).makeAsyncIterator()
+      #expect(try await second.next() == .noEmission(source: .initial))
+      #expect(fetchCount.withLock { $0 } == 1)
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      #expect(
+        try await first.next()
+          == .emitted(
+            OrbitValueObservationChange(value: 1, source: .transaction(.local))
+          )
+      )
+
+      try await driver.write { transaction in
+        try transaction.execute(#sql("DELETE FROM items", as: Void.self))
+      }
+      #expect(try await first.next() == .noEmission(source: .transaction(.local)))
+
+      var third = observation.updates(in: driver).makeAsyncIterator()
+      #expect(
+        try await third.next()
+          == .emitted(
+            OrbitValueObservationChange(value: 1, source: .transaction(.local))
+          )
+      )
+      #expect(fetchCount.withLock { $0 } == 3)
+      _ = second
+    }
+
+    @Test
     func interprocessObservationRefetchesWithExternalSource() async throws {
       let driver = try await itemsDatabase()
       let network = InMemoryIPCTransport.Network()
@@ -785,6 +856,41 @@
     }
 
     @Test
+    func updateCallbackReceivesEmissionsAndNoEmissions() throws {
+      let driver = try blockingItemsDatabase()
+      let updates = Lock([OrbitValueObservationUpdate<Int>]())
+      let errors = Lock([String]())
+      let subscription = try itemCountObservation()
+        .filter { $0.isMultiple(of: 2) == false }
+        .subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { error in errors.withLock { $0.append(String(describing: error)) } },
+          onUpdate: { update in updates.withLock { $0.append(update) } }
+        )
+
+      #expect(updates.withLock { $0 } == [.noEmission(source: .initial)])
+
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      }
+      try driver.writeBlocking { transaction in
+        try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+      }
+
+      #expect(
+        updates.withLock { $0 }
+          == [
+            .noEmission(source: .initial),
+            .emitted(OrbitValueObservationChange(value: 1, source: .transaction(.local))),
+            .noEmission(source: .transaction(.local))
+          ]
+      )
+      #expect(errors.withLock { $0 }.isEmpty)
+      _ = subscription
+    }
+
+    @Test
     func compactMapSuppressesNilAndTransformsNonNilValues() throws {
       let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<String>()
@@ -1017,7 +1123,12 @@
       let driver = PostCommitObservableDatabase(queue)
       let fetchCount = Lock(0)
       let observation = OrbitValueObservation<Int>
-        .tracking(region: .fullDatabase) { _ in fetchCount.withLock { $0 += 1; return $0 } }
+        .tracking(region: .fullDatabase) { _ in
+          fetchCount.withLock {
+            $0 += 1
+            return $0
+          }
+        }
         .refetching(.coalesced)
       let recorder = ObservationRecorder<Int>()
       let subscription = try observation.subscribe(

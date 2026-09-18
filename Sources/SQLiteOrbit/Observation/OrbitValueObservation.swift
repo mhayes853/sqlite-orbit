@@ -49,6 +49,31 @@ public struct OrbitValueObservationChange<Value: Sendable>: Sendable {
 extension OrbitValueObservationChange: Equatable where Value: Equatable {}
 extension OrbitValueObservationChange: Hashable where Value: Hashable {}
 
+/// The outcome of one successfully accepted value-observation fetch.
+///
+/// Most fetches emit a value. Operators such as ``OrbitValueObservation/filter(_:)`` and
+/// ``OrbitValueObservation/compactMap(_:)`` can instead suppress their output, in which case the
+/// update records why the fetch ran without exposing a value that does not exist at this point in
+/// the observation's operator chain.
+public enum OrbitValueObservationUpdate<Value: Sendable>: Sendable {
+  /// The fetch emitted a value.
+  case emitted(OrbitValueObservationChange<Value>)
+
+  /// The fetch completed successfully, but the observation emitted no value.
+  case noEmission(source: OrbitValueObservationSource)
+
+  /// The event whose fetch produced this update.
+  public var source: OrbitValueObservationSource {
+    switch self {
+    case .emitted(let change): change.source
+    case .noEmission(let source): source
+    }
+  }
+}
+
+extension OrbitValueObservationUpdate: Equatable where Value: Equatable {}
+extension OrbitValueObservationUpdate: Hashable where Value: Hashable {}
+
 private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
   case constantOnFirstFetch
@@ -178,10 +203,11 @@ private struct OrbitValueObservationEvents: Sendable {
 /// have changed.
 ///
 /// An observation is a description, not a running process: nothing is read until you start it
-/// with ``subscribe(to:isolation:onError:onChange:)``, ``changes(in:bufferingPolicy:)``, or
-/// ``values(in:bufferingPolicy:)``. Every subscriber to the same observation value and database
-/// shares one runtime, so a chain built once and started twice fetches once and hands the same
-/// value to both.
+/// with ``subscribe(to:isolation:onError:onChange:)``,
+/// ``subscribe(to:isolation:onError:onUpdate:)``, ``updates(in:bufferingPolicy:)``,
+/// ``changes(in:bufferingPolicy:)``, or ``values(in:bufferingPolicy:)``. Every subscriber to the
+/// same observation value and database shares one runtime, so a chain built once and started twice
+/// fetches once and hands the same value to both.
 ///
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
@@ -837,6 +863,35 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
+  /// Starts this observation and delivers every accepted fetch through callbacks on Swift's
+  /// cooperative executor.
+  ///
+  /// Unlike the `onChange` overload, `onUpdate` also runs when an operator suppresses a fetch's
+  /// output. Store the returned subscription for as long as updates should be delivered.
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
+  ///     without an extra hop. Defaults to the caller's isolation.
+  ///   - onError: Receives the error that ends the observation.
+  ///   - onUpdate: Receives the outcome of each accepted fetch.
+  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Throws: Whatever registering a transaction observer on `database` throws.
+  public func subscribe<Database: OrbitObservableDatabase>(
+    to database: Database,
+    isolation: isolated (any Actor)? = #isolation,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
+  ) throws -> OrbitSubscription {
+    try subscribe(
+      to: database,
+      scheduling: OrbitAsyncValueObservationScheduler.async(),
+      isolation: isolation,
+      onError: onError,
+      onUpdate: onUpdate
+    )
+  }
+
   /// Starts this observation and delivers its changes through `scheduler`.
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
@@ -872,27 +927,58 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
-    try subscribeForFetchProperty(
+    try subscribeIncludingNoEmissions(
       to: database,
       scheduling: scheduler,
       isolation: isolation,
-      onInitialFetchCompletedWithoutValue: nil,
+      onNoEmission: nil,
       onError: onError,
       onChange: onChange
     )
   }
 
-  /// The subscriber shape fetch properties need in order to finish loading when a reducer
-  /// suppresses the initial value. Ordinary observation subscribers have no event to handle in
-  /// that case.
-  func subscribeForFetchProperty<
+  /// Starts this observation and delivers every accepted fetch through `scheduler`.
+  ///
+  /// Unlike the `onChange` overload, `onUpdate` also receives ``OrbitValueObservationUpdate/noEmission(source:)``.
+  /// A scheduler that requests an immediate initial value makes this method perform a blocking
+  /// read, so `onUpdate` has run once by the time it returns.
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - scheduler: Decides where and when callbacks run.
+  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - onError: Receives the error that ends the observation.
+  ///   - onUpdate: Receives the outcome of each accepted fetch.
+  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Throws: Whatever registering a transaction observer on `database` throws.
+  public func subscribe<
+    Database: OrbitObservableDatabase,
+    Scheduler: OrbitValueObservationScheduler
+  >(
+    to database: Database,
+    scheduling scheduler: Scheduler,
+    isolation: isolated (any Actor)? = #isolation,
+    onError: @escaping @Sendable (any Error) -> Void,
+    onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
+  ) throws -> OrbitSubscription {
+    try subscribeIncludingNoEmissions(
+      to: database,
+      scheduling: scheduler,
+      isolation: isolation,
+      onNoEmission: { onUpdate(.noEmission(source: $0)) },
+      onError: onError,
+      onChange: { onUpdate(.emitted($0)) }
+    )
+  }
+
+  private func subscribeIncludingNoEmissions<
     Database: OrbitObservableDatabase,
     Scheduler: OrbitValueObservationScheduler
   >(
     to database: Database,
     scheduling scheduler: Scheduler,
     isolation: isolated (any Actor)?,
-    onInitialFetchCompletedWithoutValue: (@Sendable () -> Void)?,
+    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
@@ -900,7 +986,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     let subscription = runtime.addSubscriber(
       scheduling: scheduler,
       isolation: isolation,
-      onInitialFetchCompletedWithoutValue: onInitialFetchCompletedWithoutValue,
+      onNoEmission: onNoEmission,
       onError: onError,
       onChange: onChange
     )
@@ -1012,6 +1098,47 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       // Stop observing the moment the task is cancelled, not when it gets around to returning.
       subscription.cancel()
       completion.finish(.success(()))
+    }
+  }
+
+  /// Returns an asynchronous sequence containing the outcome of every accepted fetch.
+  ///
+  /// Unlike ``changes(in:bufferingPolicy:)``, this sequence also produces an element when an
+  /// operator such as ``filter(_:)`` or ``compactMap(_:)`` suppresses a fetched value. A rejected
+  /// transaction, a superseded fetch, and a cancelled fetch produce no update. A fetch error ends
+  /// the sequence by throwing.
+  ///
+  /// A subscriber joining a running observation is caught up with its latest emitted value. If the
+  /// observation has never emitted but has completed a fetch, it is instead caught up with the
+  /// latest no-emission update. A no-emission update never erases an earlier emitted value used for
+  /// this catch-up.
+  ///
+  /// ```swift
+  /// for try await update in observation.updates(in: database) {
+  ///   switch update {
+  ///   case .emitted(let change):
+  ///     print(change.value, "after", change.source)
+  ///   case .noEmission(let source):
+  ///     print("no value after", source)
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - database: The database to observe.
+  ///   - bufferingPolicy: How elements are buffered for a consumer that falls behind.
+  /// - Returns: An asynchronous sequence of updates, failing with the error that ends the
+  ///   observation.
+  public func updates<Database: OrbitObservableDatabase>(
+    in database: Database,
+    bufferingPolicy: OrbitValueObservationBufferingPolicy = .unbounded
+  ) -> OrbitValueObservationSequence<OrbitValueObservationUpdate<Value>> {
+    OrbitValueObservationSequence(bufferingPolicy: bufferingPolicy) { onError, onUpdate in
+      try subscribe(
+        to: database,
+        onError: onError,
+        onUpdate: onUpdate
+      )
     }
   }
 
@@ -1315,26 +1442,24 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func addSubscriber<Scheduler: OrbitValueObservationScheduler>(
     scheduling scheduler: Scheduler,
     isolation: isolated (any Actor)?,
-    onInitialFetchCompletedWithoutValue: (@Sendable () -> Void)?,
+    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) -> OrbitSubscription {
     let subscriber = OrbitValueObservationSubscriber(
       scheduler: scheduler,
-      onInitialFetchCompletedWithoutValue: onInitialFetchCompletedWithoutValue,
+      onNoEmission: onNoEmission,
       onError: onError,
       onChange: onChange
     )
-    let registration = state.withLock { state in
-      (state.subscribers.add(subscriber), state.reads.initialFetchCompleted)
-    }
-    switch registration.0 {
-    case .success(let (identifier, latest, isFirstEver)):
+    let registration = state.withLock { $0.subscribers.add(subscriber) }
+    switch registration {
+    case .success(let (identifier, latest, noEmissionSource, isFirstEver)):
       if isFirstEver { events.willStart() }
       if let latest {
         subscriber.receive(.outcome(.success(latest)), from: isolation)
-      } else if registration.1 {
-        subscriber.receive(.initialFetchCompletedWithoutValue, from: isolation)
+      } else if let source = noEmissionSource {
+        subscriber.receive(.noEmission(source: source), from: isolation)
       }
       return OrbitSubscription { [self] in removeSubscriber(identifier) }
     case .failure(let error):
@@ -1697,26 +1822,21 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
       guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
-      let didCompleteInitialFetch = completeInitialFetch(state: &state)
+      completeInitialFetch(state: &state)
       state.observedRegion = output.region
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
-          let delivery: OrbitValueObservationDelivery
-          if didCompleteInitialFetch {
-            let subscribers = state.subscribers.awaitingInitialFetchCompletion
-            let publication = OrbitValueObservationPublication<Value>(
-              event: .initialFetchCompletedWithoutValue,
-              subscribers: subscribers
+          let subscribers = state.subscribers.publishNoEmission(source: source)
+          let publication = OrbitValueObservationPublication<Value>(
+            event: .noEmission(source: source),
+            subscribers: subscribers
+          )
+          let delivery =
+            subscribers.isEmpty
+            ? .idle
+            : OrbitValueObservationDelivery(
+              shouldDrain: state.deliveries.enqueue(publication)
             )
-            delivery =
-              subscribers.isEmpty
-              ? .idle
-              : OrbitValueObservationDelivery(
-                shouldDrain: state.deliveries.enqueue(publication)
-              )
-          } else {
-            delivery = .idle
-          }
           return OrbitValueObservationAcceptance(
             delivery: delivery,
             requiresObservableRefetch: requiresObservableRefetch
@@ -1727,7 +1847,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         outcome = .failure(error)
       }
     case .failure(let error):
-      _ = completeInitialFetch(state: &state)
+      completeInitialFetch(state: &state)
       outcome = .failure(error)
     }
 
@@ -1758,11 +1878,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   ///
   /// Every invalidation raised before the initial value forced that read to run again, so the one
   /// finally accepted covers all of them and a controller running afterwards must not see them.
-  private func completeInitialFetch(state: inout State) -> Bool {
-    guard !state.reads.initialFetchCompleted else { return false }
+  private func completeInitialFetch(state: inout State) {
+    guard !state.reads.initialFetchCompleted else { return }
     state.reads.completeInitialFetch()
     state.dropOutstandingInvalidations()
-    return true
   }
 
   private func discard(

@@ -83,7 +83,7 @@ struct OrbitValueObservationSubscriberRegistryTests {
   ) -> OrbitValueObservationSubscriber<Int> {
     OrbitValueObservationSubscriber(
       scheduler: OrbitImmediateValueObservationScheduler(),
-      onInitialFetchCompletedWithoutValue: nil,
+      onNoEmission: nil,
       onError: { _ in },
       onChange: onChange
     )

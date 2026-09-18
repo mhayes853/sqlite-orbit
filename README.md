@@ -732,8 +732,28 @@ snapshot exposes active-writer state, affected and tracked regions, and accumula
 reasons. They build on `waitForActiveWriters()` and `fetch(publishing:)`; a controller owns its
 retry loop and must finish with either a published or cancelled result.
 
-Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
-source; a committed transaction reports whether it came from this process or another one:
+Use `updates(in:)` when every accepted fetch matters, including one whose output was suppressed by
+`filter`, `compactMap`, or `removeDuplicates`:
+
+```swift
+for try await update in reminders.updates(in: database) {
+  switch update {
+  case .emitted(let change):
+    render(change.value)
+  case .noEmission(let source):
+    logger.debug("No value emitted after \(source)")
+  }
+}
+```
+
+An update counts an accepted fetch, not a database notification: a transaction rejected by
+`filterTransactions`, or a fetch superseded before its result was accepted, produces no update.
+The `noEmission` case has no value because operators such as `compactMap` may produce no value of
+the observation's output type at all.
+
+Use `changes(in:)` when only emitted values and the reason for each fetch matter. An initial fetch
+has an `.initial` source; a committed transaction reports whether it came from this process or
+another one:
 
 ```swift
 for try await change in reminders.changes(in: database) {
@@ -750,9 +770,9 @@ for try await change in reminders.changes(in: database) {
 }
 ```
 
-Both sequences start observing when iteration begins, and buffer every element a slow consumer has
-not taken yet. Pass a `bufferingPolicy` to bound that buffer, which lets a slow loop skip ahead to
-the current state of the database rather than working through every intermediate one:
+All three sequences start observing when iteration begins, and buffer every element a slow consumer
+has not taken yet. Pass a `bufferingPolicy` to bound that buffer, which lets a slow loop skip ahead
+to the current state of the database rather than working through every intermediate one:
 
 ```swift
 for try await change in reminders.changes(in: database, bufferingPolicy: .bufferingNewest(1)) {
@@ -760,13 +780,24 @@ for try await change in reminders.changes(in: database, bufferingPolicy: .buffer
 }
 ```
 
-The callback API is the primitive beneath both asynchronous sequences:
+The callback API is the primitive beneath the asynchronous sequences. Use `onChange` for emitted
+values only:
 
 ```swift
 let subscription = try reminders.subscribe(
   to: database,
   onError: report,
   onChange: { change in render(change.value) }
+)
+```
+
+Use `onUpdate` to receive the same emitted and no-emission outcomes as `updates(in:)`:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  onError: report,
+  onUpdate: process
 )
 ```
 

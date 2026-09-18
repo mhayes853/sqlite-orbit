@@ -419,18 +419,20 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     let scheduler: any OrbitValueObservationScheduler =
       signal == nil ? source.scheduler : OrbitDeferredFetchScheduler(base: source.scheduler)
     do {
-      let subscription = try source.observation.subscribeForFetchProperty(
+      let subscription = try source.observation.subscribe(
         to: source.database,
         scheduling: scheduler,
         isolation: nil,
-        onInitialFetchCompletedWithoutValue: { [weak self] in
-          self?.receiveInitialFetchCompletion(generation: generation)
-        },
         onError: { [weak self] error in
           self?.receive(.failure(error), generation: generation)
         },
-        onChange: { [weak self] change in
-          self?.receive(.success(change.value), generation: generation)
+        onUpdate: { [weak self] update in
+          switch update {
+          case .emitted(let change):
+            self?.receive(.success(change.value), generation: generation)
+          case .noEmission:
+            self?.receiveInitialFetchCompletion(generation: generation)
+          }
         }
       )
       let isStale = state.withLock { state -> Bool in
