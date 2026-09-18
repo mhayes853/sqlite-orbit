@@ -13,7 +13,7 @@ public enum ReminderPriority: String, AppEnum, Sendable {
   public static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
     .low: "Low",
     .medium: "Medium",
-    .high: "High",
+    .high: "High"
   ]
 
   public init(_ priority: Reminder.Priority) {

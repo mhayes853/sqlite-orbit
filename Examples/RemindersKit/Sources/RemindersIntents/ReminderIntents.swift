@@ -84,7 +84,9 @@ public struct CreateReminderIntent: AppIntent {
         else { throw ReminderIntentError.listNotFound }
         remindersList = resolvedList
       } else {
-        guard let firstList = try (RemindersList
+        guard
+          let firstList = try
+            (RemindersList
             .order { ($0.position, $0.title.collate(.nocase), $0.id) }
             .fetchOne(transaction))
         else { throw ReminderIntentError.noLists }
@@ -119,10 +121,12 @@ public struct CreateReminderIntent: AppIntent {
       }
     }
 
-    guard let reminder = try await ReminderEntityQuery.entity(
-      id: reminderID,
-      database: database
-    ) else { throw ReminderIntentError.reminderNotFound }
+    guard
+      let reminder = try await ReminderEntityQuery.entity(
+        id: reminderID,
+        database: database
+      )
+    else { throw ReminderIntentError.reminderNotFound }
     return .result(
       value: reminder,
       dialog: "Created the reminder.",
@@ -136,7 +140,8 @@ public struct CreateReminderIntent: AppIntent {
 
   private static func normalizedTags(_ values: [String]) -> [String] {
     var seen = Set<String>()
-    return values
+    return
+      values
       .flatMap { $0.split(separator: ",", omittingEmptySubsequences: false) }
       .map {
         $0
@@ -184,10 +189,12 @@ public struct CompleteReminderIntent: AppIntent {
     try await database.write { transaction in
       try Reminder.complete(id: reminder.id).execute(transaction)
     }
-    guard let updatedReminder = try await ReminderEntityQuery.entity(
-      id: reminder.id,
-      database: database
-    ) else { throw ReminderIntentError.reminderNotFound }
+    guard
+      let updatedReminder = try await ReminderEntityQuery.entity(
+        id: reminder.id,
+        database: database
+      )
+    else { throw ReminderIntentError.reminderNotFound }
     return .result(
       value: updatedReminder,
       dialog: "Completed the reminder.",
@@ -236,10 +243,12 @@ public struct ReopenReminderIntent: AppIntent {
     try await database.write { transaction in
       try Reminder.reopen(id: reminder.id).execute(transaction)
     }
-    guard let updatedReminder = try await ReminderEntityQuery.entity(
-      id: reminder.id,
-      database: database
-    ) else { throw ReminderIntentError.reminderNotFound }
+    guard
+      let updatedReminder = try await ReminderEntityQuery.entity(
+        id: reminder.id,
+        database: database
+      )
+    else { throw ReminderIntentError.reminderNotFound }
     return .result(
       value: updatedReminder,
       dialog: "Reopened the reminder.",
@@ -307,8 +316,8 @@ private enum ReminderIntentError: LocalizedError {
   }
 }
 
-private extension ReminderEntity {
-  static var placeholder: Self {
+extension ReminderEntity {
+  fileprivate static var placeholder: Self {
     Self(
       id: UUID(),
       title: "",

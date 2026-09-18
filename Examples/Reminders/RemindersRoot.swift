@@ -1,4 +1,6 @@
+import AppIntents
 import RemindersData
+import RemindersIntents
 import SQLiteOrbit
 import SwiftUI
 import TipKit
@@ -8,10 +10,14 @@ public struct RemindersRoot: View {
   private let widgetReloader: RemindersWidgetReloader
 
   public init() {
-    let database = try! OrbitIPCDatabase.reminders()
+    self.init(database: try! OrbitIPCDatabase.reminders())
+  }
+
+  public init(database: OrbitIPCDatabase) {
     let widgetReloader = try! RemindersWidgetReloader(database: database)
     self.database = database
     self.widgetReloader = widgetReloader
+    RemindersIntentDependencies.register(database: database)
     database.delegate = widgetReloader
     try? Tips.configure()
   }
@@ -22,5 +28,11 @@ public struct RemindersRoot: View {
     }
     .fontDesign(.rounded)
     .orbitDatabase(database)
+  }
+}
+
+public struct RemindersFeatureIntentsPackage: AppIntentsPackage {
+  public static var includedPackages: [any AppIntentsPackage.Type] {
+    [RemindersIntentsPackage.self]
   }
 }

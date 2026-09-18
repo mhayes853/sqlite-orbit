@@ -110,7 +110,8 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     for identifiers: [ReminderEntity.ID]
   ) async throws -> [ReminderEntity] {
     let entities = try await resolvedDatabase.read { transaction in
-      let records = try Reminder
+      let records =
+        try Reminder
         .where { $0.id.in(identifiers) }
         .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
         .select {
@@ -130,7 +131,8 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
 
   public func suggestedEntities() async throws -> [ReminderEntity] {
     try await resolvedDatabase.read { transaction in
-      let records = try Reminder
+      let records =
+        try Reminder
         .where { !$0.isCompleted }
         .order { ($0.createdAt.desc(), $0.id) }
         .limit(20)
@@ -150,7 +152,8 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     let match = Self.ftsMatch(string)
     guard !match.isEmpty else { return try await suggestedEntities() }
     return try await resolvedDatabase.read { transaction in
-      let records = try ReminderText
+      let records =
+        try ReminderText
         .where { $0.match(match) }
         .order(by: \.rank)
         .join(Reminder.all) { $0.rowid.eq($1.rowid) }
@@ -172,16 +175,18 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     database: RemindersDatabase
   ) async throws -> ReminderEntity? {
     try await database.read { transaction in
-      guard let record = try (Reminder
-        .find(id)
-        .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
-        .select {
-          ReminderEntityRecord.Columns(
-            reminder: $0,
-            remindersList: $1
-          )
-        }
-        .fetchOne(transaction))
+      guard
+        let record = try
+          (Reminder
+          .find(id)
+          .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
+          .select {
+            ReminderEntityRecord.Columns(
+              reminder: $0,
+              remindersList: $1
+            )
+          }
+          .fetchOne(transaction))
       else { return nil }
       return try entities(records: [record], transaction: transaction).first
     }
@@ -192,7 +197,8 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     transaction: borrowing SQLiteReadTransaction
   ) throws -> [ReminderEntity] {
     let reminderIDs = records.map(\.reminder.id)
-    let tags = try ReminderTag
+    let tags =
+      try ReminderTag
       .where { $0.reminderID.in(reminderIDs) }
       .order { ($0.reminderID, $0.tagID.collate(.nocase)) }
       .join(Tag.all) { $0.tagID.eq($1.primaryKey) }

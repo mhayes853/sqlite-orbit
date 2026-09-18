@@ -6,7 +6,7 @@ public struct RemindersShortcuts: AppShortcutsProvider {
       intent: CreateReminderIntent(),
       phrases: [
         "Create a reminder with \(.applicationName)",
-        "Add a reminder in \(.applicationName)",
+        "Add a reminder in \(.applicationName)"
       ],
       shortTitle: "New Reminder",
       systemImageName: "plus.circle"
@@ -15,7 +15,7 @@ public struct RemindersShortcuts: AppShortcutsProvider {
       intent: CompleteReminderIntent(),
       phrases: [
         "Complete \(\.$reminder) in \(.applicationName)",
-        "Mark \(\.$reminder) complete in \(.applicationName)",
+        "Mark \(\.$reminder) complete in \(.applicationName)"
       ],
       shortTitle: "Complete Reminder",
       systemImageName: "checkmark.circle"
@@ -24,7 +24,7 @@ public struct RemindersShortcuts: AppShortcutsProvider {
       intent: ReopenReminderIntent(),
       phrases: [
         "Reopen \(\.$reminder) in \(.applicationName)",
-        "Mark \(\.$reminder) incomplete in \(.applicationName)",
+        "Mark \(\.$reminder) incomplete in \(.applicationName)"
       ],
       shortTitle: "Reopen Reminder",
       systemImageName: "circle"

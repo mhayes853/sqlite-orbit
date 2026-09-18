@@ -1,3 +1,4 @@
+import AppIntents
 import RemindersFeature
 import SwiftUI
 
@@ -7,5 +8,11 @@ struct RemindersApp: App {
     WindowGroup {
       RemindersRoot()
     }
+  }
+}
+
+struct RemindersAppIntentsPackage: AppIntentsPackage {
+  static var includedPackages: [any AppIntentsPackage.Type] {
+    [RemindersFeatureIntentsPackage.self]
   }
 }

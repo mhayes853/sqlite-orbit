@@ -15,6 +15,7 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
   public let isFlagged: Bool
   @Column(as: Color.HexRepresentation.self)
   public let listColor: Color
+  public let listID: RemindersList.ID
   public let listTitle: String
   public let priority: Reminder.Priority?
   public let title: String
@@ -25,6 +26,7 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
     dueDate: Date? = nil,
     isFlagged: Bool = false,
     listColor: Color = RemindersList.defaultColor,
+    listID: RemindersList.ID = UUID(),
     listTitle: String,
     priority: Reminder.Priority? = nil,
     title: String
@@ -34,6 +36,7 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
     self.dueDate = dueDate
     self.isFlagged = isFlagged
     self.listColor = listColor
+    self.listID = listID
     self.listTitle = listTitle
     self.priority = priority
     self.title = title
@@ -54,6 +57,7 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
           dueDate: $0.dueDate,
           isFlagged: $0.isFlagged,
           listColor: $1.color,
+          listID: $1.id,
           listTitle: $1.title,
           priority: $0.priority,
           title: $0.title

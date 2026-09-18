@@ -24,8 +24,9 @@
 		AF61DBBBC0533986CD07787D /* ReminderRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 341F2170219F6C7F5877E717 /* ReminderRow.swift */; };
 		A10000000000000000000003 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
 		A10000000000000000000004 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
+		A20000000000000000000003 /* RemindersIntents in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* RemindersIntents */; };
+		A20000000000000000000004 /* RemindersIntents in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* RemindersIntents */; };
 		B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
-		B10000000000000000000002 /* CompleteReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteReminderIntent.swift */; };
 		B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* RecentRemindersWidget.swift */; };
 		B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* RemindersWidgetBundle.swift */; };
 		B10000000000000000000005 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
@@ -109,7 +110,6 @@
 		F3563D78F50635334631EB41 /* ReminderForm.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderForm.swift; sourceTree = "<group>"; };
 		F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* RemindersWidgetReloader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetReloader.swift; sourceTree = "<group>"; };
-		B10000000000000000000011 /* CompleteReminderIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CompleteReminderIntent.swift; sourceTree = "<group>"; };
 		B10000000000000000000012 /* RecentRemindersWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecentRemindersWidget.swift; sourceTree = "<group>"; };
 		B10000000000000000000013 /* RemindersWidgetBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetBundle.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -133,6 +133,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A20000000000000000000003 /* RemindersIntents in Frameworks */,
 				A10000000000000000000003 /* RemindersKit in Frameworks */,
 				7BDEE4BDAEC666D60BADB649 /* Foundation.framework in Frameworks */,
 				EE2E0084D7EAED9AF452E4AA /* SQLiteOrbit in Frameworks */,
@@ -152,6 +153,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A20000000000000000000004 /* RemindersIntents in Frameworks */,
 				B10000000000000000000005 /* RemindersKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -242,7 +244,6 @@
 		B10000000000000000000020 /* RemindersWidget */ = {
 			isa = PBXGroup;
 			children = (
-				B10000000000000000000011 /* CompleteReminderIntent.swift */,
 				B10000000000000000000012 /* RecentRemindersWidget.swift */,
 				B10000000000000000000013 /* RemindersWidgetBundle.swift */,
 				B10000000000000000000014 /* Info.plist */,
@@ -323,6 +324,7 @@
 			name = RemindersFeature;
 			packageProductDependencies = (
 				A10000000000000000000002 /* RemindersKit */,
+				A20000000000000000000002 /* RemindersIntents */,
 				E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */,
 			);
 			productName = RemindersFeature;
@@ -344,6 +346,7 @@
 			name = RemindersWidget;
 			packageProductDependencies = (
 				A10000000000000000000002 /* RemindersKit */,
+				A20000000000000000000002 /* RemindersIntents */,
 			);
 			productName = RemindersWidget;
 			productReference = B10000000000000000000016 /* RemindersWidget.appex */;
@@ -437,7 +440,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B10000000000000000000002 /* CompleteReminderIntent.swift in Sources */,
 				B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */,
 				B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */,
 			);
@@ -841,6 +843,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000001 /* XCLocalSwiftPackageReference "RemindersKit" */;
 			productName = RemindersKit;
+		};
+		A20000000000000000000002 /* RemindersIntents */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000001 /* XCLocalSwiftPackageReference "RemindersKit" */;
+			productName = RemindersIntents;
 		};
 		E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */ = {
 			isa = XCSwiftPackageProductDependency;

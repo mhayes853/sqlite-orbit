@@ -59,7 +59,8 @@ struct ReminderIntentTests {
     _ = try await CreateReminderIntent(
       title: "Call home",
       database: database
-    ).perform()
+    )
+    .perform()
 
     let reminder = try await database.read {
       try Reminder.all.fetchOne($0)
@@ -122,7 +123,8 @@ struct ReminderIntentTests {
     _ = try await DeleteRemindersIntent(
       entities: [entity],
       database: database
-    ).perform()
+    )
+    .perform()
 
     let remainingIDs = try await database.read {
       try Reminder.select(\.id).fetchAll($0)

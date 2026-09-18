@@ -1,5 +1,6 @@
 import AppIntents
 import RemindersData
+import RemindersIntents
 import SQLiteOrbit
 import SwiftUI
 import WidgetKit
@@ -11,13 +12,16 @@ struct RemindersWidgetBundle: WidgetBundle {
   init() {
     let database = try! OrbitIPCDatabase.reminders()
     self.database = database
-    AppDependencyManager.shared.add(
-      key: RemindersWidgetDependencyKey.database,
-      dependency: database
-    )
+    RemindersIntentDependencies.register(database: database)
   }
 
   var body: some Widget {
     RecentRemindersWidget(database: database)
+  }
+}
+
+struct RemindersWidgetAppIntentsPackage: AppIntentsPackage {
+  static var includedPackages: [any AppIntentsPackage.Type] {
+    [RemindersIntentsPackage.self]
   }
 }

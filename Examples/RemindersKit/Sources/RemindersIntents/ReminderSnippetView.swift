@@ -79,8 +79,8 @@ public struct ReminderSnippetView: View {
   }
 }
 
-private extension ReminderPriority {
-  var displayName: String {
+extension ReminderPriority {
+  fileprivate var displayName: String {
     switch self {
     case .low: "Low"
     case .medium: "Medium"

@@ -40,6 +40,7 @@ struct RemindersWidgetQueriesTests {
     }
 
     #expect(reminders.map(\.title) == ["Newest", "Older"])
+    #expect(reminders.map(\.listID) == [list.id, list.id])
   }
 
   @Test
