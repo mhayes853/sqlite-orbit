@@ -9,7 +9,8 @@ let package = Package(
     .macOS(.v13),
   ],
   products: [
-    .library(name: "RemindersKit", targets: ["RemindersData"])
+    .library(name: "RemindersKit", targets: ["RemindersData"]),
+    .library(name: "RemindersIntents", targets: ["RemindersIntents"]),
   ],
   dependencies: [
     .package(name: "sqlite-orbit", path: "../..")
@@ -21,9 +22,24 @@ let package = Package(
         .product(name: "SQLiteOrbit", package: "sqlite-orbit")
       ]
     ),
+    .target(
+      name: "RemindersIntents",
+      dependencies: [
+        "RemindersData",
+        .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
+      ]
+    ),
     .testTarget(
       name: "RemindersDataTests",
       dependencies: ["RemindersData"]
+    ),
+    .testTarget(
+      name: "RemindersIntentsTests",
+      dependencies: [
+        "RemindersData",
+        "RemindersIntents",
+        .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
+      ]
     ),
   ],
   swiftLanguageModes: [.v6]
