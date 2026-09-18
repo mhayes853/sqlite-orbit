@@ -1,8 +1,8 @@
 import AppIntents
 import RemindersData
 
-struct RemindersIntentDatabase: Sendable {
-  let value: RemindersDatabase
+public struct RemindersIntentDatabase: Sendable {
+  public let value: RemindersDatabase
 }
 
 public enum RemindersIntentDependencies {
@@ -15,7 +15,7 @@ public enum RemindersIntentDependencies {
 }
 
 extension AppDependency where Value == RemindersIntentDatabase {
-  static func reminders(_ database: RemindersDatabase) -> AppDependency {
+  public static func reminders(_ database: RemindersDatabase) -> AppDependency {
     let dependency = AppDependency(manager: AppDependencyManager())
     dependency.wrappedValue = RemindersIntentDatabase(value: database)
     return dependency

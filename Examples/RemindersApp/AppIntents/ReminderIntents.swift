@@ -1,7 +1,7 @@
 import AppIntents
 import Foundation
 import RemindersData
-import SQLiteOrbit
+import RemindersIntents
 
 public struct CreateReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Create Reminder"
@@ -26,7 +26,7 @@ public struct CreateReminderIntent: AppIntent {
   public var isFlagged: Bool
 
   @Parameter(title: "Priority")
-  public var priority: ReminderPriority?
+  public var priority: ReminderPriorityParameter?
 
   @Parameter(title: "Tags")
   public var tags: [String]?
@@ -52,7 +52,7 @@ public struct CreateReminderIntent: AppIntent {
     notes: String? = nil,
     dueDate: Date? = nil,
     isFlagged: Bool = false,
-    priority: ReminderPriority? = nil,
+    priority: ReminderPriorityParameter? = nil,
     tags: [String]? = nil,
     database: RemindersDatabase
   ) {
@@ -71,56 +71,18 @@ public struct CreateReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let title = reminderTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !title.isEmpty else { throw ReminderIntentError.missingTitle }
-
-    let reminderID = Reminder.ID()
-    try await database.write { transaction in
-      let remindersList: RemindersList
-      if let list {
-        guard let resolvedList = try RemindersList.find(list.id).fetchOne(transaction)
-        else { throw ReminderIntentError.listNotFound }
-        remindersList = resolvedList
-      } else {
-        guard
-          let firstList = try
-            (RemindersList
-            .order { ($0.position, $0.title.collate(.nocase), $0.id) }
-            .fetchOne(transaction))
-        else { throw ReminderIntentError.noLists }
-        remindersList = firstList
-      }
-
-      let position = try Reminder.count().fetchOne(transaction) ?? 0
-      try Reminder.insert {
-        Reminder.Draft(
-          Reminder(
-            id: reminderID,
-            dueDate: dueDate,
-            isFlagged: isFlagged,
-            notes: notes ?? "",
-            position: position,
-            priority: priority?.reminderPriority,
-            remindersListID: remindersList.id,
-            title: title
-          )
-        )
-      }
-      .execute(transaction)
-
-      try ReminderTag.replaceTags(
-        for: reminderID,
-        with: tags ?? [],
-        in: transaction
-      )
-    }
-
-    guard
-      let reminder = try await ReminderEntityQuery.entity(
-        id: reminderID,
-        database: database
-      )
-    else { throw ReminderIntentError.reminderNotFound }
+    let reminder = try await ReminderIntentOperations.create(
+      ReminderIntentDraft(
+        title: reminderTitle,
+        list: list,
+        notes: notes,
+        dueDate: dueDate,
+        isFlagged: isFlagged,
+        priority: priority?.value,
+        tags: tags
+      ),
+      in: database
+    )
     return .result(
       value: reminder,
       dialog: "Created the reminder.",
@@ -161,10 +123,10 @@ public struct CompleteReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let updatedReminder = try await updateStatus(
-      reminder,
-      status: .completed,
-      database: database
+    let updatedReminder = try await ReminderIntentOperations.setStatus(
+      .completed,
+      for: reminder,
+      in: database
     )
     return .result(
       value: updatedReminder,
@@ -205,10 +167,10 @@ public struct ReopenReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let updatedReminder = try await updateStatus(
-      reminder,
-      status: .incomplete,
-      database: database
+    let updatedReminder = try await ReminderIntentOperations.setStatus(
+      .incomplete,
+      for: reminder,
+      in: database
     )
     return .result(
       value: updatedReminder,
@@ -241,47 +203,9 @@ public struct DeleteRemindersIntent: DeleteIntent {
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {
-    let ids = entities.map(\.id)
-    try await database.write { transaction in
-      try Reminder.where { $0.id.in(ids) }.delete().execute(transaction)
-    }
+    try await ReminderIntentOperations.delete(entities, in: database)
     return .result(dialog: "Deleted the reminders.")
   }
-}
-
-private enum ReminderIntentError: LocalizedError {
-  case listNotFound
-  case missingTitle
-  case noLists
-  case reminderNotFound
-
-  var errorDescription: String? {
-    switch self {
-    case .listNotFound:
-      "The selected reminders list could not be found."
-    case .missingTitle:
-      "Give the reminder a title before creating it."
-    case .noLists:
-      "Create a reminders list before adding a reminder."
-    case .reminderNotFound:
-      "The reminder could not be found."
-    }
-  }
-}
-
-private func updateStatus(
-  _ reminder: ReminderEntity,
-  status: Reminder.Status,
-  database: RemindersDatabase
-) async throws -> ReminderEntity {
-  try await Reminder.setStatus(status, id: reminder.id, in: database)
-  guard
-    let reminder = try await ReminderEntityQuery.entity(
-      id: reminder.id,
-      database: database
-    )
-  else { throw ReminderIntentError.reminderNotFound }
-  return reminder
 }
 
 extension ReminderEntity {

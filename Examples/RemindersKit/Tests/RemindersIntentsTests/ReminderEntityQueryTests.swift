@@ -3,7 +3,7 @@ import RemindersData
 import SQLiteOrbit
 import Testing
 
-@testable import Reminders
+@testable import RemindersIntents
 
 struct ReminderEntityQueryTests {
   @Test
@@ -54,7 +54,7 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQuery(database: database)
+    let query = ReminderEntityQueries(database: database)
     let entities = try await query.entities(for: [newer.id, older.id])
 
     #expect(entities.map(\.id) == [newer.id, older.id])
@@ -108,7 +108,7 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQuery(database: database)
+    let query = ReminderEntityQueries(database: database)
 
     let suggestions = try await query.suggestedEntities()
     let matches = try await query.entities(matching: "travel plans")
@@ -128,7 +128,7 @@ struct ReminderEntityQueryTests {
       }
       .execute(transaction)
     }
-    let query = RemindersListEntityQuery(database: database)
+    let query = RemindersListEntityQueries(database: database)
 
     let resolved = try await query.entities(for: [work.id, personal.id])
     let matches = try await query.entities(matching: "project")
