@@ -54,7 +54,7 @@ public struct ReminderSnippetView: View {
             .accessibilityLabel("Flagged")
         }
         if let priority = reminder.priority {
-          Text(prioritySymbol(priority))
+          Text(priority.symbol)
             .font(.headline)
             .foregroundStyle(.orange)
             .accessibilityLabel("\(priority.displayName) priority")
@@ -68,23 +68,5 @@ public struct ReminderSnippetView: View {
 
   private var listColor: Color {
     Color.HexRepresentation(hexValue: reminder.list.colorHex).queryOutput
-  }
-
-  private func prioritySymbol(_ priority: ReminderPriority) -> String {
-    switch priority {
-    case .low: "!"
-    case .medium: "!!"
-    case .high: "!!!"
-    }
-  }
-}
-
-extension ReminderPriority {
-  fileprivate var displayName: String {
-    switch self {
-    case .low: "Low"
-    case .medium: "Medium"
-    case .high: "High"
-    }
   }
 }

@@ -2,7 +2,6 @@ import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
-import SwiftUI
 
 public struct CreateReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Create Reminder"
@@ -32,9 +31,8 @@ public struct CreateReminderIntent: AppIntent {
   @Parameter(title: "Tags")
   public var tags: [String]?
 
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private var databaseOverride: RemindersDatabase?
 
   public init() {
     reminderTitle = ""
@@ -44,7 +42,6 @@ public struct CreateReminderIntent: AppIntent {
     isFlagged = false
     priority = nil
     tags = nil
-    databaseOverride = nil
   }
 
   init(
@@ -64,7 +61,7 @@ public struct CreateReminderIntent: AppIntent {
     self.isFlagged = isFlagged
     self.priority = priority
     self.tags = tags
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -75,7 +72,6 @@ public struct CreateReminderIntent: AppIntent {
     let title = reminderTitle.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !title.isEmpty else { throw ReminderIntentError.missingTitle }
 
-    let database = resolvedDatabase
     let reminderID = Reminder.ID()
     try await database.write { transaction in
       let remindersList: RemindersList
@@ -110,15 +106,11 @@ public struct CreateReminderIntent: AppIntent {
       }
       .execute(transaction)
 
-      for tagTitle in Self.normalizedTags(tags ?? []) {
-        try Tag.upsert { Tag.Draft(Tag(title: tagTitle)) }.execute(transaction)
-        try ReminderTag.insert {
-          ReminderTag.Draft(
-            ReminderTag(id: UUID(), reminderID: reminderID, tagID: tagTitle)
-          )
-        }
-        .execute(transaction)
-      }
+      try ReminderTag.replaceTags(
+        for: reminderID,
+        with: tags ?? [],
+        in: transaction
+      )
     }
 
     guard
@@ -134,23 +126,6 @@ public struct CreateReminderIntent: AppIntent {
     )
   }
 
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
-  }
-
-  private static func normalizedTags(_ values: [String]) -> [String] {
-    var seen = Set<String>()
-    return
-      values
-      .flatMap { $0.split(separator: ",", omittingEmptySubsequences: false) }
-      .map {
-        $0
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-          .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-          .trimmingCharacters(in: .whitespacesAndNewlines)
-      }
-      .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
-  }
 }
 
 public struct CompleteReminderIntent: AppIntent {
@@ -161,23 +136,20 @@ public struct CompleteReminderIntent: AppIntent {
   @Parameter(title: "Reminder")
   public var reminder: ReminderEntity
 
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private var databaseOverride: RemindersDatabase?
 
   public init() {
     reminder = ReminderEntity.placeholder
-    databaseOverride = nil
   }
 
   public init(reminder: ReminderEntity) {
     self.reminder = reminder
-    databaseOverride = nil
   }
 
   init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -185,25 +157,16 @@ public struct CompleteReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let database = resolvedDatabase
-    try await database.write { transaction in
-      try Reminder.complete(id: reminder.id).execute(transaction)
-    }
-    guard
-      let updatedReminder = try await ReminderEntityQuery.entity(
-        id: reminder.id,
-        database: database
-      )
-    else { throw ReminderIntentError.reminderNotFound }
+    let updatedReminder = try await updateStatus(
+      reminder,
+      status: .completed,
+      database: database
+    )
     return .result(
       value: updatedReminder,
       dialog: "Completed the reminder.",
       view: ReminderSnippetView(reminder: updatedReminder)
     )
-  }
-
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
   }
 }
 
@@ -215,23 +178,20 @@ public struct ReopenReminderIntent: AppIntent {
   @Parameter(title: "Reminder")
   public var reminder: ReminderEntity
 
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private var databaseOverride: RemindersDatabase?
 
   public init() {
     reminder = ReminderEntity.placeholder
-    databaseOverride = nil
   }
 
   public init(reminder: ReminderEntity) {
     self.reminder = reminder
-    databaseOverride = nil
   }
 
   init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult
@@ -239,25 +199,16 @@ public struct ReopenReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let database = resolvedDatabase
-    try await database.write { transaction in
-      try Reminder.reopen(id: reminder.id).execute(transaction)
-    }
-    guard
-      let updatedReminder = try await ReminderEntityQuery.entity(
-        id: reminder.id,
-        database: database
-      )
-    else { throw ReminderIntentError.reminderNotFound }
+    let updatedReminder = try await updateStatus(
+      reminder,
+      status: .incomplete,
+      database: database
+    )
     return .result(
       value: updatedReminder,
       dialog: "Reopened the reminder.",
       view: ReminderSnippetView(reminder: updatedReminder)
     )
-  }
-
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
   }
 }
 
@@ -269,30 +220,24 @@ public struct DeleteRemindersIntent: DeleteIntent {
   @Parameter(title: "Reminders")
   public var entities: [ReminderEntity]
 
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private var databaseOverride: RemindersDatabase?
 
   public init() {
     entities = []
-    databaseOverride = nil
   }
 
   init(entities: [ReminderEntity], database: RemindersDatabase) {
     self.entities = entities
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {
     let ids = entities.map(\.id)
-    try await resolvedDatabase.write { transaction in
+    try await database.write { transaction in
       try Reminder.where { $0.id.in(ids) }.delete().execute(transaction)
     }
     return .result(dialog: "Deleted the reminders.")
-  }
-
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
   }
 }
 
@@ -314,6 +259,23 @@ private enum ReminderIntentError: LocalizedError {
       "The reminder could not be found."
     }
   }
+}
+
+private func updateStatus(
+  _ reminder: ReminderEntity,
+  status: Reminder.Status,
+  database: RemindersDatabase
+) async throws -> ReminderEntity {
+  try await database.write {
+    try Reminder.setStatus(status, id: reminder.id).execute($0)
+  }
+  guard
+    let reminder = try await ReminderEntityQuery.entity(
+      id: reminder.id,
+      database: database
+    )
+  else { throw ReminderIntentError.reminderNotFound }
+  return reminder
 }
 
 extension ReminderEntity {

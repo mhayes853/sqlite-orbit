@@ -126,7 +126,7 @@ final class ReminderFormModel {
       errorMessage = "Give the reminder a title before saving."
       return false
     }
-    let tagTitles = Self.uniquedTags(tagTitles + Self.parseTags(tagText))
+    let tagTitles = Tag.normalizedTitles(tagTitles + Self.parseTags(tagText))
     let id = id
     let isNew = isNew
     var reminder = reminder
@@ -139,16 +139,7 @@ final class ReminderFormModel {
         }
         try Reminder.upsert { reminder }.execute(transaction)
 
-        try ReminderTag.where { $0.reminderID.eq(id) }.delete().execute(transaction)
-        for tagTitle in tagTitles {
-          try Tag.upsert { Tag.Draft(Tag(title: tagTitle)) }.execute(transaction)
-          try ReminderTag.insert {
-            ReminderTag.Draft(
-              ReminderTag(id: UUID(), reminderID: id, tagID: tagTitle)
-            )
-          }
-          .execute(transaction)
-        }
+        try ReminderTag.replaceTags(for: id, with: tagTitles, in: transaction)
       }
       return true
     } catch {
@@ -169,25 +160,11 @@ final class ReminderFormModel {
   }
 
   nonisolated static func parseTags(_ text: String) -> [String] {
-    uniquedTags(
-      text
-        .split(separator: ",")
-        .map {
-          $0
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-    )
+    Tag.normalizedTitles([text])
   }
 
   private func addTagTitles(_ titles: [String]) {
-    tagTitles = Self.uniquedTags(tagTitles + titles)
-  }
-
-  private nonisolated static func uniquedTags(_ titles: [String]) -> [String] {
-    var seen = Set<String>()
-    return titles.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+    tagTitles = Tag.normalizedTitles(tagTitles + titles)
   }
 }
 

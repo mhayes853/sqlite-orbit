@@ -39,22 +39,19 @@ public struct RemindersListEntity: AppEntity, Sendable {
 }
 
 public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private let databaseOverride: RemindersDatabase?
 
-  public init() {
-    databaseOverride = nil
-  }
+  public init() {}
 
   init(database: RemindersDatabase) {
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func entities(
     for identifiers: [RemindersListEntity.ID]
   ) async throws -> [RemindersListEntity] {
-    let remindersLists = try await resolvedDatabase.read { transaction in
+    let remindersLists = try await database.read { transaction in
       try RemindersList
         .where { $0.id.in(identifiers) }
         .fetchAll(transaction)
@@ -64,7 +61,7 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
   }
 
   public func suggestedEntities() async throws -> [RemindersListEntity] {
-    try await resolvedDatabase.read { transaction in
+    try await database.read { transaction in
       try RemindersList
         .order { ($0.position, $0.title.collate(.nocase), $0.id) }
         .fetchAll(transaction)
@@ -74,7 +71,7 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
 
   public func entities(matching string: String) async throws -> [RemindersListEntity] {
     let pattern = "%\(Self.escapedLikePattern(string))%"
-    return try await resolvedDatabase.read { transaction in
+    return try await database.read { transaction in
       try RemindersList
         .where { $0.title.like(pattern, escape: "\\") }
         .order { ($0.position, $0.title.collate(.nocase), $0.id) }
@@ -88,9 +85,5 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
       .replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "%", with: "\\%")
       .replacingOccurrences(of: "_", with: "\\_")
-  }
-
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
   }
 }

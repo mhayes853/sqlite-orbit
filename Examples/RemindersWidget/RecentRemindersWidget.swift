@@ -125,7 +125,7 @@ struct RecentRemindersWidgetView: View {
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
     HStack(spacing: 8) {
-      Button(intent: CompleteReminderIntent(reminder: reminder.intentEntity)) {
+      Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
         Image(systemName: "circle")
           .font(.title3)
           .foregroundStyle(reminder.listColor)
@@ -162,24 +162,6 @@ struct RecentRemindersWidgetView: View {
       Spacer(minLength: 0)
     }
     .padding(.vertical, 6)
-  }
-}
-
-private extension WidgetReminder {
-  var intentEntity: ReminderEntity {
-    ReminderEntity(
-      id: id,
-      title: title,
-      list: RemindersListEntity(
-        id: listID,
-        title: listTitle,
-        colorHex: Color.HexRepresentation(queryOutput: listColor).hexValue ?? 0
-      ),
-      dueDate: dueDate,
-      isFlagged: isFlagged,
-      priority: priority.map(ReminderPriority.init),
-      createdAt: createdAt
-    )
   }
 }
 

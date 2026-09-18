@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
+import SwiftUI
 
 public struct ReminderEntity: AppEntity, Sendable {
   public static let typeDisplayRepresentation = TypeDisplayRepresentation(
@@ -70,6 +71,41 @@ public struct ReminderEntity: AppEntity, Sendable {
     self.createdAt = createdAt
   }
 
+  public init(_ reminder: WidgetReminder) {
+    self.init(
+      id: reminder.id,
+      title: reminder.title,
+      list: RemindersListEntity(
+        id: reminder.listID,
+        title: reminder.listTitle,
+        colorHex: Color.HexRepresentation(queryOutput: reminder.listColor).hexValue ?? 0
+      ),
+      dueDate: reminder.dueDate,
+      isFlagged: reminder.isFlagged,
+      priority: reminder.priority.map(ReminderPriority.init),
+      createdAt: reminder.createdAt
+    )
+  }
+
+  fileprivate init(
+    _ reminder: Reminder,
+    list: RemindersListEntity,
+    tags: [String]
+  ) {
+    self.init(
+      id: reminder.id,
+      title: reminder.title,
+      notes: reminder.notes,
+      list: list,
+      dueDate: reminder.dueDate,
+      isCompleted: reminder.isCompleted,
+      isFlagged: reminder.isFlagged,
+      priority: reminder.priority.map(ReminderPriority.init),
+      tags: tags,
+      createdAt: reminder.createdAt
+    )
+  }
+
   private var systemImageName: String {
     if isCompleted {
       "checkmark.circle.fill"
@@ -94,22 +130,19 @@ private nonisolated struct ReminderEntityTag: Sendable {
 }
 
 public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
-  @Dependency(key: RemindersIntentDependencyKey.database)
+  @Dependency
   private var database: RemindersDatabase
-  private let databaseOverride: RemindersDatabase?
 
-  public init() {
-    databaseOverride = nil
-  }
+  public init() {}
 
   init(database: RemindersDatabase) {
-    databaseOverride = database
+    _database = .reminders(database)
   }
 
   public func entities(
     for identifiers: [ReminderEntity.ID]
   ) async throws -> [ReminderEntity] {
-    let entities = try await resolvedDatabase.read { transaction in
+    let entities = try await database.read { transaction in
       let records =
         try Reminder
         .where { $0.id.in(identifiers) }
@@ -130,7 +163,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
   }
 
   public func suggestedEntities() async throws -> [ReminderEntity] {
-    try await resolvedDatabase.read { transaction in
+    try await database.read { transaction in
       let records =
         try Reminder
         .where { !$0.isCompleted }
@@ -151,7 +184,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
   public func entities(matching string: String) async throws -> [ReminderEntity] {
     let match = Self.ftsMatch(string)
     guard !match.isEmpty else { return try await suggestedEntities() }
-    return try await resolvedDatabase.read { transaction in
+    return try await database.read { transaction in
       let records =
         try ReminderText
         .where { $0.match(match) }
@@ -174,22 +207,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     id: Reminder.ID,
     database: RemindersDatabase
   ) async throws -> ReminderEntity? {
-    try await database.read { transaction in
-      guard
-        let record = try
-          (Reminder
-          .find(id)
-          .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
-          .select {
-            ReminderEntityRecord.Columns(
-              reminder: $0,
-              remindersList: $1
-            )
-          }
-          .fetchOne(transaction))
-      else { return nil }
-      return try entities(records: [record], transaction: transaction).first
-    }
+    try await ReminderEntityQuery(database: database).entities(for: [id]).first
   }
 
   private static func entities(
@@ -213,18 +231,11 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
       grouping: tags,
       by: \.reminderID
     )
-    return records.map { record in
+    return records.map {
       ReminderEntity(
-        id: record.reminder.id,
-        title: record.reminder.title,
-        notes: record.reminder.notes,
-        list: RemindersListEntity(record.remindersList),
-        dueDate: record.reminder.dueDate,
-        isCompleted: record.reminder.isCompleted,
-        isFlagged: record.reminder.isFlagged,
-        priority: record.reminder.priority.map(ReminderPriority.init),
-        tags: tagsByReminderID[record.reminder.id, default: []].map { $0.title },
-        createdAt: record.reminder.createdAt
+        $0.reminder,
+        list: RemindersListEntity($0.remindersList),
+        tags: tagsByReminderID[$0.reminder.id, default: []].map(\.title)
       )
     }
   }
@@ -234,9 +245,5 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
       .split(whereSeparator: \.isWhitespace)
       .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
       .joined(separator: " ")
-  }
-
-  private var resolvedDatabase: RemindersDatabase {
-    databaseOverride ?? database
   }
 }

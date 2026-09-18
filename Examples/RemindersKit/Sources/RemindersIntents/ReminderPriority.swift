@@ -1,8 +1,8 @@
 import AppIntents
 import RemindersData
 
-public enum ReminderPriority: String, AppEnum, Sendable {
-  case low
+public enum ReminderPriority: Int, AppEnum, Sendable {
+  case low = 1
   case medium
   case high
 
@@ -17,18 +17,22 @@ public enum ReminderPriority: String, AppEnum, Sendable {
   ]
 
   public init(_ priority: Reminder.Priority) {
-    switch priority {
-    case .low: self = .low
-    case .medium: self = .medium
-    case .high: self = .high
-    }
+    self = Self(rawValue: priority.rawValue)!
   }
 
   var reminderPriority: Reminder.Priority {
+    Reminder.Priority(rawValue: rawValue)!
+  }
+
+  var symbol: String {
+    String(repeating: "!", count: rawValue)
+  }
+
+  var displayName: String {
     switch self {
-    case .low: .low
-    case .medium: .medium
-    case .high: .high
+    case .low: "Low"
+    case .medium: "Medium"
+    case .high: "High"
     }
   }
 }

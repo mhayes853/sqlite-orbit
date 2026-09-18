@@ -59,10 +59,10 @@ struct RemindersWidgetQueriesTests {
     }
 
     try await database.write {
-      try Reminder.complete(id: reminder.id).execute($0)
+      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
     }
     try await database.write {
-      try Reminder.complete(id: reminder.id).execute($0)
+      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
     }
 
     let persisted = try await database.read { transaction in
@@ -117,7 +117,7 @@ struct RemindersWidgetQueriesTests {
     #expect(try await values.next()?.map(\.title) == ["Buy milk"])
 
     try await widgetDatabase.write {
-      try Reminder.complete(id: reminder.id).execute($0)
+      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
     }
 
     #expect(try await values.next()?.isEmpty == true)

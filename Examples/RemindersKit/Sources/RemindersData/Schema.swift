@@ -115,6 +115,20 @@ public nonisolated struct Tag: Hashable, Identifiable, Sendable {
   }
 }
 
+extension Tag {
+  public static func normalizedTitles(_ values: [String]) -> [String] {
+    var seen = Set<String>()
+    let charactersToTrim = CharacterSet.whitespacesAndNewlines.union(
+      CharacterSet(charactersIn: "#")
+    )
+    return
+      values
+      .flatMap { $0.split(separator: ",", omittingEmptySubsequences: false) }
+      .map { $0.trimmingCharacters(in: charactersToTrim) }
+      .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+  }
+}
+
 @Table("remindersTags")
 public nonisolated struct ReminderTag: Hashable, Identifiable, Sendable {
   public let id: UUID
@@ -125,6 +139,23 @@ public nonisolated struct ReminderTag: Hashable, Identifiable, Sendable {
     self.id = id
     self.reminderID = reminderID
     self.tagID = tagID
+  }
+}
+
+extension ReminderTag {
+  public static func replaceTags(
+    for reminderID: Reminder.ID,
+    with titles: [String],
+    in transaction: borrowing SQLiteWriteTransaction
+  ) throws {
+    try ReminderTag.where { $0.reminderID.eq(reminderID) }.delete().execute(transaction)
+    for title in Tag.normalizedTitles(titles) {
+      try Tag.upsert { Tag.Draft(title: title) }.execute(transaction)
+      try ReminderTag.insert {
+        ReminderTag.Draft(id: UUID(), reminderID: reminderID, tagID: title)
+      }
+      .execute(transaction)
+    }
   }
 }
 
@@ -175,8 +206,8 @@ public nonisolated struct SearchSettings: Hashable, Sendable, SingleRowTable {
   public static let defaultValue = SearchSettings(id: 0)
 }
 
-public extension Reminder {
-  static var withTags: Select<(), Reminder, (ReminderTag?, Tag?)> {
+extension Reminder {
+  public static var withTags: Select<(), Reminder, (ReminderTag?, Tag?)> {
     group(by: \.id)
       .leftJoin(ReminderTag.all) { $0.id.eq($1.reminderID) }
       .leftJoin(Tag.all) { $1.tagID.eq($2.primaryKey) }
