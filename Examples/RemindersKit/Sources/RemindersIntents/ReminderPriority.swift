@@ -16,7 +16,7 @@ public enum ReminderPriority: String, AppEnum, Sendable {
     .high: "High",
   ]
 
-  init(_ priority: Reminder.Priority) {
+  public init(_ priority: Reminder.Priority) {
     switch priority {
     case .low: self = .low
     case .medium: self = .medium

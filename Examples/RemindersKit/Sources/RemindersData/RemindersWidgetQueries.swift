@@ -66,4 +66,8 @@ public extension Reminder {
   static func complete(id: ID) -> UpdateOf<Reminder> {
     find(id).update { $0.status = Reminder.Status.completed }
   }
+
+  static func reopen(id: ID) -> UpdateOf<Reminder> {
+    find(id).update { $0.status = Reminder.Status.incomplete }
+  }
 }
