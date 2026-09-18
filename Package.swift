@@ -28,7 +28,8 @@ let package = Package(
     .visionOS(.v1)
   ],
   products: [
-    .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"])
+    .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"]),
+    .library(name: "SQLiteOrbitTestSupport", targets: ["SQLiteOrbitTestSupport"])
   ],
   traits: [
     .default(enabledTraits: ["SystemSQLite"]),
@@ -112,6 +113,10 @@ let package = Package(
         .linkedLibrary("m", .when(platforms: [.linux]))
       ]
     ),
+    .target(
+      name: "SQLiteOrbitTestSupport",
+      dependencies: ["SQLiteOrbit"]
+    ),
     .macro(
       name: "SQLiteOrbitMacros",
       dependencies: [
@@ -133,6 +138,7 @@ let package = Package(
       name: "SQLiteOrbitTests",
       dependencies: [
         "SQLiteOrbit",
+        "SQLiteOrbitTestSupport",
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",
