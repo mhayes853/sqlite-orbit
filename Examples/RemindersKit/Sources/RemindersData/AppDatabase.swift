@@ -1,6 +1,8 @@
 import Foundation
 import SQLiteOrbit
 
+public typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
+
 public enum RemindersDatabaseConfiguration {
   public static let appGroupIdentifier = "group.co.sqlite-orbit.Reminders"
 }

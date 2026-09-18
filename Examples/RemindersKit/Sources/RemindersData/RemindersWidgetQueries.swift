@@ -62,34 +62,8 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
   }
 }
 
-public struct RemindersWidgetStore: Sendable {
-  private let database: any OrbitDatabaseWriter & OrbitObservableDatabase
-
-  public init(database: some OrbitDatabaseWriter & OrbitObservableDatabase) {
-    self.database = database
-  }
-
-  public static func live() throws -> Self {
-    try Self(database: makeAppDatabase())
-  }
-
-  public func completeReminder(id: Reminder.ID) async throws {
-    try await database.write { transaction in
-      try Reminder.find(id)
-        .update { $0.status = Reminder.Status.completed }
-        .execute(transaction)
-    }
-  }
-
-  public func recentReminders(limit: Int) async throws -> [WidgetReminder] {
-    try await database.read { transaction in
-      try transaction.fetchAll(WidgetReminder.recent(limit: limit))
-    }
-  }
-
-  public func observedRegion(limit: Int) throws -> OrbitDatabaseRegion {
-    try database.readBlocking { transaction in
-      try OrbitDatabaseRegion(WidgetReminder.recent(limit: limit).query, in: transaction)
-    }
+public extension Reminder {
+  static func complete(id: ID) -> UpdateOf<Reminder> {
+    find(id).update { $0.status = Reminder.Status.completed }
   }
 }

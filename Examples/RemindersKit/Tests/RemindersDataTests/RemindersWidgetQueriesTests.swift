@@ -5,11 +5,10 @@ import Testing
 @testable import RemindersData
 
 @Suite
-struct RemindersWidgetStoreTests {
+struct RemindersWidgetQueriesTests {
   @Test
   func recentRemindersAreNewestFirstAndIncomplete() async throws {
     let database = try makeEphemeralDatabase()
-    let store = RemindersWidgetStore(database: database)
     let list = RemindersList(id: UUID(), title: "Personal")
     let older = Reminder(
       id: UUID(),
@@ -36,7 +35,9 @@ struct RemindersWidgetStoreTests {
       try Reminder.insert { [older, newest, completed] }.execute(transaction)
     }
 
-    let reminders = try await store.recentReminders(limit: 2)
+    let reminders = try await database.read {
+      try $0.fetchAll(WidgetReminder.recent(limit: 2))
+    }
 
     #expect(reminders.map(\.title) == ["Newest", "Older"])
   }
@@ -44,7 +45,6 @@ struct RemindersWidgetStoreTests {
   @Test
   func completingReminderIsIdempotent() async throws {
     let database = try makeEphemeralDatabase()
-    let store = RemindersWidgetStore(database: database)
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
@@ -57,14 +57,21 @@ struct RemindersWidgetStoreTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
 
-    try await store.completeReminder(id: reminder.id)
-    try await store.completeReminder(id: reminder.id)
+    try await database.write {
+      try Reminder.complete(id: reminder.id).execute($0)
+    }
+    try await database.write {
+      try Reminder.complete(id: reminder.id).execute($0)
+    }
 
     let persisted = try await database.read { transaction in
       try Reminder.find(reminder.id).fetchOne(transaction)
     }
     #expect(persisted?.status == .completed)
-    #expect(try await store.recentReminders(limit: 8).isEmpty)
+    let recentReminders = try await database.read {
+      try $0.fetchAll(WidgetReminder.recent(limit: 8))
+    }
+    #expect(recentReminders.isEmpty)
   }
 
   @Test
@@ -108,7 +115,9 @@ struct RemindersWidgetStoreTests {
     var values = observation.values(in: appDatabase).makeAsyncIterator()
     #expect(try await values.next()?.map(\.title) == ["Buy milk"])
 
-    try await RemindersWidgetStore(database: widgetDatabase).completeReminder(id: reminder.id)
+    try await widgetDatabase.write {
+      try Reminder.complete(id: reminder.id).execute($0)
+    }
 
     #expect(try await values.next()?.isEmpty == true)
   }

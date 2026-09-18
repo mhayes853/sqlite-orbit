@@ -29,6 +29,12 @@ struct RecentRemindersEntry: TimelineEntry {
 }
 
 struct RecentRemindersProvider: TimelineProvider {
+  private let database: RemindersDatabase
+
+  init(database: RemindersDatabase) {
+    self.database = database
+  }
+
   func placeholder(in context: Context) -> RecentRemindersEntry {
     .placeholder
   }
@@ -54,17 +60,22 @@ struct RecentRemindersProvider: TimelineProvider {
     }
   }
 
-  private func entry() async -> RecentRemindersEntry {
+  func entry() async -> RecentRemindersEntry {
     let reminders =
-      (try? await RemindersWidgetStore.live().recentReminders(
-        limit: RemindersWidgetConfiguration.maximumReminderCount
-      )) ?? []
+      (try? await database.read { transaction in
+        try transaction.fetchAll(
+          WidgetReminder.recent(
+            limit: RemindersWidgetConfiguration.maximumReminderCount
+          )
+        )
+      }) ?? []
     return RecentRemindersEntry(date: .now, reminders: reminders)
   }
 }
 
 struct RecentRemindersWidgetView: View {
   let entry: RecentRemindersEntry
+  let database: RemindersDatabase
 
   @Environment(\.widgetFamily) private var family
 
@@ -113,7 +124,9 @@ struct RecentRemindersWidgetView: View {
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
     HStack(spacing: 8) {
-      Button(intent: CompleteReminderIntent(reminderID: reminder.id)) {
+      Button(
+        intent: CompleteReminderIntent(reminderID: reminder.id, database: database)
+      ) {
         Image(systemName: "circle")
           .font(.title3)
           .foregroundStyle(reminder.listColor)
@@ -154,12 +167,22 @@ struct RecentRemindersWidgetView: View {
 }
 
 struct RecentRemindersWidget: Widget {
+  private let database: RemindersDatabase
+
+  init() {
+    database = RemindersWidgetEnvironment.database
+  }
+
+  init(database: RemindersDatabase) {
+    self.database = database
+  }
+
   var body: some WidgetConfiguration {
     StaticConfiguration(
       kind: RemindersWidgetConfiguration.kind,
-      provider: RecentRemindersProvider()
+      provider: RecentRemindersProvider(database: database)
     ) { entry in
-      RecentRemindersWidgetView(entry: entry)
+      RecentRemindersWidgetView(entry: entry, database: database)
     }
     .configurationDisplayName("Recent Reminders")
     .description("See and complete your latest reminders.")

@@ -4,8 +4,6 @@ import SQLiteOrbit
 import SwiftUI
 import TipKit
 
-typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
-
 enum RemindersListsSheet: Identifiable {
   case reminder(RemindersList)
   case remindersList(RemindersList?)

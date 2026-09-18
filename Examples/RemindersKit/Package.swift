@@ -3,13 +3,13 @@
 import PackageDescription
 
 let package = Package(
-  name: "RemindersData",
+  name: "RemindersKit",
   platforms: [
     .iOS(.v17),
     .macOS(.v13),
   ],
   products: [
-    .library(name: "RemindersData", targets: ["RemindersData"])
+    .library(name: "RemindersKit", targets: ["RemindersData"])
   ],
   dependencies: [
     .package(name: "sqlite-orbit", path: "../..")
