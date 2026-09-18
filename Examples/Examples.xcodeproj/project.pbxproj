@@ -24,7 +24,6 @@
 		AF61DBBBC0533986CD07787D /* ReminderRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 341F2170219F6C7F5877E717 /* ReminderRow.swift */; };
 		A10000000000000000000003 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
 		A10000000000000000000004 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
-		A20000000000000000000004 /* RemindersIntents in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* RemindersIntents */; };
 		A20000000000000000000005 /* RemindersIntents in Frameworks */ = {isa = PBXBuildFile; productRef = A20000000000000000000002 /* RemindersIntents */; };
 		A20000000000000000000006 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
 		A20000000000000000000007 /* SQLiteOrbit in Frameworks */ = {isa = PBXBuildFile; productRef = E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */; };
@@ -159,7 +158,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A20000000000000000000004 /* RemindersIntents in Frameworks */,
 				B10000000000000000000005 /* RemindersKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -357,7 +355,6 @@
 			name = RemindersWidget;
 			packageProductDependencies = (
 				A10000000000000000000002 /* RemindersKit */,
-				A20000000000000000000002 /* RemindersIntents */,
 			);
 			productName = RemindersWidget;
 			productReference = B10000000000000000000016 /* RemindersWidget.appex */;

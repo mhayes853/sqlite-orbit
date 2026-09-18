@@ -1,5 +1,4 @@
 import RemindersData
-import RemindersIntents
 import SQLiteOrbit
 import SwiftUI
 import WidgetKit
@@ -125,7 +124,7 @@ struct RecentRemindersWidgetView: View {
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
     HStack(spacing: 8) {
-      Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
+      Button(intent: CompleteWidgetReminderIntent(reminderID: reminder.id)) {
         Image(systemName: "circle")
           .font(.title3)
           .foregroundStyle(reminder.listColor)
