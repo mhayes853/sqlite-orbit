@@ -8,7 +8,7 @@ import Testing
 struct RemindersWidgetQueriesTests {
   @Test
   func recentRemindersAreNewestFirstAndIncomplete() async throws {
-    let database = try makeEphemeralDatabase()
+    let database = try SQLiteQueue.reminders()
     let list = RemindersList(id: UUID(), title: "Personal")
     let older = Reminder(
       id: UUID(),
@@ -44,7 +44,7 @@ struct RemindersWidgetQueriesTests {
 
   @Test
   func completingReminderIsIdempotent() async throws {
-    let database = try makeEphemeralDatabase()
+    let database = try SQLiteQueue.reminders()
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),

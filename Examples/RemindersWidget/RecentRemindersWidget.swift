@@ -1,4 +1,5 @@
 import RemindersData
+import SQLiteOrbit
 import SwiftUI
 import WidgetKit
 
@@ -167,7 +168,7 @@ struct RecentRemindersWidget: Widget {
   private let database: RemindersDatabase
 
   init() {
-    database = RemindersEnvironment.database
+    database = try! OrbitIPCDatabase.reminders()
   }
 
   init(database: RemindersDatabase) {

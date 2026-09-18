@@ -8,7 +8,7 @@ public struct RemindersRoot: View {
   private let widgetReloader: RemindersWidgetReloader
 
   public init() {
-    let database = RemindersEnvironment.database
+    let database = try! OrbitIPCDatabase.reminders()
     let widgetReloader = try! RemindersWidgetReloader(database: database)
     self.database = database
     self.widgetReloader = widgetReloader
