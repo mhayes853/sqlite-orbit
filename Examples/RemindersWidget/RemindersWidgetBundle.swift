@@ -1,4 +1,5 @@
 import AppIntents
+import RemindersData
 import SwiftUI
 import WidgetKit
 
@@ -7,7 +8,7 @@ struct RemindersWidgetBundle: WidgetBundle {
   init() {
     AppDependencyManager.shared.add(
       key: RemindersWidgetDependencyKey.database,
-      dependency: RemindersWidgetEnvironment.database
+      dependency: RemindersEnvironment.database
     )
   }
 

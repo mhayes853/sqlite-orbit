@@ -5,10 +5,6 @@ enum RemindersWidgetDependencyKey {
   static let database = "RemindersWidgetDatabase"
 }
 
-enum RemindersWidgetEnvironment {
-  static let database = try! makeAppDatabase()
-}
-
 struct CompleteReminderIntent: AppIntent {
   static let title: LocalizedStringResource = "Complete Reminder"
   static let description = IntentDescription("Marks a reminder as completed.")

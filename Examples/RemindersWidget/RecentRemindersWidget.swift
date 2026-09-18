@@ -167,7 +167,7 @@ struct RecentRemindersWidget: Widget {
   private let database: RemindersDatabase
 
   init() {
-    database = RemindersWidgetEnvironment.database
+    database = RemindersEnvironment.database
   }
 
   init(database: RemindersDatabase) {

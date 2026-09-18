@@ -51,6 +51,10 @@ public func makeAppDatabase() throws -> OrbitIPCDatabase {
   return database
 }
 
+public enum RemindersEnvironment {
+  public static let database: OrbitIPCDatabase = try! makeAppDatabase()
+}
+
 public func makeEphemeralDatabase() throws -> SQLiteQueue {
   let database = try SQLiteQueue(path: .memory)
   try remindersMigrator().migrateBlocking(database)
