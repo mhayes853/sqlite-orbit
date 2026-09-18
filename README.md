@@ -1009,6 +1009,23 @@ built with no database at all, in a process that has no default, keeps the value
 with and reports an `OrbitMissingDefaultDatabaseError` through `loadError` rather than trapping, so
 a view built before its database exists still renders.
 
+The `SQLiteOrbitTestSupport` product supplies a Swift Testing trait that installs a task-local
+database for every test case. A database construction expression is evaluated separately for each
+case, so tests remain isolated while running in parallel:
+
+```swift
+import SQLiteOrbitTestSupport
+import Testing
+
+@Suite(.orbitDatabase(try testDatabase()))
+struct RemindersTests {
+  @Test func loadsReminders() {
+    let model = RemindersModel()
+    #expect(model.reminders.count == 2)
+  }
+}
+```
+
 A property does not query until something reads it. Reading it the first time performs the fetch
 and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
 each rebuilt property costing a query.
