@@ -7,6 +7,16 @@ public struct CreateReminderIntent: AppIntent {
   public static let description = IntentDescription(
     "Creates a reminder with optional scheduling and organization details."
   )
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Create reminder ‘\(\.$reminderTitle)’") {
+      \.$list
+      \.$notes
+      \.$dueDate
+      \.$isFlagged
+      \.$priority
+      \.$tags
+    }
+  }
   public static let openAppWhenRun = false
 
   @Parameter(title: "Title")
@@ -93,6 +103,9 @@ public struct CreateReminderIntent: AppIntent {
 public struct CompleteReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Complete Reminder"
   public static let description = IntentDescription("Marks a reminder as completed.")
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Complete \(\.$reminder)")
+  }
   public static let openAppWhenRun = false
 
   @Parameter(title: "Reminder")
@@ -137,6 +150,9 @@ public struct CompleteReminderIntent: AppIntent {
 public struct ReopenReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Reopen Reminder"
   public static let description = IntentDescription("Marks a reminder as incomplete.")
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Reopen \(\.$reminder)")
+  }
   public static let openAppWhenRun = false
 
   @Parameter(title: "Reminder")
@@ -181,6 +197,9 @@ public struct ReopenReminderIntent: AppIntent {
 public struct DeleteRemindersIntent: DeleteIntent {
   public static let title: LocalizedStringResource = "Delete Reminders"
   public static let description = IntentDescription("Deletes one or more reminders.")
+  public static var parameterSummary: some ParameterSummary {
+    Summary("Delete \(\.$entities)")
+  }
   public static let openAppWhenRun = false
 
   @Parameter(title: "Reminders")
