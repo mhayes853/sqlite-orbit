@@ -58,12 +58,8 @@ struct RemindersWidgetQueriesTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
 
-    try await database.write {
-      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
-    }
-    try await database.write {
-      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
-    }
+    try await Reminder.setStatus(.completed, id: reminder.id, in: database)
+    try await Reminder.setStatus(.completed, id: reminder.id, in: database)
 
     let persisted = try await database.read { transaction in
       try Reminder.find(reminder.id).fetchOne(transaction)
@@ -116,9 +112,7 @@ struct RemindersWidgetQueriesTests {
     var values = observation.values(in: appDatabase).makeAsyncIterator()
     #expect(try await values.next()?.map(\.title) == ["Buy milk"])
 
-    try await widgetDatabase.write {
-      try Reminder.setStatus(.completed, id: reminder.id).execute($0)
-    }
+    try await Reminder.setStatus(.completed, id: reminder.id, in: widgetDatabase)
 
     #expect(try await values.next()?.isEmpty == true)
   }

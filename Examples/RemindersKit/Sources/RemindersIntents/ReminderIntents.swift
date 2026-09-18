@@ -274,9 +274,7 @@ private func updateStatus(
   status: Reminder.Status,
   database: RemindersDatabase
 ) async throws -> ReminderEntity {
-  try await database.write {
-    try Reminder.setStatus(status, id: reminder.id).execute($0)
-  }
+  try await Reminder.setStatus(status, id: reminder.id, in: database)
   guard
     let reminder = try await ReminderEntityQuery.entity(
       id: reminder.id,

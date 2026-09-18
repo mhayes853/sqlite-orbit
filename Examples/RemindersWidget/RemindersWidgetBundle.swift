@@ -49,9 +49,11 @@ struct CompleteWidgetReminderIntent: AppIntent {
     guard let reminderID = UUID(uuidString: reminderID) else {
       throw CompleteWidgetReminderError.invalidIdentifier
     }
-    try await databaseDependency.database.write {
-      try Reminder.setStatus(.completed, id: reminderID).execute($0)
-    }
+    try await Reminder.setStatus(
+      .completed,
+      id: reminderID,
+      in: databaseDependency.database
+    )
     WidgetCenter.shared.reloadTimelines(ofKind: RemindersWidgetConfiguration.kind)
     return .result()
   }

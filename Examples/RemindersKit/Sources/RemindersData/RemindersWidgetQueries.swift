@@ -67,6 +67,16 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
 }
 
 extension Reminder {
+  public static func setStatus(
+    _ status: Status,
+    id: ID,
+    in database: RemindersDatabase
+  ) async throws {
+    try await database.write {
+      try setStatus(status, id: id).execute($0)
+    }
+  }
+
   public static func setStatus(_ status: Status, id: ID) -> UpdateOf<Reminder> {
     find(id).update { $0.status = #bind(status) }
   }
