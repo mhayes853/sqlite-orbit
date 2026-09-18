@@ -3,7 +3,7 @@ import RemindersData
 import SQLiteOrbit
 import Testing
 
-@testable import RemindersIntents
+@testable import Reminders
 
 struct ReminderIntentTests {
   @Test

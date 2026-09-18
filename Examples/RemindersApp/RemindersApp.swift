@@ -1,7 +1,6 @@
 import AppIntents
 import RemindersData
 import RemindersFeature
-import RemindersIntents
 import SQLiteOrbit
 import SwiftUI
 

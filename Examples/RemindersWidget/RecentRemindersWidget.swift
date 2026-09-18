@@ -124,7 +124,7 @@ struct RecentRemindersWidgetView: View {
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
     HStack(spacing: 8) {
-      Button(intent: CompleteWidgetReminderIntent(reminderID: reminder.id)) {
+      Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
         Image(systemName: "circle")
           .font(.title3)
           .foregroundStyle(reminder.listColor)
