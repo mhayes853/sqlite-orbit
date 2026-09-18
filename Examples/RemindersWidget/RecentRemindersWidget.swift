@@ -75,7 +75,6 @@ struct RecentRemindersProvider: TimelineProvider {
 
 struct RecentRemindersWidgetView: View {
   let entry: RecentRemindersEntry
-  let database: RemindersDatabase
 
   @Environment(\.widgetFamily) private var family
 
@@ -124,9 +123,7 @@ struct RecentRemindersWidgetView: View {
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
     HStack(spacing: 8) {
-      Button(
-        intent: CompleteReminderIntent(reminderID: reminder.id, database: database)
-      ) {
+      Button(intent: CompleteReminderIntent(reminderID: reminder.id)) {
         Image(systemName: "circle")
           .font(.title3)
           .foregroundStyle(reminder.listColor)
@@ -182,7 +179,7 @@ struct RecentRemindersWidget: Widget {
       kind: RemindersWidgetConfiguration.kind,
       provider: RecentRemindersProvider(database: database)
     ) { entry in
-      RecentRemindersWidgetView(entry: entry, database: database)
+      RecentRemindersWidgetView(entry: entry)
     }
     .configurationDisplayName("Recent Reminders")
     .description("See and complete your latest reminders.")

@@ -1,6 +1,10 @@
 import AppIntents
 import RemindersData
 
+enum RemindersWidgetDependencyKey {
+  static let database = "RemindersWidgetDatabase"
+}
+
 enum RemindersWidgetEnvironment {
   static let database = try! makeAppDatabase()
 }
@@ -13,19 +17,19 @@ struct CompleteReminderIntent: AppIntent {
   @Parameter(title: "Reminder")
   var reminderID: String
 
-  private let database: RemindersDatabase
+  @Dependency(key: RemindersWidgetDependencyKey.database)
+  private var database: RemindersDatabase
 
   init() {
-    database = RemindersWidgetEnvironment.database
     reminderID = ""
   }
 
   init(reminderID: Reminder.ID) {
-    self.init(reminderID: reminderID, database: RemindersWidgetEnvironment.database)
+    self.reminderID = reminderID.uuidString
   }
 
-  init(reminderID: Reminder.ID, database: RemindersDatabase) {
-    self.database = database
+  init(reminderID: Reminder.ID, dependencyManager: AppDependencyManager) {
+    _database = AppDependency(manager: dependencyManager)
     self.reminderID = reminderID.uuidString
   }
 
