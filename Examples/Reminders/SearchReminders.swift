@@ -25,7 +25,6 @@ final class SearchRemindersModel {
 
   init(now: Date = .now) {
     self.now = now
-    _results = FetchAll(wrappedValue: [])
   }
 
   func search(_ text: String, showCompleted: Bool, debounce: Bool = true) {
@@ -97,7 +96,7 @@ final class SearchRemindersModel {
 }
 
 struct SearchRemindersView: View {
-  @SingleRow private var settings: SearchSettings
+  @SingleRow(SearchSettings.self) private var settings: SearchSettings
   let model: SearchRemindersModel
   let remindersLists: [RemindersList]
   let searchText: String
@@ -110,7 +109,6 @@ struct SearchRemindersView: View {
     self.model = model
     self.remindersLists = remindersLists
     self.searchText = searchText
-    _settings = SingleRow(SearchSettings.self)
   }
 
   var body: some View {

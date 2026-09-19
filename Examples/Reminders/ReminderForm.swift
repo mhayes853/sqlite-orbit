@@ -172,8 +172,10 @@ struct ReminderFormContext: Identifiable {
 }
 
 struct ReminderFormView: View {
-  @FetchAll private var availableTags: [Tag]
-  @FetchAll private var remindersLists: [RemindersList]
+  @FetchAll(Tag.order(by: \.title), animation: .default)
+  private var availableTags: [Tag]
+  @FetchAll(RemindersList.order(by: \.title), animation: .default)
+  private var remindersLists: [RemindersList]
   @State private var model: ReminderFormModel
   @FocusState private var focusedField: Field?
   @Environment(\.dismiss) private var dismiss
@@ -187,14 +189,6 @@ struct ReminderFormView: View {
     remindersList: RemindersList,
     reminder: Reminder? = nil
   ) {
-    _availableTags = FetchAll(
-      Tag.order(by: \.title),
-      animation: .default
-    )
-    _remindersLists = FetchAll(
-      RemindersList.order(by: \.title),
-      animation: .default
-    )
     _model = State(
       initialValue: ReminderFormModel(
         remindersList: remindersList,

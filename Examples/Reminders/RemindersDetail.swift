@@ -82,7 +82,8 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
 @Observable
 final class RemindersDetailModel {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
-  @ObservationIgnored @FetchAll var remindersLists: [RemindersList]
+  @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
+  var remindersLists: [RemindersList]
   @ObservationIgnored @FetchOne var coverImageData: Data? = nil
 
   let detailType: RemindersDetailType
@@ -124,10 +125,6 @@ final class RemindersDetailModel {
         showCompleted: showCompleted,
         now: now
       ),
-      animation: .default
-    )
-    _remindersLists = FetchAll(
-      RemindersList.order(by: \.position),
       animation: .default
     )
     if let listID = detailType.remindersList?.id {

@@ -35,8 +35,24 @@ nonisolated struct RemindersStats: Sendable {
 @MainActor
 @Observable
 final class RemindersListsModel {
-  @ObservationIgnored @FetchAll var remindersLists: [RemindersListSummary]
-  @ObservationIgnored @FetchAll var tags: [Tag]
+  @ObservationIgnored
+  @FetchAll(
+    RemindersList
+      .group(by: \.id)
+      .order(by: \.position)
+      .leftJoin(Reminder.all) { $0.id.eq($1.remindersListID) && !$1.isCompleted }
+      .select {
+        RemindersListSummary.Columns(
+          remindersCount: $1.id.count(),
+          remindersList: $0
+        )
+      },
+    animation: .default
+  )
+  var remindersLists: [RemindersListSummary]
+
+  @ObservationIgnored @FetchAll(Tag.order(by: \.title), animation: .default)
+  var tags: [Tag]
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
   var errorMessage: String?
@@ -49,23 +65,6 @@ final class RemindersListsModel {
   }
 
   init(now: Date = .now) {
-    _remindersLists = FetchAll(
-      RemindersList
-        .group(by: \.id)
-        .order(by: \.position)
-        .leftJoin(Reminder.all) { $0.id.eq($1.remindersListID) && !$1.isCompleted }
-        .select {
-          RemindersListSummary.Columns(
-            remindersCount: $1.id.count(),
-            remindersList: $0
-          )
-        },
-      animation: .default
-    )
-    _tags = FetchAll(
-      Tag.order(by: \.title),
-      animation: .default
-    )
     _stats = FetchOne(
       wrappedValue: RemindersStats(),
       Reminder.select {
