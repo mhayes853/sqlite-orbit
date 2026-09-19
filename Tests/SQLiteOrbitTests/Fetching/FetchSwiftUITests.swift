@@ -150,7 +150,7 @@
     }
     @Test
     func theEnvironmentSuppliesADatabaseToAPropertyDeclaredWithoutOne() async throws {
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       OrbitDefaultDatabase.set(nil)
       defer { OrbitDefaultDatabase.set(previous) }
       let database = try await remindersDatabase(titles: "Milk")

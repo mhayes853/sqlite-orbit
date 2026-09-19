@@ -1004,10 +1004,34 @@ struct RemindersApp: App {
 ```
 
 `OrbitDefaultDatabase.withValue(_:operation:)` overrides it for the duration of an operation, which
-is how a test gives itself a database of its own without touching the process-wide one. A property
-built with no database at all, in a process that has no default, keeps the value it was declared
-with and reports an `OrbitMissingDefaultDatabaseError` through `loadError` rather than trapping, so
-a view built before its database exists still renders.
+is how a test gives itself a database of its own without touching the process-wide one. Accessing
+`OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
+detailed setup instructions. A SwiftUI property waits until its environment has been resolved, so
+providing a database with `.orbitDatabase(...)` does not require a process-wide default.
+
+Enable the `Dependencies` trait to configure the same default with
+[swift-dependencies](https://github.com/pointfreeco/swift-dependencies):
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["default", "Dependencies"]
+)
+```
+
+```swift
+import Dependencies
+import SQLiteOrbit
+
+prepareDependencies {
+  $0.orbitDefaultDatabase = try! appDatabase()
+}
+```
+
+`OrbitDefaultDatabase.current` and `@Dependency(\.orbitDefaultDatabase)` then resolve the same
+database. An `OrbitDefaultDatabase.withValue` scope wins over a dependency override, and a
+dependency override wins over the process default installed by `OrbitDefaultDatabase.set`.
 
 The `SQLiteOrbitTestSupport` product supplies a Swift Testing trait that installs a task-local
 database for every test case. A database construction expression is evaluated separately for each

@@ -31,6 +31,7 @@ where
     private let writeGeneration = SwiftUI.State(wrappedValue: 0)
     private let fetchGeneration = SwiftUI.State(wrappedValue: 0)
     @Environment(\.orbitDatabase) private var environmentDatabase
+    private var defaultDatabase = OrbitDefaultDatabaseSource()
 
     private var storage: OrbitRowStorage<Value> { state.wrappedValue }
   #else
@@ -159,7 +160,7 @@ where
     public func update() {
       storage.fetch.update(
         declared: box.fetch,
-        database: environmentDatabase,
+        database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
         generation: fetchGeneration
       )
       observeWritesForSwiftUI()

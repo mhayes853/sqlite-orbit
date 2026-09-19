@@ -48,9 +48,15 @@ let package = Package(
       description:
         "Links the local Rust Turso engine and vends `SQLiteLibrary.turso`. Mutually exclusive "
         + "with the other SQLite traits, which export the same `sqlite3_*` symbols."
+    ),
+    .trait(
+      name: "Dependencies",
+      description:
+        "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
     )
   ],
   dependencies: [
+    .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
     .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
     .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
@@ -87,6 +93,11 @@ let package = Package(
           package: "swift-sqlcipher",
           condition: .when(traits: ["SQLCipher"])
         ),
+        .product(
+          name: "Dependencies",
+          package: "swift-dependencies",
+          condition: .when(traits: ["Dependencies"])
+        ),
         .target(
           name: "TursoSQLite3",
           condition: .when(traits: ["Turso"])
@@ -105,7 +116,8 @@ let package = Package(
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
         .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
-        .define("BuiltInSQLite", .when(traits: ["Turso"]))
+        .define("BuiltInSQLite", .when(traits: ["Turso"])),
+        .define("Dependencies", .when(traits: ["Dependencies"]))
       ],
       linkerSettings: [
         // Rust's standard library uses the platform math library. This is already implicit on
@@ -140,6 +152,11 @@ let package = Package(
         "SQLiteOrbit",
         "SQLiteOrbitTestSupport",
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+        .product(
+          name: "Dependencies",
+          package: "swift-dependencies",
+          condition: .when(traits: ["Dependencies"])
+        ),
         .target(
           name: "CSQLite3",
           condition: .when(traits: ["SystemSQLite"])
@@ -167,7 +184,8 @@ let package = Package(
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
         .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
-        .define("BuiltInSQLite", .when(traits: ["Turso"]))
+        .define("BuiltInSQLite", .when(traits: ["Turso"])),
+        .define("Dependencies", .when(traits: ["Dependencies"]))
       ]
     )
   ],

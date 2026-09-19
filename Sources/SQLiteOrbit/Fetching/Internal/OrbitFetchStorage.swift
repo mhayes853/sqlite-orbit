@@ -213,6 +213,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   }
 
   private let state: Lock<State>
+  private let defaultDatabase: OrbitDefaultDatabaseSource
   // One registrar covers the value, the error, and whether a read is in flight, because nothing
   // changes any one of them without publishing all three.
   private let registrar = OrbitFetchObservationRegistrar()
@@ -221,9 +222,11 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     value: Value,
     source: OrbitFetchSource<Value>? = nil,
     binding: OrbitFetchSourceBinding<Value>? = nil,
+    defaultDatabase: OrbitDefaultDatabaseSource = OrbitDefaultDatabaseSource(),
     loadError: (any Error)? = nil,
     sourceID: OrbitFetchSourceID? = nil
   ) {
+    self.defaultDatabase = defaultDatabase
     self.state = Lock(
       State(
         value: value,
@@ -277,9 +280,9 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   ///
   /// Mutable fetch properties call this instead of resolving the default independently, because a
   /// SwiftUI environment database may have replaced it after the property was created.
-  func databaseForWriting() -> (any OrbitObservableDatabase)? {
+  func databaseForWriting() -> any OrbitObservableDatabase {
     attachIfNeeded(database: nil)
-    return state.withLock { $0.source?.database }
+    return state.withLock { $0.source?.database } ?? defaultDatabase.current
   }
 
   /// Holds the observation that keeps a SwiftUI view without the Observation framework redrawing.
@@ -314,7 +317,13 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   ///
   /// - Throws: Whatever the read throws, which also becomes ``loadError``.
   func load() async throws {
-    guard let source = state.withLock({ $0.source }) else { return }
+    attachIfNeeded(database: nil)
+    guard let source = state.withLock({ $0.source }) else {
+      if state.withLock({ $0.binding != nil }) {
+        _ = defaultDatabase.current
+      }
+      return
+    }
     try await load(source)
   }
 
@@ -387,6 +396,10 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   }
 
   private func startIfNeeded() {
+    attachIfNeeded(database: nil)
+    if state.withLock({ $0.binding != nil && $0.source == nil }) {
+      _ = defaultDatabase.current
+    }
     subscribe()
   }
 
@@ -519,9 +532,8 @@ struct OrbitDeferredFetchScheduler: OrbitValueObservationScheduler {
 extension OrbitFetchStorage {
   /// Creates a storage that observes `request`, resolving the database to read from.
   ///
-  /// A property created without a database, in a process that has no
-  /// ``OrbitDefaultDatabase/current`` one, keeps `value` and reports the failure through
-  /// ``loadError`` rather than trapping.
+  /// A property created before its database is available retains enough information to attach the
+  /// database later. Reading it while it still has no database terminates with setup instructions.
   static func make(
     value: Value,
     request: some OrbitFetchKeyRequest<Value>,
@@ -558,18 +570,20 @@ extension OrbitFetchStorage {
     binding: OrbitFetchSourceBinding<Value>,
     database: (any OrbitObservableDatabase)?
   ) -> OrbitFetchStorage<Value> {
-    guard let database = database ?? OrbitDefaultDatabase.current else {
+    let defaultDatabase = OrbitDefaultDatabaseSource()
+    guard let database = database ?? defaultDatabase.currentIfConfigured else {
       return OrbitFetchStorage(
         value: value,
         binding: binding,
-        loadError: OrbitMissingDefaultDatabaseError(),
+        defaultDatabase: defaultDatabase,
         sourceID: binding.makeID(nil)
       )
     }
     return OrbitFetchStorage(
       value: value,
       source: binding.makeSource(database),
-      binding: binding
+      binding: binding,
+      defaultDatabase: defaultDatabase
     )
   }
 
@@ -609,9 +623,7 @@ extension OrbitFetchStorage {
     binding: OrbitFetchSourceBinding<Value>,
     database: (any OrbitObservableDatabase)?
   ) async throws -> OrbitFetchSubscription {
-    guard let database = database ?? OrbitDefaultDatabase.current else {
-      throw OrbitMissingDefaultDatabaseError()
-    }
+    let database = database ?? defaultDatabase.current
     state.withLock { $0.binding = binding }
     try await load(binding.makeSource(database))
     return OrbitFetchSubscription { [self] in detach() }
@@ -633,7 +645,9 @@ extension OrbitFetchStorage {
   func attachIfNeeded(database: (any OrbitObservableDatabase)?) {
     let resolved = state.withLock { state -> (any OrbitObservableDatabase)? in
       guard let binding = state.binding, !binding.isDatabaseExplicit else { return nil }
-      guard let database = database ?? (state.source == nil ? OrbitDefaultDatabase.current : nil)
+      guard
+        let database =
+          database ?? (state.source == nil ? defaultDatabase.currentIfConfigured : nil)
       else { return nil }
       guard state.source?.database !== database else { return nil }
       return database
