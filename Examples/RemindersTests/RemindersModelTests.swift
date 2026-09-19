@@ -4,11 +4,9 @@ import SQLiteOrbit
 import SQLiteOrbitTestSupport
 import Testing
 
-@testable import RemindersFeature
-
 @MainActor
 @Suite(.orbitDatabase(try makeTestDatabase()))
-struct RemindersFeatureTests {
+struct RemindersModelTests {
   @Test
   func newReminderPresentationUsesTheFirstInsertedList() async throws {
     let database = OrbitDefaultDatabase.current

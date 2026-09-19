@@ -5,8 +5,6 @@ import SQLiteOrbitTestSupport
 import SwiftUI
 import Testing
 
-@testable import RemindersFeature
-
 @MainActor
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct FormAndSearchTests {

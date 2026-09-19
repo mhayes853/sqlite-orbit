@@ -4,8 +4,6 @@ import SQLiteOrbit
 import SQLiteOrbitTestSupport
 import Testing
 
-@testable import RemindersFeature
-
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct SchemaTests {
   @Test
