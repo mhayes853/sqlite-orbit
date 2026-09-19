@@ -30,7 +30,7 @@
 /// ```
 ///
 /// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
-/// argument first, then the SwiftUI environment, then the process-wide default.
+/// argument first, then the SwiftUI environment, then the default.
 ///
 /// The projected value reaches the rest of the property — its ``isLoading`` and ``loadError``, a
 /// reader for one of its members, and ``load(_:database:scheduler:)``, which swaps the query being
@@ -52,6 +52,7 @@ public struct FetchAll<Element: Sendable>: Sendable {
     private let generation = SwiftUI.State(wrappedValue: 0)
     // The environment's database, resolved by SwiftUI before `update()` runs.
     @Environment(\.orbitDatabase) private var environmentDatabase
+    private var defaultDatabase = OrbitDefaultDatabaseSource()
 
     var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>> {
       state.wrappedValue
@@ -378,7 +379,7 @@ extension FetchAll: Equatable where Element: Equatable {
     public func update() {
       state.wrappedValue.update(
         declared: box,
-        database: environmentDatabase,
+        database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
         generation: generation
       )
     }

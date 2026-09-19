@@ -52,7 +52,7 @@
 /// The property is populated the first time it is read, and refetches whenever a committed write
 /// touches anything its source read.
 /// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
-/// argument first, then the SwiftUI environment, then the process-wide default.
+/// argument first, then the SwiftUI environment, then the default.
 /// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
 /// rebuilt property keeps its existing observation.
 @dynamicMemberLookup
@@ -64,6 +64,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     private let generation = SwiftUI.State(wrappedValue: 0)
     // The environment's database, resolved by SwiftUI before `update()` runs.
     @Environment(\.orbitDatabase) private var environmentDatabase
+    private var defaultDatabase = OrbitDefaultDatabaseSource()
 
     private var storage: OrbitFetchStorage<Value> { state.wrappedValue }
   #else
@@ -277,7 +278,7 @@ extension Fetch: Equatable where Value: Equatable {
     public func update() {
       state.wrappedValue.update(
         declared: box,
-        database: environmentDatabase,
+        database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
         generation: generation
       )
     }

@@ -35,10 +35,10 @@
     /// Gives this view and its descendants a database for their fetch properties to read from.
     ///
     /// A fetch property resolves its database from three places, in this order: the `database:`
-    /// argument it was declared with, this modifier, and ``OrbitDefaultDatabase/current``. A
-    /// property that finds none of them reports ``OrbitMissingDefaultDatabaseError`` and keeps the
-    /// value it was declared with — and starts reading as soon as this modifier appears above it,
-    /// which is what lets a preview hand a database to a view written against the app's.
+    /// argument it was declared with, this modifier, and ``OrbitDefaultDatabase/current``. SwiftUI
+    /// resolves this environment value before the property's first read, which lets a preview hand
+    /// a database to a view written against the app's. Reading a property that finds none of these
+    /// sources terminates with setup instructions.
     ///
     /// ```swift
     /// #Preview {

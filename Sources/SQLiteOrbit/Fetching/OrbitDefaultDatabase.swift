@@ -1,3 +1,10 @@
+#if Dependencies
+  import Dependencies
+  #if canImport(SwiftUI)
+    import protocol SwiftUI.DynamicProperty
+  #endif
+#endif
+
 /// The database that ``Fetch``, ``FetchAll``, and ``FetchOne`` read from when they are not given
 /// one.
 ///
@@ -38,12 +45,16 @@ public enum OrbitDefaultDatabase {
   /// The database property wrappers use when none is supplied.
   ///
   /// This is the innermost ``withValue(_:operation:)-1nrqd`` override in effect, or the database
-  /// last given to ``set(_:)``, or `nil` when neither has happened.
-  public static var current: (any OrbitObservableDatabase)? {
-    scoped ?? storage.database
+  /// in `DependencyValues.orbitDefaultDatabase` when the `Dependencies` trait is enabled, or the
+  /// database last given to ``set(_:)``, in that order.
+  ///
+  /// Accessing this property without first configuring a database is a programmer error and
+  /// terminates the process with setup instructions.
+  public static var current: any OrbitObservableDatabase {
+    OrbitDefaultDatabaseSource().current
   }
 
-  /// Sets the database property wrappers use when none is supplied.
+  /// Sets the process-wide fallback database property wrappers use when none is supplied.
   ///
   /// - Parameter database: The database to use, or `nil` to leave the process without a default.
   public static func set(_ database: (any OrbitObservableDatabase)?) {
@@ -87,6 +98,48 @@ public enum OrbitDefaultDatabase {
 
   private static let storage = Storage()
 
+  static var currentIfConfigured: (any OrbitObservableDatabase)? {
+    OrbitDefaultDatabaseSource().currentIfConfigured
+  }
+
+  fileprivate static func resolve(
+    dependency: (any OrbitObservableDatabase)?
+  ) -> (any OrbitObservableDatabase)? {
+    scoped ?? dependency ?? storage.database
+  }
+
+  fileprivate static func require(
+    dependency: (any OrbitObservableDatabase)?
+  ) -> any OrbitObservableDatabase {
+    guard let database = resolve(dependency: dependency) else {
+      fatalError(missingDatabaseMessage)
+    }
+    return database
+  }
+
+  static let missingDatabaseMessage = """
+    A default database has not been configured for 'SQLiteOrbit'.
+
+    Configure one as early as possible in your application's lifetime:
+
+      OrbitDefaultDatabase.set(try! appDatabase())
+
+    When using the 'Dependencies' package trait, prepare the dependency instead:
+
+      prepareDependencies {
+        $0.orbitDefaultDatabase = try! appDatabase()
+      }
+
+    In tests, import 'SQLiteOrbitTestSupport' and apply its database trait:
+
+      @Test(.orbitDatabase(try testDatabase()))
+
+    A SwiftUI view can instead provide a database to its fetch properties:
+
+      ContentView()
+        .orbitDatabase(try! previewDatabase())
+    """
+
   private final class Storage: Sendable {
     private let value = Lock<(any OrbitObservableDatabase)?>(nil)
 
@@ -97,32 +150,52 @@ public enum OrbitDefaultDatabase {
   }
 }
 
-/// Thrown by a fetch property that was given no database and found no
-/// ``OrbitDefaultDatabase/current`` one to fall back to.
+/// A default-database lookup that retains the dependency values present when it is created.
 ///
-/// The property keeps whatever value it was declared with and reports this as its `loadError`
-/// rather than trapping, so a view built before its database exists still renders — and starts
-/// reading by itself once one of the three sources of a database described by
-/// ``OrbitDefaultDatabase`` supplies one.
-///
-/// ```swift
-/// @FetchAll(Reminder.all) var reminders
-/// if $reminders.loadError is OrbitMissingDefaultDatabaseError {
-///   // `OrbitDefaultDatabase.set(_:)` has not been called.
-/// }
-/// ```
-public struct OrbitMissingDefaultDatabaseError: Error, Sendable {
-  /// Creates the error.
-  public init() {}
-}
+/// Fetch storage owns one of these so that a model created inside `withDependencies` keeps that
+/// database after the operation returns. Reading it still observes any more-local dependency or
+/// ``OrbitDefaultDatabase/withValue(_:operation:)-1nrqd`` scope.
+struct OrbitDefaultDatabaseSource: Sendable {
+  #if Dependencies
+    @Dependency(OrbitDefaultDatabaseKey.self) private var dependency
+  #else
+    private let dependency: (any OrbitObservableDatabase)? = nil
+  #endif
 
-extension OrbitMissingDefaultDatabaseError: CustomStringConvertible {
-  /// A description naming the call that would have prevented the error.
-  public var description: String {
-    """
-    A fetch property was created without a database, and no default database has been set. Call \
-    'OrbitDefaultDatabase.set(_:)' before creating it, pass one as the property's 'database' \
-    argument, or put a '.orbitDatabase(_:)' modifier above the view that declares it.
-    """
+  var currentIfConfigured: (any OrbitObservableDatabase)? {
+    OrbitDefaultDatabase.resolve(dependency: dependency)
+  }
+
+  var current: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.require(dependency: dependency)
   }
 }
+
+#if Dependencies
+  #if canImport(SwiftUI)
+    extension OrbitDefaultDatabaseSource: DynamicProperty {}
+  #endif
+
+  private enum OrbitDefaultDatabaseKey: DependencyKey {
+    static let liveValue: (any OrbitObservableDatabase)? = nil
+    static let testValue: (any OrbitObservableDatabase)? = nil
+  }
+
+  extension DependencyValues {
+    /// The database Orbit fetch properties use when no nearer source supplies one.
+    ///
+    /// This value interoperates with ``OrbitDefaultDatabase`` in both directions. An
+    /// ``OrbitDefaultDatabase/withValue(_:operation:)-1nrqd`` scope takes precedence over a
+    /// dependency override, while the process default set by ``OrbitDefaultDatabase/set(_:)`` is
+    /// used when the dependency has not been overridden. Accessing this value without configuring
+    /// any of those sources terminates the process with setup instructions.
+    public var orbitDefaultDatabase: any OrbitObservableDatabase {
+      get {
+        OrbitDefaultDatabase.require(dependency: self[OrbitDefaultDatabaseKey.self])
+      }
+      set {
+        self[OrbitDefaultDatabaseKey.self] = newValue
+      }
+    }
+  }
+#endif

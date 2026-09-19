@@ -94,7 +94,7 @@
 
     @Test
     func bindingWritesToTheEnvironmentDatabaseItReads() async throws {
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       let processDefault = try await bindingDatabase(settings: true)
       let environment = try await bindingDatabase(settings: true)
       OrbitDefaultDatabase.set(processDefault)
