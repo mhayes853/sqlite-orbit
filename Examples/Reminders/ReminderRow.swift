@@ -218,7 +218,9 @@ struct ReminderRow: View {
           ReminderTitle(
             reminder: reminder,
             isCompleted: isCompleted,
-            title: highlightedTitle.flatMap(ReminderSearchHighlight.attributedString)
+            title: highlightedTitle.flatMap {
+              AttributedString(searchHighlighting: $0)
+            }
           )
         }
         .font(.title3)
@@ -292,7 +294,7 @@ struct ReminderRow: View {
 
   private func highlightedText(_ text: String) -> Text {
     guard highlightedTitle != nil,
-      let attributedText = ReminderSearchHighlight.attributedString(text)
+      let attributedText = AttributedString(searchHighlighting: text)
     else {
       return Text(text)
     }

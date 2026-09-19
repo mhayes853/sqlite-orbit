@@ -1,7 +1,7 @@
 import AppIntents
 import RemindersData
 
-public enum ReminderPriority: Int, AppEnum, Sendable {
+public enum ReminderIntentPriority: Int, AppEnum, Sendable {
   case low = 1
   case medium
   case high

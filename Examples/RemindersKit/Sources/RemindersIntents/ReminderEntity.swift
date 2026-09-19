@@ -34,7 +34,9 @@ public struct ReminderEntity: AppEntity, Sendable {
   public var isFlagged: Bool { reminder.isFlagged }
 
   @ComputedProperty(title: "Priority")
-  public var priority: ReminderPriority? { reminder.priority.map(ReminderPriority.init) }
+  public var priority: ReminderIntentPriority? {
+    reminder.priority.map(ReminderIntentPriority.init)
+  }
 
   @ComputedProperty(title: "Tags")
   public var tagTitles: [String] { tags.map(\.title) }

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import RemindersUI
@@ -6,7 +7,7 @@ struct ReminderSearchHighlightTests {
   @Test
   func highlightedTextUsesBoldTextAndABackgroundColor() throws {
     let text = try #require(
-      ReminderSearchHighlight.attributedString("Call **Blob** today")
+      AttributedString(searchHighlighting: "Call **Blob** today")
     )
     let highlightedRun = try #require(
       text.runs.first {

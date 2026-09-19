@@ -38,7 +38,7 @@ public struct CreateReminderIntent: AppIntent {
   public var isFlagged: Bool
 
   @Parameter(title: "Priority")
-  public var priority: ReminderPriority?
+  public var priority: ReminderIntentPriority?
 
   @Parameter(title: "Tags")
   public var tags: [String]?
@@ -56,13 +56,13 @@ public struct CreateReminderIntent: AppIntent {
     tags = nil
   }
 
-  init(
+  public init(
     title: String,
     list: RemindersListEntity? = nil,
     notes: String? = nil,
     dueDate: Date? = nil,
     isFlagged: Bool = false,
-    priority: ReminderPriority? = nil,
+    priority: ReminderIntentPriority? = nil,
     tags: [String]? = nil,
     database: RemindersDatabase
   ) {
@@ -171,7 +171,7 @@ public struct CompleteReminderIntent: AppIntent {
     self.reminder = reminder
   }
 
-  init(reminder: ReminderEntity, database: RemindersDatabase) {
+  public init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
     _database = remindersDatabaseDependency(database)
   }
@@ -216,7 +216,7 @@ public struct ReopenReminderIntent: AppIntent {
     self.reminder = reminder
   }
 
-  init(reminder: ReminderEntity, database: RemindersDatabase) {
+  public init(reminder: ReminderEntity, database: RemindersDatabase) {
     self.reminder = reminder
     _database = remindersDatabaseDependency(database)
   }
@@ -257,7 +257,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
     entities = []
   }
 
-  init(entities: [ReminderEntity], database: RemindersDatabase) {
+  public init(entities: [ReminderEntity], database: RemindersDatabase) {
     self.entities = entities
     _database = remindersDatabaseDependency(database)
   }
