@@ -47,6 +47,14 @@ too.
 Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
 write transactions alike, and the caller is stating which it is.
 
+## Reminders demo
+
+The [Reminders example](Examples/README.md) is an iOS app demonstrating migrations, observed
+queries, aggregate counts, transactional forms, FTS5 search, and database-backed view settings.
+Open `Examples/Examples.xcodeproj`, select the **Reminders** scheme, and run it on an iOS 17 or later
+simulator. The first pass intentionally has no CloudKit synchronization or third-party dependency
+management.
+
 ## Drivers
 
 The package ships its own SQLite driver, which is the default and needs no third-party dependency:
