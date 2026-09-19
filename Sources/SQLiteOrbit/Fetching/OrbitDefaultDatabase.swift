@@ -51,12 +51,7 @@ public enum OrbitDefaultDatabase {
   /// Accessing this property without first configuring a database is a programmer error and
   /// terminates the process with setup instructions.
   public static var current: any OrbitObservableDatabase {
-    #if Dependencies
-      @Dependency(OrbitDefaultDatabaseKey.self) var dependency
-      return require(dependency: dependency)
-    #else
-      return require(dependency: nil)
-    #endif
+    OrbitDefaultDatabaseSource().current
   }
 
   /// Sets the process-wide fallback database property wrappers use when none is supplied.
@@ -104,12 +99,7 @@ public enum OrbitDefaultDatabase {
   private static let storage = Storage()
 
   static var currentIfConfigured: (any OrbitObservableDatabase)? {
-    #if Dependencies
-      @Dependency(OrbitDefaultDatabaseKey.self) var dependency
-      return resolve(dependency: dependency)
-    #else
-      return resolve(dependency: nil)
-    #endif
+    OrbitDefaultDatabaseSource().currentIfConfigured
   }
 
   fileprivate static func resolve(
@@ -127,49 +117,28 @@ public enum OrbitDefaultDatabase {
     return database
   }
 
-  static var missingDatabaseMessage: String {
-    #if Dependencies
-      """
-      A default database has not been configured for 'SQLiteOrbit'.
+  static let missingDatabaseMessage = """
+    A default database has not been configured for 'SQLiteOrbit'.
 
-      Configure one as early as possible in your application's lifetime:
+    Configure one as early as possible in your application's lifetime:
 
-        OrbitDefaultDatabase.set(try! appDatabase())
+      OrbitDefaultDatabase.set(try! appDatabase())
 
-      When using the 'Dependencies' package trait, prepare the dependency instead:
+    When using the 'Dependencies' package trait, prepare the dependency instead:
 
-        prepareDependencies {
-          $0.orbitDefaultDatabase = try! appDatabase()
-        }
+      prepareDependencies {
+        $0.orbitDefaultDatabase = try! appDatabase()
+      }
 
-      In tests, import 'SQLiteOrbitTestSupport' and apply its database trait:
+    In tests, import 'SQLiteOrbitTestSupport' and apply its database trait:
 
-        @Test(.orbitDatabase(try testDatabase()))
+      @Test(.orbitDatabase(try testDatabase()))
 
-      A SwiftUI view can instead provide a database to its fetch properties:
+    A SwiftUI view can instead provide a database to its fetch properties:
 
-        ContentView()
-          .orbitDatabase(try! previewDatabase())
-      """
-    #else
-      """
-      A default database has not been configured for 'SQLiteOrbit'.
-
-      Configure one as early as possible in your application's lifetime:
-
-        OrbitDefaultDatabase.set(try! appDatabase())
-
-      In tests, import 'SQLiteOrbitTestSupport' and apply its database trait:
-
-        @Test(.orbitDatabase(try testDatabase()))
-
-      A SwiftUI view can instead provide a database to its fetch properties:
-
-        ContentView()
-          .orbitDatabase(try! previewDatabase())
-      """
-    #endif
-  }
+      ContentView()
+        .orbitDatabase(try! previewDatabase())
+    """
 
   private final class Storage: Sendable {
     private let value = Lock<(any OrbitObservableDatabase)?>(nil)
@@ -189,21 +158,17 @@ public enum OrbitDefaultDatabase {
 struct OrbitDefaultDatabaseSource: Sendable {
   #if Dependencies
     @Dependency(OrbitDefaultDatabaseKey.self) private var dependency
-
-    var currentIfConfigured: (any OrbitObservableDatabase)? {
-      OrbitDefaultDatabase.resolve(dependency: dependency)
-    }
-
-    var current: any OrbitObservableDatabase {
-      OrbitDefaultDatabase.require(dependency: dependency)
-    }
   #else
-    var currentIfConfigured: (any OrbitObservableDatabase)? {
-      OrbitDefaultDatabase.currentIfConfigured
-    }
-
-    var current: any OrbitObservableDatabase { OrbitDefaultDatabase.current }
+    private let dependency: (any OrbitObservableDatabase)? = nil
   #endif
+
+  var currentIfConfigured: (any OrbitObservableDatabase)? {
+    OrbitDefaultDatabase.resolve(dependency: dependency)
+  }
+
+  var current: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.require(dependency: dependency)
+  }
 }
 
 #if Dependencies

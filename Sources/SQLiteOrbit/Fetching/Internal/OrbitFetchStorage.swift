@@ -318,12 +318,7 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
   /// - Throws: Whatever the read throws, which also becomes ``loadError``.
   func load() async throws {
     attachIfNeeded(database: nil)
-    guard let source = state.withLock({ $0.source }) else {
-      if state.withLock({ $0.binding != nil }) {
-        _ = defaultDatabase.current
-      }
-      return
-    }
+    guard let source = state.withLock({ $0.source }) else { return }
     try await load(source)
   }
 
@@ -397,9 +392,6 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
 
   private func startIfNeeded() {
     attachIfNeeded(database: nil)
-    if state.withLock({ $0.binding != nil && $0.source == nil }) {
-      _ = defaultDatabase.current
-    }
     subscribe()
   }
 
@@ -643,23 +635,23 @@ extension OrbitFetchStorage {
   ///
   /// - Parameter database: The database the environment offers, or `nil` when it offers none.
   func attachIfNeeded(database: (any OrbitObservableDatabase)?) {
-    let resolved = state.withLock { state -> (any OrbitObservableDatabase)? in
+    let attachment = state.withLock {
+      state -> (binding: OrbitFetchSourceBinding<Value>, database: any OrbitObservableDatabase)? in
       guard let binding = state.binding, !binding.isDatabaseExplicit else { return nil }
-      guard
-        let database =
-          database ?? (state.source == nil ? defaultDatabase.currentIfConfigured : nil)
-      else { return nil }
+      guard let database = database ?? (state.source == nil ? defaultDatabase.current : nil) else {
+        return nil
+      }
       guard state.source?.database !== database else { return nil }
-      return database
+      return (binding, database)
     }
-    guard let resolved, let binding = state.withLock({ $0.binding }) else { return }
+    guard let attachment else { return }
     // Building a request-backed source may render its statement, which is work the lock has no
     // reason to hold, and adopting takes the lock again for itself.
     adopt(
       from: OrbitFetchStorage(
         value: untrackedValue,
-        source: binding.makeSource(resolved),
-        binding: binding
+        source: attachment.binding.makeSource(attachment.database),
+        binding: attachment.binding
       )
     )
   }
