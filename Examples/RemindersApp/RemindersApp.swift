@@ -5,6 +5,12 @@ import RemindersIntents
 import SQLiteOrbit
 import SwiftUI
 
+struct RemindersAppIntentsPackage: AppIntentsPackage {
+  static var includedPackages: [any AppIntentsPackage.Type] {
+    [RemindersIntentsPackage.self]
+  }
+}
+
 @main
 struct RemindersApp: App {
   private let root: RemindersRoot
