@@ -64,7 +64,10 @@ struct ReminderEntityQueryTests {
     #expect(entities[0].dueDate == Date(timeIntervalSince1970: 3_000))
     #expect(entities[0].isFlagged)
     #expect(entities[0].priority == .high)
-    #expect(entities[0].tags == ["focus time", "work"])
+    #expect(entities[0].tagTitles == ["focus time", "work"])
+    #expect(entities[0].reminder == newer)
+    #expect(entities[0].remindersList.id == work.id)
+    #expect(entities[0].remindersList.title == work.title)
     #expect(entities[0].createdAt == Date(timeIntervalSince1970: 2_000))
   }
 
@@ -133,6 +136,7 @@ struct ReminderEntityQueryTests {
     let resolved = try await query.entities(for: [work.id, personal.id])
     let matches = try await query.entities(matching: "project")
     #expect(resolved.map(\.id) == [work.id, personal.id])
+    #expect(resolved.map(\.remindersList.title) == [work.title, personal.title])
     #expect(matches.map(\.id) == [work.id])
   }
 }

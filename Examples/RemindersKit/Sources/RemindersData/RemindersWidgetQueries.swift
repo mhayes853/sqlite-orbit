@@ -9,37 +9,17 @@ public enum RemindersWidgetConfiguration {
 
 @Selection
 public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
-  public let id: Reminder.ID
-  public let createdAt: Date
-  public let dueDate: Date?
-  public let isFlagged: Bool
-  @Column(as: Color.HexRepresentation.self)
-  public let listColor: Color
-  public let listID: RemindersList.ID
-  public let listTitle: String
-  public let priority: Reminder.Priority?
-  public let title: String
+  public let reminder: Reminder
+  public let remindersList: RemindersList
+
+  public var id: Reminder.ID { reminder.id }
 
   public init(
-    id: Reminder.ID,
-    createdAt: Date,
-    dueDate: Date? = nil,
-    isFlagged: Bool = false,
-    listColor: Color = RemindersList.defaultColor,
-    listID: RemindersList.ID = UUID(),
-    listTitle: String,
-    priority: Reminder.Priority? = nil,
-    title: String
+    reminder: Reminder,
+    remindersList: RemindersList
   ) {
-    self.id = id
-    self.createdAt = createdAt
-    self.dueDate = dueDate
-    self.isFlagged = isFlagged
-    self.listColor = listColor
-    self.listID = listID
-    self.listTitle = listTitle
-    self.priority = priority
-    self.title = title
+    self.reminder = reminder
+    self.remindersList = remindersList
   }
 
   public static func recent(
@@ -52,15 +32,8 @@ public nonisolated struct WidgetReminder: Hashable, Identifiable, Sendable {
       .limit(limit)
       .select {
         WidgetReminder.Columns(
-          id: $0.id,
-          createdAt: $0.createdAt,
-          dueDate: $0.dueDate,
-          isFlagged: $0.isFlagged,
-          listColor: $1.color,
-          listID: $1.id,
-          listTitle: $1.title,
-          priority: $0.priority,
-          title: $0.title
+          reminder: $0,
+          remindersList: $1
         )
       }
   }

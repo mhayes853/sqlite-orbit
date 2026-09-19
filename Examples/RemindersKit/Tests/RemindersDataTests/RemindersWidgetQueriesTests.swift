@@ -39,8 +39,8 @@ struct RemindersWidgetQueriesTests {
       try $0.fetchAll(WidgetReminder.recent(limit: 2))
     }
 
-    #expect(reminders.map(\.title) == ["Newest", "Older"])
-    #expect(reminders.map(\.listID) == [list.id, list.id])
+    #expect(reminders.map(\.reminder.title) == ["Newest", "Older"])
+    #expect(reminders.map(\.remindersList.id) == [list.id, list.id])
   }
 
   @Test
@@ -110,7 +110,7 @@ struct RemindersWidgetQueriesTests {
       WidgetReminder.recent(limit: RemindersWidgetConfiguration.maximumReminderCount)
     )
     var values = observation.values(in: appDatabase).makeAsyncIterator()
-    #expect(try await values.next()?.map(\.title) == ["Buy milk"])
+    #expect(try await values.next()?.map(\.reminder.title) == ["Buy milk"])
 
     try await Reminder.setStatus(.completed, id: reminder.id, in: widgetDatabase)
 

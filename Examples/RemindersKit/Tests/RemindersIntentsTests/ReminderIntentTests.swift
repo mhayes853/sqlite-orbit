@@ -91,9 +91,8 @@ struct ReminderIntentTests {
     let database = try SQLiteQueue.reminders()
     let (list, reminder) = try await insertReminder(in: database)
     let entity = ReminderEntity(
-      id: reminder.id,
-      title: reminder.title,
-      list: RemindersListEntity(list)
+      reminder: reminder,
+      remindersList: list
     )
 
     let complete = CompleteReminderIntent(reminder: entity, database: database)
@@ -117,9 +116,8 @@ struct ReminderIntentTests {
       title: "Second"
     )
     let entity = ReminderEntity(
-      id: first.id,
-      title: first.title,
-      list: RemindersListEntity(list)
+      reminder: first,
+      remindersList: list
     )
 
     _ = try await DeleteRemindersIntent(

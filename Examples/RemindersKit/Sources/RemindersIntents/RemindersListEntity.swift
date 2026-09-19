@@ -9,12 +9,16 @@ public struct RemindersListEntity: AppEntity, Sendable {
   )
   public static let defaultQuery = RemindersListEntityQuery()
 
-  public let id: RemindersList.ID
+  public let remindersList: RemindersList
 
-  @Property(title: "Title")
-  public var title: String
+  public var id: RemindersList.ID { remindersList.id }
 
-  public let colorHex: Int64
+  @ComputedProperty(title: "Title")
+  public var title: String { remindersList.title }
+
+  public var colorHex: Int64 {
+    Color.HexRepresentation(queryOutput: remindersList.color).hexValue ?? 0
+  }
 
   public var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(
@@ -23,18 +27,8 @@ public struct RemindersListEntity: AppEntity, Sendable {
     )
   }
 
-  public init(id: RemindersList.ID, title: String, colorHex: Int64) {
-    self.id = id
-    self.colorHex = colorHex
-    self.title = title
-  }
-
   public init(_ remindersList: RemindersList) {
-    self.init(
-      id: remindersList.id,
-      title: remindersList.title,
-      colorHex: Color.HexRepresentation(queryOutput: remindersList.color).hexValue ?? 0
-    )
+    self.remindersList = remindersList
   }
 }
 

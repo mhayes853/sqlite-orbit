@@ -2,7 +2,6 @@ import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
-import SwiftUI
 
 public struct ReminderEntity: AppEntity, Sendable {
   public static let typeDisplayRepresentation = TypeDisplayRepresentation(
@@ -10,34 +9,38 @@ public struct ReminderEntity: AppEntity, Sendable {
   )
   public static let defaultQuery = ReminderEntityQuery()
 
-  public let id: Reminder.ID
+  public let reminder: Reminder
+  public let remindersList: RemindersList
+  public let tags: [Tag]
 
-  @Property(title: "Title")
-  public var title: String
+  public var id: Reminder.ID { reminder.id }
 
-  @Property(title: "Notes")
-  public var notes: String
+  @ComputedProperty(title: "Title")
+  public var title: String { reminder.title }
 
-  @Property(title: "List")
-  public var list: RemindersListEntity
+  @ComputedProperty(title: "Notes")
+  public var notes: String { reminder.notes }
 
-  @Property(title: "Due Date")
-  public var dueDate: Date?
+  @ComputedProperty(title: "List")
+  public var list: RemindersListEntity { RemindersListEntity(remindersList) }
 
-  @Property(title: "Completed")
-  public var isCompleted: Bool
+  @ComputedProperty(title: "Due Date")
+  public var dueDate: Date? { reminder.dueDate }
 
-  @Property(title: "Flagged")
-  public var isFlagged: Bool
+  @ComputedProperty(title: "Completed")
+  public var isCompleted: Bool { reminder.isCompleted }
 
-  @Property(title: "Priority")
-  public var priority: ReminderPriority?
+  @ComputedProperty(title: "Flagged")
+  public var isFlagged: Bool { reminder.isFlagged }
 
-  @Property(title: "Tags")
-  public var tags: [String]
+  @ComputedProperty(title: "Priority")
+  public var priority: ReminderPriority? { reminder.priority.map(ReminderPriority.init) }
 
-  @Property(title: "Created")
-  public var createdAt: Date
+  @ComputedProperty(title: "Tags")
+  public var tagTitles: [String] { tags.map(\.title) }
+
+  @ComputedProperty(title: "Created")
+  public var createdAt: Date { reminder.createdAt }
 
   public var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(
@@ -48,61 +51,19 @@ public struct ReminderEntity: AppEntity, Sendable {
   }
 
   public init(
-    id: Reminder.ID,
-    title: String,
-    notes: String = "",
-    list: RemindersListEntity,
-    dueDate: Date? = nil,
-    isCompleted: Bool = false,
-    isFlagged: Bool = false,
-    priority: ReminderPriority? = nil,
-    tags: [String] = [],
-    createdAt: Date = .now
+    reminder: Reminder,
+    remindersList: RemindersList,
+    tags: [Tag] = []
   ) {
-    self.id = id
-    self.title = title
-    self.notes = notes
-    self.list = list
-    self.dueDate = dueDate
-    self.isCompleted = isCompleted
-    self.isFlagged = isFlagged
-    self.priority = priority
+    self.reminder = reminder
+    self.remindersList = remindersList
     self.tags = tags
-    self.createdAt = createdAt
   }
 
   public init(_ reminder: WidgetReminder) {
     self.init(
-      id: reminder.id,
-      title: reminder.title,
-      list: RemindersListEntity(
-        id: reminder.listID,
-        title: reminder.listTitle,
-        colorHex: Color.HexRepresentation(queryOutput: reminder.listColor).hexValue ?? 0
-      ),
-      dueDate: reminder.dueDate,
-      isFlagged: reminder.isFlagged,
-      priority: reminder.priority.map(ReminderPriority.init),
-      createdAt: reminder.createdAt
-    )
-  }
-
-  fileprivate init(
-    _ reminder: Reminder,
-    list: RemindersListEntity,
-    tags: [String]
-  ) {
-    self.init(
-      id: reminder.id,
-      title: reminder.title,
-      notes: reminder.notes,
-      list: list,
-      dueDate: reminder.dueDate,
-      isCompleted: reminder.isCompleted,
-      isFlagged: reminder.isFlagged,
-      priority: reminder.priority.map(ReminderPriority.init),
-      tags: tags,
-      createdAt: reminder.createdAt
+      reminder: reminder.reminder,
+      remindersList: reminder.remindersList
     )
   }
 
@@ -126,7 +87,7 @@ private nonisolated struct ReminderEntityRecord: Sendable {
 @Selection
 private nonisolated struct ReminderEntityTag: Sendable {
   let reminderID: Reminder.ID
-  let title: String
+  let tag: Tag
 }
 
 public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
@@ -223,7 +184,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
       .select {
         ReminderEntityTag.Columns(
           reminderID: $0.reminderID,
-          title: $1.title
+          tag: $1
         )
       }
       .fetchAll(transaction)
@@ -233,9 +194,9 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     )
     return records.map {
       ReminderEntity(
-        $0.reminder,
-        list: RemindersListEntity($0.remindersList),
-        tags: tagsByReminderID[$0.reminder.id, default: []].map(\.title)
+        reminder: $0.reminder,
+        remindersList: $0.remindersList,
+        tags: tagsByReminderID[$0.reminder.id, default: []].map(\.tag)
       )
     }
   }

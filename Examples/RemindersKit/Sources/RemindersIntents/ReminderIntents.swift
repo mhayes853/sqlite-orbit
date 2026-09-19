@@ -1,6 +1,7 @@
 import AppIntents
 import Foundation
 import RemindersData
+import RemindersUI
 import SQLiteOrbit
 
 public struct CreateReminderIntent: AppIntent {
@@ -138,7 +139,11 @@ public struct CreateReminderIntent: AppIntent {
     return .result(
       value: reminder,
       dialog: "Created the reminder.",
-      view: ReminderSnippetView(reminder: reminder)
+      view: ReminderSnippetView(
+        reminder: reminder.reminder,
+        remindersList: reminder.remindersList,
+        tags: reminder.tags
+      )
     )
   }
 }
@@ -179,7 +184,11 @@ public struct CompleteReminderIntent: AppIntent {
     return .result(
       value: updatedReminder,
       dialog: "Completed the reminder.",
-      view: ReminderSnippetView(reminder: updatedReminder)
+      view: ReminderSnippetView(
+        reminder: updatedReminder.reminder,
+        remindersList: updatedReminder.remindersList,
+        tags: updatedReminder.tags
+      )
     )
   }
 }
@@ -220,7 +229,11 @@ public struct ReopenReminderIntent: AppIntent {
     return .result(
       value: updatedReminder,
       dialog: "Reopened the reminder.",
-      view: ReminderSnippetView(reminder: updatedReminder)
+      view: ReminderSnippetView(
+        reminder: updatedReminder.reminder,
+        remindersList: updatedReminder.remindersList,
+        tags: updatedReminder.tags
+      )
     )
   }
 }
@@ -273,10 +286,10 @@ extension ReminderEntity {
   }
 
   fileprivate static var placeholder: Self {
-    Self(
-      id: UUID(),
-      title: "",
-      list: RemindersListEntity(id: UUID(), title: "", colorHex: 0)
+    let remindersList = RemindersList(id: UUID())
+    return Self(
+      reminder: Reminder(id: UUID(), remindersListID: remindersList.id),
+      remindersList: remindersList
     )
   }
 }
