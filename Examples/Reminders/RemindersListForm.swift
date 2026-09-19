@@ -15,10 +15,12 @@ final class RemindersListFormModel {
   var coverImageData: Data?
   var errorMessage: String?
 
-  @ObservationIgnored private let database: RemindersDatabase
+  private var database: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.current
+  }
 
-  init(database: RemindersDatabase, remindersList: RemindersList?) {
-    self.database = database
+  init(remindersList: RemindersList?) {
+    let database = OrbitDefaultDatabase.current
     id = remindersList?.id ?? UUID()
     isNew = remindersList == nil
     originalPosition = remindersList?.position ?? 0
@@ -73,9 +75,9 @@ struct RemindersListForm: View {
   @FocusState private var isTitleFocused: Bool
   @Environment(\.dismiss) private var dismiss
 
-  init(database: RemindersDatabase, remindersList: RemindersList?) {
+  init(remindersList: RemindersList?) {
     _model = State(
-      initialValue: RemindersListFormModel(database: database, remindersList: remindersList)
+      initialValue: RemindersListFormModel(remindersList: remindersList)
     )
   }
 

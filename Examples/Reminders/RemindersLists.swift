@@ -48,10 +48,11 @@ final class RemindersListsModel {
     remindersLists.map(\.remindersList)
   }
 
-  @ObservationIgnored private let database: RemindersDatabase
+  private var database: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.current
+  }
 
-  init(database: RemindersDatabase, now: Date = .now) {
-    self.database = database
+  init(now: Date = .now) {
     _remindersLists = FetchAll(
       RemindersList
         .group(by: \.id)
@@ -63,12 +64,10 @@ final class RemindersListsModel {
             remindersList: $0
           )
         },
-      database: database,
       animation: .default
     )
     _tags = FetchAll(
       Tag.order(by: \.title),
-      database: database,
       animation: .default
     )
     _stats = FetchOne(
@@ -81,7 +80,6 @@ final class RemindersListsModel {
           todayCount: $0.count(filter: $0.isToday(relativeTo: now))
         )
       },
-      database: database,
       animation: .default
     )
   }
@@ -210,17 +208,10 @@ final class RemindersListsModel {
 }
 
 struct RemindersListsView: View {
-  @State private var model: RemindersListsModel
-  @State private var searchModel: SearchRemindersModel
+  @State private var model = RemindersListsModel()
+  @State private var searchModel = SearchRemindersModel()
   @State private var searchText = ""
   @State private var isSearchPresented = false
-  private let database: RemindersDatabase
-
-  init(database: RemindersDatabase) {
-    self.database = database
-    _model = State(initialValue: RemindersListsModel(database: database))
-    _searchModel = State(initialValue: SearchRemindersModel(database: database))
-  }
 
   var body: some View {
     @Bindable var model = model
@@ -228,7 +219,6 @@ struct RemindersListsView: View {
     List {
       if !searchText.isEmpty {
         SearchRemindersView(
-          database: database,
           model: searchModel,
           remindersLists: model.allRemindersLists,
           searchText: searchText
@@ -367,17 +357,17 @@ struct RemindersListsView: View {
       NavigationStack {
         switch sheet {
         case .reminder(let list):
-          ReminderFormView(database: database, remindersList: list)
+          ReminderFormView(remindersList: list)
         case .remindersList(let list):
-          RemindersListForm(database: database, remindersList: list)
+          RemindersListForm(remindersList: list)
         }
       }
     }
     .navigationDestination(for: RemindersDetailType.self) { detailType in
-      RemindersDetailView(model: RemindersDetailModel(database: database, detailType: detailType))
+      RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
     }
     .navigationDestination(item: $model.selectedDetail) { detailType in
-      RemindersDetailView(model: RemindersDetailModel(database: database, detailType: detailType))
+      RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
     }
     .alert(
       "Database Error",

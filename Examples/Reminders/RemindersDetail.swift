@@ -95,15 +95,16 @@ final class RemindersDetailModel {
     detailType != .completed
   }
 
-  @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private let now: Date
+  private var database: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.current
+  }
 
   init(
-    database: RemindersDatabase,
     detailType: RemindersDetailType,
     now: Date = .now
   ) {
-    self.database = database
+    let database = OrbitDefaultDatabase.current
     self.detailType = detailType
     self.now = now
 
@@ -126,12 +127,10 @@ final class RemindersDetailModel {
         showCompleted: showCompleted,
         now: now
       ),
-      database: database,
       animation: .default
     )
     _remindersLists = FetchAll(
       RemindersList.order(by: \.position),
-      database: database,
       animation: .default
     )
     if let listID = detailType.remindersList?.id {
@@ -139,7 +138,6 @@ final class RemindersDetailModel {
         RemindersListAsset
           .where { $0.remindersListID.eq(listID) }
           .select(\.coverImage),
-        database: database,
         animation: .default
       )
     } else {
@@ -221,7 +219,6 @@ final class RemindersDetailModel {
           showCompleted: showCompleted,
           now: now
         ),
-        database: database,
         animation: .default
       )
     } catch {
@@ -300,7 +297,6 @@ struct RemindersDetailView: View {
       ForEach(model.reminderRows) { row in
         ReminderRow(
           color: model.detailType.color,
-          database: model.databaseForView,
           isPastDue: row.isPastDue,
           notes: row.notes,
           reminder: row.reminder,
@@ -362,7 +358,7 @@ struct RemindersDetailView: View {
     }
     .sheet(item: $model.reminderForm) { context in
       NavigationStack {
-        ReminderFormView(database: model.databaseForView, remindersList: context.remindersList)
+        ReminderFormView(remindersList: context.remindersList)
       }
     }
     .overlay {
@@ -412,8 +408,4 @@ private struct RemindersDetailHeader: View {
         .listRowSeparator(.hidden)
     }
   }
-}
-
-extension RemindersDetailModel {
-  fileprivate var databaseForView: RemindersDatabase { database }
 }

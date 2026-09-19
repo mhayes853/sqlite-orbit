@@ -1,21 +1,22 @@
 import Foundation
 import RemindersData
 import SQLiteOrbit
+import SQLiteOrbitTestSupport
 import Testing
 
 @testable import RemindersFeature
 
 @MainActor
-@Suite
+@Suite(.orbitDatabase(try makeTestDatabase()))
 struct RemindersFeatureTests {
   @Test
   func newReminderPresentationUsesTheFirstInsertedList() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
       try RemindersList.insert { list }.execute($0)
     }
-    let model = RemindersListsModel(database: database)
+    let model = RemindersListsModel()
     await model.load()
 
     model.newReminderButtonTapped()
@@ -29,8 +30,7 @@ struct RemindersFeatureTests {
 
   @Test
   func newReminderDoesNotPresentTheListFormWhenThereAreNoLists() throws {
-    let database = try makeTestDatabase()
-    let model = RemindersListsModel(database: database)
+    let model = RemindersListsModel()
 
     model.newReminderButtonTapped()
 
@@ -40,9 +40,8 @@ struct RemindersFeatureTests {
 
   @Test
   func listDetailPresentsNewReminderForItsList() throws {
-    let database = try makeTestDatabase()
     let list = RemindersList(id: UUID(), title: "Work")
-    let model = RemindersDetailModel(database: database, detailType: .list(list))
+    let model = RemindersDetailModel(detailType: .list(list))
 
     model.newReminderButtonTapped()
 
@@ -52,7 +51,7 @@ struct RemindersFeatureTests {
 
   @Test
   func smartListsPresentNewRemindersForTheFirstListExceptCompleted() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let firstList = RemindersList(id: UUID(), position: 0, title: "Personal")
     let secondList = RemindersList(id: UUID(), position: 1, title: "Work")
     try await database.write {
@@ -67,7 +66,7 @@ struct RemindersFeatureTests {
       .today
     ]
     for detailType in detailTypes {
-      let model = RemindersDetailModel(database: database, detailType: detailType)
+      let model = RemindersDetailModel(detailType: detailType)
 
       #expect(model.canAddReminder)
       model.newReminderButtonTapped()
@@ -75,7 +74,7 @@ struct RemindersFeatureTests {
       #expect(model.reminderForm?.remindersList.id == firstList.id)
     }
 
-    let completed = RemindersDetailModel(database: database, detailType: .completed)
+    let completed = RemindersDetailModel(detailType: .completed)
     #expect(!completed.canAddReminder)
     completed.newReminderButtonTapped()
     #expect(completed.reminderForm == nil)
@@ -83,8 +82,7 @@ struct RemindersFeatureTests {
 
   @Test
   func selectingSmartListSetsOnlyThatDestination() throws {
-    let database = try makeTestDatabase()
-    let model = RemindersListsModel(database: database)
+    let model = RemindersListsModel()
 
     #expect(model.selectedDetail == nil)
 
@@ -95,7 +93,7 @@ struct RemindersFeatureTests {
 
   @Test
   func dashboardCountsInsertedReminders() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let listID = UUID()
     let now = Date(timeIntervalSince1970: 1_789_560_000)
 
@@ -142,7 +140,7 @@ struct RemindersFeatureTests {
       .execute(transaction)
     }
 
-    let model = RemindersListsModel(database: database, now: now)
+    let model = RemindersListsModel(now: now)
     await model.load()
 
     #expect(model.stats.allCount == 3)
@@ -154,8 +152,8 @@ struct RemindersFeatureTests {
 
   @Test
   func detailSettingsRoundTripThroughDatabase() async throws {
-    let database = try makeTestDatabase()
-    let model = RemindersDetailModel(database: database, detailType: .all)
+    let database = OrbitDefaultDatabase.current
+    let model = RemindersDetailModel(detailType: .all)
     await model.load()
 
     #expect(model.ordering == .dueDate)
@@ -170,14 +168,14 @@ struct RemindersFeatureTests {
     #expect(stored?.ordering == .title)
     #expect(stored?.showCompleted == true)
 
-    let restored = RemindersDetailModel(database: database, detailType: .all)
+    let restored = RemindersDetailModel(detailType: .all)
     #expect(restored.ordering == .title)
     #expect(restored.showCompleted == true)
   }
 
   @Test
   func detailFiltersCompletedRemindersUntilEnabled() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let listID = UUID()
 
     try await database.write { transaction in
@@ -200,7 +198,7 @@ struct RemindersFeatureTests {
       .execute(transaction)
     }
 
-    let model = RemindersDetailModel(database: database, detailType: .all)
+    let model = RemindersDetailModel(detailType: .all)
     await model.load()
     #expect(model.reminderRows.map(\.reminder.title) == ["Open"])
 
@@ -210,7 +208,7 @@ struct RemindersFeatureTests {
 
   @Test
   func manualMovePersistsPositionsAndPreference() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Work")
     let reminders = [
       Reminder(id: UUID(), position: 0, remindersListID: list.id, title: "A"),
@@ -225,7 +223,7 @@ struct RemindersFeatureTests {
       }
     }
 
-    let model = RemindersDetailModel(database: database, detailType: .list(list))
+    let model = RemindersDetailModel(detailType: .list(list))
     await model.load()
     await model.setOrdering(.manual)
     await model.moveReminders(from: IndexSet(integer: 0), to: 3)

@@ -1,15 +1,16 @@
 import Foundation
 import RemindersData
 import SQLiteOrbit
+import SQLiteOrbitTestSupport
 import Testing
 
 @testable import RemindersFeature
 
-@Suite
+@Suite(.orbitDatabase(try makeTestDatabase()))
 struct SchemaTests {
   @Test
   func migratedDatabaseStartsEmpty() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
 
     let counts = try await database.read { transaction in
       try (
@@ -30,7 +31,7 @@ struct SchemaTests {
 
   @Test
   func searchSettingsReadTheirDefaultWithoutInsertingAndPersistOneRow() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
 
     let initial = try await database.read { try SearchSettings.find(in: $0) }
     #expect(initial == .defaultValue)
@@ -47,7 +48,7 @@ struct SchemaTests {
 
   @Test
   func deletingListCascadesRelatedRows() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let listID = UUID()
     let reminderID = UUID()
 
@@ -89,7 +90,7 @@ struct SchemaTests {
 
   @Test
   func detailSettingsArePersistedInDatabase() async throws {
-    let database = try makeTestDatabase()
+    let database = OrbitDefaultDatabase.current
     let settings = RemindersDetailSettings(
       id: "today",
       ordering: .priority,

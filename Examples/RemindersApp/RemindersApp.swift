@@ -17,6 +17,7 @@ struct RemindersApp: App {
 
   init() {
     let database = try! OrbitIPCDatabase.reminders()
+    OrbitDefaultDatabase.set(database)
     RemindersIntentDependencies.register(database: database)
     root = RemindersRoot(database: database)
     RemindersAppShortcuts.updateAppShortcutParameters()

@@ -12,22 +12,22 @@ final class ReminderRowModel {
   var isCompletionPending = false
   var reminderForm: ReminderFormContext?
 
-  @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private let calendar: Calendar
   @ObservationIgnored private let delay: Duration
   @ObservationIgnored private let now: Date
   @ObservationIgnored private let sleep: Sleep
   @ObservationIgnored private var completionGeneration = 0
   @ObservationIgnored private var completionTask: Task<Void, Never>?
+  private var database: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.current
+  }
 
   init(
-    database: RemindersDatabase,
     calendar: Calendar = .current,
     delay: Duration = .seconds(3),
     now: Date = .now,
     sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
   ) {
-    self.database = database
     self.calendar = calendar
     self.delay = delay
     self.now = now
@@ -166,8 +166,6 @@ final class ReminderRowModel {
       }
     }
   }
-
-  fileprivate var databaseForView: RemindersDatabase { database }
 }
 
 struct ReminderRow: View {
@@ -184,7 +182,6 @@ struct ReminderRow: View {
 
   init(
     color: Color,
-    database: RemindersDatabase,
     highlightedTitle: String? = nil,
     isPastDue: Bool,
     notes: String,
@@ -201,7 +198,7 @@ struct ReminderRow: View {
     self.remindersList = remindersList
     self.remindersLists = remindersLists
     self.tags = tags
-    _model = State(initialValue: ReminderRowModel(database: database))
+    _model = State(initialValue: ReminderRowModel())
   }
 
   var body: some View {
@@ -286,7 +283,6 @@ struct ReminderRow: View {
     .sheet(item: $model.reminderForm) { context in
       NavigationStack {
         ReminderFormView(
-          database: model.databaseForView,
           remindersList: remindersList,
           reminder: context.reminder
         )

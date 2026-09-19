@@ -4,7 +4,6 @@ import SwiftUI
 import TipKit
 
 public struct RemindersRoot: View {
-  private let database: OrbitIPCDatabase
   private let widgetReloader: RemindersWidgetReloader
 
   public init() {
@@ -13,17 +12,16 @@ public struct RemindersRoot: View {
 
   public init(database: OrbitIPCDatabase) {
     let widgetReloader = try! RemindersWidgetReloader(database: database)
-    self.database = database
     self.widgetReloader = widgetReloader
     database.delegate = widgetReloader
+    OrbitDefaultDatabase.set(database)
     try? Tips.configure()
   }
 
   public var body: some View {
     NavigationStack {
-      RemindersListsView(database: database)
+      RemindersListsView()
     }
     .fontDesign(.rounded)
-    .orbitDatabase(database)
   }
 }

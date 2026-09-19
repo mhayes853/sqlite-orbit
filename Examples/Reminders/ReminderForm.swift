@@ -23,7 +23,9 @@ final class ReminderFormModel {
     dueDateMode == .dateAndTime
   }
 
-  @ObservationIgnored private let database: RemindersDatabase
+  private var database: any OrbitObservableDatabase {
+    OrbitDefaultDatabase.current
+  }
 
   private enum DueDateMode {
     case none
@@ -32,11 +34,10 @@ final class ReminderFormModel {
   }
 
   init(
-    database: RemindersDatabase,
     remindersList: RemindersList,
     reminder: Reminder? = nil
   ) {
-    self.database = database
+    let database = OrbitDefaultDatabase.current
     id = reminder?.id ?? UUID()
     isNew = reminder == nil
     self.reminder = Reminder.Draft(
@@ -187,23 +188,19 @@ struct ReminderFormView: View {
   }
 
   init(
-    database: RemindersDatabase,
     remindersList: RemindersList,
     reminder: Reminder? = nil
   ) {
     _availableTags = FetchAll(
       Tag.order(by: \.title),
-      database: database,
       animation: .default
     )
     _remindersLists = FetchAll(
       RemindersList.order(by: \.title),
-      database: database,
       animation: .default
     )
     _model = State(
       initialValue: ReminderFormModel(
-        database: database,
         remindersList: remindersList,
         reminder: reminder
       )

@@ -20,12 +20,10 @@ final class SearchRemindersModel {
   @ObservationIgnored @FetchAll var results: [SearchReminderRow]
   var errorMessage: String?
 
-  @ObservationIgnored private let database: RemindersDatabase
   @ObservationIgnored private var searchTask: Task<Void, Never>?
   @ObservationIgnored private let now: Date
 
-  init(database: RemindersDatabase, now: Date = .now) {
-    self.database = database
+  init(now: Date = .now) {
     self.now = now
     _results = FetchAll(wrappedValue: [])
   }
@@ -50,7 +48,6 @@ final class SearchRemindersModel {
           showCompleted: showCompleted,
           now: now
         ),
-        database: database,
         animation: .default
       )
     } catch is CancellationError {
@@ -101,22 +98,19 @@ final class SearchRemindersModel {
 
 struct SearchRemindersView: View {
   @SingleRow private var settings: SearchSettings
-  let database: RemindersDatabase
   let model: SearchRemindersModel
   let remindersLists: [RemindersList]
   let searchText: String
 
   init(
-    database: RemindersDatabase,
     model: SearchRemindersModel,
     remindersLists: [RemindersList],
     searchText: String
   ) {
-    self.database = database
     self.model = model
     self.remindersLists = remindersLists
     self.searchText = searchText
-    _settings = SingleRow(SearchSettings.self, database: database)
+    _settings = SingleRow(SearchSettings.self)
   }
 
   var body: some View {
@@ -146,7 +140,6 @@ struct SearchRemindersView: View {
       ForEach(model.results) { row in
         ReminderRow(
           color: row.remindersList.color,
-          database: database,
           highlightedTitle: row.highlightedTitle,
           isPastDue: row.isPastDue,
           notes: row.highlightedNotes,

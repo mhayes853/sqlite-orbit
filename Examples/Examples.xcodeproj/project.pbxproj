@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		02874ECBB75E0F87E5B04F1E /* RemindersLists.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C51905997693B9560285072 /* RemindersLists.swift */; };
-		0AA225B36FE9CF002EA521D5 /* RemindersFeature.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = D3812AA3B99A34861D695680 /* RemindersFeature.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		2DE3475B674EA317D52B8111 /* TestDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B21562B5E71C8F1597709EB /* TestDatabase.swift */; };
 		3E2B10D6DCFB12181B09195F /* RemindersRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4CFE0842EF8DCAECBCF41A0 /* RemindersRoot.swift */; };
 		4188F6CC0D2C4FE24A32C5D5 /* Helpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FE6D37803383BC704714ABE /* Helpers.swift */; };
@@ -39,6 +38,7 @@
 		CB445D035AC1D7CED392216A /* SchemaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C1B0AC373E35B14B0D0C89C /* SchemaTests.swift */; };
 		D62383DC2F27F30593EF4894 /* FormAndSearchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD9563F2EA4E07B6AF6DBE06 /* FormAndSearchTests.swift */; };
 		D6E62FD98B47B1BD4E75A58C /* RemindersListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65FD0E728ABCDE1C00748C4D /* RemindersListRow.swift */; };
+		D10000000000000000000002 /* SQLiteOrbitTestSupport in Frameworks */ = {isa = PBXBuildFile; productRef = D10000000000000000000001 /* SQLiteOrbitTestSupport */; };
 		E8BADF493C0AA97FF4E059FE /* RemindersFeature.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D3812AA3B99A34861D695680 /* RemindersFeature.framework */; };
 		EDABEF1041846E364C01D60C /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C1E925CFC90229D09E535EC /* Foundation.framework */; };
 		EE2E0084D7EAED9AF452E4AA /* SQLiteOrbit in Frameworks */ = {isa = PBXBuildFile; productRef = E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */; };
@@ -75,7 +75,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				0AA225B36FE9CF002EA521D5 /* RemindersFeature.framework in Embed Frameworks */,
 			);
 			name = "Embed Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -129,6 +128,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000004 /* RemindersKit in Frameworks */,
+				D10000000000000000000002 /* SQLiteOrbitTestSupport in Frameworks */,
 				EDABEF1041846E364C01D60C /* Foundation.framework in Frameworks */,
 				A82D4B1094C226EB3659E137 /* RemindersFeature.framework in Frameworks */,
 			);
@@ -291,6 +291,7 @@
 			name = RemindersTests;
 			packageProductDependencies = (
 				A10000000000000000000002 /* RemindersKit */,
+				D10000000000000000000001 /* SQLiteOrbitTestSupport */,
 			);
 			productName = RemindersTests;
 			productReference = AE6702A092C6F26EBC9A82F8 /* RemindersTests.xctest */;
@@ -516,6 +517,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACH_O_TYPE = staticlib;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.RemindersFeature";
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
@@ -596,6 +598,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INSTALL_PATH = "$(LOCAL_LIBRARY_DIR)/Frameworks";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACH_O_TYPE = staticlib;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @loader_path/Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = "co.sqlite-orbit.RemindersFeature";
 				PRODUCT_NAME = "$(TARGET_NAME:c99extidentifier)";
@@ -870,6 +873,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = EC2E45CDAF92B3D07F881861 /* XCLocalSwiftPackageReference ".." */;
 			productName = SQLiteOrbit;
+		};
+		D10000000000000000000001 /* SQLiteOrbitTestSupport */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = EC2E45CDAF92B3D07F881861 /* XCLocalSwiftPackageReference ".." */;
+			productName = SQLiteOrbitTestSupport;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
