@@ -145,6 +145,41 @@ struct ReminderIntentTests {
     #expect(remainingIDs == [second.id])
   }
 
+  @Test
+  func intentsReconcileNotificationsBeforeReturning() async throws {
+    let database = try SQLiteQueue.reminders()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+    }
+    let center = RecordingReminderNotificationCenter()
+    let scheduler = ReminderNotificationScheduler(center: center)
+
+    let result = try await CreateReminderIntent(
+      title: "Call home",
+      list: RemindersListEntity(list),
+      dueDate: .distantFuture,
+      database: database,
+      notificationScheduler: scheduler
+    )
+    .perform()
+    let entity = try #require(result.value)
+
+    #expect(
+      await center.requestIdentifiers()
+        == ["reminder.\(entity.id.uuidString)"]
+    )
+
+    _ = try await CompleteReminderIntent(
+      reminder: entity,
+      database: database,
+      notificationScheduler: scheduler
+    )
+    .perform()
+
+    #expect(await center.requestIdentifiers().isEmpty)
+  }
+
   private func insertReminder(
     in database: RemindersDatabase,
     list: RemindersList? = nil,
@@ -170,5 +205,41 @@ struct ReminderIntentTests {
     try await database.read {
       try Reminder.find(id).select(\.status).fetchOne($0)
     }
+  }
+}
+
+private actor RecordingReminderNotificationCenter: ReminderNotificationCenter {
+  private var requests: [String: ReminderNotificationRequest] = [:]
+
+  func add(_ request: ReminderNotificationRequest) async throws {
+    requests[request.identifier] = request
+  }
+
+  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
+    .authorized
+  }
+
+  func deliveredNotificationRequestIdentifiers() async -> [String] {
+    []
+  }
+
+  func pendingNotificationRequestIdentifiers() async -> [String] {
+    Array(requests.keys)
+  }
+
+  func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {}
+
+  func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {
+    for identifier in identifiers {
+      requests[identifier] = nil
+    }
+  }
+
+  func requestAuthorization() async throws -> Bool {
+    true
+  }
+
+  func requestIdentifiers() -> [String] {
+    requests.keys.sorted()
   }
 }

@@ -15,14 +15,25 @@ struct RemindersAppIntentsPackage: AppIntentsPackage {
 struct RemindersApp: App {
   @Environment(\.scenePhase) private var scenePhase
 
+  private let notificationHandler: ReminderNotificationHandler
   private let notificationObservation: ReminderNotificationObservation
   private let root: RemindersRoot
 
   init() {
     let database = try! OrbitIPCDatabase.reminders()
     OrbitDefaultDatabase.set(database)
-    notificationObservation = ReminderNotificationObservation(database: database)
+    let notificationScheduler = ReminderNotificationScheduler()
+    let notificationHandler = ReminderNotificationHandler(
+      database: database,
+      scheduler: notificationScheduler
+    )
+    self.notificationHandler = notificationHandler
+    notificationObservation = ReminderNotificationObservation(
+      database: database,
+      scheduler: notificationScheduler
+    )
     root = RemindersRoot(database: database)
+    notificationHandler.register()
     RemindersAppShortcuts.updateAppShortcutParameters()
   }
 

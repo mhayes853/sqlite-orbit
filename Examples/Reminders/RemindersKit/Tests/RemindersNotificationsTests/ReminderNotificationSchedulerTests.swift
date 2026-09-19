@@ -133,6 +133,37 @@ struct ReminderNotificationSchedulerTests {
     _ = observation
   }
 
+  @Test
+  func notificationHandlerCompletesTheReminder() async throws {
+    let database = try SQLiteQueue.reminders()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(
+      id: UUID(),
+      dueDate: .distantFuture,
+      remindersListID: list.id,
+      title: "Complete me"
+    )
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let center = TestReminderNotificationCenter(
+      requests: [notificationRequest(identifier: "reminder.\(reminder.id.uuidString)")]
+    )
+    let handler = ReminderNotificationHandler(
+      database: database,
+      scheduler: ReminderNotificationScheduler(center: center)
+    )
+
+    try await handler.complete(reminderID: reminder.id)
+
+    let status = try await database.read {
+      try Reminder.find(reminder.id).select(\.status).fetchOne($0)
+    }
+    #expect(status == .completed)
+    #expect(await center.requestIdentifiers().isEmpty)
+  }
+
   private func notificationRequest(identifier: String) -> ReminderNotificationRequest {
     ReminderNotificationRequest(
       body: "",
@@ -166,6 +197,10 @@ private actor TestReminderNotificationCenter: ReminderNotificationCenter {
 
   func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
     .authorized
+  }
+
+  func deliveredNotificationRequestIdentifiers() async -> [String] {
+    []
   }
 
   func pendingNotificationRequestIdentifiers() async -> [String] {

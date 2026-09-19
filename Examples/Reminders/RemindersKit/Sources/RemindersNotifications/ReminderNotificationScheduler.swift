@@ -60,11 +60,15 @@ public struct ReminderNotificationScheduler: Sendable {
   func reconcile(_ reminders: [Reminder]) async throws {
     let requests = reminders.compactMap(request(for:))
     let desiredIdentifiers = Set(requests.map(\.identifier))
-    let staleIdentifiers = await center.pendingNotificationRequestIdentifiers()
-      .filter {
-        $0.hasPrefix(Self.requestIdentifierPrefix)
-          && !desiredIdentifiers.contains($0)
-      }
+    async let pendingIdentifiers = center.pendingNotificationRequestIdentifiers()
+    async let deliveredIdentifiers = center.deliveredNotificationRequestIdentifiers()
+    let staleIdentifiers = Array(
+      Set(await pendingIdentifiers + deliveredIdentifiers)
+        .filter {
+          $0.hasPrefix(Self.requestIdentifierPrefix)
+            && !desiredIdentifiers.contains($0)
+        }
+    )
     if !staleIdentifiers.isEmpty {
       await center.removePendingNotificationRequests(withIdentifiers: staleIdentifiers)
       await center.removeDeliveredNotifications(withIdentifiers: staleIdentifiers)
@@ -120,6 +124,10 @@ private struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
 
   func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
     .denied
+  }
+
+  func deliveredNotificationRequestIdentifiers() async -> [String] {
+    []
   }
 
   func pendingNotificationRequestIdentifiers() async -> [String] {

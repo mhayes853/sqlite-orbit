@@ -39,6 +39,7 @@ public enum ReminderNotificationAuthorizationStatus: Sendable {
 public protocol ReminderNotificationCenter: Sendable {
   func add(_ request: ReminderNotificationRequest) async throws
   func authorizationStatus() async -> ReminderNotificationAuthorizationStatus
+  func deliveredNotificationRequestIdentifiers() async -> [String]
   func pendingNotificationRequestIdentifiers() async -> [String]
   func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async
   func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async
@@ -83,6 +84,10 @@ public struct SystemReminderNotificationCenter: ReminderNotificationCenter {
 
   public func pendingNotificationRequestIdentifiers() async -> [String] {
     await UNUserNotificationCenter.current().pendingNotificationRequests().map(\.identifier)
+  }
+
+  public func deliveredNotificationRequestIdentifiers() async -> [String] {
+    await UNUserNotificationCenter.current().deliveredNotifications().map(\.request.identifier)
   }
 
   public func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {

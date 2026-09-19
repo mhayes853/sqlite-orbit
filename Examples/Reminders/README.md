@@ -14,6 +14,7 @@ The app demonstrates:
 - live dashboard aggregates and observed reminder queries;
 - list and reminder creation and editing, including tags, priorities, due dates, and cover photos;
 - transactional writes and cascade deletion;
+- due-date notifications synchronized by cross-process value observation and App Intents;
 - full-text reminder search;
 - a search preference persisted with `SingleRowTable` and bound with `@SingleRow`;
 - TipKit-driven sample data discovery; and
