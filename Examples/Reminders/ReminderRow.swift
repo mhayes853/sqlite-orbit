@@ -18,9 +18,6 @@ final class ReminderRowModel {
   @ObservationIgnored private let sleep: Sleep
   @ObservationIgnored private var completionGeneration = 0
   @ObservationIgnored private var completionTask: Task<Void, Never>?
-  private var database: any OrbitObservableDatabase {
-    OrbitDefaultDatabase.current
-  }
 
   init(
     calendar: Calendar = .current,
@@ -144,7 +141,7 @@ final class ReminderRowModel {
     do {
       try await sleep(delay)
       try Task.checkCancellation()
-      try await database.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         try Reminder.find(reminder.id)
           .update { $0.status = Reminder.Status.completed }
           .execute(transaction)
@@ -160,7 +157,7 @@ final class ReminderRowModel {
   ) -> Task<Void, Never> {
     Task {
       do {
-        try await database.write(operation)
+        try await OrbitDefaultDatabase.current.write(operation)
       } catch {
         errorMessage = error.localizedDescription
       }

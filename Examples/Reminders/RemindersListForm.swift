@@ -15,10 +15,6 @@ final class RemindersListFormModel {
   var coverImageData: Data?
   var errorMessage: String?
 
-  private var database: any OrbitObservableDatabase {
-    OrbitDefaultDatabase.current
-  }
-
   init(remindersList: RemindersList?) {
     let database = OrbitDefaultDatabase.current
     id = remindersList?.id ?? UUID()
@@ -45,7 +41,7 @@ final class RemindersListFormModel {
     let isNew = isNew
     let originalPosition = originalPosition
     do {
-      try await database.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         let position =
           isNew ? (try RemindersList.count().fetchOne(transaction) ?? 0) : originalPosition
         try RemindersList.upsert {

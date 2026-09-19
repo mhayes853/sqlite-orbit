@@ -96,9 +96,6 @@ final class RemindersDetailModel {
   }
 
   @ObservationIgnored private let now: Date
-  private var database: any OrbitObservableDatabase {
-    OrbitDefaultDatabase.current
-  }
 
   init(
     detailType: RemindersDetailType,
@@ -172,7 +169,7 @@ final class RemindersDetailModel {
     ids.move(fromOffsets: source, toOffset: destination)
     let orderedIDs = ids
     do {
-      try await database.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         for (position, id) in orderedIDs.enumerated() {
           try Reminder.find(id).update { $0.position = position }.execute(transaction)
         }
@@ -194,7 +191,7 @@ final class RemindersDetailModel {
   }
 
   private var firstRemindersList: RemindersList? {
-    (try? database.readBlocking {
+    (try? OrbitDefaultDatabase.current.readBlocking {
       try RemindersList.order(by: \.position).fetchOne($0)
     }) ?? nil
   }
@@ -206,7 +203,7 @@ final class RemindersDetailModel {
       showCompleted: showCompleted
     )
     do {
-      try await database.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         try RemindersDetailSettings.upsert {
           RemindersDetailSettings.Draft(settings)
         }

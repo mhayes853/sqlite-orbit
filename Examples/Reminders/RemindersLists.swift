@@ -48,10 +48,6 @@ final class RemindersListsModel {
     remindersLists.map(\.remindersList)
   }
 
-  private var database: any OrbitObservableDatabase {
-    OrbitDefaultDatabase.current
-  }
-
   init(now: Date = .now) {
     _remindersLists = FetchAll(
       RemindersList
@@ -200,7 +196,7 @@ final class RemindersListsModel {
     _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) async {
     do {
-      try await database.write(operation)
+      try await OrbitDefaultDatabase.current.write(operation)
     } catch {
       errorMessage = error.localizedDescription
     }

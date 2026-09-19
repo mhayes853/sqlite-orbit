@@ -23,10 +23,6 @@ final class ReminderFormModel {
     dueDateMode == .dateAndTime
   }
 
-  private var database: any OrbitObservableDatabase {
-    OrbitDefaultDatabase.current
-  }
-
   private enum DueDateMode {
     case none
     case date
@@ -134,7 +130,7 @@ final class ReminderFormModel {
     reminder.dueDate = dueDateToSave
     reminder.title = title
     do {
-      try await database.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         if isNew {
           reminder.position = try Reminder.count().fetchOne(transaction) ?? 0
         }
