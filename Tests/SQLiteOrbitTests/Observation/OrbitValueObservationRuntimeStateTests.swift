@@ -83,6 +83,7 @@ struct OrbitValueObservationSubscriberRegistryTests {
   ) -> OrbitValueObservationSubscriber<Int> {
     OrbitValueObservationSubscriber(
       scheduler: OrbitImmediateValueObservationScheduler(),
+      onNoEmission: nil,
       onError: { _ in },
       onChange: onChange
     )
@@ -111,12 +112,12 @@ struct OrbitValueObservationSubscriberRegistryTests {
     let lateRegistration = registry.add(lateSubscriber)
     #expect(owed.count == 1)
 
-    for subscriber in owed { subscriber.receive(.success(change), from: nil) }
+    for subscriber in owed { subscriber.receive(.outcome(.success(change)), from: nil) }
     guard case .success(let place) = lateRegistration else {
       Issue.record("the late subscriber was refused")
       return
     }
-    lateSubscriber.receive(.success(try #require(place.latest)), from: nil)
+    lateSubscriber.receive(.outcome(.success(try #require(place.latest))), from: nil)
 
     #expect(early.withLock { $0 } == [1])
     #expect(late.withLock { $0 } == [1])
@@ -192,13 +193,13 @@ struct OrbitValueObservationSubscriberRegistryTests {
 struct OrbitValueObservationDeliveryQueueTests {
   private func publication(_ value: Int) -> OrbitValueObservationPublication<Int> {
     OrbitValueObservationPublication(
-      outcome: .success(OrbitValueObservationChange(value: value, source: .initial)),
+      event: .outcome(.success(OrbitValueObservationChange(value: value, source: .initial))),
       subscribers: []
     )
   }
 
   private func value(of publication: OrbitValueObservationPublication<Int>?) -> Int? {
-    guard case .success(let change) = publication?.outcome else { return nil }
+    guard case .outcome(.success(let change)) = publication?.event else { return nil }
     return change.value
   }
 

@@ -8,9 +8,9 @@
 final class OrbitFetchObservationBox<Value: Sendable>: Sendable {
   let observation: OrbitValueObservation<Value>
 
-  private let id: OrbitFetchRequestID
+  private let id: OrbitFetchSourceID
 
-  init(id: OrbitFetchRequestID, observation: OrbitValueObservation<Value>) {
+  init(id: OrbitFetchSourceID, observation: OrbitValueObservation<Value>) {
     self.id = id
     self.observation = observation
   }
@@ -42,14 +42,14 @@ final class OrbitFetchObservationRegistry: Sendable {
     }
   }
 
-  private let boxes = Lock<[OrbitFetchRequestID: WeakBox]>([:])
+  private let boxes = Lock<[OrbitFetchSourceID: WeakBox]>([:])
 
   /// Whether a property is currently reading through the observation of `id`, which is what a
   /// test asserts the release of a shared observation against.
   ///
   /// - Parameter id: The read to look for.
   /// - Returns: Whether the read has a live observation.
-  func holdsObservation(for id: OrbitFetchRequestID) -> Bool {
+  func holdsObservation(for id: OrbitFetchSourceID) -> Bool {
     boxes.withLock { boxes in boxes[id]?.object() != nil }
   }
 
@@ -61,7 +61,7 @@ final class OrbitFetchObservationRegistry: Sendable {
   ///   - makeObservation: Builds the observation, when this read has none.
   /// - Returns: A box to hold for as long as the caller reads through the observation.
   func box<Value: Sendable>(
-    for id: OrbitFetchRequestID,
+    for id: OrbitFetchSourceID,
     makeObservation: () -> OrbitValueObservation<Value>
   ) -> OrbitFetchObservationBox<Value> {
     if let existing = boxes.withLock({ $0[id]?.object() as? OrbitFetchObservationBox<Value> }) {
@@ -83,7 +83,7 @@ final class OrbitFetchObservationRegistry: Sendable {
   /// the same identifier, and that one must survive.
   ///
   /// - Parameter id: The read to forget.
-  func forgetIfReleased(_ id: OrbitFetchRequestID) {
+  func forgetIfReleased(_ id: OrbitFetchSourceID) {
     boxes.withLock { boxes in
       guard boxes[id]?.object() == nil else { return }
       boxes.removeValue(forKey: id)

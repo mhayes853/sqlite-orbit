@@ -1,6 +1,10 @@
 #if BuiltInSQLite
   import Testing
 
+  #if Dependencies
+    import Dependencies
+  #endif
+
   #if canImport(Observation)
     import Observation
   #endif
@@ -97,6 +101,151 @@
     }
 
     @Test
+    func fetchSubscribesToAValueObservationDirectly() async throws {
+      let database = try await remindersDatabase(titles: "Milk")
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+
+      @Fetch(observation, database: database) var titles = [String]()
+
+      #expect(titles == ["Milk"])
+      try await database.write { transaction in
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+      }
+      try await waitUntil { titles == ["Milk", "Eggs"] }
+    }
+
+    @Test
+    func anObservationBackedFetchUsesTheDefaultDatabase() async throws {
+      let database = try await remindersDatabase(titles: "Milk")
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+
+      OrbitDefaultDatabase.withValue(database) {
+        @Fetch(observation) var titles = [String]()
+        #expect(titles == ["Milk"])
+      }
+    }
+
+    @Test
+    func anObservationBackedFetchRequiresADefaultDatabaseWhenRead() async {
+      let result = await #expect(
+        processExitsWith: .failure,
+        observing: [\.standardErrorContent]
+      ) {
+        OrbitDefaultDatabase.set(nil)
+        let observation = OrbitValueObservation.tracking { _ in ["Fetched"] }
+        @Fetch(observation) var values = ["Placeholder"]
+        _ = values
+      }
+      let standardError = String(
+        decoding: result?.standardErrorContent ?? [],
+        as: UTF8.self
+      )
+      #expect(
+        standardError.contains("A default database has not been configured for 'SQLiteOrbit'.")
+      )
+    }
+
+    @Test
+    func propertiesGivenTheSameObservationShareItsRuntimeAcrossSchedulers() async throws {
+      let database = try await countingRemindersDatabase(titles: "Milk")
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+
+      @Fetch(observation, database: database) var immediate = [String]()
+      @Fetch(observation, database: database, scheduler: .async()) var asynchronous = [String]()
+
+      #expect(immediate == ["Milk"])
+      try await waitUntil { asynchronous == ["Milk"] }
+      #expect(database.subscriptionCount == 1)
+    }
+
+    @Test
+    func aSuppressedInitialValueFinishesLoadingAndKeepsThePlaceholder() async throws {
+      let database = try await remindersDatabase()
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+        .filter { !$0.isEmpty }
+
+      @Fetch(observation, database: database) var titles = ["Waiting"]
+
+      #expect(titles == ["Waiting"])
+      #expect(!$titles.isLoading)
+      #expect($titles.loadError == nil)
+
+      try await database.write { transaction in
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
+      }
+      try await waitUntil { titles == ["Milk"] }
+    }
+
+    @Test
+    func aLatePropertyLearnsThatTheSharedInitialValueWasSuppressed() async throws {
+      let database = try await remindersDatabase()
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+        .filter { !$0.isEmpty }
+
+      @Fetch(observation, database: database) var first = ["First"]
+      #expect(first == ["First"])
+      #expect(!$first.isLoading)
+
+      @Fetch(observation, database: database) var late = ["Late"]
+      #expect(late == ["Late"])
+      #expect(!$late.isLoading)
+    }
+
+    @Test
+    func loadingAnObservationCompletesWhenItsInitialValueIsSuppressed() async throws {
+      let database = try await remindersDatabase()
+      let observation =
+        OrbitValueObservation
+        .trackingAll(Reminder.order(by: \.id))
+        .map { $0.map(\.title) }
+        .filter { !$0.isEmpty }
+
+      @Fetch var titles = ["Waiting"]
+      let subscription = try await $titles.load(observation, database: database)
+
+      #expect(titles == ["Waiting"])
+      #expect(!$titles.isLoading)
+      #expect($titles.loadError == nil)
+      withExtendedLifetime(subscription) {}
+    }
+
+    @Test
+    func loadingAnObservationReplacesTheObservedRequest() async throws {
+      let database = try await remindersDatabase(titles: "Milk", "Eggs")
+      let eggs =
+        OrbitValueObservation
+        .trackingAll(Reminder.where { $0.title.eq("Eggs") })
+        .map { $0.map(\.title) }
+
+      @Fetch(TitleSearch(term: "Milk"), database: database) var titles = [String]()
+      #expect(titles == ["Milk"])
+
+      let subscription = try await $titles.load(eggs, database: database)
+      #expect(titles == ["Eggs"])
+
+      try await database.write { transaction in
+        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
+      }
+      try await waitUntil { titles == ["Eggs", "Eggs"] }
+      withExtendedLifetime(subscription) {}
+    }
+
+    @Test
     func loadReplacesTheObservedQuery() async throws {
       let database = try await remindersDatabase(titles: "Milk", "Eggs")
 
@@ -185,12 +334,12 @@
         load.cancel()
       case .detach:
         storage.detach()
-      case .adoptMissingDatabase:
+      case .adoptError:
         storage.adoptIfNeeded(
           from: OrbitFetchStorage(
             value: [],
-            loadError: OrbitMissingDefaultDatabaseError(),
-            requestID: OrbitFetchRequestID(
+            loadError: FetchTestError(),
+            sourceID: OrbitFetchSourceID(
               request: TitleSearch(term: "Milk"),
               database: nil,
               scheduler: nil
@@ -217,9 +366,9 @@
         scheduler.release()
         #expect(storage.value.isEmpty)
       }
-      if interruption == .adoptMissingDatabase {
-        #expect(storage.requestID != nil)
-        #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
+      if interruption == .adoptError {
+        #expect(storage.sourceID != nil)
+        #expect(storage.loadError is FetchTestError)
       }
     }
 
@@ -232,8 +381,8 @@
 
       func id(
         _ scheduler: (any OrbitValueObservationScheduler & Hashable)?
-      ) -> OrbitFetchRequestID {
-        OrbitFetchRequestID(request: request, database: database, scheduler: scheduler)
+      ) -> OrbitFetchSourceID {
+        OrbitFetchSourceID(request: request, database: database, scheduler: scheduler)
       }
 
       #expect(id(nil) != id(.immediate))
@@ -276,10 +425,81 @@
 
       original.adoptIfNeeded(from: sameConfiguration)
       #expect(original.untrackedValue == ["original"])
-      #expect(original.requestID != changedConfiguration.requestID)
+      #expect(original.sourceID != changedConfiguration.sourceID)
       original.adoptIfNeeded(from: changedConfiguration)
       #expect(original.untrackedValue == ["changed configuration"])
-      #expect(original.requestID == changedConfiguration.requestID)
+      #expect(original.sourceID == changedConfiguration.sourceID)
+    }
+
+    @Test
+    func observationIdentityUsesItsDefinitionUnlessAnExplicitIDIsGiven() async throws {
+      let database = try await remindersDatabase()
+      let first = OrbitValueObservation.tracking { _ in ["first"] }
+      let firstCopy = first
+      let second = OrbitValueObservation.tracking { _ in ["second"] }
+
+      func storage(
+        _ observation: OrbitValueObservation<[String]>,
+        identity: OrbitFetchObservationIdentity
+      ) -> OrbitFetchStorage<[String]> {
+        .make(
+          value: [],
+          observation: observation,
+          identity: identity,
+          database: database,
+          scheduler: nil
+        )
+      }
+
+      #expect(
+        storage(first, identity: .intrinsic(first.identity)).sourceID
+          == storage(firstCopy, identity: .intrinsic(firstCopy.identity)).sourceID
+      )
+      #expect(
+        storage(first, identity: .intrinsic(first.identity)).sourceID
+          != storage(second, identity: .intrinsic(second.identity)).sourceID
+      )
+      #expect(
+        storage(first, identity: OrbitFetchObservationIdentity("stable")).sourceID
+          == storage(second, identity: OrbitFetchObservationIdentity("stable")).sourceID
+      )
+
+      @Fetch(first, id: "stable", database: database) var value = [String]()
+      #expect(value == ["first"])
+    }
+
+    @Test
+    func anExplicitObservationIDControlsDeclarationAdoption() async throws {
+      let database = try await remindersDatabase()
+      let first = OrbitValueObservation.tracking { _ in ["first"] }
+      let second = OrbitValueObservation.tracking { _ in ["second"] }
+      let original = OrbitFetchStorage.make(
+        value: ["original"],
+        observation: first,
+        identity: OrbitFetchObservationIdentity("stable"),
+        database: database,
+        scheduler: nil
+      )
+      let sameDeclaration = OrbitFetchStorage.make(
+        value: ["rebuilt"],
+        observation: second,
+        identity: OrbitFetchObservationIdentity("stable"),
+        database: database,
+        scheduler: nil
+      )
+      let changedDeclaration = OrbitFetchStorage.make(
+        value: ["changed"],
+        observation: second,
+        identity: OrbitFetchObservationIdentity("changed"),
+        database: database,
+        scheduler: nil
+      )
+
+      original.adoptIfNeeded(from: sameDeclaration)
+      #expect(original.untrackedValue == ["original"])
+
+      original.adoptIfNeeded(from: changedDeclaration)
+      #expect(original.untrackedValue == ["changed"])
     }
 
     @Test(arguments: ExplicitRequestChange.allCases)
@@ -291,7 +511,7 @@
         .make(value: [], request: TitleSearch(term: term), database: database, scheduler: nil)
       }
       let storage = declaration("Milk")
-      let declaredID = storage.requestID
+      let declaredID = storage.sourceID
       #expect(storage.value == ["Milk"])
 
       switch change {
@@ -309,53 +529,51 @@
 
       storage.adoptIfNeeded(from: declaration("Milk"))
       #expect(storage.untrackedValue == expected)
-      #expect(storage.requestID == declaredID)
+      #expect(storage.sourceID == declaredID)
       // A value-only declaration also leaves a dynamically loaded request alone.
       storage.adoptIfNeeded(from: OrbitFetchStorage(value: []))
       #expect(storage.untrackedValue == expected)
-      #expect(storage.requestID == declaredID)
+      #expect(storage.sourceID == declaredID)
 
       let changedDeclaration = declaration("Bread")
       storage.adoptIfNeeded(from: changedDeclaration)
-      #expect(storage.requestID == changedDeclaration.requestID)
+      #expect(storage.sourceID == changedDeclaration.sourceID)
       #expect(storage.value.isEmpty)
     }
 
     @Test
     func missingDatabaseDeclarationsKeepTheirIdentityAndRecover() async throws {
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       OrbitDefaultDatabase.set(nil)
       defer { OrbitDefaultDatabase.set(previous) }
       func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
         .make(value: [], request: TitleSearch(term: term), database: nil, scheduler: nil)
       }
       let storage = declaration("Milk")
-      let missingID = try #require(storage.requestID)
-      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
-      #expect(declaration("Milk").requestID == missingID)
-      #expect(declaration("Eggs").requestID != missingID)
+      let missingID = try #require(storage.sourceID)
+      #expect(declaration("Milk").sourceID == missingID)
+      #expect(declaration("Eggs").sourceID != missingID)
 
       let database = try await remindersDatabase(titles: "Milk")
       OrbitDefaultDatabase.set(database)
       storage.adoptIfNeeded(from: declaration("Milk"))
-      #expect(storage.requestID != missingID)
+      #expect(storage.sourceID != missingID)
       #expect(storage.value == ["Milk"])
       #expect(storage.loadError == nil)
 
       OrbitDefaultDatabase.set(nil)
       storage.adoptIfNeeded(from: declaration("Milk"))
-      #expect(storage.requestID == missingID)
-      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
+      #expect(storage.sourceID == missingID)
+      #expect(storage.untrackedValue.isEmpty)
     }
 
     @Test
     func aStorageWithoutADatabaseStartsReadingWhenOneIsAttached() async throws {
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       OrbitDefaultDatabase.set(nil)
       defer { OrbitDefaultDatabase.set(previous) }
       let storage = OrbitFetchStorage<[String]>
         .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
-      #expect(storage.loadError is OrbitMissingDefaultDatabaseError)
 
       let database = try await remindersDatabase(titles: "Milk")
       storage.attachIfNeeded(database: database)
@@ -366,7 +584,7 @@
 
     @Test
     func aStorageWithoutADatabaseFallsBackToADefaultSetAfterwards() async throws {
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       OrbitDefaultDatabase.set(nil)
       defer { OrbitDefaultDatabase.set(previous) }
       let storage = OrbitFetchStorage<[String]>
@@ -383,7 +601,7 @@
     @Test
     func aStorageOnTheProcessDefaultMovesToAnAttachedDatabase() async throws {
       let processDefault = try await remindersDatabase(titles: "Milk")
-      let previous = OrbitDefaultDatabase.current
+      let previous = OrbitDefaultDatabase.currentIfConfigured
       OrbitDefaultDatabase.set(processDefault)
       defer { OrbitDefaultDatabase.set(previous) }
       let storage = OrbitFetchStorage<[String]>
@@ -461,7 +679,7 @@
         .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
       let second = OrbitFetchStorage<[String]>
         .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
-      let id = try #require(first.requestID)
+      let id = try #require(first.sourceID)
       #expect(first.value == ["Milk"])
       #expect(second.value == ["Milk"])
 
@@ -511,12 +729,84 @@
       #expect(reminders.count == 1)
     }
 
-    @Test
-    func aMissingDefaultDatabaseIsReportedRatherThanTrapped() async throws {
-      @FetchAll(Reminder.all) var reminders
+    #if Dependencies
+      @Test
+      func databaseResolutionIncludesSwiftDependencies() throws {
+        let previous = OrbitDefaultDatabase.currentIfConfigured
+        let process = try SQLiteQueue(path: .memory)
+        let dependency = try SQLiteQueue(path: .memory)
+        let scoped = try SQLiteQueue(path: .memory)
+        OrbitDefaultDatabase.set(process)
+        defer { OrbitDefaultDatabase.set(previous) }
 
-      #expect(reminders.isEmpty)
-      #expect($reminders.loadError is OrbitMissingDefaultDatabaseError)
+        @Dependency(\.orbitDefaultDatabase) var processDependency
+        #expect(processDependency === process)
+
+        withDependencies {
+          $0.orbitDefaultDatabase = dependency
+        } operation: {
+          #expect(OrbitDefaultDatabase.current === dependency)
+
+          OrbitDefaultDatabase.withValue(scoped) {
+            @Dependency(\.orbitDefaultDatabase) var scopedDependency
+            #expect(OrbitDefaultDatabase.current === scoped)
+            #expect(scopedDependency === scoped)
+          }
+        }
+      }
+
+      @Test
+      func fetchStorageRetainsItsDependencyContext() async throws {
+        final class Model {
+          @Fetch var titles = [String]()
+        }
+
+        let database = try await remindersDatabase(titles: "Milk")
+        let model = withDependencies {
+          $0.orbitDefaultDatabase = database
+        } operation: {
+          Model()
+        }
+
+        try await model.$titles.load(TitleSearch(term: "Milk"))
+        #expect(model.titles == ["Milk"])
+      }
+
+      @Test
+      func missingDatabaseDependencyExplainsHowToConfigureIt() async {
+        let result = await #expect(
+          processExitsWith: .failure,
+          observing: [\.standardErrorContent]
+        ) {
+          OrbitDefaultDatabase.set(nil)
+          @Dependency(\.orbitDefaultDatabase) var database
+          _ = database
+        }
+        let standardError = String(
+          decoding: result?.standardErrorContent ?? [],
+          as: UTF8.self
+        )
+        #expect(standardError.contains("prepareDependencies"))
+        #expect(standardError.contains("$0.orbitDefaultDatabase = try! appDatabase()"))
+      }
+    #endif
+
+    @Test
+    func missingCurrentDatabaseExplainsHowToConfigureIt() async {
+      let result = await #expect(
+        processExitsWith: .failure,
+        observing: [\.standardErrorContent]
+      ) {
+        OrbitDefaultDatabase.set(nil)
+        _ = OrbitDefaultDatabase.current
+      }
+      let standardError = String(
+        decoding: result?.standardErrorContent ?? [],
+        as: UTF8.self
+      )
+      #expect(standardError.contains("OrbitDefaultDatabase.set(try! appDatabase())"))
+      #expect(standardError.contains("@Test(.orbitDatabase(try testDatabase()))"))
+      #expect(standardError.contains(".orbitDatabase(try! previewDatabase())"))
     }
 
     @Test
@@ -1009,8 +1299,10 @@
   enum PendingLoadInterruption: CaseIterable, Sendable {
     case cancel
     case detach
-    case adoptMissingDatabase
+    case adoptError
   }
+
+  private struct FetchTestError: Error {}
 
   private actor SchedulerActor {}
 

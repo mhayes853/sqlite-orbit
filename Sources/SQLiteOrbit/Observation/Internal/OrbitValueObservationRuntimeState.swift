@@ -15,26 +15,40 @@ final class OrbitValueObservationSubscriberLifetime: Sendable {
 struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
   let lifetime = OrbitValueObservationSubscriberLifetime()
   let scheduler: any OrbitValueObservationScheduler
+  let onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?
   let onError: @Sendable (any Error) -> Void
   let onChange: @Sendable (OrbitValueObservationChange<Value>) -> Void
 
   func receive(
-    _ outcome: Result<OrbitValueObservationChange<Value>, any Error>,
+    _ event: OrbitValueObservationPublicationEvent<Value>,
     from isolation: isolated (any Actor)?
   ) {
     guard self.lifetime.isSubscribed else { return }
-    self.scheduler.schedule(from: isolation) { [lifetime, onError, onChange] in
+    if case .noEmission = event, onNoEmission == nil {
+      return
+    }
+    self.scheduler.schedule(from: isolation) {
+      [lifetime, onNoEmission, onError, onChange] in
       guard lifetime.isSubscribed else { return }
-      switch outcome {
-      case .success(let change): onChange(change)
-      case .failure(let error): onError(error)
+      switch event {
+      case .noEmission(let source):
+        onNoEmission?(source)
+      case .outcome(.success(let change)):
+        onChange(change)
+      case .outcome(.failure(let error)):
+        onError(error)
       }
     }
   }
 }
 
+enum OrbitValueObservationPublicationEvent<Value: Sendable>: Sendable {
+  case noEmission(source: OrbitValueObservationSource)
+  case outcome(Result<OrbitValueObservationChange<Value>, any Error>)
+}
+
 struct OrbitValueObservationPublication<Value: Sendable>: Sendable {
-  let outcome: Result<OrbitValueObservationChange<Value>, any Error>
+  let event: OrbitValueObservationPublicationEvent<Value>
   let subscribers: [OrbitValueObservationSubscriber<Value>]
 }
 
@@ -146,6 +160,7 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     (
       identifier: UInt64,
       latest: OrbitValueObservationChange<Value>?,
+      noEmissionSource: OrbitValueObservationSource?,
       isFirstEver: Bool
     ), any Error
   >
@@ -153,6 +168,7 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
   private var subscribers = IdentifiedRegistry<OrbitValueObservationSubscriber<Value>>()
   private var didStart = false
   private var latest: OrbitValueObservationChange<Value>?
+  private var noEmissionSource: OrbitValueObservationSource?
 
   private(set) var terminalError: (any Error)?
 
@@ -164,6 +180,7 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
       (
         identifier: self.subscribers.insert(subscriber),
         latest: self.latest,
+        noEmissionSource: self.noEmissionSource,
         isFirstEver: isFirstEver
       )
     )
@@ -182,7 +199,15 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     _ change: OrbitValueObservationChange<Value>
   ) -> [OrbitValueObservationSubscriber<Value>] {
     self.latest = change
+    self.noEmissionSource = nil
     return self.subscribers.all
+  }
+
+  mutating func publishNoEmission(
+    source: OrbitValueObservationSource
+  ) -> [OrbitValueObservationSubscriber<Value>] {
+    if latest == nil { noEmissionSource = source }
+    return subscribers.all.filter { $0.onNoEmission != nil }
   }
 
   mutating func fail(_ error: any Error) -> [OrbitValueObservationSubscriber<Value>] {

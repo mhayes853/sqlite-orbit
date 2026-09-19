@@ -54,11 +54,7 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
         any OrbitObservableDatabase
       ) async throws -> sending Result
   ) async throws -> Result {
-    guard let database = fetch.databaseForWriting() else {
-      let error = OrbitMissingDefaultDatabaseError()
-      finishWrite(.failure(error), didStart: false)
-      throw error
-    }
+    let database = fetch.databaseForWriting()
 
     beginWrite()
     do {
@@ -78,11 +74,7 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
   func writeBlocking<Result: Sendable>(
     _ operation: (any OrbitObservableDatabase) throws -> Result
   ) throws -> Result {
-    guard let database = fetch.databaseForWriting() else {
-      let error = OrbitMissingDefaultDatabaseError()
-      finishWrite(.failure(error), didStart: false)
-      throw error
-    }
+    let database = fetch.databaseForWriting()
 
     beginWrite()
     do {

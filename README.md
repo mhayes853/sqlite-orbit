@@ -740,8 +740,28 @@ snapshot exposes active-writer state, affected and tracked regions, and accumula
 reasons. They build on `waitForActiveWriters()` and `fetch(publishing:)`; a controller owns its
 retry loop and must finish with either a published or cancelled result.
 
-Use `changes(in:)` when the reason for each fetch matters. An initial fetch has an `.initial`
-source; a committed transaction reports whether it came from this process or another one:
+Use `updates(in:)` when every accepted fetch matters, including one whose output was suppressed by
+`filter`, `compactMap`, or `removeDuplicates`:
+
+```swift
+for try await update in reminders.updates(in: database) {
+  switch update {
+  case .emitted(let change):
+    render(change.value)
+  case .noEmission(let source):
+    logger.debug("No value emitted after \(source)")
+  }
+}
+```
+
+An update counts an accepted fetch, not a database notification: a transaction rejected by
+`filterTransactions`, or a fetch superseded before its result was accepted, produces no update.
+The `noEmission` case has no value because operators such as `compactMap` may produce no value of
+the observation's output type at all.
+
+Use `changes(in:)` when only emitted values and the reason for each fetch matter. An initial fetch
+has an `.initial` source; a committed transaction reports whether it came from this process or
+another one:
 
 ```swift
 for try await change in reminders.changes(in: database) {
@@ -758,9 +778,9 @@ for try await change in reminders.changes(in: database) {
 }
 ```
 
-Both sequences start observing when iteration begins, and buffer every element a slow consumer has
-not taken yet. Pass a `bufferingPolicy` to bound that buffer, which lets a slow loop skip ahead to
-the current state of the database rather than working through every intermediate one:
+All three sequences start observing when iteration begins, and buffer every element a slow consumer
+has not taken yet. Pass a `bufferingPolicy` to bound that buffer, which lets a slow loop skip ahead
+to the current state of the database rather than working through every intermediate one:
 
 ```swift
 for try await change in reminders.changes(in: database, bufferingPolicy: .bufferingNewest(1)) {
@@ -768,13 +788,24 @@ for try await change in reminders.changes(in: database, bufferingPolicy: .buffer
 }
 ```
 
-The callback API is the primitive beneath both asynchronous sequences:
+The callback API is the primitive beneath the asynchronous sequences. Use `onChange` for emitted
+values only:
 
 ```swift
 let subscription = try reminders.subscribe(
   to: database,
   onError: report,
   onChange: { change in render(change.value) }
+)
+```
+
+Use `onUpdate` to receive the same emitted and no-emission outcomes as `updates(in:)`:
+
+```swift
+let subscription = try reminders.subscribe(
+  to: database,
+  onError: report,
+  onUpdate: process
 )
 ```
 
@@ -921,10 +952,10 @@ makes an absent row `nil` instead.
 @FetchOne(Reminder.all.count()) var count = 0             // An aggregate.
 ```
 
-`@Fetch` takes an `OrbitFetchKeyRequest`, which is what several queries that must agree with one
-another are written as. Its `fetch` runs in one read transaction, so the values it assembles come
-from a single snapshot, and the property refetches when a write touches any region any of them
-read:
+`@Fetch` takes either an `OrbitFetchKeyRequest` or an `OrbitValueObservation`. A request is how
+several queries that must agree with one another are written. Its `fetch` runs in one read
+transaction, so the values it assembles come from a single snapshot, and the property refetches
+when a write touches any region any of them read:
 
 ```swift
 struct RemindersOverview: OrbitFetchKeyRequest {
@@ -944,6 +975,29 @@ struct RemindersOverview: OrbitFetchKeyRequest {
 @Fetch(RemindersOverview()) var overview = RemindersOverview.Value()
 ```
 
+Passing a value observation directly preserves its operators, external dependencies, refetch
+controller, and shared runtime:
+
+```swift
+let incompleteTitles = OrbitValueObservation
+  .trackingAll(Reminder.where { !$0.isCompleted }.order(by: \.title))
+  .map { $0.map(\.title) }
+  .removeDuplicates()
+
+@Fetch(incompleteTitles) var titles = [String]()
+```
+
+If `filter` or `compactMap` suppresses the initial value, the property keeps its declared value and
+finishes loading normally while it waits for a later value the observation accepts.
+
+Copies of one observation share an identity, so a stored observation survives SwiftUI view
+reconstruction. When a declaration constructs a fresh observation each time, give it a stable
+identity. Changing that identity replaces the observation:
+
+```swift
+@Fetch(makeObservation(for: filter), id: filter) var reminders = [Reminder]()
+```
+
 ### The database a property reads
 
 A property is created wherever the property it wraps lives, which is rarely somewhere a database is
@@ -958,10 +1012,51 @@ struct RemindersApp: App {
 ```
 
 `OrbitDefaultDatabase.withValue(_:operation:)` overrides it for the duration of an operation, which
-is how a test gives itself a database of its own without touching the process-wide one. A property
-built with no database at all, in a process that has no default, keeps the value it was declared
-with and reports an `OrbitMissingDefaultDatabaseError` through `loadError` rather than trapping, so
-a view built before its database exists still renders.
+is how a test gives itself a database of its own without touching the process-wide one. Accessing
+`OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
+detailed setup instructions. A SwiftUI property waits until its environment has been resolved, so
+providing a database with `.orbitDatabase(...)` does not require a process-wide default.
+
+Enable the `Dependencies` trait to configure the same default with
+[swift-dependencies](https://github.com/pointfreeco/swift-dependencies):
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["default", "Dependencies"]
+)
+```
+
+```swift
+import Dependencies
+import SQLiteOrbit
+
+prepareDependencies {
+  $0.orbitDefaultDatabase = try! appDatabase()
+}
+```
+
+`OrbitDefaultDatabase.current` and `@Dependency(\.orbitDefaultDatabase)` then resolve the same
+database. An `OrbitDefaultDatabase.withValue` scope wins over a dependency override, and a
+dependency override wins over the process default installed by `OrbitDefaultDatabase.set`.
+
+The `SQLiteOrbitTestSupport` product supplies a Swift Testing trait that installs a task-local
+database for every test case. A database construction expression is evaluated separately for each
+case, so tests remain isolated while running in parallel:
+
+```swift
+import SQLiteOrbitTestSupport
+import Testing
+
+@Suite(.orbitDatabase(try testDatabase()))
+struct RemindersTests {
+  @Test func loadsReminders() {
+    let model = RemindersModel()
+    #expect(model.reminders.count == 2)
+  }
+}
+```
 
 A property does not query until something reads it. Reading it the first time performs the fetch
 and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
@@ -990,8 +1085,8 @@ A read that fails leaves the value the property last produced in place, reports 
 `loadError`, and ends the observation; `load()` reads again and resumes it, which is what a retry
 button calls.
 
-`load(_:)` replaces the query the property observes, which is what a filter or a sort control
-drives:
+`load(_:)` replaces the query or value observation the property observes, which is what a filter or
+a sort control drives:
 
 ```swift
 try await $reminders.load(Reminder.where { $0.title.contains(search) })
@@ -1020,12 +1115,13 @@ an `animation:`, which delivers every change on the main actor inside that anima
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
 ```
 
-Fetch identity follows SQLiteData: it includes the database instance, request type and value, and
-optional scheduler value. Omitting a scheduler is distinct from explicitly supplying `.immediate`.
-SwiftUI remembers the declaration's identity separately from the currently loaded request, so a
-`load()` or projected-value assignment survives an unchanged declaration being rendered again.
-Changing the declaration's query, database, or scheduler replaces the observation; a value-only
-declaration leaves it alone.
+Request-backed fetch identity follows SQLiteData: it includes the database instance, request type
+and value, and optional scheduler value. An observation-backed fetch uses the observation's
+definition identity, or the explicit `id:` supplied with it. Omitting a scheduler is distinct from
+explicitly supplying `.immediate`. SwiftUI remembers the declaration's identity separately from
+the currently loaded source, so a `load()` or projected-value assignment survives an unchanged
+declaration being rendered again. Changing the declaration's request, observation identity,
+database, or scheduler replaces the observation; a value-only declaration leaves it alone.
 
 Custom schedulers should base equality and hashing on stable configuration (or instance identity),
 not mutable callback queues. The built-in schedulers already provide these conformances. Direct
