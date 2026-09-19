@@ -9,7 +9,10 @@ let package = Package(
     .macOS(.v26),
   ],
   products: [
-    .library(name: "RemindersKit", targets: ["RemindersData", "RemindersUI"]),
+    .library(
+      name: "RemindersKit",
+      targets: ["RemindersData", "RemindersNotifications", "RemindersUI"]
+    ),
     .library(name: "RemindersIntents", targets: ["RemindersIntents"]),
   ],
   dependencies: [
@@ -23,6 +26,10 @@ let package = Package(
       ]
     ),
     .target(
+      name: "RemindersNotifications",
+      dependencies: ["RemindersData"]
+    ),
+    .target(
       name: "RemindersUI",
       dependencies: ["RemindersData"]
     ),
@@ -30,6 +37,7 @@ let package = Package(
       name: "RemindersIntents",
       dependencies: [
         "RemindersData",
+        "RemindersNotifications",
         "RemindersUI",
         .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
       ]
@@ -37,6 +45,10 @@ let package = Package(
     .testTarget(
       name: "RemindersDataTests",
       dependencies: ["RemindersData"]
+    ),
+    .testTarget(
+      name: "RemindersNotificationsTests",
+      dependencies: ["RemindersData", "RemindersNotifications"]
     ),
     .testTarget(
       name: "RemindersUITests",
