@@ -34,7 +34,7 @@ nonisolated struct RemindersStats: Sendable {
 
 @MainActor
 @Observable
-final class RemindersListsModel {
+final class RemindersListsModel: ErrorReporting {
   @ObservationIgnored
   @FetchAll(
     RemindersList
@@ -80,12 +80,10 @@ final class RemindersListsModel {
   }
 
   func load() async {
-    do {
+    await withErrorReporting {
       try await $remindersLists.load()
       try await $tags.load()
       try await $stats.load()
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -194,10 +192,8 @@ final class RemindersListsModel {
   private func performDatabaseWrite(
     _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) async {
-    do {
+    await withErrorReporting {
       try await OrbitDefaultDatabase.current.write(operation)
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 }
@@ -210,6 +206,7 @@ struct RemindersListsView: View {
 
   var body: some View {
     @Bindable var model = model
+    @Bindable var searchModel = searchModel
 
     List {
       if !searchText.isEmpty {
@@ -364,14 +361,8 @@ struct RemindersListsView: View {
     .navigationDestination(item: $model.selectedDetail) { detailType in
       RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
     }
-    .alert(
-      "Database Error",
-      isPresented: $model.errorMessage.isPresented
-    ) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
+    .errorAlert(message: $model.errorMessage)
+    .errorAlert("Search Error", message: $searchModel.errorMessage)
   }
 
 }

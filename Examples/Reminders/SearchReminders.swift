@@ -16,7 +16,7 @@ nonisolated struct SearchReminderRow: Identifiable, Sendable {
 
 @MainActor
 @Observable
-final class SearchRemindersModel {
+final class SearchRemindersModel: ErrorReporting {
   @ObservationIgnored @FetchAll var results: [SearchReminderRow]
   var errorMessage: String?
 
@@ -40,7 +40,7 @@ final class SearchRemindersModel {
   }
 
   func loadResults(for text: String, showCompleted: Bool) async {
-    do {
+    await withErrorReporting {
       try await $results.load(
         Self.query(
           text: text,
@@ -49,9 +49,6 @@ final class SearchRemindersModel {
         ),
         animation: .default
       )
-    } catch is CancellationError {
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -119,11 +116,11 @@ struct SearchRemindersView: View {
       )
     }
     .task(id: searchText) {
-      do {
+      if await model.withErrorReporting({
         try await $settings.load()
+        return true
+      }) == true {
         model.search(searchText, showCompleted: settings.showCompleted)
-      } catch {
-        model.errorMessage = error.localizedDescription
       }
     }
     .onChange(of: settings.showCompleted) {

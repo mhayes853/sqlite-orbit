@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class ReminderRowModel {
+final class ReminderRowModel: ErrorReporting {
   typealias Sleep = @Sendable (Duration) async throws -> Void
 
   var errorMessage: String?
@@ -138,7 +138,7 @@ final class ReminderRowModel {
         completionTask = nil
       }
     }
-    do {
+    await withErrorReporting {
       try await sleep(delay)
       try Task.checkCancellation()
       try await OrbitDefaultDatabase.current.write { transaction in
@@ -146,9 +146,6 @@ final class ReminderRowModel {
           .update { $0.status = Reminder.Status.completed }
           .execute(transaction)
       }
-    } catch is CancellationError {
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -156,10 +153,8 @@ final class ReminderRowModel {
     _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) -> Task<Void, Never> {
     Task {
-      do {
+      await withErrorReporting {
         try await OrbitDefaultDatabase.current.write(operation)
-      } catch {
-        errorMessage = error.localizedDescription
       }
     }
   }
@@ -285,14 +280,7 @@ struct ReminderRow: View {
         )
       }
     }
-    .alert(
-      "Database Error",
-      isPresented: $model.errorMessage.isPresented
-    ) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
+    .errorAlert(message: $model.errorMessage)
   }
 
   private func highlightedText(_ text: String) -> Text {

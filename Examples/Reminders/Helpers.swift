@@ -1,5 +1,26 @@
 import SwiftUI
 
+@MainActor
+protocol ErrorReporting {
+  var errorMessage: String? { get nonmutating set }
+}
+
+extension ErrorReporting {
+  @discardableResult
+  func withErrorReporting<Value>(
+    _ operation: () async throws -> Value
+  ) async -> Value? {
+    do {
+      return try await operation()
+    } catch is CancellationError {
+      return nil
+    } catch {
+      errorMessage = error.localizedDescription
+      return nil
+    }
+  }
+}
+
 extension Optional {
   var isPresented: Bool {
     get { self != nil }
@@ -82,7 +103,30 @@ private struct RemindersSearchModifier: ViewModifier {
   }
 }
 
+private struct ErrorAlertModifier: ViewModifier {
+  let title: LocalizedStringKey
+  @Binding var message: String?
+
+  func body(content: Content) -> some View {
+    content.alert(
+      title,
+      isPresented: $message.isPresented
+    ) {
+      Button("OK", role: .cancel) {}
+    } message: {
+      Text(message ?? "Unknown error")
+    }
+  }
+}
+
 extension View {
+  func errorAlert(
+    _ title: LocalizedStringKey = "Database Error",
+    message: Binding<String?>
+  ) -> some View {
+    modifier(ErrorAlertModifier(title: title, message: message))
+  }
+
   func remindersSearchable(
     text: Binding<String>,
     isPresented: Binding<Bool>,

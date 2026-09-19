@@ -395,6 +395,28 @@ struct FormAndSearchTests {
   }
 
   @Test
+  func errorReportingCapturesFailuresAndIgnoresCancellation() async {
+    let model = SearchRemindersModel()
+
+    let value = await model.withErrorReporting { 42 }
+    #expect(value == 42)
+    #expect(model.errorMessage == nil)
+
+    let failedValue: Int? = await model.withErrorReporting {
+      throw ErrorReportingTestError.failed
+    }
+    #expect(failedValue == nil)
+    #expect(model.errorMessage == "Something went wrong.")
+
+    model.errorMessage = nil
+    let cancelledValue: Int? = await model.withErrorReporting {
+      throw CancellationError()
+    }
+    #expect(cancelledValue == nil)
+    #expect(model.errorMessage == nil)
+  }
+
+  @Test
   func tagParsing() {
     #expect(ReminderFormModel.parseTags("#work, HOME work") == ["work", "HOME work"])
     #expect(
@@ -403,6 +425,14 @@ struct FormAndSearchTests {
     #expect(ReminderFormModel.parseTags("#this is a test") == ["this is a test"])
     #expect(ReminderFormModel.parseTags("#work, WORK") == ["work"])
     #expect(ReminderFormModel.parseTags("").isEmpty)
+  }
+}
+
+private enum ErrorReportingTestError: LocalizedError {
+  case failed
+
+  var errorDescription: String? {
+    "Something went wrong."
   }
 }
 

@@ -6,7 +6,7 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class RemindersListFormModel {
+final class RemindersListFormModel: ErrorReporting {
   let id: RemindersList.ID
   let isNew: Bool
   let originalPosition: Int
@@ -40,7 +40,7 @@ final class RemindersListFormModel {
     let coverImageData = coverImageData
     let isNew = isNew
     let originalPosition = originalPosition
-    do {
+    return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
         let position =
           isNew ? (try RemindersList.count().fetchOne(transaction) ?? 0) : originalPosition
@@ -58,10 +58,7 @@ final class RemindersListFormModel {
         .execute(transaction)
       }
       return true
-    } catch {
-      errorMessage = error.localizedDescription
-      return false
-    }
+    } ?? false
   }
 }
 
@@ -157,14 +154,10 @@ struct RemindersListForm: View {
     .onChange(of: photoItem) {
       photoItemChanged()
     }
-    .alert(
+    .errorAlert(
       "Could Not Save List",
-      isPresented: $model.errorMessage.isPresented
-    ) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
+      message: $model.errorMessage
+    )
   }
 
   private func photoItemChanged() {

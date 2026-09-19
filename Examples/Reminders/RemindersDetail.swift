@@ -80,7 +80,7 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
 
 @MainActor
 @Observable
-final class RemindersDetailModel {
+final class RemindersDetailModel: ErrorReporting {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
   @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
   var remindersLists: [RemindersList]
@@ -145,14 +145,12 @@ final class RemindersDetailModel {
   }
 
   func load() async {
-    do {
+    await withErrorReporting {
       try await $reminderRows.load()
       try await $remindersLists.load()
       if detailType.remindersList != nil {
         try await $coverImageData.load()
       }
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -165,7 +163,7 @@ final class RemindersDetailModel {
     var ids = reminderRows.map(\.id)
     ids.move(fromOffsets: source, toOffset: destination)
     let orderedIDs = ids
-    do {
+    await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
         for (position, id) in orderedIDs.enumerated() {
           try Reminder.find(id).update { $0.position = position }.execute(transaction)
@@ -173,8 +171,6 @@ final class RemindersDetailModel {
       }
       ordering = .manual
       await persistSettingsAndReload()
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -199,7 +195,7 @@ final class RemindersDetailModel {
       ordering: ordering,
       showCompleted: showCompleted
     )
-    do {
+    await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
         try RemindersDetailSettings.upsert {
           RemindersDetailSettings.Draft(settings)
@@ -215,8 +211,6 @@ final class RemindersDetailModel {
         ),
         animation: .default
       )
-    } catch {
-      errorMessage = error.localizedDescription
     }
   }
 
@@ -360,14 +354,7 @@ struct RemindersDetailView: View {
         ContentUnavailableView("No Reminders", systemImage: "checkmark.circle")
       }
     }
-    .alert(
-      "Database Error",
-      isPresented: $model.errorMessage.isPresented
-    ) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
+    .errorAlert(message: $model.errorMessage)
   }
 
 }

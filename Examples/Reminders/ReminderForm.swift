@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class ReminderFormModel {
+final class ReminderFormModel: ErrorReporting {
   let id: Reminder.ID
   let isNew: Bool
   var dueDate: Date
@@ -129,7 +129,7 @@ final class ReminderFormModel {
     var reminder = reminder
     reminder.dueDate = dueDateToSave
     reminder.title = title
-    do {
+    return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
         if isNew {
           reminder.position = try Reminder.count().fetchOne(transaction) ?? 0
@@ -139,10 +139,7 @@ final class ReminderFormModel {
         try ReminderTag.replaceTags(for: id, with: tagTitles, in: transaction)
       }
       return true
-    } catch {
-      errorMessage = error.localizedDescription
-      return false
-    }
+    } ?? false
   }
 
   private var dueDateToSave: Date? {
@@ -241,14 +238,10 @@ struct ReminderFormView: View {
       }
     }
     .defaultFocus($focusedField, model.isNew ? .title : nil)
-    .alert(
+    .errorAlert(
       "Could Not Save Reminder",
-      isPresented: $model.errorMessage.isPresented
-    ) {
-      Button("OK", role: .cancel) {}
-    } message: {
-      Text(model.errorMessage ?? "Unknown error")
-    }
+      message: $model.errorMessage
+    )
   }
 
   private func saveButtonTapped() {
