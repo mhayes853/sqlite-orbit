@@ -166,15 +166,7 @@ struct RecentRemindersWidgetView: View {
 }
 
 struct RecentRemindersWidget: Widget {
-  private let database: RemindersDatabase
-
-  init() {
-    database = try! OrbitIPCDatabase.reminders()
-  }
-
-  init(database: RemindersDatabase) {
-    self.database = database
-  }
+  private let database: RemindersDatabase = OrbitDefaultDatabase.current
 
   var body: some WidgetConfiguration {
     StaticConfiguration(

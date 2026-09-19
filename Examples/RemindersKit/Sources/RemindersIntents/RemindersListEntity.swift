@@ -39,15 +39,13 @@ public struct RemindersListEntity: AppEntity, Sendable {
 }
 
 public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
-  @Dependency
-  private var databaseDependency: RemindersIntentDatabase
-
-  private var database: RemindersDatabase { databaseDependency.value }
+  @Dependency(default: OrbitDefaultDatabase.current)
+  private var database: RemindersDatabase
 
   public init() {}
 
   public init(database: RemindersDatabase) {
-    _databaseDependency = .reminders(database)
+    _database = remindersDatabaseDependency(database)
   }
 
   public func entities(

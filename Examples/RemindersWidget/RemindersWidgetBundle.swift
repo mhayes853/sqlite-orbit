@@ -13,15 +13,11 @@ struct RemindersWidgetIntentsPackage: AppIntentsPackage {
 
 @main
 struct RemindersWidgetBundle: WidgetBundle {
-  private let database: RemindersDatabase
-
   init() {
-    let database = try! OrbitIPCDatabase.reminders()
-    self.database = database
-    RemindersIntentDependencies.register(database: database)
+    OrbitDefaultDatabase.set(try! OrbitIPCDatabase.reminders())
   }
 
   var body: some Widget {
-    RecentRemindersWidget(database: database)
+    RecentRemindersWidget()
   }
 }
