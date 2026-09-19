@@ -2,25 +2,11 @@ import Foundation
 import RemindersData
 import SQLiteOrbit
 import SQLiteOrbitTestSupport
-import SwiftUI
 import Testing
 
 @MainActor
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct FormAndSearchTests {
-  @Test
-  func searchHighlightUsesBoldTextAndABackgroundColor() throws {
-    let text = try #require(ReminderRow.highlightedAttributedString("Call **Blob** today"))
-    let highlightedRun = try #require(
-      text.runs.first {
-        $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
-      }
-    )
-
-    #expect(String(text.characters) == "Call Blob today")
-    #expect(highlightedRun.backgroundColor != nil)
-  }
-
   @Test
   func listFormCreatesThenEditsAList() async throws {
     let database = OrbitDefaultDatabase.current

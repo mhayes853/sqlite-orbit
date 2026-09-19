@@ -1,5 +1,6 @@
 import RemindersData
 import RemindersIntents
+import RemindersUI
 import SQLiteOrbit
 import SwiftUI
 import WidgetKit
@@ -8,26 +9,34 @@ struct RecentRemindersEntry: TimelineEntry {
   let date: Date
   let reminders: [WidgetReminder]
 
-  static let placeholder = Self(
-    date: .now,
-    reminders: [
-      WidgetReminder(
-        id: UUID(),
-        createdAt: .now,
-        listTitle: "Personal",
-        title: "Pick up groceries"
-      ),
-      WidgetReminder(
-        id: UUID(),
-        createdAt: .now,
-        dueDate: .now,
-        isFlagged: true,
-        listTitle: "Work",
-        priority: .high,
-        title: "Review the launch notes"
-      ),
-    ]
-  )
+  static let placeholder: Self = {
+    let personal = RemindersList(id: UUID(), title: "Personal")
+    let work = RemindersList(id: UUID(), title: "Work")
+    return Self(
+      date: .now,
+      reminders: [
+        WidgetReminder(
+          reminder: Reminder(
+            id: UUID(),
+            remindersListID: personal.id,
+            title: "Pick up groceries"
+          ),
+          remindersList: personal
+        ),
+        WidgetReminder(
+          reminder: Reminder(
+            id: UUID(),
+            dueDate: .now,
+            isFlagged: true,
+            priority: .high,
+            remindersListID: work.id,
+            title: "Review the launch notes"
+          ),
+          remindersList: work
+        ),
+      ]
+    )
+  }()
 }
 
 struct RecentRemindersProvider: TimelineProvider {
@@ -124,35 +133,38 @@ struct RecentRemindersWidgetView: View {
   }
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
-    HStack(spacing: 8) {
+    let value = reminder.reminder
+    let remindersList = reminder.remindersList
+
+    return HStack(spacing: 8) {
       Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
-        Image(systemName: "circle")
+        ReminderCompletionIndicator(
+          isCompleted: value.isCompleted,
+          color: remindersList.color
+        )
           .font(.title3)
-          .foregroundStyle(reminder.listColor)
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("Complete \(reminder.title)")
+      .accessibilityLabel("Complete \(value.title)")
 
       VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 4) {
-          if let priority = reminder.priority {
-            Text(String(repeating: "!", count: priority.rawValue))
-              .foregroundStyle(.orange)
+          if let priority = value.priority {
+            ReminderPriorityIndicator(priority: priority, color: .orange)
           }
-          Text(reminder.title)
+          ReminderTitle(reminder: value)
             .lineLimit(1)
         }
         .font(.subheadline.weight(.medium))
 
         HStack(spacing: 4) {
-          Text(reminder.listTitle)
-          if let dueDate = reminder.dueDate {
+          Text(remindersList.title)
+          if let dueDate = value.dueDate {
             Text("•")
-            Text(dueDate, style: .date)
+            ReminderDueDate(dueDate, includesTime: false)
           }
-          if reminder.isFlagged {
-            Image(systemName: "flag.fill")
-              .foregroundStyle(.orange)
+          if value.isFlagged {
+            ReminderFlagIndicator()
           }
         }
         .font(.caption2)

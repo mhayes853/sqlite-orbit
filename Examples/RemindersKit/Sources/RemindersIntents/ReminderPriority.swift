@@ -23,16 +23,4 @@ public enum ReminderPriority: Int, AppEnum, Sendable {
   public var reminderPriority: Reminder.Priority {
     Reminder.Priority(rawValue: rawValue)!
   }
-
-  public var symbol: String {
-    String(repeating: "!", count: rawValue)
-  }
-
-  public var displayName: String {
-    switch self {
-    case .low: "Low"
-    case .medium: "Medium"
-    case .high: "High"
-    }
-  }
 }

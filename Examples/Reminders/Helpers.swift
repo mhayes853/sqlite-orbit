@@ -43,20 +43,6 @@ extension Optional where Wrapped == Date {
   }
 }
 
-struct RemindersListIcon: View {
-  let color: Color
-  var size: CGFloat = 38
-
-  var body: some View {
-    Image(systemName: "list.bullet")
-      .font(.system(size: size * 0.46, weight: .bold))
-      .foregroundStyle(.white)
-      .frame(width: size, height: size)
-      .background(color.gradient, in: .circle)
-      .accessibilityHidden(true)
-  }
-}
-
 struct FloatingAddButton: View {
   let tint: Color
   let title: String

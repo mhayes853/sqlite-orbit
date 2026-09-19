@@ -1,5 +1,6 @@
 import Observation
 import RemindersData
+import RemindersUI
 import SQLiteOrbit
 import SwiftUI
 
@@ -201,8 +202,10 @@ struct ReminderRow: View {
       Button {
         model.completionButtonTapped(reminder)
       } label: {
-        Image(systemName: isCompleted ? "circle.inset.filled" : "circle")
-          .foregroundStyle(isCompleted ? color : .secondary)
+        ReminderCompletionIndicator(
+          isCompleted: isCompleted,
+          color: isCompleted ? color : .secondary
+        )
           .font(.title2)
       }
       .accessibilityLabel(isCompleted ? "Mark incomplete" : "Mark complete")
@@ -210,12 +213,13 @@ struct ReminderRow: View {
       VStack(alignment: .leading, spacing: 3) {
         HStack(alignment: .firstTextBaseline, spacing: 3) {
           if let priority = reminder.priority {
-            Text(String(repeating: "!", count: priority.rawValue))
-              .foregroundStyle(color)
+            ReminderPriorityIndicator(priority: priority, color: color)
           }
-          highlightedText(highlightedTitle ?? reminder.title)
-            .foregroundStyle(isCompleted ? .secondary : .primary)
-            .strikethrough(isCompleted)
+          ReminderTitle(
+            reminder: reminder,
+            isCompleted: isCompleted,
+            title: highlightedTitle.flatMap(ReminderSearchHighlight.attributedString)
+          )
         }
         .font(.title3)
 
@@ -228,8 +232,11 @@ struct ReminderRow: View {
 
         HStack(spacing: 5) {
           if let dueDate = reminder.dueDate {
-            Text(dueDate.formatted(date: .numeric, time: .shortened))
-              .foregroundStyle(isPastDue ? .red : .secondary)
+            ReminderDueDate(
+              dueDate,
+              includesTime: true,
+              isPastDue: isPastDue
+            )
           }
           if !tags.isEmpty {
             highlightedText(tags).foregroundStyle(.secondary)
@@ -240,7 +247,7 @@ struct ReminderRow: View {
 
       Spacer()
       if reminder.isFlagged {
-        Image(systemName: "flag.fill").foregroundStyle(.orange)
+        ReminderFlagIndicator()
       }
       Button("Details", systemImage: "info.circle") {
         model.detailsButtonTapped(reminder, remindersList: remindersList)
@@ -285,24 +292,11 @@ struct ReminderRow: View {
 
   private func highlightedText(_ text: String) -> Text {
     guard highlightedTitle != nil,
-      let attributedText = Self.highlightedAttributedString(text)
+      let attributedText = ReminderSearchHighlight.attributedString(text)
     else {
       return Text(text)
     }
     return Text(attributedText)
-  }
-
-  static func highlightedAttributedString(_ text: String) -> AttributedString? {
-    guard var attributedText = try? AttributedString(markdown: text) else { return nil }
-    let highlightedRanges = attributedText.runs.compactMap { run in
-      run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
-        ? run.range
-        : nil
-    }
-    for range in highlightedRanges {
-      attributedText[range].backgroundColor = .yellow.opacity(0.35)
-    }
-    return attributedText
   }
 }
 
