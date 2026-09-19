@@ -49,9 +49,9 @@ write transactions alike, and the caller is stating which it is.
 
 ## Reminders demo
 
-The [Reminders example](Examples/README.md) is an iOS app demonstrating migrations, observed
+The [Reminders example](Examples/Reminders/README.md) is an iOS app demonstrating migrations, observed
 queries, aggregate counts, transactional forms, FTS5 search, and database-backed view settings.
-Open `Examples/Examples.xcodeproj`, select the **Reminders** scheme, and run it on an iOS 17 or later
+Open `Examples/Reminders/Reminders.xcodeproj`, select the **Reminders** scheme, and run it on an iOS 17 or later
 simulator. The first pass intentionally has no CloudKit synchronization or third-party dependency
 management.
 

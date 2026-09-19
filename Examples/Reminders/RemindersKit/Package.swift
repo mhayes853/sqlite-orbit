@@ -13,7 +13,7 @@ let package = Package(
     .library(name: "RemindersIntents", targets: ["RemindersIntents"]),
   ],
   dependencies: [
-    .package(name: "sqlite-orbit", path: "../..")
+    .package(name: "sqlite-orbit", path: "../../..")
   ],
   targets: [
     .target(

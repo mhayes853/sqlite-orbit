@@ -4,7 +4,7 @@ The Reminders demo is a small iOS app patterned after SQLiteData's example app. 
 SQLiteOrbit itself and Apple frameworks, without CloudKit synchronization, Dependencies, or other
 Point-Free support libraries.
 
-Open `Examples.xcodeproj`, choose the **Reminders** scheme, and run it on an iOS 17 or later
+Open `Reminders.xcodeproj`, choose the **Reminders** scheme, and run it on an iOS 17 or later
 simulator.
 
 The app demonstrates:
@@ -33,7 +33,7 @@ Run the suite from Xcode or from the command line:
 
 ```sh
 xcodebuild test \
-  -project Examples/Examples.xcodeproj \
+  -project Examples/Reminders/Reminders.xcodeproj \
   -scheme Reminders \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -skipMacroValidation

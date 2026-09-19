@@ -300,7 +300,7 @@
 				LastSwiftUpdateCheck = 1500;
 				LastUpgradeCheck = 1500;
 			};
-			buildConfigurationList = 1F52357DB439A0F948DBB02C /* Build configuration list for PBXProject "Examples" */;
+			buildConfigurationList = 1F52357DB439A0F948DBB02C /* Build configuration list for PBXProject "Reminders" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -653,7 +653,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1F52357DB439A0F948DBB02C /* Build configuration list for PBXProject "Examples" */ = {
+		1F52357DB439A0F948DBB02C /* Build configuration list for PBXProject "Reminders" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				6654FB87C2FCB42F5FBD2619 /* Debug */,
@@ -698,7 +698,7 @@
 		};
 		EC2E45CDAF92B3D07F881861 /* XCLocalSwiftPackageReference ".." */ = {
 			isa = XCLocalSwiftPackageReference;
-			relativePath = ..;
+			relativePath = ../..;
 		};
 /* End XCLocalSwiftPackageReference section */
 

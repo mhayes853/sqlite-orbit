@@ -5,7 +5,8 @@ require "xcodeproj"
 
 root = File.expand_path("..", __dir__)
 examples = File.join(root, "Examples")
-project_path = File.join(examples, "Examples.xcodeproj")
+reminders_example = File.join(examples, "Reminders")
+project_path = File.join(reminders_example, "Reminders.xcodeproj")
 project = Xcodeproj::Project.new(project_path)
 
 feature = project.new_target(:framework, "RemindersFeature", :ios, "17.0")
@@ -54,25 +55,25 @@ tests.build_configurations.each do |configuration|
 end
 
 reminders_group = project.main_group.new_group("Reminders", "Reminders")
-Dir[File.join(examples, "Reminders", "*.swift")].sort.each do |path|
+Dir[File.join(reminders_example, "Reminders", "*.swift")].sort.each do |path|
   reference = reminders_group.new_file(File.basename(path))
   feature.source_build_phase.add_file_reference(reference)
 end
 
 app_group = project.main_group.new_group("RemindersApp", "RemindersApp")
-Dir[File.join(examples, "RemindersApp", "*.swift")].sort.each do |path|
+Dir[File.join(reminders_example, "RemindersApp", "*.swift")].sort.each do |path|
   reference = app_group.new_file(File.basename(path))
   app.source_build_phase.add_file_reference(reference)
 end
 
 tests_group = project.main_group.new_group("RemindersTests", "RemindersTests")
-Dir[File.join(examples, "RemindersTests", "*.swift")].sort.each do |path|
+Dir[File.join(reminders_example, "RemindersTests", "*.swift")].sort.each do |path|
   reference = tests_group.new_file(File.basename(path))
   tests.source_build_phase.add_file_reference(reference)
 end
 
 package = project.new(Xcodeproj::Project::Object::XCLocalSwiftPackageReference)
-package.relative_path = ".."
+package.relative_path = "../.."
 project.root_object.package_references << package
 
 product = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
@@ -96,28 +97,28 @@ File.write(
       <BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">
         <BuildActionEntries>
           <BuildActionEntry buildForTesting="YES" buildForRunning="YES" buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">
-            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Reminders.xcodeproj"/>
           </BuildActionEntry>
           <BuildActionEntry buildForTesting="YES" buildForRunning="NO" buildForProfiling="NO" buildForArchiving="NO" buildForAnalyzing="YES">
-            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{tests.uuid}" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{tests.uuid}" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Reminders.xcodeproj"/>
           </BuildActionEntry>
         </BuildActionEntries>
       </BuildAction>
       <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES">
         <Testables>
           <TestableReference skipped="NO">
-            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{tests.uuid}" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Examples.xcodeproj"/>
+            <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{tests.uuid}" BuildableName="RemindersTests.xctest" BlueprintName="RemindersTests" ReferencedContainer="container:Reminders.xcodeproj"/>
           </TestableReference>
         </Testables>
       </TestAction>
       <LaunchAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" launchStyle="0" useCustomWorkingDirectory="NO" ignoresPersistentStateOnLaunch="NO" debugDocumentVersioning="YES" debugServiceExtension="internal" allowLocationSimulation="YES">
         <BuildableProductRunnable runnableDebuggingMode="0">
-          <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+          <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Reminders.xcodeproj"/>
         </BuildableProductRunnable>
       </LaunchAction>
       <ProfileAction buildConfiguration="Release" shouldUseLaunchSchemeArgsEnv="YES" savedToolIdentifier="" useCustomWorkingDirectory="NO" debugDocumentVersioning="YES">
         <BuildableProductRunnable runnableDebuggingMode="0">
-          <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Examples.xcodeproj"/>
+          <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="#{app.uuid}" BuildableName="Reminders.app" BlueprintName="Reminders" ReferencedContainer="container:Reminders.xcodeproj"/>
         </BuildableProductRunnable>
       </ProfileAction>
       <AnalyzeAction buildConfiguration="Debug"/>
