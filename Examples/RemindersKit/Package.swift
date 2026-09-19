@@ -5,11 +5,11 @@ import PackageDescription
 let package = Package(
   name: "RemindersKit",
   platforms: [
-    .iOS(.v17),
-    .macOS(.v13),
+    .iOS(.v26),
+    .macOS(.v26),
   ],
   products: [
-    .library(name: "RemindersKit", targets: ["RemindersData"]),
+    .library(name: "RemindersKit", targets: ["RemindersData", "RemindersUI"]),
     .library(name: "RemindersIntents", targets: ["RemindersIntents"]),
   ],
   dependencies: [
@@ -23,15 +23,24 @@ let package = Package(
       ]
     ),
     .target(
+      name: "RemindersUI",
+      dependencies: ["RemindersData"]
+    ),
+    .target(
       name: "RemindersIntents",
       dependencies: [
         "RemindersData",
+        "RemindersUI",
         .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
       ]
     ),
     .testTarget(
       name: "RemindersDataTests",
       dependencies: ["RemindersData"]
+    ),
+    .testTarget(
+      name: "RemindersUITests",
+      dependencies: ["RemindersUI"]
     ),
     .testTarget(
       name: "RemindersIntentsTests",
