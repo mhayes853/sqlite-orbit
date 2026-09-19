@@ -1,6 +1,4 @@
-import Foundation
 import SQLiteOrbit
-import SwiftUI
 
 public enum RemindersWidgetConfiguration {
   public static let kind = "RecentRemindersWidget"

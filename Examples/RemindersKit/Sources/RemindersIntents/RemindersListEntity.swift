@@ -1,7 +1,6 @@
 import AppIntents
 import RemindersData
 import SQLiteOrbit
-import SwiftUI
 
 public struct RemindersListEntity: AppEntity, Sendable {
   public static let typeDisplayRepresentation = TypeDisplayRepresentation(
@@ -15,10 +14,6 @@ public struct RemindersListEntity: AppEntity, Sendable {
 
   @ComputedProperty(title: "Title")
   public var title: String { remindersList.title }
-
-  public var colorHex: Int64 {
-    Color.HexRepresentation(queryOutput: remindersList.color).hexValue ?? 0
-  }
 
   public var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(

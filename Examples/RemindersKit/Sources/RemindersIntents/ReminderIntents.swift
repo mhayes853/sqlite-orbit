@@ -3,6 +3,7 @@ import Foundation
 import RemindersData
 import RemindersUI
 import SQLiteOrbit
+import SwiftUI
 
 public struct CreateReminderIntent: AppIntent {
   public static let title: LocalizedStringResource = "Create Reminder"
