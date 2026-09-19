@@ -161,7 +161,7 @@ struct RecentRemindersWidgetView: View {
           Text(remindersList.title)
           if let dueDate = value.dueDate {
             Text("•")
-            ReminderDueDate(dueDate, includesTime: false)
+            ReminderDueDate(dueDate, includesTime: value.includesTime)
           }
           if value.isFlagged {
             ReminderFlagIndicator()

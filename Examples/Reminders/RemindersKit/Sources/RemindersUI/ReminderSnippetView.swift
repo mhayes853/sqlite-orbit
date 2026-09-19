@@ -37,7 +37,7 @@ public struct ReminderSnippetView: View {
           Label(remindersList.title, systemImage: "list.bullet")
           if let dueDate = reminder.dueDate {
             Label {
-              ReminderDueDate(dueDate, includesTime: false)
+              ReminderDueDate(dueDate, includesTime: reminder.includesTime)
             } icon: {
               Image(systemName: "calendar")
             }

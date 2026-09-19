@@ -136,6 +136,30 @@ struct FormAndSearchTests {
       await database.read { try Reminder.find(reminderID).fetchOne($0) }
     )
     #expect(reminder.dueDate == Calendar.current.startOfDay(for: dueDate))
+    #expect(!reminder.includesTime)
+  }
+
+  @Test
+  func reminderFormPersistsThatADueDateIncludesATime() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+    }
+    let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
+    let form = ReminderFormModel(remindersList: list)
+    form.reminder.title = "Timed"
+    form.dueDate = dueDate
+    form.timeToggleTapped()
+
+    #expect(await form.save())
+    let reminderID = form.id
+
+    let reminder = try #require(
+      await database.read { try Reminder.find(reminderID).fetchOne($0) }
+    )
+    #expect(reminder.dueDate == dueDate)
+    #expect(reminder.includesTime)
   }
 
   @Test

@@ -47,6 +47,7 @@ public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
   public let id: UUID
   public var createdAt = Date()
   public var dueDate: Date?
+  public var includesTime = false
   public var isFlagged = false
   public var notes = ""
   public var position = 0
@@ -59,6 +60,7 @@ public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
     id: UUID,
     createdAt: Date = .now,
     dueDate: Date? = nil,
+    includesTime: Bool = false,
     isFlagged: Bool = false,
     notes: String = "",
     position: Int = 0,
@@ -70,6 +72,7 @@ public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
     self.id = id
     self.createdAt = createdAt
     self.dueDate = dueDate
+    self.includesTime = includesTime
     self.isFlagged = isFlagged
     self.notes = notes
     self.position = position
@@ -412,6 +415,14 @@ public func remindersMigrator(
       """
       UPDATE "reminders"
       SET "createdAt" = strftime('%Y-%m-%d %H:%M:%f', 'now')
+      """
+    )
+  }
+  migrator.registerMigration("Add reminder time inclusion") { transaction in
+    try transaction.execute(
+      """
+      ALTER TABLE "reminders"
+      ADD COLUMN "includesTime" INTEGER NOT NULL DEFAULT 0
       """
     )
   }

@@ -94,7 +94,10 @@ final class ReminderRowModel: ErrorReporting {
     )
     return write {
       try Reminder.find(reminder.id)
-        .update { $0.dueDate = dueDate }
+        .update {
+          $0.dueDate = dueDate
+          $0.includesTime = false
+        }
         .execute($0)
     }
   }
@@ -103,7 +106,10 @@ final class ReminderRowModel: ErrorReporting {
   func clearDueDateButtonTapped(_ reminder: Reminder) -> Task<Void, Never> {
     write {
       try Reminder.find(reminder.id)
-        .update { $0.dueDate = #bind(nil as Date?) }
+        .update {
+          $0.dueDate = #bind(nil as Date?)
+          $0.includesTime = false
+        }
         .execute($0)
     }
   }
@@ -236,7 +242,7 @@ struct ReminderRow: View {
           if let dueDate = reminder.dueDate {
             ReminderDueDate(
               dueDate,
-              includesTime: true,
+              includesTime: reminder.includesTime,
               isPastDue: isPastDue
             )
           }

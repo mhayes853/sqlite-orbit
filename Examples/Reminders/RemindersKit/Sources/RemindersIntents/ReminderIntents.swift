@@ -113,6 +113,7 @@ public struct CreateReminderIntent: AppIntent {
           Reminder(
             id: reminderID,
             dueDate: dueDate,
+            includesTime: dueDate != nil,
             isFlagged: isFlagged,
             notes: notes,
             position: position,

@@ -41,9 +41,8 @@ final class ReminderFormModel: ErrorReporting {
       reminder ?? Reminder(id: id, remindersListID: remindersList.id)
     )
     dueDate = reminder?.dueDate ?? .now
-    if let dueDate = reminder?.dueDate {
-      let components = Calendar.current.dateComponents([.hour, .minute], from: dueDate)
-      dueDateMode = components.hour != 0 || components.minute != 0 ? .dateAndTime : .date
+    if reminder?.dueDate != nil {
+      dueDateMode = reminder?.includesTime == true ? .dateAndTime : .date
     } else {
       dueDateMode = .none
     }
@@ -129,6 +128,7 @@ final class ReminderFormModel: ErrorReporting {
     let isNew = isNew
     var reminder = reminder
     reminder.dueDate = dueDateToSave
+    reminder.includesTime = isTimeEnabled
     reminder.title = title
     return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
