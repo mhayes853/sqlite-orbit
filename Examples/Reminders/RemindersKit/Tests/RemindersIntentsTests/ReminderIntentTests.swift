@@ -1,5 +1,6 @@
 import Foundation
 import RemindersData
+import RemindersNotifications
 import SQLiteOrbit
 import Testing
 
@@ -22,7 +23,8 @@ struct ReminderIntentTests {
       isFlagged: true,
       priority: .high,
       tags: ["travel plans, #Work", "work"],
-      database: database
+      database: database,
+      notificationScheduler: .disabled
     )
 
     _ = try await intent.perform()
@@ -58,7 +60,8 @@ struct ReminderIntentTests {
 
     _ = try await CreateReminderIntent(
       title: "Call home",
-      database: database
+      database: database,
+      notificationScheduler: .disabled
     )
     .perform()
 
@@ -74,7 +77,8 @@ struct ReminderIntentTests {
     do {
       _ = try await CreateReminderIntent(
         title: "Call home",
-        database: database
+        database: database,
+        notificationScheduler: .disabled
       )
       .perform()
       Issue.record("Expected reminder creation to fail without a list")
@@ -95,12 +99,20 @@ struct ReminderIntentTests {
       remindersList: list
     )
 
-    let complete = CompleteReminderIntent(reminder: entity, database: database)
+    let complete = CompleteReminderIntent(
+      reminder: entity,
+      database: database,
+      notificationScheduler: .disabled
+    )
     _ = try await complete.perform()
     _ = try await complete.perform()
     #expect(try await status(of: reminder.id, in: database) == .completed)
 
-    let reopen = ReopenReminderIntent(reminder: entity, database: database)
+    let reopen = ReopenReminderIntent(
+      reminder: entity,
+      database: database,
+      notificationScheduler: .disabled
+    )
     _ = try await reopen.perform()
     _ = try await reopen.perform()
     #expect(try await status(of: reminder.id, in: database) == .incomplete)
@@ -122,7 +134,8 @@ struct ReminderIntentTests {
 
     _ = try await DeleteRemindersIntent(
       entities: [entity],
-      database: database
+      database: database,
+      notificationScheduler: .disabled
     )
     .perform()
 

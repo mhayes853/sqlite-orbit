@@ -59,6 +59,7 @@ let package = Package(
       dependencies: [
         "RemindersData",
         "RemindersIntents",
+        "RemindersNotifications",
         .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
       ]
     ),

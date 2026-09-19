@@ -1,6 +1,7 @@
 import AppIntents
 import RemindersData
 import RemindersIntents
+import RemindersNotifications
 import SQLiteOrbit
 import SwiftUI
 
@@ -12,11 +13,15 @@ struct RemindersAppIntentsPackage: AppIntentsPackage {
 
 @main
 struct RemindersApp: App {
+  @Environment(\.scenePhase) private var scenePhase
+
+  private let notificationObservation: ReminderNotificationObservation
   private let root: RemindersRoot
 
   init() {
     let database = try! OrbitIPCDatabase.reminders()
     OrbitDefaultDatabase.set(database)
+    notificationObservation = ReminderNotificationObservation(database: database)
     root = RemindersRoot(database: database)
     RemindersAppShortcuts.updateAppShortcutParameters()
   }
@@ -24,6 +29,10 @@ struct RemindersApp: App {
   var body: some Scene {
     WindowGroup {
       root
+        .task(id: scenePhase) {
+          guard scenePhase == .active else { return }
+          await notificationObservation.reconcile()
+        }
     }
   }
 }

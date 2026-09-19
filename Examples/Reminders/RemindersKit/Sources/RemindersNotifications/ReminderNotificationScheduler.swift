@@ -4,6 +4,7 @@ import SQLiteOrbit
 
 public struct ReminderNotificationScheduler: Sendable {
   public static let categoryIdentifier = "REMINDER_DUE"
+  public static let disabled = Self(center: DisabledReminderNotificationCenter())
 
   private static let requestIdentifierPrefix = "reminder."
 
@@ -111,5 +112,25 @@ public struct ReminderNotificationScheduler: Sendable {
     Reminder
       .where { !$0.isCompleted && $0.dueDate.isNot(nil) }
       .order { ($0.dueDate, $0.id) }
+  }
+}
+
+private struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
+  func add(_ request: ReminderNotificationRequest) async throws {}
+
+  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
+    .denied
+  }
+
+  func pendingNotificationRequestIdentifiers() async -> [String] {
+    []
+  }
+
+  func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {}
+
+  func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {}
+
+  func requestAuthorization() async throws -> Bool {
+    false
   }
 }
