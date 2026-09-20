@@ -45,10 +45,10 @@ public struct CreateReminderIntent: AppIntent {
   public var tags: [String]?
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  private var database: RemindersDatabase
+  var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
-  private var notificationScheduler: ReminderNotificationScheduler
+  var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminderTitle = ""
@@ -68,8 +68,7 @@ public struct CreateReminderIntent: AppIntent {
     isFlagged: Bool = false,
     priority: ReminderIntentPriority? = nil,
     tags: [String]? = nil,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
+    dependencies: AppDependencyManager
   ) {
     reminderTitle = title
     self.list = list
@@ -78,12 +77,8 @@ public struct CreateReminderIntent: AppIntent {
     self.isFlagged = isFlagged
     self.priority = priority
     self.tags = tags
-    let dependencies = AppDependencyManager()
-    _database = appDependency(database, manager: dependencies)
-    _notificationScheduler = appDependency(
-      notificationScheduler,
-      manager: dependencies
-    )
+    _database = AppDependency(manager: dependencies)
+    _notificationScheduler = AppDependency(manager: dependencies)
   }
 
   public func perform() async throws -> some IntentResult
@@ -175,10 +170,10 @@ public struct CompleteReminderIntent: AppIntent {
   public var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  private var database: RemindersDatabase
+  var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
-  private var notificationScheduler: ReminderNotificationScheduler
+  var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -190,16 +185,11 @@ public struct CompleteReminderIntent: AppIntent {
 
   public init(
     reminder: ReminderEntity,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
+    dependencies: AppDependencyManager
   ) {
     self.reminder = reminder
-    let dependencies = AppDependencyManager()
-    _database = appDependency(database, manager: dependencies)
-    _notificationScheduler = appDependency(
-      notificationScheduler,
-      manager: dependencies
-    )
+    _database = AppDependency(manager: dependencies)
+    _notificationScheduler = AppDependency(manager: dependencies)
   }
 
   public func perform() async throws -> some IntentResult
@@ -236,10 +226,10 @@ public struct ReopenReminderIntent: AppIntent {
   public var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  private var database: RemindersDatabase
+  var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
-  private var notificationScheduler: ReminderNotificationScheduler
+  var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -251,16 +241,11 @@ public struct ReopenReminderIntent: AppIntent {
 
   public init(
     reminder: ReminderEntity,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
+    dependencies: AppDependencyManager
   ) {
     self.reminder = reminder
-    let dependencies = AppDependencyManager()
-    _database = appDependency(database, manager: dependencies)
-    _notificationScheduler = appDependency(
-      notificationScheduler,
-      manager: dependencies
-    )
+    _database = AppDependency(manager: dependencies)
+    _notificationScheduler = AppDependency(manager: dependencies)
   }
 
   public func perform() async throws -> some IntentResult
@@ -297,10 +282,10 @@ public struct DeleteRemindersIntent: DeleteIntent {
   public var entities: [ReminderEntity]
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  private var database: RemindersDatabase
+  var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
-  private var notificationScheduler: ReminderNotificationScheduler
+  var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     entities = []
@@ -308,16 +293,11 @@ public struct DeleteRemindersIntent: DeleteIntent {
 
   public init(
     entities: [ReminderEntity],
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
+    dependencies: AppDependencyManager
   ) {
     self.entities = entities
-    let dependencies = AppDependencyManager()
-    _database = appDependency(database, manager: dependencies)
-    _notificationScheduler = appDependency(
-      notificationScheduler,
-      manager: dependencies
-    )
+    _database = AppDependency(manager: dependencies)
+    _notificationScheduler = AppDependency(manager: dependencies)
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -330,15 +310,6 @@ public struct DeleteRemindersIntent: DeleteIntent {
     }
     return .result(dialog: "Deleted the reminders.")
   }
-}
-
-func appDependency<Value: Sendable>(
-  _ value: Value,
-  manager: AppDependencyManager
-) -> AppDependency<Value> {
-  let dependency = AppDependency<Value>(manager: manager)
-  dependency.wrappedValue = value
-  return dependency
 }
 
 extension ReminderEntity {

@@ -94,17 +94,23 @@ private nonisolated struct ReminderEntityTag: Sendable {
 
 public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
   @Dependency(default: OrbitDefaultDatabase.current)
-  private var database: RemindersDatabase
+  var database: RemindersDatabase
 
   public init() {}
 
-  public init(database: RemindersDatabase) {
-    let dependencies = AppDependencyManager()
-    _database = appDependency(database, manager: dependencies)
+  public init(dependencies: AppDependencyManager) {
+    _database = AppDependency(manager: dependencies)
   }
 
   public func entities(
     for identifiers: [ReminderEntity.ID]
+  ) async throws -> [ReminderEntity] {
+    try await Self.entities(for: identifiers, in: database)
+  }
+
+  private static func entities(
+    for identifiers: [ReminderEntity.ID],
+    in database: RemindersDatabase
   ) async throws -> [ReminderEntity] {
     let entities = try await database.read { transaction in
       let records =
@@ -171,7 +177,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     id: Reminder.ID,
     database: RemindersDatabase
   ) async throws -> ReminderEntity? {
-    try await ReminderEntityQuery(database: database).entities(for: [id]).first
+    try await entities(for: [id], in: database).first
   }
 
   private static func entities(

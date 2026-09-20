@@ -1,3 +1,4 @@
+import AppIntents
 import Foundation
 import RemindersData
 import RemindersNotifications
@@ -206,6 +207,69 @@ struct ReminderIntentTests {
     try await database.read {
       try Reminder.find(id).select(\.status).fetchOne($0)
     }
+  }
+}
+
+private extension CreateReminderIntent {
+  init(
+    title: String,
+    list: RemindersListEntity? = nil,
+    notes: String? = nil,
+    dueDate: Date? = nil,
+    isFlagged: Bool = false,
+    priority: ReminderIntentPriority? = nil,
+    tags: [String]? = nil,
+    database: RemindersDatabase,
+    notificationScheduler: ReminderNotificationScheduler
+  ) {
+    self.init(
+      title: title,
+      list: list,
+      notes: notes,
+      dueDate: dueDate,
+      isFlagged: isFlagged,
+      priority: priority,
+      tags: tags,
+      dependencies: AppDependencyManager()
+    )
+    $database.wrappedValue = database
+    $notificationScheduler.wrappedValue = notificationScheduler
+  }
+}
+
+private extension CompleteReminderIntent {
+  init(
+    reminder: ReminderEntity,
+    database: RemindersDatabase,
+    notificationScheduler: ReminderNotificationScheduler
+  ) {
+    self.init(reminder: reminder, dependencies: AppDependencyManager())
+    $database.wrappedValue = database
+    $notificationScheduler.wrappedValue = notificationScheduler
+  }
+}
+
+private extension ReopenReminderIntent {
+  init(
+    reminder: ReminderEntity,
+    database: RemindersDatabase,
+    notificationScheduler: ReminderNotificationScheduler
+  ) {
+    self.init(reminder: reminder, dependencies: AppDependencyManager())
+    $database.wrappedValue = database
+    $notificationScheduler.wrappedValue = notificationScheduler
+  }
+}
+
+private extension DeleteRemindersIntent {
+  init(
+    entities: [ReminderEntity],
+    database: RemindersDatabase,
+    notificationScheduler: ReminderNotificationScheduler
+  ) {
+    self.init(entities: entities, dependencies: AppDependencyManager())
+    $database.wrappedValue = database
+    $notificationScheduler.wrappedValue = notificationScheduler
   }
 }
 

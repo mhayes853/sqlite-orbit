@@ -1,3 +1,4 @@
+import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
@@ -140,5 +141,19 @@ struct ReminderEntityQueryTests {
     #expect(resolved.map(\.id) == [work.id, personal.id])
     #expect(resolved.map(\.remindersList.title) == [work.title, personal.title])
     #expect(matches.map(\.id) == [work.id])
+  }
+}
+
+private extension ReminderEntityQuery {
+  init(database: RemindersDatabase) {
+    self.init(dependencies: AppDependencyManager())
+    $database.wrappedValue = database
+  }
+}
+
+private extension RemindersListEntityQuery {
+  init(database: RemindersDatabase) {
+    self.init(dependencies: AppDependencyManager())
+    $database.wrappedValue = database
   }
 }
