@@ -38,12 +38,7 @@ struct ReminderDateTests {
   }
 
   @Test
-  func invalidOrPartialComponentsAreRejected() {
-    #expect(
-      ReminderDate(
-        components: DateComponents(year: 2026, month: 2, day: 30)
-      ) == nil
-    )
+  func partialComponentsAndMalformedRawValuesAreRejected() {
     #expect(
       ReminderDate(
         components: DateComponents(

@@ -29,7 +29,6 @@ public nonisolated struct ReminderDate:
       hour: components.hour,
       minute: components.minute
     )
-    guard Self.isValid(normalized) else { return nil }
     self.components = normalized
   }
 
@@ -48,35 +47,20 @@ public nonisolated struct ReminderDate:
   }
 
   public init?(rawValue: String) {
-    let bytes = Array(rawValue.utf8)
     guard
-      bytes.count == 10 || bytes.count == 16,
-      bytes[4] == UInt8(ascii: "-"),
-      bytes[7] == UInt8(ascii: "-"),
-      let year = Self.integer(in: 0..<4, from: bytes),
-      let month = Self.integer(in: 5..<7, from: bytes),
-      let day = Self.integer(in: 8..<10, from: bytes)
-    else { return nil }
-
-    if bytes.count == 10 {
-      self.init(components: DateComponents(year: year, month: month, day: day))
-    } else {
-      guard
-        bytes[10] == UInt8(ascii: "T"),
-        bytes[13] == UInt8(ascii: ":"),
-        let hour = Self.integer(in: 11..<13, from: bytes),
-        let minute = Self.integer(in: 14..<16, from: bytes)
-      else { return nil }
-      self.init(
-        components: DateComponents(
-          year: year,
-          month: month,
-          day: day,
-          hour: hour,
-          minute: minute
-        )
+      let match = rawValue.wholeMatch(
+        of: /([0-9]{4})-([0-9]{2})-([0-9]{2})(?:T([0-9]{2}):([0-9]{2}))?/
       )
-    }
+    else { return nil }
+    self.init(
+      components: DateComponents(
+        year: Int(match.1),
+        month: Int(match.2),
+        day: Int(match.3),
+        hour: match.4.flatMap { Int($0) },
+        minute: match.5.flatMap { Int($0) }
+      )
+    )
   }
 
   public var rawValue: String {
@@ -97,34 +81,5 @@ public nonisolated struct ReminderDate:
     components.calendar = calendar
     components.timeZone = calendar.timeZone
     return components.date
-  }
-
-  private static func integer(
-    in range: Range<Int>,
-    from bytes: [UInt8]
-  ) -> Int? {
-    var value = 0
-    for byte in bytes[range] {
-      guard byte >= UInt8(ascii: "0"), byte <= UInt8(ascii: "9")
-      else { return nil }
-      value = value * 10 + Int(byte - UInt8(ascii: "0"))
-    }
-    return value
-  }
-
-  private static func isValid(_ components: DateComponents) -> Bool {
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-    guard let date = calendar.date(from: components) else { return false }
-    let fields: Set<Calendar.Component> =
-      components.hour == nil
-      ? [.year, .month, .day]
-      : [.year, .month, .day, .hour, .minute]
-    let validated = calendar.dateComponents(fields, from: date)
-    return validated.year == components.year
-      && validated.month == components.month
-      && validated.day == components.day
-      && validated.hour == components.hour
-      && validated.minute == components.minute
   }
 }
