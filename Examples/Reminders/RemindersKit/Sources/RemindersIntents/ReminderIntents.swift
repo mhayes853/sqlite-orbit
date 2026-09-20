@@ -46,7 +46,9 @@ public struct CreateReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler: ReminderNotificationScheduler?
+
+  @Dependency(default: ReminderNotificationScheduler())
+  private var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminderTitle = ""
@@ -67,7 +69,7 @@ public struct CreateReminderIntent: AppIntent {
     priority: ReminderIntentPriority? = nil,
     tags: [String]? = nil,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler? = nil
+    notificationScheduler: ReminderNotificationScheduler
   ) {
     reminderTitle = title
     self.list = list
@@ -76,8 +78,8 @@ public struct CreateReminderIntent: AppIntent {
     self.isFlagged = isFlagged
     self.priority = priority
     self.tags = tags
-    self.notificationScheduler = notificationScheduler
-    _database = remindersDatabaseDependency(database)
+    _database = appDependency(database)
+    _notificationScheduler = appDependency(notificationScheduler)
   }
 
   public func perform() async throws -> some IntentResult
@@ -134,7 +136,7 @@ public struct CreateReminderIntent: AppIntent {
         in: transaction
       )
     }
-    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+    try await notificationScheduler.reconcile(
       reminderID: reminderID,
       in: database
     )
@@ -170,7 +172,9 @@ public struct CompleteReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler: ReminderNotificationScheduler?
+
+  @Dependency(default: ReminderNotificationScheduler())
+  private var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -183,11 +187,11 @@ public struct CompleteReminderIntent: AppIntent {
   public init(
     reminder: ReminderEntity,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler? = nil
+    notificationScheduler: ReminderNotificationScheduler
   ) {
     self.reminder = reminder
-    self.notificationScheduler = notificationScheduler
-    _database = remindersDatabaseDependency(database)
+    _database = appDependency(database)
+    _notificationScheduler = appDependency(notificationScheduler)
   }
 
   public func perform() async throws -> some IntentResult
@@ -196,7 +200,7 @@ public struct CompleteReminderIntent: AppIntent {
     & ShowsSnippetView
   {
     let updatedReminder = try await reminder.settingStatus(.completed, in: database)
-    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+    try await notificationScheduler.reconcile(
       reminderID: reminder.id,
       in: database
     )
@@ -225,7 +229,9 @@ public struct ReopenReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler: ReminderNotificationScheduler?
+
+  @Dependency(default: ReminderNotificationScheduler())
+  private var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -238,11 +244,11 @@ public struct ReopenReminderIntent: AppIntent {
   public init(
     reminder: ReminderEntity,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler? = nil
+    notificationScheduler: ReminderNotificationScheduler
   ) {
     self.reminder = reminder
-    self.notificationScheduler = notificationScheduler
-    _database = remindersDatabaseDependency(database)
+    _database = appDependency(database)
+    _notificationScheduler = appDependency(notificationScheduler)
   }
 
   public func perform() async throws -> some IntentResult
@@ -251,7 +257,7 @@ public struct ReopenReminderIntent: AppIntent {
     & ShowsSnippetView
   {
     let updatedReminder = try await reminder.settingStatus(.incomplete, in: database)
-    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+    try await notificationScheduler.reconcile(
       reminderID: reminder.id,
       in: database
     )
@@ -280,7 +286,9 @@ public struct DeleteRemindersIntent: DeleteIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler: ReminderNotificationScheduler?
+
+  @Dependency(default: ReminderNotificationScheduler())
+  private var notificationScheduler: ReminderNotificationScheduler
 
   public init() {
     entities = []
@@ -289,11 +297,11 @@ public struct DeleteRemindersIntent: DeleteIntent {
   public init(
     entities: [ReminderEntity],
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler? = nil
+    notificationScheduler: ReminderNotificationScheduler
   ) {
     self.entities = entities
-    self.notificationScheduler = notificationScheduler
-    _database = remindersDatabaseDependency(database)
+    _database = appDependency(database)
+    _notificationScheduler = appDependency(notificationScheduler)
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -301,7 +309,6 @@ public struct DeleteRemindersIntent: DeleteIntent {
     try await database.write { transaction in
       try Reminder.where { $0.id.in(ids) }.delete().execute(transaction)
     }
-    let notificationScheduler = notificationScheduler ?? ReminderNotificationScheduler()
     for id in ids {
       try await notificationScheduler.reconcile(reminderID: id, in: database)
     }
@@ -353,10 +360,8 @@ private enum ReminderIntentError: LocalizedError {
   }
 }
 
-func remindersDatabaseDependency(
-  _ database: RemindersDatabase
-) -> AppDependency<RemindersDatabase> {
-  let dependency = AppDependency<RemindersDatabase>(manager: AppDependencyManager())
-  dependency.wrappedValue = database
+func appDependency<Value: Sendable>(_ value: Value) -> AppDependency<Value> {
+  let dependency = AppDependency<Value>(manager: AppDependencyManager())
+  dependency.wrappedValue = value
   return dependency
 }
