@@ -175,6 +175,26 @@ struct ReminderNotificationSchedulerTests {
     #expect(await center.requestIdentifiers().isEmpty)
   }
 
+  @Test @MainActor
+  func notificationHandlerOpensTheReminderForTheDefaultAction() async throws {
+    let reminderID = UUID()
+    let openedReminderIDs = OpenedReminderIDs()
+    let handler = ReminderNotificationHandler(
+      database: try SQLiteQueue.reminders(),
+      scheduler: .disabled,
+      openReminder: { reminderID in
+        openedReminderIDs.append(reminderID)
+      }
+    )
+
+    await handler.handle(
+      actionIdentifier: UNNotificationDefaultActionIdentifier,
+      reminderID: reminderID
+    )
+
+    #expect(openedReminderIDs.values == [reminderID])
+  }
+
   private func notificationRequest(identifier: String) -> ReminderNotificationRequest {
     ReminderNotificationRequest(
       body: "",
@@ -186,6 +206,15 @@ struct ReminderNotificationSchedulerTests {
       threadIdentifier: "",
       title: ""
     )
+  }
+}
+
+@MainActor
+private final class OpenedReminderIDs {
+  var values: [Reminder.ID] = []
+
+  func append(_ reminderID: Reminder.ID) {
+    values.append(reminderID)
   }
 }
 
