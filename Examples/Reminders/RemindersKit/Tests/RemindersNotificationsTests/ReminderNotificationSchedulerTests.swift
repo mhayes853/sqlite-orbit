@@ -37,6 +37,7 @@ struct ReminderNotificationSchedulerTests {
     )
     #expect(request.title == "Present")
     #expect(request.body == "Remember the slides")
+    #expect(request.interruptionLevel == .timeSensitive)
     #expect(request.threadIdentifier == reminder.remindersListID.uuidString)
     #expect(request.dateComponents.year == 2030)
     #expect(request.dateComponents.month == 2)
@@ -63,6 +64,7 @@ struct ReminderNotificationSchedulerTests {
     )
 
     let request = try #require(scheduler.request(for: reminder))
+    #expect(request.interruptionLevel == .active)
     #expect(request.dateComponents.hour == 9)
     #expect(request.dateComponents.minute == 0)
   }
@@ -179,6 +181,7 @@ struct ReminderNotificationSchedulerTests {
       categoryIdentifier: "",
       dateComponents: DateComponents(),
       identifier: identifier,
+      interruptionLevel: .active,
       reminderID: UUID(),
       threadIdentifier: "",
       title: ""

@@ -18,6 +18,7 @@ public struct ReminderNotificationRequest: Equatable, Sendable {
   public let categoryIdentifier: String
   public let dateComponents: DateComponents
   public let identifier: String
+  public let interruptionLevel: UNNotificationInterruptionLevel
   public let reminderID: Reminder.ID
   public let threadIdentifier: String
   public let title: String
@@ -27,6 +28,7 @@ public struct ReminderNotificationRequest: Equatable, Sendable {
     categoryIdentifier: String,
     dateComponents: DateComponents,
     identifier: String,
+    interruptionLevel: UNNotificationInterruptionLevel,
     reminderID: Reminder.ID,
     threadIdentifier: String,
     title: String
@@ -35,6 +37,7 @@ public struct ReminderNotificationRequest: Equatable, Sendable {
     self.categoryIdentifier = categoryIdentifier
     self.dateComponents = dateComponents
     self.identifier = identifier
+    self.interruptionLevel = interruptionLevel
     self.reminderID = reminderID
     self.threadIdentifier = threadIdentifier
     self.title = title
@@ -57,6 +60,7 @@ extension UNUserNotificationCenter: ReminderNotificationCenter {
     content.title = request.title
     content.body = request.body
     content.categoryIdentifier = request.categoryIdentifier
+    content.interruptionLevel = request.interruptionLevel
     content.sound = .default
     content.threadIdentifier = request.threadIdentifier
     content.userInfo = [

@@ -105,6 +105,7 @@ public final class ReminderNotificationScheduler: Sendable {
       categoryIdentifier: ReminderNotificationIdentifiers.category,
       dateComponents: dateComponents,
       identifier: ReminderNotificationIdentifiers.request(for: reminder.id),
+      interruptionLevel: dueDate.isAllDay ? .active : .timeSensitive,
       reminderID: reminder.id,
       threadIdentifier: reminder.remindersListID.uuidString,
       title: reminder.title
