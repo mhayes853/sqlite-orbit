@@ -69,20 +69,22 @@ struct FloatingAddButton: View {
 }
 
 private struct RemindersSearchModifier: ViewModifier {
-  @Binding var text: String
-  @Binding var isPresented: Bool
+  @Binding var search: SearchRemindersModel?
   let prompt: String
 
   @ViewBuilder
   func body(content: Content) -> some View {
-    if isPresented {
+    if let searchModel = search {
+      @Bindable var searchModel = searchModel
+
       content.searchable(
-        text: $text,
-        isPresented: $isPresented,
+        text: $searchModel.text,
+        isPresented: $search.isPresented,
         placement: .toolbar,
         prompt: prompt
       )
       .searchDictationBehavior(.inline(activation: .onSelect))
+      .errorAlert("Search Error", message: $searchModel.errorMessage)
     } else {
       content
     }
@@ -114,14 +116,12 @@ extension View {
   }
 
   func remindersSearchable(
-    text: Binding<String>,
-    isPresented: Binding<Bool>,
+    search: Binding<SearchRemindersModel?>,
     prompt: String
   ) -> some View {
     modifier(
       RemindersSearchModifier(
-        text: text,
-        isPresented: isPresented,
+        search: search,
         prompt: prompt
       )
     )

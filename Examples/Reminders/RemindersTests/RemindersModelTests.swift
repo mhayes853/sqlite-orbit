@@ -82,10 +82,13 @@ struct RemindersModelTests {
   func showingSmartListReplacesTheNavigationPath() throws {
     let model = RemindersNavigationModel()
 
-    model.show(.flagged)
+    model.detailButtonTapped(.flagged)
 
-    #expect(model.path == [.flagged])
-    #expect(model.reminderForm == nil)
+    guard case .detail(let detail)? = model.path.first else {
+      Issue.record("Expected the detail destination")
+      return
+    }
+    #expect(detail.detailType == .flagged)
   }
 
   @Test
@@ -99,12 +102,15 @@ struct RemindersModelTests {
 
     await model.open(.list(list.id))
 
-    guard case .list(let destination)? = model.path.first else {
+    guard
+      case .detail(let detail)? = model.path.first,
+      case .list(let destination) = detail.detailType
+    else {
       Issue.record("Expected the list detail destination")
       return
     }
     #expect(destination.id == list.id)
-    #expect(model.reminderForm == nil)
+    #expect(detail.reminderForm == nil)
     #expect(model.errorMessage == nil)
   }
 
@@ -125,26 +131,42 @@ struct RemindersModelTests {
 
     await model.open(.reminder(reminder.id))
 
-    guard case .list(let destination)? = model.path.first else {
+    guard
+      case .detail(let detail)? = model.path.first,
+      case .list(let destination) = detail.detailType
+    else {
       Issue.record("Expected the reminder's list detail destination")
       return
     }
     #expect(destination.id == list.id)
-    #expect(model.reminderForm?.remindersList.id == list.id)
-    #expect(model.reminderForm?.reminder?.id == reminder.id)
+    #expect(detail.reminderForm?.remindersList.id == list.id)
+    #expect(detail.reminderForm?.reminder?.id == reminder.id)
     #expect(model.errorMessage == nil)
   }
 
   @Test
   func staleDeepLinkReportsAnErrorWithoutChangingNavigation() async throws {
     let model = RemindersNavigationModel()
-    model.show(.flagged)
+    model.detailButtonTapped(.flagged)
+    let originalPath = model.path
 
     await model.open(.reminder(UUID()))
 
-    #expect(model.path == [.flagged])
-    #expect(model.reminderForm == nil)
+    #expect(model.path == originalPath)
     #expect(model.errorMessage == "This reminder no longer exists.")
+  }
+
+  @Test
+  func listsModelOwnsItsSearchPresentation() throws {
+    let model = RemindersListsModel()
+
+    #expect(model.search == nil)
+
+    model.searchButtonTapped()
+    let search = try #require(model.search)
+    search.text = "dentist"
+
+    #expect(model.search?.text == "dentist")
   }
 
   @Test

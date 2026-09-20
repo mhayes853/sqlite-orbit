@@ -80,7 +80,7 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
 
 @MainActor
 @Observable
-final class RemindersDetailModel: ErrorReporting {
+final class RemindersDetailModel: ErrorReporting, Hashable {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
   @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
   var remindersLists: [RemindersList]
@@ -137,6 +137,17 @@ final class RemindersDetailModel: ErrorReporting {
     } else {
       _coverImageData = FetchOne(wrappedValue: nil)
     }
+  }
+
+  nonisolated static func == (
+    lhs: RemindersDetailModel,
+    rhs: RemindersDetailModel
+  ) -> Bool {
+    lhs === rhs
+  }
+
+  nonisolated func hash(into hasher: inout Hasher) {
+    hasher.combine(ObjectIdentifier(self))
   }
 
   func setOrdering(_ newValue: ReminderOrdering) async {
@@ -346,7 +357,10 @@ struct RemindersDetailView: View {
     }
     .sheet(item: $model.reminderForm) { context in
       NavigationStack {
-        ReminderFormView(remindersList: context.remindersList)
+        ReminderFormView(
+          remindersList: context.remindersList,
+          reminder: context.reminder
+        )
       }
     }
     .overlay {

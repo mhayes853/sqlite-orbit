@@ -57,6 +57,7 @@ final class RemindersListsModel: ErrorReporting {
 
   var errorMessage: String?
   var presentedSheet: RemindersListsSheet?
+  var search: SearchRemindersModel?
   let seedDatabaseTip = SeedDatabaseTip()
 
   var allRemindersLists: [RemindersList] {
@@ -124,6 +125,10 @@ final class RemindersListsModel: ErrorReporting {
       return
     }
     presentedSheet = .reminder(list)
+  }
+
+  func searchButtonTapped() {
+    search = SearchRemindersModel()
   }
 
   func seedSampleData() async {
@@ -197,20 +202,15 @@ struct RemindersListsView: View {
   let navigation: RemindersNavigationModel
 
   @State private var model = RemindersListsModel()
-  @State private var searchModel = SearchRemindersModel()
-  @State private var searchText = ""
-  @State private var isSearchPresented = false
 
   var body: some View {
     @Bindable var model = model
-    @Bindable var searchModel = searchModel
 
     List {
-      if !searchText.isEmpty {
+      if let search = model.search, !search.text.isEmpty {
         SearchRemindersView(
-          model: searchModel,
-          remindersLists: model.allRemindersLists,
-          searchText: searchText
+          model: search,
+          remindersLists: model.allRemindersLists
         )
       } else {
         Section {
@@ -219,31 +219,31 @@ struct RemindersListsView: View {
               RemindersStatCell(
                 count: model.stats.todayCount,
                 detailType: .today,
-                select: navigation.show
+                select: navigation.detailButtonTapped
               )
               RemindersStatCell(
                 count: model.stats.scheduledCount,
                 detailType: .scheduled,
-                select: navigation.show
+                select: navigation.detailButtonTapped
               )
             }
             GridRow {
               RemindersStatCell(
                 count: model.stats.allCount,
                 detailType: .all,
-                select: navigation.show
+                select: navigation.detailButtonTapped
               )
               RemindersStatCell(
                 count: model.stats.flaggedCount,
                 detailType: .flagged,
-                select: navigation.show
+                select: navigation.detailButtonTapped
               )
             }
             GridRow {
               RemindersStatCell(
                 count: nil,
                 detailType: .completed,
-                select: navigation.show
+                select: navigation.detailButtonTapped
               )
               Color.clear
             }
@@ -258,14 +258,23 @@ struct RemindersListsView: View {
 
         Section {
           ForEach(model.remindersLists) { summary in
-            NavigationLink(value: RemindersDetailType.list(summary.remindersList)) {
-              RemindersListRow(
-                remindersCount: summary.remindersCount,
-                remindersList: summary.remindersList,
-                onDelete: { Task { await model.deleteList(summary.remindersList) } },
-                onEdit: { model.editListButtonTapped(summary.remindersList) }
-              )
+            Button {
+              navigation.detailButtonTapped(.list(summary.remindersList))
+            } label: {
+              HStack(spacing: 8) {
+                RemindersListRow(
+                  remindersCount: summary.remindersCount,
+                  remindersList: summary.remindersList,
+                  onDelete: { Task { await model.deleteList(summary.remindersList) } },
+                  onEdit: { model.editListButtonTapped(summary.remindersList) }
+                )
+                Image(systemName: "chevron.right")
+                  .font(.footnote.bold())
+                  .foregroundStyle(.tertiary)
+                  .accessibilityHidden(true)
+              }
             }
+            .buttonStyle(.plain)
           }
           .onMove { source, destination in
             Task { await model.moveLists(from: source, to: destination) }
@@ -277,9 +286,19 @@ struct RemindersListsView: View {
 
           Section {
             ForEach(model.tags) { tag in
-              NavigationLink(value: RemindersDetailType.tags([tag])) {
-                TagRow(tag: tag)
+              Button {
+                navigation.detailButtonTapped(.tags([tag]))
+              } label: {
+                HStack {
+                  TagRow(tag: tag)
+                  Spacer()
+                  Image(systemName: "chevron.right")
+                    .font(.footnote.bold())
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                }
               }
+              .buttonStyle(.plain)
             }
             .onDelete { offsets in
               Task { await model.deleteTags(at: offsets) }
@@ -296,8 +315,7 @@ struct RemindersListsView: View {
     .toolbarTitleDisplayMode(.inline)
     .task { await model.load() }
     .remindersSearchable(
-      text: $searchText,
-      isPresented: $isSearchPresented,
+      search: $model.search,
       prompt: "Search reminders and tags"
     )
     .toolbar {
@@ -310,8 +328,10 @@ struct RemindersListsView: View {
         }
       }
       ToolbarItem(placement: .topBarTrailing) {
-        Button("Search", systemImage: "magnifyingglass") { isSearchPresented = true }
-          .labelStyle(.iconOnly)
+        Button("Search", systemImage: "magnifyingglass") {
+          model.searchButtonTapped()
+        }
+        .labelStyle(.iconOnly)
       }
       ToolbarItem(placement: .topBarTrailing) {
         Button {
@@ -338,9 +358,9 @@ struct RemindersListsView: View {
         model.newReminderButtonTapped()
       }
       .padding(24)
-      .opacity(isSearchPresented ? 0 : 1)
-      .allowsHitTesting(!isSearchPresented)
-      .accessibilityHidden(isSearchPresented)
+      .opacity(model.search == nil ? 1 : 0)
+      .allowsHitTesting(model.search == nil)
+      .accessibilityHidden(model.search != nil)
     }
     .sheet(item: $model.presentedSheet) { sheet in
       NavigationStack {
@@ -353,7 +373,6 @@ struct RemindersListsView: View {
       }
     }
     .errorAlert(message: $model.errorMessage)
-    .errorAlert("Search Error", message: $searchModel.errorMessage)
   }
 
 }

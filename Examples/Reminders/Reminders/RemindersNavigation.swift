@@ -6,13 +6,15 @@ import SQLiteOrbit
 @MainActor
 @Observable
 final class RemindersNavigationModel: ErrorReporting {
-  var errorMessage: String?
-  var path: [RemindersDetailType] = []
-  var reminderForm: ReminderFormContext?
+  enum Path: Hashable {
+    case detail(RemindersDetailModel)
+  }
 
-  func show(_ detailType: RemindersDetailType) {
-    reminderForm = nil
-    path = [detailType]
+  var errorMessage: String?
+  var path: [Path] = []
+
+  func detailButtonTapped(_ detailType: RemindersDetailType) {
+    path = [.detail(RemindersDetailModel(detailType: detailType))]
   }
 
   func open(_ route: RemindersRoute) async {
@@ -25,7 +27,7 @@ final class RemindersNavigationModel: ErrorReporting {
             try RemindersList.find(id).fetchOne($0)
           })
         else { throw RemindersNavigationError.missingList }
-        show(.list(list))
+        detailButtonTapped(.list(list))
 
       case .reminder(let id):
         let destination = try await OrbitDefaultDatabase.current.read { transaction in
@@ -38,8 +40,9 @@ final class RemindersNavigationModel: ErrorReporting {
         guard let (reminder, list) = destination else {
           throw RemindersNavigationError.missingReminder
         }
-        path = [.list(list)]
-        reminderForm = ReminderFormContext(remindersList: list, reminder: reminder)
+        let model = RemindersDetailModel(detailType: .list(list))
+        model.reminderForm = ReminderFormContext(remindersList: list, reminder: reminder)
+        path = [.detail(model)]
       }
     }
   }

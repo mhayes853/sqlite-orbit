@@ -1,30 +1,15 @@
 import RemindersData
-import SQLiteOrbit
 import SwiftUI
-import TipKit
 
 public struct RemindersRoot: View {
   @State private var navigation: RemindersNavigationModel
-  private let widgetReloader: RemindersWidgetReloader
 
   public init() {
-    self.init(database: try! OrbitIPCDatabase.reminders())
+    self.init(navigation: RemindersNavigationModel())
   }
 
-  public init(database: OrbitIPCDatabase) {
-    self.init(database: database, navigation: RemindersNavigationModel())
-  }
-
-  init(
-    database: OrbitIPCDatabase,
-    navigation: RemindersNavigationModel
-  ) {
+  init(navigation: RemindersNavigationModel) {
     _navigation = State(initialValue: navigation)
-    let widgetReloader = try! RemindersWidgetReloader(database: database)
-    self.widgetReloader = widgetReloader
-    database.delegate = widgetReloader
-    OrbitDefaultDatabase.set(database)
-    try? Tips.configure()
   }
 
   public var body: some View {
@@ -32,17 +17,12 @@ public struct RemindersRoot: View {
 
     NavigationStack(path: $navigation.path) {
       RemindersListsView(navigation: navigation)
-        .navigationDestination(for: RemindersDetailType.self) { detailType in
-          RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
+        .navigationDestination(for: RemindersNavigationModel.Path.self) { path in
+          switch path {
+          case .detail(let model):
+            RemindersDetailView(model: model)
+          }
         }
-    }
-    .sheet(item: $navigation.reminderForm) { context in
-      NavigationStack {
-        ReminderFormView(
-          remindersList: context.remindersList,
-          reminder: context.reminder
-        )
-      }
     }
     .onOpenURL(perform: open)
     .errorAlert("Could Not Open Link", message: $navigation.errorMessage)

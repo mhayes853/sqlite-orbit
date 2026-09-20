@@ -4,6 +4,7 @@ import RemindersIntents
 import RemindersNotifications
 import SQLiteOrbit
 import SwiftUI
+import TipKit
 
 struct RemindersAppIntentsPackage: AppIntentsPackage {
   static var includedPackages: [any AppIntentsPackage.Type] {
@@ -20,10 +21,14 @@ struct RemindersApp: App {
   private let notificationHandler: ReminderNotificationHandler
   private let notificationScheduler: ReminderNotificationScheduler
   private let root: RemindersRoot
+  private let widgetReloader: RemindersWidgetReloader
 
   init() {
     let database = try! OrbitIPCDatabase.reminders()
     OrbitDefaultDatabase.set(database)
+    let widgetReloader = try! RemindersWidgetReloader(database: database)
+    database.delegate = widgetReloader
+    try? Tips.configure()
     let navigation = RemindersNavigationModel()
     let notificationScheduler = ReminderNotificationScheduler()
     let notificationHandler = ReminderNotificationHandler(
@@ -37,7 +42,8 @@ struct RemindersApp: App {
     self.navigation = navigation
     self.notificationHandler = notificationHandler
     self.notificationScheduler = notificationScheduler
-    root = RemindersRoot(database: database, navigation: navigation)
+    self.widgetReloader = widgetReloader
+    root = RemindersRoot(navigation: navigation)
     notificationHandler.register()
     RemindersAppShortcuts.updateAppShortcutParameters()
   }

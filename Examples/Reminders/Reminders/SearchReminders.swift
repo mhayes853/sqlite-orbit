@@ -19,6 +19,7 @@ nonisolated struct SearchReminderRow: Identifiable, Sendable {
 final class SearchRemindersModel: ErrorReporting {
   @ObservationIgnored @FetchAll var results: [SearchReminderRow]
   var errorMessage: String?
+  var text = ""
 
   @ObservationIgnored private var searchTask: Task<Void, Never>?
   @ObservationIgnored private let now: Date
@@ -96,16 +97,13 @@ struct SearchRemindersView: View {
   @SingleRow(SearchSettings.self) private var settings: SearchSettings
   let model: SearchRemindersModel
   let remindersLists: [RemindersList]
-  let searchText: String
 
   init(
     model: SearchRemindersModel,
-    remindersLists: [RemindersList],
-    searchText: String
+    remindersLists: [RemindersList]
   ) {
     self.model = model
     self.remindersLists = remindersLists
-    self.searchText = searchText
   }
 
   var body: some View {
@@ -115,17 +113,17 @@ struct SearchRemindersView: View {
         isOn: $settings.binding(\.showCompleted)
       )
     }
-    .task(id: searchText) {
+    .task(id: model.text) {
       if await model.withErrorReporting({
         try await $settings.load()
         return true
       }) == true {
-        model.search(searchText, showCompleted: settings.showCompleted)
+        model.search(model.text, showCompleted: settings.showCompleted)
       }
     }
     .onChange(of: settings.showCompleted) {
       model.search(
-        searchText,
+        model.text,
         showCompleted: settings.showCompleted,
         debounce: false
       )
@@ -149,7 +147,7 @@ struct SearchRemindersView: View {
     }
 
     if model.results.isEmpty {
-      ContentUnavailableView.search(text: searchText)
+      ContentUnavailableView.search(text: model.text)
         .listRowBackground(Color.clear)
     }
   }
