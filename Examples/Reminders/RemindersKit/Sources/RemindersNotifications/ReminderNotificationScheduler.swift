@@ -1,6 +1,8 @@
 import Foundation
+import OSLog
 import RemindersData
 import SQLiteOrbit
+import UserNotifications
 
 public struct ReminderNotificationScheduler: Sendable {
   public static let categoryIdentifier = "REMINDER_DUE"
@@ -9,16 +11,20 @@ public struct ReminderNotificationScheduler: Sendable {
   private static let requestIdentifierPrefix = "reminder."
 
   private let calendar: Calendar
-  private let center: any ReminderNotificationCenter
+  private let injectedCenter: (any ReminderNotificationCenter)?
   private let now: @Sendable () -> Date
 
+  private var center: any ReminderNotificationCenter {
+    injectedCenter ?? UNUserNotificationCenter.current()
+  }
+
   public init(
-    center: any ReminderNotificationCenter = SystemReminderNotificationCenter(),
+    center: (any ReminderNotificationCenter)? = nil,
     calendar: Calendar = .current,
     now: @escaping @Sendable () -> Date = { .now }
   ) {
     self.calendar = calendar
-    self.center = center
+    self.injectedCenter = center
     self.now = now
   }
 
@@ -26,6 +32,7 @@ public struct ReminderNotificationScheduler: Sendable {
     reminderID: Reminder.ID,
     in database: RemindersDatabase
   ) async throws {
+    let center = self.center
     let reminder = try await database.read {
       try Reminder.find(reminderID).fetchOne($0)
     }
@@ -42,22 +49,31 @@ public struct ReminderNotificationScheduler: Sendable {
     try await center.add(request)
   }
 
-  public func reconcileAll(in database: RemindersDatabase) async throws {
-    let reminders = try await database.read {
-      try Self.scheduledReminders.fetchAll($0)
+  public func observe(in database: RemindersDatabase) async {
+    let center = self.center
+    let observation = OrbitValueObservation
+      .trackingAll(Self.scheduledReminders)
+      .removeDuplicates()
+    do {
+      for try await reminders in observation.values(in: database) {
+        if
+          !reminders.isEmpty,
+          await center.authorizationStatus() == .notDetermined
+        {
+          _ = try await center.requestAuthorization()
+        }
+        try await reconcile(reminders)
+      }
+    } catch is CancellationError {
+    } catch {
+      Logger.remindersNotifications.error(
+        "Reminder notification observation failed: \(error.localizedDescription)"
+      )
     }
-    try await reconcile(reminders)
-  }
-
-  public func requestAuthorization() async throws -> Bool {
-    try await center.requestAuthorization()
-  }
-
-  public func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
-    await center.authorizationStatus()
   }
 
   func reconcile(_ reminders: [Reminder]) async throws {
+    let center = self.center
     let requests = reminders.compactMap(request(for:))
     let desiredIdentifiers = Set(requests.map(\.identifier))
     async let pendingIdentifiers = center.pendingNotificationRequestIdentifiers()
@@ -128,7 +144,7 @@ public struct ReminderNotificationScheduler: Sendable {
 private struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
   func add(_ request: ReminderNotificationRequest) async throws {}
 
-  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
+  func authorizationStatus() async -> UNAuthorizationStatus {
     .denied
   }
 
@@ -147,4 +163,11 @@ private struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
   func requestAuthorization() async throws -> Bool {
     false
   }
+}
+
+private extension Logger {
+  static let remindersNotifications = Logger(
+    subsystem: "co.sqlite-orbit.Reminders",
+    category: "Notifications"
+  )
 }

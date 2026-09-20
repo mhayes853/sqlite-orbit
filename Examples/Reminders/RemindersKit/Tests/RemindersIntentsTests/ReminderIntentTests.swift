@@ -3,6 +3,7 @@ import RemindersData
 import RemindersNotifications
 import SQLiteOrbit
 import Testing
+import UserNotifications
 
 @testable import RemindersIntents
 
@@ -215,7 +216,7 @@ private actor RecordingReminderNotificationCenter: ReminderNotificationCenter {
     requests[request.identifier] = request
   }
 
-  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
+  func authorizationStatus() async -> UNAuthorizationStatus {
     .authorized
   }
 

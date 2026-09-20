@@ -2,6 +2,7 @@ import Foundation
 import RemindersData
 import SQLiteOrbit
 import Testing
+import UserNotifications
 
 @testable import RemindersNotifications
 
@@ -65,8 +66,7 @@ struct ReminderNotificationSchedulerTests {
   }
 
   @Test
-  func reconcileAllReplacesTheReminderNotificationSet() async throws {
-    let database = try SQLiteQueue.reminders()
+  func reconciliationReplacesTheReminderNotificationSet() async throws {
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
@@ -74,10 +74,6 @@ struct ReminderNotificationSchedulerTests {
       remindersListID: list.id,
       title: "Future"
     )
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
     let stale = notificationRequest(identifier: "reminder.stale")
     let unrelated = notificationRequest(identifier: "another-feature")
     let center = TestReminderNotificationCenter(requests: [stale, unrelated])
@@ -87,7 +83,7 @@ struct ReminderNotificationSchedulerTests {
       now: { .distantPast }
     )
 
-    try await scheduler.reconcileAll(in: database)
+    try await scheduler.reconcile([reminder])
 
     #expect(
       await center.requestIdentifiers()
@@ -113,10 +109,8 @@ struct ReminderNotificationSchedulerTests {
       calendar: calendar,
       now: { .distantPast }
     )
-    let observation = ReminderNotificationObservation(
-      database: database,
-      scheduler: scheduler
-    )
+    let observation = Task { await scheduler.observe(in: database) }
+    defer { observation.cancel() }
 
     try await database.write { transaction in
       try RemindersList.insert { list }.execute(transaction)
@@ -127,7 +121,6 @@ struct ReminderNotificationSchedulerTests {
       identifier == "reminder.\(reminder.id.uuidString)"
     }
     #expect(identifier != nil)
-    _ = observation
   }
 
   @Test
@@ -192,7 +185,7 @@ private actor TestReminderNotificationCenter: ReminderNotificationCenter {
     onAdd(request)
   }
 
-  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
+  func authorizationStatus() async -> UNAuthorizationStatus {
     .authorized
   }
 

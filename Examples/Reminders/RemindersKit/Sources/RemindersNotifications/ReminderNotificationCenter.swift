@@ -30,15 +30,9 @@ public struct ReminderNotificationRequest: Equatable, Sendable {
   }
 }
 
-public enum ReminderNotificationAuthorizationStatus: Sendable {
-  case authorized
-  case denied
-  case notDetermined
-}
-
 public protocol ReminderNotificationCenter: Sendable {
   func add(_ request: ReminderNotificationRequest) async throws
-  func authorizationStatus() async -> ReminderNotificationAuthorizationStatus
+  func authorizationStatus() async -> UNAuthorizationStatus
   func deliveredNotificationRequestIdentifiers() async -> [String]
   func pendingNotificationRequestIdentifiers() async -> [String]
   func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async
@@ -46,9 +40,7 @@ public protocol ReminderNotificationCenter: Sendable {
   func requestAuthorization() async throws -> Bool
 }
 
-public struct SystemReminderNotificationCenter: ReminderNotificationCenter {
-  public init() {}
-
+extension UNUserNotificationCenter: ReminderNotificationCenter {
   public func add(_ request: ReminderNotificationRequest) async throws {
     let content = UNMutableNotificationContent()
     content.title = request.title
@@ -57,7 +49,7 @@ public struct SystemReminderNotificationCenter: ReminderNotificationCenter {
     content.sound = .default
     content.threadIdentifier = request.threadIdentifier
     content.userInfo = ["reminderID": request.reminderID.uuidString]
-    try await UNUserNotificationCenter.current().add(
+    try await add(
       UNNotificationRequest(
         identifier: request.identifier,
         content: content,
@@ -69,40 +61,19 @@ public struct SystemReminderNotificationCenter: ReminderNotificationCenter {
     )
   }
 
-  public func authorizationStatus() async -> ReminderNotificationAuthorizationStatus {
-    switch await UNUserNotificationCenter.current().notificationSettings().authorizationStatus {
-    case .authorized, .ephemeral, .provisional:
-      .authorized
-    case .denied:
-      .denied
-    case .notDetermined:
-      .notDetermined
-    @unknown default:
-      .denied
-    }
+  public func authorizationStatus() async -> UNAuthorizationStatus {
+    await notificationSettings().authorizationStatus
   }
 
   public func pendingNotificationRequestIdentifiers() async -> [String] {
-    await UNUserNotificationCenter.current().pendingNotificationRequests().map(\.identifier)
+    await pendingNotificationRequests().map(\.identifier)
   }
 
   public func deliveredNotificationRequestIdentifiers() async -> [String] {
-    await UNUserNotificationCenter.current().deliveredNotifications().map(\.request.identifier)
-  }
-
-  public func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {
-    UNUserNotificationCenter.current().removeDeliveredNotifications(
-      withIdentifiers: identifiers
-    )
-  }
-
-  public func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {
-    UNUserNotificationCenter.current().removePendingNotificationRequests(
-      withIdentifiers: identifiers
-    )
+    await deliveredNotifications().map(\.request.identifier)
   }
 
   public func requestAuthorization() async throws -> Bool {
-    try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+    try await requestAuthorization(options: [.alert, .sound])
   }
 }

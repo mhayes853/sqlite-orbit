@@ -15,8 +15,9 @@ struct RemindersAppIntentsPackage: AppIntentsPackage {
 struct RemindersApp: App {
   @Environment(\.scenePhase) private var scenePhase
 
+  private let database: RemindersDatabase
   private let notificationHandler: ReminderNotificationHandler
-  private let notificationObservation: ReminderNotificationObservation
+  private let notificationScheduler: ReminderNotificationScheduler
   private let root: RemindersRoot
 
   init() {
@@ -27,11 +28,9 @@ struct RemindersApp: App {
       database: database,
       scheduler: notificationScheduler
     )
+    self.database = database
     self.notificationHandler = notificationHandler
-    notificationObservation = ReminderNotificationObservation(
-      database: database,
-      scheduler: notificationScheduler
-    )
+    self.notificationScheduler = notificationScheduler
     root = RemindersRoot(database: database)
     notificationHandler.register()
     RemindersAppShortcuts.updateAppShortcutParameters()
@@ -42,7 +41,7 @@ struct RemindersApp: App {
       root
         .task(id: scenePhase) {
           guard scenePhase == .active else { return }
-          await notificationObservation.reconcile()
+          await notificationScheduler.observe(in: database)
         }
     }
   }
