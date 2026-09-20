@@ -10,6 +10,7 @@ struct ReminderEntityQueryTests {
   @Test
   func reminderEntitiesIncludeTheirIntentProperties() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let personal = RemindersList(id: UUID(), title: "Personal")
     let work = RemindersList(id: UUID(), position: 1, title: "Work")
     let older = Reminder(
@@ -57,7 +58,8 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQuery(database: database)
+    let query = ReminderEntityQuery(dependencies: dependencies)
+    query.$database.wrappedValue = database
     let entities = try await query.entities(for: [newer.id, older.id])
 
     #expect(entities.map(\.id) == [newer.id, older.id])
@@ -77,6 +79,7 @@ struct ReminderEntityQueryTests {
   @Test
   func reminderEntitySearchUsesFTSAndSuggestionsExcludeCompleted() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let list = RemindersList(id: UUID(), title: "Personal")
     let completed = Reminder(
       id: UUID(),
@@ -114,7 +117,8 @@ struct ReminderEntityQueryTests {
       .execute(transaction)
     }
 
-    let query = ReminderEntityQuery(database: database)
+    let query = ReminderEntityQuery(dependencies: dependencies)
+    query.$database.wrappedValue = database
 
     let suggestions = try await query.suggestedEntities()
     let matches = try await query.entities(matching: "travel plans")
@@ -125,6 +129,7 @@ struct ReminderEntityQueryTests {
   @Test
   func remindersListQueryResolvesAndSearchesLists() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let personal = RemindersList(id: UUID(), title: "Personal")
     let work = RemindersList(id: UUID(), position: 1, title: "Work Projects")
     try await database.write { transaction in
@@ -134,26 +139,13 @@ struct ReminderEntityQueryTests {
       }
       .execute(transaction)
     }
-    let query = RemindersListEntityQuery(database: database)
+    let query = RemindersListEntityQuery(dependencies: dependencies)
+    query.$database.wrappedValue = database
 
     let resolved = try await query.entities(for: [work.id, personal.id])
     let matches = try await query.entities(matching: "project")
     #expect(resolved.map(\.id) == [work.id, personal.id])
     #expect(resolved.map(\.remindersList.title) == [work.title, personal.title])
     #expect(matches.map(\.id) == [work.id])
-  }
-}
-
-private extension ReminderEntityQuery {
-  init(database: RemindersDatabase) {
-    self.init(dependencies: AppDependencyManager())
-    $database.wrappedValue = database
-  }
-}
-
-private extension RemindersListEntityQuery {
-  init(database: RemindersDatabase) {
-    self.init(dependencies: AppDependencyManager())
-    $database.wrappedValue = database
   }
 }

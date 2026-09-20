@@ -12,6 +12,7 @@ struct ReminderIntentTests {
   @Test
   func createReminderPersistsAllDetailsAndExplicitTags() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
       try RemindersList.insert { RemindersList.Draft(list) }.execute($0)
@@ -25,9 +26,10 @@ struct ReminderIntentTests {
       isFlagged: true,
       priority: .high,
       tags: ["travel plans, #Work", "work"],
-      database: database,
-      notificationScheduler: .disabled
+      dependencies: dependencies
     )
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
 
     _ = try await intent.perform()
 
@@ -50,6 +52,7 @@ struct ReminderIntentTests {
   @Test
   func createReminderUsesFirstListWhenNoListIsSpecified() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let second = RemindersList(id: UUID(), position: 1, title: "Second")
     let first = RemindersList(id: UUID(), title: "First")
     try await database.write {
@@ -60,12 +63,13 @@ struct ReminderIntentTests {
       .execute($0)
     }
 
-    _ = try await CreateReminderIntent(
+    let intent = CreateReminderIntent(
       title: "Call home",
-      database: database,
-      notificationScheduler: .disabled
+      dependencies: dependencies
     )
-    .perform()
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
+    _ = try await intent.perform()
 
     let reminder = try await database.read {
       try Reminder.all.fetchOne($0)
@@ -76,13 +80,15 @@ struct ReminderIntentTests {
   @Test
   func createReminderRequiresAnExistingList() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
+    let intent = CreateReminderIntent(
+      title: "Call home",
+      dependencies: dependencies
+    )
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
     do {
-      _ = try await CreateReminderIntent(
-        title: "Call home",
-        database: database,
-        notificationScheduler: .disabled
-      )
-      .perform()
+      _ = try await intent.perform()
       Issue.record("Expected reminder creation to fail without a list")
     } catch {
       #expect(error.localizedDescription == "Create a reminders list before adding a reminder.")
@@ -95,6 +101,7 @@ struct ReminderIntentTests {
   @Test
   func completeAndReopenReminderAreIdempotent() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let (list, reminder) = try await insertReminder(in: database)
     let entity = ReminderEntity(
       reminder: reminder,
@@ -103,18 +110,20 @@ struct ReminderIntentTests {
 
     let complete = CompleteReminderIntent(
       reminder: entity,
-      database: database,
-      notificationScheduler: .disabled
+      dependencies: dependencies
     )
+    complete.$database.wrappedValue = database
+    complete.$notificationScheduler.wrappedValue = .disabled
     _ = try await complete.perform()
     _ = try await complete.perform()
     #expect(try await status(of: reminder.id, in: database) == .completed)
 
     let reopen = ReopenReminderIntent(
       reminder: entity,
-      database: database,
-      notificationScheduler: .disabled
+      dependencies: dependencies
     )
+    reopen.$database.wrappedValue = database
+    reopen.$notificationScheduler.wrappedValue = .disabled
     _ = try await reopen.perform()
     _ = try await reopen.perform()
     #expect(try await status(of: reminder.id, in: database) == .incomplete)
@@ -123,6 +132,7 @@ struct ReminderIntentTests {
   @Test
   func deleteRemindersDeletesOnlyTheSelectedRecords() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let (list, first) = try await insertReminder(in: database, title: "First")
     let (_, second) = try await insertReminder(
       in: database,
@@ -134,12 +144,13 @@ struct ReminderIntentTests {
       remindersList: list
     )
 
-    _ = try await DeleteRemindersIntent(
+    let intent = DeleteRemindersIntent(
       entities: [entity],
-      database: database,
-      notificationScheduler: .disabled
+      dependencies: dependencies
     )
-    .perform()
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
+    _ = try await intent.perform()
 
     let remainingIDs = try await database.read {
       try Reminder.select(\.id).fetchAll($0)
@@ -150,6 +161,7 @@ struct ReminderIntentTests {
   @Test
   func intentsReconcileNotificationsBeforeReturning() async throws {
     let database = try SQLiteQueue.reminders()
+    let dependencies = AppDependencyManager()
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
       try RemindersList.insert { list }.execute($0)
@@ -157,14 +169,15 @@ struct ReminderIntentTests {
     let center = RecordingReminderNotificationCenter()
     let scheduler = ReminderNotificationScheduler(center: center)
 
-    let result = try await CreateReminderIntent(
+    let create = CreateReminderIntent(
       title: "Call home",
       list: RemindersListEntity(list),
       dueDate: Date.distantFuture,
-      database: database,
-      notificationScheduler: scheduler
+      dependencies: dependencies
     )
-    .perform()
+    create.$database.wrappedValue = database
+    create.$notificationScheduler.wrappedValue = scheduler
+    let result = try await create.perform()
     let entity = try #require(result.value)
 
     #expect(
@@ -172,12 +185,13 @@ struct ReminderIntentTests {
         == [ReminderNotificationIdentifiers.request(for: entity.id)]
     )
 
-    _ = try await CompleteReminderIntent(
+    let complete = CompleteReminderIntent(
       reminder: entity,
-      database: database,
-      notificationScheduler: scheduler
+      dependencies: dependencies
     )
-    .perform()
+    complete.$database.wrappedValue = database
+    complete.$notificationScheduler.wrappedValue = scheduler
+    _ = try await complete.perform()
 
     #expect(await center.requestIdentifiers().isEmpty)
   }
@@ -207,69 +221,6 @@ struct ReminderIntentTests {
     try await database.read {
       try Reminder.find(id).select(\.status).fetchOne($0)
     }
-  }
-}
-
-private extension CreateReminderIntent {
-  init(
-    title: String,
-    list: RemindersListEntity? = nil,
-    notes: String? = nil,
-    dueDate: Date? = nil,
-    isFlagged: Bool = false,
-    priority: ReminderIntentPriority? = nil,
-    tags: [String]? = nil,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
-  ) {
-    self.init(
-      title: title,
-      list: list,
-      notes: notes,
-      dueDate: dueDate,
-      isFlagged: isFlagged,
-      priority: priority,
-      tags: tags,
-      dependencies: AppDependencyManager()
-    )
-    $database.wrappedValue = database
-    $notificationScheduler.wrappedValue = notificationScheduler
-  }
-}
-
-private extension CompleteReminderIntent {
-  init(
-    reminder: ReminderEntity,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
-  ) {
-    self.init(reminder: reminder, dependencies: AppDependencyManager())
-    $database.wrappedValue = database
-    $notificationScheduler.wrappedValue = notificationScheduler
-  }
-}
-
-private extension ReopenReminderIntent {
-  init(
-    reminder: ReminderEntity,
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
-  ) {
-    self.init(reminder: reminder, dependencies: AppDependencyManager())
-    $database.wrappedValue = database
-    $notificationScheduler.wrappedValue = notificationScheduler
-  }
-}
-
-private extension DeleteRemindersIntent {
-  init(
-    entities: [ReminderEntity],
-    database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler
-  ) {
-    self.init(entities: entities, dependencies: AppDependencyManager())
-    $database.wrappedValue = database
-    $notificationScheduler.wrappedValue = notificationScheduler
   }
 }
 
