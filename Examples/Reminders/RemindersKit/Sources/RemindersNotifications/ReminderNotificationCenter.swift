@@ -2,6 +2,17 @@ import Foundation
 import RemindersData
 import UserNotifications
 
+public enum ReminderNotificationIdentifiers {
+  public static let category = "REMINDER_DUE"
+  public static let completeAction = "COMPLETE_REMINDER"
+  public static let reminderIDUserInfoKey = "reminderID"
+  public static let requestPrefix = "reminder."
+
+  public static func request(for reminderID: Reminder.ID) -> String {
+    requestPrefix + reminderID.uuidString
+  }
+}
+
 public struct ReminderNotificationRequest: Equatable, Sendable {
   public let body: String
   public let categoryIdentifier: String
@@ -48,7 +59,9 @@ extension UNUserNotificationCenter: ReminderNotificationCenter {
     content.categoryIdentifier = request.categoryIdentifier
     content.sound = .default
     content.threadIdentifier = request.threadIdentifier
-    content.userInfo = ["reminderID": request.reminderID.uuidString]
+    content.userInfo = [
+      ReminderNotificationIdentifiers.reminderIDUserInfoKey: request.reminderID.uuidString
+    ]
     try await add(
       UNNotificationRequest(
         identifier: request.identifier,
@@ -75,5 +88,31 @@ extension UNUserNotificationCenter: ReminderNotificationCenter {
 
   public func requestAuthorization() async throws -> Bool {
     try await requestAuthorization(options: [.alert, .sound])
+  }
+}
+
+public struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
+  public init() {}
+
+  public func add(_ request: ReminderNotificationRequest) async throws {}
+
+  public func authorizationStatus() async -> UNAuthorizationStatus {
+    .denied
+  }
+
+  public func deliveredNotificationRequestIdentifiers() async -> [String] {
+    []
+  }
+
+  public func pendingNotificationRequestIdentifiers() async -> [String] {
+    []
+  }
+
+  public func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {}
+
+  public func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {}
+
+  public func requestAuthorization() async throws -> Bool {
+    false
   }
 }

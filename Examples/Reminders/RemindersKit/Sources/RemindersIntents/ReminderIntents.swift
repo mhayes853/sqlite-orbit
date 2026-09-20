@@ -46,7 +46,7 @@ public struct CreateReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler = ReminderNotificationScheduler()
+  private var notificationScheduler: ReminderNotificationScheduler?
 
   public init() {
     reminderTitle = ""
@@ -67,7 +67,7 @@ public struct CreateReminderIntent: AppIntent {
     priority: ReminderIntentPriority? = nil,
     tags: [String]? = nil,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler = ReminderNotificationScheduler()
+    notificationScheduler: ReminderNotificationScheduler? = nil
   ) {
     reminderTitle = title
     self.list = list
@@ -134,7 +134,10 @@ public struct CreateReminderIntent: AppIntent {
         in: transaction
       )
     }
-    try await notificationScheduler.reconcile(reminderID: reminderID, in: database)
+    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+      reminderID: reminderID,
+      in: database
+    )
 
     guard
       let reminder = try await ReminderEntityQuery.entity(
@@ -167,7 +170,7 @@ public struct CompleteReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler = ReminderNotificationScheduler()
+  private var notificationScheduler: ReminderNotificationScheduler?
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -180,7 +183,7 @@ public struct CompleteReminderIntent: AppIntent {
   public init(
     reminder: ReminderEntity,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler = ReminderNotificationScheduler()
+    notificationScheduler: ReminderNotificationScheduler? = nil
   ) {
     self.reminder = reminder
     self.notificationScheduler = notificationScheduler
@@ -193,7 +196,10 @@ public struct CompleteReminderIntent: AppIntent {
     & ShowsSnippetView
   {
     let updatedReminder = try await reminder.settingStatus(.completed, in: database)
-    try await notificationScheduler.reconcile(reminderID: reminder.id, in: database)
+    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+      reminderID: reminder.id,
+      in: database
+    )
     return .result(
       value: updatedReminder,
       dialog: "Completed the reminder.",
@@ -219,7 +225,7 @@ public struct ReopenReminderIntent: AppIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler = ReminderNotificationScheduler()
+  private var notificationScheduler: ReminderNotificationScheduler?
 
   public init() {
     reminder = ReminderEntity.placeholder
@@ -232,7 +238,7 @@ public struct ReopenReminderIntent: AppIntent {
   public init(
     reminder: ReminderEntity,
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler = ReminderNotificationScheduler()
+    notificationScheduler: ReminderNotificationScheduler? = nil
   ) {
     self.reminder = reminder
     self.notificationScheduler = notificationScheduler
@@ -245,7 +251,10 @@ public struct ReopenReminderIntent: AppIntent {
     & ShowsSnippetView
   {
     let updatedReminder = try await reminder.settingStatus(.incomplete, in: database)
-    try await notificationScheduler.reconcile(reminderID: reminder.id, in: database)
+    try await (notificationScheduler ?? ReminderNotificationScheduler()).reconcile(
+      reminderID: reminder.id,
+      in: database
+    )
     return .result(
       value: updatedReminder,
       dialog: "Reopened the reminder.",
@@ -271,7 +280,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
 
   @Dependency(default: OrbitDefaultDatabase.current)
   private var database: RemindersDatabase
-  private var notificationScheduler = ReminderNotificationScheduler()
+  private var notificationScheduler: ReminderNotificationScheduler?
 
   public init() {
     entities = []
@@ -280,7 +289,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
   public init(
     entities: [ReminderEntity],
     database: RemindersDatabase,
-    notificationScheduler: ReminderNotificationScheduler = ReminderNotificationScheduler()
+    notificationScheduler: ReminderNotificationScheduler? = nil
   ) {
     self.entities = entities
     self.notificationScheduler = notificationScheduler
@@ -292,6 +301,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
     try await database.write { transaction in
       try Reminder.where { $0.id.in(ids) }.delete().execute(transaction)
     }
+    let notificationScheduler = notificationScheduler ?? ReminderNotificationScheduler()
     for id in ids {
       try await notificationScheduler.reconcile(reminderID: id, in: database)
     }

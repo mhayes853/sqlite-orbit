@@ -168,7 +168,7 @@ struct ReminderIntentTests {
 
     #expect(
       await center.requestIdentifiers()
-        == ["reminder.\(entity.id.uuidString)"]
+        == [ReminderNotificationIdentifiers.request(for: entity.id)]
     )
 
     _ = try await CompleteReminderIntent(

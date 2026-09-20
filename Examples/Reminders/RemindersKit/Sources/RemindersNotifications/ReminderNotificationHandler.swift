@@ -3,8 +3,6 @@ import RemindersData
 import UserNotifications
 
 public final class ReminderNotificationHandler: NSObject, UNUserNotificationCenterDelegate {
-  public static let completeActionIdentifier = "COMPLETE_REMINDER"
-
   private let database: RemindersDatabase
   private let scheduler: ReminderNotificationScheduler
 
@@ -21,10 +19,10 @@ public final class ReminderNotificationHandler: NSObject, UNUserNotificationCent
     center.delegate = self
     center.setNotificationCategories([
       UNNotificationCategory(
-        identifier: ReminderNotificationScheduler.categoryIdentifier,
+        identifier: ReminderNotificationIdentifiers.category,
         actions: [
           UNNotificationAction(
-            identifier: Self.completeActionIdentifier,
+            identifier: ReminderNotificationIdentifiers.completeAction,
             title: "Complete"
           )
         ],
@@ -43,9 +41,10 @@ public final class ReminderNotificationHandler: NSObject, UNUserNotificationCent
     didReceive response: UNNotificationResponse
   ) async {
     guard
-      response.actionIdentifier == Self.completeActionIdentifier,
-      let reminderIDString = response.notification.request.content.userInfo["reminderID"]
-        as? String,
+      response.actionIdentifier == ReminderNotificationIdentifiers.completeAction,
+      let reminderIDString = response.notification.request.content.userInfo[
+        ReminderNotificationIdentifiers.reminderIDUserInfoKey
+      ] as? String,
       let reminderID = Reminder.ID(uuidString: reminderIDString)
     else { return }
     try? await complete(reminderID: reminderID)

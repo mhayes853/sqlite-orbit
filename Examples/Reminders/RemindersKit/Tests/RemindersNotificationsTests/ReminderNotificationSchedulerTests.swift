@@ -32,7 +32,9 @@ struct ReminderNotificationSchedulerTests {
     )
 
     let request = try #require(scheduler.request(for: reminder))
-    #expect(request.identifier == "reminder.\(reminder.id.uuidString)")
+    #expect(
+      request.identifier == ReminderNotificationIdentifiers.request(for: reminder.id)
+    )
     #expect(request.title == "Present")
     #expect(request.body == "Remember the slides")
     #expect(request.threadIdentifier == reminder.remindersListID.uuidString)
@@ -66,7 +68,8 @@ struct ReminderNotificationSchedulerTests {
   }
 
   @Test
-  func reconciliationReplacesTheReminderNotificationSet() async throws {
+  func observationReplacesTheReminderNotificationSet() async throws {
+    let database = try SQLiteQueue.reminders()
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
@@ -74,22 +77,34 @@ struct ReminderNotificationSchedulerTests {
       remindersListID: list.id,
       title: "Future"
     )
-    let stale = notificationRequest(identifier: "reminder.stale")
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let staleIdentifier = ReminderNotificationIdentifiers.request(for: UUID())
+    let stale = notificationRequest(identifier: staleIdentifier)
     let unrelated = notificationRequest(identifier: "another-feature")
-    let center = TestReminderNotificationCenter(requests: [stale, unrelated])
+    let (identifiers, continuation) = AsyncStream.makeStream(of: String.self)
+    let center = TestReminderNotificationCenter(
+      requests: [stale, unrelated],
+      onAdd: { continuation.yield($0.identifier) }
+    )
     let scheduler = ReminderNotificationScheduler(
       center: center,
       calendar: calendar,
       now: { .distantPast }
     )
+    let observation = Task { await scheduler.observe(in: database) }
+    defer { observation.cancel() }
 
-    try await scheduler.reconcile([reminder])
+    let reminderIdentifier = ReminderNotificationIdentifiers.request(for: reminder.id)
+    #expect(await identifiers.first { $0 == reminderIdentifier } != nil)
 
     #expect(
       await center.requestIdentifiers()
-        == ["another-feature", "reminder.\(reminder.id.uuidString)"]
+        == ["another-feature", reminderIdentifier]
     )
-    #expect(await center.removedDeliveredIdentifiers() == ["reminder.stale"])
+    #expect(await center.removedDeliveredIdentifiers() == [staleIdentifier])
   }
 
   @Test(.timeLimit(.minutes(1)))
@@ -118,7 +133,7 @@ struct ReminderNotificationSchedulerTests {
     }
 
     let identifier = await identifiers.first { identifier in
-      identifier == "reminder.\(reminder.id.uuidString)"
+      identifier == ReminderNotificationIdentifiers.request(for: reminder.id)
     }
     #expect(identifier != nil)
   }
@@ -138,7 +153,11 @@ struct ReminderNotificationSchedulerTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
     let center = TestReminderNotificationCenter(
-      requests: [notificationRequest(identifier: "reminder.\(reminder.id.uuidString)")]
+      requests: [
+        notificationRequest(
+          identifier: ReminderNotificationIdentifiers.request(for: reminder.id)
+        )
+      ]
     )
     let handler = ReminderNotificationHandler(
       database: database,

@@ -4,27 +4,22 @@ import RemindersData
 import SQLiteOrbit
 import UserNotifications
 
-public struct ReminderNotificationScheduler: Sendable {
-  public static let categoryIdentifier = "REMINDER_DUE"
-  public static let disabled = Self(center: DisabledReminderNotificationCenter())
-
-  private static let requestIdentifierPrefix = "reminder."
+public final class ReminderNotificationScheduler: Sendable {
+  public static let disabled = ReminderNotificationScheduler(
+    center: DisabledReminderNotificationCenter()
+  )
 
   private let calendar: Calendar
-  private let injectedCenter: (any ReminderNotificationCenter)?
+  private let center: any ReminderNotificationCenter
   private let now: @Sendable () -> Date
 
-  private var center: any ReminderNotificationCenter {
-    injectedCenter ?? UNUserNotificationCenter.current()
-  }
-
   public init(
-    center: (any ReminderNotificationCenter)? = nil,
+    center: any ReminderNotificationCenter = UNUserNotificationCenter.current(),
     calendar: Calendar = .current,
     now: @escaping @Sendable () -> Date = { .now }
   ) {
     self.calendar = calendar
-    self.injectedCenter = center
+    self.center = center
     self.now = now
   }
 
@@ -32,11 +27,10 @@ public struct ReminderNotificationScheduler: Sendable {
     reminderID: Reminder.ID,
     in database: RemindersDatabase
   ) async throws {
-    let center = self.center
     let reminder = try await database.read {
       try Reminder.find(reminderID).fetchOne($0)
     }
-    let identifier = Self.requestIdentifier(for: reminderID)
+    let identifier = ReminderNotificationIdentifiers.request(for: reminderID)
     guard
       let reminder,
       let request = request(for: reminder)
@@ -50,7 +44,6 @@ public struct ReminderNotificationScheduler: Sendable {
   }
 
   public func observe(in database: RemindersDatabase) async {
-    let center = self.center
     let observation = OrbitValueObservation
       .trackingAll(Self.scheduledReminders)
       .removeDuplicates()
@@ -72,8 +65,7 @@ public struct ReminderNotificationScheduler: Sendable {
     }
   }
 
-  func reconcile(_ reminders: [Reminder]) async throws {
-    let center = self.center
+  private func reconcile(_ reminders: [Reminder]) async throws {
     let requests = reminders.compactMap(request(for:))
     let desiredIdentifiers = Set(requests.map(\.identifier))
     async let pendingIdentifiers = center.pendingNotificationRequestIdentifiers()
@@ -81,7 +73,7 @@ public struct ReminderNotificationScheduler: Sendable {
     let staleIdentifiers = Array(
       Set(await pendingIdentifiers + deliveredIdentifiers)
         .filter {
-          $0.hasPrefix(Self.requestIdentifierPrefix)
+          $0.hasPrefix(ReminderNotificationIdentifiers.requestPrefix)
             && !desiredIdentifiers.contains($0)
         }
     )
@@ -110,9 +102,9 @@ public struct ReminderNotificationScheduler: Sendable {
     )
     return ReminderNotificationRequest(
       body: reminder.notes,
-      categoryIdentifier: Self.categoryIdentifier,
+      categoryIdentifier: ReminderNotificationIdentifiers.category,
       dateComponents: dateComponents,
-      identifier: Self.requestIdentifier(for: reminder.id),
+      identifier: ReminderNotificationIdentifiers.request(for: reminder.id),
       reminderID: reminder.id,
       threadIdentifier: reminder.remindersListID.uuidString,
       title: reminder.title
@@ -130,38 +122,10 @@ public struct ReminderNotificationScheduler: Sendable {
     return components.date
   }
 
-  private static func requestIdentifier(for reminderID: Reminder.ID) -> String {
-    requestIdentifierPrefix + reminderID.uuidString
-  }
-
-  static var scheduledReminders: some SelectStatement<(), Reminder, ()> {
+  private static var scheduledReminders: some SelectStatement<(), Reminder, ()> {
     Reminder
       .where { !$0.isCompleted && $0.dueDate.isNot(nil) }
       .order { ($0.dueDate, $0.id) }
-  }
-}
-
-private struct DisabledReminderNotificationCenter: ReminderNotificationCenter {
-  func add(_ request: ReminderNotificationRequest) async throws {}
-
-  func authorizationStatus() async -> UNAuthorizationStatus {
-    .denied
-  }
-
-  func deliveredNotificationRequestIdentifiers() async -> [String] {
-    []
-  }
-
-  func pendingNotificationRequestIdentifiers() async -> [String] {
-    []
-  }
-
-  func removeDeliveredNotifications(withIdentifiers identifiers: [String]) async {}
-
-  func removePendingNotificationRequests(withIdentifiers identifiers: [String]) async {}
-
-  func requestAuthorization() async throws -> Bool {
-    false
   }
 }
 
