@@ -79,14 +79,72 @@ struct RemindersModelTests {
   }
 
   @Test
-  func selectingSmartListSetsOnlyThatDestination() throws {
-    let model = RemindersListsModel()
+  func showingSmartListReplacesTheNavigationPath() throws {
+    let model = RemindersNavigationModel()
 
-    #expect(model.selectedDetail == nil)
+    model.show(.flagged)
 
-    model.selectDetail(.flagged)
+    #expect(model.path == [.flagged])
+    #expect(model.reminderForm == nil)
+  }
 
-    #expect(model.selectedDetail == .flagged)
+  @Test
+  func listDeepLinkOpensTheList() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Work")
+    try await database.write {
+      try RemindersList.insert { list }.execute($0)
+    }
+    let model = RemindersNavigationModel()
+
+    await model.open(.list(list.id))
+
+    guard case .list(let destination)? = model.path.first else {
+      Issue.record("Expected the list detail destination")
+      return
+    }
+    #expect(destination.id == list.id)
+    #expect(model.reminderForm == nil)
+    #expect(model.errorMessage == nil)
+  }
+
+  @Test
+  func reminderDeepLinkOpensTheReminderFormFromItsList() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(
+      id: UUID(),
+      remindersListID: list.id,
+      title: "Buy milk"
+    )
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    let model = RemindersNavigationModel()
+
+    await model.open(.reminder(reminder.id))
+
+    guard case .list(let destination)? = model.path.first else {
+      Issue.record("Expected the reminder's list detail destination")
+      return
+    }
+    #expect(destination.id == list.id)
+    #expect(model.reminderForm?.remindersList.id == list.id)
+    #expect(model.reminderForm?.reminder?.id == reminder.id)
+    #expect(model.errorMessage == nil)
+  }
+
+  @Test
+  func staleDeepLinkReportsAnErrorWithoutChangingNavigation() async throws {
+    let model = RemindersNavigationModel()
+    model.show(.flagged)
+
+    await model.open(.reminder(UUID()))
+
+    #expect(model.path == [.flagged])
+    #expect(model.reminderForm == nil)
+    #expect(model.errorMessage == "This reminder no longer exists.")
   }
 
   @Test

@@ -147,30 +147,33 @@ struct RecentRemindersWidgetView: View {
       .buttonStyle(.plain)
       .accessibilityLabel("Complete \(value.title)")
 
-      VStack(alignment: .leading, spacing: 2) {
-        HStack(spacing: 4) {
-          if let priority = value.priority {
-            ReminderPriorityIndicator(priority: priority, color: .orange)
+      Link(destination: RemindersRoute.reminder(value.id).url) {
+        VStack(alignment: .leading, spacing: 2) {
+          HStack(spacing: 4) {
+            if let priority = value.priority {
+              ReminderPriorityIndicator(priority: priority, color: .orange)
+            }
+            ReminderTitle(reminder: value)
+              .lineLimit(1)
           }
-          ReminderTitle(reminder: value)
-            .lineLimit(1)
-        }
-        .font(.subheadline.weight(.medium))
+          .font(.subheadline.weight(.medium))
 
-        HStack(spacing: 4) {
-          Text(remindersList.title)
-          if let dueDate = value.dueDate {
-            Text("•")
-            ReminderDueDate(dueDate)
+          HStack(spacing: 4) {
+            Text(remindersList.title)
+            if let dueDate = value.dueDate {
+              Text("•")
+              ReminderDueDate(dueDate)
+            }
+            if value.isFlagged {
+              ReminderFlagIndicator()
+            }
           }
-          if value.isFlagged {
-            ReminderFlagIndicator()
-          }
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
         }
-        .font(.caption2)
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
       }
+      .buttonStyle(.plain)
       Spacer(minLength: 0)
     }
     .padding(.vertical, 6)

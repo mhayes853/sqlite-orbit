@@ -4,13 +4,13 @@ import UserNotifications
 
 public final class ReminderNotificationHandler: NSObject, UNUserNotificationCenterDelegate {
   private let database: RemindersDatabase
-  private let openReminder: @MainActor @Sendable (Reminder.ID) -> Void
+  private let openReminder: @MainActor @Sendable (Reminder.ID) async -> Void
   private let scheduler: ReminderNotificationScheduler
 
   public init(
     database: RemindersDatabase,
     scheduler: ReminderNotificationScheduler = ReminderNotificationScheduler(),
-    openReminder: @escaping @MainActor @Sendable (Reminder.ID) -> Void = { _ in }
+    openReminder: @escaping @MainActor @Sendable (Reminder.ID) async -> Void = { _ in }
   ) {
     self.database = database
     self.openReminder = openReminder
@@ -87,7 +87,7 @@ public final class ReminderNotificationHandler: NSObject, UNUserNotificationCent
     reminderID: Reminder.ID,
     database: RemindersDatabase,
     scheduler: ReminderNotificationScheduler,
-    openReminder: @MainActor @Sendable (Reminder.ID) -> Void
+    openReminder: @MainActor @Sendable (Reminder.ID) async -> Void
   ) async {
     switch actionIdentifier {
     case UNNotificationDefaultActionIdentifier:

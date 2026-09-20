@@ -48,6 +48,8 @@
 		E10000000000000000000009 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
 		E1000000000000000000000A /* SearchReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D651376890B540F1E4D0E20 /* SearchReminders.swift */; };
 		E1000000000000000000000B /* TagRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = C46C98AFB2BB09B1DD5ED406 /* TagRow.swift */; };
+		D20000000000000000000002 /* RemindersNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* RemindersNavigation.swift */; };
+		D20000000000000000000003 /* RemindersNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* RemindersNavigation.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -101,6 +103,8 @@
 		B10000000000000000000016 /* RemindersWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = RemindersWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		B10000000000000000000017 /* Reminders.entitlements */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.entitlements; path = Reminders.entitlements; sourceTree = "<group>"; };
 		A30000000000000000000002 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		D20000000000000000000001 /* RemindersNavigation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersNavigation.swift; sourceTree = "<group>"; };
+		D20000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -173,6 +177,7 @@
 			isa = PBXGroup;
 			children = (
 				F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */,
+				D20000000000000000000004 /* Info.plist */,
 				4FE6D37803383BC704714ABE /* Helpers.swift */,
 				F3563D78F50635334631EB41 /* ReminderForm.swift */,
 				341F2170219F6C7F5877E717 /* ReminderRow.swift */,
@@ -180,6 +185,7 @@
 				CAF541DDEDF5B57347ADFBFD /* RemindersListForm.swift */,
 				65FD0E728ABCDE1C00748C4D /* RemindersListRow.swift */,
 				3C51905997693B9560285072 /* RemindersLists.swift */,
+				D20000000000000000000001 /* RemindersNavigation.swift */,
 				C4CFE0842EF8DCAECBCF41A0 /* RemindersRoot.swift */,
 				B10000000000000000000010 /* RemindersWidgetReloader.swift */,
 				6D651376890B540F1E4D0E20 /* SearchReminders.swift */,
@@ -370,6 +376,7 @@
 				E10000000000000000000005 /* RemindersListForm.swift in Sources */,
 				E10000000000000000000006 /* RemindersListRow.swift in Sources */,
 				E10000000000000000000007 /* RemindersLists.swift in Sources */,
+				D20000000000000000000003 /* RemindersNavigation.swift in Sources */,
 				E10000000000000000000008 /* RemindersRoot.swift in Sources */,
 				E10000000000000000000009 /* RemindersWidgetReloader.swift in Sources */,
 				E1000000000000000000000A /* SearchReminders.swift in Sources */,
@@ -393,6 +400,7 @@
 				500A49D4BC27BFBC3A69769E /* RemindersListForm.swift in Sources */,
 				D6E62FD98B47B1BD4E75A58C /* RemindersListRow.swift in Sources */,
 				02874ECBB75E0F87E5B04F1E /* RemindersLists.swift in Sources */,
+				D20000000000000000000002 /* RemindersNavigation.swift in Sources */,
 				3E2B10D6DCFB12181B09195F /* RemindersRoot.swift in Sources */,
 				B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */,
 				86E8274F1D85BF6CABCE1347 /* SearchReminders.swift in Sources */,
@@ -564,6 +572,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reminders/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Orbit Reminders";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -589,6 +598,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Reminders/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Orbit Reminders";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

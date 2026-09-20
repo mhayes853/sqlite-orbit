@@ -16,6 +16,7 @@ struct RemindersApp: App {
   @Environment(\.scenePhase) private var scenePhase
 
   private let database: RemindersDatabase
+  private let navigation: RemindersNavigationModel
   private let notificationHandler: ReminderNotificationHandler
   private let notificationScheduler: ReminderNotificationScheduler
   private let root: RemindersRoot
@@ -23,15 +24,20 @@ struct RemindersApp: App {
   init() {
     let database = try! OrbitIPCDatabase.reminders()
     OrbitDefaultDatabase.set(database)
+    let navigation = RemindersNavigationModel()
     let notificationScheduler = ReminderNotificationScheduler()
     let notificationHandler = ReminderNotificationHandler(
       database: database,
-      scheduler: notificationScheduler
+      scheduler: notificationScheduler,
+      openReminder: { reminderID in
+        await navigation.open(.reminder(reminderID))
+      }
     )
     self.database = database
+    self.navigation = navigation
     self.notificationHandler = notificationHandler
     self.notificationScheduler = notificationScheduler
-    root = RemindersRoot(database: database)
+    root = RemindersRoot(database: database, navigation: navigation)
     notificationHandler.register()
     RemindersAppShortcuts.updateAppShortcutParameters()
   }

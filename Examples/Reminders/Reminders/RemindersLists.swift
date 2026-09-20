@@ -57,7 +57,6 @@ final class RemindersListsModel: ErrorReporting {
 
   var errorMessage: String?
   var presentedSheet: RemindersListsSheet?
-  var selectedDetail: RemindersDetailType?
   let seedDatabaseTip = SeedDatabaseTip()
 
   var allRemindersLists: [RemindersList] {
@@ -125,10 +124,6 @@ final class RemindersListsModel: ErrorReporting {
       return
     }
     presentedSheet = .reminder(list)
-  }
-
-  func selectDetail(_ detailType: RemindersDetailType) {
-    selectedDetail = detailType
   }
 
   func seedSampleData() async {
@@ -199,6 +194,8 @@ final class RemindersListsModel: ErrorReporting {
 }
 
 struct RemindersListsView: View {
+  let navigation: RemindersNavigationModel
+
   @State private var model = RemindersListsModel()
   @State private var searchModel = SearchRemindersModel()
   @State private var searchText = ""
@@ -222,31 +219,31 @@ struct RemindersListsView: View {
               RemindersStatCell(
                 count: model.stats.todayCount,
                 detailType: .today,
-                select: model.selectDetail
+                select: navigation.show
               )
               RemindersStatCell(
                 count: model.stats.scheduledCount,
                 detailType: .scheduled,
-                select: model.selectDetail
+                select: navigation.show
               )
             }
             GridRow {
               RemindersStatCell(
                 count: model.stats.allCount,
                 detailType: .all,
-                select: model.selectDetail
+                select: navigation.show
               )
               RemindersStatCell(
                 count: model.stats.flaggedCount,
                 detailType: .flagged,
-                select: model.selectDetail
+                select: navigation.show
               )
             }
             GridRow {
               RemindersStatCell(
                 count: nil,
                 detailType: .completed,
-                select: model.selectDetail
+                select: navigation.show
               )
               Color.clear
             }
@@ -354,12 +351,6 @@ struct RemindersListsView: View {
           RemindersListForm(remindersList: list)
         }
       }
-    }
-    .navigationDestination(for: RemindersDetailType.self) { detailType in
-      RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
-    }
-    .navigationDestination(item: $model.selectedDetail) { detailType in
-      RemindersDetailView(model: RemindersDetailModel(detailType: detailType))
     }
     .errorAlert(message: $model.errorMessage)
     .errorAlert("Search Error", message: $searchModel.errorMessage)
