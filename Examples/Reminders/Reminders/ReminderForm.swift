@@ -14,38 +14,30 @@ final class ReminderFormModel: ErrorReporting {
   var tagText: String
   private(set) var tagTitles: [String]
   var errorMessage: String?
-  private var dueDateMode: DueDateMode
+  @ObservationIgnored private let calendar: Calendar
 
   var isDateEnabled: Bool {
-    dueDateMode != .none
+    reminder.dueDate != nil
   }
 
   var isTimeEnabled: Bool {
-    dueDateMode == .dateAndTime
-  }
-
-  private enum DueDateMode {
-    case none
-    case date
-    case dateAndTime
+    reminder.dueDate?.isAllDay == false
   }
 
   init(
     remindersList: RemindersList,
-    reminder: Reminder? = nil
+    reminder: Reminder? = nil,
+    calendar: Calendar = .current,
+    now: Date = .now
   ) {
     let database = OrbitDefaultDatabase.current
+    self.calendar = calendar
     id = reminder?.id ?? UUID()
     isNew = reminder == nil
     self.reminder = Reminder.Draft(
       reminder ?? Reminder(id: id, remindersListID: remindersList.id)
     )
-    dueDate = reminder?.dueDate ?? .now
-    if reminder?.dueDate != nil {
-      dueDateMode = reminder?.includesTime == true ? .dateAndTime : .date
-    } else {
-      dueDateMode = .none
-    }
+    dueDate = reminder?.dueDate?.date(in: calendar) ?? now
     if let reminder {
       let tags = try? database.readBlocking { transaction in
         try Tag
@@ -63,16 +55,20 @@ final class ReminderFormModel: ErrorReporting {
   }
 
   func dateToggleTapped() {
-    dueDateMode = isDateEnabled ? .none : .date
+    reminder.dueDate = isDateEnabled
+      ? nil
+      : ReminderDate(date: dueDate, calendar: calendar)
   }
 
   func timeToggleTapped() {
-    dueDateMode = isTimeEnabled ? .date : .dateAndTime
+    reminder.dueDate = isTimeEnabled
+      ? ReminderDate(date: dueDate, calendar: calendar)
+      : ReminderDate(dateAndTime: dueDate, calendar: calendar)
   }
 
   func dateOptionButtonTapped() {
     if !isDateEnabled {
-      dueDateMode = .date
+      reminder.dueDate = ReminderDate(date: dueDate, calendar: calendar)
     }
   }
 
@@ -128,7 +124,6 @@ final class ReminderFormModel: ErrorReporting {
     let isNew = isNew
     var reminder = reminder
     reminder.dueDate = dueDateToSave
-    reminder.includesTime = isTimeEnabled
     reminder.title = title
     return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
@@ -143,15 +138,11 @@ final class ReminderFormModel: ErrorReporting {
     } ?? false
   }
 
-  private var dueDateToSave: Date? {
-    switch dueDateMode {
-    case .none:
-      nil
-    case .date:
-      Calendar.current.startOfDay(for: dueDate)
-    case .dateAndTime:
-      dueDate
-    }
+  private var dueDateToSave: ReminderDate? {
+    guard isDateEnabled else { return nil }
+    return isTimeEnabled
+      ? ReminderDate(dateAndTime: dueDate, calendar: calendar)
+      : ReminderDate(date: dueDate, calendar: calendar)
   }
 
   nonisolated static func parseTags(_ text: String) -> [String] {

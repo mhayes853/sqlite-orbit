@@ -26,7 +26,7 @@ struct RecentRemindersEntry: TimelineEntry {
         WidgetReminder(
           reminder: Reminder(
             id: UUID(),
-            dueDate: .now,
+            dueDate: ReminderDate(date: .now),
             isFlagged: true,
             priority: .high,
             remindersListID: work.id,
@@ -161,7 +161,7 @@ struct RecentRemindersWidgetView: View {
           Text(remindersList.title)
           if let dueDate = value.dueDate {
             Text("•")
-            ReminderDueDate(dueDate, includesTime: value.includesTime)
+            ReminderDueDate(dueDate)
           }
           if value.isFlagged {
             ReminderFlagIndicator()

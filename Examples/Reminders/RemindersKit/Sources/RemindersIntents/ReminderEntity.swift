@@ -25,7 +25,7 @@ public struct ReminderEntity: AppEntity, Sendable {
   public var list: RemindersListEntity { RemindersListEntity(remindersList) }
 
   @ComputedProperty(title: "Due Date")
-  public var dueDate: Date? { reminder.dueDate }
+  public var dueDate: Date? { reminder.dueDate?.date() }
 
   @ComputedProperty(title: "Completed")
   public var isCompleted: Bool { reminder.isCompleted }

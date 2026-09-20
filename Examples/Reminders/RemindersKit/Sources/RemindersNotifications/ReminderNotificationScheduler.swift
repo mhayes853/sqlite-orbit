@@ -84,7 +84,7 @@ public struct ReminderNotificationScheduler: Sendable {
     guard
       reminder.status == .incomplete,
       let dueDate = reminder.dueDate,
-      let deliveryDate = deliveryDate(for: reminder, dueDate: dueDate),
+      let deliveryDate = deliveryDate(for: dueDate),
       deliveryDate > now()
     else { return nil }
 
@@ -103,9 +103,15 @@ public struct ReminderNotificationScheduler: Sendable {
     )
   }
 
-  private func deliveryDate(for reminder: Reminder, dueDate: Date) -> Date? {
-    guard !reminder.includesTime else { return dueDate }
-    return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: dueDate)
+  private func deliveryDate(for dueDate: ReminderDate) -> Date? {
+    var components = dueDate.components
+    if dueDate.isAllDay {
+      components.hour = 9
+      components.minute = 0
+    }
+    components.calendar = calendar
+    components.timeZone = calendar.timeZone
+    return components.date
   }
 
   private static func requestIdentifier(for reminderID: Reminder.ID) -> String {

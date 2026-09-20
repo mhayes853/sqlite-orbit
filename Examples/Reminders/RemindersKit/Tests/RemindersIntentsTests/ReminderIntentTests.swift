@@ -14,7 +14,7 @@ struct ReminderIntentTests {
     try await database.write {
       try RemindersList.insert { RemindersList.Draft(list) }.execute($0)
     }
-    let dueDate = Date(timeIntervalSince1970: 12_345)
+    let dueDate = Date(timeIntervalSince1970: 12_360)
     let intent = CreateReminderIntent(
       title: "  Book flights  ",
       list: RemindersListEntity(list),
@@ -38,7 +38,7 @@ struct ReminderIntentTests {
     #expect(reminders.count == 1)
     #expect(reminders[0].title == "Book flights")
     #expect(reminders[0].notes == "Use points")
-    #expect(reminders[0].dueDate == dueDate)
+    #expect(reminders[0].dueDate == ReminderDate(dateAndTime: dueDate))
     #expect(reminders[0].isFlagged)
     #expect(reminders[0].priority == .high)
     #expect(reminders[0].remindersListID == list.id)
@@ -158,7 +158,7 @@ struct ReminderIntentTests {
     let result = try await CreateReminderIntent(
       title: "Call home",
       list: RemindersListEntity(list),
-      dueDate: .distantFuture,
+      dueDate: Date.distantFuture,
       database: database,
       notificationScheduler: scheduler
     )

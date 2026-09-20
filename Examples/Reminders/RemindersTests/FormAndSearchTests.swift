@@ -114,7 +114,7 @@ struct FormAndSearchTests {
   }
 
   @Test
-  func reminderFormPersistsADateWithoutATimeAtTheStartOfDay() async throws {
+  func reminderFormPersistsAnAllDayDate() async throws {
     let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
@@ -135,12 +135,12 @@ struct FormAndSearchTests {
     let reminder = try #require(
       await database.read { try Reminder.find(reminderID).fetchOne($0) }
     )
-    #expect(reminder.dueDate == Calendar.current.startOfDay(for: dueDate))
-    #expect(!reminder.includesTime)
+    #expect(reminder.dueDate == ReminderDate(date: dueDate))
+    #expect(reminder.dueDate?.isAllDay == true)
   }
 
   @Test
-  func reminderFormPersistsThatADueDateIncludesATime() async throws {
+  func reminderFormPersistsATimedDate() async throws {
     let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
@@ -158,8 +158,8 @@ struct FormAndSearchTests {
     let reminder = try #require(
       await database.read { try Reminder.find(reminderID).fetchOne($0) }
     )
-    #expect(reminder.dueDate == dueDate)
-    #expect(reminder.includesTime)
+    #expect(reminder.dueDate == ReminderDate(dateAndTime: dueDate))
+    #expect(reminder.dueDate?.isAllDay == false)
   }
 
   @Test
@@ -194,7 +194,9 @@ struct FormAndSearchTests {
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
-      dueDate: Date(timeIntervalSince1970: 1_800_000_000),
+      dueDate: ReminderDate(
+        dateAndTime: Date(timeIntervalSince1970: 1_800_000_000)
+      ),
       isFlagged: true,
       notes: "Original notes",
       position: 42,
@@ -369,6 +371,7 @@ struct FormAndSearchTests {
     #expect(
       updated.dueDate
         == calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
+          .map { ReminderDate(date: $0, calendar: calendar) }
     )
     #expect(updated.remindersListID == work.id)
     #expect(updated.priority == .high)

@@ -91,13 +91,10 @@ final class ReminderRowModel: ErrorReporting {
       byAdding: .day,
       value: daysFromToday,
       to: calendar.startOfDay(for: now)
-    )
+    ).map { ReminderDate(date: $0, calendar: calendar) }
     return write {
       try Reminder.find(reminder.id)
-        .update {
-          $0.dueDate = dueDate
-          $0.includesTime = false
-        }
+        .update { $0.dueDate = dueDate }
         .execute($0)
     }
   }
@@ -106,10 +103,7 @@ final class ReminderRowModel: ErrorReporting {
   func clearDueDateButtonTapped(_ reminder: Reminder) -> Task<Void, Never> {
     write {
       try Reminder.find(reminder.id)
-        .update {
-          $0.dueDate = #bind(nil as Date?)
-          $0.includesTime = false
-        }
+        .update { $0.dueDate = #bind(nil as ReminderDate?) }
         .execute($0)
     }
   }
@@ -242,7 +236,6 @@ struct ReminderRow: View {
           if let dueDate = reminder.dueDate {
             ReminderDueDate(
               dueDate,
-              includesTime: reminder.includesTime,
               isPastDue: isPastDue
             )
           }

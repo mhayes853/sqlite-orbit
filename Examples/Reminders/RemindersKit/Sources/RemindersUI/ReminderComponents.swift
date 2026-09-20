@@ -74,26 +74,25 @@ public struct ReminderTitle: View {
 }
 
 public struct ReminderDueDate: View {
-  public let dueDate: Date
-  public let includesTime: Bool
+  public let dueDate: ReminderDate
   public let isPastDue: Bool
 
   public nonisolated init(
-    _ dueDate: Date,
-    includesTime: Bool,
+    _ dueDate: ReminderDate,
     isPastDue: Bool = false
   ) {
     self.dueDate = dueDate
-    self.includesTime = includesTime
     self.isPastDue = isPastDue
   }
 
   public var body: some View {
     Group {
-      if includesTime {
-        Text(dueDate.formatted(date: .numeric, time: .shortened))
-      } else {
-        Text(dueDate, style: .date)
+      if let date = dueDate.date() {
+        if dueDate.isAllDay {
+          Text(date, style: .date)
+        } else {
+          Text(date.formatted(date: .numeric, time: .shortened))
+        }
       }
     }
     .foregroundStyle(isPastDue ? .red : .secondary)

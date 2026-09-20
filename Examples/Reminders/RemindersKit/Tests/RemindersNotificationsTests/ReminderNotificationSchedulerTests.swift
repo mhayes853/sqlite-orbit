@@ -19,8 +19,7 @@ struct ReminderNotificationSchedulerTests {
     )
     let reminder = Reminder(
       id: UUID(),
-      dueDate: dueDate,
-      includesTime: true,
+      dueDate: ReminderDate(dateAndTime: dueDate, calendar: calendar),
       notes: "Remember the slides",
       remindersListID: UUID(),
       title: "Present"
@@ -50,7 +49,7 @@ struct ReminderNotificationSchedulerTests {
     )
     let reminder = Reminder(
       id: UUID(),
-      dueDate: dueDate,
+      dueDate: ReminderDate(date: dueDate, calendar: calendar),
       remindersListID: UUID(),
       title: "All day"
     )
@@ -71,8 +70,7 @@ struct ReminderNotificationSchedulerTests {
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
-      dueDate: .distantFuture,
-      includesTime: true,
+      dueDate: ReminderDate(dateAndTime: .distantFuture, calendar: calendar),
       remindersListID: list.id,
       title: "Future"
     )
@@ -104,8 +102,7 @@ struct ReminderNotificationSchedulerTests {
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
-      dueDate: .distantFuture,
-      includesTime: true,
+      dueDate: ReminderDate(dateAndTime: .distantFuture, calendar: calendar),
       remindersListID: list.id,
       title: "Observed"
     )
@@ -139,7 +136,7 @@ struct ReminderNotificationSchedulerTests {
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
-      dueDate: .distantFuture,
+      dueDate: ReminderDate(date: .distantFuture, calendar: calendar),
       remindersListID: list.id,
       title: "Complete me"
     )

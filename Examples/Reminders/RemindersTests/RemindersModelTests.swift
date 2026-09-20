@@ -103,7 +103,7 @@ struct RemindersModelTests {
       try Reminder.insert {
         Reminder(
           id: UUID(),
-          dueDate: now,
+          dueDate: ReminderDate(date: now),
           remindersListID: listID,
           title: "Today"
         )
@@ -121,7 +121,7 @@ struct RemindersModelTests {
       try Reminder.insert {
         Reminder(
           id: UUID(),
-          dueDate: now.addingTimeInterval(86_400),
+          dueDate: ReminderDate(date: now.addingTimeInterval(86_400)),
           remindersListID: listID,
           title: "Scheduled"
         )

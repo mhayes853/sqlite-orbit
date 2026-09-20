@@ -151,7 +151,7 @@ final class RemindersListsModel: ErrorReporting {
         [
           Reminder(
             id: groceriesID,
-            dueDate: now,
+            dueDate: ReminderDate(date: now),
             notes: "Milk, coffee, and apples",
             position: 0,
             remindersListID: personalID,
@@ -159,7 +159,7 @@ final class RemindersListsModel: ErrorReporting {
           ),
           Reminder(
             id: presentationID,
-            dueDate: now.addingTimeInterval(86_400),
+            dueDate: ReminderDate(date: now.addingTimeInterval(86_400)),
             isFlagged: true,
             notes: "Add the latest launch numbers",
             position: 1,

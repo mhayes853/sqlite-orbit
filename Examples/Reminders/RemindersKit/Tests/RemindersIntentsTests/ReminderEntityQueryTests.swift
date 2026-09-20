@@ -20,7 +20,9 @@ struct ReminderEntityQueryTests {
     let newer = Reminder(
       id: UUID(),
       createdAt: Date(timeIntervalSince1970: 2_000),
-      dueDate: Date(timeIntervalSince1970: 3_000),
+      dueDate: ReminderDate(
+        dateAndTime: Date(timeIntervalSince1970: 3_000)
+      ),
       isFlagged: true,
       notes: "Bring the launch numbers",
       priority: .high,

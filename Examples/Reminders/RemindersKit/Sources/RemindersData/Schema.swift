@@ -46,8 +46,7 @@ public nonisolated struct RemindersListAsset: Hashable, Identifiable, Sendable {
 public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
   public let id: UUID
   public var createdAt = Date()
-  public var dueDate: Date?
-  public var includesTime = false
+  public var dueDate: ReminderDate?
   public var isFlagged = false
   public var notes = ""
   public var position = 0
@@ -59,8 +58,7 @@ public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
   public init(
     id: UUID,
     createdAt: Date = .now,
-    dueDate: Date? = nil,
-    includesTime: Bool = false,
+    dueDate: ReminderDate? = nil,
     isFlagged: Bool = false,
     notes: String = "",
     position: Int = 0,
@@ -72,7 +70,6 @@ public nonisolated struct Reminder: Hashable, Identifiable, Sendable {
     self.id = id
     self.createdAt = createdAt
     self.dueDate = dueDate
-    self.includesTime = includesTime
     self.isFlagged = isFlagged
     self.notes = notes
     self.position = position
@@ -223,11 +220,13 @@ nonisolated extension Reminder.TableColumns {
   }
 
   public func isPastDue(relativeTo date: Date) -> some QueryExpression<Bool> {
-    !isCompleted && #sql("coalesce(date(\(dueDate)) < date(\(date)), 0)")
+    !isCompleted
+      && #sql("coalesce(date(\(dueDate)) < date(\(ReminderDate(date: date))), 0)")
   }
 
   public func isToday(relativeTo date: Date) -> some QueryExpression<Bool> {
-    !isCompleted && #sql("coalesce(date(\(dueDate)) = date(\(date)), 0)")
+    !isCompleted
+      && #sql("coalesce(date(\(dueDate)) = date(\(ReminderDate(date: date))), 0)")
   }
 
   public var isScheduled: some QueryExpression<Bool> {
@@ -423,6 +422,24 @@ public func remindersMigrator(
       """
       ALTER TABLE "reminders"
       ADD COLUMN "includesTime" INTEGER NOT NULL DEFAULT 0
+      """
+    )
+  }
+  migrator.registerMigration("Store reminder date components") { transaction in
+    try transaction.execute(
+      """
+      UPDATE "reminders"
+      SET "dueDate" = CASE
+        WHEN "dueDate" IS NULL THEN NULL
+        WHEN "includesTime" THEN strftime('%Y-%m-%dT%H:%M', "dueDate", 'localtime')
+        ELSE strftime('%Y-%m-%d', "dueDate", 'localtime')
+      END
+      """
+    )
+    try transaction.execute(
+      """
+      ALTER TABLE "reminders"
+      DROP COLUMN "includesTime"
       """
     )
   }

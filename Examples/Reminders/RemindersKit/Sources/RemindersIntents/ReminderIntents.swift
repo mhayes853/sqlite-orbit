@@ -116,8 +116,7 @@ public struct CreateReminderIntent: AppIntent {
         Reminder.Draft(
           Reminder(
             id: reminderID,
-            dueDate: dueDate,
-            includesTime: dueDate != nil,
+            dueDate: dueDate.map { ReminderDate(dateAndTime: $0) },
             isFlagged: isFlagged,
             notes: notes,
             position: position,
