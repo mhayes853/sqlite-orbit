@@ -78,8 +78,12 @@ public struct CreateReminderIntent: AppIntent {
     self.isFlagged = isFlagged
     self.priority = priority
     self.tags = tags
-    _database = appDependency(database)
-    _notificationScheduler = appDependency(notificationScheduler)
+    let dependencies = AppDependencyManager()
+    _database = appDependency(database, manager: dependencies)
+    _notificationScheduler = appDependency(
+      notificationScheduler,
+      manager: dependencies
+    )
   }
 
   public func perform() async throws -> some IntentResult
@@ -190,8 +194,12 @@ public struct CompleteReminderIntent: AppIntent {
     notificationScheduler: ReminderNotificationScheduler
   ) {
     self.reminder = reminder
-    _database = appDependency(database)
-    _notificationScheduler = appDependency(notificationScheduler)
+    let dependencies = AppDependencyManager()
+    _database = appDependency(database, manager: dependencies)
+    _notificationScheduler = appDependency(
+      notificationScheduler,
+      manager: dependencies
+    )
   }
 
   public func perform() async throws -> some IntentResult
@@ -247,8 +255,12 @@ public struct ReopenReminderIntent: AppIntent {
     notificationScheduler: ReminderNotificationScheduler
   ) {
     self.reminder = reminder
-    _database = appDependency(database)
-    _notificationScheduler = appDependency(notificationScheduler)
+    let dependencies = AppDependencyManager()
+    _database = appDependency(database, manager: dependencies)
+    _notificationScheduler = appDependency(
+      notificationScheduler,
+      manager: dependencies
+    )
   }
 
   public func perform() async throws -> some IntentResult
@@ -300,8 +312,12 @@ public struct DeleteRemindersIntent: DeleteIntent {
     notificationScheduler: ReminderNotificationScheduler
   ) {
     self.entities = entities
-    _database = appDependency(database)
-    _notificationScheduler = appDependency(notificationScheduler)
+    let dependencies = AppDependencyManager()
+    _database = appDependency(database, manager: dependencies)
+    _notificationScheduler = appDependency(
+      notificationScheduler,
+      manager: dependencies
+    )
   }
 
   public func perform() async throws -> some IntentResult & ProvidesDialog {
@@ -314,6 +330,15 @@ public struct DeleteRemindersIntent: DeleteIntent {
     }
     return .result(dialog: "Deleted the reminders.")
   }
+}
+
+func appDependency<Value: Sendable>(
+  _ value: Value,
+  manager: AppDependencyManager
+) -> AppDependency<Value> {
+  let dependency = AppDependency<Value>(manager: manager)
+  dependency.wrappedValue = value
+  return dependency
 }
 
 extension ReminderEntity {
@@ -358,10 +383,4 @@ private enum ReminderIntentError: LocalizedError {
       "The reminder could not be found."
     }
   }
-}
-
-func appDependency<Value: Sendable>(_ value: Value) -> AppDependency<Value> {
-  let dependency = AppDependency<Value>(manager: AppDependencyManager())
-  dependency.wrappedValue = value
-  return dependency
 }

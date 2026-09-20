@@ -34,7 +34,8 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
   public init() {}
 
   public init(database: RemindersDatabase) {
-    _database = appDependency(database)
+    let dependencies = AppDependencyManager()
+    _database = appDependency(database, manager: dependencies)
   }
 
   public func entities(
