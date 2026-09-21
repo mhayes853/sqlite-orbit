@@ -3,48 +3,48 @@ import Foundation
 import RemindersData
 import SQLiteOrbit
 
-public struct ReminderEntity: AppEntity, Sendable {
-  public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+struct ReminderEntity: AppEntity, Sendable {
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(
     name: "Reminder"
   )
-  public static let defaultQuery = ReminderEntityQuery()
+  static let defaultQuery = ReminderEntityQuery()
 
-  public let reminder: Reminder
-  public let remindersList: RemindersList
-  public let tags: [Tag]
+  let reminder: Reminder
+  let remindersList: RemindersList
+  let tags: [Tag]
 
-  public var id: Reminder.ID { reminder.id }
+  var id: Reminder.ID { reminder.id }
 
   @ComputedProperty(title: "Title")
-  public var title: String { reminder.title }
+  var title: String { reminder.title }
 
   @ComputedProperty(title: "Notes")
-  public var notes: String { reminder.notes }
+  var notes: String { reminder.notes }
 
   @ComputedProperty(title: "List")
-  public var list: RemindersListEntity { RemindersListEntity(remindersList) }
+  var list: RemindersListEntity { RemindersListEntity(remindersList) }
 
   @ComputedProperty(title: "Due Date")
-  public var dueDate: Date? { reminder.dueDate?.date() }
+  var dueDate: Date? { reminder.dueDate?.date() }
 
   @ComputedProperty(title: "Completed")
-  public var isCompleted: Bool { reminder.isCompleted }
+  var isCompleted: Bool { reminder.isCompleted }
 
   @ComputedProperty(title: "Flagged")
-  public var isFlagged: Bool { reminder.isFlagged }
+  var isFlagged: Bool { reminder.isFlagged }
 
   @ComputedProperty(title: "Priority")
-  public var priority: ReminderIntentPriority? {
+  var priority: ReminderIntentPriority? {
     reminder.priority.map(ReminderIntentPriority.init)
   }
 
   @ComputedProperty(title: "Tags")
-  public var tagTitles: [String] { tags.map(\.title) }
+  var tagTitles: [String] { tags.map(\.title) }
 
   @ComputedProperty(title: "Created")
-  public var createdAt: Date { reminder.createdAt }
+  var createdAt: Date { reminder.createdAt }
 
-  public var displayRepresentation: DisplayRepresentation {
+  var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(
       title: "\(title)",
       subtitle: "\(list.title)",
@@ -52,7 +52,7 @@ public struct ReminderEntity: AppEntity, Sendable {
     )
   }
 
-  public init(
+  init(
     reminder: Reminder,
     remindersList: RemindersList,
     tags: [Tag] = []
@@ -62,7 +62,7 @@ public struct ReminderEntity: AppEntity, Sendable {
     self.tags = tags
   }
 
-  public init(_ reminder: WidgetReminder) {
+  init(_ reminder: WidgetReminder) {
     self.init(
       reminder: reminder.reminder,
       remindersList: reminder.remindersList
@@ -92,9 +92,9 @@ private nonisolated struct ReminderEntityTag: Sendable {
   let tag: Tag
 }
 
-public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
   @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
-  public static let allowedExecutionTargets: IntentExecutionTargets = [
+  static let allowedExecutionTargets: IntentExecutionTargets = [
     .main,
     .widgetKitExtension
   ]
@@ -102,13 +102,13 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
-  public init() {}
+  init() {}
 
-  public init(dependencies: AppDependencyManager) {
+  init(dependencies: AppDependencyManager) {
     _database = AppDependency(manager: dependencies)
   }
 
-  public func entities(
+  func entities(
     for identifiers: [ReminderEntity.ID]
   ) async throws -> [ReminderEntity] {
     try await Self.entities(for: identifiers, in: database)
@@ -138,7 +138,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     return identifiers.compactMap { entitiesByID[$0] }
   }
 
-  public func suggestedEntities() async throws -> [ReminderEntity] {
+  func suggestedEntities() async throws -> [ReminderEntity] {
     try await database.read { transaction in
       let records =
         try Reminder
@@ -157,7 +157,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     }
   }
 
-  public func entities(matching string: String) async throws -> [ReminderEntity] {
+  func entities(matching string: String) async throws -> [ReminderEntity] {
     let match = Self.ftsMatch(string)
     guard !match.isEmpty else { return try await suggestedEntities() }
     return try await database.read { transaction in
@@ -179,7 +179,7 @@ public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, 
     }
   }
 
-  public static func entity(
+  static func entity(
     id: Reminder.ID,
     database: RemindersDatabase
   ) async throws -> ReminderEntity? {

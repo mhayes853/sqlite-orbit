@@ -7,12 +7,86 @@ import RemindersUI
 import SQLiteOrbit
 import SwiftUI
 
-public struct CreateReminderIntent: AppIntent {
-  public static let title: LocalizedStringResource = "Create Reminder"
-  public static let description = IntentDescription(
+struct CompleteWidgetReminderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Complete Reminder"
+  static let description = IntentDescription("Marks a reminder as completed.")
+  static let isDiscoverable = false
+  static let supportedModes: IntentModes = [.background]
+
+  @Parameter(title: "Reminder ID")
+  var reminderID: String
+
+  @Dependency(default: { try OrbitIPCDatabase.reminders() })
+  var database: RemindersDatabase
+
+  @Dependency(default: ReminderNotificationScheduler())
+  var notificationScheduler: ReminderNotificationScheduler
+
+  init() {
+    reminderID = ""
+  }
+
+  init(reminderID: Reminder.ID) {
+    self.reminderID = reminderID.uuidString
+  }
+
+  init(
+    reminderID: Reminder.ID,
+    dependencies: AppDependencyManager
+  ) {
+    self.reminderID = reminderID.uuidString
+    _database = AppDependency(manager: dependencies)
+    _notificationScheduler = AppDependency(manager: dependencies)
+  }
+
+  func perform() async throws -> some IntentResult {
+    guard let reminderID = UUID(uuidString: reminderID) else {
+      throw CompleteWidgetReminderError.invalidIdentifier
+    }
+    try await Reminder.setStatus(
+      .completed,
+      id: reminderID,
+      in: database,
+      scheduler: notificationScheduler
+    )
+    return .result()
+  }
+}
+
+private enum CompleteWidgetReminderError: Error {
+  case invalidIdentifier
+}
+
+enum ReminderIntentPriority: Int, AppEnum, Sendable {
+  case low = 1
+  case medium
+  case high
+
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(
+    name: "Priority"
+  )
+
+  static let caseDisplayRepresentations: [Self: DisplayRepresentation] = [
+    .low: "Low",
+    .medium: "Medium",
+    .high: "High"
+  ]
+
+  init(_ priority: Reminder.Priority) {
+    self = Self(rawValue: priority.rawValue)!
+  }
+
+  var reminderPriority: Reminder.Priority {
+    Reminder.Priority(rawValue: rawValue)!
+  }
+}
+
+struct CreateReminderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Create Reminder"
+  static let description = IntentDescription(
     "Creates a reminder with optional scheduling and organization details."
   )
-  public static var parameterSummary: some ParameterSummary {
+  static var parameterSummary: some ParameterSummary {
     Summary("Create reminder ‘\(\.$reminderTitle)’") {
       \.$list
       \.$notes
@@ -22,28 +96,28 @@ public struct CreateReminderIntent: AppIntent {
       \.$tags
     }
   }
-  public static let openAppWhenRun = false
+  static let openAppWhenRun = false
 
   @Parameter(title: "Title")
-  public var reminderTitle: String
+  var reminderTitle: String
 
   @Parameter(title: "List")
-  public var list: RemindersListEntity?
+  var list: RemindersListEntity?
 
   @Parameter(title: "Notes")
-  public var notes: String?
+  var notes: String?
 
   @Parameter(title: "Due Date")
-  public var dueDate: Date?
+  var dueDate: Date?
 
   @Parameter(title: "Flagged", default: false)
-  public var isFlagged: Bool
+  var isFlagged: Bool
 
   @Parameter(title: "Priority")
-  public var priority: ReminderIntentPriority?
+  var priority: ReminderIntentPriority?
 
   @Parameter(title: "Tags")
-  public var tags: [String]?
+  var tags: [String]?
 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
@@ -51,7 +125,7 @@ public struct CreateReminderIntent: AppIntent {
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
 
-  public init() {
+  init() {
     reminderTitle = ""
     list = nil
     notes = nil
@@ -61,7 +135,7 @@ public struct CreateReminderIntent: AppIntent {
     tags = nil
   }
 
-  public init(
+  init(
     title: String,
     list: RemindersListEntity? = nil,
     notes: String? = nil,
@@ -82,7 +156,7 @@ public struct CreateReminderIntent: AppIntent {
     _notificationScheduler = AppDependency(manager: dependencies)
   }
 
-  public func perform() async throws -> some IntentResult
+  func perform() async throws -> some IntentResult
     & ReturnsValue<ReminderEntity>
     & ProvidesDialog
     & ShowsSnippetView
@@ -151,22 +225,22 @@ public struct CreateReminderIntent: AppIntent {
   }
 }
 
-public struct CompleteReminderIntent: AppIntent {
-  public static let title: LocalizedStringResource = "Complete Reminder"
-  public static let description = IntentDescription("Marks a reminder as completed.")
-  public static var parameterSummary: some ParameterSummary {
+struct CompleteReminderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Complete Reminder"
+  static let description = IntentDescription("Marks a reminder as completed.")
+  static var parameterSummary: some ParameterSummary {
     Summary("Complete \(\.$reminder)")
   }
-  public static let supportedModes: IntentModes = [.background]
+  static let supportedModes: IntentModes = [.background]
 
   @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
-  public static let allowedExecutionTargets: IntentExecutionTargets = [
+  static let allowedExecutionTargets: IntentExecutionTargets = [
     .main,
     .widgetKitExtension
   ]
 
   @Parameter(title: "Reminder")
-  public var reminder: ReminderEntity
+  var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
@@ -174,15 +248,15 @@ public struct CompleteReminderIntent: AppIntent {
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
 
-  public init() {
+  init() {
     reminder = ReminderEntity.placeholder
   }
 
-  public init(reminder: ReminderEntity) {
+  init(reminder: ReminderEntity) {
     self.reminder = reminder
   }
 
-  public init(
+  init(
     reminder: ReminderEntity,
     dependencies: AppDependencyManager
   ) {
@@ -191,7 +265,7 @@ public struct CompleteReminderIntent: AppIntent {
     _notificationScheduler = AppDependency(manager: dependencies)
   }
 
-  public func perform() async throws -> some IntentResult
+  func perform() async throws -> some IntentResult
     & ReturnsValue<ReminderEntity>
     & ProvidesDialog
     & ShowsSnippetView
@@ -212,16 +286,16 @@ public struct CompleteReminderIntent: AppIntent {
   }
 }
 
-public struct ReopenReminderIntent: AppIntent {
-  public static let title: LocalizedStringResource = "Reopen Reminder"
-  public static let description = IntentDescription("Marks a reminder as incomplete.")
-  public static var parameterSummary: some ParameterSummary {
+struct ReopenReminderIntent: AppIntent {
+  static let title: LocalizedStringResource = "Reopen Reminder"
+  static let description = IntentDescription("Marks a reminder as incomplete.")
+  static var parameterSummary: some ParameterSummary {
     Summary("Reopen \(\.$reminder)")
   }
-  public static let openAppWhenRun = false
+  static let openAppWhenRun = false
 
   @Parameter(title: "Reminder")
-  public var reminder: ReminderEntity
+  var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
@@ -229,15 +303,15 @@ public struct ReopenReminderIntent: AppIntent {
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
 
-  public init() {
+  init() {
     reminder = ReminderEntity.placeholder
   }
 
-  public init(reminder: ReminderEntity) {
+  init(reminder: ReminderEntity) {
     self.reminder = reminder
   }
 
-  public init(
+  init(
     reminder: ReminderEntity,
     dependencies: AppDependencyManager
   ) {
@@ -246,7 +320,7 @@ public struct ReopenReminderIntent: AppIntent {
     _notificationScheduler = AppDependency(manager: dependencies)
   }
 
-  public func perform() async throws -> some IntentResult
+  func perform() async throws -> some IntentResult
     & ReturnsValue<ReminderEntity>
     & ProvidesDialog
     & ShowsSnippetView
@@ -260,16 +334,16 @@ public struct ReopenReminderIntent: AppIntent {
   }
 }
 
-public struct DeleteRemindersIntent: DeleteIntent {
-  public static let title: LocalizedStringResource = "Delete Reminders"
-  public static let description = IntentDescription("Deletes one or more reminders.")
-  public static var parameterSummary: some ParameterSummary {
+struct DeleteRemindersIntent: DeleteIntent {
+  static let title: LocalizedStringResource = "Delete Reminders"
+  static let description = IntentDescription("Deletes one or more reminders.")
+  static var parameterSummary: some ParameterSummary {
     Summary("Delete \(\.$entities)")
   }
-  public static let openAppWhenRun = false
+  static let openAppWhenRun = false
 
   @Parameter(title: "Reminders")
-  public var entities: [ReminderEntity]
+  var entities: [ReminderEntity]
 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
@@ -277,11 +351,11 @@ public struct DeleteRemindersIntent: DeleteIntent {
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
 
-  public init() {
+  init() {
     entities = []
   }
 
-  public init(
+  init(
     entities: [ReminderEntity],
     dependencies: AppDependencyManager
   ) {
@@ -290,7 +364,7 @@ public struct DeleteRemindersIntent: DeleteIntent {
     _notificationScheduler = AppDependency(manager: dependencies)
   }
 
-  public func perform() async throws -> some IntentResult & ProvidesDialog {
+  func perform() async throws -> some IntentResult & ProvidesDialog {
     let ids = entities.map(\.id)
     try await database.write { transaction in
       try Reminder.where { $0.id.in(ids) }.delete().execute(transaction)

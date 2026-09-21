@@ -2,42 +2,42 @@ import AppIntents
 import RemindersData
 import SQLiteOrbit
 
-public struct RemindersListEntity: AppEntity, Sendable {
-  public static let typeDisplayRepresentation = TypeDisplayRepresentation(
+struct RemindersListEntity: AppEntity, Sendable {
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(
     name: "Reminders List"
   )
-  public static let defaultQuery = RemindersListEntityQuery()
+  static let defaultQuery = RemindersListEntityQuery()
 
-  public let remindersList: RemindersList
+  let remindersList: RemindersList
 
-  public var id: RemindersList.ID { remindersList.id }
+  var id: RemindersList.ID { remindersList.id }
 
   @ComputedProperty(title: "Title")
-  public var title: String { remindersList.title }
+  var title: String { remindersList.title }
 
-  public var displayRepresentation: DisplayRepresentation {
+  var displayRepresentation: DisplayRepresentation {
     DisplayRepresentation(
       title: "\(title)",
       image: .init(systemName: "list.bullet")
     )
   }
 
-  public init(_ remindersList: RemindersList) {
+  init(_ remindersList: RemindersList) {
     self.remindersList = remindersList
   }
 }
 
-public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
-  public init() {}
+  init() {}
 
-  public init(dependencies: AppDependencyManager) {
+  init(dependencies: AppDependencyManager) {
     _database = AppDependency(manager: dependencies)
   }
 
-  public func entities(
+  func entities(
     for identifiers: [RemindersListEntity.ID]
   ) async throws -> [RemindersListEntity] {
     let remindersLists = try await database.read { transaction in
@@ -49,7 +49,7 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
     return identifiers.compactMap { remindersListsByID[$0].map(RemindersListEntity.init) }
   }
 
-  public func suggestedEntities() async throws -> [RemindersListEntity] {
+  func suggestedEntities() async throws -> [RemindersListEntity] {
     try await database.read { transaction in
       try RemindersList
         .order { ($0.position, $0.title.collate(.nocase), $0.id) }
@@ -58,7 +58,7 @@ public struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependenc
     }
   }
 
-  public func entities(matching string: String) async throws -> [RemindersListEntity] {
+  func entities(matching string: String) async throws -> [RemindersListEntity] {
     let pattern = "%\(Self.escapedLikePattern(string))%"
     return try await database.read { transaction in
       try RemindersList

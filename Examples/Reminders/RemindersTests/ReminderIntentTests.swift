@@ -144,6 +144,23 @@ struct ReminderIntentTests {
   }
 
   @Test
+  func widgetCompletionUsesInjectedDependencies() async throws {
+    let database = try SQLiteQueue.reminders()
+    let (_, reminder) = try await insertReminder(in: database)
+    let dependencies = AppDependencyManager()
+    let intent = CompleteWidgetReminderIntent(
+      reminderID: reminder.id,
+      dependencies: dependencies
+    )
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
+
+    _ = try await intent.perform()
+
+    #expect(try await status(of: reminder.id, in: database) == .completed)
+  }
+
+  @Test
   func deleteRemindersDeletesOnlyTheSelectedRecords() async throws {
     let database = try SQLiteQueue.reminders()
     let dependencies = AppDependencyManager()

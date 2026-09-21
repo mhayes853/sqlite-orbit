@@ -25,8 +25,6 @@
 		C10000000000000000000031 /* SQLiteOrbit in Frameworks */ = {isa = PBXBuildFile; productRef = E5137AE6BDC0F8811DB112FC /* SQLiteOrbit */; };
 		A30000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* Assets.xcassets */; };
 		B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
-		B10000000000000000000002 /* CompleteWidgetReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */; };
-		B10000000000000000000007 /* CompleteWidgetReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */; };
 		B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* RecentRemindersWidget.swift */; };
 		B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* RemindersWidgetBundle.swift */; };
 		B10000000000000000000005 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
@@ -51,15 +49,16 @@
 		D20000000000000000000002 /* RemindersNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* RemindersNavigation.swift */; };
 		D20000000000000000000003 /* RemindersNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* RemindersNavigation.swift */; };
 		C20000000000000000000011 /* ReminderEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* ReminderEntity.swift */; };
-		C20000000000000000000012 /* ReminderIntentPriority.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* ReminderIntentPriority.swift */; };
 		C20000000000000000000013 /* ReminderIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* ReminderIntents.swift */; };
 		C20000000000000000000014 /* RemindersListEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* RemindersListEntity.swift */; };
 		C20000000000000000000021 /* ReminderEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* ReminderEntity.swift */; };
-		C20000000000000000000022 /* ReminderIntentPriority.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000002 /* ReminderIntentPriority.swift */; };
 		C20000000000000000000023 /* ReminderIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* ReminderIntents.swift */; };
 		C20000000000000000000024 /* RemindersListEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* RemindersListEntity.swift */; };
 		C20000000000000000000041 /* ReminderEntityQueryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000031 /* ReminderEntityQueryTests.swift */; };
 		C20000000000000000000042 /* ReminderIntentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000032 /* ReminderIntentTests.swift */; };
+		C20000000000000000000015 /* ReminderIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000003 /* ReminderIntents.swift */; };
+		C20000000000000000000016 /* ReminderEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000001 /* ReminderEntity.swift */; };
+		C20000000000000000000017 /* RemindersListEntity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C20000000000000000000004 /* RemindersListEntity.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -106,7 +105,6 @@
 		F3563D78F50635334631EB41 /* ReminderForm.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderForm.swift; sourceTree = "<group>"; };
 		F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersApp.swift; sourceTree = "<group>"; };
 		B10000000000000000000010 /* RemindersWidgetReloader.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetReloader.swift; sourceTree = "<group>"; };
-		B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CompleteWidgetReminderIntent.swift; sourceTree = "<group>"; };
 		B10000000000000000000012 /* RecentRemindersWidget.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RecentRemindersWidget.swift; sourceTree = "<group>"; };
 		B10000000000000000000013 /* RemindersWidgetBundle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersWidgetBundle.swift; sourceTree = "<group>"; };
 		B10000000000000000000014 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -117,7 +115,6 @@
 		D20000000000000000000001 /* RemindersNavigation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersNavigation.swift; sourceTree = "<group>"; };
 		D20000000000000000000004 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		C20000000000000000000001 /* ReminderEntity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderEntity.swift; sourceTree = "<group>"; };
-		C20000000000000000000002 /* ReminderIntentPriority.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderIntentPriority.swift; sourceTree = "<group>"; };
 		C20000000000000000000003 /* ReminderIntents.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderIntents.swift; sourceTree = "<group>"; };
 		C20000000000000000000004 /* RemindersListEntity.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RemindersListEntity.swift; sourceTree = "<group>"; };
 		C20000000000000000000031 /* ReminderEntityQueryTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ReminderEntityQueryTests.swift; sourceTree = "<group>"; };
@@ -194,9 +191,7 @@
 			isa = PBXGroup;
 			children = (
 				F5A75B912FF3CFC8301A0E45 /* RemindersApp.swift */,
-				B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */,
 				C20000000000000000000001 /* ReminderEntity.swift */,
-				C20000000000000000000002 /* ReminderIntentPriority.swift */,
 				C20000000000000000000003 /* ReminderIntents.swift */,
 				C20000000000000000000004 /* RemindersListEntity.swift */,
 				D20000000000000000000004 /* Info.plist */,
@@ -380,7 +375,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B10000000000000000000002 /* CompleteWidgetReminderIntent.swift in Sources */,
+				C20000000000000000000015 /* ReminderIntents.swift in Sources */,
+				C20000000000000000000016 /* ReminderEntity.swift in Sources */,
+				C20000000000000000000017 /* RemindersListEntity.swift in Sources */,
 				B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */,
 				B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */,
 			);
@@ -391,7 +388,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				C20000000000000000000021 /* ReminderEntity.swift in Sources */,
-				C20000000000000000000022 /* ReminderIntentPriority.swift in Sources */,
 				C20000000000000000000023 /* ReminderIntents.swift in Sources */,
 				C20000000000000000000024 /* RemindersListEntity.swift in Sources */,
 				E10000000000000000000001 /* Helpers.swift in Sources */,
@@ -420,9 +416,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CAD8E286C848B1FAC4491CCD /* RemindersApp.swift in Sources */,
-				B10000000000000000000007 /* CompleteWidgetReminderIntent.swift in Sources */,
 				C20000000000000000000011 /* ReminderEntity.swift in Sources */,
-				C20000000000000000000012 /* ReminderIntentPriority.swift in Sources */,
 				C20000000000000000000013 /* ReminderIntents.swift in Sources */,
 				C20000000000000000000014 /* RemindersListEntity.swift in Sources */,
 				4188F6CC0D2C4FE24A32C5D5 /* Helpers.swift in Sources */,
