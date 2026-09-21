@@ -1,5 +1,17 @@
 import SwiftUI
 
+protocol HashableObject: AnyObject, Hashable {}
+
+extension HashableObject {
+  nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs === rhs
+  }
+
+  nonisolated func hash(into hasher: inout Hasher) {
+    hasher.combine(ObjectIdentifier(self))
+  }
+}
+
 @MainActor
 protocol ErrorReporting {
   var errorMessage: String? { get nonmutating set }

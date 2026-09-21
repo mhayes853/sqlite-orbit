@@ -6,15 +6,11 @@ import SQLiteOrbit
 @MainActor
 @Observable
 final class RemindersNavigationModel: ErrorReporting {
-  enum Path: Hashable {
-    case detail(RemindersDetailModel)
-  }
-
   var errorMessage: String?
-  var path: [Path] = []
+  var path: [RemindersDetailModel] = []
 
   func detailButtonTapped(_ detailType: RemindersDetailType) {
-    path = [.detail(RemindersDetailModel(detailType: detailType))]
+    path = [RemindersDetailModel(detailType: detailType)]
   }
 
   func open(_ route: RemindersRoute) async {
@@ -42,7 +38,7 @@ final class RemindersNavigationModel: ErrorReporting {
         }
         let model = RemindersDetailModel(detailType: .list(list))
         model.reminderForm = ReminderFormContext(remindersList: list, reminder: reminder)
-        path = [.detail(model)]
+        path = [model]
       }
     }
   }

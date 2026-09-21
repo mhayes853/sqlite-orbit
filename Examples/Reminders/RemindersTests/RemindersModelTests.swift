@@ -84,10 +84,7 @@ struct RemindersModelTests {
 
     model.detailButtonTapped(.flagged)
 
-    guard case .detail(let detail)? = model.path.first else {
-      Issue.record("Expected the detail destination")
-      return
-    }
+    let detail = try #require(model.path.first)
     #expect(detail.detailType == .flagged)
   }
 
@@ -102,10 +99,8 @@ struct RemindersModelTests {
 
     await model.open(.list(list.id))
 
-    guard
-      case .detail(let detail)? = model.path.first,
-      case .list(let destination) = detail.detailType
-    else {
+    let detail = try #require(model.path.first)
+    guard case .list(let destination) = detail.detailType else {
       Issue.record("Expected the list detail destination")
       return
     }
@@ -131,10 +126,8 @@ struct RemindersModelTests {
 
     await model.open(.reminder(reminder.id))
 
-    guard
-      case .detail(let detail)? = model.path.first,
-      case .list(let destination) = detail.detailType
-    else {
+    let detail = try #require(model.path.first)
+    guard case .list(let destination) = detail.detailType else {
       Issue.record("Expected the reminder's list detail destination")
       return
     }

@@ -17,11 +17,8 @@ public struct RemindersRoot: View {
 
     NavigationStack(path: $navigation.path) {
       RemindersListsView(navigation: navigation)
-        .navigationDestination(for: RemindersNavigationModel.Path.self) { path in
-          switch path {
-          case .detail(let model):
-            RemindersDetailView(model: model)
-          }
+        .navigationDestination(for: RemindersDetailModel.self) { model in
+          RemindersDetailView(model: model)
         }
     }
     .onOpenURL(perform: open)
