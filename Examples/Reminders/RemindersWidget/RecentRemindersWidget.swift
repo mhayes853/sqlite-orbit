@@ -159,15 +159,18 @@ struct RecentRemindersWidgetView: View {
     let remindersList = reminder.remindersList
 
     return HStack(spacing: 8) {
-      Toggle(
-        isOn: value.isCompleted,
-        intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))
-      ) {
-        Text("Complete \(value.title)")
+      Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
+        ReminderCompletionIndicator(
+          isCompleted: value.isCompleted,
+          color: remindersList.color
+        )
+        .font(.title3)
+        .invalidatableContent()
       }
-      .toggleStyle(ReminderCompletionToggleStyle(color: remindersList.color))
       .frame(width: 36, height: 36)
       .contentShape(.rect)
+      .buttonStyle(.plain)
+      .zIndex(1)
       .accessibilityLabel("Complete \(value.title)")
 
       Link(destination: RemindersRoute.reminder(value.id).url) {
@@ -202,19 +205,6 @@ struct RecentRemindersWidgetView: View {
       .buttonStyle(.plain)
     }
     .padding(.vertical, 2)
-  }
-}
-
-private struct ReminderCompletionToggleStyle: ToggleStyle {
-  let color: Color
-
-  func makeBody(configuration: Configuration) -> some View {
-    ReminderCompletionIndicator(
-      isCompleted: configuration.isOn,
-      color: color
-    )
-    .font(.title3)
-    .invalidatableContent()
   }
 }
 
