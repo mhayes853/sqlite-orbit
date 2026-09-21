@@ -1,4 +1,56 @@
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
+
+nonisolated struct RemindersCoverImage: Sendable {
+  let data: Data
+  let image: CGImage
+
+  @concurrent
+  static func importing(_ data: Data, maxPixelSize: Int = 2_000) async -> Self? {
+    guard let image = image(from: data, maxPixelSize: maxPixelSize) else { return nil }
+    let encodedData = NSMutableData()
+    guard
+      let destination = CGImageDestinationCreateWithData(
+        encodedData,
+        UTType.jpeg.identifier as CFString,
+        1,
+        nil
+      )
+    else { return nil }
+    CGImageDestinationAddImage(
+      destination,
+      image,
+      [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary
+    )
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return Self(data: encodedData as Data, image: image)
+  }
+
+  @concurrent
+  static func decoding(_ data: Data, maxPixelSize: Int = 2_000) async -> CGImage? {
+    image(from: data, maxPixelSize: maxPixelSize)
+  }
+
+  private static func image(from data: Data, maxPixelSize: Int) -> CGImage? {
+    guard
+      let source = CGImageSourceCreateWithData(
+        data as CFData,
+        [kCGImageSourceShouldCache: false] as CFDictionary
+      )
+    else { return nil }
+    return CGImageSourceCreateThumbnailAtIndex(
+      source,
+      0,
+      [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+      ] as CFDictionary
+    )
+  }
+}
 
 protocol HashableObject: AnyObject, Hashable {}
 

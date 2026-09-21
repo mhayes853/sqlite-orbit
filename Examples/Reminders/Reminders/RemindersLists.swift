@@ -4,19 +4,6 @@ import SQLiteOrbit
 import SwiftUI
 import TipKit
 
-enum RemindersListsSheet: Identifiable {
-  case reminder(RemindersList)
-  case remindersList(RemindersList?)
-
-  var id: String {
-    switch self {
-    case .reminder(let list): "new-reminder-\(list.id)"
-    case .remindersList(.some(let list)): "edit-list-\(list.id)"
-    case .remindersList(nil): "new-list"
-    }
-  }
-}
-
 @Selection
 nonisolated struct RemindersListSummary: Identifiable, Sendable {
   var id: RemindersList.ID { remindersList.id }
@@ -56,7 +43,8 @@ final class RemindersListsModel: ErrorReporting {
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
   var errorMessage: String?
-  var presentedSheet: RemindersListsSheet?
+  var reminderForm: ReminderFormModel?
+  var remindersListForm: RemindersListFormModel?
   var search: SearchRemindersModel?
   let seedDatabaseTip = SeedDatabaseTip()
 
@@ -81,9 +69,10 @@ final class RemindersListsModel: ErrorReporting {
 
   func load() async {
     await withErrorReporting {
-      try await $remindersLists.load()
-      try await $tags.load()
-      try await $stats.load()
+      async let loadLists: Void = $remindersLists.load()
+      async let loadTags: Void = $tags.load()
+      async let loadStats: Void = $stats.load()
+      _ = try await (loadLists, loadTags, loadStats)
     }
   }
 
@@ -112,11 +101,11 @@ final class RemindersListsModel: ErrorReporting {
   }
 
   func addListButtonTapped() {
-    presentedSheet = .remindersList(nil)
+    remindersListForm = RemindersListFormModel(remindersList: nil)
   }
 
   func editListButtonTapped(_ list: RemindersList) {
-    presentedSheet = .remindersList(list)
+    remindersListForm = RemindersListFormModel(remindersList: list)
   }
 
   func newReminderButtonTapped() {
@@ -124,7 +113,7 @@ final class RemindersListsModel: ErrorReporting {
       errorMessage = "Create a list before adding a reminder."
       return
     }
-    presentedSheet = .reminder(list)
+    reminderForm = ReminderFormModel(remindersList: list)
   }
 
   func searchButtonTapped() {
@@ -362,14 +351,14 @@ struct RemindersListsView: View {
       .allowsHitTesting(model.search == nil)
       .accessibilityHidden(model.search != nil)
     }
-    .sheet(item: $model.presentedSheet) { sheet in
+    .sheet(item: $model.reminderForm) { formModel in
       NavigationStack {
-        switch sheet {
-        case .reminder(let list):
-          ReminderFormView(remindersList: list)
-        case .remindersList(let list):
-          RemindersListForm(remindersList: list)
-        }
+        ReminderFormView(model: formModel)
+      }
+    }
+    .sheet(item: $model.remindersListForm) { formModel in
+      NavigationStack {
+        RemindersListForm(model: formModel)
       }
     }
     .errorAlert(message: $model.errorMessage)

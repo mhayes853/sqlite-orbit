@@ -6,7 +6,7 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class ReminderFormModel: ErrorReporting {
+final class ReminderFormModel: ErrorReporting, Identifiable {
   let id: Reminder.ID
   let isNew: Bool
   var dueDate: Date
@@ -154,18 +154,12 @@ final class ReminderFormModel: ErrorReporting {
   }
 }
 
-struct ReminderFormContext: Identifiable {
-  let id = UUID()
-  let remindersList: RemindersList
-  var reminder: Reminder?
-}
-
 struct ReminderFormView: View {
   @FetchAll(Tag.order(by: \.title), animation: .default)
   private var availableTags: [Tag]
   @FetchAll(RemindersList.order(by: \.title), animation: .default)
   private var remindersLists: [RemindersList]
-  @State private var model: ReminderFormModel
+  @Bindable var model: ReminderFormModel
   @FocusState private var focusedField: Field?
   @Environment(\.dismiss) private var dismiss
 
@@ -174,21 +168,11 @@ struct ReminderFormView: View {
     case title
   }
 
-  init(
-    remindersList: RemindersList,
-    reminder: Reminder? = nil
-  ) {
-    _model = State(
-      initialValue: ReminderFormModel(
-        remindersList: remindersList,
-        reminder: reminder
-      )
-    )
+  init(model: ReminderFormModel) {
+    self.model = model
   }
 
   var body: some View {
-    @Bindable var model = model
-
     ScrollView {
       VStack(alignment: .leading, spacing: 26) {
         ReminderTextFields(model: model, focusedField: $focusedField)

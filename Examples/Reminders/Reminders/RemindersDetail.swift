@@ -84,11 +84,12 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
   @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
   var remindersLists: [RemindersList]
-  @ObservationIgnored @FetchOne var coverImageData: Data? = nil
+  @ObservationIgnored @FetchOne private var coverImageData: Data? = nil
 
   let detailType: RemindersDetailType
+  var coverImage: CGImage?
   var ordering: ReminderOrdering
-  var reminderForm: ReminderFormContext?
+  var reminderForm: ReminderFormModel?
   var showCompleted: Bool
   var errorMessage: String?
 
@@ -96,15 +97,16 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
     detailType != .completed
   }
 
-  @ObservationIgnored private let now: Date
+  @ObservationIgnored private let now: @Sendable () -> Date
 
   init(
     detailType: RemindersDetailType,
-    now: Date = .now
+    now: @escaping @Sendable () -> Date = { .now }
   ) {
     let database = OrbitDefaultDatabase.current
     self.detailType = detailType
     self.now = now
+    let currentDate = now()
 
     let defaults = RemindersDetailSettings(
       id: detailType.id,
@@ -123,7 +125,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         detailType: detailType,
         ordering: ordering,
         showCompleted: showCompleted,
-        now: now
+        now: currentDate
       ),
       animation: .default
     )
@@ -146,10 +148,18 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
 
   func load() async {
     await withErrorReporting {
-      try await $reminderRows.load()
-      try await $remindersLists.load()
+      async let loadReminders: Void = $reminderRows.load()
+      async let loadLists: Void = $remindersLists.load()
       if detailType.remindersList != nil {
-        try await $coverImageData.load()
+        async let loadCoverImage: Void = $coverImageData.load()
+        _ = try await (loadReminders, loadLists, loadCoverImage)
+        if let coverImageData {
+          coverImage = await RemindersCoverImage.decoding(coverImageData)
+        } else {
+          coverImage = nil
+        }
+      } else {
+        _ = try await (loadReminders, loadLists)
       }
     }
   }
@@ -180,7 +190,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       errorMessage = "Create a list before adding a reminder."
       return
     }
-    reminderForm = ReminderFormContext(remindersList: list)
+    reminderForm = ReminderFormModel(remindersList: list)
   }
 
   private var firstRemindersList: RemindersList? {
@@ -195,22 +205,24 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       ordering: ordering,
       showCompleted: showCompleted
     )
+    let query = Self.remindersQuery(
+      detailType: detailType,
+      ordering: ordering,
+      showCompleted: showCompleted,
+      now: now()
+    )
     await withErrorReporting {
-      try await OrbitDefaultDatabase.current.write { transaction in
+      async let persistSettings: Void = OrbitDefaultDatabase.current.write { transaction in
         try RemindersDetailSettings.upsert {
           RemindersDetailSettings.Draft(settings)
         }
         .execute(transaction)
       }
-      try await $reminderRows.load(
-        Self.remindersQuery(
-          detailType: detailType,
-          ordering: ordering,
-          showCompleted: showCompleted,
-          now: now
-        ),
+      async let reloadReminders = $reminderRows.load(
+        query,
         animation: .default
       )
+      _ = try await (persistSettings, reloadReminders)
     }
   }
 
@@ -278,7 +290,7 @@ struct RemindersDetailView: View {
     List {
       RemindersDetailHeader(
         color: model.detailType.color,
-        coverImageData: model.coverImageData,
+        coverImage: model.coverImage,
         title: model.detailType.navigationTitle
       )
 
@@ -344,12 +356,9 @@ struct RemindersDetailView: View {
         .padding(24)
       }
     }
-    .sheet(item: $model.reminderForm) { context in
+    .sheet(item: $model.reminderForm) { formModel in
       NavigationStack {
-        ReminderFormView(
-          remindersList: context.remindersList,
-          reminder: context.reminder
-        )
+        ReminderFormView(model: formModel)
       }
     }
     .overlay {
@@ -364,13 +373,13 @@ struct RemindersDetailView: View {
 
 private struct RemindersDetailHeader: View {
   let color: Color
-  let coverImageData: Data?
+  let coverImage: CGImage?
   let title: String
 
   var body: some View {
-    if let coverImageData, let image = UIImage(data: coverImageData) {
+    if let coverImage {
       ZStack(alignment: .bottomLeading) {
-        Image(uiImage: image)
+        Image(decorative: coverImage, scale: 1)
           .resizable()
           .scaledToFill()
           .frame(height: 200)

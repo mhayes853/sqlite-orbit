@@ -7,27 +7,52 @@ import SwiftUI
 
 @MainActor
 @Observable
-final class RemindersListFormModel: ErrorReporting {
+final class RemindersListFormModel: ErrorReporting, Identifiable {
   let id: RemindersList.ID
   let isNew: Bool
   let originalPosition: Int
   var title: String
   var color: Color
-  var coverImageData: Data?
+  private(set) var coverImage: CGImage?
   var errorMessage: String?
+  @ObservationIgnored private var coverImageData: Data?
+  @ObservationIgnored private var coverImageWasChanged = false
 
   init(remindersList: RemindersList?) {
-    let database = OrbitDefaultDatabase.current
     id = remindersList?.id ?? UUID()
     isNew = remindersList == nil
     originalPosition = remindersList?.position ?? 0
     title = remindersList?.title ?? ""
     color = remindersList?.color ?? RemindersList.defaultColor
-    if let remindersList {
-      coverImageData = try? database.readBlocking {
-        try RemindersListAsset.find(remindersList.id).select(\.coverImage).fetchOne($0) ?? nil
+  }
+
+  func load() async {
+    guard !isNew else { return }
+    await withErrorReporting {
+      let data = try await OrbitDefaultDatabase.current.read {
+        try RemindersListAsset.find(id).select(\.coverImage).fetchOne($0) ?? nil
+      }
+      guard !coverImageWasChanged else { return }
+      coverImageData = data
+      if let data {
+        coverImage = await RemindersCoverImage.decoding(data)
+      } else {
+        coverImage = nil
       }
     }
+  }
+
+  func photoSelected(_ data: Data) async {
+    guard let coverImage = await RemindersCoverImage.importing(data) else { return }
+    coverImageWasChanged = true
+    coverImageData = coverImage.data
+    self.coverImage = coverImage.image
+  }
+
+  func removeCoverImageButtonTapped() {
+    coverImageWasChanged = true
+    coverImageData = nil
+    coverImage = nil
   }
 
   func save() async -> Bool {
@@ -39,6 +64,7 @@ final class RemindersListFormModel: ErrorReporting {
     let id = id
     let color = color
     let coverImageData = coverImageData
+    let shouldSaveCoverImage = isNew || coverImageWasChanged
     let isNew = isNew
     let originalPosition = originalPosition
     return await withErrorReporting {
@@ -51,12 +77,14 @@ final class RemindersListFormModel: ErrorReporting {
           )
         }
         .execute(transaction)
-        try RemindersListAsset.upsert {
-          RemindersListAsset.Draft(
-            RemindersListAsset(remindersListID: id, coverImage: coverImageData)
-          )
+        if shouldSaveCoverImage {
+          try RemindersListAsset.upsert {
+            RemindersListAsset.Draft(
+              RemindersListAsset(remindersListID: id, coverImage: coverImageData)
+            )
+          }
+          .execute(transaction)
         }
-        .execute(transaction)
       }
       return true
     } ?? false
@@ -64,20 +92,17 @@ final class RemindersListFormModel: ErrorReporting {
 }
 
 struct RemindersListForm: View {
-  @State private var model: RemindersListFormModel
+  @Bindable var model: RemindersListFormModel
   @State private var photoItem: PhotosPickerItem?
   @FocusState private var isTitleFocused: Bool
   @Environment(\.dismiss) private var dismiss
 
-  init(remindersList: RemindersList?) {
-    _model = State(
-      initialValue: RemindersListFormModel(remindersList: remindersList)
-    )
+  init(model: RemindersListFormModel) {
+    self.model = model
   }
 
   var body: some View {
-    @Bindable var model = model
-    let photoButtonTitle = model.coverImageData == nil ? "Choose Photo" : "Replace Photo"
+    let photoButtonTitle = model.coverImage == nil ? "Choose Photo" : "Replace Photo"
 
     ScrollView {
       VStack(spacing: 20) {
@@ -104,8 +129,8 @@ struct RemindersListForm: View {
           Text("Cover Image")
             .font(.headline)
 
-          if let data = model.coverImageData, let image = UIImage(data: data) {
-            Image(uiImage: image)
+          if let image = model.coverImage {
+            Image(decorative: image, scale: 1)
               .resizable()
               .scaledToFill()
               .frame(height: 160)
@@ -121,9 +146,9 @@ struct RemindersListForm: View {
             }
             .buttonStyle(.bordered)
 
-            if model.coverImageData != nil {
+            if model.coverImage != nil {
               Button("Remove", systemImage: "trash", role: .destructive) {
-                model.coverImageData = nil
+                model.removeCoverImageButtonTapped()
               }
               .buttonStyle(.bordered)
             }
@@ -152,6 +177,7 @@ struct RemindersListForm: View {
       }
     }
     .defaultFocus($isTitleFocused, model.isNew)
+    .task { await model.load() }
     .onChange(of: photoItem) {
       photoItemChanged()
     }
@@ -165,7 +191,7 @@ struct RemindersListForm: View {
     guard let photoItem else { return }
     Task {
       if let data = try? await photoItem.loadTransferable(type: Data.self) {
-        model.coverImageData = resizedImageData(from: data)
+        await model.photoSelected(data)
       }
       self.photoItem = nil
     }
@@ -232,15 +258,5 @@ private struct RemindersColorButton: View {
     .buttonStyle(.plain)
     .accessibilityLabel(choice.id.capitalized)
     .accessibilityAddTraits(isSelected ? .isSelected : [])
-  }
-}
-
-private func resizedImageData(from data: Data, maxWidth: CGFloat = 1_000) -> Data? {
-  guard let image = UIImage(data: data) else { return nil }
-  let scale = min(1, maxWidth / image.size.width)
-  let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-  let renderer = UIGraphicsImageRenderer(size: size)
-  return renderer.jpegData(withCompressionQuality: 0.8) { _ in
-    image.draw(in: CGRect(origin: .zero, size: size))
   }
 }

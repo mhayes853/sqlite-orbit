@@ -37,7 +37,7 @@ final class RemindersNavigationModel: ErrorReporting {
           throw RemindersNavigationError.missingReminder
         }
         let model = RemindersDetailModel(detailType: .list(list))
-        model.reminderForm = ReminderFormContext(remindersList: list, reminder: reminder)
+        model.reminderForm = ReminderFormModel(remindersList: list, reminder: reminder)
         path = [model]
       }
     }

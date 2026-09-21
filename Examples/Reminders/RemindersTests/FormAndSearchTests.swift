@@ -8,6 +8,46 @@ import Testing
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct FormAndSearchTests {
   @Test
+  func listFormLoadsAndProcessesCoverImages() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let imageData = try #require(
+      Data(
+        base64Encoded:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      )
+    )
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try RemindersListAsset.insert {
+        RemindersListAsset(remindersListID: list.id, coverImage: imageData)
+      }
+      .execute(transaction)
+    }
+
+    let edit = RemindersListFormModel(remindersList: list)
+    #expect(edit.coverImage == nil)
+    await edit.load()
+    #expect(edit.coverImage != nil)
+    edit.title = "Home"
+    #expect(await edit.save())
+    let preservedImageData = try await database.read {
+      try RemindersListAsset.find(list.id).select(\.coverImage).fetchOne($0) ?? nil
+    }
+    #expect(preservedImageData == imageData)
+
+    let create = RemindersListFormModel(remindersList: nil)
+    create.title = "Work"
+    await create.photoSelected(imageData)
+    #expect(create.coverImage != nil)
+    #expect(await create.save())
+    let storedImageData = try await database.read {
+      try RemindersListAsset.find(create.id).select(\.coverImage).fetchOne($0) ?? nil
+    }
+    #expect(storedImageData?.isEmpty == false)
+  }
+
+  @Test
   func listFormCreatesThenEditsAList() async throws {
     let database = OrbitDefaultDatabase.current
     let create = RemindersListFormModel(remindersList: nil)
@@ -327,8 +367,8 @@ struct FormAndSearchTests {
     let model = ReminderRowModel()
 
     model.detailsButtonTapped(reminder, remindersList: list)
-    #expect(model.reminderForm?.reminder == reminder)
-    #expect(model.reminderForm?.remindersList == list)
+    #expect(model.reminderForm?.id == reminder.id)
+    #expect(model.reminderForm?.reminder.remindersListID == list.id)
 
     await model.flagButtonTapped(reminder).value
     let flagged = try #require(

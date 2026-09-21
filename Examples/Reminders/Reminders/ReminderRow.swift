@@ -11,7 +11,7 @@ final class ReminderRowModel: ErrorReporting {
 
   var errorMessage: String?
   var isCompletionPending = false
-  var reminderForm: ReminderFormContext?
+  var reminderForm: ReminderFormModel?
 
   @ObservationIgnored private let calendar: Calendar
   @ObservationIgnored private let delay: Duration
@@ -70,7 +70,7 @@ final class ReminderRowModel: ErrorReporting {
     _ reminder: Reminder,
     remindersList: RemindersList
   ) {
-    reminderForm = ReminderFormContext(remindersList: remindersList, reminder: reminder)
+    reminderForm = ReminderFormModel(remindersList: remindersList, reminder: reminder)
   }
 
   @discardableResult
@@ -280,12 +280,9 @@ struct ReminderRow: View {
         remindersLists: remindersLists
       )
     }
-    .sheet(item: $model.reminderForm) { context in
+    .sheet(item: $model.reminderForm) { formModel in
       NavigationStack {
-        ReminderFormView(
-          remindersList: remindersList,
-          reminder: context.reminder
-        )
+        ReminderFormView(model: formModel)
       }
     }
     .errorAlert(message: $model.errorMessage)

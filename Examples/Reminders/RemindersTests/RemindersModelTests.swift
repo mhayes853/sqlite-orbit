@@ -8,6 +8,19 @@ import Testing
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct RemindersModelTests {
   @Test
+  func listFormPresentationUsesObservableModels() {
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let model = RemindersListsModel()
+
+    model.addListButtonTapped()
+    #expect(model.remindersListForm?.isNew == true)
+
+    model.editListButtonTapped(list)
+    #expect(model.remindersListForm?.id == list.id)
+    #expect(model.remindersListForm?.isNew == false)
+  }
+
+  @Test
   func newReminderPresentationUsesTheFirstInsertedList() async throws {
     let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
@@ -19,11 +32,7 @@ struct RemindersModelTests {
 
     model.newReminderButtonTapped()
 
-    guard case .reminder(let presentedList) = model.presentedSheet else {
-      Issue.record("Expected the reminder form to be presented")
-      return
-    }
-    #expect(presentedList.id == list.id)
+    #expect(model.reminderForm?.reminder.remindersListID == list.id)
   }
 
   @Test
@@ -32,7 +41,8 @@ struct RemindersModelTests {
 
     model.newReminderButtonTapped()
 
-    #expect(model.presentedSheet == nil)
+    #expect(model.reminderForm == nil)
+    #expect(model.remindersListForm == nil)
     #expect(model.errorMessage == "Create a list before adding a reminder.")
   }
 
@@ -43,8 +53,8 @@ struct RemindersModelTests {
 
     model.newReminderButtonTapped()
 
-    #expect(model.reminderForm?.remindersList.id == list.id)
-    #expect(model.reminderForm?.reminder == nil)
+    #expect(model.reminderForm?.reminder.remindersListID == list.id)
+    #expect(model.reminderForm?.isNew == true)
   }
 
   @Test
@@ -69,7 +79,7 @@ struct RemindersModelTests {
       #expect(model.canAddReminder)
       model.newReminderButtonTapped()
 
-      #expect(model.reminderForm?.remindersList.id == firstList.id)
+      #expect(model.reminderForm?.reminder.remindersListID == firstList.id)
     }
 
     let completed = RemindersDetailModel(detailType: .completed)
@@ -132,8 +142,8 @@ struct RemindersModelTests {
       return
     }
     #expect(destination.id == list.id)
-    #expect(detail.reminderForm?.remindersList.id == list.id)
-    #expect(detail.reminderForm?.reminder?.id == reminder.id)
+    #expect(detail.reminderForm?.reminder.remindersListID == list.id)
+    #expect(detail.reminderForm?.id == reminder.id)
     #expect(model.errorMessage == nil)
   }
 
