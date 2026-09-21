@@ -146,15 +146,7 @@ public struct CreateReminderIntent: AppIntent {
         database: database
       )
     else { throw ReminderIntentError.reminderNotFound }
-    return .result(
-      value: reminder,
-      dialog: "Created the reminder.",
-      view: ReminderSnippetView(
-        reminder: reminder.reminder,
-        remindersList: reminder.remindersList,
-        tags: reminder.tags
-      )
-    )
+    return reminder.intentResult(dialog: "Created the reminder.")
   }
 }
 
@@ -197,20 +189,12 @@ public struct CompleteReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let updatedReminder = try await reminder.settingStatus(.completed, in: database)
-    try await notificationScheduler.reconcile(
-      reminderID: reminder.id,
-      in: database
+    let updatedReminder = try await reminder.settingStatus(
+      .completed,
+      in: database,
+      scheduler: notificationScheduler
     )
-    return .result(
-      value: updatedReminder,
-      dialog: "Completed the reminder.",
-      view: ReminderSnippetView(
-        reminder: updatedReminder.reminder,
-        remindersList: updatedReminder.remindersList,
-        tags: updatedReminder.tags
-      )
-    )
+    return updatedReminder.intentResult(dialog: "Completed the reminder.")
   }
 }
 
@@ -253,20 +237,12 @@ public struct ReopenReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let updatedReminder = try await reminder.settingStatus(.incomplete, in: database)
-    try await notificationScheduler.reconcile(
-      reminderID: reminder.id,
-      in: database
+    let updatedReminder = try await reminder.settingStatus(
+      .incomplete,
+      in: database,
+      scheduler: notificationScheduler
     )
-    return .result(
-      value: updatedReminder,
-      dialog: "Reopened the reminder.",
-      view: ReminderSnippetView(
-        reminder: updatedReminder.reminder,
-        remindersList: updatedReminder.remindersList,
-        tags: updatedReminder.tags
-      )
-    )
+    return updatedReminder.intentResult(dialog: "Reopened the reminder.")
   }
 }
 
@@ -315,9 +291,11 @@ public struct DeleteRemindersIntent: DeleteIntent {
 extension ReminderEntity {
   fileprivate func settingStatus(
     _ status: Reminder.Status,
-    in database: RemindersDatabase
+    in database: RemindersDatabase,
+    scheduler: ReminderNotificationScheduler
   ) async throws -> Self {
     try await Reminder.setStatus(status, id: id, in: database)
+    try await scheduler.reconcile(reminderID: id, in: database)
     guard
       let reminder = try await ReminderEntityQuery.entity(
         id: id,
@@ -325,6 +303,20 @@ extension ReminderEntity {
       )
     else { throw ReminderIntentError.reminderNotFound }
     return reminder
+  }
+
+  fileprivate func intentResult(
+    dialog: IntentDialog
+  ) -> some IntentResult & ReturnsValue<Self> & ProvidesDialog & ShowsSnippetView {
+    .result(
+      value: self,
+      dialog: dialog,
+      view: ReminderSnippetView(
+        reminder: reminder,
+        remindersList: remindersList,
+        tags: tags
+      )
+    )
   }
 
   fileprivate static var placeholder: Self {

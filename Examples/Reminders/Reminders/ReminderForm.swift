@@ -251,12 +251,7 @@ private struct ReminderDateAndTimeSection: View {
   @Bindable var model: ReminderFormModel
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Date & Time")
-        .font(.title3.bold())
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-
+    ReminderFormSection("Date & Time") {
       VStack(spacing: 0) {
         ReminderToggleButton(
           title: "Date",
@@ -343,16 +338,38 @@ private struct ReminderMoreOptionsSection: View {
   let remindersLists: [RemindersList]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("More Options")
-        .font(.title3.bold())
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
-
+    ReminderFormSection("More Options") {
       VStack(spacing: 0) {
-        ReminderListPicker(model: model, remindersLists: remindersLists)
-          .padding(.horizontal, 16)
-          .padding(.vertical, 12)
+        Menu {
+          ForEach(remindersLists) { list in
+            CheckmarkedMenuButton(
+              title: list.title,
+              isSelected: list.id == model.reminder.remindersListID
+            ) {
+              model.reminder.remindersListID = list.id
+            }
+          }
+        } label: {
+          HStack(spacing: 14) {
+            RemindersListIcon(color: selectedList?.color ?? .blue, size: 34)
+            Text("List").foregroundStyle(.primary)
+            Spacer(minLength: 12)
+            Text(selectedList?.title ?? "None")
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+            Image(systemName: "chevron.right")
+              .font(.footnote.bold())
+              .foregroundStyle(.tertiary)
+              .accessibilityHidden(true)
+          }
+          .frame(maxWidth: .infinity, minHeight: 36)
+          .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("List")
+        .accessibilityValue(selectedList?.title ?? "None")
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
 
         Divider().padding(.leading, 62)
 
@@ -400,67 +417,20 @@ private struct ReminderMoreOptionsSection: View {
     }
   }
 
+  private var selectedList: RemindersList? {
+    remindersLists.first { $0.id == model.reminder.remindersListID }
+  }
+
   private func priorityButton(
     _ title: String,
     priority: Reminder.Priority?
   ) -> some View {
-    Button {
+    CheckmarkedMenuButton(
+      title: title,
+      isSelected: model.reminder.priority == priority
+    ) {
       model.reminder.priority = priority
-    } label: {
-      if model.reminder.priority == priority {
-        Label(title, systemImage: "checkmark")
-      } else {
-        Text(title)
-      }
     }
-  }
-}
-
-private struct ReminderListPicker: View {
-  @Bindable var model: ReminderFormModel
-  let remindersLists: [RemindersList]
-
-  var body: some View {
-    Menu {
-      ForEach(remindersLists) { list in
-        Button {
-          model.reminder.remindersListID = list.id
-        } label: {
-          if list.id == model.reminder.remindersListID {
-            Label(list.title, systemImage: "checkmark")
-          } else {
-            Text(list.title)
-          }
-        }
-      }
-    } label: {
-      HStack(spacing: 14) {
-        RemindersListIcon(color: selectedListColor, size: 34)
-        Text("List")
-          .foregroundStyle(.primary)
-        Spacer(minLength: 12)
-        Text(selectedListTitle)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-        Image(systemName: "chevron.right")
-          .font(.footnote.bold())
-          .foregroundStyle(.tertiary)
-          .accessibilityHidden(true)
-      }
-      .frame(maxWidth: .infinity, minHeight: 36)
-      .contentShape(.rect)
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel("List")
-    .accessibilityValue(selectedListTitle)
-  }
-
-  private var selectedListColor: Color {
-    remindersLists.first { $0.id == model.reminder.remindersListID }?.color ?? .blue
-  }
-
-  private var selectedListTitle: String {
-    remindersLists.first { $0.id == model.reminder.remindersListID }?.title ?? "None"
   }
 }
 
@@ -469,73 +439,79 @@ private struct ReminderTagsSection: View {
   let availableTagTitles: [String]
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Tags")
-        .font(.title3.bold())
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 18)
+    ReminderFormSection("Tags") {
+      VStack(alignment: .leading, spacing: 12) {
+        if !model.tagTitles.isEmpty {
+          ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+              ForEach(model.tagTitles, id: \.self) { title in
+                ReminderTagChip(model: model, title: title)
+              }
+            }
+          }
+          .scrollIndicators(.hidden)
+          .transition(.opacity.combined(with: .move(edge: .top)))
+        }
 
-      ReminderTagsField(model: model, availableTagTitles: availableTagTitles)
-        .padding()
-        .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
+        Label {
+          TextField("Add Tags", text: $model.tagText)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.done)
+            .onSubmit(model.tagTextSubmitted)
+            .onChange(of: model.tagText) { model.tagTextChanged() }
+        } icon: {
+          Image(systemName: "number")
+            .foregroundStyle(.secondary)
+            .frame(width: 30)
+        }
+
+        let suggestions = model.tagSuggestions(from: availableTagTitles)
+        if !suggestions.isEmpty {
+          ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+              ForEach(suggestions, id: \.self) { title in
+                Button {
+                  model.tagSuggestionTapped(title)
+                } label: {
+                  Label(title, systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
+                .accessibilityLabel("Add tag \(title)")
+              }
+            }
+          }
+          .scrollIndicators(.hidden)
+          .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+      }
+      .animation(.smooth(duration: 0.2), value: model.tagTitles)
+      .animation(.smooth(duration: 0.2), value: model.tagText)
+      .padding()
+      .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 22))
     }
   }
 }
 
-private struct ReminderTagsField: View {
-  @Bindable var model: ReminderFormModel
-  let availableTagTitles: [String]
+private struct ReminderFormSection<Content: View>: View {
+  let title: String
+  @ViewBuilder let content: Content
+
+  init(_ title: String, @ViewBuilder content: () -> Content) {
+    self.title = title
+    self.content = content()
+  }
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      if !model.tagTitles.isEmpty {
-        ScrollView(.horizontal) {
-          HStack(spacing: 8) {
-            ForEach(model.tagTitles, id: \.self) { title in
-              ReminderTagChip(model: model, title: title)
-            }
-          }
-        }
-        .scrollIndicators(.hidden)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-      }
-
-      Label {
-        TextField("Add Tags", text: $model.tagText)
-          .textInputAutocapitalization(.never)
-          .autocorrectionDisabled()
-          .submitLabel(.done)
-          .onSubmit(model.tagTextSubmitted)
-          .onChange(of: model.tagText) { model.tagTextChanged() }
-      } icon: {
-        Image(systemName: "number")
-          .foregroundStyle(.secondary)
-          .frame(width: 30)
-      }
-
-      let suggestions = model.tagSuggestions(from: availableTagTitles)
-      if !suggestions.isEmpty {
-        ScrollView(.horizontal) {
-          HStack(spacing: 8) {
-            ForEach(suggestions, id: \.self) { title in
-              Button {
-                model.tagSuggestionTapped(title)
-              } label: {
-                Label(title, systemImage: "plus")
-              }
-              .buttonStyle(.bordered)
-              .buttonBorderShape(.capsule)
-              .controlSize(.small)
-              .accessibilityLabel("Add tag \(title)")
-            }
-          }
-        }
-        .scrollIndicators(.hidden)
-        .transition(.opacity.combined(with: .move(edge: .top)))
-      }
+    VStack(alignment: .leading, spacing: 10) {
+      Text(title)
+        .font(.title3.bold())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 18)
+      content
     }
-    .animation(.smooth(duration: 0.2), value: model.tagTitles)
-    .animation(.smooth(duration: 0.2), value: model.tagText)
   }
 }
 

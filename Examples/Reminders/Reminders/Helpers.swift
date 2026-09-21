@@ -142,6 +142,22 @@ struct FloatingAddButton: View {
   }
 }
 
+struct CheckmarkedMenuButton: View {
+  let title: String
+  let isSelected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      if isSelected {
+        Label(title, systemImage: "checkmark")
+      } else {
+        Text(title)
+      }
+    }
+  }
+}
+
 private struct RemindersSearchModifier: ViewModifier {
   @Binding var search: SearchRemindersModel?
   let prompt: String

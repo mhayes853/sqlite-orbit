@@ -226,38 +226,27 @@ private struct RemindersColorPalette: View {
   var body: some View {
     LazyVGrid(columns: [GridItem(.adaptive(minimum: 52), spacing: 14)], spacing: 14) {
       ForEach(Self.choices) { choice in
-        RemindersColorButton(choice: choice, selection: $selection)
+        let isSelected = selection == choice.color
+        Button {
+          selection = choice.color
+        } label: {
+          Circle()
+            .fill(choice.color.gradient)
+            .frame(width: 46, height: 46)
+            .padding(5)
+            .overlay {
+              if isSelected {
+                Circle().strokeBorder(.secondary, lineWidth: 3)
+              }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(choice.id.capitalized)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
       }
     }
     .padding(20)
     .frame(maxWidth: .infinity)
     .background(Color(.secondarySystemGroupedBackground), in: .rect(cornerRadius: 24))
-  }
-}
-
-private struct RemindersColorButton: View {
-  let choice: RemindersColorChoice
-  @Binding var selection: Color
-
-  private var isSelected: Bool { selection == choice.color }
-
-  var body: some View {
-    Button {
-      selection = choice.color
-    } label: {
-      Circle()
-        .fill(choice.color.gradient)
-        .frame(width: 46, height: 46)
-        .padding(5)
-        .overlay {
-          if isSelected {
-            Circle()
-              .strokeBorder(.secondary, lineWidth: 3)
-          }
-        }
-    }
-    .buttonStyle(.plain)
-    .accessibilityLabel(choice.id.capitalized)
-    .accessibilityAddTraits(isSelected ? .isSelected : [])
   }
 }

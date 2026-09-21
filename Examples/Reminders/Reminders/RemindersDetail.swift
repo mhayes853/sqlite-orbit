@@ -321,14 +321,11 @@ struct RemindersDetailView: View {
         Menu {
           Menu("Sort By") {
             ForEach(ReminderOrdering.allCases, id: \.self) { ordering in
-              Button {
+              CheckmarkedMenuButton(
+                title: ordering.rawValue,
+                isSelected: model.ordering == ordering
+              ) {
                 Task { await model.setOrdering(ordering) }
-              } label: {
-                if model.ordering == ordering {
-                  Label(ordering.rawValue, systemImage: "checkmark")
-                } else {
-                  Text(ordering.rawValue)
-                }
               }
             }
           }

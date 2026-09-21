@@ -374,14 +374,11 @@ private struct ReminderContextMenu: View {
     _ title: String,
     priority: Reminder.Priority?
   ) -> some View {
-    Button {
+    CheckmarkedMenuButton(
+      title: title,
+      isSelected: reminder.priority == priority
+    ) {
       model.priorityButtonTapped(reminder, priority: priority)
-    } label: {
-      if reminder.priority == priority {
-        Label(title, systemImage: "checkmark")
-      } else {
-        Text(title)
-      }
     }
   }
 }
