@@ -10,6 +10,8 @@
 
   @testable import SQLiteOrbit
 
+  private typealias Reminder = RemindersTestFixture.Reminder
+
   // Hosting is process-wide, and a time limit turns a view that never renders into a failure
   // rather than a test that never returns.
   @MainActor
@@ -38,9 +40,7 @@
           let texts = try view.texts()
           #expect(texts == ["Milk"])
         }
-        try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-        }
+        try await insertReminders("Eggs", into: database)
         try await sut.inspection.inspect(after: settle) { view in
           let texts = try view.texts()
           #expect(texts == ["Milk", "Eggs"])
@@ -79,9 +79,7 @@
           #expect(texts == ["Milk"])
           try view.find(button: "Rebuild").tap()
         }
-        try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-        }
+        try await insertReminders("Eggs", into: database)
         // The rebuilt property describes the same read, so the observation the first render
         // started is the one still delivering.
         try await sut.inspection.inspect(after: settle) { view in
@@ -123,9 +121,7 @@
           let texts = try view.texts()
           #expect(texts == ["1 remaining"])
         }
-        try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-        }
+        try await insertReminders("Eggs", into: database)
         try await sut.inspection.inspect(after: settle) { view in
           let texts = try view.texts()
           #expect(texts == ["2 remaining"])
@@ -161,9 +157,7 @@
           let texts = try view.texts()
           #expect(texts == ["Milk"])
         }
-        try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-        }
+        try await insertReminders("Eggs", into: database)
         try await sut.inspection.inspect(after: settle) { view in
           let texts = try view.texts()
           #expect(texts == ["Milk", "Eggs"])
@@ -366,33 +360,4 @@
     }
   }
 
-  private func remindersDatabase(
-    titles: String...
-  ) async throws -> SQLiteQueue {
-    let database = try inMemoryDatabase()
-    try await database.write { transaction in
-      try transaction.execute(
-        """
-        CREATE TABLE reminders (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          title TEXT NOT NULL,
-          isCompleted INTEGER NOT NULL DEFAULT 0,
-          priority TEXT
-        )
-        """
-      )
-      for title in titles {
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: title) })
-      }
-    }
-    return database
-  }
-
-  @Table("reminders")
-  private struct Reminder: Equatable, Sendable {
-    let id: Int
-    var title: String
-    var isCompleted = false
-    var priority: String?
-  }
 #endif
