@@ -93,6 +93,12 @@ private nonisolated struct ReminderEntityTag: Sendable {
 }
 
 public struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+  @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
+  public static let allowedExecutionTargets: IntentExecutionTargets = [
+    .main,
+    .widgetKitExtension
+  ]
+
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 

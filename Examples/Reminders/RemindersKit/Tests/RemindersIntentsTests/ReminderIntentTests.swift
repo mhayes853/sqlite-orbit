@@ -130,6 +130,22 @@ struct ReminderIntentTests {
   }
 
   @Test
+  func completeReminderUsesTheDefaultDatabase() async throws {
+    let database = try SQLiteQueue.reminders()
+    let (list, reminder) = try await insertReminder(in: database)
+
+    try await OrbitDefaultDatabase.withValue(database) {
+      let intent = CompleteReminderIntent(
+        reminder: ReminderEntity(reminder: reminder, remindersList: list)
+      )
+      intent.$notificationScheduler.wrappedValue = .disabled
+      _ = try await intent.callAsFunction(donate: false)
+    }
+
+    #expect(try await status(of: reminder.id, in: database) == .completed)
+  }
+
+  @Test
   func deleteRemindersDeletesOnlyTheSelectedRecords() async throws {
     let database = try SQLiteQueue.reminders()
     let dependencies = AppDependencyManager()

@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import OSLog
 import RemindersData
 import RemindersNotifications
 import RemindersUI
@@ -156,7 +157,13 @@ public struct CompleteReminderIntent: AppIntent {
   public static var parameterSummary: some ParameterSummary {
     Summary("Complete \(\.$reminder)")
   }
-  public static let openAppWhenRun = false
+  public static let supportedModes: IntentModes = [.background]
+
+  @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
+  public static let allowedExecutionTargets: IntentExecutionTargets = [
+    .main,
+    .widgetKitExtension
+  ]
 
   @Parameter(title: "Reminder")
   public var reminder: ReminderEntity
@@ -189,12 +196,19 @@ public struct CompleteReminderIntent: AppIntent {
     & ProvidesDialog
     & ShowsSnippetView
   {
-    let updatedReminder = try await reminder.settingStatus(
-      .completed,
-      in: database,
-      scheduler: notificationScheduler
-    )
-    return updatedReminder.intentResult(dialog: "Completed the reminder.")
+    do {
+      let updatedReminder = try await reminder.settingStatus(
+        .completed,
+        in: database,
+        scheduler: notificationScheduler
+      )
+      return updatedReminder.intentResult(dialog: "Completed the reminder.")
+    } catch {
+      Logger.remindersIntents.error(
+        "Could not complete reminder \(reminder.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+      throw error
+    }
   }
 }
 
@@ -346,4 +360,11 @@ private enum ReminderIntentError: LocalizedError {
       "The reminder could not be found."
     }
   }
+}
+
+extension Logger {
+  fileprivate static let remindersIntents = Logger(
+    subsystem: "co.sqlite-orbit.Reminders",
+    category: "AppIntents"
+  )
 }

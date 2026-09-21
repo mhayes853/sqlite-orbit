@@ -33,7 +33,7 @@ struct RecentRemindersEntry: TimelineEntry {
             title: "Review the launch notes"
           ),
           remindersList: work
-        ),
+        )
       ]
     )
   }()
@@ -87,49 +87,67 @@ struct RecentRemindersProvider: TimelineProvider {
 struct RecentRemindersWidgetView: View {
   let entry: RecentRemindersEntry
 
-  @Environment(\.widgetFamily) private var family
-
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Label("Reminders", systemImage: "checklist")
-          .font(.headline)
-          .foregroundStyle(.blue)
-        Spacer()
-        Text(entry.reminders.count, format: .number)
-          .font(.headline.monospacedDigit())
-          .foregroundStyle(.secondary)
-      }
-
+    Group {
       if entry.reminders.isEmpty {
-        ContentUnavailableView {
-          Label("All Clear", systemImage: "checkmark.circle")
-        } description: {
-          Text("No recent reminders")
-        }
-      } else {
-        VStack(spacing: 0) {
-          ForEach(Array(entry.reminders.prefix(rowLimit).enumerated()), id: \.element.id) {
-            index, reminder in
-            reminderRow(reminder)
-            if index < min(entry.reminders.count, rowLimit) - 1 {
-              Divider().padding(.leading, 28)
-            }
+        widgetContent {
+          ContentUnavailableView {
+            Label("All Clear", systemImage: "checkmark.circle")
+          } description: {
+            Text("No recent reminders")
           }
         }
+      } else {
+        ViewThatFits(in: .vertical) {
+          widgetContent(rowLimit: 6)
+          widgetContent(rowLimit: 5)
+          widgetContent(rowLimit: 4)
+          widgetContent(rowLimit: 3)
+          widgetContent(rowLimit: 2)
+          widgetContent(rowLimit: 1)
+        }
       }
-      Spacer(minLength: 0)
     }
+    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .fontDesign(.rounded)
     .containerBackground(.background, for: .widget)
   }
 
-  private var rowLimit: Int {
-    switch family {
-    case .systemSmall: 2
-    case .systemMedium: 3
-    default: 6
+  private func widgetContent<Content: View>(
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      header
+      content()
     }
+    .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func widgetContent(rowLimit: Int) -> some View {
+    widgetContent {
+      VStack(spacing: 0) {
+        ForEach(Array(entry.reminders.prefix(rowLimit).enumerated()), id: \.element.id) {
+          index,
+          reminder in
+          reminderRow(reminder)
+          if index < min(entry.reminders.count, rowLimit) - 1 {
+            Divider().padding(.leading, 44)
+          }
+        }
+      }
+    }
+  }
+
+  private var header: some View {
+    HStack {
+      Label("Reminders", systemImage: "checklist")
+        .foregroundStyle(.blue)
+      Spacer()
+      Text(entry.reminders.count, format: .number)
+        .monospacedDigit()
+        .foregroundStyle(.secondary)
+    }
+    .font(.headline)
   }
 
   private func reminderRow(_ reminder: WidgetReminder) -> some View {
@@ -142,8 +160,11 @@ struct RecentRemindersWidgetView: View {
           isCompleted: value.isCompleted,
           color: remindersList.color
         )
-          .font(.title3)
+        .font(.title3)
+        .invalidatableContent()
       }
+      .frame(width: 36, height: 36)
+      .contentShape(.rect)
       .buttonStyle(.plain)
       .accessibilityLabel("Complete \(value.title)")
 
@@ -172,11 +193,13 @@ struct RecentRemindersWidgetView: View {
           .foregroundStyle(.secondary)
           .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(.rect)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
       .buttonStyle(.plain)
-      Spacer(minLength: 0)
     }
-    .padding(.vertical, 6)
+    .padding(.vertical, 2)
   }
 }
 
