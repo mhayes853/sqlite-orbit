@@ -7,56 +7,6 @@ import RemindersUI
 import SQLiteOrbit
 import SwiftUI
 
-struct CompleteWidgetReminderIntent: AppIntent {
-  static let title: LocalizedStringResource = "Complete Reminder"
-  static let description = IntentDescription("Marks a reminder as completed.")
-  static let isDiscoverable = false
-  static let supportedModes: IntentModes = [.background]
-
-  @Parameter(title: "Reminder ID")
-  var reminderID: String
-
-  @Dependency(default: { try OrbitIPCDatabase.reminders() })
-  var database: RemindersDatabase
-
-  @Dependency(default: ReminderNotificationScheduler())
-  var notificationScheduler: ReminderNotificationScheduler
-
-  init() {
-    reminderID = ""
-  }
-
-  init(reminderID: Reminder.ID) {
-    self.reminderID = reminderID.uuidString
-  }
-
-  init(
-    reminderID: Reminder.ID,
-    dependencies: AppDependencyManager
-  ) {
-    self.reminderID = reminderID.uuidString
-    _database = AppDependency(manager: dependencies)
-    _notificationScheduler = AppDependency(manager: dependencies)
-  }
-
-  func perform() async throws -> some IntentResult {
-    guard let reminderID = UUID(uuidString: reminderID) else {
-      throw CompleteWidgetReminderError.invalidIdentifier
-    }
-    try await Reminder.setStatus(
-      .completed,
-      id: reminderID,
-      in: database,
-      scheduler: notificationScheduler
-    )
-    return .result()
-  }
-}
-
-private enum CompleteWidgetReminderError: Error {
-  case invalidIdentifier
-}
-
 enum ReminderIntentPriority: Int, AppEnum, Sendable {
   case low = 1
   case medium

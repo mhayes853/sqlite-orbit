@@ -1,3 +1,4 @@
+import AppIntents
 import RemindersData
 import RemindersUI
 import SQLiteOrbit
@@ -86,6 +87,8 @@ struct RecentRemindersProvider: TimelineProvider {
 struct RecentRemindersWidgetView: View {
   let entry: RecentRemindersEntry
 
+  @Environment(\.widgetFamily) private var family
+
   var body: some View {
     Group {
       if entry.reminders.isEmpty {
@@ -97,19 +100,21 @@ struct RecentRemindersWidgetView: View {
           }
         }
       } else {
-        ViewThatFits(in: .vertical) {
-          widgetContent(rowLimit: 6)
-          widgetContent(rowLimit: 5)
-          widgetContent(rowLimit: 4)
-          widgetContent(rowLimit: 3)
-          widgetContent(rowLimit: 2)
-          widgetContent(rowLimit: 1)
-        }
+        widgetContent(rowLimit: rowLimit)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .fontDesign(.rounded)
     .containerBackground(.background, for: .widget)
+  }
+
+  private var rowLimit: Int {
+    switch family {
+    case .systemLarge:
+      6
+    default:
+      2
+    }
   }
 
   private func widgetContent<Content: View>(
@@ -154,17 +159,15 @@ struct RecentRemindersWidgetView: View {
     let remindersList = reminder.remindersList
 
     return HStack(spacing: 8) {
-      Button(intent: CompleteWidgetReminderIntent(reminderID: value.id)) {
-        ReminderCompletionIndicator(
-          isCompleted: value.isCompleted,
-          color: remindersList.color
-        )
-        .font(.title3)
-        .invalidatableContent()
+      Toggle(
+        isOn: value.isCompleted,
+        intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))
+      ) {
+        Text("Complete \(value.title)")
       }
+      .toggleStyle(ReminderCompletionToggleStyle(color: remindersList.color))
       .frame(width: 36, height: 36)
       .contentShape(.rect)
-      .buttonStyle(.plain)
       .accessibilityLabel("Complete \(value.title)")
 
       Link(destination: RemindersRoute.reminder(value.id).url) {
@@ -199,6 +202,19 @@ struct RecentRemindersWidgetView: View {
       .buttonStyle(.plain)
     }
     .padding(.vertical, 2)
+  }
+}
+
+private struct ReminderCompletionToggleStyle: ToggleStyle {
+  let color: Color
+
+  func makeBody(configuration: Configuration) -> some View {
+    ReminderCompletionIndicator(
+      isCompleted: configuration.isOn,
+      color: color
+    )
+    .font(.title3)
+    .invalidatableContent()
   }
 }
 
