@@ -4,11 +4,26 @@ import UniformTypeIdentifiers
 
 nonisolated struct RemindersCoverImage: Sendable {
   let data: Data
-  let image: CGImage
+  private let image: CGImage
+
+  var uiImage: UIImage {
+    UIImage(cgImage: image)
+  }
+
+  private init(data: Data, image: CGImage) {
+    self.data = data
+    self.image = image
+  }
 
   @concurrent
-  static func importing(_ data: Data, maxPixelSize: Int = 2_000) async -> Self? {
+  static func load(
+    _ data: Data,
+    maxPixelSize: Int = 2_000,
+    compressionQuality: Double? = nil
+  ) async -> Self? {
     guard let image = image(from: data, maxPixelSize: maxPixelSize) else { return nil }
+    guard let compressionQuality else { return Self(data: data, image: image) }
+
     let encodedData = NSMutableData()
     guard
       let destination = CGImageDestinationCreateWithData(
@@ -21,15 +36,10 @@ nonisolated struct RemindersCoverImage: Sendable {
     CGImageDestinationAddImage(
       destination,
       image,
-      [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary
+      [kCGImageDestinationLossyCompressionQuality: compressionQuality] as CFDictionary
     )
     guard CGImageDestinationFinalize(destination) else { return nil }
     return Self(data: encodedData as Data, image: image)
-  }
-
-  @concurrent
-  static func decoding(_ data: Data, maxPixelSize: Int = 2_000) async -> CGImage? {
-    image(from: data, maxPixelSize: maxPixelSize)
   }
 
   private static func image(from data: Data, maxPixelSize: Int) -> CGImage? {

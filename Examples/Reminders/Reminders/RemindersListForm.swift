@@ -13,9 +13,8 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
   let originalPosition: Int
   var title: String
   var color: Color
-  private(set) var coverImage: CGImage?
+  private(set) var coverImage: RemindersCoverImage?
   var errorMessage: String?
-  @ObservationIgnored private var coverImageData: Data?
   @ObservationIgnored private var coverImageWasChanged = false
 
   init(remindersList: RemindersList?) {
@@ -33,9 +32,8 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
         try RemindersListAsset.find(id).select(\.coverImage).fetchOne($0) ?? nil
       }
       guard !coverImageWasChanged else { return }
-      coverImageData = data
       if let data {
-        coverImage = await RemindersCoverImage.decoding(data)
+        coverImage = await RemindersCoverImage.load(data)
       } else {
         coverImage = nil
       }
@@ -43,15 +41,18 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
   }
 
   func photoSelected(_ data: Data) async {
-    guard let coverImage = await RemindersCoverImage.importing(data) else { return }
+    guard
+      let coverImage = await RemindersCoverImage.load(
+        data,
+        compressionQuality: 0.8
+      )
+    else { return }
     coverImageWasChanged = true
-    coverImageData = coverImage.data
-    self.coverImage = coverImage.image
+    self.coverImage = coverImage
   }
 
   func removeCoverImageButtonTapped() {
     coverImageWasChanged = true
-    coverImageData = nil
     coverImage = nil
   }
 
@@ -63,7 +64,7 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
     }
     let id = id
     let color = color
-    let coverImageData = coverImageData
+    let coverImageData = coverImage?.data
     let shouldSaveCoverImage = isNew || coverImageWasChanged
     let isNew = isNew
     let originalPosition = originalPosition
@@ -130,7 +131,7 @@ struct RemindersListForm: View {
             .font(.headline)
 
           if let image = model.coverImage {
-            Image(decorative: image, scale: 1)
+            Image(uiImage: image.uiImage)
               .resizable()
               .scaledToFill()
               .frame(height: 160)

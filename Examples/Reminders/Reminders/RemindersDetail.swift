@@ -87,7 +87,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   @ObservationIgnored @FetchOne private var coverImageData: Data? = nil
 
   let detailType: RemindersDetailType
-  var coverImage: CGImage?
+  var coverImage: RemindersCoverImage?
   var ordering: ReminderOrdering
   var reminderForm: ReminderFormModel?
   var showCompleted: Bool
@@ -154,7 +154,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         async let loadCoverImage: Void = $coverImageData.load()
         _ = try await (loadReminders, loadLists, loadCoverImage)
         if let coverImageData {
-          coverImage = await RemindersCoverImage.decoding(coverImageData)
+          coverImage = await RemindersCoverImage.load(coverImageData)
         } else {
           coverImage = nil
         }
@@ -373,13 +373,13 @@ struct RemindersDetailView: View {
 
 private struct RemindersDetailHeader: View {
   let color: Color
-  let coverImage: CGImage?
+  let coverImage: RemindersCoverImage?
   let title: String
 
   var body: some View {
     if let coverImage {
       ZStack(alignment: .bottomLeading) {
-        Image(decorative: coverImage, scale: 1)
+        Image(uiImage: coverImage.uiImage)
           .resizable()
           .scaledToFill()
           .frame(height: 200)
