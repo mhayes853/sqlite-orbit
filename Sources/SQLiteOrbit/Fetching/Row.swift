@@ -128,19 +128,7 @@ where
     let primaryKey = self.primaryKey
     return try await storage.write { database in
       try await database.write { transaction in
-        var value = try transaction.find(
-          Value.all,
-          key: Value.PrimaryKey(queryOutput: primaryKey)
-        )
-        let result = try mutation(&value)
-        guard value.primaryKey == primaryKey else {
-          throw OrbitRowIdentityMismatchError()
-        }
-        try transaction.execute(Value.update(value))
-        guard transaction.changesCount == 1 else {
-          throw OrbitDatabaseRecordNotFoundError()
-        }
-        return result
+        try Self.update(in: transaction, primaryKey: primaryKey, mutation)
       }
     }
   }
@@ -170,21 +158,26 @@ where
     let primaryKey = self.primaryKey
     return try storage.writeBlocking { database in
       try database.writeBlocking { transaction in
-        var value = try transaction.find(
-          Value.all,
-          key: Value.PrimaryKey(queryOutput: primaryKey)
-        )
-        let result = try mutation(&value)
-        guard value.primaryKey == primaryKey else {
-          throw OrbitRowIdentityMismatchError()
-        }
-        try transaction.execute(Value.update(value))
-        guard transaction.changesCount == 1 else {
-          throw OrbitDatabaseRecordNotFoundError()
-        }
-        return result
+        try Self.update(in: transaction, primaryKey: primaryKey, mutation)
       }
     }
+  }
+
+  private static func update<Result>(
+    in transaction: borrowing SQLiteWriteTransaction,
+    primaryKey: Value.PrimaryKey.QueryOutput,
+    _ mutation: (inout Value) throws -> Result
+  ) throws -> Result {
+    var value = try transaction.find(Value.all, key: Value.PrimaryKey(queryOutput: primaryKey))
+    let result = try mutation(&value)
+    guard value.primaryKey == primaryKey else {
+      throw OrbitRowIdentityMismatchError()
+    }
+    try transaction.execute(Value.update(value))
+    guard transaction.changesCount == 1 else {
+      throw OrbitDatabaseRecordNotFoundError()
+    }
+    return result
   }
 }
 

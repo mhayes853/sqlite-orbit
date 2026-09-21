@@ -59,10 +59,10 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
     beginWrite()
     do {
       let result = try await operation(database)
-      finishWrite(.success(()), didStart: true)
+      finishWrite()
       return result
     } catch {
-      finishWrite(.failure(error), didStart: true)
+      finishWrite(error: error)
       throw error
     }
   }
@@ -79,10 +79,10 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
     beginWrite()
     do {
       let result = try operation(database)
-      finishWrite(.success(()), didStart: true)
+      finishWrite()
       return result
     } catch {
-      finishWrite(.failure(error), didStart: true)
+      finishWrite(error: error)
       throw error
     }
   }
@@ -97,11 +97,11 @@ final class OrbitRowStorage<Value: Sendable>: Sendable {
     notifyObservers()
   }
 
-  private func finishWrite(_ result: Result<Void, any Error>, didStart: Bool) {
+  private func finishWrite(error: (any Error)? = nil) {
     registrar.withMutation {
       writes.withLock {
-        if didStart { $0.savesInFlight -= 1 }
-        if case .failure(let error) = result {
+        $0.savesInFlight -= 1
+        if let error {
           $0.saveError = error
         }
       }
