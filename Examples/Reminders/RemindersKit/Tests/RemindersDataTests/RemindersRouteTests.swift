@@ -3,17 +3,8 @@ import RemindersData
 import Testing
 
 struct RemindersRouteTests {
-  @Test
-  func listURLRoundTrips() throws {
-    let route = RemindersRoute.list(UUID())
-
-    #expect(RemindersRoute(url: route.url) == route)
-  }
-
-  @Test
-  func reminderURLRoundTrips() throws {
-    let route = RemindersRoute.reminder(UUID())
-
+  @Test(arguments: [RemindersRoute.list(UUID()), .reminder(UUID())])
+  func urlRoundTrips(route: RemindersRoute) throws {
     #expect(RemindersRoute(url: route.url) == route)
   }
 

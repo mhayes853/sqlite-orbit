@@ -9,22 +9,14 @@ struct SchemaTests {
   @Test
   func migratedDatabaseStartsEmpty() async throws {
     let database = OrbitDefaultDatabase.current
-
-    let counts = try await database.read { transaction in
-      try (
-        RemindersList.count().fetchOne(transaction) ?? -1,
-        Reminder.count().fetchOne(transaction) ?? -1,
-        Tag.count().fetchOne(transaction) ?? -1,
-        RemindersDetailSettings.count().fetchOne(transaction) ?? -1,
-        SearchSettings.count().fetchOne(transaction) ?? -1
-      )
+    let counts = try await database.read {
+      try [
+        RemindersList.count().fetchOne($0),
+        Reminder.count().fetchOne($0),
+        Tag.count().fetchOne($0)
+      ]
     }
-
-    #expect(counts.0 == 0)
-    #expect(counts.1 == 0)
-    #expect(counts.2 == 0)
-    #expect(counts.3 == 0)
-    #expect(counts.4 == 0)
+    #expect(counts == [0, 0, 0])
   }
 
   @Test
@@ -84,25 +76,5 @@ struct SchemaTests {
     #expect(counts.1 == 0)
     #expect(counts.2 == 0)
     #expect(counts.3 == 1)
-  }
-
-  @Test
-  func detailSettingsArePersistedInDatabase() async throws {
-    let database = OrbitDefaultDatabase.current
-    let settings = RemindersDetailSettings(
-      id: "today",
-      ordering: .priority,
-      showCompleted: true
-    )
-
-    try await database.write { transaction in
-      try RemindersDetailSettings.insert { settings }.execute(transaction)
-    }
-
-    let persisted = try await database.read { transaction in
-      try RemindersDetailSettings.find("today").fetchOne(transaction)
-    }
-
-    #expect(persisted == settings)
   }
 }

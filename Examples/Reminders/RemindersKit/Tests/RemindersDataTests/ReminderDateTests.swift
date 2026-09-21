@@ -5,36 +5,27 @@ import Testing
 @testable import RemindersData
 
 struct ReminderDateTests {
-  @Test
-  func dateOnlyRoundTripsThroughItsDatabaseRepresentation() throws {
-    let reminderDate = try #require(
-      ReminderDate(
-        components: DateComponents(year: 2026, month: 9, day: 19)
-      )
-    )
-
-    #expect(reminderDate.rawValue == "2026-09-19")
-    #expect(ReminderDate(rawValue: reminderDate.rawValue) == reminderDate)
-    #expect(reminderDate.isAllDay)
-  }
-
-  @Test
-  func dateAndTimeRoundTripsThroughItsDatabaseRepresentation() throws {
+  @Test(arguments: [(nil, nil, "2026-09-19"), (14, 30, "2026-09-19T14:30")])
+  func roundTripsThroughItsDatabaseRepresentation(
+    hour: Int?,
+    minute: Int?,
+    rawValue: String
+  ) throws {
     let reminderDate = try #require(
       ReminderDate(
         components: DateComponents(
           year: 2026,
           month: 9,
           day: 19,
-          hour: 14,
-          minute: 30
+          hour: hour,
+          minute: minute
         )
       )
     )
 
-    #expect(reminderDate.rawValue == "2026-09-19T14:30")
+    #expect(reminderDate.rawValue == rawValue)
     #expect(ReminderDate(rawValue: reminderDate.rawValue) == reminderDate)
-    #expect(!reminderDate.isAllDay)
+    #expect(reminderDate.isAllDay == (hour == nil))
   }
 
   @Test

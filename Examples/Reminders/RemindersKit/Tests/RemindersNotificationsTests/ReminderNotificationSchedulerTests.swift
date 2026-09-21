@@ -13,17 +13,19 @@ struct ReminderNotificationSchedulerTests {
     return calendar
   }()
 
-  @Test
-  func timedReminderBuildsARequestAtItsDueDate() throws {
+  @Test(arguments: [false, true])
+  func reminderBuildsARequest(allDay: Bool) throws {
     let dueDate = try #require(
       calendar.date(from: DateComponents(year: 2030, month: 2, day: 3, hour: 14, minute: 30))
     )
     let reminder = Reminder(
       id: UUID(),
-      dueDate: ReminderDate(dateAndTime: dueDate, calendar: calendar),
-      notes: "Remember the slides",
+      dueDate: allDay
+        ? ReminderDate(date: dueDate, calendar: calendar)
+        : ReminderDate(dateAndTime: dueDate, calendar: calendar),
+      notes: allDay ? "" : "Remember the slides",
       remindersListID: UUID(),
-      title: "Present"
+      title: allDay ? "All day" : "Present"
     )
     let scheduler = ReminderNotificationScheduler(
       center: TestReminderNotificationCenter(),
@@ -35,54 +37,23 @@ struct ReminderNotificationSchedulerTests {
     #expect(
       request.identifier == ReminderNotificationIdentifiers.request(for: reminder.id)
     )
-    #expect(request.title == "Present")
-    #expect(request.body == "Remember the slides")
-    #expect(request.interruptionLevel == .timeSensitive)
+    #expect(request.title == reminder.title)
+    #expect(request.body == reminder.notes)
+    #expect(request.interruptionLevel == (allDay ? .active : .timeSensitive))
     #expect(request.threadIdentifier == reminder.remindersListID.uuidString)
     #expect(request.dateComponents.year == 2030)
     #expect(request.dateComponents.month == 2)
     #expect(request.dateComponents.day == 3)
-    #expect(request.dateComponents.hour == 14)
-    #expect(request.dateComponents.minute == 30)
-  }
-
-  @Test
-  func dateOnlyReminderBuildsARequestForNineAM() throws {
-    let dueDate = try #require(
-      calendar.date(from: DateComponents(year: 2030, month: 2, day: 3))
-    )
-    let reminder = Reminder(
-      id: UUID(),
-      dueDate: ReminderDate(date: dueDate, calendar: calendar),
-      remindersListID: UUID(),
-      title: "All day"
-    )
-    let scheduler = ReminderNotificationScheduler(
-      center: TestReminderNotificationCenter(),
-      calendar: calendar,
-      now: { .distantPast }
-    )
-
-    let request = try #require(scheduler.request(for: reminder))
-    #expect(request.interruptionLevel == .active)
-    #expect(request.dateComponents.hour == 9)
-    #expect(request.dateComponents.minute == 0)
+    #expect(request.dateComponents.hour == (allDay ? 9 : 14))
+    #expect(request.dateComponents.minute == (allDay ? 0 : 30))
   }
 
   @Test
   func observationReplacesTheReminderNotificationSet() async throws {
-    let database = try SQLiteQueue.reminders()
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let reminder = Reminder(
-      id: UUID(),
+    let (database, reminder) = try await reminderFixture(
       dueDate: ReminderDate(dateAndTime: .distantFuture, calendar: calendar),
-      remindersListID: list.id,
       title: "Future"
     )
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
     let staleIdentifier = ReminderNotificationIdentifiers.request(for: UUID())
     let stale = notificationRequest(identifier: staleIdentifier)
     let unrelated = notificationRequest(identifier: "another-feature")
@@ -142,18 +113,10 @@ struct ReminderNotificationSchedulerTests {
 
   @Test
   func notificationHandlerCompletesTheReminder() async throws {
-    let database = try SQLiteQueue.reminders()
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let reminder = Reminder(
-      id: UUID(),
+    let (database, reminder) = try await reminderFixture(
       dueDate: ReminderDate(date: .distantFuture, calendar: calendar),
-      remindersListID: list.id,
       title: "Complete me"
     )
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
     let center = TestReminderNotificationCenter(
       requests: [
         notificationRequest(
@@ -206,6 +169,25 @@ struct ReminderNotificationSchedulerTests {
       threadIdentifier: "",
       title: ""
     )
+  }
+
+  private func reminderFixture(
+    dueDate: ReminderDate,
+    title: String
+  ) async throws -> (SQLiteQueue, Reminder) {
+    let database = try SQLiteQueue.reminders()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminder = Reminder(
+      id: UUID(),
+      dueDate: dueDate,
+      remindersListID: list.id,
+      title: title
+    )
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminder }.execute(transaction)
+    }
+    return (database, reminder)
   }
 }
 

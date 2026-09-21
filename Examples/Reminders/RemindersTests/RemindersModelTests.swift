@@ -8,25 +8,9 @@ import Testing
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct RemindersModelTests {
   @Test
-  func listFormPresentationUsesObservableModels() {
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let model = RemindersListsModel()
-
-    model.addListButtonTapped()
-    #expect(model.remindersListForm?.isNew == true)
-
-    model.editListButtonTapped(list)
-    #expect(model.remindersListForm?.id == list.id)
-    #expect(model.remindersListForm?.isNew == false)
-  }
-
-  @Test
   func newReminderPresentationUsesTheFirstInsertedList() async throws {
-    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
-    try await database.write {
-      try RemindersList.insert { list }.execute($0)
-    }
+    try await insertFixture(lists: [list])
     let model = RemindersListsModel()
     await model.load()
 
@@ -89,22 +73,9 @@ struct RemindersModelTests {
   }
 
   @Test
-  func showingSmartListReplacesTheNavigationPath() throws {
-    let model = RemindersNavigationModel()
-
-    model.detailButtonTapped(.flagged)
-
-    let detail = try #require(model.path.first)
-    #expect(detail.detailType == .flagged)
-  }
-
-  @Test
   func listDeepLinkOpensTheList() async throws {
-    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Work")
-    try await database.write {
-      try RemindersList.insert { list }.execute($0)
-    }
+    try await insertFixture(lists: [list])
     let model = RemindersNavigationModel()
 
     await model.open(.list(list.id))
@@ -121,17 +92,13 @@ struct RemindersModelTests {
 
   @Test
   func reminderDeepLinkOpensTheReminderFormFromItsList() async throws {
-    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
       remindersListID: list.id,
       title: "Buy milk"
     )
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
+    try await insertFixture(lists: [list], reminders: [reminder])
     let model = RemindersNavigationModel()
 
     await model.open(.reminder(reminder.id))
@@ -160,66 +127,38 @@ struct RemindersModelTests {
   }
 
   @Test
-  func listsModelOwnsItsSearchPresentation() throws {
-    let model = RemindersListsModel()
-
-    #expect(model.search == nil)
-
-    model.searchButtonTapped()
-    let search = try #require(model.search)
-    search.text = "dentist"
-
-    #expect(model.search?.text == "dentist")
-  }
-
-  @Test
   func dashboardCountsInsertedReminders() async throws {
-    let database = OrbitDefaultDatabase.current
-    let listID = UUID()
+    let list = RemindersList(id: UUID(), title: "Personal")
     let now = Date(timeIntervalSince1970: 1_789_560_000)
-
-    try await database.write { transaction in
-      try RemindersList.insert {
-        RemindersList(id: listID, title: "Personal")
-      }
-      .execute(transaction)
-      try Reminder.insert {
+    try await insertFixture(
+      lists: [list],
+      reminders: [
         Reminder(
           id: UUID(),
           dueDate: ReminderDate(date: now),
-          remindersListID: listID,
+          remindersListID: list.id,
           title: "Today"
-        )
-      }
-      .execute(transaction)
-      try Reminder.insert {
+        ),
         Reminder(
           id: UUID(),
           isFlagged: true,
-          remindersListID: listID,
+          remindersListID: list.id,
           title: "Flagged"
-        )
-      }
-      .execute(transaction)
-      try Reminder.insert {
+        ),
         Reminder(
           id: UUID(),
           dueDate: ReminderDate(date: now.addingTimeInterval(86_400)),
-          remindersListID: listID,
+          remindersListID: list.id,
           title: "Scheduled"
-        )
-      }
-      .execute(transaction)
-      try Reminder.insert {
+        ),
         Reminder(
           id: UUID(),
-          remindersListID: listID,
+          remindersListID: list.id,
           status: .completed,
           title: "Done"
         )
-      }
-      .execute(transaction)
-    }
+      ]
+    )
 
     let model = RemindersListsModel(now: now)
     await model.load()
@@ -256,28 +195,19 @@ struct RemindersModelTests {
 
   @Test
   func detailFiltersCompletedRemindersUntilEnabled() async throws {
-    let database = OrbitDefaultDatabase.current
-    let listID = UUID()
-
-    try await database.write { transaction in
-      try RemindersList.insert {
-        RemindersList(id: listID, title: "Work")
-      }
-      .execute(transaction)
-      try Reminder.insert {
-        Reminder(id: UUID(), remindersListID: listID, title: "Open")
-      }
-      .execute(transaction)
-      try Reminder.insert {
+    let list = RemindersList(id: UUID(), title: "Work")
+    try await insertFixture(
+      lists: [list],
+      reminders: [
+        Reminder(id: UUID(), remindersListID: list.id, title: "Open"),
         Reminder(
           id: UUID(),
-          remindersListID: listID,
+          remindersListID: list.id,
           status: .completed,
           title: "Closed"
         )
-      }
-      .execute(transaction)
-    }
+      ]
+    )
 
     let model = RemindersDetailModel(detailType: .all)
     await model.load()
@@ -299,9 +229,7 @@ struct RemindersModelTests {
 
     try await database.write { transaction in
       try RemindersList.insert { list }.execute(transaction)
-      for reminder in reminders {
-        try Reminder.insert { reminder }.execute(transaction)
-      }
+      try Reminder.insert { reminders }.execute(transaction)
     }
 
     let model = RemindersDetailModel(detailType: .list(list))

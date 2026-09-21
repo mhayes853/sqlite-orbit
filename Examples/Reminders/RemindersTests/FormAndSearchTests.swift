@@ -153,53 +153,31 @@ struct FormAndSearchTests {
     #expect(form.tagTitles == ["work", "this is a test", "workout"])
   }
 
-  @Test
-  func reminderFormPersistsAnAllDayDate() async throws {
+  @Test(arguments: [false, true])
+  func reminderFormPersistsDate(includeTime: Bool) async throws {
     let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
-    try await database.write {
-      try RemindersList.insert { list }.execute($0)
-    }
-    let calendar = Calendar(identifier: .gregorian)
-    let dueDate = try #require(
-      calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 15, minute: 30))
-    )
-    let form = ReminderFormModel(remindersList: list)
-    form.reminder.title = "Date only"
-    form.dueDate = dueDate
-    form.dateToggleTapped()
-
-    #expect(await form.save())
-    let reminderID = form.id
-
-    let reminder = try #require(
-      await database.read { try Reminder.find(reminderID).fetchOne($0) }
-    )
-    #expect(reminder.dueDate == ReminderDate(date: dueDate))
-    #expect(reminder.dueDate?.isAllDay == true)
-  }
-
-  @Test
-  func reminderFormPersistsATimedDate() async throws {
-    let database = OrbitDefaultDatabase.current
-    let list = RemindersList(id: UUID(), title: "Personal")
-    try await database.write {
-      try RemindersList.insert { list }.execute($0)
-    }
+    try await insertFixture(lists: [list])
     let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
     let form = ReminderFormModel(remindersList: list)
-    form.reminder.title = "Timed"
+    form.reminder.title = "Dated"
     form.dueDate = dueDate
-    form.timeToggleTapped()
+    if includeTime {
+      form.timeToggleTapped()
+    } else {
+      form.dateToggleTapped()
+    }
 
     #expect(await form.save())
     let reminderID = form.id
-
     let reminder = try #require(
       await database.read { try Reminder.find(reminderID).fetchOne($0) }
     )
-    #expect(reminder.dueDate == ReminderDate(dateAndTime: dueDate))
-    #expect(reminder.dueDate?.isAllDay == false)
+    #expect(
+      reminder.dueDate
+        == (includeTime ? ReminderDate(dateAndTime: dueDate) : ReminderDate(date: dueDate))
+    )
+    #expect(reminder.dueDate?.isAllDay == !includeTime)
   }
 
   @Test
@@ -297,73 +275,38 @@ struct FormAndSearchTests {
     #expect(search.results.map(\.reminder.title).sorted() == ["Call Blob", "Email Blob"])
   }
 
-  @Test
-  func completingReminderWaitsForTheUIGracePeriod() async throws {
+  @Test(arguments: [false, true])
+  func reminderCompletionHonorsGracePeriod(cancel: Bool) async throws {
     let database = OrbitDefaultDatabase.current
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
+    let (_, reminder) = try await reminderFixture()
     let gate = CompletionDelayGate()
     let model = ReminderRowModel(
       sleep: { _ in try await gate.wait() }
     )
 
     let completion = try #require(model.completionButtonTapped(reminder))
-
     #expect(model.isCompletionPending)
-    let beforeDelay = try #require(
-      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    #expect(
+      try await database.read { try Reminder.find(reminder.id).fetchOne($0)?.isCompleted }
+        == false
     )
-    #expect(!beforeDelay.isCompleted)
-
-    await gate.open()
-    await completion.value
-
-    #expect(!model.isCompletionPending)
-    let afterDelay = try #require(
-      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
-    )
-    #expect(afterDelay.isCompleted)
-  }
-
-  @Test
-  func cancellingPendingCompletionLeavesReminderIncomplete() async throws {
-    let database = OrbitDefaultDatabase.current
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
+    if cancel {
+      #expect(model.completionButtonTapped(reminder) == nil)
     }
-    let gate = CompletionDelayGate()
-    let model = ReminderRowModel(
-      sleep: { _ in try await gate.wait() }
-    )
-
-    let completion = try #require(model.completionButtonTapped(reminder))
-    #expect(model.completionButtonTapped(reminder) == nil)
     await gate.open()
     await completion.value
 
     #expect(!model.isCompletionPending)
-    let stored = try #require(
-      await database.read { try Reminder.find(reminder.id).fetchOne($0) }
+    #expect(
+      try await database.read { try Reminder.find(reminder.id).fetchOne($0)?.isCompleted }
+        == !cancel
     )
-    #expect(!stored.isCompleted)
   }
 
   @Test
   func reminderRowModelHandlesDetailsFlaggingAndDeletion() async throws {
     let database = OrbitDefaultDatabase.current
-    let list = RemindersList(id: UUID(), title: "Personal")
-    let reminder = Reminder(id: UUID(), remindersListID: list.id, title: "Call Blob")
-    try await database.write { transaction in
-      try RemindersList.insert { list }.execute(transaction)
-      try Reminder.insert { reminder }.execute(transaction)
-    }
+    let (list, reminder) = try await reminderFixture()
     let model = ReminderRowModel()
 
     model.detailsButtonTapped(reminder, remindersList: list)
@@ -411,7 +354,7 @@ struct FormAndSearchTests {
     #expect(
       updated.dueDate
         == calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now))
-          .map { ReminderDate(date: $0, calendar: calendar) }
+        .map { ReminderDate(date: $0, calendar: calendar) }
     )
     #expect(updated.remindersListID == work.id)
     #expect(updated.priority == .high)
