@@ -2,8 +2,6 @@
   // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
   import protocol SwiftUI.DynamicProperty
   import struct SwiftUI.Animation
-  import struct SwiftUI.State
-  import struct SwiftUI.Environment
 #endif
 
 /// A property that observes a single value a query produces.
@@ -36,26 +34,10 @@
 @dynamicMemberLookup
 @propertyWrapper
 public struct FetchOne<Value: Sendable>: Sendable {
-  #if canImport(SwiftUI)
-    private let box: OrbitFetchStorage<Value>
-    private let state: SwiftUI.State<OrbitFetchStorage<Value>>
-    private let generation = SwiftUI.State(wrappedValue: 0)
-    // The environment's database, resolved by SwiftUI before `update()` runs.
-    @Environment(\.orbitDatabase) private var environmentDatabase
-    private var defaultDatabase = OrbitDefaultDatabaseSource()
-
-    private var storage: OrbitFetchStorage<Value> { state.wrappedValue }
-  #else
-    private let storage: OrbitFetchStorage<Value>
-  #endif
+  @OrbitFetchState private var storage: OrbitFetchStorage<Value>
 
   private init(storage: OrbitFetchStorage<Value>) {
-    #if canImport(SwiftUI)
-      self.box = storage
-      self.state = SwiftUI.State(wrappedValue: storage)
-    #else
-      self.storage = storage
-    #endif
+    _storage = OrbitFetchState(wrappedValue: storage)
   }
 
   private init(
@@ -619,11 +601,7 @@ extension FetchOne: Equatable where Value: Equatable {
   extension FetchOne: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      state.wrappedValue.update(
-        declared: box,
-        database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
-        generation: generation
-      )
+      _storage.reconcile()
     }
 
     /// Creates a property observing the first row of a table, delivering changes with an
