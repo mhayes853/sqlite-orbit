@@ -308,8 +308,12 @@ extension ReminderEntity {
     in database: RemindersDatabase,
     scheduler: ReminderNotificationScheduler
   ) async throws -> Self {
-    try await Reminder.setStatus(status, id: id, in: database)
-    try await scheduler.reconcile(reminderID: id, in: database)
+    try await Reminder.setStatus(
+      status,
+      id: id,
+      in: database,
+      scheduler: scheduler
+    )
     guard
       let reminder = try await ReminderEntityQuery.entity(
         id: id,

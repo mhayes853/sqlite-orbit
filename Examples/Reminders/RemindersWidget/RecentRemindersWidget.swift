@@ -1,5 +1,4 @@
 import RemindersData
-import RemindersIntents
 import RemindersUI
 import SQLiteOrbit
 import SwiftUI
@@ -155,7 +154,7 @@ struct RecentRemindersWidgetView: View {
     let remindersList = reminder.remindersList
 
     return HStack(spacing: 8) {
-      Button(intent: CompleteReminderIntent(reminder: ReminderEntity(reminder))) {
+      Button(intent: CompleteWidgetReminderIntent(reminderID: value.id)) {
         ReminderCompletionIndicator(
           isCompleted: value.isCompleted,
           color: remindersList.color

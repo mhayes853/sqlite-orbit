@@ -44,13 +44,13 @@ public final class ReminderNotificationScheduler: Sendable {
   }
 
   public func observe(in database: RemindersDatabase) async {
-    let observation = OrbitValueObservation
+    let observation =
+      OrbitValueObservation
       .trackingAll(Self.scheduledReminders)
       .removeDuplicates()
     do {
       for try await reminders in observation.values(in: database) {
-        if
-          !reminders.isEmpty,
+        if !reminders.isEmpty,
           await center.authorizationStatus() == .notDetermined
         {
           _ = try await center.requestAuthorization()
@@ -130,8 +130,20 @@ public final class ReminderNotificationScheduler: Sendable {
   }
 }
 
-private extension Logger {
-  static let remindersNotifications = Logger(
+extension Reminder {
+  public static func setStatus(
+    _ status: Status,
+    id: ID,
+    in database: RemindersDatabase,
+    scheduler: ReminderNotificationScheduler
+  ) async throws {
+    try await setStatus(status, id: id, in: database)
+    try await scheduler.reconcile(reminderID: id, in: database)
+  }
+}
+
+extension Logger {
+  fileprivate static let remindersNotifications = Logger(
     subsystem: "co.sqlite-orbit.Reminders",
     category: "Notifications"
   )
