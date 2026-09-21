@@ -27,6 +27,7 @@
 		A30000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A30000000000000000000002 /* Assets.xcassets */; };
 		B10000000000000000000001 /* RemindersWidgetReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000010 /* RemindersWidgetReloader.swift */; };
 		B10000000000000000000002 /* CompleteWidgetReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */; };
+		B10000000000000000000007 /* CompleteWidgetReminderIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000011 /* CompleteWidgetReminderIntent.swift */; };
 		B10000000000000000000003 /* RecentRemindersWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000012 /* RecentRemindersWidget.swift */; };
 		B10000000000000000000004 /* RemindersWidgetBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000013 /* RemindersWidgetBundle.swift */; };
 		B10000000000000000000005 /* RemindersKit in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000002 /* RemindersKit */; };
@@ -394,6 +395,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CAD8E286C848B1FAC4491CCD /* RemindersApp.swift in Sources */,
+				B10000000000000000000007 /* CompleteWidgetReminderIntent.swift in Sources */,
 				4188F6CC0D2C4FE24A32C5D5 /* Helpers.swift in Sources */,
 				59B1236BA99CEFCB347B4775 /* ReminderForm.swift in Sources */,
 				AF61DBBBC0533986CD07787D /* ReminderRow.swift in Sources */,
