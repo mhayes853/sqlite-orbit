@@ -13,7 +13,6 @@ let package = Package(
       name: "RemindersKit",
       targets: ["RemindersData", "RemindersNotifications", "RemindersUI"]
     ),
-    .library(name: "RemindersIntents", targets: ["RemindersIntents"]),
   ],
   dependencies: [
     .package(name: "sqlite-orbit", path: "../../..")
@@ -33,15 +32,6 @@ let package = Package(
       name: "RemindersUI",
       dependencies: ["RemindersData"]
     ),
-    .target(
-      name: "RemindersIntents",
-      dependencies: [
-        "RemindersData",
-        "RemindersNotifications",
-        "RemindersUI",
-        .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
-      ]
-    ),
     .testTarget(
       name: "RemindersDataTests",
       dependencies: ["RemindersData"]
@@ -53,15 +43,6 @@ let package = Package(
     .testTarget(
       name: "RemindersUITests",
       dependencies: ["RemindersUI"]
-    ),
-    .testTarget(
-      name: "RemindersIntentsTests",
-      dependencies: [
-        "RemindersData",
-        "RemindersIntents",
-        "RemindersNotifications",
-        .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
-      ]
     ),
   ],
   swiftLanguageModes: [.v6]

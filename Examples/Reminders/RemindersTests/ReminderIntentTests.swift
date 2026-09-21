@@ -6,8 +6,6 @@ import SQLiteOrbit
 import Testing
 import UserNotifications
 
-@testable import RemindersIntents
-
 struct ReminderIntentTests {
   @Test
   func createReminderPersistsAllDetailsAndExplicitTags() async throws {

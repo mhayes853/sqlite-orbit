@@ -1,16 +1,9 @@
 import AppIntents
 import RemindersData
-import RemindersIntents
 import RemindersNotifications
 import SQLiteOrbit
 import SwiftUI
 import TipKit
-
-struct RemindersAppIntentsPackage: AppIntentsPackage {
-  static var includedPackages: [any AppIntentsPackage.Type] {
-    [RemindersIntentsPackage.self]
-  }
-}
 
 @main
 struct RemindersApp: App {

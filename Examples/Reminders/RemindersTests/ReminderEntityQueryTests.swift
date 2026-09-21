@@ -4,8 +4,6 @@ import RemindersData
 import SQLiteOrbit
 import Testing
 
-@testable import RemindersIntents
-
 struct ReminderEntityQueryTests {
   @Test
   func reminderEntitiesIncludeTheirIntentProperties() async throws {
