@@ -85,11 +85,15 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
     // Each connection's role is set up apart from the caller's configuration, which is what its
     // transactions report having been opened with.
+    //
+    // Switching to WAL does not create the `-wal` and `-shm` files; the next transaction does. A
+    // read-only connection cannot create them itself, and Apple's SQLite then fails to open a new
+    // database at all, so the writer reads once to leave them in place for the readers.
     let writer = try SQLiteSerialConnection(
       path: path,
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration,
-      driverSetupSQL: ["PRAGMA journal_mode = WAL"]
+      driverSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"]
     )
 
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through

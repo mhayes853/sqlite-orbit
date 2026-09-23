@@ -8,7 +8,10 @@ import PackageDescription
 // resolving a package it could never build.
 #if canImport(Darwin)
   let swiftUITestPackages: [Package.Dependency] = [
-    .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.3")
+    // 0.10.4's manifest declares tools version 5.9 but names `.visionOS(.v2)`, which only exists
+    // from PackageDescription 6.0, so it fails to load and resolution stops rather than falling
+    // back to an earlier release.
+    .package(url: "https://github.com/nalexn/ViewInspector", "0.10.3"..<"0.10.4")
   ]
   let swiftUITestDependencies: [Target.Dependency] = [
     .product(name: "ViewInspector", package: "ViewInspector")
@@ -82,8 +85,8 @@ let package = Package(
     .binaryTarget(
       name: "TursoSQLite3",
       url:
-        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r4.artifactbundleindex",
-      checksum: "ecaae3ea882953b3fb074ae60599c0e3e4944acb66190d64dee1b2b9a3b0d543"
+        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r5.artifactbundleindex",
+      checksum: "0f4843d061b9bce33e265a8016cb2576ca1207a4748282ed2465d24b880d70ee"
     ),
     .target(
       name: "SQLiteOrbit",
