@@ -8,7 +8,10 @@ import PackageDescription
 // resolving a package it could never build.
 #if canImport(Darwin)
   let swiftUITestPackages: [Package.Dependency] = [
-    .package(url: "https://github.com/nalexn/ViewInspector", from: "0.10.3")
+    // 0.10.4's manifest declares tools version 5.9 but names `.visionOS(.v2)`, which only exists
+    // from PackageDescription 6.0, so it fails to load and resolution stops rather than falling
+    // back to an earlier release.
+    .package(url: "https://github.com/nalexn/ViewInspector", "0.10.3"..<"0.10.4")
   ]
   let swiftUITestDependencies: [Target.Dependency] = [
     .product(name: "ViewInspector", package: "ViewInspector")
