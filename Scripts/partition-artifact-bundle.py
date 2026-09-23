@@ -53,11 +53,16 @@ def host_triple_aliases(family, triples):
     aliases = set(triples)
     if family == "apple":
         # SwiftPM normally reports an unversioned host triple, but Xcode's swift-build backend
-        # reports the macOS SDK version and compares it for exact Triple equality.
+        # reports a major.minor macOS version (`arm64-apple-macos26.6`) and compares it for exact
+        # Triple equality, so every minor release needs its own alias.
         for triple in triples:
             prefix = triple.replace("-apple-macosx", "-apple-macos")
             aliases.add(prefix)
-            aliases.update(f"{prefix}{major}.0" for major in range(13, 41))
+            aliases.update(
+                f"{prefix}{major}.{minor}"
+                for major in range(13, 41)
+                for minor in range(10)
+            )
     return sorted(aliases)
 
 
