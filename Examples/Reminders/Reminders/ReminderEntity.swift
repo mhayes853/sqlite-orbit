@@ -93,11 +93,14 @@ private nonisolated struct ReminderEntityTag: Sendable {
 }
 
 struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
-  @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
-  static let allowedExecutionTargets: IntentExecutionTargets = [
-    .main,
-    .widgetKitExtension
-  ]
+  // `IntentExecutionTargets` is new in the iOS 27 SDK, which Swift 6.4 ships with.
+  #if compiler(>=6.4)
+    @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
+    static let allowedExecutionTargets: IntentExecutionTargets = [
+      .main,
+      .widgetKitExtension
+    ]
+  #endif
 
   @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
