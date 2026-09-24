@@ -45,7 +45,7 @@
 
       var attributes = pthread_attr_t()
       precondition(pthread_attr_init(&attributes) == 0, "pthread_attr_init failed")
-      defer { pthread_attr_destroy(&attributes) }
+      defer { _ = pthread_attr_destroy(&attributes) }
       precondition(
         pthread_attr_setdetachstate(&attributes, Int32(PTHREAD_CREATE_DETACHED)) == 0,
         "pthread_attr_setdetachstate failed"
@@ -56,7 +56,15 @@
       #else
         var thread = pthread_t()
       #endif
-      let result = pthread_create(&thread, &attributes, entryPoint, context)
+      // The context is retained for the thread and released by it, so the thread owns the closure
+      // it runs for as long as it runs. Bionic has declared the argument both nullable and not,
+      // and widening it to an optional first reads either declaration.
+      let result = pthread_create(&thread, &attributes, { context in
+        Unmanaged<Context>.fromOpaque((context as UnsafeMutableRawPointer?)!)
+          .takeRetainedValue()
+          .run()
+        return nil
+      }, context)
       guard result == 0 else {
         Unmanaged<Context>.fromOpaque(context).release()
         fatalError("pthread_create failed with \(result)")
@@ -114,19 +122,5 @@
   #elseif os(Android)
     private let setThreadName: (@convention(c) (pthread_t, UnsafePointer<CChar>) -> Int32)? =
       pthread_setname_np
-  #endif
-
-  // The context is retained for the thread and released by it, so the thread owns the closure it
-  // runs for as long as it runs.
-  #if os(Android)
-    private let entryPoint: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = {
-      Unmanaged<DetachedThread.Context>.fromOpaque($0!).takeRetainedValue().run()
-      return nil
-    }
-  #else
-    private let entryPoint: @convention(c) (UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? = {
-      Unmanaged<DetachedThread.Context>.fromOpaque($0!).takeRetainedValue().run()
-      return nil
-    }
   #endif
 #endif

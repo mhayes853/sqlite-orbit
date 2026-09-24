@@ -32,7 +32,7 @@
 
       var attributes = pthread_condattr_t()
       precondition(pthread_condattr_init(&attributes) == 0, "pthread_condattr_init failed")
-      defer { pthread_condattr_destroy(&attributes) }
+      defer { _ = pthread_condattr_destroy(&attributes) }
       #if !os(WASI)
         // A timed wait measures against the monotonic clock, so setting the wall clock neither
         // cuts a wait short nor stretches it out.
@@ -45,10 +45,10 @@
     }
 
     deinit {
-      pthread_cond_destroy(condition)
+      _ = pthread_cond_destroy(condition)
       condition.deinitialize(count: 1)
       condition.deallocate()
-      pthread_mutex_destroy(mutex)
+      _ = pthread_mutex_destroy(mutex)
       mutex.deinitialize(count: 1)
       mutex.deallocate()
     }

@@ -112,6 +112,9 @@ let package = Package(
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
         .enableExperimentalFeature("SuppressedAssociatedTypes"),
+        // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
+        // connection executor needs are declared by hand there.
+        .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
         // Every trait that links a SQLite of its own defines this, so that code needing only
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
