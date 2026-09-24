@@ -56,9 +56,11 @@
       try await waitUntil { gate.isEntered }
 
       var completions = [holder]
+      // Each arrival is submitted without waiting on the cooperative pool, and is seen to be queued
+      // before the next is submitted.
       for (index, label) in ["A", "B", "C", "D", "E", "F"].enumerated() {
         if index.isMultiple(of: 2) {
-          completions.append(Task { await isolated.run { log.append(label) } })
+          completions.append(Task.immediate { await isolated.run { log.append(label) } })
         } else {
           completions.append(
             onNewThread {
@@ -264,8 +266,10 @@
     }
   }
 
+  // The thread is started before this returns, however busy the cooperative pool is, and the
+  // returned task finishes once it has run `body`.
   private func onNewThread(_ body: @escaping @Sendable () -> Void) -> Task<Void, Never> {
-    Task {
+    Task.immediate {
       await withCheckedContinuation { continuation in
         DetachedThread.spawn(name: "executor test") {
           body()
