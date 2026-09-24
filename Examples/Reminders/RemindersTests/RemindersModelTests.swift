@@ -344,4 +344,50 @@ struct RemindersModelTests {
     }
     #expect(settings?.ordering == .manual)
   }
+
+  @Test(.timeLimit(.minutes(1)))
+  func widgetReloaderRefreshesAfterLocalAndExternalCommits() async throws {
+    let directory = FileManager.default.temporaryDirectory.appending(
+      path: UUID().uuidString,
+      directoryHint: .isDirectory
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let network = InMemoryIPCTransport.Network()
+    let path = OrbitDatabasePath.file(directory.appending(path: "reminders.sqlite"))
+    let identifier = OrbitDatabaseIdentifier(rawValue: "widget-reload-test")
+    let appDatabase = OrbitIPCDatabase(
+      writer: try SQLitePool(path: path),
+      id: identifier,
+      transport: InMemoryIPCTransport(network: network)
+    )
+    let peerDatabase = OrbitIPCDatabase(
+      writer: try SQLitePool(path: path),
+      id: identifier,
+      transport: InMemoryIPCTransport(network: network)
+    )
+    try remindersMigrator().migrateBlocking(appDatabase)
+    let refreshCount = Mutex(0)
+    let reloader = try RemindersWidgetReloader(database: appDatabase) {
+      refreshCount.withLock { $0 += 1 }
+    }
+    appDatabase.delegate = reloader
+
+    let list = RemindersList(id: UUID(), title: "Personal")
+    try await appDatabase.write { try RemindersList.insert { list }.execute($0) }
+    #expect(refreshCount.withLock { $0 } == 1)
+
+    let reminder = Reminder(
+      id: UUID(),
+      remindersListID: list.id,
+      title: "From a peer"
+    )
+    try await peerDatabase.write { try Reminder.insert { reminder }.execute($0) }
+    for _ in 0..<100 {
+      if refreshCount.withLock({ $0 }) == 2 { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(refreshCount.withLock { $0 } == 2)
+  }
 }
