@@ -88,6 +88,8 @@ jobs:
 
       - name: Install Android NDK r30
         run: |
+          apt-get update
+          apt-get install -y --no-install-recommends curl unzip
           curl -fSL -o /tmp/android-ndk.zip https://dl.google.com/android/repository/android-ndk-r30-Linux.zip
           unzip -q /tmp/android-ndk.zip -d /opt
           echo "ANDROID_NDK_HOME=/opt/android-ndk-r30" >> "$GITHUB_ENV"
@@ -115,7 +117,7 @@ jobs:
           swift sdk list
 
       - name: Build
-        run: swift build --disable-default-traits --swift-sdk swift-wasm-6.3-RELEASE-wasm32-unknown-wasip1-threads
+        run: swift build --disable-default-traits --swift-sdk 6.3-RELEASE-wasm32-unknown-wasip1-threads
 
   build-windows:
     name: Windows
@@ -124,7 +126,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: SwiftyLab/setup-swift@v1.14.0
         with:
-          swift-version: '6.4.0'
+          swift-version: '6.3.3'
 
       - name: Build
         run: swift build --disable-default-traits
