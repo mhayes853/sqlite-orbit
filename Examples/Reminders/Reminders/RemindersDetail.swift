@@ -181,12 +181,45 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   }
 
   func moveReminders(from source: IndexSet, to destination: Int) async {
-    var ids = reminderRows.map(\.id)
-    ids.move(fromOffsets: source, toOffset: destination)
-    let orderedIDs = ids
+    let visibleIDs = reminderRows.map(\.id)
+    let movingIDs = source.map { visibleIDs[$0] }
+    guard !movingIDs.isEmpty else { return }
+    let remainingVisibleIDs = visibleIDs.enumerated()
+      .filter { !source.contains($0.offset) }
+      .map(\.element)
+    let insertion = min(
+      max(destination - source.filter { $0 < destination }.count, 0),
+      remainingVisibleIDs.count
+    )
+    let nextID = insertion < remainingVisibleIDs.count
+      ? remainingVisibleIDs[insertion] : nil
+    let previousID = insertion > 0 ? remainingVisibleIDs[insertion - 1] : nil
+    let currentOrdering = ordering
+    let showCompleted = showCompleted
     await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
-        for (position, id) in orderedIDs.enumerated() {
+        var allIDs = try Reminder
+          .order {
+            if showCompleted { $0.isCompleted }
+          }
+          .order {
+            switch currentOrdering {
+            case .dueDate: $0.dueDate.asc(nulls: .last)
+            case .manual: $0.position
+            case .priority: ($0.priority.desc(), $0.isFlagged.desc())
+            case .title: $0.title
+            }
+          }
+          .order(by: \.id)
+          .select(\.id)
+          .fetchAll(transaction)
+        guard movingIDs.allSatisfy(allIDs.contains) else { return }
+        allIDs.removeAll { movingIDs.contains($0) }
+        let insertionIndex = nextID.flatMap(allIDs.firstIndex(of:))
+          ?? previousID.flatMap { allIDs.firstIndex(of: $0).map { $0 + 1 } }
+          ?? allIDs.count
+        allIDs.insert(contentsOf: movingIDs, at: insertionIndex)
+        for (position, id) in allIDs.enumerated() {
           try Reminder.find(id).update { $0.position = position }.execute(transaction)
         }
       }

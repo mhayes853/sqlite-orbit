@@ -345,6 +345,83 @@ struct RemindersModelTests {
     #expect(settings?.ordering == .manual)
   }
 
+  @Test
+  func movingFilteredRemindersUpdatesHiddenPositions() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Work")
+    let day = Date(timeIntervalSince1970: 1_789_560_000)
+    let reminders = [
+      Reminder(
+        id: UUID(),
+        dueDate: ReminderDate(date: day),
+        isFlagged: true,
+        position: 2,
+        remindersListID: list.id,
+        title: "A"
+      ),
+      Reminder(
+        id: UUID(),
+        dueDate: ReminderDate(date: day.addingTimeInterval(86_400)),
+        position: 0,
+        remindersListID: list.id,
+        title: "B"
+      ),
+      Reminder(
+        id: UUID(),
+        dueDate: ReminderDate(date: day.addingTimeInterval(172_800)),
+        isFlagged: true,
+        position: 1,
+        remindersListID: list.id,
+        title: "C"
+      )
+    ]
+    try await insertFixture(lists: [list], reminders: reminders)
+
+    let model = RemindersDetailModel(detailType: .flagged)
+    await model.load()
+    #expect(model.ordering == .dueDate)
+    #expect(model.reminderRows.map(\.reminder.title) == ["A", "C"])
+
+    await model.moveReminders(from: IndexSet(integer: 1), to: 0)
+
+    let stored = try await database.read {
+      try Reminder.order(by: \.position).fetchAll($0)
+    }
+    #expect(stored.map(\.title) == ["C", "A", "B"])
+    #expect(stored.map(\.position) == [0, 1, 2])
+  }
+
+  @Test
+  func movingPastACompletedReminderUpdatesItsPosition() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Work")
+    let reminders = [
+      Reminder(id: UUID(), position: 0, remindersListID: list.id, title: "A"),
+      Reminder(
+        id: UUID(),
+        position: 1,
+        remindersListID: list.id,
+        status: .completed,
+        title: "B"
+      ),
+      Reminder(id: UUID(), position: 2, remindersListID: list.id, title: "C")
+    ]
+    try await insertFixture(lists: [list], reminders: reminders)
+
+    let model = RemindersDetailModel(detailType: .list(list))
+    await model.load()
+    await model.setOrdering(.manual)
+    #expect(model.reminderRows.map(\.reminder.title) == ["A", "C"])
+
+    await model.moveReminders(from: IndexSet(integer: 0), to: 2)
+
+    let stored = try await database.read {
+      try Reminder.order(by: \.position).fetchAll($0)
+    }
+    #expect(stored.map(\.title) == ["B", "C", "A"])
+    #expect(stored.map(\.position) == [0, 1, 2])
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func widgetReloaderRefreshesAfterLocalAndExternalCommits() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(
