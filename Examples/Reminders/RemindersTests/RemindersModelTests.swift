@@ -8,7 +8,7 @@ import Testing
 @Suite(.orbitDatabase(try makeTestDatabase()))
 struct RemindersModelTests {
   @Test
-  func newReminderPresentationUsesTheFirstInsertedList() async throws {
+  func newReminderPresentationUsesTheOnlyList() async throws {
     let list = RemindersList(id: UUID(), title: "Personal")
     try await insertFixture(lists: [list])
     let model = RemindersListsModel()

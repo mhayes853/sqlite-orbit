@@ -34,17 +34,23 @@ struct ReminderIntentTests {
     let reminders = try await database.read {
       try Reminder.all.fetchAll($0)
     }
+    let reminder = try #require(reminders.first)
     let tags = try await database.read {
       try Tag.order(by: \.title).fetchAll($0)
     }
+    let linkedTagIDs = try await database.read {
+      try ReminderTag.where { $0.reminderID.eq(reminder.id) }
+        .select(\.tagID).fetchAll($0)
+    }
     #expect(reminders.count == 1)
-    #expect(reminders[0].title == "Book flights")
-    #expect(reminders[0].notes == "Use points")
-    #expect(reminders[0].dueDate == ReminderDate(dateAndTime: dueDate))
-    #expect(reminders[0].isFlagged)
-    #expect(reminders[0].priority == .high)
-    #expect(reminders[0].remindersListID == list.id)
+    #expect(reminder.title == "Book flights")
+    #expect(reminder.notes == "Use points")
+    #expect(reminder.dueDate == ReminderDate(dateAndTime: dueDate))
+    #expect(reminder.isFlagged)
+    #expect(reminder.priority == .high)
+    #expect(reminder.remindersListID == list.id)
     #expect(tags.map(\.title) == ["travel plans", "Work"])
+    #expect(Set(linkedTagIDs) == Set(["travel plans", "Work"]))
   }
 
   @Test

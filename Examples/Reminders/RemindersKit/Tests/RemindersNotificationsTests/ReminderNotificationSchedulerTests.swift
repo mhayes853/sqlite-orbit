@@ -48,7 +48,7 @@ struct ReminderNotificationSchedulerTests {
     #expect(request.dateComponents.minute == (allDay ? 0 : 30))
   }
 
-  @Test
+  @Test(.timeLimit(.minutes(1)))
   func observationReplacesTheReminderNotificationSet() async throws {
     let (database, reminder) = try await reminderFixture(
       dueDate: ReminderDate(dateAndTime: .distantFuture, calendar: calendar),

@@ -90,7 +90,14 @@ struct ReminderDateTests {
     let reminders = try await database.read {
       try Reminder.order(by: \.title).fetchAll($0)
     }
-    #expect(reminders.map(\.dueDate?.isAllDay) == [true, false])
-    #expect(reminders.allSatisfy { $0.dueDate != nil })
+    let utc = ISO8601DateFormatter()
+    let allDay = try #require(utc.date(from: "2026-09-19T12:00:00Z"))
+    let timed = try #require(utc.date(from: "2026-09-19T14:30:00Z"))
+    #expect(
+      reminders.map(\.dueDate) == [
+        ReminderDate(date: allDay),
+        ReminderDate(dateAndTime: timed)
+      ]
+    )
   }
 }

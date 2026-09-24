@@ -71,7 +71,7 @@ struct RemindersWidgetQueriesTests {
     #expect(recentReminders.isEmpty)
   }
 
-  @Test
+  @Test(.timeLimit(.minutes(1)))
   func widgetWriteRefreshesAnObservingAppProcess() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(
       path: UUID().uuidString,
