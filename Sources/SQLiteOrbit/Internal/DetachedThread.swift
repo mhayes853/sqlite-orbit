@@ -72,12 +72,17 @@
       // The context is retained for the thread and released by it, so the thread owns the closure
       // it runs for as long as it runs. Bionic has declared the argument both nullable and not,
       // and widening it to an optional first reads either declaration.
-      let result = pthread_create(&thread, &attributes, { context in
-        Unmanaged<Context>.fromOpaque((context as UnsafeMutableRawPointer?)!)
-          .takeRetainedValue()
-          .run()
-        return nil
-      }, context)
+      let result = pthread_create(
+        &thread,
+        &attributes,
+        { context in
+          Unmanaged<Context>.fromOpaque((context as UnsafeMutableRawPointer?)!)
+            .takeRetainedValue()
+            .run()
+          return nil
+        },
+        context
+      )
       guard result == 0 else {
         Unmanaged<Context>.fromOpaque(context).release()
         fatalError("pthread_create failed with \(result)")

@@ -131,14 +131,15 @@
       let occupancy = Occupancy()
       let rounds = 200
 
-      let threads = (0..<4).map { _ in
-        onNewThread {
-          for round in 0..<rounds {
-            executor.sync { occupancy.visit() }
-            if round.isMultiple(of: 16) { pauseBriefly() }
+      let threads = (0..<4)
+        .map { _ in
+          onNewThread {
+            for round in 0..<rounds {
+              executor.sync { occupancy.visit() }
+              if round.isMultiple(of: 16) { pauseBriefly() }
+            }
           }
         }
-      }
       await withTaskGroup(of: Void.self) { group in
         for _ in 0..<4 {
           group.addTask {
@@ -174,17 +175,18 @@
         let writers = 6
         let bumpsEach = 100
 
-        let threads = (0..<writers).map { _ in
-          onNewThread {
-            for bump in 0..<bumpsEach {
-              try! connection.writeBlocking { try $0.execute("UPDATE counter SET n = n + 1") }
-              _ = try! connection.readBlocking {
-                try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+        let threads = (0..<writers)
+          .map { _ in
+            onNewThread {
+              for bump in 0..<bumpsEach {
+                try! connection.writeBlocking { try $0.execute("UPDATE counter SET n = n + 1") }
+                _ = try! connection.readBlocking {
+                  try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+                }
+                if bump.isMultiple(of: 16) { pauseBriefly() }
               }
-              if bump.isMultiple(of: 16) { pauseBriefly() }
             }
           }
-        }
         await withTaskGroup(of: Void.self) { group in
           for _ in 0..<writers {
             group.addTask {

@@ -93,7 +93,10 @@
         deadline.tv_nsec -= 1_000_000_000
       }
       let result = pthread_cond_timedwait(condition, mutex, &deadline)
-      precondition(result == 0 || result == ETIMEDOUT, "pthread_cond_timedwait failed with \(result)")
+      precondition(
+        result == 0 || result == ETIMEDOUT,
+        "pthread_cond_timedwait failed with \(result)"
+      )
       return result == 0
     }
 

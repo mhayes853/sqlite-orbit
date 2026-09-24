@@ -1,3 +1,6 @@
+// swift-format-ignore-file
+// These declarations must keep the C names of the functions they bind.
+
 // The WASILibc module Swift ships reads wasi-libc's `sys/types.h`, which names the pthread types,
 // but not its `pthread.h`, which declares the functions. These are the functions the pthread
 // executor needs, declared as wasi-libc exports them on a target built with threads.
