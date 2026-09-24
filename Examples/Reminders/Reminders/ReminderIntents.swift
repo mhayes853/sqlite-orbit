@@ -137,7 +137,9 @@ struct CreateReminderIntent: AppIntent {
         remindersList = firstList
       }
 
-      let position = try Reminder.count().fetchOne(transaction) ?? 0
+      let position =
+        (try Reminder.order { $0.position.desc() }
+          .select(\.position).fetchOne(transaction) ?? -1) + 1
       try Reminder.insert {
         Reminder.Draft(
           Reminder(

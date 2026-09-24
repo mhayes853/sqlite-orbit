@@ -128,7 +128,9 @@ final class ReminderFormModel: ErrorReporting, Identifiable {
     return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
         if isNew {
-          reminder.position = try Reminder.count().fetchOne(transaction) ?? 0
+          reminder.position =
+            (try Reminder.order { $0.position.desc() }
+              .select(\.position).fetchOne(transaction) ?? -1) + 1
         }
         try Reminder.upsert { reminder }.execute(transaction)
 

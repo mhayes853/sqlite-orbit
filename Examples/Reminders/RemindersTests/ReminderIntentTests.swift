@@ -76,6 +76,39 @@ struct ReminderIntentTests {
   }
 
   @Test
+  func createReminderIntentAppendsAfterADeletion() async throws {
+    let database = try SQLiteQueue.reminders()
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminders = (0...2).map {
+      Reminder(
+        id: UUID(),
+        position: $0,
+        remindersListID: list.id,
+        title: "Reminder \($0)"
+      )
+    }
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminders }.execute(transaction)
+      try Reminder.delete(reminders[0]).execute(transaction)
+    }
+
+    let intent = CreateReminderIntent(
+      title: "New",
+      list: RemindersListEntity(list),
+      dependencies: AppDependencyManager()
+    )
+    intent.$database.wrappedValue = database
+    intent.$notificationScheduler.wrappedValue = .disabled
+    _ = try await intent.perform()
+
+    let positions = try await database.read {
+      try Reminder.order(by: \.position).select(\.position).fetchAll($0)
+    }
+    #expect(positions == [1, 2, 3])
+  }
+
+  @Test
   func createReminderRequiresAnExistingList() async throws {
     let database = try SQLiteQueue.reminders()
     let dependencies = AppDependencyManager()

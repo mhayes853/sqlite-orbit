@@ -70,8 +70,10 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
     let originalPosition = originalPosition
     return await withErrorReporting {
       try await OrbitDefaultDatabase.current.write { transaction in
-        let position =
-          isNew ? (try RemindersList.count().fetchOne(transaction) ?? 0) : originalPosition
+        let position = isNew
+          ? (try RemindersList.order { $0.position.desc() }
+            .select(\.position).fetchOne(transaction) ?? -1) + 1
+          : originalPosition
         try RemindersList.upsert {
           RemindersList.Draft(
             RemindersList(id: id, color: color, position: position, title: title)

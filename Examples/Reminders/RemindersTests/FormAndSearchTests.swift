@@ -72,6 +72,55 @@ struct FormAndSearchTests {
   }
 
   @Test
+  func newListsAppendAfterADeletion() async throws {
+    let database = OrbitDefaultDatabase.current
+    let lists = (0...2).map {
+      RemindersList(id: UUID(), position: $0, title: "List \($0)")
+    }
+    try await database.write { transaction in
+      try RemindersList.insert { lists }.execute(transaction)
+      try RemindersList.delete(lists[0]).execute(transaction)
+    }
+
+    let form = RemindersListFormModel(remindersList: nil)
+    form.title = "New"
+    #expect(await form.save())
+
+    let positions = try await database.read {
+      try RemindersList.order(by: \.position).select(\.position).fetchAll($0)
+    }
+    #expect(positions == [1, 2, 3])
+  }
+
+  @Test
+  func newRemindersAppendAfterADeletion() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let reminders = (0...2).map {
+      Reminder(
+        id: UUID(),
+        position: $0,
+        remindersListID: list.id,
+        title: "Reminder \($0)"
+      )
+    }
+    try await database.write { transaction in
+      try RemindersList.insert { list }.execute(transaction)
+      try Reminder.insert { reminders }.execute(transaction)
+      try Reminder.delete(reminders[0]).execute(transaction)
+    }
+
+    let form = ReminderFormModel(remindersList: list)
+    form.reminder.title = "New"
+    #expect(await form.save())
+
+    let positions = try await database.read {
+      try Reminder.order(by: \.position).select(\.position).fetchAll($0)
+    }
+    #expect(positions == [1, 2, 3])
+  }
+
+  @Test
   func reminderFormCreatesTagsAndSearchableText() async throws {
     let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
