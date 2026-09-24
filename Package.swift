@@ -21,6 +21,25 @@ import PackageDescription
   let swiftUITestDependencies: [Target.Dependency] = []
 #endif
 
+// The published Turso artifact has Apple and Linux slices only. SwiftPM resolves binary targets
+// even when their trait is disabled, so omit it from manifests evaluated on Windows.
+#if os(Windows)
+  let tursoTargets: [Target] = []
+  let tursoDependencies: [Target.Dependency] = []
+#else
+  let tursoTargets: [Target] = [
+    .binaryTarget(
+      name: "TursoSQLite3",
+      url:
+        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r5.artifactbundleindex",
+      checksum: "0f4843d061b9bce33e265a8016cb2576ca1207a4748282ed2465d24b880d70ee"
+    )
+  ]
+  let tursoDependencies: [Target.Dependency] = [
+    .target(name: "TursoSQLite3", condition: .when(traits: ["Turso"]))
+  ]
+#endif
+
 let package = Package(
   name: "sqlite-orbit",
   platforms: [
@@ -76,12 +95,6 @@ let package = Package(
         .brew(["sqlite3"])
       ]
     ),
-    .binaryTarget(
-      name: "TursoSQLite3",
-      url:
-        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r5.artifactbundleindex",
-      checksum: "0f4843d061b9bce33e265a8016cb2576ca1207a4748282ed2465d24b880d70ee"
-    ),
     .target(
       name: "SQLiteOrbit",
       dependencies: [
@@ -101,11 +114,7 @@ let package = Package(
           package: "swift-dependencies",
           condition: .when(traits: ["Dependencies"])
         ),
-        .target(
-          name: "TursoSQLite3",
-          condition: .when(traits: ["Turso"])
-        )
-      ],
+      ] + tursoDependencies,
       cSettings: [
         // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
         // dependency's own C settings do not reach the clang importer of a target importing it.
@@ -172,11 +181,7 @@ let package = Package(
           package: "swift-sqlcipher",
           condition: .when(traits: ["SQLCipher"])
         ),
-        .target(
-          name: "TursoSQLite3",
-          condition: .when(traits: ["Turso"])
-        )
-      ] + swiftUITestDependencies,
+      ] + swiftUITestDependencies + tursoDependencies,
       cSettings: [
         // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
         // dependency's own C settings do not reach the clang importer of a target importing it.
@@ -194,6 +199,6 @@ let package = Package(
         .define("Dependencies", .when(traits: ["Dependencies"]))
       ]
     )
-  ],
+  ] + tursoTargets,
   swiftLanguageModes: [.v6]
 )

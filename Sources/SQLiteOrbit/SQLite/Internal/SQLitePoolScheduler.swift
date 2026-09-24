@@ -1,5 +1,26 @@
-import Dispatch
 import Foundation
+
+#if canImport(Dispatch)
+  import Dispatch
+  private typealias PoolSemaphore = DispatchSemaphore
+#else
+  // The threaded WASI SDK has pthread conditions but no libdispatch.
+  private final class PoolSemaphore: Sendable {
+    private let signaled = ConditionLock(false)
+
+    init(value: Int) {
+      precondition(value == 0)
+    }
+
+    func signal() {
+      signaled.withLock { $0 = true }
+    }
+
+    func wait() {
+      signaled.withLock(until: { $0 }) { _, _ in }
+    }
+  }
+#endif
 
 /// A finite snapshot of writers that were still active when another writer finished.
 final class SQLitePoolWriterBarrier: Sendable {
@@ -91,7 +112,7 @@ final class SQLitePoolScheduler: Sendable {
     var wake: Wake
 
     enum Wake {
-      case blocking(DispatchSemaphore)
+      case blocking(PoolSemaphore)
       case asynchronous(CheckedContinuation<Lease, any Error>?)
     }
   }
@@ -233,7 +254,7 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private func acquireBlocking(_ kind: Kind) -> Lease {
-    let semaphore = DispatchSemaphore(value: 0)
+    let semaphore = PoolSemaphore(value: 0)
     let request = join(kind, blockingHolder: Self.currentThread, semaphore: semaphore)
     for wakeup in request.wakeups { wakeup.deliver() }
     semaphore.wait()
@@ -248,7 +269,7 @@ final class SQLitePoolScheduler: Sendable {
   private func join(
     _ kind: Kind,
     blockingHolder: ObjectIdentifier?,
-    semaphore: DispatchSemaphore? = nil
+    semaphore: PoolSemaphore? = nil
   ) -> (id: Int, wakeups: [Wakeup]) {
     state.withLock { state in
       if let blockingHolder {
