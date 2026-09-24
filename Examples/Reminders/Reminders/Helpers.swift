@@ -2,6 +2,29 @@ import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
+@MainActor
+func refreshAtDayBoundaries(
+  calendar: Calendar = .current,
+  refresh: @escaping @MainActor () async -> Void
+) async {
+  while !Task.isCancelled {
+    let currentDate = Date.now
+    guard
+      let nextDay = calendar.date(
+        byAdding: .day,
+        value: 1,
+        to: calendar.startOfDay(for: currentDate)
+      )
+    else { return }
+    do {
+      try await Task.sleep(for: .seconds(max(1, nextDay.timeIntervalSince(currentDate))))
+    } catch {
+      return
+    }
+    await refresh()
+  }
+}
+
 nonisolated struct RemindersCoverImage: Sendable {
   let data: Data
   private let image: CGImage

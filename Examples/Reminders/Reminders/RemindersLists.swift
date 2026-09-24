@@ -52,17 +52,10 @@ final class RemindersListsModel: ErrorReporting {
     remindersLists.map(\.remindersList)
   }
 
-  init(now: Date = .now) {
+  init() {
     _stats = FetchOne(
       wrappedValue: RemindersStats(),
-      Reminder.select {
-        RemindersStats.Columns(
-          allCount: $0.count(filter: !$0.isCompleted),
-          flaggedCount: $0.count(filter: $0.isFlagged && !$0.isCompleted),
-          scheduledCount: $0.count(filter: $0.isScheduled),
-          todayCount: $0.count(filter: $0.isToday(relativeTo: now))
-        )
-      },
+      Self.statsQuery,
       animation: .default
     )
   }
@@ -73,6 +66,23 @@ final class RemindersListsModel: ErrorReporting {
       async let loadTags: Void = $tags.load()
       async let loadStats: Void = $stats.load()
       _ = try await (loadLists, loadTags, loadStats)
+    }
+  }
+
+  func refreshForCurrentDate() async {
+    await withErrorReporting {
+      try await $stats.load(Self.statsQuery, animation: .default)
+    }
+  }
+
+  private static var statsQuery: some Statement<RemindersStats> {
+    Reminder.select {
+      RemindersStats.Columns(
+        allCount: $0.count(filter: !$0.isCompleted),
+        flaggedCount: $0.count(filter: $0.isFlagged && !$0.isCompleted),
+        scheduledCount: $0.count(filter: $0.isScheduled),
+        todayCount: $0.count(filter: $0.isToday)
+      )
     }
   }
 
@@ -188,6 +198,7 @@ final class RemindersListsModel: ErrorReporting {
 }
 
 struct RemindersListsView: View {
+  @Environment(\.scenePhase) private var scenePhase
   let navigation: RemindersNavigationModel
   let quickActions: RemindersHomeQuickActions
 
@@ -303,7 +314,11 @@ struct RemindersListsView: View {
     .background(Color(.systemGroupedBackground))
     .navigationTitle("")
     .toolbarTitleDisplayMode(.inline)
-    .task { await model.load() }
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      await model.load()
+      await refreshAtDayBoundaries { await model.refreshForCurrentDate() }
+    }
     .onChange(of: model.remindersLists.map(\.remindersList), initial: true) { _, lists in
       quickActions.update(for: lists)
     }

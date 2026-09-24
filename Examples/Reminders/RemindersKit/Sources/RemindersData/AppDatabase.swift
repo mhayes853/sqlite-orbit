@@ -37,8 +37,11 @@ extension OrbitIPCDatabase {
       directory: coordinationDirectory,
       backPressure: .suspend(upTo: .milliseconds(250))
     )
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: RemindersClock().$currentDate)
     let database = try OrbitIPCDatabase(
       path: .file(directory.appending(path: "reminders.sqlite")),
+      configuration: configuration,
       coordination: coordination
     )
     #if DEBUG
@@ -54,8 +57,12 @@ extension OrbitIPCDatabase {
 }
 
 extension SQLiteQueue {
-  public static func reminders() throws -> SQLiteQueue {
-    let database = try SQLiteQueue(path: .memory)
+  public static func reminders(
+    now: @escaping @Sendable () -> Date = { .now }
+  ) throws -> SQLiteQueue {
+    var configuration = SQLiteConfiguration.default
+    configuration.register(function: RemindersClock(now: now).$currentDate)
+    let database = try SQLiteQueue(path: .memory, configuration: configuration)
     try remindersMigrator().migrateBlocking(database)
     return database
   }

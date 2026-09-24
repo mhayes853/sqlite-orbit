@@ -214,19 +214,32 @@ extension Reminder {
   }
 }
 
+nonisolated struct RemindersClock: Sendable {
+  let now: @Sendable () -> Date
+
+  init(now: @escaping @Sendable () -> Date = { .now }) {
+    self.now = now
+  }
+
+  @DatabaseFunction
+  var currentDate: String {
+    ReminderDate(date: now()).rawValue
+  }
+}
+
 nonisolated extension Reminder.TableColumns {
   public var isCompleted: some QueryExpression<Bool> {
     status.neq(Reminder.Status.incomplete)
   }
 
-  public func isPastDue(relativeTo date: Date) -> some QueryExpression<Bool> {
+  public var isPastDue: some QueryExpression<Bool> {
     !isCompleted
-      && #sql("coalesce(date(\(dueDate)) < date(\(ReminderDate(date: date))), 0)")
+      && #sql("coalesce(date(\(dueDate)) < \(RemindersClock().$currentDate), 0)")
   }
 
-  public func isToday(relativeTo date: Date) -> some QueryExpression<Bool> {
+  public var isToday: some QueryExpression<Bool> {
     !isCompleted
-      && #sql("coalesce(date(\(dueDate)) = date(\(ReminderDate(date: date))), 0)")
+      && #sql("coalesce(date(\(dueDate)) = \(RemindersClock().$currentDate), 0)")
   }
 
   public var isScheduled: some QueryExpression<Bool> {

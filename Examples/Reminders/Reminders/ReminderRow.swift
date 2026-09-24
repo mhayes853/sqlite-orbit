@@ -15,7 +15,7 @@ final class ReminderRowModel: ErrorReporting {
 
   @ObservationIgnored private let calendar: Calendar
   @ObservationIgnored private let delay: Duration
-  @ObservationIgnored private let now: Date
+  @ObservationIgnored private let now: @MainActor () -> Date
   @ObservationIgnored private let sleep: Sleep
   @ObservationIgnored private var completionGeneration = 0
   @ObservationIgnored private var completionTask: Task<Void, Never>?
@@ -23,7 +23,7 @@ final class ReminderRowModel: ErrorReporting {
   init(
     calendar: Calendar = .current,
     delay: Duration = .seconds(3),
-    now: Date = .now,
+    now: @escaping @MainActor () -> Date = { .now },
     sleep: @escaping Sleep = { try await Task.sleep(for: $0) }
   ) {
     self.calendar = calendar
@@ -90,7 +90,7 @@ final class ReminderRowModel: ErrorReporting {
     let dueDate = calendar.date(
       byAdding: .day,
       value: daysFromToday,
-      to: calendar.startOfDay(for: now)
+      to: calendar.startOfDay(for: now())
     ).map { ReminderDate(date: $0, calendar: calendar) }
     return write {
       try Reminder.find(reminder.id)

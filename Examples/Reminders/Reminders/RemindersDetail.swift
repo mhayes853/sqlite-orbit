@@ -84,7 +84,6 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
   @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
   var remindersLists: [RemindersList]
-  @ObservationIgnored @FetchOne private var coverImageData: Data? = nil
 
   let detailType: RemindersDetailType
   var coverImage: RemindersCoverImage?
@@ -97,16 +96,9 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
     detailType != .completed
   }
 
-  @ObservationIgnored private let now: @Sendable () -> Date
-
-  init(
-    detailType: RemindersDetailType,
-    now: @escaping @Sendable () -> Date = { .now }
-  ) {
+  init(detailType: RemindersDetailType) {
     let database = OrbitDefaultDatabase.current
     self.detailType = detailType
-    self.now = now
-    let currentDate = now()
 
     let defaults = RemindersDetailSettings(
       id: detailType.id,
@@ -124,21 +116,10 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       Self.remindersQuery(
         detailType: detailType,
         ordering: ordering,
-        showCompleted: showCompleted,
-        now: currentDate
+        showCompleted: showCompleted
       ),
       animation: .default
     )
-    if let listID = detailType.remindersList?.id {
-      _coverImageData = FetchOne(
-        RemindersListAsset
-          .where { $0.remindersListID.eq(listID) }
-          .select(\.coverImage),
-        animation: .default
-      )
-    } else {
-      _coverImageData = FetchOne(wrappedValue: nil)
-    }
   }
 
   func setOrdering(_ newValue: ReminderOrdering) async {
@@ -148,19 +129,49 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
 
   func load() async {
     await withErrorReporting {
-      async let loadReminders: Void = $reminderRows.load()
+      async let loadReminders = $reminderRows.load(
+        Self.remindersQuery(
+          detailType: detailType,
+          ordering: ordering,
+          showCompleted: showCompleted
+        )
+      )
       async let loadLists: Void = $remindersLists.load()
-      if detailType.remindersList != nil {
-        async let loadCoverImage: Void = $coverImageData.load()
-        _ = try await (loadReminders, loadLists, loadCoverImage)
-        if let coverImageData {
-          coverImage = await RemindersCoverImage.load(coverImageData)
+      _ = try await (loadReminders, loadLists)
+    }
+  }
+
+  func observeCoverImage() async {
+    guard let listID = detailType.remindersList?.id else { return }
+    let observation = OrbitValueObservation.trackingOne(
+      RemindersListAsset
+        .where { $0.remindersListID.eq(listID) }
+        .select(\.coverImage)
+    )
+    do {
+      for try await data in observation.values(in: OrbitDefaultDatabase.current) {
+        if let data = data ?? nil {
+          coverImage = await RemindersCoverImage.load(data)
         } else {
           coverImage = nil
         }
-      } else {
-        _ = try await (loadReminders, loadLists)
       }
+    } catch is CancellationError {
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  func refreshForCurrentDate() async {
+    await withErrorReporting {
+      try await $reminderRows.load(
+        Self.remindersQuery(
+          detailType: detailType,
+          ordering: ordering,
+          showCompleted: showCompleted
+        ),
+        animation: .default
+      )
     }
   }
 
@@ -208,8 +219,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
     let query = Self.remindersQuery(
       detailType: detailType,
       ordering: ordering,
-      showCompleted: showCompleted,
-      now: now()
+      showCompleted: showCompleted
     )
     await withErrorReporting {
       async let persistSettings: Void = OrbitDefaultDatabase.current.write { transaction in
@@ -229,8 +239,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   private static func remindersQuery(
     detailType: RemindersDetailType,
     ordering: ReminderOrdering,
-    showCompleted: Bool,
-    now: Date
+    showCompleted: Bool
   ) -> some Statement<ReminderDetailRow> {
     Reminder
       .where {
@@ -260,7 +269,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         case .list(let list): reminder.remindersListID.eq(list.id)
         case .scheduled: reminder.isScheduled
         case .tags(let tags): tag.primaryKey.ifnull("").in(tags.map(\.primaryKey))
-        case .today: reminder.isToday(relativeTo: now)
+        case .today: reminder.isToday
         }
       }
       .join(RemindersList.all) { $0.remindersListID.eq($3.id) }
@@ -269,7 +278,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         ReminderDetailRow.Columns(
           reminder: $0,
           remindersList: $3,
-          isPastDue: $0.isPastDue(relativeTo: now),
+          isPastDue: $0.isPastDue,
           notes: $4.notes.substr(0, 200),
           tags: $4.tags
         )
@@ -278,6 +287,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
 }
 
 struct RemindersDetailView: View {
+  @Environment(\.scenePhase) private var scenePhase
   @State private var model: RemindersDetailModel
 
   init(model: RemindersDetailModel) {
@@ -314,7 +324,12 @@ struct RemindersDetailView: View {
     .scrollContentBackground(.hidden)
     .background(Color(.systemBackground))
     .navigationTitle("")
-    .task { await model.load() }
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      await model.load()
+      await refreshAtDayBoundaries { await model.refreshForCurrentDate() }
+    }
+    .task { await model.observeCoverImage() }
     .toolbarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {

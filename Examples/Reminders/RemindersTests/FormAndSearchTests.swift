@@ -47,6 +47,41 @@ struct FormAndSearchTests {
     #expect(storedImageData?.isEmpty == false)
   }
 
+  @Test(.timeLimit(.minutes(1)))
+  func detailCoverImageTracksDatabaseChanges() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Personal")
+    let imageData = try #require(
+      Data(
+        base64Encoded:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+      )
+    )
+    try await database.write { try RemindersList.insert { list }.execute($0) }
+    let model = RemindersDetailModel(detailType: .list(list))
+    let observation = Task { await model.observeCoverImage() }
+    defer { observation.cancel() }
+
+    try await database.write {
+      try RemindersListAsset.insert {
+        RemindersListAsset(remindersListID: list.id, coverImage: imageData)
+      }
+      .execute($0)
+    }
+    for _ in 0..<100 {
+      if model.coverImage?.data == imageData { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(model.coverImage?.data == imageData)
+
+    try await database.write { try RemindersListAsset.find(list.id).delete().execute($0) }
+    for _ in 0..<100 {
+      if model.coverImage == nil { break }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+    #expect(model.coverImage == nil)
+  }
+
   @Test
   func listFormCreatesThenEditsAList() async throws {
     let database = OrbitDefaultDatabase.current
@@ -390,7 +425,7 @@ struct FormAndSearchTests {
     )
     let model = ReminderRowModel(
       calendar: calendar,
-      now: now
+      now: { now }
     )
 
     await model.dueDateButtonTapped(reminder, daysFromToday: 1).value

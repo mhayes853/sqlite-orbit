@@ -22,12 +22,6 @@ final class SearchRemindersModel: ErrorReporting {
   var text = ""
 
   @ObservationIgnored private var searchTask: Task<Void, Never>?
-  @ObservationIgnored private let now: Date
-
-  init(now: Date = .now) {
-    self.now = now
-  }
-
   func search(_ text: String, showCompleted: Bool, debounce: Bool = true) {
     searchTask?.cancel()
     searchTask = Task { [weak self] in
@@ -45,8 +39,7 @@ final class SearchRemindersModel: ErrorReporting {
       try await $results.load(
         Self.query(
           text: text,
-          showCompleted: showCompleted,
-          now: now
+          showCompleted: showCompleted
         ),
         animation: .default
       )
@@ -55,8 +48,7 @@ final class SearchRemindersModel: ErrorReporting {
 
   private static func query(
     text: String,
-    showCompleted: Bool,
-    now: Date
+    showCompleted: Bool
   ) -> some Statement<SearchReminderRow> {
     let match =
       text
@@ -85,7 +77,7 @@ final class SearchRemindersModel: ErrorReporting {
           highlightedNotes: $0.notes.snippet("**", "**", "...", 64).replace("\n", " "),
           highlightedTags: $0.tags.highlight("**", "**"),
           highlightedTitle: $0.title.highlight("**", "**"),
-          isPastDue: $1.isPastDue(relativeTo: now),
+          isPastDue: $1.isPastDue,
           reminder: $1,
           remindersList: $2
         )
@@ -94,6 +86,7 @@ final class SearchRemindersModel: ErrorReporting {
 }
 
 struct SearchRemindersView: View {
+  @Environment(\.scenePhase) private var scenePhase
   @SingleRow(SearchSettings.self) private var settings: SearchSettings
   let model: SearchRemindersModel
   let remindersLists: [RemindersList]
@@ -127,6 +120,16 @@ struct SearchRemindersView: View {
         showCompleted: settings.showCompleted,
         debounce: false
       )
+    }
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      if !model.text.isEmpty {
+        await model.loadResults(for: model.text, showCompleted: settings.showCompleted)
+      }
+      await refreshAtDayBoundaries {
+        guard !model.text.isEmpty else { return }
+        await model.loadResults(for: model.text, showCompleted: settings.showCompleted)
+      }
     }
 
     Section {

@@ -2,6 +2,7 @@ import Foundation
 import RemindersData
 import SQLiteOrbit
 import SQLiteOrbitTestSupport
+import Synchronization
 import Testing
 
 @MainActor
@@ -176,46 +177,93 @@ struct RemindersModelTests {
 
   @Test
   func dashboardCountsInsertedReminders() async throws {
-    let list = RemindersList(id: UUID(), title: "Personal")
     let now = Date(timeIntervalSince1970: 1_789_560_000)
-    try await insertFixture(
-      lists: [list],
-      reminders: [
-        Reminder(
-          id: UUID(),
-          dueDate: ReminderDate(date: now),
-          remindersListID: list.id,
-          title: "Today"
-        ),
-        Reminder(
-          id: UUID(),
-          isFlagged: true,
-          remindersListID: list.id,
-          title: "Flagged"
-        ),
-        Reminder(
-          id: UUID(),
-          dueDate: ReminderDate(date: now.addingTimeInterval(86_400)),
-          remindersListID: list.id,
-          title: "Scheduled"
-        ),
-        Reminder(
-          id: UUID(),
-          remindersListID: list.id,
-          status: .completed,
-          title: "Done"
-        )
-      ]
-    )
+    try await OrbitDefaultDatabase.withValue(SQLiteQueue.reminders(now: { now })) {
+      let list = RemindersList(id: UUID(), title: "Personal")
+      try await insertFixture(
+        lists: [list],
+        reminders: [
+          Reminder(
+            id: UUID(),
+            dueDate: ReminderDate(date: now),
+            remindersListID: list.id,
+            title: "Today"
+          ),
+          Reminder(
+            id: UUID(),
+            isFlagged: true,
+            remindersListID: list.id,
+            title: "Flagged"
+          ),
+          Reminder(
+            id: UUID(),
+            dueDate: ReminderDate(date: now.addingTimeInterval(86_400)),
+            remindersListID: list.id,
+            title: "Scheduled"
+          ),
+          Reminder(
+            id: UUID(),
+            remindersListID: list.id,
+            status: .completed,
+            title: "Done"
+          )
+        ]
+      )
 
-    let model = RemindersListsModel(now: now)
-    await model.load()
+      let model = RemindersListsModel()
+      await model.load()
 
-    #expect(model.stats.allCount == 3)
-    #expect(model.stats.flaggedCount == 1)
-    #expect(model.stats.scheduledCount == 2)
-    #expect(model.stats.todayCount == 1)
-    #expect(model.remindersLists.first?.remindersCount == 3)
+      #expect(model.stats.allCount == 3)
+      #expect(model.stats.flaggedCount == 1)
+      #expect(model.stats.scheduledCount == 2)
+      #expect(model.stats.todayCount == 1)
+      #expect(model.remindersLists.first?.remindersCount == 3)
+    }
+  }
+
+  @Test
+  func dateDependentQueriesUseTheDatabaseClockWhenRefreshed() async throws {
+    let today = Date(timeIntervalSince1970: 1_789_560_000)
+    let tomorrow = today.addingTimeInterval(86_400)
+    let clock = Mutex(today)
+    let database = try SQLiteQueue.reminders(now: { clock.withLock { $0 } })
+    try await OrbitDefaultDatabase.withValue(database) {
+      let list = RemindersList(id: UUID(), title: "Personal")
+      try await insertFixture(
+        lists: [list],
+        reminders: [
+          Reminder(
+            id: UUID(),
+            dueDate: ReminderDate(date: today),
+            remindersListID: list.id,
+            title: "Day one"
+          ),
+          Reminder(
+            id: UUID(),
+            dueDate: ReminderDate(date: tomorrow),
+            remindersListID: list.id,
+            title: "Day two"
+          )
+        ]
+      )
+      let lists = RemindersListsModel()
+      let detail = RemindersDetailModel(detailType: .today)
+      let search = SearchRemindersModel()
+      await lists.load()
+      await detail.load()
+      await search.loadResults(for: "Day", showCompleted: false)
+      #expect(lists.stats.todayCount == 1)
+      #expect(detail.reminderRows.map(\.reminder.title) == ["Day one"])
+      #expect(search.results.first { $0.reminder.title == "Day one" }?.isPastDue == false)
+
+      clock.withLock { $0 = tomorrow }
+      await lists.refreshForCurrentDate()
+      await detail.refreshForCurrentDate()
+      await search.loadResults(for: "Day", showCompleted: false)
+      #expect(lists.stats.todayCount == 1)
+      #expect(detail.reminderRows.map(\.reminder.title) == ["Day two"])
+      #expect(search.results.first { $0.reminder.title == "Day one" }?.isPastDue == true)
+    }
   }
 
   @Test
