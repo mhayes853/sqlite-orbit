@@ -79,10 +79,13 @@ let package = Package(
         "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r4.artifactbundleindex",
       checksum: "ecaae3ea882953b3fb074ae60599c0e3e4944acb66190d64dee1b2b9a3b0d543"
     ),
+    // The C the pthread connection executor needs and Swift cannot import on its own.
+    .target(name: "CSQLiteOrbitThreads"),
     .target(
       name: "SQLiteOrbit",
       dependencies: [
         "SQLiteOrbitMacros",
+        "CSQLiteOrbitThreads",
         .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
         .target(
           name: "CSQLite3",
@@ -112,9 +115,6 @@ let package = Package(
       swiftSettings: [
         .enableExperimentalFeature("Lifetimes"),
         .enableExperimentalFeature("SuppressedAssociatedTypes"),
-        // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
-        // connection executor needs are declared by hand there.
-        .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
         // Every trait that links a SQLite of its own defines this, so that code needing only
         // "some build is available" does not have to name each one.
         .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),

@@ -1,6 +1,8 @@
 // Only the pthread executor starts threads of its own, so this is built only where that executor
 // is. Darwin and Windows keep libdispatch, and a runtime without threads cannot start one.
 #if !canImport(Darwin) && !os(Windows) && _runtime(_multithreaded)
+  import CSQLiteOrbitThreads
+
   #if canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
@@ -37,11 +39,15 @@
     /// Starts a thread running `body`.
     ///
     /// - Parameters:
-    ///   - name: What the thread is called in debuggers, hang reports and crash tombstones. Where
-    ///     the platform caps a name's length, it is cut short to fit.
+    ///   - name: What the thread is called in debuggers, hang reports and crash tombstones. Linux
+    ///     and Android refuse a name longer than 15 bytes, leaving the thread unnamed.
     ///   - body: The work the thread does before it ends.
     static func spawn(name: String, _ body: @escaping @Sendable () -> Void) {
-      let context = Unmanaged.passRetained(Context(name: name, body: body)).toOpaque()
+      let run = Context {
+        _ = csqliteorbit_set_current_thread_name(name)
+        body()
+      }
+      let context = Unmanaged.passRetained(run).toOpaque()
 
       var attributes = pthread_attr_t()
       precondition(pthread_attr_init(&attributes) == 0, "pthread_attr_init failed")
@@ -50,8 +56,9 @@
         pthread_attr_setdetachstate(&attributes, Int32(PTHREAD_CREATE_DETACHED)) == 0,
         "pthread_attr_setdetachstate failed"
       )
-      // Musl gives a new thread 128 KiB of stack, where Glibc gives 8 MiB and Bionic about 1 MiB. SQLite's parser and a deep decode both recurse, so a thread is
-      // given at least a mebibyte, and a platform that already gives more keeps its own default.
+      // Musl gives a new thread 128 KiB of stack, where Glibc gives 8 MiB and Bionic about 1 MiB.
+      // SQLite's parser and a deep decode both recurse, so a thread is given at least a mebibyte,
+      // and a platform that already gives more keeps its own default.
       var stackSize = 0
       precondition(
         pthread_attr_getstacksize(&attributes, &stackSize) == 0,
@@ -91,56 +98,13 @@
 
     private static let minimumStackSize = 1 << 20
 
-    #if !os(WASI)
-      // Linux and Android refuse a name longer than 15 bytes outright rather than truncating it,
-      // so it is cut short here, where a multi-byte character can be kept whole.
-      private static let maximumNameLength = 15
-
-      fileprivate static func truncatedName(_ name: String) -> String {
-        var truncated = ""
-        var length = 0
-        for scalar in name.unicodeScalars {
-          length += UTF8.width(scalar)
-          guard length <= maximumNameLength else { break }
-          truncated.unicodeScalars.append(scalar)
-        }
-        return truncated
-      }
-    #endif
-
+    // The closure a thread runs, boxed to pass through `pthread_create`'s context pointer.
     fileprivate final class Context {
-      let name: String
-      let body: @Sendable () -> Void
+      let run: @Sendable () -> Void
 
-      init(name: String, body: @escaping @Sendable () -> Void) {
-        self.name = name
-        self.body = body
-      }
-
-      func run() {
-        #if !os(WASI)
-          // A thread can only be named once it exists, and naming itself is the one way every
-          // platform here allows.
-          _ = setThreadName?(pthread_self(), DetachedThread.truncatedName(name))
-        #endif
-        body()
+      init(_ run: @escaping @Sendable () -> Void) {
+        self.run = run
       }
     }
   }
-
-  #if canImport(Glibc) || canImport(Musl)
-    // Glibc and Musl declare `pthread_setname_np` only under `_GNU_SOURCE`, which Swift does not
-    // read their headers with, so it is looked up by name instead. Both have had it for more than a
-    // decade, and a thread that goes unnamed still runs.
-    private let setThreadName: (@convention(c) (pthread_t, UnsafePointer<CChar>) -> Int32)? = {
-      guard let symbol = dlsym(dlopen(nil, RTLD_NOW), "pthread_setname_np") else { return nil }
-      return unsafeBitCast(
-        symbol,
-        to: (@convention(c) (pthread_t, UnsafePointer<CChar>) -> Int32).self
-      )
-    }()
-  #elseif os(Android)
-    private let setThreadName: (@convention(c) (pthread_t, UnsafePointer<CChar>) -> Int32)? =
-      pthread_setname_np
-  #endif
 #endif

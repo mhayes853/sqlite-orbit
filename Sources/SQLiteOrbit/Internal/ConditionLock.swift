@@ -1,6 +1,8 @@
 // Only the pthread executor waits on a condition, so this is built only where that executor is.
 // Darwin and Windows keep libdispatch, and a runtime without threads has nothing to wait for.
 #if !canImport(Darwin) && !os(Windows) && _runtime(_multithreaded)
+  import CSQLiteOrbitThreads
+
   #if canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
@@ -33,14 +35,12 @@
       var attributes = pthread_condattr_t()
       precondition(pthread_condattr_init(&attributes) == 0, "pthread_condattr_init failed")
       defer { _ = pthread_condattr_destroy(&attributes) }
-      #if !os(WASI)
-        // A timed wait measures against the monotonic clock, so setting the wall clock neither
-        // cuts a wait short nor stretches it out.
-        precondition(
-          pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC) == 0,
-          "pthread_condattr_setclock failed"
-        )
-      #endif
+      // A timed wait measures against the monotonic clock, so setting the wall clock neither cuts
+      // a wait short nor stretches it out.
+      precondition(
+        csqliteorbit_condattr_set_monotonic_clock(&attributes) == 0,
+        "pthread_condattr_setclock failed"
+      )
       precondition(pthread_cond_init(condition, &attributes) == 0, "pthread_cond_init failed")
     }
 
@@ -100,27 +100,14 @@
       return result == 0
     }
 
-    borrowing func signal() {
-      let result = pthread_cond_signal(condition)
-      precondition(result == 0, "pthread_cond_signal failed with \(result)")
-    }
-
     borrowing func broadcast() {
       let result = pthread_cond_broadcast(condition)
       precondition(result == 0, "pthread_cond_broadcast failed with \(result)")
     }
 
-    // The time on the clock the condition measures its deadlines against.
     private static func now() -> timespec {
       var now = timespec()
-      #if os(WASI)
-        // wasi-libc spells its clock ids as the addresses of C globals, which Swift cannot import,
-        // so the condition keeps its default wall clock and C11 reads it. Setting the clock can then
-        // end a timed wait early or late, which the idle timeout this serves can afford.
-        _ = timespec_get(&now, TIME_UTC)
-      #else
-        _ = clock_gettime(CLOCK_MONOTONIC, &now)
-      #endif
+      _ = csqliteorbit_monotonic_now(&now)
       return now
     }
   }

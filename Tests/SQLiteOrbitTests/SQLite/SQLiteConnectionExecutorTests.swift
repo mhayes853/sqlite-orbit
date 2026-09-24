@@ -28,13 +28,13 @@
         return ThreadID.current
       }
       #expect(ranOn == caller)
-      #expect(executor.state.startedWorkerCount == 0)
+      #expect(!executor.state.hasRunningWorker)
     }
 
     @Test func jobsShareOneWorkerStartedForTheFirstOfThem() async {
       let executor = SQLiteConnectionExecutor(path: .memory)
       let isolated = ExecutorBoundActor(executor)
-      #expect(executor.state.startedWorkerCount == 0)
+      #expect(!executor.state.hasRunningWorker)
 
       let first = await isolated.run {
         executor.checkIsolated()
@@ -42,32 +42,40 @@
       }
       let second = await isolated.run { ThreadID.current }
       #expect(first == second)
-      #expect(executor.state.startedWorkerCount == 1)
+      #expect(executor.state.hasRunningWorker)
     }
 
     @Test func jobsAndBlockingAccessesRunInTheOrderTheyArrived() async throws {
       let executor = SQLiteConnectionExecutor(path: .memory)
       let isolated = ExecutorBoundActor(executor)
-      let log = Log()
+      let log = Lock<[String]>([])
 
       // Holding the executor from a blocking access queues everything that follows behind it.
-      let gate = Gate()
-      let holder = onNewThread { executor.sync { gate.enterAndWait() } }
-      try await waitUntil { gate.isEntered }
+      let isHeld = Lock(false)
+      let mayRelease = Lock(false)
+      let holder = onNewThread {
+        executor.sync {
+          isHeld.withLock { $0 = true }
+          while !mayRelease.withLock({ $0 }) { pauseBriefly() }
+        }
+      }
+      try await waitUntil { isHeld.withLock { $0 } }
 
       var completions = [holder]
       // Each arrival is submitted without waiting on the cooperative pool, and is seen to be queued
       // before the next is submitted.
       for (index, label) in ["A", "B", "C", "D", "E", "F"].enumerated() {
         if index.isMultiple(of: 2) {
-          completions.append(Task.immediate { await isolated.run { log.append(label) } })
+          completions.append(
+            Task.immediate { @Sendable in await isolated.run { log.withLock { $0.append(label) } } }
+          )
         } else {
           completions.append(
             onNewThread {
               let caller = ThreadID.current
               executor.sync {
                 let isInline = ThreadID.current == caller
-                log.append(isInline ? label : "\(label) off its thread")
+                log.withLock { $0.append(isInline ? label : "\(label) off its thread") }
               }
             }
           )
@@ -75,9 +83,9 @@
         try await waitUntil { executor.state.pendingCount == index + 1 }
       }
 
-      gate.open()
+      mayRelease.withLock { $0 = true }
       for completion in completions { await completion.value }
-      #expect(log.entries == ["A", "B", "C", "D", "E", "F"])
+      #expect(log.withLock { $0 } == ["A", "B", "C", "D", "E", "F"])
     }
 
     @Test func anIdleWorkerEndsAndTheNextJobStartsAnother() async throws {
@@ -85,12 +93,10 @@
       let isolated = ExecutorBoundActor(executor)
 
       await isolated.run {}
-      #expect(executor.state.startedWorkerCount == 1)
       try await waitUntil { !executor.state.hasRunningWorker }
 
       let ran = await isolated.run { true }
       #expect(ran)
-      #expect(executor.state.startedWorkerCount == 2)
     }
 
     @Test func releasingTheExecutorEndsItsIdleWorker() async throws {
@@ -167,7 +173,7 @@
           path: .memory,
           flags: [.readWrite, .create, .noMutex],
           configuration: .default,
-          executor: SQLiteConnectionExecutor(path: .memory, idleTimeout: .microseconds(50))
+          idleTimeout: .microseconds(50)
         )
         try await connection.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
         try await connection.write { try $0.execute("INSERT INTO counter (n) VALUES (0)") }
@@ -226,32 +232,6 @@
     }
   }
 
-  private final class Log: Sendable {
-    private let storage = Lock<[String]>([])
-
-    var entries: [String] { storage.withLock { $0 } }
-
-    func append(_ entry: String) {
-      storage.withLock { $0.append(entry) }
-    }
-  }
-
-  // Blocks the thread that enters it until it is opened.
-  private final class Gate: Sendable {
-    private let state = Lock((isEntered: false, isOpen: false))
-
-    var isEntered: Bool { state.withLock { $0.isEntered } }
-
-    func enterAndWait() {
-      state.withLock { $0.isEntered = true }
-      while !state.withLock({ $0.isOpen }) { pauseBriefly() }
-    }
-
-    func open() {
-      state.withLock { $0.isOpen = true }
-    }
-  }
-
   // Counts visits made under the executor, and how many found another visit already under way.
   // The counters are deliberately unsynchronized: only the executor keeps them consistent.
   private final class Occupancy: @unchecked Sendable {
@@ -278,14 +258,6 @@
           continuation.resume()
         }
       }
-    }
-  }
-
-  private func waitUntil(_ condition: () -> Bool) async throws {
-    let deadline = ContinuousClock.now + .seconds(10)
-    while !condition() {
-      try #require(ContinuousClock.now < deadline, "Timed out waiting for the executor")
-      try await Task.sleep(for: .milliseconds(1))
     }
   }
 

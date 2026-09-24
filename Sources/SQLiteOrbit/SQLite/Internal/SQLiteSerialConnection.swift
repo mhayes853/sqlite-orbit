@@ -14,7 +14,7 @@ actor SQLiteSerialConnection {
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
     driverSetupSQL: [String] = [],
-    executor: SQLiteConnectionExecutor? = nil
+    idleTimeout: Duration? = nil
   ) throws {
     let handle = try SQLiteHandle.open(
       path: path,
@@ -28,7 +28,7 @@ actor SQLiteSerialConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.connections.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    self.executor = executor ?? SQLiteConnectionExecutor(path: path)
+    self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
     self.handle = handle
   }
 
