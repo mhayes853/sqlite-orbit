@@ -3,7 +3,9 @@ import Foundation
 #if canImport(Dispatch)
   import Dispatch
   private typealias PoolSemaphore = DispatchSemaphore
+  private typealias PoolThreadIdentity = ObjectIdentifier
 #else
+  private typealias PoolThreadIdentity = ThreadID
   // The threaded WASI SDK has pthread conditions but no libdispatch.
   private final class PoolSemaphore: Sendable {
     private let signaled = ConditionLock(false)
@@ -84,7 +86,7 @@ final class SQLitePoolScheduler: Sendable {
     let id: Int
     let kind: Kind
     let connection: SQLiteSerialConnection
-    let blockingHolder: ObjectIdentifier?
+    let blockingHolder: PoolThreadIdentity?
   }
 
   private struct State {
@@ -94,7 +96,7 @@ final class SQLitePoolScheduler: Sendable {
     var isBarrierWriteActive = false
     var waiting: [Waiter] = []
     var settled: [Int: Result<Lease, any Error>] = [:]
-    var blockingHolders: Set<ObjectIdentifier> = []
+    var blockingHolders: [PoolThreadIdentity] = []
     var activeWriterIDs: Set<Int> = []
     var writerBarriers: [Int: [SQLitePoolWriterBarrier]] = [:]
     var nextRequestID = 0
@@ -108,7 +110,7 @@ final class SQLitePoolScheduler: Sendable {
   private struct Waiter {
     let id: Int
     let kind: Kind
-    let blockingHolder: ObjectIdentifier?
+    let blockingHolder: PoolThreadIdentity?
     var wake: Wake
 
     enum Wake {
@@ -268,7 +270,7 @@ final class SQLitePoolScheduler: Sendable {
 
   private func join(
     _ kind: Kind,
-    blockingHolder: ObjectIdentifier?,
+    blockingHolder: PoolThreadIdentity?,
     semaphore: PoolSemaphore? = nil
   ) -> (id: Int, wakeups: [Wakeup]) {
     state.withLock { state in
@@ -281,7 +283,7 @@ final class SQLitePoolScheduler: Sendable {
           transaction already in hand rather than opening a second one.
           """
         )
-        state.blockingHolders.insert(blockingHolder)
+        state.blockingHolders.append(blockingHolder)
       }
 
       let id = state.claimRequestID()
@@ -293,8 +295,12 @@ final class SQLitePoolScheduler: Sendable {
     }
   }
 
-  private static var currentThread: ObjectIdentifier {
-    ObjectIdentifier(Thread.current)
+  private static var currentThread: PoolThreadIdentity {
+    #if canImport(Dispatch)
+      ObjectIdentifier(Thread.current)
+    #else
+      ThreadID.current
+    #endif
   }
 
   // MARK: - Releasing
@@ -333,7 +339,7 @@ final class SQLitePoolScheduler: Sendable {
         state.isBarrierWriteActive = false
       }
       if let blockingHolder = lease.blockingHolder {
-        state.blockingHolders.remove(blockingHolder)
+        state.blockingHolders.removeAll { $0 == blockingHolder }
       }
       return (Self.grant(&state), completedBarriers, capturedBarrier)
     }
