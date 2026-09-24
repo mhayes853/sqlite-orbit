@@ -120,7 +120,7 @@ jobs:
         run: swift build --disable-default-traits --swift-sdk 6.3-RELEASE-wasm32-unknown-wasip1-threads
 
   build-windows:
-    name: Windows
+    name: Windows (macros)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,4 +130,6 @@ jobs:
           swift-build: 6.4.0-RELEASE
 
       - name: Build
-        run: swift build --disable-default-traits
+        # StructuredQueriesCore currently crashes the Windows Swift compiler while type-checking
+        # PrimaryKeyed.swift, before SQLiteOrbit itself is compiled.
+        run: swift build --disable-default-traits --target SQLiteOrbitMacros
