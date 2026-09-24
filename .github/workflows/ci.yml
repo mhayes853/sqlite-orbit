@@ -124,9 +124,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: SwiftyLab/setup-swift@v1.14.0
+      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
         with:
-          swift-version: '6.2.3'
+          swift-version: swift-6.4.0-release
+          swift-build: 6.4.0-RELEASE
 
       - name: Build
         run: swift build --disable-default-traits
