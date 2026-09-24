@@ -28,13 +28,13 @@
         return ThreadID.current
       }
       #expect(ranOn == caller)
-      #expect(!executor.state.hasRunningWorker)
+      #expect(!executor.state.withLock { $0.hasWorker })
     }
 
     @Test func jobsShareOneWorkerStartedForTheFirstOfThem() async {
       let executor = SQLiteConnectionExecutor(path: .memory)
       let isolated = ExecutorBoundActor(executor)
-      #expect(!executor.state.hasRunningWorker)
+      #expect(!executor.state.withLock { $0.hasWorker })
 
       let first = await isolated.run {
         executor.checkIsolated()
@@ -42,7 +42,7 @@
       }
       let second = await isolated.run { ThreadID.current }
       #expect(first == second)
-      #expect(executor.state.hasRunningWorker)
+      #expect(executor.state.withLock { $0.hasWorker })
     }
 
     @Test func jobsAndBlockingAccessesRunInTheOrderTheyArrived() async throws {
@@ -80,7 +80,7 @@
             }
           )
         }
-        try await waitUntil { executor.state.pendingCount == index + 1 }
+        try await waitUntil { executor.state.withLock { $0.pending.count } == index + 1 }
       }
 
       mayRelease.withLock { $0 = true }
@@ -93,14 +93,14 @@
       let isolated = ExecutorBoundActor(executor)
 
       await isolated.run {}
-      try await waitUntil { !executor.state.hasRunningWorker }
+      try await waitUntil { !executor.state.withLock { $0.hasWorker } }
 
       let ran = await isolated.run { true }
       #expect(ran)
     }
 
     @Test func releasingTheExecutorEndsItsIdleWorker() async throws {
-      let state: SQLiteConnectionExecutor.State
+      let state: ConditionLock<SQLiteConnectionExecutor.State>
       do {
         let executor = SQLiteConnectionExecutor(path: .memory, idleTimeout: .seconds(600))
         let isolated = ExecutorBoundActor(executor)
@@ -108,7 +108,7 @@
         state = executor.state
       }
       // Well inside the idle timeout, so only the executor going away can have ended the worker.
-      try await waitUntil { !state.hasRunningWorker }
+      try await waitUntil { !state.withLock { $0.hasWorker } }
     }
 
     #if os(Linux)

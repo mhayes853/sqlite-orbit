@@ -1,8 +1,6 @@
 // Only the pthread executor starts threads of its own, so this is built only where that executor
 // is. Darwin and Windows keep libdispatch, and a runtime without threads cannot start one.
 #if !canImport(Darwin) && !os(Windows) && _runtime(_multithreaded)
-  import CSQLiteOrbitThreads
-
   #if canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
@@ -40,11 +38,11 @@
     ///
     /// - Parameters:
     ///   - name: What the thread is called in debuggers, hang reports and crash tombstones. Linux
-    ///     and Android refuse a name longer than 15 bytes, leaving the thread unnamed.
+    ///     and Android keep only its first 15 bytes.
     ///   - body: The work the thread does before it ends.
     static func spawn(name: String, _ body: @escaping @Sendable () -> Void) {
       let run = Context {
-        _ = csqliteorbit_set_current_thread_name(name)
+        nameCurrentThread(name)
         body()
       }
       let context = Unmanaged.passRetained(run).toOpaque()
@@ -97,6 +95,20 @@
     }
 
     private static let minimumStackSize = 1 << 20
+
+    // Linux and Android read a thread's name from its `comm` file, and writing that file is a way
+    // to name a thread Swift can reach: Glibc and Musl declare `pthread_setname_np` only under
+    // `_GNU_SOURCE`, which Swift does not read their headers with. A thread that goes unnamed
+    // still runs, so a failure is ignored.
+    private static func nameCurrentThread(_ name: String) {
+      #if os(Linux) || os(Android)
+        let descriptor = open("/proc/thread-self/comm", O_WRONLY | O_CLOEXEC)
+        guard descriptor >= 0 else { return }
+        var name = name
+        _ = name.withUTF8 { write(descriptor, $0.baseAddress, $0.count) }
+        _ = close(descriptor)
+      #endif
+    }
 
     // The closure a thread runs, boxed to pass through `pthread_create`'s context pointer.
     fileprivate final class Context {
