@@ -111,6 +111,15 @@
     }
   }
 
+  @Test func aBlockingAccessInsideAnAsynchronousOneOnTheSameConnectionIsReported() async throws {
+    await #expect(processExitsWith: .failure) {
+      let driver = try SQLiteQueue(path: .memory)
+      try await driver.read { _ in
+        _ = try driver.readBlocking { _ in 1 }
+      }
+    }
+  }
+
   @Test func aBlockingAccessOnAnotherDatabaseIsNotReentrancy() async throws {
     let first = BlockingTestDatabase()
     let second = BlockingTestDatabase()

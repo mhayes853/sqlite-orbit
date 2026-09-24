@@ -1,8 +1,6 @@
-import Dispatch
-
 actor SQLiteSerialConnection {
   // Reached from `performBlocking` without hopping onto the actor: what serializes access to the
-  // handle is the connection's queue, which is also this actor's executor.
+  // handle is the connection's executor, which is also this actor's executor.
   private nonisolated(unsafe) let handle: SQLiteHandle
   private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
@@ -15,7 +13,8 @@ actor SQLiteSerialConnection {
     path: OrbitDatabasePath,
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
-    driverSetupSQL: [String] = []
+    driverSetupSQL: [String] = [],
+    idleTimeout: Duration? = nil
   ) throws {
     let handle = try SQLiteHandle.open(
       path: path,
@@ -29,7 +28,7 @@ actor SQLiteSerialConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.connections.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    self.executor = SQLiteConnectionExecutor(path: path)
+    self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
     self.handle = handle
   }
 
@@ -96,9 +95,9 @@ actor SQLiteSerialConnection {
   private nonisolated func performBlocking<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) throws -> Result {
-    // `sync` runs the work on the queue that is this actor's executor, so no isolated use of the
-    // handle can be running while it does. Hopping onto the actor to say so is what a closure the
-    // caller only lent us cannot do.
+    // `sync` runs the work as this actor's executor, so no isolated use of the handle can be
+    // running while it does. Hopping onto the actor to say so is what a closure the caller only
+    // lent us cannot do.
     return try executor.sync { try work(handle) }
   }
 
@@ -121,76 +120,6 @@ actor SQLiteSerialConnection {
     }
   }
 }
-
-final class SQLiteConnectionExecutor: SerialExecutor {
-  private let queue: DispatchQueue
-
-  private static let owner = DispatchSpecificKey<ObjectIdentifier>()
-
-  init(path: OrbitDatabasePath) {
-    // The queue is labelled with the database it serves, because a stack of blocked threads is
-    // most of what a hang report of this package will show.
-    self.queue = DispatchQueue(
-      label: "SQLiteOrbit.connection(\(path))",
-      autoreleaseFrequency: .workItem
-    )
-    queue.setSpecific(key: Self.owner, value: ObjectIdentifier(self))
-  }
-
-  func sync<Result>(_ body: () throws -> Result) rethrows -> Result {
-    precondition(
-      DispatchQueue.getSpecific(key: Self.owner) != ObjectIdentifier(self),
-      """
-      A blocking database access cannot be nested inside another one on the same connection: \
-      the inner access would wait for the outer one to release a connection it still holds. \
-      Use the transaction already in hand rather than opening a second one.
-      """
-    )
-    return try queue.sync(execute: body)
-  }
-
-  // A job's priority is handed to dispatch rather than dropped. Without it every query would run
-  // at the queue's own QoS, so a read a user is waiting on would be served no sooner than a
-  // background one, and the thread running it would not be raised to match. Dispatch also
-  // resolves the inversion this leaves behind: a high-priority block enqueued behind a
-  // low-priority one raises the queue until it drains.
-  //
-  // This is the entry point every platform has. Implementing the newer one as well would mean
-  // implementing neither: a type that has this one is never asked for the other.
-  func enqueue(_ job: UnownedJob) {
-    guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else {
-      return run(job, at: .unspecified)
-    }
-    run(job, at: Self.dispatchQoS(for: job.priority))
-  }
-
-  func asUnownedSerialExecutor() -> UnownedSerialExecutor {
-    UnownedSerialExecutor(ordinary: self)
-  }
-
-  func checkIsolated() {
-    dispatchPrecondition(condition: .onQueue(queue))
-  }
-
-  private func run(_ job: UnownedJob, at qos: DispatchQoS) {
-    queue.async(qos: qos) {
-      job.runSynchronously(on: self.asUnownedSerialExecutor())
-    }
-  }
-
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  private static func dispatchQoS(for priority: JobPriority) -> DispatchQoS {
-    guard let priority = TaskPriority(priority) else { return .unspecified }
-    if priority >= .high { return .userInitiated }
-    if priority >= .medium { return .default }
-    if priority >= .low { return .utility }
-    return .background
-  }
-}
-
-#if os(Linux) || os(Android) || os(Windows)
-  extension SQLiteConnectionExecutor: @unchecked Sendable {}
-#endif
 
 private final class SQLiteInterruptToken: Sendable {
   private let interrupt = Lock<(@Sendable () -> Void)?>(nil)
