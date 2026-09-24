@@ -76,8 +76,8 @@ Two ordinary SQLite drivers provide process-local access, and the multiprocess-c
   `OrbitDatabasePath.memory` or `.temporary` database, which is private to the connection that
   opened it and so cannot be pooled at all.
 
-Each connection runs on a serial executor of its own, a dispatch queue on Apple platforms and a
-thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
+Each connection runs on a serial executor of its own, a dispatch queue on Apple platforms and
+Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
 A driver is opened with an `OrbitDatabasePath` rather than a string, so the databases that no second
 connection can reach are named outright:

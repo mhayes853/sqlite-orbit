@@ -50,6 +50,19 @@
         pthread_attr_setdetachstate(&attributes, Int32(PTHREAD_CREATE_DETACHED)) == 0,
         "pthread_attr_setdetachstate failed"
       )
+      // Musl gives a new thread 128 KiB of stack, where Glibc gives 8 MiB and Bionic about 1 MiB. SQLite's parser and a deep decode both recurse, so a thread is
+      // given at least a mebibyte, and a platform that already gives more keeps its own default.
+      var stackSize = 0
+      precondition(
+        pthread_attr_getstacksize(&attributes, &stackSize) == 0,
+        "pthread_attr_getstacksize failed"
+      )
+      if stackSize < minimumStackSize {
+        precondition(
+          pthread_attr_setstacksize(&attributes, minimumStackSize) == 0,
+          "pthread_attr_setstacksize failed"
+        )
+      }
 
       #if canImport(Musl) || os(WASI)
         var thread: pthread_t? = nil
@@ -70,6 +83,8 @@
         fatalError("pthread_create failed with \(result)")
       }
     }
+
+    private static let minimumStackSize = 1 << 20
 
     #if !os(WASI)
       // Linux and Android refuse a name longer than 15 bytes outright rather than truncating it,

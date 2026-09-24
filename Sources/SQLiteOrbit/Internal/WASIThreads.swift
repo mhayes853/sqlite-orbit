@@ -66,6 +66,18 @@
   ) -> Int32
 
   @_extern(c)
+  func pthread_attr_getstacksize(
+    _ attributes: UnsafePointer<pthread_attr_t>,
+    _ size: UnsafeMutablePointer<Int>
+  ) -> Int32
+
+  @_extern(c)
+  func pthread_attr_setstacksize(
+    _ attributes: UnsafeMutablePointer<pthread_attr_t>,
+    _ size: Int
+  ) -> Int32
+
+  @_extern(c)
   func pthread_create(
     _ thread: UnsafeMutablePointer<pthread_t?>,
     _ attributes: UnsafePointer<pthread_attr_t>?,
