@@ -1,12 +1,15 @@
 import AppIntents
+import Observation
 import RemindersData
 import RemindersNotifications
 import SQLiteOrbit
 import SwiftUI
 import TipKit
+import UIKit
 
 @main
 struct RemindersApp: App {
+  @UIApplicationDelegateAdaptor(RemindersAppDelegate.self) private var appDelegate
   @Environment(\.scenePhase) private var scenePhase
 
   private let database: RemindersDatabase
@@ -48,6 +51,89 @@ struct RemindersApp: App {
           guard scenePhase == .active else { return }
           await notificationScheduler.observe(in: database)
         }
+    }
+  }
+}
+
+@MainActor
+final class RemindersAppDelegate: NSObject, UIApplicationDelegate {
+  func application(
+    _ application: UIApplication,
+    configurationForConnecting connectingSceneSession: UISceneSession,
+    options: UIScene.ConnectionOptions
+  ) -> UISceneConfiguration {
+    let configuration = UISceneConfiguration(
+      name: nil,
+      sessionRole: connectingSceneSession.role
+    )
+    configuration.delegateClass = RemindersSceneDelegate.self
+    return configuration
+  }
+}
+
+@MainActor
+final class RemindersSceneDelegate: NSObject, UIWindowSceneDelegate {
+  func scene(
+    _ scene: UIScene,
+    willConnectTo session: UISceneSession,
+    options connectionOptions: UIScene.ConnectionOptions
+  ) {
+    if let shortcutItem = connectionOptions.shortcutItem {
+      RemindersHomeQuickActions.shared.request(shortcutItem)
+    }
+  }
+
+  func windowScene(
+    _ windowScene: UIWindowScene,
+    performActionFor shortcutItem: UIApplicationShortcutItem,
+    completionHandler: @escaping (Bool) -> Void
+  ) {
+    completionHandler(RemindersHomeQuickActions.shared.request(shortcutItem))
+  }
+}
+
+@MainActor
+@Observable
+final class RemindersHomeQuickActions {
+  static let shared = RemindersHomeQuickActions()
+
+  private static let newReminderType = "co.sqlite-orbit.Reminders.newReminder"
+  private static let newInListType = "co.sqlite-orbit.Reminders.newInList"
+  private static let listIDKey = "listID"
+
+  enum Action: Equatable {
+    case newReminder
+    case newInList(RemindersList.ID)
+  }
+
+  var pendingAction: Action?
+
+  @discardableResult
+  func request(_ item: UIApplicationShortcutItem) -> Bool {
+    switch item.type {
+    case Self.newReminderType:
+      pendingAction = .newReminder
+    case Self.newInListType:
+      guard
+        let idString = item.userInfo?[Self.listIDKey] as? String,
+        let id = RemindersList.ID(uuidString: idString)
+      else { return false }
+      pendingAction = .newInList(id)
+    default:
+      return false
+    }
+    return true
+  }
+
+  func update(for lists: [RemindersList]) {
+    UIApplication.shared.shortcutItems = lists.prefix(3).map { list in
+      UIApplicationShortcutItem(
+        type: Self.newInListType,
+        localizedTitle: "New in \(list.title)",
+        localizedSubtitle: nil,
+        icon: UIApplicationShortcutIcon(systemImageName: "plus"),
+        userInfo: [Self.listIDKey: list.id.uuidString as NSString]
+      )
     }
   }
 }

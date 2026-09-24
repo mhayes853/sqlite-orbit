@@ -2,6 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>co.sqlite-orbit.Reminders.newReminder</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>New Reminder</string>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>plus</string>
+		</dict>
+	</array>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -303,6 +303,9 @@ struct RemindersListsView: View {
     .navigationTitle("")
     .toolbarTitleDisplayMode(.inline)
     .task { await model.load() }
+    .onChange(of: model.remindersLists.map(\.remindersList), initial: true) { _, lists in
+      RemindersHomeQuickActions.shared.update(for: lists)
+    }
     .remindersSearchable(
       search: $model.search,
       prompt: "Search reminders and tags"
