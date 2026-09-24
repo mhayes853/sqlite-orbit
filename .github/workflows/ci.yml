@@ -78,3 +78,53 @@ jobs:
       # what lets a caller supply their own build.
       - name: Build
         run: swift build --disable-default-traits
+
+  build-android:
+    name: Android (aarch64)
+    runs-on: ubuntu-latest
+    container: swift:6.4.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Android NDK r30
+        run: |
+          curl -fSL -o /tmp/android-ndk.zip https://dl.google.com/android/repository/android-ndk-r30-Linux.zip
+          unzip -q /tmp/android-ndk.zip -d /opt
+          echo "ANDROID_NDK_HOME=/opt/android-ndk-r30" >> "$GITHUB_ENV"
+
+      - name: Install Swift SDK for Android
+        run: |
+          swift sdk install https://download.swift.org/swift-6.4.0-release/android-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_android.artifactbundle.tar.gz \
+            --checksum 21fb555122a3d801ad943d48df7ebffdd8824de61c25c180bb792d3edaee0b43
+
+      - name: Build
+        run: swift build --disable-default-traits --swift-sdk swift-6.4.0-RELEASE_android --triple aarch64-unknown-linux-android23
+
+  build-wasi:
+    name: WASI (threads)
+    runs-on: ubuntu-latest
+    container: swift:6.3.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official Wasm SDK has no threads target yet. This package requires threads.
+      - name: Install threaded WASI SDK
+        run: |
+          swift sdk install https://github.com/swiftwasm/swift/releases/download/swift-wasm-6.3-RELEASE/swift-wasm-6.3-RELEASE-wasm32-unknown-wasip1-threads.artifactbundle.zip \
+            --checksum a09a0eed0fef420b4b8bb03e4dc0e7e2653ab6c88b44cb4f359ef06063b35c39
+          swift sdk list
+
+      - name: Build
+        run: swift build --disable-default-traits --swift-sdk swift-wasm-6.3-RELEASE-wasm32-unknown-wasip1-threads
+
+  build-windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SwiftyLab/setup-swift@v1.14.0
+        with:
+          swift-version: '6.4.0'
+
+      - name: Build
+        run: swift build --disable-default-traits
