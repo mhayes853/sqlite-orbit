@@ -189,6 +189,7 @@ final class RemindersListsModel: ErrorReporting {
 
 struct RemindersListsView: View {
   let navigation: RemindersNavigationModel
+  let quickActions: RemindersHomeQuickActions
 
   @State private var model = RemindersListsModel()
 
@@ -304,7 +305,7 @@ struct RemindersListsView: View {
     .toolbarTitleDisplayMode(.inline)
     .task { await model.load() }
     .onChange(of: model.remindersLists.map(\.remindersList), initial: true) { _, lists in
-      RemindersHomeQuickActions.shared.update(for: lists)
+      quickActions.update(for: lists)
     }
     .remindersSearchable(
       search: $model.search,

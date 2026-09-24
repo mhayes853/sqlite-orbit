@@ -1,27 +1,29 @@
 import Observation
 import RemindersData
-import SQLiteOrbit
 import SwiftUI
 import UIKit
 
 public struct RemindersRoot: View {
   @State private var navigation: RemindersNavigationModel
-  @State private var quickActions = RemindersHomeQuickActions.shared
-  @State private var quickActionReminderForm: ReminderFormModel?
+  let quickActions: RemindersHomeQuickActions
 
   public init() {
-    self.init(navigation: RemindersNavigationModel())
+    self.init(
+      navigation: RemindersNavigationModel(),
+      quickActions: RemindersHomeQuickActions()
+    )
   }
 
-  init(navigation: RemindersNavigationModel) {
+  init(navigation: RemindersNavigationModel, quickActions: RemindersHomeQuickActions) {
     _navigation = State(initialValue: navigation)
+    self.quickActions = quickActions
   }
 
   public var body: some View {
     @Bindable var navigation = navigation
 
     NavigationStack(path: $navigation.path) {
-      RemindersListsView(navigation: navigation)
+      RemindersListsView(navigation: navigation, quickActions: quickActions)
         .navigationDestination(for: RemindersDetailModel.self) { model in
           RemindersDetailView(model: model)
         }
@@ -30,9 +32,9 @@ public struct RemindersRoot: View {
     .onChange(of: quickActions.pendingAction, initial: true) { _, action in
       guard let action else { return }
       quickActions.pendingAction = nil
-      Task { await open(action) }
+      Task { await navigation.open(action) }
     }
-    .sheet(item: $quickActionReminderForm) { formModel in
+    .sheet(item: $navigation.reminderForm) { formModel in
       NavigationStack {
         ReminderFormView(model: formModel)
       }
@@ -45,33 +47,11 @@ public struct RemindersRoot: View {
     guard let route = RemindersRoute(url: url) else { return }
     Task { await navigation.open(route) }
   }
-
-  private func open(_ action: RemindersHomeQuickActions.Action) async {
-    do {
-      let list = try await OrbitDefaultDatabase.current.read { transaction in
-        switch action {
-        case .newReminder:
-          return try RemindersList.order(by: \.position).fetchOne(transaction)
-        case .newInList(let id):
-          return try RemindersList.find(id).fetchOne(transaction)
-        }
-      }
-      guard let list else {
-        navigation.errorMessage = "Create a list before adding a reminder."
-        return
-      }
-      quickActionReminderForm = ReminderFormModel(remindersList: list)
-    } catch {
-      navigation.errorMessage = error.localizedDescription
-    }
-  }
 }
 
 @MainActor
 @Observable
 final class RemindersHomeQuickActions {
-  static let shared = RemindersHomeQuickActions()
-
   private static let newReminderType = "co.sqlite-orbit.Reminders.newReminder"
   private static let newInListType = "co.sqlite-orbit.Reminders.newInList"
   private static let listIDKey = "listID"

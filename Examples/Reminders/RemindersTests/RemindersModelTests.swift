@@ -127,6 +127,54 @@ struct RemindersModelTests {
   }
 
   @Test
+  func newReminderQuickActionUsesTheFirstListByPosition() async throws {
+    let work = RemindersList(id: UUID(), position: 1, title: "Work")
+    let personal = RemindersList(id: UUID(), position: 0, title: "Personal")
+    try await insertFixture(lists: [work, personal])
+    let model = RemindersNavigationModel()
+
+    await model.open(.newReminder)
+
+    #expect(model.reminderForm?.reminder.remindersListID == personal.id)
+    #expect(model.reminderForm?.isNew == true)
+    #expect(model.errorMessage == nil)
+  }
+
+  @Test
+  func listQuickActionUsesTheSelectedList() async throws {
+    let personal = RemindersList(id: UUID(), position: 0, title: "Personal")
+    let work = RemindersList(id: UUID(), position: 1, title: "Work")
+    try await insertFixture(lists: [personal, work])
+    let model = RemindersNavigationModel()
+
+    await model.open(.newInList(work.id))
+
+    #expect(model.reminderForm?.reminder.remindersListID == work.id)
+    #expect(model.reminderForm?.isNew == true)
+    #expect(model.errorMessage == nil)
+  }
+
+  @Test
+  func newReminderQuickActionWithoutListsReportsAnError() async {
+    let model = RemindersNavigationModel()
+
+    await model.open(.newReminder)
+
+    #expect(model.reminderForm == nil)
+    #expect(model.errorMessage == "Create a list before adding a reminder.")
+  }
+
+  @Test
+  func quickActionForDeletedListReportsAnError() async {
+    let model = RemindersNavigationModel()
+
+    await model.open(.newInList(UUID()))
+
+    #expect(model.reminderForm == nil)
+    #expect(model.errorMessage == "This reminders list no longer exists.")
+  }
+
+  @Test
   func dashboardCountsInsertedReminders() async throws {
     let list = RemindersList(id: UUID(), title: "Personal")
     let now = Date(timeIntervalSince1970: 1_789_560_000)

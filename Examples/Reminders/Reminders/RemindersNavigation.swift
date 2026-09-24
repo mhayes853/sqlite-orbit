@@ -8,6 +8,7 @@ import SQLiteOrbit
 final class RemindersNavigationModel: ErrorReporting {
   var errorMessage: String?
   var path: [RemindersDetailModel] = []
+  var reminderForm: ReminderFormModel?
 
   func detailButtonTapped(_ detailType: RemindersDetailType) {
     path = [RemindersDetailModel(detailType: detailType)]
@@ -40,6 +41,30 @@ final class RemindersNavigationModel: ErrorReporting {
         model.reminderForm = ReminderFormModel(remindersList: list, reminder: reminder)
         path = [model]
       }
+    }
+  }
+
+  func open(_ action: RemindersHomeQuickActions.Action) async {
+    errorMessage = nil
+    await withErrorReporting {
+      let list = try await OrbitDefaultDatabase.current.read { transaction in
+        switch action {
+        case .newReminder:
+          return try RemindersList.order(by: \.position).fetchOne(transaction)
+        case .newInList(let id):
+          return try RemindersList.find(id).fetchOne(transaction)
+        }
+      }
+      guard let list else {
+        switch action {
+        case .newReminder:
+          errorMessage = "Create a list before adding a reminder."
+        case .newInList:
+          errorMessage = "This reminders list no longer exists."
+        }
+        return
+      }
+      reminderForm = ReminderFormModel(remindersList: list)
     }
   }
 }

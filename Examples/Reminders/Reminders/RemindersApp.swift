@@ -15,7 +15,6 @@ struct RemindersApp: App {
   private let navigation: RemindersNavigationModel
   private let notificationHandler: ReminderNotificationHandler
   private let notificationScheduler: ReminderNotificationScheduler
-  private let root: RemindersRoot
   private let widgetReloader: RemindersWidgetReloader
 
   init() {
@@ -38,19 +37,27 @@ struct RemindersApp: App {
     self.notificationHandler = notificationHandler
     self.notificationScheduler = notificationScheduler
     self.widgetReloader = widgetReloader
-    root = RemindersRoot(navigation: navigation)
     notificationHandler.register()
     RemindersAppShortcuts.updateAppShortcutParameters()
   }
 
   var body: some Scene {
     WindowGroup {
-      root
+      RemindersSceneContent(navigation: navigation)
         .task(id: scenePhase) {
           guard scenePhase == .active else { return }
           await notificationScheduler.observe(in: database)
         }
     }
+  }
+}
+
+private struct RemindersSceneContent: View {
+  @EnvironmentObject private var sceneDelegate: RemindersSceneDelegate
+  let navigation: RemindersNavigationModel
+
+  var body: some View {
+    RemindersRoot(navigation: navigation, quickActions: sceneDelegate.quickActions)
   }
 }
 
@@ -71,14 +78,16 @@ final class RemindersAppDelegate: NSObject, UIApplicationDelegate {
 }
 
 @MainActor
-final class RemindersSceneDelegate: NSObject, UIWindowSceneDelegate {
+final class RemindersSceneDelegate: NSObject, UIWindowSceneDelegate, ObservableObject {
+  let quickActions = RemindersHomeQuickActions()
+
   func scene(
     _ scene: UIScene,
     willConnectTo session: UISceneSession,
     options connectionOptions: UIScene.ConnectionOptions
   ) {
     if let shortcutItem = connectionOptions.shortcutItem {
-      RemindersHomeQuickActions.shared.request(shortcutItem)
+      quickActions.request(shortcutItem)
     }
   }
 
@@ -87,7 +96,7 @@ final class RemindersSceneDelegate: NSObject, UIWindowSceneDelegate {
     performActionFor shortcutItem: UIApplicationShortcutItem,
     completionHandler: @escaping (Bool) -> Void
   ) {
-    completionHandler(RemindersHomeQuickActions.shared.request(shortcutItem))
+    completionHandler(quickActions.request(shortcutItem))
   }
 }
 
