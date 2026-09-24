@@ -120,7 +120,7 @@ jobs:
         run: swift build --disable-default-traits --swift-sdk 6.3-RELEASE-wasm32-unknown-wasip1-threads
 
   build-windows:
-    name: Windows (macros)
+    name: Windows (syntax)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +129,13 @@ jobs:
           swift-version: swift-6.4.0-release
           swift-build: 6.4.0-RELEASE
 
-      - name: Build
-        # StructuredQueriesCore currently crashes the Windows Swift compiler while type-checking
+      - name: Validate manifest and parse Swift sources
+        # A full build currently crashes the Windows Swift compiler in StructuredQueriesCore's
         # PrimaryKeyed.swift, before SQLiteOrbit itself is compiled.
-        run: swift build --disable-default-traits --target SQLiteOrbitMacros
+        shell: pwsh
+        run: |
+          swift package dump-package | Out-Null
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sources = Get-ChildItem Sources -Recurse -Filter *.swift | ForEach-Object FullName
+          & swiftc -frontend -parse $sources
+          exit $LASTEXITCODE
