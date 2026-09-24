@@ -25,7 +25,7 @@ public struct SQLiteConfiguration: Sendable {
 
   /// The number of reader connections a pool opens, and so how many reads can run at once.
   ///
-  /// Each connection runs on a dispatch queue of its own, so this bounds threads rather than any
+  /// Each connection runs its work on a thread of its own, so this bounds threads rather than any
   /// share of the cooperative pool.
   public var readerCount: Int
 
