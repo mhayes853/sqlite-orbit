@@ -2,6 +2,10 @@
   import StructuredQueries
   import Testing
 
+  #if os(Linux)
+    import Foundation
+  #endif
+
   #if canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
@@ -99,6 +103,26 @@
       try await waitUntil { !state.hasRunningWorker }
     }
 
+    #if os(Linux)
+      @Test(
+        arguments: [
+          (OrbitDatabasePath.memory, "Orbit :memory:"),
+          (OrbitDatabasePath.temporary, "Orbit temporary"),
+          (OrbitDatabasePath("/var/db/app.db"), "Orbit app.db"),
+          // The accent would take the name a byte past the 15 Linux allows, so it is dropped whole
+          // rather than split.
+          (OrbitDatabasePath("/var/db/abcdefgh\u{E9}.sqlite"), "Orbit abcdefgh")
+        ]
+      )
+      func aWorkerIsNamedForItsDatabase(path: OrbitDatabasePath, expected: String) async throws {
+        let isolated = ExecutorBoundActor(SQLiteConnectionExecutor(path: path))
+        let name = try await isolated.run {
+          try String(contentsOfFile: "/proc/thread-self/comm", encoding: .utf8)
+        }
+        #expect(name == expected + "\n")
+      }
+    #endif
+
     @Test func accessesNeverOverlapWhileWorkersComeAndGo() async {
       let executor = SQLiteConnectionExecutor(path: .memory, idleTimeout: .microseconds(50))
       let isolated = ExecutorBoundActor(executor)
@@ -193,8 +217,8 @@
       self.executor = executor
     }
 
-    func run<Result: Sendable>(_ body: @Sendable () -> Result) -> Result {
-      body()
+    func run<Result: Sendable>(_ body: @Sendable () throws -> Result) rethrows -> Result {
+      try body()
     }
   }
 
