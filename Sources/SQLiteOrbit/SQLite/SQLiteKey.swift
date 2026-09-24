@@ -2,6 +2,10 @@
   import Darwin
 #elseif canImport(Glibc)
   import Glibc
+#elseif canImport(Android)
+  import Android
+#elseif canImport(WASILibc)
+  import WASILibc
 #endif
 
 // `memset`, whose imported signature differs by platform.

@@ -85,5 +85,17 @@
   @_extern(c)
   func pthread_equal(_ lhs: pthread_t, _ rhs: pthread_t) -> Int32
 
+  @_extern(c)
+  func pthread_key_create(
+    _ key: UnsafeMutablePointer<pthread_key_t>,
+    _ destructor: (@convention(c) (UnsafeMutableRawPointer?) -> Void)?
+  ) -> Int32
+
+  @_extern(c)
+  func pthread_getspecific(_ key: pthread_key_t) -> UnsafeMutableRawPointer?
+
+  @_extern(c)
+  func pthread_setspecific(_ key: pthread_key_t, _ value: UnsafeRawPointer?) -> Int32
+
   let PTHREAD_CREATE_DETACHED: Int32 = 1
 #endif

@@ -40,51 +40,7 @@ import PackageDescription
   ]
 #endif
 
-let package = Package(
-  name: "sqlite-orbit",
-  platforms: [
-    .macOS(.v13),
-    .iOS(.v16),
-    .tvOS(.v16),
-    .watchOS(.v9),
-    .visionOS(.v1)
-  ],
-  products: [
-    .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"]),
-    .library(name: "SQLiteOrbitTestSupport", targets: ["SQLiteOrbitTestSupport"])
-  ],
-  traits: [
-    .default(enabledTraits: ["SystemSQLite"]),
-    .trait(
-      name: "SystemSQLite",
-      description: "Links the platform SQLite and vends `SQLiteLibrary.system`."
-    ),
-    .trait(
-      name: "SQLCipher",
-      description:
-        "Links SQLCipher and vends `SQLiteLibrary.sqlCipher`, which opens encrypted databases. "
-        + "Mutually exclusive with `SystemSQLite`, which exports the same `sqlite3_*` symbols."
-    ),
-    .trait(
-      name: "Turso",
-      description:
-        "Links the local Rust Turso engine and vends `SQLiteLibrary.turso`. Mutually exclusive "
-        + "with the other SQLite traits, which export the same `sqlite3_*` symbols."
-    ),
-    .trait(
-      name: "Dependencies",
-      description:
-        "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
-    )
-  ],
-  dependencies: [
-    .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
-    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
-    .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
-    .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
-    .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
-  ] + swiftUITestPackages,
-  targets: [
+let packageTargets: [Target] = [
     .systemLibrary(
       name: "CSQLite3",
       path: "Sources/CSQLite3",
@@ -199,6 +155,52 @@ let package = Package(
         .define("Dependencies", .when(traits: ["Dependencies"]))
       ]
     )
-  ] + tursoTargets,
+  ] + tursoTargets
+
+let package = Package(
+  name: "sqlite-orbit",
+  platforms: [
+    .macOS(.v13),
+    .iOS(.v16),
+    .tvOS(.v16),
+    .watchOS(.v9),
+    .visionOS(.v1)
+  ],
+  products: [
+    .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"]),
+    .library(name: "SQLiteOrbitTestSupport", targets: ["SQLiteOrbitTestSupport"])
+  ],
+  traits: [
+    .default(enabledTraits: ["SystemSQLite"]),
+    .trait(
+      name: "SystemSQLite",
+      description: "Links the platform SQLite and vends `SQLiteLibrary.system`."
+    ),
+    .trait(
+      name: "SQLCipher",
+      description:
+        "Links SQLCipher and vends `SQLiteLibrary.sqlCipher`, which opens encrypted databases. "
+        + "Mutually exclusive with `SystemSQLite`, which exports the same `sqlite3_*` symbols."
+    ),
+    .trait(
+      name: "Turso",
+      description:
+        "Links the local Rust Turso engine and vends `SQLiteLibrary.turso`. Mutually exclusive "
+        + "with the other SQLite traits, which export the same `sqlite3_*` symbols."
+    ),
+    .trait(
+      name: "Dependencies",
+      description:
+        "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
+    )
+  ],
+  dependencies: [
+    .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
+    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
+    .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
+    .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
+    .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
+  ] + swiftUITestPackages,
+  targets: packageTargets,
   swiftLanguageModes: [.v6]
 )
