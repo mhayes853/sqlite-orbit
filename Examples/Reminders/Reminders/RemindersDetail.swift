@@ -226,9 +226,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
           showCompleted: showCompleted
         ).fetchAll(transaction)
         guard let reorderedIDs = move.applying(to: allIDs) else { return false }
-        for (position, id) in reorderedIDs.enumerated() {
-          try Reminder.find(id).update { $0.position = position }.execute(transaction)
-        }
+        try Self.updatePositions(reorderedIDs, in: transaction)
         return true
       }
       guard didMove else { return }
@@ -296,6 +294,22 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       }
       .order(by: \.id)
       .select(\.id)
+  }
+
+  private nonisolated static func updatePositions(
+    _ ids: [Reminder.ID],
+    in transaction: borrowing SQLiteWriteTransaction
+  ) throws {
+    guard let firstID = ids.first else { return }
+    try Reminder.update { reminder in
+      var positions = Case<Reminder.ID, Int>(reminder.id)
+        .when(#bind(firstID), then: #bind(0))
+      for (position, id) in ids.enumerated().dropFirst() {
+        positions = positions.when(#bind(id), then: #bind(position))
+      }
+      reminder.position = positions.else(reminder.position)
+    }
+    .execute(transaction)
   }
 
   private static func remindersQuery(
