@@ -1,13 +1,18 @@
 actor SQLiteSerialConnection {
-  // Reached from `performBlocking` without hopping onto the actor: what serializes access to the
-  // handle is the connection's executor, which is also this actor's executor.
+  // Reached from `performBlocking` without hopping onto the actor. The custom executor serializes
+  // this access on threaded runtimes; on a single-threaded runtime no other job can run during it.
   private nonisolated(unsafe) let handle: SQLiteHandle
-  private let executor: SQLiteConnectionExecutor
   private let interrupt: @Sendable () -> Void
 
-  nonisolated var unownedExecutor: UnownedSerialExecutor {
-    executor.asUnownedSerialExecutor()
-  }
+  #if _runtime(_multithreaded)
+    private let executor: SQLiteConnectionExecutor
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+      executor.asUnownedSerialExecutor()
+    }
+  #else
+    private let isAccessing = Lock(false)
+  #endif
 
   init(
     path: OrbitDatabasePath,
@@ -28,7 +33,11 @@ actor SQLiteSerialConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.connections.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
-    self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
+    #if _runtime(_multithreaded)
+      self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
+    #else
+      _ = idleTimeout
+    #endif
     self.handle = handle
   }
 
@@ -95,11 +104,30 @@ actor SQLiteSerialConnection {
   private nonisolated func performBlocking<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
   ) throws -> Result {
-    // `sync` runs the work as this actor's executor, so no isolated use of the handle can be
-    // running while it does. Hopping onto the actor to say so is what a closure the caller only
-    // lent us cannot do.
-    return try executor.sync { try work(handle) }
+    #if _runtime(_multithreaded)
+      // `sync` runs the work as this actor's executor. Hopping onto the actor is impossible for
+      // a closure the caller only lent us.
+      return try executor.sync { try work(handle) }
+    #else
+      return try withConnectionAccess { try work(handle) }
+    #endif
   }
+
+  #if !_runtime(_multithreaded)
+    private nonisolated func withConnectionAccess<Result>(
+      _ work: () throws -> Result
+    ) rethrows -> Result {
+      isAccessing.withLock { isAccessing in
+        precondition(
+          !isAccessing,
+          "A blocking database access cannot be nested inside another access on the same connection."
+        )
+        isAccessing = true
+      }
+      defer { isAccessing.withLock { $0 = false } }
+      return try work()
+    }
+  #endif
 
   private func perform<Result: Sendable>(
     _ work: sending (borrowing SQLiteHandle) throws -> Result
@@ -111,7 +139,11 @@ actor SQLiteSerialConnection {
         defer { token.disarm() }
         // A task may have been cancelled while waiting to enter the actor.
         try Task.checkCancellation()
-        return try work(handle)
+        #if _runtime(_multithreaded)
+          return try work(handle)
+        #else
+          return try withConnectionAccess { try work(handle) }
+        #endif
       } onCancel: {
         token.fire()
       }

@@ -3,9 +3,7 @@ import Foundation
 #if canImport(Dispatch)
   import Dispatch
   private typealias PoolSemaphore = DispatchSemaphore
-  private typealias PoolThreadIdentity = ObjectIdentifier
 #elseif _runtime(_multithreaded)
-  private typealias PoolThreadIdentity = ThreadID
   // The threaded WASI SDK has pthread conditions but no libdispatch.
   private final class PoolSemaphore: Sendable {
     private let signaled = ConditionLock(false)
@@ -23,22 +21,14 @@ import Foundation
     }
   }
 #else
-  private typealias PoolThreadIdentity = Int
-
-  private final class PoolSemaphore: @unchecked Sendable {
-    private var signaled = false
-
+  private final class PoolSemaphore: Sendable {
     init(value: Int) {
       precondition(value == 0)
     }
 
-    func signal() {
-      signaled = true
-    }
+    func signal() {}
 
-    func wait() {
-      precondition(signaled, "A blocking pool access cannot wait on single-threaded WASI.")
-    }
+    func wait() {}
   }
 #endif
 
@@ -104,7 +94,7 @@ final class SQLitePoolScheduler: Sendable {
     let id: Int
     let kind: Kind
     let connection: SQLiteSerialConnection
-    let blockingHolder: PoolThreadIdentity?
+    let blockingHolder: ThreadID?
   }
 
   private struct State {
@@ -114,7 +104,7 @@ final class SQLitePoolScheduler: Sendable {
     var isBarrierWriteActive = false
     var waiting: [Waiter] = []
     var settled: [Int: Result<Lease, any Error>] = [:]
-    var blockingHolders: [PoolThreadIdentity] = []
+    var blockingHolders: [ThreadID] = []
     var activeWriterIDs: Set<Int> = []
     var writerBarriers: [Int: [SQLitePoolWriterBarrier]] = [:]
     var nextRequestID = 0
@@ -128,7 +118,7 @@ final class SQLitePoolScheduler: Sendable {
   private struct Waiter {
     let id: Int
     let kind: Kind
-    let blockingHolder: PoolThreadIdentity?
+    let blockingHolder: ThreadID?
     var wake: Wake
 
     enum Wake {
@@ -275,7 +265,7 @@ final class SQLitePoolScheduler: Sendable {
 
   private func acquireBlocking(_ kind: Kind) -> Lease {
     let semaphore = PoolSemaphore(value: 0)
-    let request = join(kind, blockingHolder: Self.currentThread, semaphore: semaphore)
+    let request = join(kind, blockingHolder: .current, semaphore: semaphore)
     for wakeup in request.wakeups { wakeup.deliver() }
     semaphore.wait()
     return state.withLock { state in
@@ -288,7 +278,7 @@ final class SQLitePoolScheduler: Sendable {
 
   private func join(
     _ kind: Kind,
-    blockingHolder: PoolThreadIdentity?,
+    blockingHolder: ThreadID?,
     semaphore: PoolSemaphore? = nil
   ) -> (id: Int, wakeups: [Wakeup]) {
     state.withLock { state in
@@ -311,16 +301,6 @@ final class SQLitePoolScheduler: Sendable {
       )
       return (id, Self.grant(&state))
     }
-  }
-
-  private static var currentThread: PoolThreadIdentity {
-    #if canImport(Dispatch)
-      ObjectIdentifier(Thread.current)
-    #elseif _runtime(_multithreaded)
-      ThreadID.current
-    #else
-      0
-    #endif
   }
 
   // MARK: - Releasing

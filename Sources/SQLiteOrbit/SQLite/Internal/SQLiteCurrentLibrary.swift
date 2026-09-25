@@ -16,7 +16,7 @@
 // The binding is taken once per transaction rather than per step, so it costs nothing on the paths
 // that matter.
 enum SQLiteCurrentLibrary {
-  #if os(WASI) && !_runtime(_multithreaded)
+  #if !_runtime(_multithreaded)
     // With one runtime thread, the callback binding can live in process storage.
     nonisolated(unsafe) private static var binding: UnsafeMutableRawPointer?
 
