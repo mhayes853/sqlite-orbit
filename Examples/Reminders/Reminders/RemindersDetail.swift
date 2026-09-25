@@ -78,35 +78,6 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
   let tags: String
 }
 
-private nonisolated struct ReminderMove: Sendable {
-  let movingIDs: [Reminder.ID]
-  let nextID: Reminder.ID?
-  let previousID: Reminder.ID?
-
-  init?(visibleIDs: [Reminder.ID], source: IndexSet, destination: Int) {
-    guard let firstSource = source.first else { return nil }
-    var reordered = visibleIDs
-    reordered.move(fromOffsets: source, toOffset: destination)
-    guard reordered != visibleIDs else { return nil }
-
-    movingIDs = source.map { visibleIDs[$0] }
-    guard let insertion = reordered.firstIndex(of: visibleIDs[firstSource]) else { return nil }
-    let nextIndex = insertion + movingIDs.count
-    nextID = nextIndex < reordered.count ? reordered[nextIndex] : nil
-    previousID = insertion > 0 ? reordered[insertion - 1] : nil
-  }
-
-  func applying(to allIDs: [Reminder.ID]) -> [Reminder.ID]? {
-    guard movingIDs.allSatisfy(allIDs.contains) else { return nil }
-    var result = allIDs.filter { !movingIDs.contains($0) }
-    let insertion = nextID.flatMap(result.firstIndex(of:))
-      ?? previousID.flatMap { result.firstIndex(of: $0).map { $0 + 1 } }
-      ?? result.count
-    result.insert(contentsOf: movingIDs, at: insertion)
-    return result
-  }
-}
-
 @MainActor
 @Observable
 final class RemindersDetailModel: ErrorReporting, HashableObject {
@@ -239,17 +210,11 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
 
   func newReminderButtonTapped() {
     guard canAddReminder else { return }
-    guard let list = detailType.remindersList ?? firstRemindersList else {
+    guard let list = detailType.remindersList ?? remindersLists.first else {
       errorMessage = "Create a list before adding a reminder."
       return
     }
     reminderForm = ReminderFormModel(remindersList: list)
-  }
-
-  private var firstRemindersList: RemindersList? {
-    (try? OrbitDefaultDatabase.current.readBlocking {
-      try RemindersList.order(by: \.position).fetchOne($0)
-    }) ?? nil
   }
 
   private func persistSettingsAndReload() async {
@@ -474,5 +439,34 @@ private struct RemindersDetailHeader: View {
         .padding(.top, 12)
         .listRowSeparator(.hidden)
     }
+  }
+}
+
+private nonisolated struct ReminderMove: Sendable {
+  let movingIDs: [Reminder.ID]
+  let nextID: Reminder.ID?
+  let previousID: Reminder.ID?
+
+  init?(visibleIDs: [Reminder.ID], source: IndexSet, destination: Int) {
+    guard let firstSource = source.first else { return nil }
+    var reordered = visibleIDs
+    reordered.move(fromOffsets: source, toOffset: destination)
+    guard reordered != visibleIDs else { return nil }
+
+    movingIDs = source.map { visibleIDs[$0] }
+    guard let insertion = reordered.firstIndex(of: visibleIDs[firstSource]) else { return nil }
+    let nextIndex = insertion + movingIDs.count
+    nextID = nextIndex < reordered.count ? reordered[nextIndex] : nil
+    previousID = insertion > 0 ? reordered[insertion - 1] : nil
+  }
+
+  func applying(to allIDs: [Reminder.ID]) -> [Reminder.ID]? {
+    guard movingIDs.allSatisfy(allIDs.contains) else { return nil }
+    var result = allIDs.filter { !movingIDs.contains($0) }
+    let insertion = nextID.flatMap(result.firstIndex(of:))
+      ?? previousID.flatMap { result.firstIndex(of: $0).map { $0 + 1 } }
+      ?? result.count
+    result.insert(contentsOf: movingIDs, at: insertion)
+    return result
   }
 }

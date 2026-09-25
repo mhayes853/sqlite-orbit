@@ -60,6 +60,7 @@ struct RemindersModelTests {
     ]
     for detailType in detailTypes {
       let model = RemindersDetailModel(detailType: detailType)
+      await model.load()
 
       #expect(model.canAddReminder)
       model.newReminderButtonTapped()
