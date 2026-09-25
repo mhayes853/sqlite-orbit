@@ -422,6 +422,37 @@ struct RemindersModelTests {
     #expect(stored.map(\.position) == [0, 1, 2])
   }
 
+  @Test
+  func movingTheOnlyVisibleReminderIsANoop() async throws {
+    let database = OrbitDefaultDatabase.current
+    let list = RemindersList(id: UUID(), title: "Work")
+    let visible = Reminder(
+      id: UUID(),
+      isFlagged: true,
+      position: 0,
+      remindersListID: list.id,
+      title: "Visible"
+    )
+    let hidden = Reminder(
+      id: UUID(),
+      position: 1,
+      remindersListID: list.id,
+      title: "Hidden"
+    )
+    try await insertFixture(lists: [list], reminders: [visible, hidden])
+    let model = RemindersDetailModel(detailType: .flagged)
+    await model.load()
+
+    await model.moveReminders(from: IndexSet(integer: 0), to: 1)
+
+    let stored = try await database.read {
+      try Reminder.order(by: \.position).fetchAll($0)
+    }
+    #expect(stored.map(\.id) == [visible.id, hidden.id])
+    #expect(stored.map(\.position) == [0, 1])
+    #expect(model.ordering == .dueDate)
+  }
+
   @Test(.timeLimit(.minutes(1)))
   func widgetReloaderRefreshesAfterLocalAndExternalCommits() async throws {
     let directory = FileManager.default.temporaryDirectory.appending(

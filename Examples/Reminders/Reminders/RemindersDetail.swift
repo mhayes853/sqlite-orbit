@@ -78,6 +78,35 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
   let tags: String
 }
 
+private nonisolated struct ReminderMove: Sendable {
+  let movingIDs: [Reminder.ID]
+  let nextID: Reminder.ID?
+  let previousID: Reminder.ID?
+
+  init?(visibleIDs: [Reminder.ID], source: IndexSet, destination: Int) {
+    guard let firstSource = source.first else { return nil }
+    var reordered = visibleIDs
+    reordered.move(fromOffsets: source, toOffset: destination)
+    guard reordered != visibleIDs else { return nil }
+
+    movingIDs = source.map { visibleIDs[$0] }
+    guard let insertion = reordered.firstIndex(of: visibleIDs[firstSource]) else { return nil }
+    let nextIndex = insertion + movingIDs.count
+    nextID = nextIndex < reordered.count ? reordered[nextIndex] : nil
+    previousID = insertion > 0 ? reordered[insertion - 1] : nil
+  }
+
+  func applying(to allIDs: [Reminder.ID]) -> [Reminder.ID]? {
+    guard movingIDs.allSatisfy(allIDs.contains) else { return nil }
+    var result = allIDs.filter { !movingIDs.contains($0) }
+    let insertion = nextID.flatMap(result.firstIndex(of:))
+      ?? previousID.flatMap { result.firstIndex(of: $0).map { $0 + 1 } }
+      ?? result.count
+    result.insert(contentsOf: movingIDs, at: insertion)
+    return result
+  }
+}
+
 @MainActor
 @Observable
 final class RemindersDetailModel: ErrorReporting, HashableObject {
@@ -181,48 +210,28 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   }
 
   func moveReminders(from source: IndexSet, to destination: Int) async {
-    let visibleIDs = reminderRows.map(\.id)
-    let movingIDs = source.map { visibleIDs[$0] }
-    guard !movingIDs.isEmpty else { return }
-    let remainingVisibleIDs = visibleIDs.enumerated()
-      .filter { !source.contains($0.offset) }
-      .map(\.element)
-    let insertion = min(
-      max(destination - source.filter { $0 < destination }.count, 0),
-      remainingVisibleIDs.count
-    )
-    let nextID = insertion < remainingVisibleIDs.count
-      ? remainingVisibleIDs[insertion] : nil
-    let previousID = insertion > 0 ? remainingVisibleIDs[insertion - 1] : nil
+    guard
+      let move = ReminderMove(
+        visibleIDs: reminderRows.map(\.id),
+        source: source,
+        destination: destination
+      )
+    else { return }
     let currentOrdering = ordering
     let showCompleted = showCompleted
     await withErrorReporting {
-      try await OrbitDefaultDatabase.current.write { transaction in
-        var allIDs = try Reminder
-          .order {
-            if showCompleted { $0.isCompleted }
-          }
-          .order {
-            switch currentOrdering {
-            case .dueDate: $0.dueDate.asc(nulls: .last)
-            case .manual: $0.position
-            case .priority: ($0.priority.desc(), $0.isFlagged.desc())
-            case .title: $0.title
-            }
-          }
-          .order(by: \.id)
-          .select(\.id)
-          .fetchAll(transaction)
-        guard movingIDs.allSatisfy(allIDs.contains) else { return }
-        allIDs.removeAll { movingIDs.contains($0) }
-        let insertionIndex = nextID.flatMap(allIDs.firstIndex(of:))
-          ?? previousID.flatMap { allIDs.firstIndex(of: $0).map { $0 + 1 } }
-          ?? allIDs.count
-        allIDs.insert(contentsOf: movingIDs, at: insertionIndex)
-        for (position, id) in allIDs.enumerated() {
+      let didMove = try await OrbitDefaultDatabase.current.write { transaction in
+        let allIDs = try Self.allReminderIDsQuery(
+          ordering: currentOrdering,
+          showCompleted: showCompleted
+        ).fetchAll(transaction)
+        guard let reorderedIDs = move.applying(to: allIDs) else { return false }
+        for (position, id) in reorderedIDs.enumerated() {
           try Reminder.find(id).update { $0.position = position }.execute(transaction)
         }
+        return true
       }
+      guard didMove else { return }
       ordering = .manual
       await persistSettingsAndReload()
     }
@@ -267,6 +276,26 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       )
       _ = try await (persistSettings, reloadReminders)
     }
+  }
+
+  private nonisolated static func allReminderIDsQuery(
+    ordering: ReminderOrdering,
+    showCompleted: Bool
+  ) -> some Statement<Reminder.ID> {
+    Reminder
+      .order {
+        if showCompleted { $0.isCompleted }
+      }
+      .order {
+        switch ordering {
+        case .dueDate: $0.dueDate.asc(nulls: .last)
+        case .manual: $0.position
+        case .priority: ($0.priority.desc(), $0.isFlagged.desc())
+        case .title: $0.title
+        }
+      }
+      .order(by: \.id)
+      .select(\.id)
   }
 
   private static func remindersQuery(
