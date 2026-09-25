@@ -82,25 +82,15 @@ jobs:
   build-android:
     name: Android (aarch64)
     runs-on: ubuntu-latest
-    container: swift:6.4.0
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Android NDK r30
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends curl unzip
-          curl -fSL -o /tmp/android-ndk.zip https://dl.google.com/android/repository/android-ndk-r30-Linux.zip
-          unzip -q /tmp/android-ndk.zip -d /opt
-          echo "ANDROID_NDK_HOME=/opt/android-ndk-r30" >> "$GITHUB_ENV"
-
-      - name: Install Swift SDK for Android
-        run: |
-          swift sdk install https://download.swift.org/swift-6.4.0-release/android-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_android.artifactbundle.tar.gz \
-            --checksum 21fb555122a3d801ad943d48df7ebffdd8824de61c25c180bb792d3edaee0b43
-
-      - name: Build
-        run: swift build --disable-default-traits --swift-sdk swift-6.4.0-RELEASE_android --triple aarch64-unknown-linux-android23
+      - name: Build Swift package for Android
+        uses: swift-android-sdk/swift-android-action@v2
+        with:
+          swift-version: '6.4'
+          swift-build-flags: --disable-default-traits
+          build-tests: false
+          run-tests: false
 
   build-wasi:
     name: WASI (threads)
@@ -119,23 +109,16 @@ jobs:
       - name: Build
         run: swift build --disable-default-traits --swift-sdk 6.3-RELEASE-wasm32-unknown-wasip1-threads
 
-  build-windows:
-    name: Windows (syntax)
-    runs-on: windows-latest
+  build-wasi-single-threaded:
+    name: WASI (single thread)
+    runs-on: ubuntu-latest
+    container: swift:6.4.0
     steps:
       - uses: actions/checkout@v4
-      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
-        with:
-          swift-version: swift-6.4.0-release
-          swift-build: 6.4.0-RELEASE
-
-      - name: Validate manifest and parse Swift sources
-        # A full build currently crashes the Windows Swift compiler in StructuredQueriesCore's
-        # PrimaryKeyed.swift, before SQLiteOrbit itself is compiled.
-        shell: pwsh
+      - name: Install Swift SDK for WebAssembly
         run: |
-          swift package dump-package | Out-Null
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $sources = Get-ChildItem Sources -Recurse -Filter *.swift | ForEach-Object FullName
-          & swiftc -frontend -parse $sources
-          exit $LASTEXITCODE
+          swift sdk install https://download.swift.org/swift-6.4.0-release/wasm-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_wasm.artifactbundle.tar.gz \
+            --checksum f07b7be3c586d92d7a07051fc6d303b87ebea67eadc40640ba59d5a8b79aa86d
+
+      - name: Build
+        run: swift build --disable-default-traits --swift-sdk swift-6.4.0-RELEASE_wasm

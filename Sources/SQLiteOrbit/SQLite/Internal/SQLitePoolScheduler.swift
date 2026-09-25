@@ -4,7 +4,7 @@ import Foundation
   import Dispatch
   private typealias PoolSemaphore = DispatchSemaphore
   private typealias PoolThreadIdentity = ObjectIdentifier
-#else
+#elseif _runtime(_multithreaded)
   private typealias PoolThreadIdentity = ThreadID
   // The threaded WASI SDK has pthread conditions but no libdispatch.
   private final class PoolSemaphore: Sendable {
@@ -20,6 +20,24 @@ import Foundation
 
     func wait() {
       signaled.withLock(until: { $0 }) { _, _ in }
+    }
+  }
+#else
+  private typealias PoolThreadIdentity = Int
+
+  private final class PoolSemaphore: @unchecked Sendable {
+    private var signaled = false
+
+    init(value: Int) {
+      precondition(value == 0)
+    }
+
+    func signal() {
+      signaled = true
+    }
+
+    func wait() {
+      precondition(signaled, "A blocking pool access cannot wait on single-threaded WASI.")
     }
   }
 #endif
@@ -298,8 +316,10 @@ final class SQLitePoolScheduler: Sendable {
   private static var currentThread: PoolThreadIdentity {
     #if canImport(Dispatch)
       ObjectIdentifier(Thread.current)
-    #else
+    #elseif _runtime(_multithreaded)
       ThreadID.current
+    #else
+      0
     #endif
   }
 
