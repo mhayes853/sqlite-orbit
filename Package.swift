@@ -31,6 +31,150 @@ import PackageDescription
   ]
 #endif
 
+// The published Turso artifact has Apple and Linux slices only. SwiftPM resolves binary targets
+// even when their trait is disabled, so omit it from manifests evaluated on Windows.
+#if os(Windows)
+  let tursoTargets: [Target] = []
+  let tursoDependencies: [Target.Dependency] = []
+#else
+  let tursoTargets: [Target] = [
+    .binaryTarget(
+      name: "TursoSQLite3",
+      url:
+        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r5.artifactbundleindex",
+      checksum: "0f4843d061b9bce33e265a8016cb2576ca1207a4748282ed2465d24b880d70ee"
+    )
+  ]
+  let tursoDependencies: [Target.Dependency] = [
+    .target(name: "TursoSQLite3", condition: .when(traits: ["Turso"]))
+  ]
+#endif
+
+let packageTarget0: Target = .systemLibrary(
+  name: "CSQLite3",
+  path: "Sources/CSQLite3",
+  pkgConfig: sqlitePkgConfig,
+  providers: sqliteProviders
+)
+
+let packageTarget1: Target = .target(
+  name: "SQLiteOrbit",
+  dependencies: [
+    "SQLiteOrbitMacros",
+    .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .target(
+      name: "CSQLite3",
+      condition: .when(traits: ["SystemSQLite"])
+    ),
+    .product(
+      name: "SQLCipher",
+      package: "swift-sqlcipher",
+      condition: .when(traits: ["SQLCipher"])
+    ),
+    .product(
+      name: "Dependencies",
+      package: "swift-dependencies",
+      condition: .when(traits: ["Dependencies"])
+    ),
+  ] + tursoDependencies,
+  cSettings: [
+    // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
+    // dependency's own C settings do not reach the clang importer of a target importing it.
+    // Without this the codec entry points are simply invisible.
+    .define("SQLITE_HAS_CODEC", .when(traits: ["SQLCipher"]))
+  ],
+  swiftSettings: [
+    .enableExperimentalFeature("Lifetimes"),
+    .enableExperimentalFeature("SuppressedAssociatedTypes"),
+    // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
+    // connection executor needs are declared by hand there.
+    .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
+    // Every trait that links a SQLite of its own defines this, so that code needing only
+    // "some build is available" does not have to name each one.
+    .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
+    .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
+    .define("BuiltInSQLite", .when(traits: ["Turso"])),
+    .define("Dependencies", .when(traits: ["Dependencies"]))
+  ],
+  linkerSettings: [
+    // Rust's standard library uses the platform math library. This is already implicit on
+    // Apple platforms, while Linux consumers of the Turso static artifact must name it.
+    .linkedLibrary("m", .when(platforms: [.linux]))
+  ]
+)
+
+let packageTarget2: Target = .target(
+  name: "SQLiteOrbitTestSupport",
+  dependencies: ["SQLiteOrbit"]
+)
+
+let packageTarget3: Target = .macro(
+  name: "SQLiteOrbitMacros",
+  dependencies: [
+    .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
+    .product(name: "SwiftDiagnostics", package: "swift-syntax"),
+    .product(name: "SwiftSyntax", package: "swift-syntax"),
+    .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
+    .product(name: "SwiftSyntaxMacros", package: "swift-syntax")
+  ]
+)
+
+let packageTarget4: Target = .testTarget(
+  name: "SQLiteOrbitMacrosTests",
+  dependencies: [
+    "SQLiteOrbitMacros",
+    .product(name: "MacroTesting", package: "swift-macro-testing")
+  ]
+)
+
+let packageTarget5: Target = .testTarget(
+  name: "SQLiteOrbitTests",
+  dependencies: [
+    "SQLiteOrbit",
+    "SQLiteOrbitTestSupport",
+    .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .product(
+      name: "Dependencies",
+      package: "swift-dependencies",
+      condition: .when(traits: ["Dependencies"])
+    ),
+    .target(
+      name: "CSQLite3",
+      condition: .when(traits: ["SystemSQLite"])
+    ),
+    .product(
+      name: "SQLCipher",
+      package: "swift-sqlcipher",
+      condition: .when(traits: ["SQLCipher"])
+    ),
+  ] + swiftUITestDependencies + tursoDependencies,
+  cSettings: [
+    // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
+    // dependency's own C settings do not reach the clang importer of a target importing it.
+    // Without this the codec entry points are simply invisible.
+    .define("SQLITE_HAS_CODEC", .when(traits: ["SQLCipher"]))
+  ],
+  swiftSettings: [
+    .enableExperimentalFeature("Lifetimes"),
+    .enableExperimentalFeature("SuppressedAssociatedTypes"),
+    // Every trait that links a SQLite of its own defines this, so that code needing only
+    // "some build is available" does not have to name each one.
+    .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
+    .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
+    .define("BuiltInSQLite", .when(traits: ["Turso"])),
+    .define("Dependencies", .when(traits: ["Dependencies"]))
+  ]
+)
+
+let packageTargets: [Target] = [
+  packageTarget0,
+  packageTarget1,
+  packageTarget2,
+  packageTarget3,
+  packageTarget4,
+  packageTarget5,
+] + tursoTargets
+
 let package = Package(
   name: "sqlite-orbit",
   platforms: [
@@ -75,131 +219,6 @@ let package = Package(
     .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
     .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
   ] + swiftUITestPackages,
-  targets: [
-    .systemLibrary(
-      name: "CSQLite3",
-      path: "Sources/CSQLite3",
-      pkgConfig: sqlitePkgConfig,
-      providers: sqliteProviders
-    ),
-    .binaryTarget(
-      name: "TursoSQLite3",
-      url:
-        "https://github.com/mhayes853/sqlite-orbit/releases/download/turso-0.8.0-pre.11/TursoSQLite3-0.8.0-pre.11-r5.artifactbundleindex",
-      checksum: "0f4843d061b9bce33e265a8016cb2576ca1207a4748282ed2465d24b880d70ee"
-    ),
-    .target(
-      name: "SQLiteOrbit",
-      dependencies: [
-        "SQLiteOrbitMacros",
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
-        .target(
-          name: "CSQLite3",
-          condition: .when(traits: ["SystemSQLite"])
-        ),
-        .product(
-          name: "SQLCipher",
-          package: "swift-sqlcipher",
-          condition: .when(traits: ["SQLCipher"])
-        ),
-        .product(
-          name: "Dependencies",
-          package: "swift-dependencies",
-          condition: .when(traits: ["Dependencies"])
-        ),
-        .target(
-          name: "TursoSQLite3",
-          condition: .when(traits: ["Turso"])
-        )
-      ],
-      cSettings: [
-        // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
-        // dependency's own C settings do not reach the clang importer of a target importing it.
-        // Without this the codec entry points are simply invisible.
-        .define("SQLITE_HAS_CODEC", .when(traits: ["SQLCipher"]))
-      ],
-      swiftSettings: [
-        .enableExperimentalFeature("Lifetimes"),
-        .enableExperimentalFeature("SuppressedAssociatedTypes"),
-        // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
-        // connection executor needs are declared by hand there.
-        .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
-        // Every trait that links a SQLite of its own defines this, so that code needing only
-        // "some build is available" does not have to name each one.
-        .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
-        .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
-        .define("BuiltInSQLite", .when(traits: ["Turso"])),
-        .define("Dependencies", .when(traits: ["Dependencies"]))
-      ],
-      linkerSettings: [
-        // Rust's standard library uses the platform math library. This is already implicit on
-        // Apple platforms, while Linux consumers of the Turso static artifact must name it.
-        .linkedLibrary("m", .when(platforms: [.linux]))
-      ]
-    ),
-    .target(
-      name: "SQLiteOrbitTestSupport",
-      dependencies: ["SQLiteOrbit"]
-    ),
-    .macro(
-      name: "SQLiteOrbitMacros",
-      dependencies: [
-        .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
-        .product(name: "SwiftDiagnostics", package: "swift-syntax"),
-        .product(name: "SwiftSyntax", package: "swift-syntax"),
-        .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
-        .product(name: "SwiftSyntaxMacros", package: "swift-syntax")
-      ]
-    ),
-    .testTarget(
-      name: "SQLiteOrbitMacrosTests",
-      dependencies: [
-        "SQLiteOrbitMacros",
-        .product(name: "MacroTesting", package: "swift-macro-testing")
-      ]
-    ),
-    .testTarget(
-      name: "SQLiteOrbitTests",
-      dependencies: [
-        "SQLiteOrbit",
-        "SQLiteOrbitTestSupport",
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
-        .product(
-          name: "Dependencies",
-          package: "swift-dependencies",
-          condition: .when(traits: ["Dependencies"])
-        ),
-        .target(
-          name: "CSQLite3",
-          condition: .when(traits: ["SystemSQLite"])
-        ),
-        .product(
-          name: "SQLCipher",
-          package: "swift-sqlcipher",
-          condition: .when(traits: ["SQLCipher"])
-        ),
-        .target(
-          name: "TursoSQLite3",
-          condition: .when(traits: ["Turso"])
-        )
-      ] + swiftUITestDependencies,
-      cSettings: [
-        // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
-        // dependency's own C settings do not reach the clang importer of a target importing it.
-        // Without this the codec entry points are simply invisible.
-        .define("SQLITE_HAS_CODEC", .when(traits: ["SQLCipher"]))
-      ],
-      swiftSettings: [
-        .enableExperimentalFeature("Lifetimes"),
-        .enableExperimentalFeature("SuppressedAssociatedTypes"),
-        // Every trait that links a SQLite of its own defines this, so that code needing only
-        // "some build is available" does not have to name each one.
-        .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
-        .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
-        .define("BuiltInSQLite", .when(traits: ["Turso"])),
-        .define("Dependencies", .when(traits: ["Dependencies"]))
-      ]
-    )
-  ],
+  targets: packageTargets,
   swiftLanguageModes: [.v6]
 )

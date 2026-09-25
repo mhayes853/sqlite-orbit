@@ -2,6 +2,10 @@
   import Darwin
 #elseif canImport(Glibc)
   import Glibc
+#elseif canImport(Android)
+  import Android
+#elseif canImport(WASILibc)
+  import WASILibc
 #endif
 
 // A `@convention(c)` callback captures nothing, so a collation or function running inside
@@ -12,6 +16,25 @@
 // The binding is taken once per transaction rather than per step, so it costs nothing on the paths
 // that matter.
 enum SQLiteCurrentLibrary {
+  #if !_runtime(_multithreaded)
+    // With one runtime thread, the callback binding can live in process storage.
+    nonisolated(unsafe) private static var binding: UnsafeMutableRawPointer?
+
+    static var current: UnsafePointer<SQLiteLibrary> {
+      guard let binding else { fatalError("A SQLite callback ran outside a statement.") }
+      return UnsafeRawPointer(binding).assumingMemoryBound(to: SQLiteLibrary.self)
+    }
+
+    static func bind(_ library: UnsafePointer<SQLiteLibrary>) -> UnsafeMutableRawPointer? {
+      let previous = binding
+      binding = UnsafeMutableRawPointer(mutating: library)
+      return previous
+    }
+
+    static func unbind(restoring previous: UnsafeMutableRawPointer?) {
+      binding = previous
+    }
+  #else
   private static let key: pthread_key_t = {
     var key = pthread_key_t()
     let code = pthread_key_create(&key, nil)
@@ -43,4 +66,5 @@ enum SQLiteCurrentLibrary {
   static func unbind(restoring previous: UnsafeMutableRawPointer?) {
     pthread_setspecific(key, previous)
   }
+  #endif
 }

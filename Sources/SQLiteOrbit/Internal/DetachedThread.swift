@@ -11,27 +11,6 @@
     import WASILibc
   #endif
 
-  /// The identity of a thread, for telling whether two are the same one.
-  ///
-  /// `pthread_t` is an integer on Glibc, a `long` on Android and a pointer on Musl and WASI, and on
-  /// none of them does POSIX promise that `==` compares it meaningfully. `pthread_equal` does.
-  struct ThreadID: Equatable {
-    private let thread: pthread_t
-
-    /// The thread this is read on.
-    static var current: Self {
-      Self(thread: pthread_self())
-    }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-      pthread_equal(lhs.thread, rhs.thread) != 0
-    }
-  }
-
-  // A thread's identity is only ever compared, never dereferenced, so sharing one is safe even
-  // where it is spelled as a pointer.
-  extension ThreadID: @unchecked Sendable {}
-
   /// Starts threads that nothing joins, each running one closure and ending when it returns.
   enum DetachedThread {
     /// Starts a thread running `body`.
