@@ -78,3 +78,47 @@ jobs:
       # what lets a caller supply their own build.
       - name: Build
         run: swift build --disable-default-traits
+
+  build-android:
+    name: Android (aarch64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Swift package for Android
+        uses: swift-android-sdk/swift-android-action@v2
+        with:
+          swift-version: '6.4.0'
+          swift-build-flags: --disable-default-traits
+          build-tests: false
+          run-tests: false
+
+  build-wasi:
+    name: WASI (threads)
+    runs-on: ubuntu-latest
+    container: swift:6.3.0
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official Wasm SDK has no threads target yet. This package requires threads.
+      - name: Install threaded WASI SDK
+        run: |
+          swift sdk install https://github.com/swiftwasm/swift/releases/download/swift-wasm-6.3-RELEASE/swift-wasm-6.3-RELEASE-wasm32-unknown-wasip1-threads.artifactbundle.zip \
+            --checksum a09a0eed0fef420b4b8bb03e4dc0e7e2653ab6c88b44cb4f359ef06063b35c39
+          swift sdk list
+
+      - name: Build
+        run: swift build --disable-default-traits --swift-sdk 6.3-RELEASE-wasm32-unknown-wasip1-threads
+
+  build-wasi-single-threaded:
+    name: WASI (single thread)
+    runs-on: ubuntu-latest
+    container: swift:6.4.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Swift SDK for WebAssembly
+        run: |
+          swift sdk install https://download.swift.org/swift-6.4.0-release/wasm-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_wasm.artifactbundle.tar.gz \
+            --checksum f07b7be3c586d92d7a07051fc6d303b87ebea67eadc40640ba59d5a8b79aa86d
+
+      - name: Build
+        run: swift build --disable-default-traits --swift-sdk swift-6.4.0-RELEASE_wasm

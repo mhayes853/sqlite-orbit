@@ -4,11 +4,7 @@
   import Dispatch
 #endif
 
-#if !_runtime(_multithreaded)
-  #error(
-    "SQLiteOrbit requires a multithreaded runtime: a connection runs its work on a thread of its own and blocks callers while it does. On WebAssembly, build for wasm32-unknown-wasip1-threads."
-  )
-#endif
+#if _runtime(_multithreaded)
 
 private let nestedBlockingAccessMessage = """
   A blocking database access cannot be nested inside another one on the same connection: \
@@ -252,4 +248,5 @@ final class SQLiteConnectionExecutor: SerialExecutor {
       }
     }
   }
+#endif
 #endif
