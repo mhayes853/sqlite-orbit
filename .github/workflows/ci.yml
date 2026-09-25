@@ -87,7 +87,7 @@ jobs:
       - name: Build Swift package for Android
         uses: swift-android-sdk/swift-android-action@v2
         with:
-          swift-version: '6.4'
+          swift-version: '6.4.0'
           swift-build-flags: --disable-default-traits
           build-tests: false
           run-tests: false
