@@ -16,6 +16,12 @@
     import CLinuxEvents
   #endif
 
+  #if canImport(Darwin)
+    // `kevent` names both the event struct and the call that takes it. A call spelled with either
+    // name resolves to the struct's initializer, so the call is reached through a name of its own.
+    private let systemKevent = kevent
+  #endif
+
   /// A failed system call, named by what it was doing, and the `errno` it failed with.
   struct OrbitIPCSystemError: Error, CustomStringConvertible, Sendable {
     let operation: String
@@ -130,7 +136,7 @@
     static func sendDatagram(_ bytes: [UInt8], on descriptor: Int32) throws -> Bool {
       // Nothing here retries `EINTR`: the socket is nonblocking, so neither this nor `recv` below
       // ever waits in the kernel long enough for a signal to interrupt it.
-      let count = bytes.withUnsafeBytes { send(descriptor, $0.baseAddress, $0.count, sendFlags) }
+      let count = bytes.withUnsafeBytes { send(descriptor, $0.baseAddress!, $0.count, sendFlags) }
       if count == bytes.count { return true }
       guard count < 0 else { throw OrbitIPCSystemError.messageTooLong("send") }
       let code = errno
@@ -147,7 +153,7 @@
       into buffer: UnsafeMutableBufferPointer<UInt8>,
       from descriptor: Int32
     ) -> Int? {
-      let count = recv(descriptor, buffer.baseAddress, buffer.count, 0)
+      let count = recv(descriptor, buffer.baseAddress!, buffer.count, 0)
       return count >= 0 ? count : nil
     }
 
@@ -283,7 +289,7 @@
           tv_nsec: Int((timeout?.attoseconds ?? 0) / 1_000_000_000)
         )
         let count = withUnsafePointer(to: &interval) { interval in
-          Darwin.kevent(
+          systemKevent(
             self.descriptor,
             nil,
             0,
@@ -369,7 +375,7 @@
           data: 0,
           udata: nil
         )
-        return Darwin.kevent(queue, &change, 1, nil, 0, nil) == 0
+        return systemKevent(queue, &change, 1, nil, 0, nil) == 0
       }
     #else
       private static func control(
@@ -436,7 +442,7 @@
           data: 0,
           udata: nil
         )
-        guard Darwin.kevent(self.descriptor, &change, 1, nil, 0, nil) == 0 else {
+        guard systemKevent(self.descriptor, &change, 1, nil, 0, nil) == 0 else {
           let error = OrbitIPCSystemError.last("kevent")
           _ = close(directory)
           throw error
@@ -456,10 +462,13 @@
     func drainChanges() -> Bool {
       var changed = false
       #if canImport(Darwin)
-        var events = [kevent](repeating: kevent(), count: 16)
+        var events: [kevent] = Array(
+          repeating: kevent(ident: 0, filter: 0, flags: 0, fflags: 0, data: 0, udata: nil),
+          count: 16
+        )
         var timeout = timespec(tv_sec: 0, tv_nsec: 0)
         while true {
-          let count = Darwin.kevent(
+          let count = systemKevent(
             self.descriptor,
             nil,
             0,
@@ -475,7 +484,7 @@
         var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
           let count = buffer.withUnsafeMutableBytes {
-            read(self.descriptor, $0.baseAddress, $0.count)
+            read(self.descriptor, $0.baseAddress!, $0.count)
           }
           if count > 0 {
             changed = true
