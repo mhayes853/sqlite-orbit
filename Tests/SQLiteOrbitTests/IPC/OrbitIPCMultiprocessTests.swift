@@ -135,6 +135,35 @@
     }
 
     @Test
+    func aProcessIsOnlySentCommitsToTheTablesItSubscribedTo() async throws {
+      // The listener is stopped while commits to a table it does not read are sent, so had any
+      // been sent to it, its queue would have filled and the sends failed.
+      let harness = try IPCProcessHarness(database: "table-filter")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen-table-a", expected: 1)
+      try await harness.waitUntilReady(1)
+      harness.suspend(listener)
+      let transport = try harness.transport(.fail)
+
+      for _ in 0..<2_000 {
+        try await transport.send(
+          .transactionDidCommit(
+            .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "b"))
+          )
+        )
+      }
+      harness.resume(listener)
+      try await transport.send(
+        .transactionDidCommit(
+          .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "a"))
+        )
+      )
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == 1)
+    }
+
+    @Test
     func suspendedSendTimesOutWhenAReceiverDoesNotDrain() async throws {
       let harness = try IPCProcessHarness(database: "back-pressure-timeout")
       defer { harness.cleanup() }
@@ -171,7 +200,9 @@
       )
     )
     let received = Lock(0)
-    let subscription = try transport.subscribe(to: database) { message in
+    let region: OrbitDatabaseRegion =
+      mode == "listen-table-a" ? OrbitDatabaseRegion(table: "a") : .fullDatabase
+    let subscription = try transport.subscribe(to: database, region: region) { message in
       if mode == "listen-region" {
         let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
           OrbitDatabaseRegion(column: "title", in: "items")
@@ -296,7 +327,7 @@
     static let expected = prefix + "EXPECTED_COUNT"
   }
 
-  private func reachesBackPressure(
+  func reachesBackPressure(
     _ transport: UnixDatagramIPCTransport,
     message: OrbitIPCMessage
   ) async throws -> Bool {

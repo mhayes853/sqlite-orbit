@@ -71,9 +71,11 @@
       _ = subscription
     }
 
-    @Test
-    func valueObservationIsNotToldAboutPeerCommitsOutsideWhatItReads() async throws {
-      try await withPeerDatabases { peers in
+    @Test(arguments: PeerTransport.allCases)
+    func valueObservationIsNotToldAboutPeerCommitsOutsideWhatItReads(transport: PeerTransport)
+      async throws
+    {
+      try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int>()
         let subscription = try OrbitValueObservation<Int>
           .tracking { transaction in
@@ -87,7 +89,7 @@
           )
         try await recorder.waitForValue(1)
         let advertised = try #require(
-          peers.observingTransport.base.advertisedRegion(for: peers.identifier)
+          peers.observingTransport.advertisedRegion(for: peers.identifier)
         )
         #expect(advertised.overlaps(OrbitDatabaseRegion(table: "a")))
         #expect(!advertised.overlaps(OrbitDatabaseRegion(table: "b")))
@@ -97,6 +99,10 @@
 
         try await peers.writing.write { try $0.execute("INSERT INTO a (flag) VALUES (0)") }
         try await recorder.waitForValue(2)
+        // A transport that delivers asynchronously can report the commit after the sibling
+        // database in this process already has. Either way, the commit to `b` was sent first, so
+        // it would have arrived first.
+        try await waitUntil(timeout: .seconds(5)) { !peers.observingTransport.messages.isEmpty }
 
         #expect(peers.observingTransport.messages.count == 1)
         #expect(recorder.values == [1, 2])
@@ -105,9 +111,10 @@
       }
     }
 
-    @Test
-    func valueObservationSeesPeerCommitsToWhatItStartsReading() async throws {
-      try await withPeerDatabases { peers in
+    @Test(arguments: PeerTransport.allCases)
+    func valueObservationSeesPeerCommitsToWhatItStartsReading(transport: PeerTransport) async throws
+    {
+      try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int?>()
         let subscription = try flaggedCountObservation()
           .subscribe(
@@ -123,7 +130,7 @@
         try await peers.writing.write { try $0.execute("UPDATE a SET flag = 1") }
         try await recorder.waitForValue(1)
         #expect(
-          peers.observingTransport.base.advertisedRegion(for: peers.identifier)?
+          peers.observingTransport.advertisedRegion(for: peers.identifier)?
             .overlaps(OrbitDatabaseRegion(table: "b")) == true
         )
 
@@ -136,9 +143,11 @@
       }
     }
 
-    @Test
-    func valueObservationFetchesAgainForACommitThatLandsWhileItsRegionWidens() async throws {
-      try await withPeerDatabases { peers in
+    @Test(arguments: PeerTransport.allCases)
+    func valueObservationFetchesAgainForACommitThatLandsWhileItsRegionWidens(
+      transport: PeerTransport
+    ) async throws {
+      try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int?>()
         // Another process inserts into `b` after the fetch that first reads it, but before the
         // region covering `b` is advertised, so its announcement would have been skipped.
@@ -165,9 +174,11 @@
       }
     }
 
-    @Test
-    func localCommitIsFollowedByAFetchForCommitsThatLandWhileItsRegionWidens() async throws {
-      try await withPeerDatabases { peers in
+    @Test(arguments: PeerTransport.allCases)
+    func localCommitIsFollowedByAFetchForCommitsThatLandWhileItsRegionWidens(
+      transport: PeerTransport
+    ) async throws {
+      try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int?>()
         peers.observingTransport.beforeRegionUpdate { region in
           guard region.overlaps(OrbitDatabaseRegion(table: "b")) else { return false }
@@ -194,9 +205,9 @@
       }
     }
 
-    @Test
-    func failingToWidenTheRegionEndsTheObservation() async throws {
-      try await withPeerDatabases { peers in
+    @Test(arguments: PeerTransport.allCases)
+    func failingToWidenTheRegionEndsTheObservation(transport: PeerTransport) async throws {
+      try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int?>()
         peers.observingTransport.beforeRegionUpdate { region in
           guard region.overlaps(OrbitDatabaseRegion(table: "b")) else { return false }
@@ -238,15 +249,53 @@
       let unannounced: SQLiteQueue
     }
 
+    /// The transports two peer databases coordinate through.
+    enum PeerTransport: CaseIterable, Sendable {
+      case inMemory
+      #if canImport(Darwin) || os(Linux) || os(Android)
+        case unixDatagram
+      #endif
+
+      /// Makes a pair of transports that are peers of each other.
+      fileprivate func makePair(
+        directory: URL
+      ) throws -> (observing: RecordingIPCTransport, writing: any OrbitIPCTransport) {
+        switch self {
+        case .inMemory:
+          let network = InMemoryIPCTransport.Network()
+          let observing = InMemoryIPCTransport(network: network)
+          return (
+            RecordingIPCTransport(observing, advertisedRegion: observing.advertisedRegion(for:)),
+            InMemoryIPCTransport(network: network)
+          )
+        #if canImport(Darwin) || os(Linux) || os(Android)
+          case .unixDatagram:
+            let configuration = UnixDatagramIPCTransport.Configuration(
+              directory: directory.appending(path: "coordination"),
+              backPressure: .suspend(upTo: .seconds(5))
+            )
+            let observing = try UnixDatagramIPCTransport(configuration: configuration)
+            return (
+              RecordingIPCTransport(observing, advertisedRegion: observing.advertisedRegion(for:)),
+              try UnixDatagramIPCTransport(configuration: configuration)
+            )
+        #endif
+        }
+      }
+    }
+
     /// Opens one database file as two coordinating processes would, each with its own writer and
-    /// transport on one network, along with a connection whose writes are never announced.
-    private func withPeerDatabases(_ body: (Peers) async throws -> Void) async throws {
+    /// transport, the transports peers of each other, along with a connection whose writes are
+    /// never announced.
+    private func withPeerDatabases(
+      _ transport: PeerTransport,
+      _ body: (Peers) async throws -> Void
+    ) async throws {
       let directory = try makeShortTemporaryDirectory("regions")
       defer { try? FileManager.default.removeItem(at: directory) }
       let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
       let identifier = OrbitDatabaseIdentifier.unique()
-      let network = InMemoryIPCTransport.Network()
-      let observingTransport = RecordingIPCTransport(InMemoryIPCTransport(network: network))
+      let (observingTransport, writingTransport) = try transport.makePair(directory: directory)
       let observing = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
         id: identifier,
@@ -264,7 +313,7 @@
       let writing = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: path),
         id: identifier,
-        transport: InMemoryIPCTransport(network: network)
+        transport: writingTransport
       )
       try await body(
         Peers(
@@ -280,32 +329,32 @@
 
   private struct RegionUpdateFailure: Error {}
 
-  /// Forwards to an in-memory transport, recording what its handlers receive and running a hook
+  /// Forwards to another transport, recording what its handlers receive and running a hook
   /// before each region update reaches it.
   private final class RecordingIPCTransport: OrbitIPCTransport, Sendable {
-    let base: InMemoryIPCTransport
+    let base: any OrbitIPCTransport
+    private let baseAdvertisedRegion: @Sendable (OrbitDatabaseIdentifier) -> OrbitDatabaseRegion?
     private let received = Lock([OrbitIPCMessage]())
     private let hook = Lock<(@Sendable (OrbitDatabaseRegion) throws -> Bool)?>(nil)
 
     var messages: [OrbitIPCMessage] { received.withLock { $0 } }
 
-    init(_ base: InMemoryIPCTransport) {
+    init(
+      _ base: any OrbitIPCTransport,
+      advertisedRegion: @escaping @Sendable (OrbitDatabaseIdentifier) -> OrbitDatabaseRegion?
+    ) {
       self.base = base
+      self.baseAdvertisedRegion = advertisedRegion
+    }
+
+    /// The region the base transport advertises to its peers for a database.
+    func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
+      self.baseAdvertisedRegion(databaseIdentifier)
     }
 
     /// Runs `hook` before region updates until it returns `true` once.
     func beforeRegionUpdate(_ hook: @escaping @Sendable (OrbitDatabaseRegion) throws -> Bool) {
       self.hook.withLock { $0 = hook }
-    }
-
-    func subscribe(
-      to databaseIdentifier: OrbitDatabaseIdentifier,
-      onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-    ) throws -> OrbitSubscription {
-      try base.subscribe(to: databaseIdentifier) { [self] message in
-        record(message)
-        onMessage(message)
-      }
     }
 
     func subscribe(

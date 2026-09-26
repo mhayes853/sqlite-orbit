@@ -99,7 +99,10 @@
     ///
     /// - Parameters:
     ///   - entry: The message to send.
-    ///   - peers: Every peer advertising the message's database now.
+    ///   - peers: The peers to send it to.
+    ///   - advertisers: Every endpoint advertising the message's database now, by name, whether or
+    ///     not the message concerns it. The sockets kept for any others that were seen with the
+    ///     database are closed.
     ///   - suspension: How long to wait for a peer whose receive queue is full, or `nil` to count
     ///     it as failed at once.
     /// - Returns: How many peers took the message, and how many did not.
@@ -108,6 +111,7 @@
     func send(
       _ entry: OrbitIPCWireEntry,
       to peers: [OrbitIPCPeer],
+      advertisedBy advertisers: some Collection<String>,
       suspendingUpTo suspension: Duration?
     ) async throws -> Delivery {
       let coordinationKey = entry.message.databaseIdentifier.coordinationKey
@@ -117,7 +121,7 @@
       let deadline = suspension.map { ContinuousClock.now.advanced(by: $0) }
 
       let (sendID, delivery, stale) = self.state.withLock { state in
-        self.retain(peers, advertising: coordinationKey, in: &state)
+        self.retain(advertisers, advertising: coordinationKey, in: &state)
         var stale: [StalePeer] = []
         let sendID = state.nextSendID
         state.nextSendID += 1
@@ -304,11 +308,11 @@
     /// Closes the sockets kept for peers that stopped advertising `coordinationKey` and advertise
     /// nothing else this endpoint has seen them with, unless something still waits for them.
     private func retain(
-      _ peers: [OrbitIPCPeer],
+      _ advertisers: some Collection<String>,
       advertising coordinationKey: String,
       in state: inout State
     ) {
-      let advertised = Set(peers.map(\.endpointName))
+      let advertised = Set(advertisers)
       // A peer something still waits for keeps what it was seen with until the next look.
       for (name, peer) in state.peers
       where !peer.hasPending && peer.coordinationKeys.contains(coordinationKey)

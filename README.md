@@ -1210,9 +1210,14 @@ try await transport.send(
 )
 ```
 
-Retain the `OrbitSubscription` for as long as messages should be delivered. Cancelling it, or
+Retain the `OrbitRegionSubscription` for as long as messages should be delivered. Cancelling it, or
 releasing its final copy, removes the process's registration when it has no other subscriber for
 that database.
+
+Pass a `region:` to `subscribe` to hear only about commits that overlap it. Each process advertises
+the union of its subscriptions' regions for a database in the coordination directory, and a sender
+skips a process that union does not overlap, so an unrelated commit never wakes it. Widening a
+region with `updateRegion(_:)` is advertised before the call returns.
 
 Delivery is bounded, at-most-once, and nondurable. Each send broadcasts to the peer processes that
 are discoverable at that moment. A successful return means every discovered peer accepted the

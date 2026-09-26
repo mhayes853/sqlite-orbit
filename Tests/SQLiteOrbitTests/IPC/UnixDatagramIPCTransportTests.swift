@@ -162,7 +162,7 @@
     let database = OrbitDatabaseIdentifier(rawValue: "shared-lifetime")
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
-    var subscription: OrbitSubscription? = try first?.subscribe(to: database) { _ in }
+    var subscription: OrbitRegionSubscription? = try first?.subscribe(to: database) { _ in }
     let firstEndpoint = try withExtendedLifetime(subscription) {
       try #require(registry.peers(databaseIdentifier: database).first).endpointName
     }
@@ -190,7 +190,7 @@
     let database = OrbitDatabaseIdentifier(rawValue: "socket-lifetime")
 
     var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
-    var subscription: OrbitSubscription? = try transport?.subscribe(to: database) { _ in }
+    var subscription: OrbitRegionSubscription? = try transport?.subscribe(to: database) { _ in }
     let socketPath = try withExtendedLifetime(subscription) {
       try #require(registry.peers(databaseIdentifier: database).first).socketPath
     }
@@ -310,6 +310,142 @@
   }
 
   @Test
+  func regionsDecideWhichPeersASendReaches() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "regions")
+    let sender = try ipcTransport(directory)
+    let receiver = try ipcTransport(directory)
+    let recorder = IPCMessageRecorder()
+    let subscription = try receiver.subscribe(
+      to: database,
+      region: OrbitDatabaseRegion(table: "items"),
+      onMessage: recorder.append
+    )
+    let disjoint = regionCommit(database, OrbitDatabaseRegion(table: "lists"))
+    let overlapping = regionCommit(database, OrbitDatabaseRegion(column: "title", in: "items"))
+
+    #expect(try sender.peers(concernedWith: disjoint).isEmpty)
+    #expect(try sender.peers(concernedWith: overlapping).count == 1)
+    try await sender.send(disjoint)
+    try await sender.send(overlapping)
+    try await recorder.waitForCount(1)
+    try await Task.sleep(for: .milliseconds(20))
+
+    #expect(recorder.values == [overlapping])
+    _ = subscription
+  }
+
+  @Test
+  func aSendThatStartsAfterARegionWidensHonorsIt() async throws {
+    // Every update widens to one more table, so each send has to see the marker rewritten by the
+    // update that just returned. The first also narrows away the table the subscription started
+    // with. The receiver judges each commit by its handler's region when the commit arrives, so
+    // the region only grows: a commit sent under an older one must still be let through.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "widening")
+    let sender = try ipcTransport(directory)
+    let receiver = try ipcTransport(directory)
+    let recorder = IPCMessageRecorder()
+    let subscription = try receiver.subscribe(
+      to: database,
+      region: OrbitDatabaseRegion(table: "t0"),
+      onMessage: recorder.append
+    )
+    var expected: [OrbitIPCMessage] = []
+    var region = OrbitDatabaseRegion.empty
+
+    for index in 1...200 {
+      let table = OrbitDatabaseRegion(table: "t\(index)")
+      region.formUnion(table)
+      try subscription.updateRegion(region)
+      #expect(try sender.peers(concernedWith: regionCommit(database, .init(table: "t0"))).isEmpty)
+      let message = regionCommit(database, table)
+      expected.append(message)
+      try await sender.send(message)
+    }
+    try await recorder.waitForCount(expected.count)
+
+    #expect(recorder.values == expected)
+  }
+
+  @Test
+  func anEndpointAdvertisesTheUnionOfItsHandlersRegions() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "union")
+    let items = OrbitDatabaseRegion(table: "items")
+    let lists = OrbitDatabaseRegion(table: "lists")
+    let sender = try ipcTransport(directory)
+    let receiver = try ipcTransport(directory)
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let itemsRecorder = IPCMessageRecorder()
+    let listsRecorder = IPCMessageRecorder()
+    let itemsSubscription = try receiver.subscribe(
+      to: database,
+      region: items,
+      onMessage: itemsRecorder.append
+    )
+    let listsSubscription = try receiver.subscribe(
+      to: database,
+      region: lists,
+      onMessage: listsRecorder.append
+    )
+    func advertised() throws -> [OrbitDatabaseRegion] {
+      Array(try registry.advertisements(coordinationKey: database.coordinationKey).values)
+    }
+
+    #expect(receiver.advertisedRegion(for: database) == items.union(lists))
+    #expect(try advertised() == [items.union(lists)])
+
+    // Each handler hears only about its own region, whatever the union lets through.
+    try await sender.send(regionCommit(database, lists))
+    try await listsRecorder.waitForCount(1)
+    #expect(itemsRecorder.values.isEmpty)
+
+    listsSubscription.cancel()
+    #expect(receiver.advertisedRegion(for: database) == items)
+    #expect(try advertised() == [items])
+    #expect(try sender.peers(concernedWith: regionCommit(database, lists)).isEmpty)
+
+    try itemsSubscription.updateRegion(.empty)
+    #expect(try advertised() == [.empty])
+    #expect(try sender.peers(concernedWith: regionCommit(database, items)).isEmpty)
+
+    itemsSubscription.cancel()
+    #expect(receiver.advertisedRegion(for: database) == nil)
+    #expect(try advertised().isEmpty)
+  }
+
+  @Test
+  func aPeerIsNeverSentACommitItsRegionMisses() async throws {
+    // The receiver stops draining its queue, so a sender that sent it commits outside its region
+    // would find the queue full long before running out of them.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "unsent")
+    let receiver = try StalledReceiver(
+      directory: directory,
+      database: database,
+      region: OrbitDatabaseRegion(table: "items")
+    )
+    let sender = try ipcTransport(directory)
+    try await sender.send(regionCommit(database, OrbitDatabaseRegion(table: "items")))
+
+    for _ in 0..<2_000 {
+      try await sender.send(regionCommit(database, OrbitDatabaseRegion(table: "lists")))
+    }
+    #expect(
+      try await reachesBackPressure(
+        sender,
+        message: regionCommit(database, OrbitDatabaseRegion(table: "items"))
+      )
+    )
+    receiver.resume()
+  }
+
+  @Test
   func unixDatagramTransportRejectsInvalidConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
@@ -333,14 +469,18 @@
     let recorder = IPCMessageRecorder()
     private let gate = DispatchSemaphore(value: 0)
     private let transport: UnixDatagramIPCTransport
-    private let subscription: OrbitSubscription
+    private let subscription: OrbitRegionSubscription
 
-    init(directory: URL, database: OrbitDatabaseIdentifier) throws {
+    init(
+      directory: URL,
+      database: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion = .fullDatabase
+    ) throws {
       let recorder = self.recorder
       let gate = self.gate
       let isStalled = Lock(true)
       self.transport = try ipcTransport(directory)
-      self.subscription = try self.transport.subscribe(to: database) { message in
+      self.subscription = try self.transport.subscribe(to: database, region: region) { message in
         recorder.append(message)
         let stalls = isStalled.withLock { isStalled in
           defer { isStalled = false }
@@ -394,6 +534,13 @@
         region: OrbitDatabaseRegion(column: "c\(index)", in: "items")
       )
     )
+  }
+
+  private func regionCommit(
+    _ database: OrbitDatabaseIdentifier,
+    _ region: OrbitDatabaseRegion
+  ) -> OrbitIPCMessage {
+    .transactionDidCommit(.init(databaseIdentifier: database, region: region))
   }
 
   private func ipcTestDirectory() throws -> URL {

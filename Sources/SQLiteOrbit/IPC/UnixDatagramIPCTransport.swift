@@ -107,6 +107,7 @@
     private let registry: OrbitIPCEndpointRegistry
     private let endpoint: UnixDatagramEndpoint
     private let handlers: OrbitIPCHandlers
+    private let advertisements: OrbitIPCAdvertisementCache
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -154,6 +155,7 @@
       self.registry = registry
       self.endpoint = endpoint
       self.handlers = handlers
+      self.advertisements = OrbitIPCAdvertisementCache(registry: registry)
       endpoint.start { bytes in
         guard let messages = try? OrbitIPCWireProtocol.decode(bytes) else { return }
         for message in messages {
@@ -171,36 +173,55 @@
       self.endpoint.stop()
     }
 
-    /// Subscribes to messages concerning `databaseIdentifier`.
+    /// Subscribes to messages concerning `databaseIdentifier` and `region`.
     ///
-    /// The first subscription for a database advertises this endpoint in the coordination
-    /// directory, so peers can find it; cancelling the last one withdraws the advertisement.
-    /// Handlers run serially on the transport's receive thread.
+    /// This endpoint advertises, in the coordination directory, the union of the regions of its
+    /// subscriptions for each database, and peers send it only the commits that union admits.
+    /// The first subscription for a database makes the endpoint discoverable for it, and cancelling
+    /// the last one withdraws the advertisement. Handlers run serially on the transport's receive
+    /// thread, and each is only called for the commits its own region admits.
+    ///
+    /// A widened region is advertised before ``OrbitRegionSubscription/updateRegion(_:)`` returns,
+    /// so every send that starts afterwards, in any process, honors it.
     ///
     /// ```swift
-    /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
+    /// let subscription = try transport.subscribe(
+    ///   to: database.id,
+    ///   region: Reminder.databaseRegion
+    /// ) { _ in refreshReminders() }
     /// ```
     ///
     /// - Parameters:
     ///   - databaseIdentifier: The database whose messages to receive.
-    ///   - onMessage: Receives each message concerning that database.
-    /// - Returns: A subscription that stops delivery when cancelled or released.
+    ///   - region: The region whose commits to receive.
+    ///   - onMessage: Receives each message concerning that database and region.
+    /// - Returns: A subscription that stops delivery when cancelled or released, and through which
+    ///   its region can change.
     /// - Throws: An ``OrbitIPCSystemError`` if the transport is closed or the coordination
     ///   directory cannot be written to.
     public func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-    ) throws -> OrbitSubscription {
+    ) throws -> OrbitRegionSubscription {
       let identifier = try self.handlers.add(
         databaseIdentifier: databaseIdentifier,
+        region: region,
         handler: onMessage
       )
-      return OrbitSubscription { [weak handlers = self.handlers] in
+      return OrbitRegionSubscription(region: region) { [weak handlers = self.handlers] region in
+        guard let handlers else { return }
+        try handlers.update(
+          identifier: identifier,
+          databaseIdentifier: databaseIdentifier,
+          region: region
+        )
+      } onCancel: { [weak handlers = self.handlers] in
         handlers?.remove(identifier: identifier, databaseIdentifier: databaseIdentifier)
       }
     }
 
-    /// Broadcasts `message` to every peer currently advertising an interest in its database.
+    /// Broadcasts `message` to every peer advertising a region that the message concerns.
     ///
     /// Peers that have died are pruned from the coordination directory as they are discovered, so
     /// a crashed process does not fail later broadcasts. A peer whose receive queue is full is
@@ -228,14 +249,19 @@
       } catch OrbitIPCWireError.datagramTooLarge {
         throw OrbitIPCSystemError.messageTooLong("datagram is too large")
       }
-      let peers = try self.registry.peers(databaseIdentifier: message.databaseIdentifier)
-        .filter { $0.endpointName != self.registry.endpointName }
+      let advertisements = try self.advertisements.advertisements(for: message.databaseIdentifier)
+      let peers = self.peers(concernedWith: entry.message, in: advertisements)
       let suspension: Duration?
       switch self.configuration.backPressure {
       case .fail: suspension = nil
       case .suspend(upTo: let duration): suspension = duration
       }
-      let delivery = try await self.endpoint.send(entry, to: peers, suspendingUpTo: suspension)
+      let delivery = try await self.endpoint.send(
+        entry,
+        to: peers,
+        advertisedBy: advertisements.keys,
+        suspendingUpTo: suspension
+      )
 
       guard delivery.failed == 0 else {
         throw OrbitIPCPartialDeliveryError(
@@ -246,9 +272,31 @@
       }
     }
 
+    /// The peers ``send(_:)`` would send `message` to now.
+    func peers(concernedWith message: OrbitIPCMessage) throws -> [OrbitIPCPeer] {
+      let advertisements = try self.advertisements.advertisements(for: message.databaseIdentifier)
+      return self.peers(concernedWith: message, in: advertisements)
+    }
+
+    /// The region this transport advertises to its peers for a database, or `nil` if it is not
+    /// discoverable for that database.
+    func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
+      self.handlers.advertisedRegion(for: databaseIdentifier)
+    }
+
     /// How many sent messages wait in pending batches for peers whose queues are full.
     var pendingMessageCount: Int {
       self.endpoint.pendingMessageCount
+    }
+
+    private func peers(
+      concernedWith message: OrbitIPCMessage,
+      in advertisements: [String: OrbitDatabaseRegion]
+    ) -> [OrbitIPCPeer] {
+      advertisements.compactMap { name, region in
+        guard name != self.registry.endpointName, message.concerns(region) else { return nil }
+        return self.registry.peer(named: name)
+      }
     }
   }
 
@@ -302,7 +350,7 @@
   /// }
   /// ```
   public struct OrbitIPCPartialDeliveryError: Error, Hashable, Sendable {
-    /// How many peers the coordination directory advertised for the message's database.
+    /// How many peers advertised, in the coordination directory, a region the message concerns.
     public let discoveredPeerCount: Int
 
     /// How many peers accepted the message into their receive queue.
@@ -328,11 +376,22 @@
     }
   }
 
+  /// The handlers subscribed to this endpoint, and the markers that advertise what they cover.
+  ///
+  /// One marker stands for every identifier sharing a coordination key, so it advertises the union
+  /// of all of their handlers' regions. It is rewritten, under the lock, whenever that union
+  /// changes, so a region is advertised before the call that widened it returns, and two changes
+  /// can never land in the directory in the opposite order to the one they were made in.
   private final class OrbitIPCHandlers: Sendable {
+    private struct Handler: Sendable {
+      var region: OrbitDatabaseRegion
+      let onMessage: @Sendable (OrbitIPCMessage) -> Void
+    }
+
     private struct State: Sendable {
-      var handlers = KeyedHandlerRegistry<
-        OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void
-      >()
+      var handlers = KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>()
+      /// What each marker this endpoint wrote advertises, by coordination key.
+      var advertised: [String: OrbitDatabaseRegion] = [:]
       var isShutdown = false
     }
 
@@ -345,61 +404,98 @@
 
     func add(
       databaseIdentifier: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion,
       handler: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> UInt64 {
       try self.state.withLock { state in
         guard !state.isShutdown else {
           throw OrbitIPCSystemError.closed("transport is closed")
         }
-        // Checked before the handler is added, so this asks whether anything was subscribed
-        // before it.
-        if !self.isAdvertised(databaseIdentifier, in: state) {
-          try self.registry.register(databaseIdentifier: databaseIdentifier)
+        let identifier = state.handlers
+          .insert(Handler(region: region, onMessage: handler), for: databaseIdentifier)
+          .identifier
+        do {
+          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+        } catch {
+          state.handlers.remove(identifier, for: databaseIdentifier)
+          throw error
         }
-        return state.handlers.insert(handler, for: databaseIdentifier).identifier
+        return identifier
+      }
+    }
+
+    func update(
+      identifier: UInt64,
+      databaseIdentifier: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion
+    ) throws {
+      try self.state.withLock { state in
+        var previous: OrbitDatabaseRegion?
+        state.handlers.update(identifier, for: databaseIdentifier) { handler in
+          previous = handler.region
+          handler.region = region
+        }
+        guard let previous else { return }
+        do {
+          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+        } catch {
+          state.handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
+          throw error
+        }
       }
     }
 
     func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
       self.state.withLock { state in
-        // Checked after the handler is gone, so this asks whether anything is subscribed still.
-        guard state.handlers.remove(identifier, for: databaseIdentifier).isLastForKey,
-          !self.isAdvertised(databaseIdentifier, in: state)
-        else { return }
-        try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
+        guard state.handlers.remove(identifier, for: databaseIdentifier).didRemove else { return }
+        // A marker left wider than the handlers need only costs this endpoint messages it ignores.
+        try? self.advertise(databaseIdentifier.coordinationKey, in: &state)
       }
     }
 
+    func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
+      self.state.withLock { $0.advertised[databaseIdentifier.coordinationKey] }
+    }
+
     func receive(_ message: OrbitIPCMessage) {
-      let callbacks = self.state.withLock { $0.handlers.handlers(for: message.databaseIdentifier) }
+      let callbacks = self.state.withLock { state in
+        state.handlers.handlers(for: message.databaseIdentifier)
+          .filter { message.concerns($0.region) }
+          .map(\.onMessage)
+      }
       for callback in callbacks {
         callback(message)
       }
     }
 
     func shutdown() {
-      let databaseIdentifiers = self.state.withLock { state -> [OrbitDatabaseIdentifier] in
+      let coordinationKeys = self.state.withLock { state -> [String] in
         guard !state.isShutdown else { return [] }
         state.isShutdown = true
-        return state.handlers.removeAll()
+        _ = state.handlers.removeAll()
+        defer { state.advertised.removeAll() }
+        return Array(state.advertised.keys)
       }
-      // Withdrawing the same advertisement twice, as two identifiers sharing a coordination key
-      // do, removes a marker file that is already gone, which the registry treats as done.
-      for databaseIdentifier in databaseIdentifiers {
-        try? self.registry.unregister(databaseIdentifier: databaseIdentifier)
+      for coordinationKey in coordinationKeys {
+        try? self.registry.unregister(coordinationKey: coordinationKey)
       }
     }
 
-    /// Whether this endpoint's advertisement for a database is one it owes to some handler.
-    ///
-    /// One marker stands for every identifier sharing a coordination key, so the advertisement
-    /// belongs to all of their handlers rather than to any one of them.
-    private func isAdvertised(
-      _ databaseIdentifier: OrbitDatabaseIdentifier,
-      in state: State
-    ) -> Bool {
-      let key = databaseIdentifier.coordinationKey
-      return state.handlers.keys.contains { $0.coordinationKey == key }
+    /// Brings the marker for `coordinationKey` in line with the handlers that share it.
+    private func advertise(_ coordinationKey: String, in state: inout State) throws {
+      let handlers = state.handlers.keys
+        .filter { $0.coordinationKey == coordinationKey }
+        .flatMap { state.handlers.handlers(for: $0) }
+      guard !handlers.isEmpty else {
+        guard state.advertised[coordinationKey] != nil else { return }
+        try self.registry.unregister(coordinationKey: coordinationKey)
+        state.advertised[coordinationKey] = nil
+        return
+      }
+      let region = handlers.reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
+      guard state.advertised[coordinationKey] != region else { return }
+      try self.registry.register(coordinationKey: coordinationKey, region: region)
+      state.advertised[coordinationKey] = region
     }
   }
 

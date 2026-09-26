@@ -62,17 +62,68 @@
       _ = path.withCString { unlink($0) }
     }
 
-    /// Creates an empty file at `path`, or leaves the one already there alone.
-    static func createFileIfAbsent(atPath path: String) throws {
-      let descriptor = path.withCString {
-        open($0, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o666)
+    /// Replaces the file at `path` with one holding `bytes`, in one step.
+    ///
+    /// The bytes are written to `temporaryPath`, which must be in the same directory, and renamed
+    /// over `path`, so a reader finds either the old contents or the new ones, never a mix, and the
+    /// name never goes missing in between.
+    static func replaceFile(
+      atPath path: String,
+      with bytes: [UInt8],
+      temporaryPath: String
+    ) throws {
+      let descriptor = temporaryPath.withCString {
+        open($0, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666)
       }
-      guard descriptor >= 0 else {
-        let code = errno
-        guard code == EEXIST else { throw OrbitIPCSystemError(operation: "open", code: code) }
-        return
+      guard descriptor >= 0 else { throw OrbitIPCSystemError.last("open") }
+      var written = 0
+      while written < bytes.count {
+        let count = bytes.withUnsafeBytes {
+          write(descriptor, $0.baseAddress! + written, $0.count - written)
+        }
+        guard count >= 0 else {
+          let code = errno
+          guard code == EINTR else {
+            _ = close(descriptor)
+            _ = temporaryPath.withCString { unlink($0) }
+            throw OrbitIPCSystemError(operation: "write", code: code)
+          }
+          continue
+        }
+        written += count
       }
       _ = close(descriptor)
+      let renamed = temporaryPath.withCString { from in path.withCString { rename(from, $0) } }
+      guard renamed == 0 else {
+        let error = OrbitIPCSystemError.last("rename")
+        _ = temporaryPath.withCString { unlink($0) }
+        throw error
+      }
+    }
+
+    /// Reads the whole file at `path`.
+    ///
+    /// - Returns: The file's bytes, or `nil` if there is no file at `path`.
+    static func readFile(atPath path: String) throws -> [UInt8]? {
+      let descriptor = path.withCString { open($0, O_RDONLY | O_CLOEXEC) }
+      guard descriptor >= 0 else {
+        let code = errno
+        guard code == ENOENT else { throw OrbitIPCSystemError(operation: "open", code: code) }
+        return nil
+      }
+      defer { _ = close(descriptor) }
+      var bytes: [UInt8] = []
+      var chunk = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = chunk.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
+        if count == 0 { return bytes }
+        guard count > 0 else {
+          let code = errno
+          guard code == EINTR else { throw OrbitIPCSystemError(operation: "read", code: code) }
+          continue
+        }
+        bytes.append(contentsOf: chunk[..<count])
+      }
     }
 
     /// Runs `body` holding an exclusive `flock` on the file at `path`, creating the file if needed.
@@ -454,6 +505,149 @@
         return epoll_ctl(queue, operation, descriptor, &event) == 0
       }
     #endif
+  }
+
+  /// Watches directories for entries appearing, disappearing or being renamed, and says which ones
+  /// changed when asked, without blocking.
+  ///
+  /// It is inotify on Linux and Android, and on Darwin a kqueue watching each directory's vnode.
+  /// Nothing about it is thread-safe: the caller serializes every use.
+  final class UnixDirectoryWatcher: @unchecked Sendable {
+    /// What changed since the last ``drainChanges()``.
+    struct Changes {
+      /// The watches whose directories' entries changed.
+      var changed: Set<Int32> = []
+
+      /// The watches that ended, because their directories were removed or moved away. They
+      /// report nothing more, and their identifiers may be reused.
+      var ended: Set<Int32> = []
+
+      /// Whether the kernel dropped changes, in which case any directory may have changed.
+      var overflowed = false
+    }
+
+    private let descriptor: Int32
+    #if canImport(Darwin)
+      private var directories: Set<Int32> = []
+    #endif
+
+    init() throws {
+      #if canImport(Darwin)
+        let descriptor = kqueue()
+        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
+        _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+      #else
+        let descriptor = inotify_init1(orbit_in_nonblock | orbit_in_cloexec)
+        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("inotify_init1") }
+      #endif
+      self.descriptor = descriptor
+    }
+
+    deinit {
+      #if canImport(Darwin)
+        for directory in self.directories {
+          _ = close(directory)
+        }
+      #endif
+      _ = close(self.descriptor)
+    }
+
+    /// Starts watching the directory at `path`.
+    ///
+    /// - Returns: The identifier ``Changes`` names the directory by.
+    /// - Throws: An ``OrbitIPCSystemError`` if the directory cannot be watched, which includes the
+    ///   system running out of watches.
+    func watch(_ path: String) throws -> Int32 {
+      #if canImport(Darwin)
+        // `O_EVTONLY` opens the directory only to hear about it, so the watch does not keep the
+        // volume it is on from being unmounted.
+        let directory = path.withCString { open($0, O_EVTONLY | O_DIRECTORY | O_CLOEXEC) }
+        guard directory >= 0 else { throw OrbitIPCSystemError.last("open") }
+        var change = kevent(
+          ident: UInt(directory),
+          filter: Int16(EVFILT_VNODE),
+          flags: UInt16(EV_ADD | EV_CLEAR),
+          fflags: UInt32(NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE),
+          data: 0,
+          udata: nil
+        )
+        guard Darwin.kevent(self.descriptor, &change, 1, nil, 0, nil) == 0 else {
+          let error = OrbitIPCSystemError.last("kevent")
+          _ = close(directory)
+          throw error
+        }
+        self.directories.insert(directory)
+        return directory
+      #else
+        let watch = path.withCString {
+          inotify_add_watch(self.descriptor, $0, orbit_in_entries_changed)
+        }
+        guard watch >= 0 else { throw OrbitIPCSystemError.last("inotify_add_watch") }
+        return watch
+      #endif
+    }
+
+    /// Collects every change the kernel has queued, without waiting for more.
+    func drainChanges() -> Changes {
+      var changes = Changes()
+      #if canImport(Darwin)
+        var events = [kevent](repeating: kevent(), count: 16)
+        var timeout = timespec(tv_sec: 0, tv_nsec: 0)
+        while true {
+          let count = Darwin.kevent(self.descriptor, nil, 0, &events, Int32(events.count), &timeout)
+          guard count > 0 else {
+            // A queue that cannot be read any more could be hiding changes.
+            if count < 0 { changes.overflowed = true }
+            return changes
+          }
+          for event in events.prefix(Int(count)) {
+            let directory = Int32(event.ident)
+            if event.fflags & UInt32(NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE) != 0 {
+              changes.ended.insert(directory)
+              if self.directories.remove(directory) != nil {
+                _ = close(directory)
+              }
+            } else {
+              changes.changed.insert(directory)
+            }
+          }
+        }
+      #else
+        let capacity = 4096
+        let buffer = UnsafeMutableRawBufferPointer.allocate(
+          byteCount: capacity,
+          alignment: MemoryLayout<inotify_event>.alignment
+        )
+        defer { buffer.deallocate() }
+        while true {
+          let count = read(self.descriptor, buffer.baseAddress, capacity)
+          guard count > 0 else {
+            let code = errno
+            if count < 0, code == EINTR { continue }
+            // A queue that cannot be read any more could be hiding changes.
+            if count < 0, code != EAGAIN, code != EWOULDBLOCK {
+              changes.overflowed = true
+            }
+            return changes
+          }
+          var offset = 0
+          while offset + MemoryLayout<inotify_event>.size <= count {
+            let event = buffer.loadUnaligned(fromByteOffset: offset, as: inotify_event.self)
+            let nameOffset = offset + MemoryLayout<inotify_event>.size
+            offset = nameOffset + Int(event.len)
+            if event.mask & orbit_in_q_overflow != 0 {
+              changes.overflowed = true
+            } else if event.mask & orbit_in_ignored != 0 {
+              changes.ended.insert(event.wd)
+            } else if event.len == 0 || buffer[nameOffset] != UInt8(ascii: ".") {
+              // An entry whose name starts with a dot is a file on its way to being renamed into
+              // place, which reports again, under its real name, when it gets there.
+              changes.changed.insert(event.wd)
+            }
+          }
+        }
+      #endif
+    }
   }
 
   private struct UnixSocketAddress {

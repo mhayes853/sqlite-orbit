@@ -19,21 +19,6 @@
 /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
 /// ```
 public protocol OrbitIPCTransport: Sendable {
-  /// Subscribes to messages concerning `databaseIdentifier`.
-  ///
-  /// Handlers are invoked serially and should return promptly. Cancellation prevents new delivery,
-  /// although an invocation already copied for delivery may race with cancellation.
-  ///
-  /// - Parameters:
-  ///   - databaseIdentifier: The database whose messages to receive.
-  ///   - onMessage: Receives each message concerning that database.
-  /// - Returns: A subscription that stops delivery when cancelled or released.
-  /// - Throws: An error if the transport cannot register the subscription.
-  func subscribe(
-    to databaseIdentifier: OrbitDatabaseIdentifier,
-    onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-  ) throws -> OrbitSubscription
-
   /// Subscribes to messages concerning `databaseIdentifier` and `region`.
   ///
   /// The region is a lower bound: a commit that overlaps it is always delivered, and one outside
@@ -76,31 +61,25 @@ public protocol OrbitIPCTransport: Sendable {
 }
 
 extension OrbitIPCTransport {
-  /// Subscribes to every message concerning `databaseIdentifier`, whatever `region` says.
+  /// Subscribes to every message concerning `databaseIdentifier`.
   ///
-  /// This serves a transport that cannot filter by region: delivering every message honors any
-  /// region, and updating the region has no effect.
+  /// This subscribes for ``OrbitDatabaseRegion/fullDatabase``, whose commits are every commit.
   ///
   /// ```swift
-  /// let subscription = try transport.subscribe(
-  ///   to: database.id,
-  ///   region: Reminder.databaseRegion
-  /// ) { _ in refreshReminders() }
+  /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
   /// ```
   ///
   /// - Parameters:
   ///   - databaseIdentifier: The database whose messages to receive.
-  ///   - region: The region whose commits to receive.
   ///   - onMessage: Receives each message concerning that database.
-  /// - Returns: A subscription that stops delivery when cancelled or released.
+  /// - Returns: A subscription that stops delivery when cancelled or released, and through which
+  ///   its region can change.
   /// - Throws: An error if the transport cannot register the subscription.
   public func subscribe(
     to databaseIdentifier: OrbitDatabaseIdentifier,
-    region: OrbitDatabaseRegion,
     onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
   ) throws -> OrbitRegionSubscription {
-    let subscription = try subscribe(to: databaseIdentifier, onMessage: onMessage)
-    return OrbitRegionSubscription(region: region) { subscription.cancel() }
+    try self.subscribe(to: databaseIdentifier, region: .fullDatabase, onMessage: onMessage)
   }
 }
 

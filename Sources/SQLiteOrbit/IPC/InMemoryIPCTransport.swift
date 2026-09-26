@@ -114,31 +114,6 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
     self.endpoint.shutdown(network: self.network)
   }
 
-  /// Subscribes to every message concerning `databaseIdentifier`.
-  ///
-  /// The first subscription for a database makes this transport discoverable to its peers for that
-  /// database, and cancelling the last one makes it undiscoverable again.
-  ///
-  /// ```swift
-  /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - databaseIdentifier: The database whose messages to receive.
-  ///   - onMessage: Receives each message concerning that database.
-  /// - Returns: A subscription that stops delivery when cancelled or released.
-  public func subscribe(
-    to databaseIdentifier: OrbitDatabaseIdentifier,
-    onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-  ) throws -> OrbitSubscription {
-    let subscription = try subscribe(
-      to: databaseIdentifier,
-      region: .fullDatabase,
-      onMessage: onMessage
-    )
-    return OrbitSubscription { subscription.cancel() }
-  }
-
   /// Subscribes to messages concerning `databaseIdentifier` and `region`.
   ///
   /// The first subscription for a database makes this transport discoverable to its peers for that

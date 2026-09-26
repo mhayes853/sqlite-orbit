@@ -251,6 +251,39 @@ func databaseIPCWireProtocolRejectsOversizedDatabaseIdentifiers() {
   }
 }
 
+@Test
+func databaseIPCMarkersRoundTripEveryRegionShape() throws {
+  for region in databaseIPCRegions {
+    let encoded = OrbitIPCWireProtocol.encodeMarker(region)
+    #expect(try decodeDatabaseIPCMarker(encoded) == region)
+  }
+  // "main", "items" and "title" once each, then the region naming them by index.
+  #expect(
+    OrbitIPCWireProtocol.encodeMarker(OrbitDatabaseRegion(column: "title", in: "items")) == [
+      0, 3, 0, 4, 0x6D, 0x61, 0x69, 0x6E, 0, 5, 0x69, 0x74, 0x65, 0x6D, 0x73,
+      0, 5, 0x74, 0x69, 0x74, 0x6C, 0x65,
+      0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 2
+    ]
+  )
+}
+
+@Test
+func databaseIPCMarkersRejectMalformedContents() throws {
+  let encoded = OrbitIPCWireProtocol.encodeMarker(OrbitDatabaseRegion(column: "title", in: "items"))
+  for count in encoded.indices {
+    #expect(throws: OrbitIPCWireError.self) {
+      try decodeDatabaseIPCMarker(Array(encoded.prefix(count)))
+    }
+  }
+  #expect(throws: OrbitIPCWireError.trailingBytes) { try decodeDatabaseIPCMarker(encoded + [0]) }
+}
+
+private func decodeDatabaseIPCMarker(_ bytes: [UInt8]) throws -> OrbitDatabaseRegion {
+  try bytes.withUnsafeBufferPointer {
+    try OrbitIPCWireProtocol.decodeMarker(Span(_unsafeElements: $0))
+  }
+}
+
 private let databaseIPCRegions: [OrbitDatabaseRegion] = {
   let table = OrbitDatabaseRegion(table: "items")
   let column = OrbitDatabaseRegion(column: "title", in: "items")

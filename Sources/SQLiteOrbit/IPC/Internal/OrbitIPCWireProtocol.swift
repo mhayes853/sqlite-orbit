@@ -97,6 +97,38 @@ enum OrbitIPCWireProtocol {
     return messages
   }
 
+  // MARK: - Markers
+
+  /// Encodes the region an endpoint advertises in a marker: a string table, then the region.
+  ///
+  /// A region too large to encode is advertised as the full database, which admits everything.
+  static func encodeMarker(_ region: OrbitDatabaseRegion) -> [UInt8] {
+    var strings: [String] = []
+    var indices: [String: UInt16] = [:]
+    for string in self.strings(in: region) where indices[string] == nil {
+      guard strings.count < UInt16.max else { return encodeMarker(.fullDatabase) }
+      indices[string] = UInt16(strings.count)
+      strings.append(string)
+    }
+    guard let byteCount = try? byteCount(of: region) else { return encodeMarker(.fullDatabase) }
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(2 + strings.reduce(0) { $0 + 2 + $1.utf8.count } + byteCount)
+    appendStringTable(strings, to: &bytes)
+    appendRegion(region, to: &bytes, indices: indices)
+    return bytes
+  }
+
+  /// Decodes the region a marker advertises.
+  ///
+  /// - Throws: An ``OrbitIPCWireError`` if the marker is malformed.
+  static func decodeMarker(_ bytes: Span<UInt8>) throws -> OrbitDatabaseRegion {
+    var offset = 0
+    let strings = try readStringTable(from: bytes, at: &offset)
+    let region = try readRegion(from: bytes, at: &offset, strings: strings)
+    guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
+    return region
+  }
+
   // MARK: - String Tables
 
   /// Appends a string table holding `strings`, whose indices are their positions in it.
