@@ -57,11 +57,19 @@ let packageTarget0: Target = .systemLibrary(
   providers: sqliteProviders
 )
 
+// Swift's Glibc module leaves out `sys/epoll.h` and `sys/eventfd.h`, which the Unix datagram
+// transport's thread waits with on Linux and Android, so this header-only module imports them.
+let linuxEventsTarget: Target = .systemLibrary(
+  name: "CLinuxEvents",
+  path: "Sources/CLinuxEvents"
+)
+
 let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
     .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .target(name: "CLinuxEvents", condition: .when(platforms: [.linux, .android])),
     .target(
       name: "CSQLite3",
       condition: .when(traits: ["SystemSQLite"])
@@ -87,9 +95,8 @@ let packageTarget1: Target = .target(
     .enableExperimentalFeature("Lifetimes"),
     .enableExperimentalFeature("SuppressedAssociatedTypes"),
     // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
-    // connection executor needs are declared by hand there. Its Glibc and Musl modules likewise
-    // leave out `sys/epoll.h` and `sys/eventfd.h`, which the IPC transport's thread waits on.
-    .enableExperimentalFeature("Extern", .when(platforms: [.wasi, .linux, .android])),
+    // connection executor needs are declared by hand there.
+    .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
     // Every trait that links a SQLite of its own defines this, so that code needing only
     // "some build is available" does not have to name each one.
     .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
@@ -169,6 +176,7 @@ let packageTarget5: Target = .testTarget(
 
 let packageTargets: [Target] = [
   packageTarget0,
+  linuxEventsTarget,
   packageTarget1,
   packageTarget2,
   packageTarget3,

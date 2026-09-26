@@ -12,6 +12,9 @@
   #elseif canImport(Android)
     import Android
   #endif
+  #if !canImport(Darwin)
+    import CLinuxEvents
+  #endif
 
   /// A failed system call, named by what it was doing, and the `errno` it failed with.
   struct OrbitIPCSystemError: Error, CustomStringConvertible, Sendable {
@@ -241,10 +244,7 @@
       private let events = UnsafeMutableBufferPointer<kevent>.allocate(capacity: 64)
     #else
       private let wakeDescriptor: Int32
-      private let events = UnsafeMutableRawBufferPointer.allocate(
-        byteCount: 64 * epollEventByteCount,
-        alignment: 8
-      )
+      private let events = UnsafeMutableBufferPointer<epoll_event>.allocate(capacity: 64)
     #endif
 
     /// Creates a queue that reports when `socket` has a datagram to read.
@@ -280,10 +280,9 @@
         }
         self.descriptor = descriptor
       #else
-        // `EPOLL_CLOEXEC`, `EFD_CLOEXEC` and `EFD_NONBLOCK` are defined as the `O_` flags.
-        let descriptor = epollCreate(Int32(O_CLOEXEC))
+        let descriptor = epoll_create1(orbit_epoll_cloexec)
         guard descriptor >= 0 else { throw OrbitIPCSystemError.last("epoll_create1") }
-        let wakeDescriptor = eventFileDescriptor(0, Int32(O_NONBLOCK | O_CLOEXEC))
+        let wakeDescriptor = eventfd(0, orbit_efd_nonblock | orbit_efd_cloexec)
         guard wakeDescriptor >= 0 else {
           let error = OrbitIPCSystemError.last("eventfd")
           _ = close(descriptor)
@@ -375,19 +374,15 @@
           let total = seconds * 1_000 + (attoseconds + 999_999_999_999_999) / 1_000_000_000_000_000
           return Int32(clamping: total)
         }
-        let count = epollWait(
+        let count = epoll_wait(
           self.descriptor,
-          self.events.baseAddress,
-          Int32(self.events.count / epollEventByteCount),
+          self.events.baseAddress!,
+          Int32(self.events.count),
           milliseconds ?? -1
         )
         Self.check(count, "epoll_wait")
-        for index in 0..<max(0, Int(count)) {
-          let token = self.events.loadUnaligned(
-            fromByteOffset: index * epollEventByteCount + epollEventDataOffset,
-            as: UInt64.self
-          )
-          switch token {
+        for event in self.events.prefix(max(0, Int(count))) {
+          switch event.data.u64 {
           case Self.readableToken:
             handle(.readable)
           case Self.wakeToken:
@@ -441,11 +436,10 @@
       private static let readableToken: UInt64 = 0
       private static let wakeToken: UInt64 = 1
 
-      // The kernel's own values, which every Linux architecture shares.
-      private static let readable: UInt32 = 0x001
-      private static let writable: UInt32 = 0x004
-      private static let add: Int32 = 1
-      private static let delete: Int32 = 2
+      private static let readable = orbit_epoll_in
+      private static let writable = orbit_epoll_out
+      private static let add = orbit_epoll_ctl_add
+      private static let delete = orbit_epoll_ctl_del
 
       private static func control(
         _ queue: Int32,
@@ -454,49 +448,13 @@
         _ events: UInt32,
         _ token: UInt64
       ) -> Bool {
-        withUnsafeTemporaryAllocation(byteCount: epollEventByteCount, alignment: 8) { event in
-          event.storeBytes(of: events, toByteOffset: 0, as: UInt32.self)
-          event.storeBytes(of: token, toByteOffset: epollEventDataOffset, as: UInt64.self)
-          return epollControl(queue, operation, descriptor, event.baseAddress) == 0
-        }
+        var event = epoll_event()
+        event.events = events
+        event.data.u64 = token
+        return epoll_ctl(queue, operation, descriptor, &event) == 0
       }
     #endif
   }
-
-  #if !canImport(Darwin)
-    // Swift's Glibc and Musl modules leave out `sys/epoll.h` and `sys/eventfd.h`, so the calls are
-    // declared here, and an event is read and written as the bytes the kernel lays it out as: a
-    // 32-bit mask followed by 64 bits of data, packed together on x86 and aligned elsewhere.
-    @_extern(c, "epoll_create1")
-    private func epollCreate(_ flags: Int32) -> Int32
-
-    @_extern(c, "epoll_ctl")
-    private func epollControl(
-      _ queue: Int32,
-      _ operation: Int32,
-      _ descriptor: Int32,
-      _ event: UnsafeMutableRawPointer?
-    ) -> Int32
-
-    @_extern(c, "epoll_wait")
-    private func epollWait(
-      _ queue: Int32,
-      _ events: UnsafeMutableRawPointer?,
-      _ capacity: Int32,
-      _ timeout: Int32
-    ) -> Int32
-
-    @_extern(c, "eventfd")
-    private func eventFileDescriptor(_ value: UInt32, _ flags: Int32) -> Int32
-
-    #if arch(x86_64) || arch(i386)
-      private let epollEventByteCount = 12
-      private let epollEventDataOffset = 4
-    #else
-      private let epollEventByteCount = 16
-      private let epollEventDataOffset = 8
-    #endif
-  #endif
 
   private struct UnixSocketAddress {
     private var storage: sockaddr_un

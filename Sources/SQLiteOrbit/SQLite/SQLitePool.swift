@@ -115,7 +115,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     directory: URL?,
     _ body: () throws -> Result
   ) throws -> Result {
-    #if canImport(Darwin) || canImport(Glibc)
+    #if canImport(Darwin) || os(Linux) || os(Android)
       return try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: directory ?? UnixDatagramIPCTransport.Configuration.defaultDirectory,
