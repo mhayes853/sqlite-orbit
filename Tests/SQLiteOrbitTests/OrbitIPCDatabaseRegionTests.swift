@@ -226,7 +226,8 @@
         #if canImport(Darwin) || os(Linux) || os(Android)
           case .unixDatagram:
             let configuration = UnixDatagramIPCTransport.Configuration(
-              directory: directory.appending(path: "coordination"),
+              // Short, since the socket paths inside it must fit in `sun_path`.
+              directory: directory.appending(path: "c"),
               backPressure: .suspend(upTo: .seconds(5))
             )
             let observing = try UnixDatagramIPCTransport(configuration: configuration)

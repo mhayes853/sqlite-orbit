@@ -164,10 +164,14 @@
         let descriptor = socket(AF_UNIX, SOCK_DGRAM, 0)
         guard descriptor >= 0 else { throw OrbitIPCSystemError.last("socket") }
         var enabled: Int32 = 1
+        // Darwin refuses a datagram larger than the sender's send buffer with `EMSGSIZE`, and that
+        // buffer starts at 2 KiB, so it is raised past the longest datagram any endpoint accepts.
+        var sendBufferByteCount: Int32 = 65_536
         let size = socklen_t(MemoryLayout<Int32>.size)
         guard fcntl(descriptor, F_SETFL, O_NONBLOCK) == 0,
           fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0,
-          setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0
+          setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0,
+          setsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &sendBufferByteCount, size) == 0
         else {
           let error = OrbitIPCSystemError.last("socket")
           _ = close(descriptor)
