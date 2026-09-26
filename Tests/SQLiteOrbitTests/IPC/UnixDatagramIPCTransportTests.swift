@@ -311,33 +311,6 @@
   }
 
   @Test
-  func regionsDecideWhichPeersASendReaches() async throws {
-    let directory = try ipcTestDirectory()
-    defer { remove(directory) }
-    let database = OrbitDatabaseIdentifier(rawValue: "regions")
-    let sender = try ipcTransport(directory)
-    let receiver = try ipcTransport(directory)
-    let recorder = IPCMessageRecorder()
-    let subscription = try receiver.subscribe(
-      to: database,
-      region: OrbitDatabaseRegion(table: "items"),
-      onMessage: recorder.append
-    )
-    let disjoint = regionCommit(database, OrbitDatabaseRegion(table: "lists"))
-    let overlapping = regionCommit(database, OrbitDatabaseRegion(column: "title", in: "items"))
-
-    #expect(try sender.peers(concernedWith: disjoint).isEmpty)
-    #expect(try sender.peers(concernedWith: overlapping).count == 1)
-    try await sender.send(disjoint)
-    try await sender.send(overlapping)
-    try await recorder.waitForCount(1)
-    try await Task.sleep(for: .milliseconds(20))
-
-    #expect(recorder.values == [overlapping])
-    _ = subscription
-  }
-
-  @Test
   func aSendThatStartsAfterARegionWidensHonorsIt() async throws {
     // Every update widens to one more table, so each send has to see the marker rewritten by the
     // update that just returned. The first also narrows away the table the subscription started
@@ -420,29 +393,29 @@
   }
 
   @Test
-  func aPeerIsNeverSentACommitItsRegionMisses() async throws {
-    // The receiver stops draining its queue, so a sender that sent it commits outside its region
-    // would find the queue full long before running out of them.
+  func aPeerIsSentOnlyTheCommitsItsRegionAdmits() async throws {
+    // The receiver stops draining its queue at the first commit, so a sender that sent it commits
+    // outside its region would find the queue full long before running out of them.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let database = OrbitDatabaseIdentifier(rawValue: "unsent")
+    let database = OrbitDatabaseIdentifier(rawValue: "regions")
     let receiver = try StalledReceiver(
       directory: directory,
       database: database,
       region: OrbitDatabaseRegion(table: "items")
     )
     let sender = try ipcTransport(directory)
-    try await sender.send(regionCommit(database, OrbitDatabaseRegion(table: "items")))
+    let disjoint = regionCommit(database, OrbitDatabaseRegion(table: "lists"))
+    let overlapping = regionCommit(database, OrbitDatabaseRegion(column: "title", in: "items"))
+    #expect(try sender.peers(concernedWith: disjoint).isEmpty)
+    #expect(try sender.peers(concernedWith: overlapping).count == 1)
 
+    try await sender.send(overlapping)
     for _ in 0..<2_000 {
-      try await sender.send(regionCommit(database, OrbitDatabaseRegion(table: "lists")))
+      try await sender.send(disjoint)
     }
-    #expect(
-      try await reachesBackPressure(
-        sender,
-        message: regionCommit(database, OrbitDatabaseRegion(table: "items"))
-      )
-    )
+    #expect(try await reachesBackPressure(sender, message: overlapping))
+    #expect(receiver.recorder.values == [overlapping])
     receiver.resume()
   }
 
