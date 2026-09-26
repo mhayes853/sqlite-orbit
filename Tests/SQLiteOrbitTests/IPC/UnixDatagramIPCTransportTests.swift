@@ -1,4 +1,5 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
+  import Dispatch
   import Foundation
   import Testing
 
@@ -45,7 +46,8 @@
     let configuration = UnixDatagramIPCTransport.Configuration(
       directory: directory,
       backPressure: .fail,
-      maximumDatagramByteCount: 12,
+      // Room for the full database's 21 bytes, and not for the column's 50.
+      maximumDatagramByteCount: 40,
       receiveBufferByteCount: 4_096
     )
     let sender = try UnixDatagramIPCTransport(configuration: configuration)
@@ -225,6 +227,89 @@
   }
 
   @Test
+  func suspendedSendsBatchBehindAStalledReceiverAndArriveInOrder() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "stalled")
+    let receiver = try StalledReceiver(directory: directory, database: database)
+    // Small datagrams, so what waits for the receiver spans several batches.
+    let sender = try UnixDatagramIPCTransport(
+      configuration: .init(
+        directory: directory,
+        backPressure: .suspend(upTo: .seconds(30)),
+        maximumDatagramByteCount: 256
+      )
+    )
+
+    let sends = try await sendUntilWaiting(sender, database: database, pendingCount: 100)
+    receiver.resume()
+    for task in sends.tasks {
+      try await task.value
+    }
+    try await receiver.recorder.waitForCount(sends.messages.count)
+
+    #expect(receiver.recorder.values == sends.messages)
+    #expect(sender.pendingMessageCount == 0)
+  }
+
+  @Test
+  func cancellingASuspendedSendWithdrawsItsMessage() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "cancelled")
+    let receiver = try StalledReceiver(directory: directory, database: database)
+    let sender = try UnixDatagramIPCTransport(
+      configuration: .init(directory: directory, backPressure: .suspend(upTo: .seconds(30)))
+    )
+    let sends = try await sendUntilWaiting(sender, database: database, pendingCount: 3)
+
+    let withdrawn = stalledCommit(database, index: -1)
+    let cancelled = Task { try await sender.send(withdrawn) }
+    try await waitUntil { sender.pendingMessageCount == 4 }
+    cancelled.cancel()
+    await #expect(throws: CancellationError.self) { try await cancelled.value }
+    #expect(sender.pendingMessageCount == 3)
+
+    receiver.resume()
+    for task in sends.tasks {
+      try await task.value
+    }
+    try await receiver.recorder.waitForCount(sends.messages.count)
+    #expect(receiver.recorder.values == sends.messages)
+  }
+
+  @Test
+  func aSuspendedSendFailsAtItsDeadlineAndLeavesNothingBehind() async throws {
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let database = OrbitDatabaseIdentifier(rawValue: "expired")
+    let receiver = try StalledReceiver(directory: directory, database: database)
+    let sender = try UnixDatagramIPCTransport(
+      configuration: .init(directory: directory, backPressure: .suspend(upTo: .milliseconds(20)))
+    )
+
+    var failure: OrbitIPCPartialDeliveryError?
+    for index in 0..<10_000 where failure == nil {
+      do {
+        try await sender.send(stalledCommit(database, index: index))
+      } catch let error as OrbitIPCPartialDeliveryError {
+        failure = error
+      }
+    }
+
+    #expect(
+      failure
+        == OrbitIPCPartialDeliveryError(
+          discoveredPeerCount: 1,
+          deliveredPeerCount: 0,
+          failedPeerCount: 1
+        )
+    )
+    #expect(sender.pendingMessageCount == 0)
+    receiver.resume()
+  }
+
+  @Test
   func unixDatagramTransportRejectsInvalidConfiguration() throws {
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
@@ -240,6 +325,75 @@
         )
       }
     }
+  }
+
+  /// A receiver whose handler blocks on the first message until ``resume()``, so its socket's
+  /// queue fills and senders see it as full.
+  private final class StalledReceiver: Sendable {
+    let recorder = IPCMessageRecorder()
+    private let gate = DispatchSemaphore(value: 0)
+    private let transport: UnixDatagramIPCTransport
+    private let subscription: OrbitSubscription
+
+    init(directory: URL, database: OrbitDatabaseIdentifier) throws {
+      let recorder = self.recorder
+      let gate = self.gate
+      let isStalled = Lock(true)
+      self.transport = try ipcTransport(directory)
+      self.subscription = try self.transport.subscribe(to: database) { message in
+        recorder.append(message)
+        let stalls = isStalled.withLock { isStalled in
+          defer { isStalled = false }
+          return isStalled
+        }
+        if stalls { gate.wait() }
+      }
+    }
+
+    deinit {
+      // A test that fails before resuming must not leave the transport's thread blocked for good.
+      self.gate.signal()
+    }
+
+    func resume() { self.gate.signal() }
+  }
+
+  /// Sends commits in order, each once the one before it has been delivered or has started
+  /// waiting, until `pendingCount` of them wait for a full receiver.
+  ///
+  /// - Returns: The tasks sending every commit, and the commits, in the order they were sent.
+  private func sendUntilWaiting(
+    _ sender: UnixDatagramIPCTransport,
+    database: OrbitDatabaseIdentifier,
+    pendingCount: Int
+  ) async throws -> (tasks: [Task<Void, any Error>], messages: [OrbitIPCMessage]) {
+    let delivered = Lock(0)
+    var tasks: [Task<Void, any Error>] = []
+    var messages: [OrbitIPCMessage] = []
+    while sender.pendingMessageCount < pendingCount {
+      guard messages.count < 10_000 else { throw TestTimeout() }
+      let message = stalledCommit(database, index: messages.count)
+      messages.append(message)
+      tasks.append(
+        Task { @Sendable in
+          try await sender.send(message)
+          delivered.withLock { $0 += 1 }
+        }
+      )
+      let sent = messages.count
+      try await waitUntil { delivered.withLock { $0 } + sender.pendingMessageCount == sent }
+    }
+    return (tasks, messages)
+  }
+
+  /// A commit no other index produces, so the order commits arrive in shows.
+  private func stalledCommit(_ database: OrbitDatabaseIdentifier, index: Int) -> OrbitIPCMessage {
+    .transactionDidCommit(
+      .init(
+        databaseIdentifier: database,
+        region: OrbitDatabaseRegion(column: "c\(index)", in: "items")
+      )
+    )
   }
 
   private func ipcTestDirectory() throws -> URL {

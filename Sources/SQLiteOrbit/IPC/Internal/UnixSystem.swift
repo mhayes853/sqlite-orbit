@@ -119,7 +119,7 @@
     /// Creates an unbound, nonblocking datagram socket connected to the one bound at `path`.
     ///
     /// Sending on it needs no address, and on Linux it reports itself unwritable while the peer's
-    /// receive queue is full, which is what ``UnixEventQueue/reportsPeerWritability`` rests on.
+    /// receive queue is full, which ``UnixEventQueue/watchWritability(of:token:)`` rests on.
     ///
     /// - Throws: An ``OrbitIPCSystemError`` whose ``OrbitIPCSystemError/isStalePeer`` holds when
     ///   nothing is bound at `path` any more.
@@ -233,16 +233,8 @@
       case writable(token: UInt64)
     }
 
-    /// Whether a connected socket reports itself writable only while its peer has room.
-    ///
-    /// Linux holds back a connected datagram socket's writability while the peer's receive queue
-    /// is full. Darwin's write filter looks only at the sender's own buffer, which a Unix datagram
-    /// never waits in, so a sender there has to retry on a timer instead.
-    #if canImport(Darwin)
-      static let reportsPeerWritability = false
-    #else
-      static let reportsPeerWritability = true
-    #endif
+    /// The smallest token ``watchWritability(of:token:)`` accepts.
+    static let firstWatchToken: UInt64 = 2
 
     private let descriptor: Int32
     #if canImport(Darwin)
@@ -416,29 +408,36 @@
       precondition(code == EINTR, "\(operation) failed with errno \(code)")
     }
 
+    /// Starts reporting ``Event/writable(token:)`` whenever a connected socket's peer has room.
+    ///
+    /// Linux holds back a connected datagram socket's writability while the peer's receive queue
+    /// is full, so it can say when to send again. Darwin's write filter looks only at the sender's
+    /// own buffer, which a Unix datagram never waits in, so there the caller has to retry on a
+    /// timer instead.
+    ///
+    /// - Parameters:
+    ///   - descriptor: A connected socket. Stop watching it before closing it.
+    ///   - token: What the events for it carry, which must be ``firstWatchToken`` or greater.
+    /// - Returns: Whether the queue will report when the socket's peer has room.
+    func watchWritability(of descriptor: Int32, token: UInt64) -> Bool {
+      precondition(token >= Self.firstWatchToken)
+      #if canImport(Darwin)
+        return false
+      #else
+        return Self.control(self.descriptor, Self.add, descriptor, Self.writable, token)
+      #endif
+    }
+
+    /// Stops reporting writability for a socket ``watchWritability(of:token:)`` said it would.
+    func stopWatchingWritability(of descriptor: Int32) {
+      #if !canImport(Darwin)
+        _ = Self.control(self.descriptor, Self.delete, descriptor, 0, 0)
+      #endif
+    }
+
     #if canImport(Darwin)
       private static let wakeIdentifier: UInt = 1
     #else
-      /// Starts reporting ``Event/writable(token:)`` for `descriptor` whenever it has room to send.
-      ///
-      /// - Parameters:
-      ///   - descriptor: A connected socket. Stop watching it before closing it.
-      ///   - token: What the events for it carry, which must be ``firstWatchToken`` or greater.
-      func watchWritability(of descriptor: Int32, token: UInt64) throws {
-        precondition(token >= Self.firstWatchToken)
-        guard Self.control(self.descriptor, Self.add, descriptor, Self.writable, token) else {
-          throw OrbitIPCSystemError.last("epoll_ctl")
-        }
-      }
-
-      /// Stops reporting writability for `descriptor`.
-      func stopWatchingWritability(of descriptor: Int32) {
-        _ = Self.control(self.descriptor, Self.delete, descriptor, 0, 0)
-      }
-
-      /// The smallest token ``watchWritability(of:token:)`` accepts.
-      static let firstWatchToken: UInt64 = 2
-
       private static let readableToken: UInt64 = 0
       private static let wakeToken: UInt64 = 1
 

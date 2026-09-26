@@ -106,6 +106,35 @@
     }
 
     @Test
+    func sendsWaitingForAStoppedProcessAllArriveOnceItResumes() async throws {
+      // Far more commits than the stopped process's queue holds, so most of them wait in batches
+      // and reach it several to a datagram.
+      let harness = try IPCProcessHarness(database: "batched")
+      defer { harness.cleanup() }
+      let messageCount = 2_000
+      let listener = try harness.spawn("listen", expected: messageCount)
+      try await harness.waitUntilReady(1)
+      harness.suspend(listener)
+
+      let transport = try harness.transport(.suspend(upTo: .seconds(20)))
+      let message = harness.message
+      let sends = Task {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+          for _ in 0..<messageCount {
+            group.addTask { try await transport.send(message) }
+          }
+          try await group.waitForAll()
+        }
+      }
+      try await waitUntil { transport.pendingMessageCount > 0 }
+      harness.resume(listener)
+      try await sends.value
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == messageCount)
+    }
+
+    @Test
     func suspendedSendTimesOutWhenAReceiverDoesNotDrain() async throws {
       let harness = try IPCProcessHarness(database: "back-pressure-timeout")
       defer { harness.cleanup() }

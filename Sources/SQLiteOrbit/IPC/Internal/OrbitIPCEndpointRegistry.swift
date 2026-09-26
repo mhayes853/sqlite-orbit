@@ -50,11 +50,20 @@
       }
     }
 
-    func remove(_ peer: OrbitIPCPeer, databaseIdentifier: OrbitDatabaseIdentifier) throws {
-      let marker = self.databaseDirectory(for: databaseIdentifier)
-        .appending(path: peer.endpointName)
+    /// Removes a dead peer's socket path and its markers for the databases it was found under.
+    ///
+    /// - Parameters:
+    ///   - peer: The peer that turned out to be dead.
+    ///   - coordinationKeys: The databases it was found advertising.
+    func remove(_ peer: OrbitIPCPeer, coordinationKeys: some Sequence<String>) throws {
       try Self.remove(URL(fileURLWithPath: peer.socketPath))
-      try Self.remove(marker)
+      for coordinationKey in coordinationKeys {
+        try Self.remove(
+          self.databasesDirectory
+            .appending(path: coordinationKey, directoryHint: .isDirectory)
+            .appending(path: peer.endpointName)
+        )
+      }
     }
 
     private static func remove(_ url: URL) throws {

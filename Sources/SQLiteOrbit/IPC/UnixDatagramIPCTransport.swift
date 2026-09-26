@@ -27,7 +27,11 @@
       /// Fails the broadcast after attempting every currently discovered peer once.
       case fail
 
-      /// Suspends and retries backpressured peers until this much time has elapsed.
+      /// Suspends until every backpressured peer takes the message, or this much time has elapsed.
+      ///
+      /// While a peer's queue is full, the messages sent to it wait in order and go out together,
+      /// in as few datagrams as fit them, once it has room. Each send still waits for, and
+      /// reports on, only its own message.
       case suspend(upTo: Duration)
     }
 
@@ -68,6 +72,8 @@
       public var backPressure: BackPressurePolicy
 
       /// The largest datagram this endpoint sends or accepts, in bytes.
+      ///
+      /// It also bounds each batch of messages waiting for a peer whose queue is full.
       public var maximumDatagramByteCount: Int
 
       /// The size of this endpoint's socket receive buffer, in bytes.
@@ -138,7 +144,8 @@
         endpointName: String(endpointName)
       )
       let endpoint = try UnixDatagramEndpoint(
-        path: registry.socketPath,
+        registry: registry,
+        maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
       let handlers = OrbitIPCHandlers(registry: registry)
@@ -147,9 +154,11 @@
       self.registry = registry
       self.endpoint = endpoint
       self.handlers = handlers
-      endpoint.start(maximumDatagramByteCount: configuration.maximumDatagramByteCount) { bytes in
-        guard let message = try? OrbitIPCWireProtocol.decode(bytes) else { return }
-        handlers.receive(message)
+      endpoint.start { bytes in
+        guard let messages = try? OrbitIPCWireProtocol.decode(bytes) else { return }
+        for message in messages {
+          handlers.receive(message)
+        }
       }
     }
 
@@ -206,93 +215,40 @@
     ///
     /// - Parameter message: The message to broadcast.
     /// - Throws: ``OrbitIPCPartialDeliveryError`` when a live peer did not accept the message,
-    ///   or an ``OrbitIPCSystemError`` if the message cannot be encoded or sent at all.
+    ///   an ``OrbitIPCSystemError`` if the message cannot be encoded or sent at all, or
+    ///   `CancellationError` if the task is cancelled while waiting for a backpressured peer, which
+    ///   withdraws the message from every peer that had not yet accepted it.
     public func send(_ message: OrbitIPCMessage) async throws {
-      let bytes = try OrbitIPCWireProtocol.encode(
-        message,
-        maximumByteCount: self.configuration.maximumDatagramByteCount
-      )
-      guard bytes.count <= self.configuration.maximumDatagramByteCount else {
+      let entry: OrbitIPCWireEntry
+      do {
+        entry = try OrbitIPCWireEntry(
+          message,
+          fittingIn: self.configuration.maximumDatagramByteCount
+        )
+      } catch OrbitIPCWireError.datagramTooLarge {
         throw OrbitIPCSystemError.messageTooLong("datagram is too large")
       }
       let peers = try self.registry.peers(databaseIdentifier: message.databaseIdentifier)
         .filter { $0.endpointName != self.registry.endpointName }
-      self.endpoint.retainPeers(
-        peers,
-        advertising: message.databaseIdentifier.coordinationKey
-      )
-      var result = self.attempt(bytes, to: peers, databaseIdentifier: message.databaseIdentifier)
-
+      let suspension: Duration?
       switch self.configuration.backPressure {
-      case .fail:
-        result.failed += result.pending.count
-      case .suspend(upTo: let duration):
-        let retry = try await self.retry(
-          bytes,
-          to: result.pending,
-          databaseIdentifier: message.databaseIdentifier,
-          upTo: duration
-        )
-        result.delivered += retry.delivered
-        result.failed += retry.failed
+      case .fail: suspension = nil
+      case .suspend(upTo: let duration): suspension = duration
       }
+      let delivery = try await self.endpoint.send(entry, to: peers, suspendingUpTo: suspension)
 
-      guard result.failed == 0 else {
+      guard delivery.failed == 0 else {
         throw OrbitIPCPartialDeliveryError(
           discoveredPeerCount: peers.count,
-          deliveredPeerCount: result.delivered,
-          failedPeerCount: result.failed
+          deliveredPeerCount: delivery.delivered,
+          failedPeerCount: delivery.failed
         )
       }
     }
 
-    private func attempt(
-      _ bytes: [UInt8],
-      to peers: [OrbitIPCPeer],
-      databaseIdentifier: OrbitDatabaseIdentifier
-    ) -> (delivered: Int, failed: Int, pending: [OrbitIPCPeer]) {
-      var result = (delivered: 0, failed: 0, pending: [OrbitIPCPeer]())
-      let coordinationKey = databaseIdentifier.coordinationKey
-      for peer in peers {
-        do {
-          if try self.endpoint.send(bytes, to: peer, coordinationKey: coordinationKey) {
-            result.delivered += 1
-          } else {
-            result.pending.append(peer)
-          }
-        } catch let error as OrbitIPCSystemError where error.isStalePeer {
-          try? self.registry.remove(peer, databaseIdentifier: databaseIdentifier)
-        } catch {
-          result.failed += 1
-        }
-      }
-      return result
-    }
-
-    private func retry(
-      _ bytes: [UInt8],
-      to peers: [OrbitIPCPeer],
-      databaseIdentifier: OrbitDatabaseIdentifier,
-      upTo duration: Duration
-    ) async throws -> (delivered: Int, failed: Int) {
-      let clock = ContinuousClock()
-      let deadline = clock.now.advanced(by: duration)
-      var pendingPeers = peers
-      var result = (delivered: 0, failed: 0)
-      var retryDelay = Duration.milliseconds(1)
-
-      while !pendingPeers.isEmpty, clock.now < deadline {
-        // AF_UNIX datagrams have no destination-specific writable event, so retry with a bounded
-        // backoff rather than spinning when a particular peer's receive queue is full. The attempt
-        // that lands exactly on the deadline still happens: the budget is time spent waiting.
-        try await clock.sleep(until: min(deadline, clock.now.advanced(by: retryDelay)))
-        retryDelay = min(retryDelay * 2, .milliseconds(16))
-        let attempt = self.attempt(bytes, to: pendingPeers, databaseIdentifier: databaseIdentifier)
-        result.delivered += attempt.delivered
-        result.failed += attempt.failed
-        pendingPeers = attempt.pending
-      }
-      return (result.delivered, result.failed + pendingPeers.count)
+    /// How many sent messages wait in pending batches for peers whose queues are full.
+    var pendingMessageCount: Int {
+      self.endpoint.pendingMessageCount
     }
   }
 
