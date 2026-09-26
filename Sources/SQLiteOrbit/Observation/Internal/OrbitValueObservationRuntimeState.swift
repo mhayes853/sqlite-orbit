@@ -235,3 +235,102 @@ struct OrbitValueObservationDeliveryQueue<Value: Sendable>: Sendable {
     return self.publications.removeFirst()
   }
 }
+
+/// The region an observation has registered with its database, and what each fetch in flight can
+/// rely on the database having honored since the fetch began.
+///
+/// A database may skip commits outside the registered region. A fetch that reads beyond what was
+/// registered for all of its duration may therefore have missed a commit made after its snapshot
+/// but before the registration grew to cover what it read. Such a fetch is either withheld, and
+/// made again once the registration covers what it read, or published, leaving the observation
+/// owing a fetch that starts once the registration covers it.
+///
+/// The region is kept conservatively: an update that narrows it counts as soon as it is decided,
+/// since the database may start honoring it at any moment, and one that widens it counts only once
+/// the database has applied it.
+struct OrbitValueObservationAdvertisement: Sendable {
+  private(set) var region: OrbitDatabaseRegion
+
+  /// Whether the database may skip commits outside `region`. One that reports every commit covers
+  /// every fetch, and there is nothing to register with it.
+  private var isFiltered = true
+
+  /// What withheld fetches read, which the registration must cover before they are made again.
+  private var withheldRegion = OrbitDatabaseRegion.empty
+
+  /// Whether the last accepted fetch read outside what was registered throughout it.
+  private var owesCoveringFetch = false
+
+  /// For each fetch in flight, the intersection of every region registered since it began.
+  private var floors = [UInt64: OrbitDatabaseRegion]()
+  private var nextFetch: UInt64 = 0
+
+  init(region: OrbitDatabaseRegion) {
+    self.region = region
+  }
+
+  /// Records that the database reports every commit whatever its registered region.
+  mutating func stopFiltering() {
+    isFiltered = false
+    region = .fullDatabase
+    floors.removeAll()
+  }
+
+  /// Starts tracking what is registered during a fetch, which must begin before its snapshot.
+  mutating func beginFetch() -> UInt64 {
+    defer { nextFetch &+= 1 }
+    if isFiltered { floors[nextFetch] = region }
+    return nextFetch
+  }
+
+  /// Stops tracking a fetch.
+  ///
+  /// - Returns: The region the database honored for all of the fetch's duration.
+  mutating func endFetch(_ fetch: UInt64) -> OrbitDatabaseRegion {
+    guard isFiltered else { return .fullDatabase }
+    return floors.removeValue(forKey: fetch) ?? .empty
+  }
+
+  /// Records a fetch that read `region` but is withheld because it was not covered.
+  mutating func withhold(read region: OrbitDatabaseRegion) {
+    withheldRegion.formUnion(region)
+  }
+
+  /// Records that the observation accepted a fetch that read `region`.
+  ///
+  /// - Parameters:
+  ///   - region: The region the fetch read.
+  ///   - floor: The region the database honored for all of the fetch's duration.
+  mutating func accept(read region: OrbitDatabaseRegion, floor: OrbitDatabaseRegion) {
+    owesCoveringFetch = !floor.contains(region)
+    withheldRegion = .empty
+  }
+
+  /// Takes the fetch owed for an uncovered read that was published, once the registered region
+  /// covers `observed`, what that read.
+  mutating func takeCoveringFetch(observing observed: OrbitDatabaseRegion) -> Bool {
+    guard owesCoveringFetch, region.contains(observed) else { return false }
+    owesCoveringFetch = false
+    return true
+  }
+
+  /// Decides to register what the observation needs covered, counting whatever that drops from
+  /// the current registration as dropped already.
+  ///
+  /// - Parameter observed: The region the last accepted fetch read.
+  /// - Returns: The region to register, or `nil` if it is registered already.
+  mutating func beginUpdate(observing observed: OrbitDatabaseRegion) -> OrbitDatabaseRegion? {
+    let target = observed.union(withheldRegion)
+    guard isFiltered, target != region else { return nil }
+    region.formIntersection(target)
+    for fetch in floors.keys {
+      floors[fetch]?.formIntersection(target)
+    }
+    return target
+  }
+
+  /// Records that the database applied `target`.
+  mutating func finishUpdate(to target: OrbitDatabaseRegion) {
+    region = target
+  }
+}

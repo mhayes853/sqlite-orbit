@@ -94,6 +94,25 @@ struct KeyedHandlerRegistry<Key: Hashable & Sendable, Handler: Sendable>: Sendab
 
   func contains(_ key: Key) -> Bool { self.groups[key] != nil }
 
+  /// Changes a handler in place.
+  ///
+  /// - Parameters:
+  ///   - identifier: The handler to change.
+  ///   - key: The key it was inserted for.
+  ///   - body: Changes the handler.
+  /// - Returns: Whether the handler was still registered.
+  @discardableResult
+  mutating func update(
+    _ identifier: UInt64,
+    for key: Key,
+    _ body: (inout Handler) -> Void
+  ) -> Bool {
+    guard var handler = self.groups[key]?[identifier] else { return false }
+    body(&handler)
+    self.groups[key]?[identifier] = handler
+    return true
+  }
+
   mutating func insert(
     _ handler: Handler,
     for key: Key

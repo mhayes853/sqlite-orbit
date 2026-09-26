@@ -375,20 +375,33 @@ extension OrbitIPCDatabase: OrbitObservableDatabase {
   /// ``OrbitDatabaseTransactionOrigin/local``), and writes announced by another process (reported
   /// as ``OrbitDatabaseTransactionOrigin/external``).
   ///
+  /// The region reaches the transport, so peers can skip announcing a commit that does not
+  /// overlap it, and it filters the commits of other handles in this process too. This handle's
+  /// own transactions are reported in full, since observers filter those themselves. Updating the
+  /// region through the returned subscription updates every source before it returns.
+  ///
   /// ```swift
-  /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
+  /// let subscription = try database.subscribe(
+  ///   transactionObserver: CommitLogger(),
+  ///   region: Reminder.databaseRegion
+  /// )
   /// ```
   ///
-  /// - Parameter transactionObserver: The observer to register.
-  /// - Returns: A subscription that unregisters the observer from every source when cancelled.
+  /// - Parameters:
+  ///   - transactionObserver: The observer to register.
+  ///   - region: The region whose commits the observer must be told about.
+  /// - Returns: A subscription that unregisters the observer from every source when cancelled,
+  ///   and through which its region can change.
   /// - Throws: An error if the writer or the transport refuses the registration.
   public func subscribe(
-    transactionObserver: any OrbitDatabaseTransactionObserver
-  ) throws -> OrbitSubscription {
-    let local = try writer.subscribe(transactionObserver: transactionObserver)
+    transactionObserver: any OrbitDatabaseTransactionObserver,
+    region: OrbitDatabaseRegion
+  ) throws -> OrbitRegionSubscription {
+    let local = try writer.subscribe(transactionObserver: transactionObserver, region: region)
     let sameProcess = OrbitDatabaseObservationHub.shared.subscribe(
       to: id,
-      writerIdentifier: ObjectIdentifier(writer)
+      writerIdentifier: ObjectIdentifier(writer),
+      region: region
     ) { region in
       transactionObserver.databaseDidChange(in: region)
       transactionObserver.databaseDidCommit(
@@ -396,14 +409,18 @@ extension OrbitIPCDatabase: OrbitObservableDatabase {
       )
     }
     do {
-      let external = try transport.subscribe(to: id) { message in
+      let external = try transport.subscribe(to: id, region: region) { message in
         guard case .transactionDidCommit(let commit) = message else { return }
         transactionObserver.databaseDidChange(in: commit.region)
         transactionObserver.databaseDidCommit(
           OrbitDatabaseCommit(origin: .external, region: commit.region)
         )
       }
-      return OrbitSubscription {
+      return OrbitRegionSubscription(region: region) { region in
+        try external.updateRegion(region)
+        try sameProcess.updateRegion(region)
+        try local.updateRegion(region)
+      } onCancel: {
         local.cancel()
         sameProcess.cancel()
         external.cancel()
@@ -421,6 +438,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
 
   private struct Registration: Sendable {
     let writerIdentifier: ObjectIdentifier
+    var region: OrbitDatabaseRegion
     let onCommit: @Sendable (OrbitDatabaseRegion) -> Void
   }
 
@@ -429,17 +447,30 @@ private final class OrbitDatabaseObservationHub: Sendable {
   func subscribe(
     to databaseIdentifier: OrbitDatabaseIdentifier,
     writerIdentifier: ObjectIdentifier,
+    region: OrbitDatabaseRegion,
     onCommit: @escaping @Sendable (OrbitDatabaseRegion) -> Void
-  ) -> OrbitSubscription {
+  ) -> OrbitRegionSubscription {
     let identifier = registrations.withLock {
       $0.insert(
-        Registration(writerIdentifier: writerIdentifier, onCommit: onCommit),
+        Registration(writerIdentifier: writerIdentifier, region: region, onCommit: onCommit),
         for: databaseIdentifier
       )
       .identifier
     }
-    return OrbitSubscription { [weak self] in
+    return OrbitRegionSubscription(region: region) { [weak self] region in
+      self?.update(identifier, for: databaseIdentifier, region: region)
+    } onCancel: { [weak self] in
       _ = self?.registrations.withLock { $0.remove(identifier, for: databaseIdentifier) }
+    }
+  }
+
+  private func update(
+    _ identifier: UInt64,
+    for databaseIdentifier: OrbitDatabaseIdentifier,
+    region: OrbitDatabaseRegion
+  ) {
+    _ = registrations.withLock {
+      $0.update(identifier, for: databaseIdentifier) { $0.region = region }
     }
   }
 
@@ -450,7 +481,7 @@ private final class OrbitDatabaseObservationHub: Sendable {
   ) {
     let callbacks = registrations.withLock { registrations in
       registrations.handlers(for: databaseIdentifier)
-        .filter { $0.writerIdentifier != writerIdentifier }
+        .filter { $0.writerIdentifier != writerIdentifier && $0.region.admits(region) }
         .map(\.onCommit)
     }
     for callback in callbacks { callback(region) }

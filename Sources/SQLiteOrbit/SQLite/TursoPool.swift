@@ -174,11 +174,19 @@
     /// Registers an observer of reads and successfully committed writes.
     ///
     /// Concurrent writes publish their aggregate changed region only after committing, followed
-    /// immediately by the commit. A conflicting or otherwise failed write publishes nothing.
+    /// immediately by the commit. A conflicting or otherwise failed write publishes nothing. Every
+    /// transaction this driver reports happens in this process, so it reports all of them whatever
+    /// `region` says, and updating the region has no effect.
+    ///
+    /// - Parameters:
+    ///   - transactionObserver: Receives reads and each committed changed region.
+    ///   - region: The region the observer cares about.
+    /// - Returns: A subscription that stops the observer when it is cancelled or released.
     public func subscribe(
-      transactionObserver: any OrbitDatabaseTransactionObserver
-    ) throws -> OrbitSubscription {
-      transactionObservers.subscribe(transactionObserver)
+      transactionObserver: any OrbitDatabaseTransactionObserver,
+      region: OrbitDatabaseRegion
+    ) throws -> OrbitRegionSubscription {
+      transactionObservers.subscribe(transactionObserver, region: region)
     }
 
     // A concurrent write reports what it changed only once it has committed, and holds back the

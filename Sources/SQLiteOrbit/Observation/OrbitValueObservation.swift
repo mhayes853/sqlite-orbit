@@ -1334,7 +1334,7 @@ private struct OrbitValueObservationAcceptance: Sendable {
 private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabaseTransactionObserver
 {
   private enum PendingLocal: Sendable {
-    case fetched(Result<OrbitValueObservationFetchOutput, any Error>)
+    case fetched(Result<OrbitValueObservationFetchOutput, any Error>, fetch: UInt64)
     case skipped
   }
 
@@ -1342,6 +1342,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var isStopped = false
 
     var observedRegion: OrbitDatabaseRegion?
+    var advertisement: OrbitValueObservationAdvertisement
     var transactionRegion: OrbitDatabaseRegion?
     var pendingLocal: PendingLocal?
 
@@ -1357,6 +1358,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
     init(observedRegion: OrbitDatabaseRegion?) {
       self.observedRegion = observedRegion
+      // Until a fetch says what it reads, only a constant region is known to cover it.
+      self.advertisement = OrbitValueObservationAdvertisement(
+        region: observedRegion ?? .fullDatabase
+      )
     }
 
     /// Forgets the invalidations a refetch controller would otherwise be told about, once a fetch
@@ -1376,7 +1381,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private let reducer: OrbitValueObservationReducer<Value>
   private var events: OrbitValueObservationEvents { reducer.events }
   private let state: Lock<State>
-  private let transactionSubscription = Lock<OrbitSubscription?>(nil)
+  private let transactionSubscription = Lock<OrbitRegionSubscription?>(nil)
+  // Held across a region update so that updates reach the database in the order they are decided
+  // in, but never together with `state`, since the database may do file I/O to apply one.
+  private let advertising = Lock(())
   private let externalTracking: ExternalTracking
 
   init<Database: OrbitObservableDatabase>(
@@ -1429,7 +1437,11 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
 
   func install<Database: OrbitObservableDatabase>(on database: Database) throws {
     let observer = WeakValueObservationObserver(runtime: self)
-    let subscription = try database.subscribe(transactionObserver: observer)
+    let region = state.withLock { $0.advertisement.region }
+    let subscription = try database.subscribe(transactionObserver: observer, region: region)
+    if !subscription.filtersByRegion {
+      state.withLock { $0.advertisement.stopFiltering() }
+    }
     transactionSubscription.withLock { $0 = subscription }
   }
 
@@ -1488,23 +1500,25 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func fetchInitialValueImmediatelyIfNeeded(
     isolation: isolated (any Actor)?
   ) {
-    let shouldFetch = state.withLock { state -> Bool in
-      guard !state.isStopped, !state.reads.initialFetchCompleted else { return false }
+    let fetch = state.withLock { state -> UInt64? in
+      guard !state.isStopped, !state.reads.initialFetchCompleted else { return nil }
       // Discard an older asynchronous fetch if one is already in flight.
       state.reads.discardInFlightRead()
-      return true
+      return state.advertisement.beginFetch()
     }
-    guard shouldFetch else { return }
+    guard let fetch else { return }
 
     events.willFetch()
     let result = readBlocking()
     let delivery = state.withLock { state -> OrbitValueObservationDelivery in
+      let floor = state.advertisement.endFetch(fetch)
       guard !state.isStopped, !state.reads.initialFetchCompleted else {
         discard(result)
         return .idle
       }
-      return accept(result, source: .initial, state: &state)?.delivery ?? .idle
+      return accept(result, source: .initial, floor: floor, state: &state)?.delivery ?? .idle
     }
+    advertiseObservedRegion()
     deliver(delivery, from: isolation)
   }
 
@@ -1531,12 +1545,19 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     guard let affectedRegion else { return }
     let commit = OrbitDatabaseCommit(origin: .local, region: affectedRegion)
     guard reducer.transactionNeedsFetch(commit) else { return }
+    // Another process can commit as soon as this transaction does, so what this fetch reads has
+    // to be covered from here on, as for a fetch that reads a snapshot of its own.
+    guard
+      let advertisedFetch = state.withLock({ state in
+        state.isStopped ? nil : state.advertisement.beginFetch()
+      })
+    else { return }
 
     events.willFetch()
     let result = Result { try fetch(transaction) }
     state.withLock { state in
       guard !state.isStopped else { return }
-      state.pendingLocal = .fetched(result)
+      state.pendingLocal = .fetched(result, fetch: advertisedFetch)
     }
   }
 
@@ -1551,9 +1572,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       switch pending {
       case .skipped:
         return
-      case .fetched(let result):
+      case .fetched(let result, let fetch):
         events.databaseDidChange()
-        publishLocal(result)
+        publishLocal(result, fetch: fetch)
         return
       case nil:
         break
@@ -1576,6 +1597,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         state.transactionRegion = nil
         state.pendingLocal = nil
       }
+      if case .fetched(_, let fetch) = state.pendingLocal {
+        _ = state.advertisement.endFetch(fetch)
+      }
       return state.pendingLocal
     }
     discard(pending)
@@ -1595,16 +1619,23 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   private func publishLocal(
-    _ result: Result<OrbitValueObservationFetchOutput, any Error>
+    _ result: Result<OrbitValueObservationFetchOutput, any Error>,
+    fetch: UInt64
   ) {
     let delivery = state.withLock { state -> OrbitValueObservationDelivery in
+      let floor = state.advertisement.endFetch(fetch)
       guard !state.isStopped else {
         discard(result)
         return .idle
       }
-      guard let acceptance = accept(result, source: .transaction(.local), state: &state) else {
-        return .idle
-      }
+      guard
+        let acceptance = accept(
+          result,
+          source: .transaction(.local),
+          floor: floor,
+          state: &state
+        )
+      else { return .idle }
       // The fetch inside this transaction includes every commit visible before this one, so it
       // also satisfies an older external invalidation whose read has not completed yet.
       state.reads.supersedePendingRead()
@@ -1612,6 +1643,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.dropOutstandingInvalidations()
       return acceptance.delivery
     }
+    advertiseObservedRegion()
     deliver(delivery, from: nil)
   }
 
@@ -1621,7 +1653,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     source: OrbitValueObservationSource,
     reason: OrbitValueObservationRefetchReason,
     affectedRegion: OrbitDatabaseRegion?,
-    activeWriterBarrier: SQLitePoolWriterBarrier?
+    activeWriterBarrier: SQLitePoolWriterBarrier?,
+    isCommit: Bool = true
   ) {
     let action = state.withLock {
       state -> (
@@ -1633,7 +1666,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       // Recorded whether or not a controller will see them, so that one running later is told the
       // truth about what is outstanding. Accepting the initial value drops them again.
       state.refetchReasons.insert(reason)
-      if case .transaction(let origin) = source, let affectedRegion {
+      if case .transaction(let origin) = source, let affectedRegion, isCommit {
         state.refetchCommits.append(OrbitDatabaseCommit(origin: origin, region: affectedRegion))
       }
       if let affectedRegion {
@@ -1711,9 +1744,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     publishing behavior: OrbitValueObservationPublicationBehavior
   ) async -> OrbitValueObservationFetchResult {
     guard
-      let request = state.withLock({ state -> OrbitValueObservationFetchRequest? in
-        guard !state.isStopped else { return nil }
-        return state.refetches.beginFetch()
+      let (request, fetch) = state.withLock({
+        state -> (OrbitValueObservationFetchRequest, UInt64)? in
+        guard !state.isStopped, let request = state.refetches.beginFetch() else { return nil }
+        return (request, state.advertisement.beginFetch())
       })
     else { return .cancelled }
 
@@ -1724,6 +1758,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
         result: OrbitValueObservationFetchResult,
         delivery: OrbitValueObservationDelivery
       ) in
+      let floor = state.advertisement.endFetch(fetch)
       guard !state.isStopped else {
         discard(result)
         return (.cancelled, .idle)
@@ -1737,6 +1772,8 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       let acceptance = accept(
         result,
         source: request.source,
+        floor: floor,
+        withholdingUncovered: true,
         forcingPublication: behavior == .force,
         state: &state
       )
@@ -1753,6 +1790,9 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       }
       return (.published, acceptance.delivery)
     }
+    // A fetch that read beyond the registered region asks for another here, once the region covers
+    // what it read, which makes the controller that ran it run again.
+    advertiseObservedRegion()
     deliver(completed.delivery, from: nil)
     return completed.result
   }
@@ -1778,25 +1818,29 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     guard let request else { return }
     Task { [weak self] in
       guard let self else { return }
+      let fetch = state.withLock { $0.advertisement.beginFetch() }
       events.willFetch()
       let result = await read()
-      completeRead(result, request: request)
+      completeRead(result, request: request, fetch: fetch)
     }
   }
 
   private func completeRead(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
-    request: OrbitValueObservationFetchRequest
+    request: OrbitValueObservationFetchRequest,
+    fetch: UInt64
   ) {
     let completed = state.withLock {
       state -> (OrbitValueObservationDelivery, OrbitValueObservationFetchRequest?) in
+      let floor = state.advertisement.endFetch(fetch)
       guard !state.isStopped else {
         discard(result)
         return (.idle, nil)
       }
       let delivery: OrbitValueObservationDelivery
       if state.reads.completeRead(request) {
-        delivery = accept(result, source: request.source, state: &state)?.delivery ?? .idle
+        delivery =
+          accept(result, source: request.source, floor: floor, state: &state)?.delivery ?? .idle
       } else {
         discard(result)
         delivery = .idle
@@ -1805,13 +1849,31 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       guard !state.isStopped else { return (delivery, nil) }
       return (delivery, state.reads.takeRequestIfPossible())
     }
+    advertiseObservedRegion()
     deliver(completed.0, from: nil)
     start(completed.1)
   }
 
+  /// Accepts a fetch and publishes its outcome.
+  ///
+  /// - Parameters:
+  ///   - result: The fetch's outcome.
+  ///   - source: The event the fetch answers.
+  ///   - floor: The region the database honored for all of the fetch's duration. A fetch that read
+  ///     beyond it may have missed a commit, and must be made again once the registered region
+  ///     covers what it read, which `advertiseObservedRegion()` sees to.
+  ///   - withholdingUncovered: Whether a fetch that read beyond `floor` is withheld, for its
+  ///     caller to make again, instead of published and followed by another fetch. Publishing
+  ///     spares a caller that cannot fetch again, while withholding spares subscribers a value
+  ///     that is followed at once by one that is likely the same.
+  ///   - forcingPublication: Whether to publish even though the fetch may be stale.
+  ///   - state: The runtime's state.
+  /// - Returns: What accepting the fetch requires, or `nil` if it was not accepted.
   private func accept(
     _ result: Result<OrbitValueObservationFetchOutput, any Error>,
     source: OrbitValueObservationSource,
+    floor: OrbitDatabaseRegion,
+    withholdingUncovered: Bool = false,
     forcingPublication: Bool = false,
     state: inout State
   ) -> OrbitValueObservationAcceptance? {
@@ -1819,11 +1881,20 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var requiresObservableRefetch = false
     switch result {
     case .success(let output):
+      if withholdingUncovered, !forcingPublication, !floor.contains(output.region) {
+        // Required again as an invalidation of its own, so that even a controller that gives up
+        // on a superseded fetch is run again for it.
+        state.advertisement.withhold(read: output.region)
+        state.refetches.require(source: source)
+        output.externalDependencies?.cancel()
+        return nil
+      }
       let dependenciesAreCurrent = externalTracking.accept(output.externalDependencies)
       guard dependenciesAreCurrent || forcingPublication else { return nil }
       requiresObservableRefetch = !dependenciesAreCurrent
       completeInitialFetch(state: &state)
       state.observedRegion = output.region
+      state.advertisement.accept(read: output.region, floor: floor)
       do {
         guard case .emit(let value) = try reducer.reduce(output.payload) else {
           let subscribers = state.subscribers.publishNoEmission(source: source)
@@ -1892,8 +1963,70 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   }
 
   private func discard(_ pending: PendingLocal?) {
-    guard case .fetched(let result) = pending else { return }
+    guard case .fetched(let result, _) = pending else { return }
     discard(result)
+  }
+
+  // MARK: - Region
+
+  /// Registers with the database the region the last accepted fetch read, together with what any
+  /// withheld fetch read, and asks for the fetch owed by a published one that read beyond what was
+  /// registered throughout it once the registration covers what it read.
+  ///
+  /// The database may skip commits outside the registered region. Narrowing it to what was read is
+  /// safe, since nothing outside that region can change the value. Widening it is not enough on its
+  /// own, since a commit to the added part may have landed between the fetch and the update, so a
+  /// fetch that read beyond the region is made again after the update returns, and so on until one
+  /// reads nothing the registration did not cover for all of its duration. A withheld fetch is
+  /// already required again, and its caller makes it again after this returns.
+  ///
+  /// Call this after accepting or withholding a fetch, without holding `state`.
+  private func advertiseObservedRegion() {
+    let outcome = advertising.withLock { _ -> (owesFetch: Bool, error: (any Error)?) in
+      var owesFetch = false
+      while true {
+        let update = state.withLock { state -> OrbitDatabaseRegion? in
+          guard !state.isStopped, let observedRegion = state.observedRegion else { return nil }
+          if state.advertisement.takeCoveringFetch(observing: observedRegion) {
+            owesFetch = true
+          }
+          return state.advertisement.beginUpdate(observing: observedRegion)
+        }
+        guard let update, let subscription = transactionSubscription.withLock({ $0 }) else {
+          return (owesFetch, nil)
+        }
+        do {
+          try subscription.updateRegion(update)
+        } catch {
+          return (owesFetch, error)
+        }
+        state.withLock { $0.advertisement.finishUpdate(to: update) }
+      }
+    }
+    if let error = outcome.error {
+      fail(error)
+    } else if outcome.owesFetch {
+      // Whatever the commit that may have been missed was, the database did not report it, so it
+      // is looked for the way an announced one from another process would be.
+      let observedRegion = state.withLock { $0.observedRegion }
+      requestRefetch(
+        source: .transaction(.external),
+        reason: .externalProcessChange,
+        affectedRegion: observedRegion,
+        activeWriterBarrier: nil,
+        isCommit: false
+      )
+    }
+  }
+
+  /// Ends the observation with `error`.
+  private func fail(_ error: any Error) {
+    let delivery = state.withLock { state -> OrbitValueObservationDelivery in
+      guard !state.isStopped else { return .idle }
+      return accept(.failure(error), source: .observable, floor: .empty, state: &state)?.delivery
+        ?? .idle
+    }
+    deliver(delivery, from: nil)
   }
 
   // MARK: - Delivery

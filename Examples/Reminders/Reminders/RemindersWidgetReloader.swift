@@ -6,7 +6,7 @@ final class RemindersWidgetReloader: OrbitIPCDatabase.Delegate, Sendable {
   private let observedRegion: OrbitDatabaseRegion
   private let refresh: @Sendable () -> Void
   private let externalObserver: ExternalWidgetCommitObserver
-  private let subscription: OrbitSubscription
+  private let subscription: OrbitRegionSubscription
 
   init(
     database: OrbitIPCDatabase,
@@ -25,7 +25,7 @@ final class RemindersWidgetReloader: OrbitIPCDatabase.Delegate, Sendable {
     observedRegion = region
     self.refresh = refresh
     externalObserver = ExternalWidgetCommitObserver(region: region, refresh: refresh)
-    subscription = try database.subscribe(transactionObserver: externalObserver)
+    subscription = try database.subscribe(transactionObserver: externalObserver, region: region)
   }
 
   func orbitIPCDatabase(

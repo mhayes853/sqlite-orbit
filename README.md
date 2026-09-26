@@ -721,6 +721,12 @@ Commits from the observed driver, another database handle, or another process ca
 observations avoid refetching after unrelated writes. A custom observable database that reports a
 commit without a region is handled conservatively.
 
+An observation also registers the region it reads with the database it observes, so that an
+`OrbitIPCDatabase` whose transport filters by region spares it, and its process, announcements of
+unrelated commits altogether. When a fetch reads beyond what was registered while it ran, the
+observation widens the registration and then fetches again, so a commit that lands in between is
+never missed.
+
 The default refetch controller starts immediately and retries when a newer invalidation supersedes
 its read. Turso applications with expensive fetches can wait for only the writers that were active
 alongside the triggering commit, then fetch their combined result:
@@ -906,7 +912,19 @@ For transaction lifecycle events that do not produce a value, register an
 aggregate committed region from another handle or a concurrent-write driver.
 `databaseWillCommit` receives a read-only view of a pending serial transaction and may throw to
 abort the write, and `databaseDidCommit` identifies the transaction's local or external origin.
-Work performed directly through `sqliteConnection` can publish its regions explicitly:
+An observer that only cares about part of the database can say so, and change its mind later:
+
+```swift
+let subscription = try database.subscribe(
+  transactionObserver: CommitLogger(),
+  region: Reminder.databaseRegion
+)
+try subscription.updateRegion(Reminder.databaseRegion.union(Tag.databaseRegion))
+```
+
+The region is a lower bound: commits that overlap it are always reported, while commits outside it
+made through other handles or by other processes may be skipped. Work performed directly through
+`sqliteConnection` can publish its regions explicitly:
 
 ```swift
 try await database.write { transaction in
