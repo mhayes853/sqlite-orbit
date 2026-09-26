@@ -1,4 +1,4 @@
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Foundation
   import Testing
 
@@ -100,13 +100,18 @@
     let database = OrbitDatabaseIdentifier(rawValue: "malformed")
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
     let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "malformed")
-    let socket = try UnixDatagramSocket(
-      path: registry.socketPath,
-      receiveBufferByteCount: 65_535
-    )
     let peer = try #require(registry.peers(databaseIdentifier: database).first)
+    let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
+    defer { UnixSystem.closeDescriptor(descriptor) }
+    // One that fills the receive buffer, which the transport sizes a byte past the longest datagram
+    // it accepts, is dropped rather than decoded from a prefix.
+    let tooLong =
+      try OrbitIPCWireProtocol.encode(commit(database))
+      + [UInt8](repeating: 0, count: 60 * 1024)
 
-    _ = try socket.send([0xff, 0, 1], to: peer.socketPath)
+    for datagram in [[0xff, 0, 1], tooLong] {
+      #expect(try datagram.withUnsafeBytes { try UnixSystem.sendDatagram($0, on: descriptor) })
+    }
     let message = commit(database)
     try await sender.send(message)
     try await recorder.waitForCount(1)
@@ -194,6 +199,29 @@
 
     #expect(try registry.peers(databaseIdentifier: database).isEmpty)
     #expect(!FileManager.default.fileExists(atPath: socketPath))
+  }
+
+  @Test
+  func aHandlerCanReleaseTheLastReferenceToItsTransport() async throws {
+    // The handler runs on the transport's own thread, so releasing the transport there must
+    // neither wait for that thread nor close the descriptors it is about to go back to waiting on.
+    let directory = try ipcTestDirectory()
+    defer { remove(directory) }
+    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let database = OrbitDatabaseIdentifier(rawValue: "self-release")
+    let sender = try ipcTransport(directory)
+    let held = Lock<UnixDatagramIPCTransport?>(try ipcTransport(directory))
+    let subscription = try held.withLock { transport in
+      try transport!.subscribe(to: database) { _ in held.withLock { $0 = nil } }
+    }
+    let socketPath = try #require(registry.peers(databaseIdentifier: database).first).socketPath
+
+    try await sender.send(commit(database))
+    try await waitUntil { held.withLock { $0 == nil } }
+
+    #expect(try registry.peers(databaseIdentifier: database).isEmpty)
+    #expect(!FileManager.default.fileExists(atPath: socketPath))
+    _ = subscription
   }
 
   @Test

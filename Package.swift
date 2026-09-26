@@ -87,8 +87,9 @@ let packageTarget1: Target = .target(
     .enableExperimentalFeature("Lifetimes"),
     .enableExperimentalFeature("SuppressedAssociatedTypes"),
     // Swift's WASILibc module does not import `pthread.h`, so the pthread functions the
-    // connection executor needs are declared by hand there.
-    .enableExperimentalFeature("Extern", .when(platforms: [.wasi])),
+    // connection executor needs are declared by hand there. Its Glibc and Musl modules likewise
+    // leave out `sys/epoll.h` and `sys/eventfd.h`, which the IPC transport's thread waits on.
+    .enableExperimentalFeature("Extern", .when(platforms: [.wasi, .linux, .android])),
     // Every trait that links a SQLite of its own defines this, so that code needing only
     // "some build is available" does not have to name each one.
     .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),

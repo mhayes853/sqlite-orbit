@@ -1,4 +1,4 @@
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Foundation
 
   struct OrbitIPCPeer: Hashable, Sendable {
@@ -27,7 +27,7 @@
     func register(databaseIdentifier: OrbitDatabaseIdentifier) throws {
       let directory = self.databaseDirectory(for: databaseIdentifier)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-      try Data().write(to: self.markerURL(in: directory), options: .atomic)
+      try UnixSystem.createFileIfAbsent(atPath: self.markerURL(in: directory).path)
     }
 
     func unregister(databaseIdentifier: OrbitDatabaseIdentifier) throws {

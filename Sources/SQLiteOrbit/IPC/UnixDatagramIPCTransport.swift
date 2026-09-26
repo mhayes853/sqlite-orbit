@@ -1,12 +1,5 @@
-#if canImport(Darwin) || canImport(Glibc)
-  import Dispatch
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Foundation
-
-  #if canImport(Darwin)
-    import Darwin
-  #elseif canImport(Glibc)
-    import Glibc
-  #endif
 
   /// A database IPC transport backed by Unix-domain datagram sockets.
   ///
@@ -106,11 +99,8 @@
 
     private let configuration: Configuration
     private let registry: OrbitIPCEndpointRegistry
-    private let socket: UnixDatagramSocket
+    private let endpoint: UnixDatagramEndpoint
     private let handlers: OrbitIPCHandlers
-    // Only `deinit` touches the source after it is resumed, and dispatch sources are safe to
-    // cancel from any thread, so this needs no lock of its own.
-    private nonisolated(unsafe) let receiver: DispatchSourceRead
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -131,11 +121,11 @@
         configuration.maximumDatagramByteCount <= 65_535,
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
       else {
-        throw OrbitIPCSystemError(operation: "invalid transport configuration", code: EINVAL)
+        throw OrbitIPCSystemError.invalidArgument("invalid transport configuration")
       }
       if case .suspend(upTo: let duration) = configuration.backPressure {
         guard duration >= .zero else {
-          throw OrbitIPCSystemError(operation: "negative back pressure duration", code: EINVAL)
+          throw OrbitIPCSystemError.invalidArgument("negative back pressure duration")
         }
       }
 
@@ -147,54 +137,36 @@
         directory: configuration.directory,
         endpointName: String(endpointName)
       )
-      let socket = try UnixDatagramSocket(
+      let endpoint = try UnixDatagramEndpoint(
         path: registry.socketPath,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
       let handlers = OrbitIPCHandlers(registry: registry)
-      let receiver = DispatchSource.makeReadSource(
-        fileDescriptor: socket.descriptor,
-        queue: DispatchQueue(label: "SQLiteOrbit.UnixDatagramReceiver")
-      )
-      receiver.setEventHandler {
-        while let bytes = try? socket.receive(
-          maximumByteCount: configuration.maximumDatagramByteCount
-        ) {
-          guard bytes.count <= configuration.maximumDatagramByteCount,
-            let message = try? bytes.withUnsafeBufferPointer({
-              try OrbitIPCWireProtocol.decode(Span(_unsafeElements: $0))
-            })
-          else { continue }
-          handlers.receive(message)
-        }
-      }
-      // Dispatch keeps watching the descriptor until cancellation completes, which happens after
-      // `cancel()` returns. Closing it any earlier would leave the source watching a descriptor
-      // number the process is free to hand to the next file it opens.
-      receiver.setCancelHandler { socket.close() }
 
       self.configuration = configuration
       self.registry = registry
-      self.socket = socket
+      self.endpoint = endpoint
       self.handlers = handlers
-      self.receiver = receiver
-      receiver.resume()
+      endpoint.start(maximumDatagramByteCount: configuration.maximumDatagramByteCount) { bytes in
+        guard let message = try? OrbitIPCWireProtocol.decode(bytes) else { return }
+        handlers.receive(message)
+      }
     }
 
     deinit {
       // Everything a peer finds this endpoint by goes now, so one that looks in the coordination
-      // directory after this transport is released finds nothing of it. The descriptor itself is
-      // closed by the cancel handler, which dispatch runs once it has stopped watching it.
+      // directory after this transport is released finds nothing of it. The descriptors
+      // themselves close once the receive thread has woken and let go of the endpoint.
       self.handlers.shutdown()
-      self.socket.removePath()
-      self.receiver.cancel()
+      self.endpoint.removePath()
+      self.endpoint.stop()
     }
 
     /// Subscribes to messages concerning `databaseIdentifier`.
     ///
     /// The first subscription for a database advertises this endpoint in the coordination
     /// directory, so peers can find it; cancelling the last one withdraws the advertisement.
-    /// Handlers run serially on the transport's receive queue.
+    /// Handlers run serially on the transport's receive thread.
     ///
     /// ```swift
     /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
@@ -241,10 +213,14 @@
         maximumByteCount: self.configuration.maximumDatagramByteCount
       )
       guard bytes.count <= self.configuration.maximumDatagramByteCount else {
-        throw OrbitIPCSystemError(operation: "datagram is too large", code: EMSGSIZE)
+        throw OrbitIPCSystemError.messageTooLong("datagram is too large")
       }
       let peers = try self.registry.peers(databaseIdentifier: message.databaseIdentifier)
         .filter { $0.endpointName != self.registry.endpointName }
+      self.endpoint.retainPeers(
+        peers,
+        advertising: message.databaseIdentifier.coordinationKey
+      )
       var result = self.attempt(bytes, to: peers, databaseIdentifier: message.databaseIdentifier)
 
       switch self.configuration.backPressure {
@@ -276,14 +252,15 @@
       databaseIdentifier: OrbitDatabaseIdentifier
     ) -> (delivered: Int, failed: Int, pending: [OrbitIPCPeer]) {
       var result = (delivered: 0, failed: 0, pending: [OrbitIPCPeer]())
+      let coordinationKey = databaseIdentifier.coordinationKey
       for peer in peers {
         do {
-          if try self.socket.send(bytes, to: peer.socketPath) {
+          if try self.endpoint.send(bytes, to: peer, coordinationKey: coordinationKey) {
             result.delivered += 1
           } else {
             result.pending.append(peer)
           }
-        } catch let error as OrbitIPCSystemError where Self.isStaleEndpointError(error.code) {
+        } catch let error as OrbitIPCSystemError where error.isStalePeer {
           try? self.registry.remove(peer, databaseIdentifier: databaseIdentifier)
         } catch {
           result.failed += 1
@@ -316,10 +293,6 @@
         pendingPeers = attempt.pending
       }
       return (result.delivered, result.failed + pendingPeers.count)
-    }
-
-    private static func isStaleEndpointError(_ code: Int32) -> Bool {
-      code == ENOENT || code == ECONNREFUSED
     }
   }
 
@@ -420,7 +393,7 @@
     ) throws -> UInt64 {
       try self.state.withLock { state in
         guard !state.isShutdown else {
-          throw OrbitIPCSystemError(operation: "transport is closed", code: EBADF)
+          throw OrbitIPCSystemError.closed("transport is closed")
         }
         // Checked before the handler is added, so this asks whether anything was subscribed
         // before it.

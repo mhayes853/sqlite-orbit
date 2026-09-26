@@ -1,4 +1,4 @@
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Foundation
   @testable import SQLiteOrbit
   import Testing

@@ -1,4 +1,4 @@
-#if BuiltInSQLite && (canImport(Darwin) || canImport(Glibc))
+#if BuiltInSQLite && (canImport(Darwin) || os(Linux) || os(Android))
 
   extension OrbitIPCDatabase {
     /// Opens the SQLite database at `path` for access from any process using the same coordination

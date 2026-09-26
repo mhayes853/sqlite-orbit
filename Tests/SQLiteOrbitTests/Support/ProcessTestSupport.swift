@@ -33,13 +33,17 @@ func waitUntil(
   }
 }
 
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Testing
 
   #if canImport(Darwin)
     import Darwin
-  #else
+  #elseif canImport(Glibc)
     import Glibc
+  #elseif canImport(Musl)
+    import Musl
+  #elseif canImport(Android)
+    import Android
   #endif
 
   func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
@@ -49,19 +53,11 @@ func waitUntil(
   }
 
   func processTestSignal(_ process: Process, _ signal: Int32) {
-    #if canImport(Darwin)
-      _ = Darwin.kill(process.processIdentifier, signal)
-    #else
-      _ = Glibc.kill(process.processIdentifier, signal)
-    #endif
+    _ = kill(process.processIdentifier, signal)
   }
 
   func processTestExit(_ status: Int32) -> Never {
-    #if canImport(Darwin)
-      Darwin.exit(status)
-    #else
-      Glibc.exit(status)
-    #endif
+    exit(status)
   }
 
   final class ProcessTestHarness {
