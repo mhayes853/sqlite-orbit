@@ -111,7 +111,7 @@
       // and reach it several to a datagram.
       let harness = try IPCProcessHarness(database: "batched")
       defer { harness.cleanup() }
-      let messageCount = 2_000
+      let messageCount = 4_000
       let listener = try harness.spawn("listen", expected: messageCount)
       try await harness.waitUntilReady(1)
       harness.suspend(listener)
@@ -193,10 +193,14 @@
     let ready = URL(fileURLWithPath: try value(IPCProcessEnvironment.ready))
     let result = URL(fileURLWithPath: try value(IPCProcessEnvironment.result))
     let expected = try #require(Int(try value(IPCProcessEnvironment.expected)))
+    // The smallest receive buffer a transport allows, so a stopped peer fills up after a
+    // predictable number of commits. Darwin bounds the queue by bytes, and a default buffer holds
+    // thousands of these small datagrams.
     let transport = try UnixDatagramIPCTransport(
       configuration: .init(
         directory: directory,
-        backPressure: .suspend(upTo: .seconds(5))
+        backPressure: .suspend(upTo: .seconds(5)),
+        receiveBufferByteCount: 60 * 1024
       )
     )
     let received = Lock(0)
