@@ -100,36 +100,42 @@ struct InMemoryIPCTransportRegionTests {
   private let database = OrbitDatabaseIdentifier(rawValue: "regions")
   private let items = OrbitDatabaseRegion(table: "items")
   private let lists = OrbitDatabaseRegion(table: "lists")
+  private let network = InMemoryIPCTransport.Network()
 
   @Test
   func senderSkipsAPeerWhoseRegionTheCommitMisses() async throws {
-    let network = InMemoryIPCTransport.Network()
     let sender = InMemoryIPCTransport(network: network)
     let receiver = InMemoryIPCTransport(network: network)
-    let recorder = IPCMessageRecorder()
-    let subscription = try receiver.subscribe(
+    let itemsRecorder = IPCMessageRecorder()
+    let everythingRecorder = IPCMessageRecorder()
+    let itemsSubscription = try receiver.subscribe(
       to: database,
       region: items,
-      onMessage: recorder.append
+      onMessage: itemsRecorder.append
     )
+    let peer = InMemoryIPCTransport(network: network)
+    let everythingSubscription = try peer.subscribe(
+      to: database,
+      onMessage: everythingRecorder.append
+    )
+    let itemsColumn = OrbitDatabaseRegion(column: "id", in: "items")
 
-    try await sender.send(commit(database, region: lists))
-    try await sender.send(commit(database, region: .empty))
-    try await sender.send(commit(database, region: OrbitDatabaseRegion(column: "id", in: "items")))
-    try await sender.send(commit(database, region: .fullDatabase))
+    for region in [lists, .empty, itemsColumn, .fullDatabase] {
+      try await sender.send(commit(database, region: region))
+    }
 
     #expect(
-      recorder.values == [
-        commit(database, region: OrbitDatabaseRegion(column: "id", in: "items")),
-        commit(database, region: .fullDatabase)
+      itemsRecorder.values == [
+        commit(database, region: itemsColumn), commit(database, region: .fullDatabase)
       ]
     )
-    _ = subscription
+    #expect(everythingRecorder.values.count == 4)
+    #expect(peer.advertisedRegion(for: database) == .fullDatabase)
+    _ = (itemsSubscription, everythingSubscription)
   }
 
   @Test
-  func wideningTakesEffectForTheNextSend() async throws {
-    let network = InMemoryIPCTransport.Network()
+  func updatedRegionTakesEffectForTheNextSend() async throws {
     let sender = InMemoryIPCTransport(network: network)
     let receiver = InMemoryIPCTransport(network: network)
     let recorder = IPCMessageRecorder()
@@ -141,37 +147,18 @@ struct InMemoryIPCTransportRegionTests {
 
     try await sender.send(commit(database, region: lists))
     try subscription.updateRegion(items.union(lists))
-    #expect(receiver.advertisedRegion(for: database) == items.union(lists))
-    try await sender.send(commit(database, region: lists))
-
-    #expect(recorder.values == [commit(database, region: lists)])
-    #expect(subscription.region == items.union(lists))
-  }
-
-  @Test
-  func narrowingStopsTheSenderAtOnce() async throws {
-    let network = InMemoryIPCTransport.Network()
-    let sender = InMemoryIPCTransport(network: network)
-    let receiver = InMemoryIPCTransport(network: network)
-    let recorder = IPCMessageRecorder()
-    let subscription = try receiver.subscribe(
-      to: database,
-      region: .fullDatabase,
-      onMessage: recorder.append
-    )
-
+    let widened = receiver.advertisedRegion(for: database)
     try await sender.send(commit(database, region: lists))
     try subscription.updateRegion(items)
     try await sender.send(commit(database, region: lists))
-    try await sender.send(commit(database, region: items))
 
-    #expect(recorder.values == [commit(database, region: lists), commit(database, region: items)])
+    #expect(recorder.values == [commit(database, region: lists)])
+    #expect(widened == items.union(lists))
     #expect(receiver.advertisedRegion(for: database) == items)
   }
 
   @Test
   func peerAdvertisesTheUnionOfItsHandlersAndEachHandlerHearsOnlyItsOwn() async throws {
-    let network = InMemoryIPCTransport.Network()
     let sender = InMemoryIPCTransport(network: network)
     let receiver = InMemoryIPCTransport(network: network)
     let itemsRecorder = IPCMessageRecorder()
@@ -198,7 +185,6 @@ struct InMemoryIPCTransportRegionTests {
 
   @Test
   func cancellingAHandlerRecomputesTheAdvertisedUnion() async throws {
-    let network = InMemoryIPCTransport.Network()
     let sender = InMemoryIPCTransport(network: network)
     let receiver = InMemoryIPCTransport(network: network)
     let itemsRecorder = IPCMessageRecorder()
@@ -210,6 +196,7 @@ struct InMemoryIPCTransportRegionTests {
     let listsSubscription = try receiver.subscribe(to: database, region: lists) { _ in }
 
     listsSubscription.cancel()
+    try listsSubscription.updateRegion(.fullDatabase)
     #expect(receiver.advertisedRegion(for: database) == items)
     try await sender.send(commit(database, region: lists))
     itemsSubscription.cancel()
@@ -217,35 +204,6 @@ struct InMemoryIPCTransportRegionTests {
     try await sender.send(commit(database, region: items))
 
     #expect(itemsRecorder.values.isEmpty)
-  }
-
-  @Test
-  func updatingACancelledSubscriptionLeavesTheOthersAlone() throws {
-    let network = InMemoryIPCTransport.Network()
-    let receiver = InMemoryIPCTransport(network: network)
-    let kept = try receiver.subscribe(to: database, region: items) { _ in }
-    let cancelled = try receiver.subscribe(to: database, region: lists) { _ in }
-
-    cancelled.cancel()
-    try cancelled.updateRegion(.fullDatabase)
-
-    #expect(receiver.advertisedRegion(for: database) == items)
-    _ = kept
-  }
-
-  @Test
-  func subscriptionWithoutARegionHearsEveryCommit() async throws {
-    let network = InMemoryIPCTransport.Network()
-    let sender = InMemoryIPCTransport(network: network)
-    let receiver = InMemoryIPCTransport(network: network)
-    let recorder = IPCMessageRecorder()
-    let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
-
-    try await sender.send(commit(database, region: .empty))
-
-    #expect(recorder.values == [commit(database, region: .empty)])
-    #expect(receiver.advertisedRegion(for: database) == .fullDatabase)
-    _ = subscription
   }
 }
 

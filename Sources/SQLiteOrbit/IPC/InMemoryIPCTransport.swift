@@ -98,7 +98,7 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   }
 
   private let network: Network
-  private let endpoint = Endpoint()
+  private let endpoint: Endpoint
 
   /// Creates a transport on `network`, or on a private network of its own if none is given.
   ///
@@ -108,10 +108,11 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// - Parameter network: The medium this transport discovers peers through.
   public init(network: Network = Network()) {
     self.network = network
+    self.endpoint = Endpoint(network: network)
   }
 
   deinit {
-    self.endpoint.shutdown(network: self.network)
+    self.endpoint.shutdown()
   }
 
   /// Subscribes to messages concerning `databaseIdentifier` and `region`.
@@ -140,25 +141,17 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
     onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
   ) throws -> OrbitRegionSubscription {
     let endpoint = self.endpoint
-    let network = self.network
-    let identifier = endpoint.add(
-      databaseIdentifier: databaseIdentifier,
-      handler: Handler(region: region, onMessage: onMessage),
-      network: network
-    )
+    let identifier = endpoint.withHandlers(for: databaseIdentifier) {
+      $0.insert(Handler(region: region, onMessage: onMessage), for: databaseIdentifier).identifier
+    }
     return OrbitRegionSubscription(region: region) { region in
-      endpoint.update(
-        identifier: identifier,
-        databaseIdentifier: databaseIdentifier,
-        region: region,
-        network: network
-      )
+      endpoint.withHandlers(for: databaseIdentifier) {
+        _ = $0.update(identifier, for: databaseIdentifier) { $0.region = region }
+      }
     } onCancel: {
-      endpoint.remove(
-        identifier: identifier,
-        databaseIdentifier: databaseIdentifier,
-        network: network
-      )
+      endpoint.withHandlers(for: databaseIdentifier) {
+        _ = $0.remove(identifier, for: databaseIdentifier)
+      }
     }
   }
 
@@ -195,53 +188,36 @@ private struct Handler: Sendable {
 }
 
 private final class Endpoint: Sendable {
+  private let network: InMemoryIPCTransport.Network
   private let handlers = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>())
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
   // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Lock(())
 
-  // What the network knows of this endpoint is changed while the handlers it describes are
-  // locked, so that a subscription added concurrently with the removal of the last one cannot
-  // have its registration undone by the removal that raced it, leaving a live subscriber
-  // undiscoverable, and so that concurrent region updates cannot leave a stale union behind.
-  func add(
-    databaseIdentifier: OrbitDatabaseIdentifier,
-    handler: Handler,
-    network: InMemoryIPCTransport.Network
-  ) -> UInt64 {
-    self.handlers.withLock { handlers in
-      let added = handlers.insert(handler, for: databaseIdentifier)
-      Self.advertise(databaseIdentifier, of: handlers, for: self, on: network)
-      return added.identifier
-    }
+  init(network: InMemoryIPCTransport.Network) {
+    self.network = network
   }
 
-  func update(
-    identifier: UInt64,
-    databaseIdentifier: OrbitDatabaseIdentifier,
-    region: OrbitDatabaseRegion,
-    network: InMemoryIPCTransport.Network
-  ) {
+  /// Changes a database's handlers, then tells the network the union of their regions, or that
+  /// there are none.
+  ///
+  /// The network is told while the handlers are still locked, so that a subscription added
+  /// concurrently with the removal of the last one cannot have its registration undone by the
+  /// removal that raced it, and so that concurrent region updates cannot leave a stale union.
+  func withHandlers<Result>(
+    for databaseIdentifier: OrbitDatabaseIdentifier,
+    _ body: (inout KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>) -> Result
+  ) -> Result {
     self.handlers.withLock { handlers in
-      guard handlers.update(identifier, for: databaseIdentifier, { $0.region = region }) else {
-        return
+      let result = body(&handlers)
+      if handlers.contains(databaseIdentifier) {
+        let region = handlers.handlers(for: databaseIdentifier)
+          .reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
+        self.network.advertise(self, region: region, for: databaseIdentifier)
+      } else {
+        self.network.unregister(self, for: databaseIdentifier)
       }
-      Self.advertise(databaseIdentifier, of: handlers, for: self, on: network)
-    }
-  }
-
-  func remove(
-    identifier: UInt64,
-    databaseIdentifier: OrbitDatabaseIdentifier,
-    network: InMemoryIPCTransport.Network
-  ) {
-    self.handlers.withLock { handlers in
-      let removal = handlers.remove(identifier, for: databaseIdentifier)
-      if removal.isLastForKey {
-        network.unregister(self, for: databaseIdentifier)
-      } else if removal.didRemove {
-        Self.advertise(databaseIdentifier, of: handlers, for: self, on: network)
-      }
+      return result
     }
   }
 
@@ -257,22 +233,11 @@ private final class Endpoint: Sendable {
     }
   }
 
-  func shutdown(network: InMemoryIPCTransport.Network) {
+  func shutdown() {
     self.handlers.withLock { handlers in
       for databaseIdentifier in handlers.removeAll() {
-        network.unregister(self, for: databaseIdentifier)
+        self.network.unregister(self, for: databaseIdentifier)
       }
     }
-  }
-
-  private static func advertise(
-    _ databaseIdentifier: OrbitDatabaseIdentifier,
-    of handlers: KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>,
-    for endpoint: Endpoint,
-    on network: InMemoryIPCTransport.Network
-  ) {
-    let region = handlers.handlers(for: databaseIdentifier)
-      .reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
-    network.advertise(endpoint, region: region, for: databaseIdentifier)
   }
 }

@@ -233,23 +233,16 @@ public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter {
 final class OrbitDatabaseTransactionObservers: Sendable {
   private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
 
-  func subscribe(
-    _ observer: any OrbitDatabaseTransactionObserver
-  ) -> OrbitSubscription {
-    let identifier = observers.withLock { $0.insert(observer) }
-    return OrbitSubscription { [weak self] in
-      _ = self?.observers.withLock { $0.remove(identifier) }
-    }
-  }
-
   /// Registers `observer` on behalf of a database whose transactions all happen in this process,
   /// which reports every one of them whatever the region.
   func subscribe(
     _ observer: any OrbitDatabaseTransactionObserver,
-    region: OrbitDatabaseRegion
+    region: OrbitDatabaseRegion = .fullDatabase
   ) -> OrbitRegionSubscription {
-    let subscription = subscribe(observer)
-    return OrbitRegionSubscription(region: region) { subscription.cancel() }
+    let identifier = observers.withLock { $0.insert(observer) }
+    return OrbitRegionSubscription(region: region) { [weak self] in
+      _ = self?.observers.withLock { $0.remove(identifier) }
+    }
   }
 
   func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {

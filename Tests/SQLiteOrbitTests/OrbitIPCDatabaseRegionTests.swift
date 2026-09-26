@@ -11,7 +11,7 @@
     private let lists = OrbitDatabaseRegion(table: "lists")
 
     @Test
-    func transactionObserverRegionFiltersSiblingsAndPeersUntilItWidens() async throws {
+    func transactionObserverRegionFiltersOnlySiblingsAndPeers() async throws {
       let identifier = OrbitDatabaseIdentifier.unique()
       let network = InMemoryIPCTransport.Network()
       let receivingTransport = InMemoryIPCTransport(network: network)
@@ -36,83 +36,33 @@
       try await peerTransport.send(
         .transactionDidCommit(.init(databaseIdentifier: identifier, region: lists))
       )
-      #expect(observer.commits.isEmpty)
-      #expect(receivingTransport.advertisedRegion(for: identifier) == items)
+      let commitsBeforeWidening = observer.commits
+      let advertisedBeforeWidening = receivingTransport.advertisedRegion(for: identifier)
 
       try subscription.updateRegion(items.union(lists))
       try await siblingDatabase.write { $0.notifyChanges(in: lists) }
       try await peerTransport.send(
         .transactionDidCommit(.init(databaseIdentifier: identifier, region: lists))
       )
+      // The observed handle's own transactions are reported whatever the region.
+      try subscription.updateRegion(items)
+      try await observingDatabase.write { $0.notifyChanges(in: lists) }
 
+      #expect(commitsBeforeWidening.isEmpty)
+      #expect(advertisedBeforeWidening == items)
       #expect(
         observer.commits == [
           OrbitDatabaseCommit(origin: .local, region: lists),
-          OrbitDatabaseCommit(origin: .external, region: lists)
+          OrbitDatabaseCommit(origin: .external, region: lists),
+          OrbitDatabaseCommit(origin: .local, region: lists)
         ]
       )
-      #expect(receivingTransport.advertisedRegion(for: identifier) == items.union(lists))
-      #expect(subscription.region == items.union(lists))
-    }
-
-    @Test
-    func ownTransactionsAreReportedWhateverTheRegion() async throws {
-      let database = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: .memory),
-        id: .unique(),
-        transport: InMemoryIPCTransport()
-      )
-      let observer = CommitRecorder()
-      let subscription = try database.subscribe(transactionObserver: observer, region: items)
-
-      try await database.write { $0.notifyChanges(in: lists) }
-
-      #expect(observer.commits == [OrbitDatabaseCommit(origin: .local, region: lists)])
-      _ = subscription
+      #expect(subscription.region == items)
     }
 
     @Test(arguments: PeerTransport.allCases)
-    func valueObservationIsNotToldAboutPeerCommitsOutsideWhatItReads(transport: PeerTransport)
+    func valueObservationIsToldOnlyAboutPeerCommitsToWhatItReads(transport: PeerTransport)
       async throws
-    {
-      try await withPeerDatabases(transport) { peers in
-        let recorder = ValueRecorder<Int>()
-        let subscription = try OrbitValueObservation<Int>
-          .tracking { transaction in
-            try transaction.fetchOne(#sql("SELECT COUNT(*) FROM a", as: Int.self)) ?? 0
-          }
-          .removeDuplicates()
-          .subscribe(
-            to: peers.observing,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-        try await recorder.waitForValue(1)
-        let advertised = try #require(
-          peers.observingTransport.advertisedRegion(for: peers.identifier)
-        )
-        #expect(advertised.overlaps(OrbitDatabaseRegion(table: "a")))
-        #expect(!advertised.overlaps(OrbitDatabaseRegion(table: "b")))
-
-        try await peers.writing.write { try $0.execute("INSERT INTO b DEFAULT VALUES") }
-        #expect(peers.observingTransport.messages.isEmpty)
-
-        try await peers.writing.write { try $0.execute("INSERT INTO a (flag) VALUES (0)") }
-        try await recorder.waitForValue(2)
-        // A transport that delivers asynchronously can report the commit after the sibling
-        // database in this process already has. Either way, the commit to `b` was sent first, so
-        // it would have arrived first.
-        try await waitUntil(timeout: .seconds(5)) { !peers.observingTransport.messages.isEmpty }
-
-        #expect(peers.observingTransport.messages.count == 1)
-        #expect(recorder.values == [1, 2])
-        #expect(recorder.errors.isEmpty)
-        _ = subscription
-      }
-    }
-
-    @Test(arguments: PeerTransport.allCases)
-    func valueObservationSeesPeerCommitsToWhatItStartsReading(transport: PeerTransport) async throws
     {
       try await withPeerDatabases(transport) { peers in
         let recorder = ValueRecorder<Int?>()
@@ -123,20 +73,25 @@
             onChange: recorder.record(change:)
           )
         try await recorder.waitForValue(nil)
+        let advertisedBeforeFlag = peers.observingTransport.advertisedRegion(for: peers.identifier)
 
         try await peers.writing.write { try $0.execute("INSERT INTO b DEFAULT VALUES") }
-        #expect(peers.observingTransport.messages.isEmpty)
-
         try await peers.writing.write { try $0.execute("UPDATE a SET flag = 1") }
         try await recorder.waitForValue(1)
-        #expect(
-          peers.observingTransport.advertisedRegion(for: peers.identifier)?
-            .overlaps(OrbitDatabaseRegion(table: "b")) == true
-        )
+        // A transport that delivers asynchronously can report the commit to `a` after the sibling
+        // database in this process already has. Either way, the commit to `b` was sent first, so
+        // it would have arrived first.
+        try await waitUntil(timeout: .seconds(5)) { !peers.observingTransport.messages.isEmpty }
+        let messagesBeforeWidening = peers.observingTransport.messages.count
+        let advertisedAfterFlag = peers.observingTransport.advertisedRegion(for: peers.identifier)
 
         try await peers.writing.write { try $0.execute("INSERT INTO b DEFAULT VALUES") }
         try await recorder.waitForValue(2)
 
+        #expect(advertisedBeforeFlag?.overlaps(OrbitDatabaseRegion(table: "a")) == true)
+        #expect(advertisedBeforeFlag?.overlaps(OrbitDatabaseRegion(table: "b")) == false)
+        #expect(messagesBeforeWidening == 1)
+        #expect(advertisedAfterFlag?.overlaps(OrbitDatabaseRegion(table: "b")) == true)
         #expect(recorder.values == [nil, 1, 2])
         #expect(recorder.errors.isEmpty)
         _ = subscription

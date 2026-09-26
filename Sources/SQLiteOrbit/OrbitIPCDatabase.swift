@@ -457,20 +457,13 @@ private final class OrbitDatabaseObservationHub: Sendable {
       )
       .identifier
     }
-    return OrbitRegionSubscription(region: region) { [weak self] region in
-      self?.update(identifier, for: databaseIdentifier, region: region)
-    } onCancel: { [weak self] in
-      _ = self?.registrations.withLock { $0.remove(identifier, for: databaseIdentifier) }
-    }
-  }
-
-  private func update(
-    _ identifier: UInt64,
-    for databaseIdentifier: OrbitDatabaseIdentifier,
-    region: OrbitDatabaseRegion
-  ) {
-    _ = registrations.withLock {
-      $0.update(identifier, for: databaseIdentifier) { $0.region = region }
+    // The hub is never released, so its registrations are captured strongly.
+    return OrbitRegionSubscription(region: region) { region in
+      _ = self.registrations.withLock {
+        $0.update(identifier, for: databaseIdentifier) { $0.region = region }
+      }
+    } onCancel: {
+      _ = self.registrations.withLock { $0.remove(identifier, for: databaseIdentifier) }
     }
   }
 

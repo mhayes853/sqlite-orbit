@@ -66,7 +66,7 @@ public struct OrbitRegionSubscription: Sendable {
 
   /// Whether commits outside ``region`` may be skipped, rather than reported like every other.
   var filtersByRegion: Bool {
-    self.storage.filtersByRegion
+    self.storage.onUpdateRegion != nil
   }
 
   /// Changes the region the registration is for.
@@ -91,15 +91,9 @@ public struct OrbitRegionSubscription: Sendable {
   }
 
   private final class Storage: Sendable {
-    private struct State {
-      var region: OrbitDatabaseRegion
-      var isCancelled = false
-      var onCancel: (@Sendable () -> Void)?
-    }
-
-    let filtersByRegion: Bool
-    private let onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)?
-    private let state: Lock<State>
+    let onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)?
+    // `onCancel` is cleared once cancellation begins.
+    private let state: Lock<(region: OrbitDatabaseRegion, onCancel: (@Sendable () -> Void)?)>
     // Held across an update so that the recorded region is always the one applied last.
     private let updates = Lock(())
 
@@ -108,9 +102,8 @@ public struct OrbitRegionSubscription: Sendable {
       onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)?,
       onCancel: @escaping @Sendable () -> Void
     ) {
-      self.filtersByRegion = onUpdateRegion != nil
       self.onUpdateRegion = onUpdateRegion
-      self.state = Lock(State(region: region, onCancel: onCancel))
+      self.state = Lock((region, onCancel))
     }
 
     deinit { self.cancel() }
@@ -121,7 +114,7 @@ public struct OrbitRegionSubscription: Sendable {
 
     func updateRegion(_ region: OrbitDatabaseRegion) throws {
       try self.updates.withLock { _ in
-        let isCurrent = self.state.withLock { $0.isCancelled || $0.region == region }
+        let isCurrent = self.state.withLock { $0.onCancel == nil || $0.region == region }
         guard !isCurrent else { return }
         try self.onUpdateRegion?(region)
         self.state.withLock { $0.region = region }
@@ -130,10 +123,7 @@ public struct OrbitRegionSubscription: Sendable {
 
     func cancel() {
       let action = self.state.withLock { state in
-        defer {
-          state.isCancelled = true
-          state.onCancel = nil
-        }
+        defer { state.onCancel = nil }
         return state.onCancel
       }
       action?()
