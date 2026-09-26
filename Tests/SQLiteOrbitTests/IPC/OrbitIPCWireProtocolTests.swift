@@ -25,14 +25,23 @@ func databaseIPCWireProtocolRoundTripsEveryRegionShape() throws {
 }
 
 @Test
-func databaseIPCWireProtocolRoundTripsBatchesInOrder() throws {
+func databaseIPCWireBatchKeepsItsExactLengthAndRoundTripsInOrder() throws {
   let messages = databaseIPCRegions.enumerated()
     .map { index, region in
       databaseIPCMessage(index.isMultiple(of: 3) ? "first" : "second", region: region)
     }
-  var batch = OrbitIPCWireBatch<Int>()
-  for (index, message) in messages.enumerated() {
-    batch.append(try OrbitIPCWireEntry(message), tag: index)
+  var batch = OrbitIPCWireBatch()
+
+  for message in messages {
+    let entry = try OrbitIPCWireEntry(message)
+    #expect(
+      OrbitIPCWireBatch().byteCount(appending: entry)
+        == (try OrbitIPCWireProtocol.encode(message).count)
+    )
+    let expected = batch.byteCount(appending: entry)
+    batch.append(entry)
+    #expect(batch.byteCount == expected)
+    #expect(batch.encoded().count == expected)
   }
 
   #expect(try decodeDatabaseIPCMessages(batch.encoded()) == messages)
@@ -42,9 +51,9 @@ func databaseIPCWireProtocolRoundTripsBatchesInOrder() throws {
 func databaseIPCWireProtocolSharesStringsAcrossABatch() throws {
   let title = OrbitDatabaseRegion(column: "title", in: "items")
   let notes = OrbitDatabaseRegion(column: "notes", in: "items")
-  var batch = OrbitIPCWireBatch<Void>()
+  var batch = OrbitIPCWireBatch()
   for region in [title, notes, title.union(notes), .fullDatabase] {
-    batch.append(try OrbitIPCWireEntry(databaseIPCMessage(region: region)), tag: ())
+    batch.append(try OrbitIPCWireEntry(databaseIPCMessage(region: region)))
   }
   let encoded = batch.encoded()
 
@@ -54,36 +63,6 @@ func databaseIPCWireProtocolSharesStringsAcrossABatch() throws {
     try decodeDatabaseIPCMessages(encoded)
       == [title, notes, title.union(notes), .fullDatabase].map { databaseIPCMessage(region: $0) }
   )
-}
-
-@Test
-func databaseIPCWireBatchKeepsItsExactLengthAsEntriesComeAndGo() throws {
-  let entries = try databaseIPCRegions.enumerated()
-    .map { index, region in
-      try OrbitIPCWireEntry(databaseIPCMessage(index.isMultiple(of: 2) ? "a" : "b", region: region))
-    }
-  var batch = OrbitIPCWireBatch<Int>()
-  #expect(batch.byteCount == OrbitIPCWireProtocol.emptyBatchByteCount)
-
-  for (index, entry) in entries.enumerated() {
-    let expected = batch.byteCount(appending: entry)
-    batch.append(entry, tag: index)
-    #expect(batch.byteCount == expected)
-    #expect(batch.encoded().count == batch.byteCount)
-  }
-  for index in [3, 0, 4, 1] {
-    batch.remove(at: min(index, batch.elements.count - 1))
-    #expect(batch.encoded().count == batch.byteCount)
-  }
-  _ = batch.removeAll()
-  #expect(batch.byteCount == OrbitIPCWireProtocol.emptyBatchByteCount)
-
-  for entry in entries {
-    #expect(
-      OrbitIPCWireBatch<Void>.byteCount(of: entry)
-        == (try OrbitIPCWireProtocol.encode(entry.message).count)
-    )
-  }
 }
 
 @Test
@@ -99,13 +78,11 @@ func databaseIPCWireProtocolEncodingIsCanonical() throws {
 
 @Test
 func databaseIPCWireProtocolRejectsEveryTruncatedPrefix() throws {
-  var batch = OrbitIPCWireBatch<Void>()
+  var batch = OrbitIPCWireBatch()
   for region in [OrbitDatabaseRegion(column: "title", in: "items"), .fullDatabase] {
-    batch.append(
-      try OrbitIPCWireEntry(databaseIPCMessage("example-database", region: region)),
-      tag: ()
-    )
+    batch.append(try OrbitIPCWireEntry(databaseIPCMessage("example-database", region: region)))
   }
+
   let encoded = batch.encoded()
   for count in encoded.indices {
     #expect(throws: OrbitIPCWireError.self) {

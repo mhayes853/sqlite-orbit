@@ -10,15 +10,15 @@
   ///
   /// Every endpoint binds a socket in `v1/s/`, and advertises its interest in a database with a
   /// marker in `v1/d/<coordination key>/`, named after the endpoint. A marker holds the region the
-  /// endpoint's subscriptions for that database cover, as a string table followed by the region.
-  /// Markers are replaced whole by renaming a temporary file over them, and a temporary file's
-  /// name starts with a dot, which no endpoint name does, so a listing never mistakes one for a
-  /// marker.
+  /// endpoint's subscriptions for that database cover. Markers are replaced whole by renaming a
+  /// temporary file over them, and a temporary file's name starts with a dot, which no endpoint
+  /// name does, so a listing never mistakes one for a marker.
   struct OrbitIPCEndpointRegistry: Sendable {
     let endpointName: String
     let socketPath: String
     private let socketsDirectory: URL
     private let databasesDirectory: URL
+
     init(directory: URL, endpointName: String) throws {
       let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
       let socketsDirectory = versionDirectory.appending(path: "s", directoryHint: .isDirectory)
@@ -37,10 +37,11 @@
     /// When this returns, a peer that lists the database's directory finds the new region.
     func register(coordinationKey: String, region: OrbitDatabaseRegion) throws {
       let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
-      try UnixSystem.replaceFile(
-        atPath: directory.appending(path: self.endpointName).path,
-        with: OrbitIPCWireProtocol.encodeMarker(region),
-        temporaryPath: directory.appending(path: ".\(self.endpointName).tmp").path
+      let temporary = directory.appending(path: ".\(self.endpointName).tmp")
+      try Data(OrbitIPCWireProtocol.encodeMarker(region)).write(to: temporary)
+      try UnixSystem.renameFile(
+        atPath: temporary.path,
+        toPath: directory.appending(path: self.endpointName).path
       )
     }
 
@@ -58,13 +59,8 @@
       return directory
     }
 
-    /// The path of the directory a database's markers go in.
-    func databaseDirectoryPath(coordinationKey: String) -> String {
-      self.databaseDirectory(coordinationKey).path
-    }
-
     func peers(databaseIdentifier: OrbitDatabaseIdentifier) throws -> [OrbitIPCPeer] {
-      try self.markerNames(coordinationKey: databaseIdentifier.coordinationKey)
+      try self.advertisements(coordinationKey: databaseIdentifier.coordinationKey).keys
         .map(self.peer(named:))
     }
 
@@ -76,23 +72,28 @@
     /// - Returns: The region each advertising endpoint's subscriptions cover, by endpoint name.
     func advertisements(coordinationKey: String) throws -> [String: OrbitDatabaseRegion] {
       let directory = self.databaseDirectory(coordinationKey)
+      let names: [String]
+      do {
+        names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+      } catch CocoaError.fileReadNoSuchFile {
+        return [:]
+      }
       var advertisements: [String: OrbitDatabaseRegion] = [:]
-      for name in try self.markerNames(coordinationKey: coordinationKey) {
-        let bytes: [UInt8]?
+      for name in names where !name.hasPrefix(".") {
+        let marker: Data
         do {
-          bytes = try UnixSystem.readFile(atPath: directory.appending(path: name).path)
-        } catch {
-          advertisements[name] = .fullDatabase
+          marker = try Data(contentsOf: directory.appending(path: name))
+        } catch CocoaError.fileReadNoSuchFile {
+          // Removed since the listing, by an endpoint that stopped advertising.
           continue
+        } catch {
+          marker = Data()
         }
-        // A marker removed since the listing belongs to an endpoint that stopped advertising.
-        guard let bytes else { continue }
-        advertisements[name] = bytes.withUnsafeBufferPointer { buffer in
-          guard !buffer.isEmpty,
-            let region = try? OrbitIPCWireProtocol.decodeMarker(Span(_unsafeElements: buffer))
-          else { return .fullDatabase }
-          return region
-        }
+        advertisements[name] =
+          (try? [UInt8](marker)
+            .withUnsafeBufferPointer {
+              try OrbitIPCWireProtocol.decodeMarker(Span(_unsafeElements: $0))
+            }) ?? .fullDatabase
       }
       return advertisements
     }
@@ -116,16 +117,6 @@
         try Self.remove(directory.appending(path: peer.endpointName))
         // Left behind if the peer died between writing a marker and renaming it into place.
         try Self.remove(directory.appending(path: ".\(peer.endpointName).tmp"))
-      }
-    }
-
-    private func markerNames(coordinationKey: String) throws -> [String] {
-      do {
-        return try FileManager.default
-          .contentsOfDirectory(atPath: self.databaseDirectory(coordinationKey).path)
-          .filter { !$0.hasPrefix(".") }
-      } catch CocoaError.fileReadNoSuchFile {
-        return []
       }
     }
 

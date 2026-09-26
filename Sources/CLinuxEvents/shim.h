@@ -2,8 +2,7 @@
 #define SQLITE_ORBIT_CLINUXEVENTS_SHIM_H
 
 // Swift's Glibc module leaves out the headers the IPC transport's thread waits with, so they are
-// imported through this module instead, along with the one its directory watches use, whose
-// constants need the same treatment.
+// imported through this module instead, along with the one its directory watches use.
 #if defined(__linux__)
 #include <stdint.h>
 #include <sys/epoll.h>
@@ -20,14 +19,12 @@ static const int orbit_epoll_ctl_del = EPOLL_CTL_DEL;
 static const int orbit_epoll_cloexec = EPOLL_CLOEXEC;
 static const int orbit_efd_cloexec = EFD_CLOEXEC;
 static const int orbit_efd_nonblock = EFD_NONBLOCK;
-
-// What changes the entries of a watched directory, and what ends the watch or the queue.
 static const int orbit_in_cloexec = IN_CLOEXEC;
 static const int orbit_in_nonblock = IN_NONBLOCK;
+
+// What changes a watched directory's entries, or the directory itself.
 static const uint32_t orbit_in_entries_changed =
     IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF;
-static const uint32_t orbit_in_ignored = IN_IGNORED;
-static const uint32_t orbit_in_q_overflow = IN_Q_OVERFLOW;
 #endif
 
 #endif

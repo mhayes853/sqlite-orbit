@@ -112,7 +112,8 @@
       + [UInt8](repeating: 0, count: 60 * 1024)
 
     for datagram in [[0xff, 0, 1], tooLong] {
-      #expect(try datagram.withUnsafeBytes { try UnixSystem.sendDatagram($0, on: descriptor) })
+      #expect(try UnixSystem.sendDatagram(datagram, on: descriptor))
+
     }
     let message = commit(database)
     try await sender.send(message)

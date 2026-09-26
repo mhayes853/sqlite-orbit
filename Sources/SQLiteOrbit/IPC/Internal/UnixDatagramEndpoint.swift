@@ -2,10 +2,11 @@
   /// The socket a transport receives on, the sockets it sends to each peer on, and the thread that
   /// waits on them.
   ///
-  /// A peer whose receive queue is full gets a pending batch, when the transport suspends: later
-  /// messages to it join the batch rather than overtake it, and the thread sends the batch as one
-  /// datagram once the peer has room, which Linux reports and Darwin is polled for on a backoff.
-  /// Each message's sender waits for its own outcome at every peer, up to its deadline.
+  /// When the transport suspends, a message a peer's full receive queue refuses waits for that
+  /// peer, and later messages to it wait behind it rather than overtake it. Once the peer has room,
+  /// which Linux reports and Darwin is polled for on a backoff, the thread sends what waits in as
+  /// few datagrams as fit it. Each message's sender waits for its own outcome at every peer, up to
+  /// its deadline.
   ///
   /// The receive thread keeps the endpoint alive for as long as it runs, and ``stop()`` is what
   /// ends it. Whichever of the transport and the thread lets go of the endpoint last closes its
@@ -86,11 +87,9 @@
       UnixSystem.removeFile(atPath: self.registry.socketPath)
     }
 
-    /// How many messages wait in pending batches, across every peer.
+    /// How many messages wait for peers, across every peer.
     var pendingMessageCount: Int {
-      self.state.withLock { state in
-        state.peers.values.reduce(0) { $0 + $1.batch.elements.count + $1.waiting.count }
-      }
+      self.state.withLock { $0.peers.values.reduce(0) { $0 + $1.pending.count } }
     }
 
     /// Sends `entry` to every peer in `peers`, on the connected socket kept for each.
@@ -115,8 +114,8 @@
       suspendingUpTo suspension: Duration?
     ) async throws -> Delivery {
       let coordinationKey = entry.message.databaseIdentifier.coordinationKey
-      var single = OrbitIPCWireBatch<Void>()
-      single.append(entry, tag: ())
+      var single = OrbitIPCWireBatch()
+      single.append(entry)
       let datagram = single.encoded()
       let deadline = suspension.map { ContinuousClock.now.advanced(by: $0) }
 
@@ -185,9 +184,7 @@
       if state.peers[name] == nil {
         do {
           let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
-          state.peers[name] = Peer(peer: peer, descriptor: descriptor, token: state.nextToken)
-          state.tokens[state.nextToken] = name
-          state.nextToken += 1
+          state.peers[name] = Peer(peer: peer, descriptor: descriptor)
         } catch let error as OrbitIPCSystemError where error.isStalePeer {
           return .stale(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
         } catch {
@@ -197,10 +194,10 @@
       state.peers[name]!.coordinationKeys.insert(coordinationKey)
 
       // A message never overtakes one already waiting for the same peer.
-      if !state.peers[name]!.hasPending {
+      let startsWaiting = state.peers[name]!.pending.isEmpty
+      if startsWaiting {
         do {
-          let descriptor = state.peers[name]!.descriptor
-          if try datagram.withUnsafeBytes({ try UnixSystem.sendDatagram($0, on: descriptor) }) {
+          if try UnixSystem.sendDatagram(datagram, on: state.peers[name]!.descriptor) {
             return .delivered
           }
         } catch let error as OrbitIPCSystemError where error.isStalePeer {
@@ -213,16 +210,18 @@
         }
       }
       guard let sendID else { return .failed }
-      let startsBatch = !state.peers[name]!.hasPending
-      let element = Peer.Element(entry: entry, tag: sendID)
-      state.peers[name]!.enqueue(element, maximumByteCount: self.maximumDatagramByteCount)
-      if startsBatch {
-        self.watch(name, in: &state)
+      state.peers[name]!.pending.append(Pending(entry: entry, sendID: sendID))
+      if startsWaiting {
+        state.peers[name]!.isWatched = self.queue.watchWritability(
+          of: state.peers[name]!.descriptor
+        )
+        state.peers[name]!.backOff()
       }
       return .pending
     }
 
-    /// Sends a peer's pending batches until it has no room or nothing left.
+    /// Sends what waits for a peer, as many messages to a datagram as fit, until the peer has no
+    /// room or nothing is left.
     private func flush(
       _ name: String,
       in state: inout State,
@@ -230,12 +229,18 @@
       stale: inout [StalePeer]
     ) {
       guard let descriptor = state.peers[name]?.descriptor else { return }
-      while state.peers[name]!.hasPending {
-        let datagram = state.peers[name]!.batch.encoded()
+      while !state.peers[name]!.pending.isEmpty {
+        // The longest run from the front that fits, which always holds at least the first.
+        var batch = OrbitIPCWireBatch()
+        for pending in state.peers[name]!.pending {
+          guard batch.byteCount(appending: pending.entry) <= self.maximumDatagramByteCount
+          else { break }
+          batch.append(pending.entry)
+        }
+
         let outcome: Outcome
         do {
-          guard try datagram.withUnsafeBytes({ try UnixSystem.sendDatagram($0, on: descriptor) })
-          else {
+          guard try UnixSystem.sendDatagram(batch.encoded(), on: descriptor) else {
             state.peers[name]!.backOff()
             return
           }
@@ -247,10 +252,10 @@
           outcome = .failed
         }
         state.peers[name]!.retryDelay = .milliseconds(1)
-        for element in state.peers[name]!.batch.removeAll() {
-          self.resolve(element.tag, outcome, in: &state, completions: &completions)
+        for pending in state.peers[name]!.pending.prefix(batch.entries.count) {
+          self.resolve(pending.sendID, outcome, in: &state, completions: &completions)
         }
-        state.peers[name]!.refill(maximumByteCount: self.maximumDatagramByteCount)
+        state.peers[name]!.pending.removeFirst(batch.entries.count)
       }
       self.unwatch(name, in: &state)
     }
@@ -260,23 +265,16 @@
     /// - Returns: How many peers it was withdrawn from.
     private func withdraw(_ sendID: UInt64, in state: inout State) -> Int {
       var count = 0
-      for name in state.peers.keys
-      where state.peers[name]!.remove(sendID, maximumByteCount: self.maximumDatagramByteCount) {
+      for name in state.peers.keys {
+        guard let index = state.peers[name]!.pending.firstIndex(where: { $0.sendID == sendID })
+        else { continue }
+        state.peers[name]!.pending.remove(at: index)
         count += 1
-        if !state.peers[name]!.hasPending {
+        if state.peers[name]!.pending.isEmpty {
           self.unwatch(name, in: &state)
         }
       }
       return count
-    }
-
-    private func watch(_ name: String, in state: inout State) {
-      let peer = state.peers[name]!
-      state.peers[name]!.isWatched = self.queue.watchWritability(
-        of: peer.descriptor,
-        token: peer.token
-      )
-      state.peers[name]!.backOff()
     }
 
     private func unwatch(_ name: String, in state: inout State) {
@@ -297,10 +295,9 @@
     ) -> StalePeer {
       self.unwatch(name, in: &state)
       let peer = state.peers.removeValue(forKey: name)!
-      state.tokens[peer.token] = nil
       UnixSystem.closeDescriptor(peer.descriptor)
-      for element in peer.batch.elements + peer.waiting {
-        self.resolve(element.tag, .pruned, in: &state, completions: &completions)
+      for pending in peer.pending {
+        self.resolve(pending.sendID, .pruned, in: &state, completions: &completions)
       }
       return StalePeer(peer: peer.peer, coordinationKeys: peer.coordinationKeys)
     }
@@ -315,7 +312,7 @@
       let advertised = Set(advertisers)
       // A peer something still waits for keeps what it was seen with until the next look.
       for (name, peer) in state.peers
-      where !peer.hasPending && peer.coordinationKeys.contains(coordinationKey)
+      where peer.pending.isEmpty && peer.coordinationKeys.contains(coordinationKey)
         && !advertised.contains(name)
       {
         state.peers[name]!.coordinationKeys.remove(coordinationKey)
@@ -414,13 +411,13 @@
       while true {
         let (isStopped, deadline) = self.state.withLock { ($0.isStopped, $0.nextDeadline) }
         guard !isStopped else { return }
-        var writable: [UInt64] = []
+        var writable: [Int32] = []
         self.queue.wait(until: deadline) { event in
           switch event {
           case .readable:
             self.drain(into: buffer, receive: receive)
-          case .writable(let token):
-            writable.append(token)
+          case .writable(let descriptor):
+            writable.append(descriptor)
           }
         }
         var completions: [Completion] = []
@@ -439,10 +436,7 @@
       receive: (Span<UInt8>) -> Void
     ) {
       while !self.state.withLock({ $0.isStopped }),
-        let count = UnixSystem.receiveDatagram(
-          into: UnsafeMutableRawBufferPointer(buffer),
-          from: self.descriptor
-        )
+        let count = UnixSystem.receiveDatagram(into: buffer, from: self.descriptor)
       {
         guard count <= self.maximumDatagramByteCount else { continue }
         receive(Span(_unsafeElements: UnsafeBufferPointer(rebasing: buffer[..<count])))
@@ -452,14 +446,15 @@
     /// Flushes the peers that have room or are due a retry, then fails every send whose deadline
     /// has passed at the peers still holding it.
     private func service(
-      _ writable: [UInt64],
+      _ writable: [Int32],
       in state: inout State,
       completions: inout [Completion]
     ) -> [StalePeer] {
       var stale: [StalePeer] = []
       let now = ContinuousClock.now
-      for token in writable {
-        guard let name = state.tokens[token] else { continue }
+      // An event for a socket closed since can name a new one given the same number, which at
+      // worst sends that peer what waits for it a little early.
+      for (name, peer) in state.peers where writable.contains(peer.descriptor) {
         self.flush(name, in: &state, completions: &completions, stale: &stale)
       }
       for (name, peer) in state.peers where peer.retryAt.map({ $0 <= now }) == true {
@@ -469,7 +464,7 @@
       let expired = state.sends.filter { $0.value.remaining > 0 && $0.value.deadline <= now }
       guard !expired.isEmpty else { return stale }
       // The attempt that lands on the deadline still happens: the budget is time spent waiting.
-      for (name, peer) in state.peers where peer.hasPending {
+      for (name, peer) in state.peers where !peer.pending.isEmpty {
         self.flush(name, in: &state, completions: &completions, stale: &stale)
       }
       for sendID in expired.keys {
@@ -496,53 +491,21 @@
       var isCancelled = false
     }
 
-    private struct Peer {
-      typealias Element = OrbitIPCWireBatch<UInt64>.Element
+    private struct Pending {
+      let entry: OrbitIPCWireEntry
+      let sendID: UInt64
+    }
 
+    private struct Peer {
       let peer: OrbitIPCPeer
       let descriptor: Int32
-      /// What the queue's writability events for this peer carry.
-      let token: UInt64
       /// The databases this peer was last seen advertising, by coordination key.
       var coordinationKeys: Set<String> = []
-      /// The messages the next datagram to this peer carries, tagged by send.
-      var batch = OrbitIPCWireBatch<UInt64>()
-      /// The messages that did not fit in ``batch``, in the order they were sent.
-      var waiting: [Element] = []
+      /// The messages waiting for this peer, in the order they were sent.
+      var pending: [Pending] = []
       var isWatched = false
       var retryAt: ContinuousClock.Instant?
       var retryDelay = Duration.milliseconds(1)
-
-      /// Whether anything waits for this peer. The batch is only ever empty when nothing does.
-      var hasPending: Bool { !self.batch.isEmpty }
-
-      mutating func enqueue(_ element: Element, maximumByteCount: Int) {
-        self.waiting.append(element)
-        self.refill(maximumByteCount: maximumByteCount)
-      }
-
-      /// Moves messages from the front of ``waiting`` into ``batch`` for as long as they fit.
-      mutating func refill(maximumByteCount: Int) {
-        var moved = 0
-        for element in self.waiting {
-          guard self.batch.byteCount(appending: element.entry) <= maximumByteCount else { break }
-          self.batch.append(element.entry, tag: element.tag)
-          moved += 1
-        }
-        self.waiting.removeFirst(moved)
-      }
-
-      /// Removes a send's message, if it is waiting for this peer.
-      mutating func remove(_ sendID: UInt64, maximumByteCount: Int) -> Bool {
-        if let index = self.batch.elements.firstIndex(where: { $0.tag == sendID }) {
-          self.batch.remove(at: index)
-          self.refill(maximumByteCount: maximumByteCount)
-          return true
-        }
-        guard let index = self.waiting.firstIndex(where: { $0.tag == sendID }) else { return false }
-        self.waiting.remove(at: index)
-        return true
-      }
 
       /// Schedules the next attempt at a peer the queue cannot say has room.
       mutating func backOff() {
@@ -555,9 +518,8 @@
     private struct State {
       var isStopped = false
       var peers: [String: Peer] = [:]
-      var tokens: [UInt64: String] = [:]
-      var nextToken = UnixEventQueue.firstWatchToken
       var sends: [UInt64: PendingSend] = [:]
+
       var nextSendID: UInt64 = 0
 
       /// When the thread next has something to do without being woken.

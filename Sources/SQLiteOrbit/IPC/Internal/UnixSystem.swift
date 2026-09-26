@@ -59,71 +59,13 @@
     }
 
     static func removeFile(atPath path: String) {
-      _ = path.withCString { unlink($0) }
+      _ = unlink(path)
     }
 
-    /// Replaces the file at `path` with one holding `bytes`, in one step.
-    ///
-    /// The bytes are written to `temporaryPath`, which must be in the same directory, and renamed
-    /// over `path`, so a reader finds either the old contents or the new ones, never a mix, and the
-    /// name never goes missing in between.
-    static func replaceFile(
-      atPath path: String,
-      with bytes: [UInt8],
-      temporaryPath: String
-    ) throws {
-      let descriptor = temporaryPath.withCString {
-        open($0, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666)
-      }
-      guard descriptor >= 0 else { throw OrbitIPCSystemError.last("open") }
-      var written = 0
-      while written < bytes.count {
-        let count = bytes.withUnsafeBytes {
-          write(descriptor, $0.baseAddress! + written, $0.count - written)
-        }
-        guard count >= 0 else {
-          let code = errno
-          guard code == EINTR else {
-            _ = close(descriptor)
-            _ = temporaryPath.withCString { unlink($0) }
-            throw OrbitIPCSystemError(operation: "write", code: code)
-          }
-          continue
-        }
-        written += count
-      }
-      _ = close(descriptor)
-      let renamed = temporaryPath.withCString { from in path.withCString { rename(from, $0) } }
-      guard renamed == 0 else {
-        let error = OrbitIPCSystemError.last("rename")
-        _ = temporaryPath.withCString { unlink($0) }
-        throw error
-      }
-    }
-
-    /// Reads the whole file at `path`.
-    ///
-    /// - Returns: The file's bytes, or `nil` if there is no file at `path`.
-    static func readFile(atPath path: String) throws -> [UInt8]? {
-      let descriptor = path.withCString { open($0, O_RDONLY | O_CLOEXEC) }
-      guard descriptor >= 0 else {
-        let code = errno
-        guard code == ENOENT else { throw OrbitIPCSystemError(operation: "open", code: code) }
-        return nil
-      }
-      defer { _ = close(descriptor) }
-      var bytes: [UInt8] = []
-      var chunk = [UInt8](repeating: 0, count: 4096)
-      while true {
-        let count = chunk.withUnsafeMutableBytes { read(descriptor, $0.baseAddress, $0.count) }
-        if count == 0 { return bytes }
-        guard count > 0 else {
-          let code = errno
-          guard code == EINTR else { throw OrbitIPCSystemError(operation: "read", code: code) }
-          continue
-        }
-        bytes.append(contentsOf: chunk[..<count])
-      }
+    /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
+    /// one file or the other and never neither.
+    static func renameFile(atPath source: String, toPath destination: String) throws {
+      guard rename(source, destination) == 0 else { throw OrbitIPCSystemError.last("rename") }
     }
 
     /// Runs `body` holding an exclusive `flock` on the file at `path`, creating the file if needed.
@@ -133,7 +75,7 @@
       atPath path: String,
       _ body: () throws -> Result
     ) throws -> Result {
-      let descriptor = path.withCString { open($0, O_RDWR | O_CREAT | O_CLOEXEC, 0o666) }
+      let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)
       guard descriptor >= 0 else { throw OrbitIPCSystemError.last("open") }
       defer { _ = close(descriptor) }
       while flock(descriptor, LOCK_EX) != 0 {
@@ -148,22 +90,14 @@
       path: String,
       receiveBufferByteCount: Int
     ) throws -> Int32 {
+      var address = try UnixSocketAddress(path: path)
       let descriptor = try makeDatagramSocket()
-      do {
-        var byteCount = Int32(clamping: receiveBufferByteCount)
-        let result = setsockopt(
-          descriptor,
-          SOL_SOCKET,
-          SO_RCVBUF,
-          &byteCount,
-          socklen_t(MemoryLayout<Int32>.size)
-        )
-        guard result == 0 else { throw OrbitIPCSystemError.last("setsockopt") }
-        var address = try UnixSocketAddress(path: path)
-        guard address.withSockAddr({ bind(descriptor, $0, $1) }) == 0 else {
-          throw OrbitIPCSystemError.last("bind")
-        }
-      } catch {
+      var byteCount = Int32(clamping: receiveBufferByteCount)
+      let size = socklen_t(MemoryLayout<Int32>.size)
+      guard setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &byteCount, size) == 0,
+        address.withSockAddr({ bind(descriptor, $0, $1) }) == 0
+      else {
+        let error = OrbitIPCSystemError.last("bind")
         _ = close(descriptor)
         throw error
       }
@@ -173,19 +107,13 @@
     /// Creates an unbound, nonblocking datagram socket connected to the one bound at `path`.
     ///
     /// Sending on it needs no address, and on Linux it reports itself unwritable while the peer's
-    /// receive queue is full, which ``UnixEventQueue/watchWritability(of:token:)`` rests on.
+    /// receive queue is full, which ``UnixEventQueue/watchWritability(of:)`` rests on.
     ///
     /// - Throws: An ``OrbitIPCSystemError`` whose ``OrbitIPCSystemError/isStalePeer`` holds when
     ///   nothing is bound at `path` any more.
     static func makeConnectedDatagramSocket(path: String) throws -> Int32 {
+      var address = try UnixSocketAddress(path: path)
       let descriptor = try makeDatagramSocket()
-      var address: UnixSocketAddress
-      do {
-        address = try UnixSocketAddress(path: path)
-      } catch {
-        _ = close(descriptor)
-        throw error
-      }
       guard address.withSockAddr({ connect(descriptor, $0, $1) }) == 0 else {
         let error = OrbitIPCSystemError.last("connect")
         _ = close(descriptor)
@@ -199,13 +127,10 @@
     /// - Returns: `false` when the peer's receive queue is full, which Linux reports as `EAGAIN`
     ///   and Darwin as `ENOBUFS`. Both mean the same thing here: nothing is wrong, and the datagram
     ///   can be sent again once the peer drains.
-    static func sendDatagram(
-      _ bytes: UnsafeRawBufferPointer,
-      on descriptor: Int32
-    ) throws -> Bool {
+    static func sendDatagram(_ bytes: [UInt8], on descriptor: Int32) throws -> Bool {
       // Nothing here retries `EINTR`: the socket is nonblocking, so neither this nor `recv` below
       // ever waits in the kernel long enough for a signal to interrupt it.
-      let count = send(descriptor, bytes.baseAddress, bytes.count, sendFlags)
+      let count = bytes.withUnsafeBytes { send(descriptor, $0.baseAddress, $0.count, sendFlags) }
       if count == bytes.count { return true }
       guard count < 0 else { throw OrbitIPCSystemError.messageTooLong("send") }
       let code = errno
@@ -219,7 +144,7 @@
     ///   datagram longer than `buffer` is cut short, so a caller that makes `buffer` one byte
     ///   longer than it accepts can tell one that was too long by its length.
     static func receiveDatagram(
-      into buffer: UnsafeMutableRawBufferPointer,
+      into buffer: UnsafeMutableBufferPointer<UInt8>,
       from descriptor: Int32
     ) -> Int? {
       let count = recv(descriptor, buffer.baseAddress, buffer.count, 0)
@@ -233,18 +158,12 @@
         let descriptor = socket(AF_UNIX, SOCK_DGRAM, 0)
         guard descriptor >= 0 else { throw OrbitIPCSystemError.last("socket") }
         var enabled: Int32 = 1
-        let flags = fcntl(descriptor, F_GETFL)
-        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0,
+        let size = socklen_t(MemoryLayout<Int32>.size)
+        guard fcntl(descriptor, F_SETFL, O_NONBLOCK) == 0,
           fcntl(descriptor, F_SETFD, FD_CLOEXEC) == 0,
-          setsockopt(
-            descriptor,
-            SOL_SOCKET,
-            SO_NOSIGPIPE,
-            &enabled,
-            socklen_t(MemoryLayout<Int32>.size)
-          ) == 0
+          setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0
         else {
-          let error = OrbitIPCSystemError.last("configuring a socket")
+          let error = OrbitIPCSystemError.last("socket")
           _ = close(descriptor)
           throw error
         }
@@ -259,15 +178,17 @@
     #if canImport(Darwin)
       // Darwin raises no `SIGPIPE` from these sockets, because each is made with `SO_NOSIGPIPE`.
       private static let sendFlags: Int32 = 0
-    #elseif canImport(Glibc)
+    #else
       // Glibc spells a socket type as a member of an enumeration, where Musl and Bionic spell it
       // as a plain integer macro.
-      private static let socketType =
-        Int32(SOCK_DGRAM.rawValue) | Int32(SOCK_NONBLOCK.rawValue) | Int32(SOCK_CLOEXEC.rawValue)
-      private static let sendFlags = Int32(MSG_NOSIGNAL)
-    #else
-      private static let socketType =
-        Int32(SOCK_DGRAM) | Int32(SOCK_NONBLOCK) | Int32(SOCK_CLOEXEC)
+      #if canImport(Glibc)
+        private static let socketType =
+          Int32(SOCK_DGRAM.rawValue) | Int32(SOCK_NONBLOCK.rawValue)
+          | Int32(SOCK_CLOEXEC.rawValue)
+      #else
+        private static let socketType =
+          Int32(SOCK_DGRAM) | Int32(SOCK_NONBLOCK) | Int32(SOCK_CLOEXEC)
+      #endif
       private static let sendFlags = Int32(MSG_NOSIGNAL)
     #endif
   }
@@ -283,14 +204,12 @@
       /// The socket the queue was created to read from has a datagram waiting.
       case readable
 
-      /// A socket watched by ``watchWritability(of:token:)`` has room to send.
-      case writable(token: UInt64)
+      /// A socket watched by ``watchWritability(of:)`` has room to send.
+      case writable(descriptor: Int32)
     }
 
-    /// The smallest token ``watchWritability(of:token:)`` accepts.
-    static let firstWatchToken: UInt64 = 2
-
     private let descriptor: Int32
+    private let socket: Int32
     #if canImport(Darwin)
       private let events = UnsafeMutableBufferPointer<kevent>.allocate(capacity: 64)
     #else
@@ -306,50 +225,29 @@
         let descriptor = kqueue()
         guard descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
         _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
-        var changes = [
-          kevent(
-            ident: UInt(socket),
-            filter: Int16(EVFILT_READ),
-            flags: UInt16(EV_ADD),
-            fflags: 0,
-            data: 0,
-            udata: nil
-          ),
-          kevent(
-            ident: Self.wakeIdentifier,
-            filter: Int16(EVFILT_USER),
-            flags: UInt16(EV_ADD | EV_CLEAR),
-            fflags: 0,
-            data: 0,
-            udata: nil
-          )
-        ]
-        guard Darwin.kevent(descriptor, &changes, Int32(changes.count), nil, 0, nil) == 0 else {
+        guard Self.change(descriptor, UInt(socket), EVFILT_READ, EV_ADD),
+          Self.change(descriptor, Self.wakeIdentifier, EVFILT_USER, EV_ADD | EV_CLEAR)
+        else {
           let error = OrbitIPCSystemError.last("kevent")
           _ = close(descriptor)
           throw error
         }
-        self.descriptor = descriptor
       #else
         let descriptor = epoll_create1(orbit_epoll_cloexec)
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("epoll_create1") }
         let wakeDescriptor = eventfd(0, orbit_efd_nonblock | orbit_efd_cloexec)
-        guard wakeDescriptor >= 0 else {
-          let error = OrbitIPCSystemError.last("eventfd")
-          _ = close(descriptor)
-          throw error
-        }
-        guard Self.control(descriptor, Self.add, socket, Self.readable, Self.readableToken),
-          Self.control(descriptor, Self.add, wakeDescriptor, Self.readable, Self.wakeToken)
+        guard descriptor >= 0, wakeDescriptor >= 0,
+          Self.control(descriptor, orbit_epoll_ctl_add, socket, orbit_epoll_in),
+          Self.control(descriptor, orbit_epoll_ctl_add, wakeDescriptor, orbit_epoll_in)
         else {
-          let error = OrbitIPCSystemError.last("epoll_ctl")
+          let error = OrbitIPCSystemError.last("creating an event queue")
           _ = close(wakeDescriptor)
           _ = close(descriptor)
           throw error
         }
-        self.descriptor = descriptor
         self.wakeDescriptor = wakeDescriptor
       #endif
+      self.descriptor = descriptor
+      self.socket = socket
     }
 
     deinit {
@@ -363,15 +261,7 @@
     /// Ends the current or next ``wait(until:_:)`` early. Safe to call from any thread.
     func wake() {
       #if canImport(Darwin)
-        var change = kevent(
-          ident: Self.wakeIdentifier,
-          filter: Int16(EVFILT_USER),
-          flags: 0,
-          fflags: UInt32(NOTE_TRIGGER),
-          data: 0,
-          udata: nil
-        )
-        _ = Darwin.kevent(self.descriptor, &change, 1, nil, 0, nil)
+        _ = Self.change(self.descriptor, Self.wakeIdentifier, EVFILT_USER, 0, NOTE_TRIGGER)
       #else
         // A full counter would fail this with `EAGAIN`, and a full counter already wakes the queue.
         var increment: UInt64 = 1
@@ -386,44 +276,29 @@
     ///   - deadline: When to stop waiting, or `nil` to wait for as long as it takes.
     ///   - handle: Receives each event that was ready.
     func wait(until deadline: ContinuousClock.Instant?, _ handle: (Event) -> Void) {
-      let timeout = deadline.map { max(.zero, $0 - .now) }
+      let timeout = deadline.map { max(.zero, $0 - .now).components }
       #if canImport(Darwin)
-        let count: Int32
-        if let timeout {
-          let (seconds, attoseconds) = timeout.components
-          var interval = timespec(
-            tv_sec: Int(seconds),
-            tv_nsec: Int(attoseconds / 1_000_000_000)
-          )
-          count = Darwin.kevent(
+        var interval = timespec(
+          tv_sec: Int(timeout?.seconds ?? 0),
+          tv_nsec: Int((timeout?.attoseconds ?? 0) / 1_000_000_000)
+        )
+        let count = withUnsafePointer(to: &interval) { interval in
+          Darwin.kevent(
             self.descriptor,
             nil,
             0,
             self.events.baseAddress,
             Int32(self.events.count),
-            &interval
+            timeout == nil ? nil : interval
           )
-        } else {
-          count = Darwin.kevent(
-            self.descriptor,
-            nil,
-            0,
-            self.events.baseAddress,
-            Int32(self.events.count),
-            nil
-          )
-        }
-        Self.check(count, "kevent")
-        for event in self.events.prefix(max(0, Int(count)))
-        where event.filter == Int16(EVFILT_READ) {
-          handle(.readable)
         }
       #else
         // Rounded up, so a wait never ends just short of its deadline and spins until it passes.
-        let milliseconds = timeout.map { timeout -> Int32 in
-          let (seconds, attoseconds) = timeout.components
-          let total = seconds * 1_000 + (attoseconds + 999_999_999_999_999) / 1_000_000_000_000_000
-          return Int32(clamping: total)
+        let milliseconds = timeout.map { timeout in
+          Int32(
+            clamping: timeout.seconds * 1_000
+              + (timeout.attoseconds + 999_999_999_999_999) / 1_000_000_000_000_000
+          )
         }
         let count = epoll_wait(
           self.descriptor,
@@ -431,116 +306,107 @@
           Int32(self.events.count),
           milliseconds ?? -1
         )
-        Self.check(count, "epoll_wait")
-        for event in self.events.prefix(max(0, Int(count))) {
-          switch event.data.u64 {
-          case Self.readableToken:
-            handle(.readable)
-          case Self.wakeToken:
+      #endif
+      // A signal that interrupts the wait only ends it early. Any other failure means a descriptor
+      // this queue owns is gone, which nothing here can recover from.
+      precondition(count >= 0 || errno == EINTR, "waiting for events failed with errno \(errno)")
+      for event in self.events.prefix(max(0, Int(count))) {
+        #if canImport(Darwin)
+          let descriptor = Int32(truncatingIfNeeded: event.ident)
+          guard event.filter == Int16(EVFILT_READ) else { continue }
+        #else
+          let descriptor = event.data.fd
+          if descriptor == self.wakeDescriptor {
             var counter: UInt64 = 0
             _ = read(self.wakeDescriptor, &counter, MemoryLayout<UInt64>.size)
-          case let token:
-            handle(.writable(token: token))
+            continue
           }
-        }
-      #endif
+        #endif
+        handle(descriptor == self.socket ? .readable : .writable(descriptor: descriptor))
+      }
     }
 
-    // A signal that interrupts the wait only ends it early. Any other failure means a descriptor
-    // this queue owns is gone, which nothing here can recover from.
-    private static func check(_ count: Int32, _ operation: String) {
-      guard count < 0 else { return }
-      let code = errno
-      precondition(code == EINTR, "\(operation) failed with errno \(code)")
-    }
-
-    /// Starts reporting ``Event/writable(token:)`` whenever a connected socket's peer has room.
+    /// Starts reporting ``Event/writable(descriptor:)`` whenever a connected socket's peer has
+    /// room.
     ///
     /// Linux holds back a connected datagram socket's writability while the peer's receive queue
     /// is full, so it can say when to send again. Darwin's write filter looks only at the sender's
     /// own buffer, which a Unix datagram never waits in, so there the caller has to retry on a
     /// timer instead.
     ///
-    /// - Parameters:
-    ///   - descriptor: A connected socket. Stop watching it before closing it.
-    ///   - token: What the events for it carry, which must be ``firstWatchToken`` or greater.
+    /// - Parameter descriptor: A connected socket. Stop watching it before closing it.
     /// - Returns: Whether the queue will report when the socket's peer has room.
-    func watchWritability(of descriptor: Int32, token: UInt64) -> Bool {
-      precondition(token >= Self.firstWatchToken)
+    func watchWritability(of descriptor: Int32) -> Bool {
       #if canImport(Darwin)
         return false
       #else
-        return Self.control(self.descriptor, Self.add, descriptor, Self.writable, token)
+        return Self.control(self.descriptor, orbit_epoll_ctl_add, descriptor, orbit_epoll_out)
       #endif
     }
 
-    /// Stops reporting writability for a socket ``watchWritability(of:token:)`` said it would.
+    /// Stops reporting writability for a socket ``watchWritability(of:)`` said it would.
     func stopWatchingWritability(of descriptor: Int32) {
       #if !canImport(Darwin)
-        _ = Self.control(self.descriptor, Self.delete, descriptor, 0, 0)
+        _ = Self.control(self.descriptor, orbit_epoll_ctl_del, descriptor, 0)
       #endif
     }
 
     #if canImport(Darwin)
       private static let wakeIdentifier: UInt = 1
+
+      private static func change(
+        _ queue: Int32,
+        _ identifier: UInt,
+        _ filter: Int32,
+        _ flags: Int32,
+        _ filterFlags: Int32 = 0
+      ) -> Bool {
+        var change = kevent(
+          ident: identifier,
+          filter: Int16(filter),
+          flags: UInt16(flags),
+          fflags: UInt32(filterFlags),
+          data: 0,
+          udata: nil
+        )
+        return Darwin.kevent(queue, &change, 1, nil, 0, nil) == 0
+      }
     #else
-      private static let readableToken: UInt64 = 0
-      private static let wakeToken: UInt64 = 1
-
-      private static let readable = orbit_epoll_in
-      private static let writable = orbit_epoll_out
-      private static let add = orbit_epoll_ctl_add
-      private static let delete = orbit_epoll_ctl_del
-
       private static func control(
         _ queue: Int32,
         _ operation: Int32,
         _ descriptor: Int32,
-        _ events: UInt32,
-        _ token: UInt64
+        _ events: UInt32
       ) -> Bool {
         var event = epoll_event()
         event.events = events
-        event.data.u64 = token
+        event.data.fd = descriptor
         return epoll_ctl(queue, operation, descriptor, &event) == 0
       }
     #endif
   }
 
-  /// Watches directories for entries appearing, disappearing or being renamed, and says which ones
-  /// changed when asked, without blocking.
+  /// Watches directories for entries appearing, disappearing or being renamed, and says, without
+  /// blocking, whether any of them has changed.
   ///
-  /// It is inotify on Linux and Android, and on Darwin a kqueue watching each directory's vnode.
-  /// Nothing about it is thread-safe: the caller serializes every use.
+  /// It is inotify on Linux and Android, and on Darwin a kqueue watching each directory's vnode. A
+  /// directory that is removed or moved away also counts as a change, after which its watch reports
+  /// nothing more. Nothing about it is thread-safe: the caller serializes every use.
   final class UnixDirectoryWatcher: @unchecked Sendable {
-    /// What changed since the last ``drainChanges()``.
-    struct Changes {
-      /// The watches whose directories' entries changed.
-      var changed: Set<Int32> = []
-
-      /// The watches that ended, because their directories were removed or moved away. They
-      /// report nothing more, and their identifiers may be reused.
-      var ended: Set<Int32> = []
-
-      /// Whether the kernel dropped changes, in which case any directory may have changed.
-      var overflowed = false
-    }
-
     private let descriptor: Int32
     #if canImport(Darwin)
-      private var directories: Set<Int32> = []
+      private var directories: [Int32] = []
     #endif
 
     init() throws {
       #if canImport(Darwin)
-        let descriptor = kqueue()
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
-        _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+        self.descriptor = kqueue()
+        guard self.descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
+        _ = fcntl(self.descriptor, F_SETFD, FD_CLOEXEC)
       #else
-        let descriptor = inotify_init1(orbit_in_nonblock | orbit_in_cloexec)
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("inotify_init1") }
+        self.descriptor = inotify_init1(orbit_in_nonblock | orbit_in_cloexec)
+        guard self.descriptor >= 0 else { throw OrbitIPCSystemError.last("inotify_init1") }
       #endif
-      self.descriptor = descriptor
     }
 
     deinit {
@@ -554,14 +420,13 @@
 
     /// Starts watching the directory at `path`.
     ///
-    /// - Returns: The identifier ``Changes`` names the directory by.
     /// - Throws: An ``OrbitIPCSystemError`` if the directory cannot be watched, which includes the
     ///   system running out of watches.
-    func watch(_ path: String) throws -> Int32 {
+    func watch(_ path: String) throws {
       #if canImport(Darwin)
         // `O_EVTONLY` opens the directory only to hear about it, so the watch does not keep the
         // volume it is on from being unmounted.
-        let directory = path.withCString { open($0, O_EVTONLY | O_DIRECTORY | O_CLOEXEC) }
+        let directory = open(path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
         guard directory >= 0 else { throw OrbitIPCSystemError.last("open") }
         var change = kevent(
           ident: UInt(directory),
@@ -576,114 +441,80 @@
           _ = close(directory)
           throw error
         }
-        self.directories.insert(directory)
-        return directory
+        self.directories.append(directory)
       #else
-        let watch = path.withCString {
-          inotify_add_watch(self.descriptor, $0, orbit_in_entries_changed)
+        guard inotify_add_watch(self.descriptor, path, orbit_in_entries_changed) >= 0 else {
+          throw OrbitIPCSystemError.last("inotify_add_watch")
         }
-        guard watch >= 0 else { throw OrbitIPCSystemError.last("inotify_add_watch") }
-        return watch
       #endif
     }
 
-    /// Collects every change the kernel has queued, without waiting for more.
-    func drainChanges() -> Changes {
-      var changes = Changes()
+    /// Takes every change the kernel has queued, without waiting for more.
+    ///
+    /// - Returns: Whether anything changed since the last call. A queue that cannot be read counts
+    ///   as a change, because it could be hiding one.
+    func drainChanges() -> Bool {
+      var changed = false
       #if canImport(Darwin)
         var events = [kevent](repeating: kevent(), count: 16)
         var timeout = timespec(tv_sec: 0, tv_nsec: 0)
         while true {
-          let count = Darwin.kevent(self.descriptor, nil, 0, &events, Int32(events.count), &timeout)
-          guard count > 0 else {
-            // A queue that cannot be read any more could be hiding changes.
-            if count < 0 { changes.overflowed = true }
-            return changes
-          }
-          for event in events.prefix(Int(count)) {
-            let directory = Int32(event.ident)
-            if event.fflags & UInt32(NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE) != 0 {
-              changes.ended.insert(directory)
-              if self.directories.remove(directory) != nil {
-                _ = close(directory)
-              }
-            } else {
-              changes.changed.insert(directory)
-            }
-          }
+          let count = Darwin.kevent(
+            self.descriptor,
+            nil,
+            0,
+            &events,
+            Int32(events.count),
+            &timeout
+          )
+
+          guard count > 0 else { return changed || count < 0 }
+          changed = true
         }
       #else
-        let capacity = 4096
-        let buffer = UnsafeMutableRawBufferPointer.allocate(
-          byteCount: capacity,
-          alignment: MemoryLayout<inotify_event>.alignment
-        )
-        defer { buffer.deallocate() }
+        var buffer = [UInt8](repeating: 0, count: 4096)
         while true {
-          let count = read(self.descriptor, buffer.baseAddress, capacity)
-          guard count > 0 else {
-            let code = errno
-            if count < 0, code == EINTR { continue }
-            // A queue that cannot be read any more could be hiding changes.
-            if count < 0, code != EAGAIN, code != EWOULDBLOCK {
-              changes.overflowed = true
-            }
-            return changes
+          let count = buffer.withUnsafeMutableBytes {
+            read(self.descriptor, $0.baseAddress, $0.count)
           }
-          var offset = 0
-          while offset + MemoryLayout<inotify_event>.size <= count {
-            let event = buffer.loadUnaligned(fromByteOffset: offset, as: inotify_event.self)
-            let nameOffset = offset + MemoryLayout<inotify_event>.size
-            offset = nameOffset + Int(event.len)
-            if event.mask & orbit_in_q_overflow != 0 {
-              changes.overflowed = true
-            } else if event.mask & orbit_in_ignored != 0 {
-              changes.ended.insert(event.wd)
-            } else if event.len == 0 || buffer[nameOffset] != UInt8(ascii: ".") {
-              // An entry whose name starts with a dot is a file on its way to being renamed into
-              // place, which reports again, under its real name, when it gets there.
-              changes.changed.insert(event.wd)
-            }
+          if count > 0 {
+            changed = true
+            continue
           }
+          let code = errno
+          if count < 0, code == EINTR { continue }
+          return changed || (count < 0 && code != EAGAIN && code != EWOULDBLOCK)
         }
       #endif
     }
   }
 
   private struct UnixSocketAddress {
-    private var storage: sockaddr_un
+    private var storage = sockaddr_un()
     private let length: socklen_t
 
     init(path: String) throws {
+      let bytes = Array(path.utf8) + [0]
       guard !path.utf8.contains(0) else {
         throw OrbitIPCSystemError.invalidArgument("socket path contains NUL")
       }
-
-      var storage = sockaddr_un()
-      storage.sun_family = sa_family_t(AF_UNIX)
-      let bytes = Array(path.utf8) + [0]
-      guard bytes.count <= MemoryLayout.size(ofValue: storage.sun_path) else {
+      guard bytes.count <= MemoryLayout.size(ofValue: self.storage.sun_path) else {
         throw OrbitIPCSystemError(operation: "socket path is too long", code: ENAMETOOLONG)
       }
-      withUnsafeMutableBytes(of: &storage.sun_path) { destination in
-        destination.copyBytes(from: bytes)
-      }
-      let offset = MemoryLayout<sockaddr_un>.offset(of: \.sun_path)!
-      let length = socklen_t(offset + bytes.count)
+      self.storage.sun_family = sa_family_t(AF_UNIX)
+      withUnsafeMutableBytes(of: &self.storage.sun_path) { $0.copyBytes(from: bytes) }
+      self.length = socklen_t(MemoryLayout<sockaddr_un>.offset(of: \.sun_path)! + bytes.count)
       #if canImport(Darwin)
-        storage.sun_len = UInt8(length)
+        self.storage.sun_len = UInt8(self.length)
       #endif
-      self.storage = storage
-      self.length = length
     }
 
     mutating func withSockAddr<Result>(
       _ body: (UnsafePointer<sockaddr>, socklen_t) throws -> Result
     ) rethrows -> Result {
-      try withUnsafePointer(to: &self.storage) { storage in
-        try storage.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-          try body($0, self.length)
-        }
+      let length = self.length
+      return try withUnsafePointer(to: &self.storage) { storage in
+        try storage.withMemoryRebound(to: sockaddr.self, capacity: 1) { try body($0, length) }
       }
     }
   }

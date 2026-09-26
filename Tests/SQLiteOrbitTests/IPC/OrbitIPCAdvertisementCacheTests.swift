@@ -56,8 +56,8 @@
 
       // Written in place, which no endpoint does, so no entry of the directory changes and the
       // cache has no reason to read it again.
-      let marker = URL(fileURLWithPath: sender.databaseDirectoryPath(coordinationKey: key))
-        .appending(path: "peer")
+      let marker = try sender.createDatabaseDirectory(coordinationKey: key).appending(path: "peer")
+
       try Data(OrbitIPCWireProtocol.encodeMarker(self.lists)).write(to: marker)
 
       #expect(try cache.advertisements(for: self.database) == ["peer": self.items])
