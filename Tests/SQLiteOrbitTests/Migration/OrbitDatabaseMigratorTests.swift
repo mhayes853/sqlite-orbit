@@ -937,17 +937,11 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let original = itemsMigrator()
       try await original.migrate(driver)
 
       // The identifier never changed, but what it creates now has an extra column.
-      var changed = makeMigrator()
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true)
 
       #expect(try await driver.read { try changed.hasSchemaChanges($0) } == true)
     }
@@ -1017,16 +1011,10 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let pool = try SQLitePool(path: .file(directory.appending(component: "database.sqlite")))
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let original = itemsMigrator()
       try await original.migrate(pool)
 
-      var changed = makeMigrator()
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true)
 
       // A pool's readers run with `PRAGMA query_only = 1`, which cf66808 kept out of what a
       // transaction reports as its configuration. Before that fix, the scratch database opened
@@ -1079,15 +1067,9 @@
       let directory = try makeShortTemporaryDirectory("schema")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let original = itemsMigrator()
       try await original.migrate(driver)
-      var changed = makeMigrator()
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true)
 
       let before = try scratchDatabaseFileNames()
       _ = try await driver.read { try changed.hasSchemaChanges($0) }
@@ -1271,18 +1253,10 @@
     @Test
     func aFailedEraseLeavesTheDatabaseIntactAndRethrows() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
-      }
+      let original = itemsMigrator(seedID: 1)
       try await original.migrate(driver)
 
-      var changed = makeMigrator()
-      changed.eraseDatabaseOnSchemaChange = true
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true, eraseDatabaseOnSchemaChange: true)
 
       // `PRAGMA query_only` turns the erase's `BEGIN IMMEDIATE` into a deferred transaction,
       // which fails the moment it tries to drop something, standing in for a disk that refuses
@@ -1301,16 +1275,7 @@
         _ = error
       #endif
 
-      let ids = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
-      }
-      #expect(ids == [1])
-      let columns = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
-        )
-      }
-      #expect(columns == ["id"])
+      #expect(try await itemsSnapshot(in: driver) == .init(columns: ["id"], ids: [1]))
     }
 
     @Test
@@ -1322,17 +1287,10 @@
       var configuration = SQLiteConfiguration.default
       configuration.library = libraryIgnoringDrops()
       let driver = try SQLiteQueue(path: .memory, configuration: configuration)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let original = itemsMigrator()
       try await original.migrate(driver)
 
-      var changed = makeMigrator()
-      changed.eraseDatabaseOnSchemaChange = true
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true, eraseDatabaseOnSchemaChange: true)
 
       let error = await #expect(throws: SQLiteError.self) {
         try await changed.migrate(driver)
@@ -1366,64 +1324,31 @@
       let directory = try makeShortTemporaryDirectory("erase")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
-      }
+      let original = itemsMigrator(seedID: 1)
       try await original.migrate(driver)
 
-      var changed = makeMigrator()
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true)
 
       #expect(!changed.eraseDatabaseOnSchemaChange)
       try await changed.migrate(driver)
 
-      let columns = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
-        )
-      }
-      #expect(columns == ["id"])
-      let ids = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
-      }
-      #expect(ids == [1])
+      #expect(try await itemsSnapshot(in: driver) == .init(columns: ["id"], ids: [1]))
     }
 
     @Test
     func anUnregisteredTargetWithTheFlagOnThrowsBeforeErasingAnything() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      var original = makeMigrator()
-      original.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
-      }
+      let original = itemsMigrator(seedID: 1)
       try await original.migrate(driver)
 
-      var changed = makeMigrator()
-      changed.eraseDatabaseOnSchemaChange = true
-      changed.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, note TEXT)")
-      }
+      let changed = itemsMigrator(hasNote: true, eraseDatabaseOnSchemaChange: true)
 
       let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
         try await changed.migrate(driver, upTo: "missing")
       }
       #expect(error == OrbitDatabaseMigrationTargetError(target: "missing", reason: .unregistered))
 
-      let columns = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
-        )
-      }
-      #expect(columns == ["id"])
-      let ids = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
-      }
-      #expect(ids == [1])
+      #expect(try await itemsSnapshot(in: driver) == .init(columns: ["id"], ids: [1]))
     }
 
     @Test
@@ -1431,11 +1356,7 @@
       async throws
     {
       let driver = try SQLiteQueue(path: .memory)
-      var newerBuild = makeMigrator()
-      newerBuild.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
-      }
+      var newerBuild = itemsMigrator(seedID: 1)
       newerBuild.registerMigration("Add notes") { transaction in
         try transaction.execute("ALTER TABLE items ADD COLUMN note TEXT")
       }
@@ -1443,24 +1364,11 @@
 
       // An older build that has not shipped "Add notes" yet. With the flag on, this is
       // documented to erase, exactly as a removed migration would.
-      var olderBuild = makeMigrator()
-      olderBuild.eraseDatabaseOnSchemaChange = true
-      olderBuild.registerMigration("Create items") { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
+      let olderBuild = itemsMigrator(eraseDatabaseOnSchemaChange: true)
 
       try await olderBuild.migrate(driver)
 
-      let ids = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
-      }
-      #expect(ids == [])
-      let columns = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
-        )
-      }
-      #expect(columns == ["id"])
+      #expect(try await itemsSnapshot(in: driver) == .init(columns: ["id"], ids: []))
       #expect(try await driver.read { try olderBuild.appliedMigrations($0) } == ["Create items"])
     }
 
@@ -1680,6 +1588,43 @@
       }
     }
     return migrator
+  }
+
+  private func itemsMigrator(
+    hasNote: Bool = false,
+    seedID: Int? = nil,
+    eraseDatabaseOnSchemaChange: Bool = false
+  ) -> OrbitDatabaseMigrator {
+    var migrator = makeMigrator()
+    migrator.eraseDatabaseOnSchemaChange = eraseDatabaseOnSchemaChange
+    migrator.registerMigration("Create items") { transaction in
+      let noteColumn = hasNote ? ", note TEXT" : ""
+      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY\(noteColumn))")
+      if let seedID {
+        try transaction.execute(
+          #sql("INSERT INTO items (id) VALUES (\(bind: seedID))", as: Void.self)
+        )
+      }
+    }
+    return migrator
+  }
+
+  private struct ItemsSnapshot: Equatable {
+    var columns: [String]
+    var ids: [Int]
+  }
+
+  private func itemsSnapshot(
+    in reader: some OrbitDatabaseReader
+  ) async throws -> ItemsSnapshot {
+    try await reader.read { transaction in
+      try ItemsSnapshot(
+        columns: transaction.fetchAll(
+          #sql("SELECT name FROM pragma_table_info('items')", as: String.self)
+        ),
+        ids: transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+      )
+    }
   }
 
   private func log(in reader: some OrbitDatabaseReader) async throws -> [String] {

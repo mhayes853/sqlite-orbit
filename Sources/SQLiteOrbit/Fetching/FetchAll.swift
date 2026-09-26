@@ -2,8 +2,6 @@
   // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
   import protocol SwiftUI.DynamicProperty
   import struct SwiftUI.Animation
-  import struct SwiftUI.State
-  import struct SwiftUI.Environment
 #endif
 
 /// A property that observes every row a query produces.
@@ -45,29 +43,10 @@
 @dynamicMemberLookup
 @propertyWrapper
 public struct FetchAll<Element: Sendable>: Sendable {
-  #if canImport(SwiftUI)
-    private let box: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>
-    private let state:
-      SwiftUI.State<OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>>
-    private let generation = SwiftUI.State(wrappedValue: 0)
-    // The environment's database, resolved by SwiftUI before `update()` runs.
-    @Environment(\.orbitDatabase) private var environmentDatabase
-    private var defaultDatabase = OrbitDefaultDatabaseSource()
-
-    var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>> {
-      state.wrappedValue
-    }
-  #else
-    let storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>
-  #endif
+  @OrbitFetchState var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>
 
   init(storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>) {
-    #if canImport(SwiftUI)
-      self.box = storage
-      self.state = SwiftUI.State(wrappedValue: storage)
-    #else
-      self.storage = storage
-    #endif
+    _storage = OrbitFetchState(wrappedValue: storage)
   }
 
   /// Creates a property holding rows that no query keeps current.
@@ -377,11 +356,7 @@ extension FetchAll: Equatable where Element: Equatable {
   extension FetchAll: DynamicProperty {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
-      state.wrappedValue.update(
-        declared: box,
-        database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
-        generation: generation
-      )
+      _storage.reconcile()
     }
 
     /// Creates a property observing every row of a table, delivering changes with an animation.

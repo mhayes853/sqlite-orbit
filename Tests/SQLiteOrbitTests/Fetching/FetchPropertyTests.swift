@@ -11,6 +11,8 @@
 
   @testable import SQLiteOrbit
 
+  private typealias Reminder = RemindersTestFixture.Reminder
+
   // The suite is serialized because a few of its tests set the process-wide default database,
   // which every other test in it would otherwise see.
   @Suite(.serialized)
@@ -37,9 +39,7 @@
       try await database.write { transaction in
         try transaction.execute(Tag.insert { Tag.Draft(name: "home") })
       }
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
 
       try await waitUntil { reminders.map(\.title) == ["Milk", "Eggs"] }
     }
@@ -51,9 +51,7 @@
       @FetchOne(Reminder.all.count(), database: database) var count = 0
       #expect(count == 1)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
 
       try await waitUntil { count == 2 }
     }
@@ -78,9 +76,7 @@
       #expect(reminder == nil)
       #expect($reminder.loadError == nil)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: database)
 
       try await waitUntil { reminder?.title == "Milk" }
     }
@@ -93,9 +89,7 @@
 
       #expect(overview == RemindersOverview.Value(count: 2, titles: ["Milk", "Eggs"]))
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
-      }
+      try await insertReminders("Bread", into: database)
 
       try await waitUntil { overview.count == 3 && overview.titles.last == "Bread" }
     }
@@ -111,9 +105,7 @@
       @Fetch(observation, database: database) var titles = [String]()
 
       #expect(titles == ["Milk"])
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       try await waitUntil { titles == ["Milk", "Eggs"] }
     }
 
@@ -182,9 +174,7 @@
       #expect(!$titles.isLoading)
       #expect($titles.loadError == nil)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: database)
       try await waitUntil { titles == ["Milk"] }
     }
 
@@ -238,9 +228,7 @@
       let subscription = try await $titles.load(eggs, database: database)
       #expect(titles == ["Eggs"])
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       try await waitUntil { titles == ["Eggs", "Eggs"] }
       withExtendedLifetime(subscription) {}
     }
@@ -259,17 +247,11 @@
       #expect(reminders.map(\.title) == ["Eggs"])
 
       // The replacement query is what is observed from now on.
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       try await waitUntil { reminders.count == 2 }
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
-      }
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Bread", into: database)
+      try await insertReminders("Eggs", into: database)
       try await waitUntil { reminders.count == 3 }
     }
 
@@ -297,9 +279,7 @@
 
       subscription.cancel()
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       try await Task.sleep(for: .milliseconds(50))
 
       #expect(reminders.count == 1)
@@ -618,13 +598,9 @@
       #expect(storage.value == ["Milk", "Milk"])
 
       // It observes the database it moved to, and no longer the one it left.
-      try await attached.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: attached)
       try await waitUntil { storage.value == ["Milk", "Milk", "Milk"] }
-      try await processDefault.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: processDefault)
       #expect(storage.value == ["Milk", "Milk", "Milk"])
     }
 
@@ -665,9 +641,7 @@
       #expect(second.value == ["Milk"])
       #expect(database.subscriptionCount == 1)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: database)
       try await waitUntil { first.value == ["Milk", "Milk"] }
       try await waitUntil { second.value == ["Milk", "Milk"] }
     }
@@ -685,9 +659,7 @@
 
       first.detach()
       #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: database)
       try await waitUntil { second.value == ["Milk", "Milk"] }
       #expect(first.untrackedValue == ["Milk"])
 
@@ -818,9 +790,7 @@
 
       #expect(count.wrappedValue == 1)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       try await waitUntil { count.wrappedValue == 2 }
     }
 
@@ -836,9 +806,7 @@
       $reminders = $all
       #expect(reminders.count == 2)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
-      }
+      try await insertReminders("Bread", into: database)
       try await waitUntil { reminders.count == 3 }
     }
 
@@ -889,9 +857,7 @@
         }
         #expect(!didChange.withLock { $0 })
 
-        try await database.write { transaction in
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-        }
+        try await insertReminders("Eggs", into: database)
 
         try await waitUntil { didChange.withLock { $0 } }
       }
@@ -951,9 +917,7 @@
 
       #expect(count == 2)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Bread") })
-      }
+      try await insertReminders("Bread", into: database)
       try await waitUntil { count == 3 }
     }
 
@@ -1219,9 +1183,7 @@
       @FetchAll(Reminder.order(by: \.id), database: reader) var reminders
       #expect(reminders.isEmpty)
 
-      try await writer.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Milk") })
-      }
+      try await insertReminders("Milk", into: writer)
 
       try await waitUntil { reminders.map(\.title) == ["Milk"] }
     }
@@ -1237,9 +1199,7 @@
       var titles = await values.next()?.map(\.title)
       #expect(titles == ["Milk"])
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       titles = await values.next()?.map(\.title)
       #expect(titles == ["Milk", "Eggs"])
     }
@@ -1266,9 +1226,7 @@
       var count = await values.next()
       #expect(count == 1)
 
-      try await database.write { transaction in
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: "Eggs") })
-      }
+      try await insertReminders("Eggs", into: database)
       count = await values.next()
       #expect(count == 2)
     }
@@ -1305,31 +1263,6 @@
   private struct FetchTestError: Error {}
 
   private actor SchedulerActor {}
-
-  private let remindersSchema = """
-    CREATE TABLE IF NOT EXISTS reminders (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL,
-      isCompleted INTEGER NOT NULL DEFAULT 0,
-      priority TEXT
-    )
-    """
-
-  private func remindersDatabase(
-    titles: String...
-  ) async throws -> SQLiteQueue {
-    let database = try inMemoryDatabase()
-    try await database.write { transaction in
-      try transaction.execute(remindersSchema)
-      try transaction.execute(
-        "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
-      )
-      for title in titles {
-        try transaction.execute(Reminder.insert { Reminder.Draft(title: title) })
-      }
-    }
-    return database
-  }
 
   private func countingRemindersDatabase(
     titles: String...
@@ -1506,14 +1439,6 @@
   private struct TaggedTitle: Equatable, Sendable {
     var title: String
     var tag: String
-  }
-
-  @Table("reminders")
-  private struct Reminder: Equatable, Sendable {
-    let id: Int
-    var title: String
-    var isCompleted = false
-    var priority: String?
   }
 
   @Table("notes")

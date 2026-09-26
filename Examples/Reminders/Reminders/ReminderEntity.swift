@@ -1,0 +1,228 @@
+import AppIntents
+import Foundation
+import RemindersData
+import SQLiteOrbit
+
+struct ReminderEntity: AppEntity, Sendable {
+  static let typeDisplayRepresentation = TypeDisplayRepresentation(
+    name: "Reminder"
+  )
+  static let defaultQuery = ReminderEntityQuery()
+
+  let reminder: Reminder
+  let remindersList: RemindersList
+  let tags: [Tag]
+
+  var id: Reminder.ID { reminder.id }
+
+  @ComputedProperty(title: "Title")
+  var title: String { reminder.title }
+
+  @ComputedProperty(title: "Notes")
+  var notes: String { reminder.notes }
+
+  @ComputedProperty(title: "List")
+  var list: RemindersListEntity { RemindersListEntity(remindersList) }
+
+  @ComputedProperty(title: "Due Date")
+  var dueDate: Date? { reminder.dueDate?.date() }
+
+  @ComputedProperty(title: "Completed")
+  var isCompleted: Bool { reminder.isCompleted }
+
+  @ComputedProperty(title: "Flagged")
+  var isFlagged: Bool { reminder.isFlagged }
+
+  @ComputedProperty(title: "Priority")
+  var priority: ReminderIntentPriority? {
+    reminder.priority.map(ReminderIntentPriority.init)
+  }
+
+  @ComputedProperty(title: "Tags")
+  var tagTitles: [String] { tags.map(\.title) }
+
+  @ComputedProperty(title: "Created")
+  var createdAt: Date { reminder.createdAt }
+
+  var displayRepresentation: DisplayRepresentation {
+    DisplayRepresentation(
+      title: "\(title)",
+      subtitle: "\(list.title)",
+      image: .init(systemName: systemImageName)
+    )
+  }
+
+  init(
+    reminder: Reminder,
+    remindersList: RemindersList,
+    tags: [Tag] = []
+  ) {
+    self.reminder = reminder
+    self.remindersList = remindersList
+    self.tags = tags
+  }
+
+  init(_ reminder: WidgetReminder) {
+    self.init(
+      reminder: reminder.reminder,
+      remindersList: reminder.remindersList
+    )
+  }
+
+  private var systemImageName: String {
+    if isCompleted {
+      "checkmark.circle.fill"
+    } else if isFlagged {
+      "flag.fill"
+    } else {
+      "circle"
+    }
+  }
+}
+
+@Selection
+private nonisolated struct ReminderEntityRecord: Sendable {
+  let reminder: Reminder
+  let remindersList: RemindersList
+}
+
+@Selection
+private nonisolated struct ReminderEntityTag: Sendable {
+  let reminderID: Reminder.ID
+  let tag: Tag
+}
+
+struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
+  // `IntentExecutionTargets` is new in the iOS 27 SDK, which Swift 6.4 ships with.
+  #if compiler(>=6.4)
+    @available(iOS 27, macOS 27, tvOS 27, watchOS 27, visionOS 27, *)
+    static let allowedExecutionTargets: IntentExecutionTargets = [
+      .main,
+      .widgetKitExtension
+    ]
+  #endif
+
+  @Dependency(default: OrbitDefaultDatabase.current)
+  var database: RemindersDatabase
+
+  init() {}
+
+  init(dependencies: AppDependencyManager) {
+    _database = AppDependency(manager: dependencies)
+  }
+
+  func entities(
+    for identifiers: [ReminderEntity.ID]
+  ) async throws -> [ReminderEntity] {
+    try await Self.entities(for: identifiers, in: database)
+  }
+
+  private static func entities(
+    for identifiers: [ReminderEntity.ID],
+    in database: RemindersDatabase
+  ) async throws -> [ReminderEntity] {
+    let entities = try await database.read { transaction in
+      let records =
+        try Reminder
+        .where { $0.id.in(identifiers) }
+        .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
+        .select {
+          ReminderEntityRecord.Columns(
+            reminder: $0,
+            remindersList: $1
+          )
+        }
+        .fetchAll(transaction)
+      return try Self.entities(records: records, transaction: transaction)
+    }
+    let entitiesByID: [Reminder.ID: ReminderEntity] = Dictionary(
+      uniqueKeysWithValues: entities.map { ($0.id, $0) }
+    )
+    return identifiers.compactMap { entitiesByID[$0] }
+  }
+
+  func suggestedEntities() async throws -> [ReminderEntity] {
+    try await database.read { transaction in
+      let records =
+        try Reminder
+        .where { !$0.isCompleted }
+        .order { ($0.createdAt.desc(), $0.id) }
+        .limit(20)
+        .join(RemindersList.all) { $0.remindersListID.eq($1.id) }
+        .select {
+          ReminderEntityRecord.Columns(
+            reminder: $0,
+            remindersList: $1
+          )
+        }
+        .fetchAll(transaction)
+      return try Self.entities(records: records, transaction: transaction)
+    }
+  }
+
+  func entities(matching string: String) async throws -> [ReminderEntity] {
+    let match = Self.ftsMatch(string)
+    guard !match.isEmpty else { return try await suggestedEntities() }
+    return try await database.read { transaction in
+      let records =
+        try ReminderText
+        .where { $0.match(match) }
+        .order(by: \.rank)
+        .join(Reminder.all) { $0.rowid.eq($1.rowid) }
+        .join(RemindersList.all) { $1.remindersListID.eq($2.id) }
+        .limit(20)
+        .select {
+          ReminderEntityRecord.Columns(
+            reminder: $1,
+            remindersList: $2
+          )
+        }
+        .fetchAll(transaction)
+      return try Self.entities(records: records, transaction: transaction)
+    }
+  }
+
+  static func entity(
+    id: Reminder.ID,
+    database: RemindersDatabase
+  ) async throws -> ReminderEntity? {
+    try await entities(for: [id], in: database).first
+  }
+
+  private static func entities(
+    records: [ReminderEntityRecord],
+    transaction: borrowing SQLiteReadTransaction
+  ) throws -> [ReminderEntity] {
+    let reminderIDs = records.map(\.reminder.id)
+    let tags =
+      try ReminderTag
+      .where { $0.reminderID.in(reminderIDs) }
+      .order { ($0.reminderID, $0.tagID.collate(.nocase)) }
+      .join(Tag.all) { $0.tagID.eq($1.primaryKey) }
+      .select {
+        ReminderEntityTag.Columns(
+          reminderID: $0.reminderID,
+          tag: $1
+        )
+      }
+      .fetchAll(transaction)
+    let tagsByReminderID: [Reminder.ID: [ReminderEntityTag]] = Dictionary(
+      grouping: tags,
+      by: \.reminderID
+    )
+    return records.map {
+      ReminderEntity(
+        reminder: $0.reminder,
+        remindersList: $0.remindersList,
+        tags: tagsByReminderID[$0.reminder.id, default: []].map(\.tag)
+      )
+    }
+  }
+
+  private static func ftsMatch(_ string: String) -> String {
+    string
+      .split(whereSeparator: \.isWhitespace)
+      .map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }
+      .joined(separator: " ")
+  }
+}

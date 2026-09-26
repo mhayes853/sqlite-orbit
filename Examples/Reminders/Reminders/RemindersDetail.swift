@@ -1,0 +1,472 @@
+import Observation
+import RemindersData
+import SQLiteOrbit
+import SwiftUI
+
+enum RemindersDetailType: Hashable, Sendable {
+  case all
+  case completed
+  case flagged
+  case list(RemindersList)
+  case scheduled
+  case tags([Tag])
+  case today
+
+  var id: String {
+    switch self {
+    case .all: "all"
+    case .completed: "completed"
+    case .flagged: "flagged"
+    case .list(let list): "list_\(list.id)"
+    case .scheduled: "scheduled"
+    case .tags(let tags): "tags_\(tags.map(\.id).sorted().joined(separator: "_"))"
+    case .today: "today"
+    }
+  }
+
+  var navigationTitle: String {
+    switch self {
+    case .all: "All"
+    case .completed: "Completed"
+    case .flagged: "Flagged"
+    case .list(let list): list.title
+    case .scheduled: "Scheduled"
+    case .tags(let tags):
+      switch tags.count {
+      case 0: "Tags"
+      case 1: "#\(tags[0].title)"
+      default: "\(tags.count) Tags"
+      }
+    case .today: "Today"
+    }
+  }
+
+  var color: Color {
+    switch self {
+    case .all, .completed: .gray
+    case .flagged: .orange
+    case .list(let list): list.color
+    case .scheduled: .red
+    case .tags, .today: .blue
+    }
+  }
+
+  var iconName: String {
+    switch self {
+    case .all: "tray.fill"
+    case .completed: "checkmark"
+    case .flagged: "flag.fill"
+    case .list: "list.bullet"
+    case .scheduled, .today: "calendar"
+    case .tags: "number"
+    }
+  }
+
+  var remindersList: RemindersList? {
+    guard case .list(let list) = self else { return nil }
+    return list
+  }
+}
+
+@Selection
+nonisolated struct ReminderDetailRow: Identifiable, Sendable {
+  var id: Reminder.ID { reminder.id }
+  let reminder: Reminder
+  let remindersList: RemindersList
+  let isPastDue: Bool
+  let notes: String
+  let tags: String
+}
+
+@MainActor
+@Observable
+final class RemindersDetailModel: ErrorReporting, HashableObject {
+  @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
+  @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
+  var remindersLists: [RemindersList]
+
+  let detailType: RemindersDetailType
+  var coverImage: RemindersCoverImage?
+  var ordering: ReminderOrdering
+  var reminderForm: ReminderFormModel?
+  var showCompleted: Bool
+  var errorMessage: String?
+
+  var canAddReminder: Bool {
+    detailType != .completed
+  }
+
+  init(detailType: RemindersDetailType) {
+    let database = OrbitDefaultDatabase.current
+    self.detailType = detailType
+
+    let defaults = RemindersDetailSettings(
+      id: detailType.id,
+      ordering: .dueDate,
+      showCompleted: detailType == .completed
+    )
+    let settings =
+      (try? database.readBlocking {
+        try RemindersDetailSettings.find(detailType.id).fetchOne($0)
+      }) ?? nil
+    ordering = settings?.ordering ?? defaults.ordering
+    showCompleted = settings?.showCompleted ?? defaults.showCompleted
+
+    _reminderRows = FetchAll(
+      Self.remindersQuery(
+        detailType: detailType,
+        ordering: ordering,
+        showCompleted: showCompleted
+      ),
+      animation: .default
+    )
+  }
+
+  func setOrdering(_ newValue: ReminderOrdering) async {
+    ordering = newValue
+    await persistSettingsAndReload()
+  }
+
+  func load() async {
+    await withErrorReporting {
+      async let loadReminders = $reminderRows.load(
+        Self.remindersQuery(
+          detailType: detailType,
+          ordering: ordering,
+          showCompleted: showCompleted
+        )
+      )
+      async let loadLists: Void = $remindersLists.load()
+      _ = try await (loadReminders, loadLists)
+    }
+  }
+
+  func observeCoverImage() async {
+    guard let listID = detailType.remindersList?.id else { return }
+    let observation = OrbitValueObservation.trackingOne(
+      RemindersListAsset
+        .where { $0.remindersListID.eq(listID) }
+        .select(\.coverImage)
+    )
+    do {
+      for try await data in observation.values(in: OrbitDefaultDatabase.current) {
+        if let data = data ?? nil {
+          coverImage = await RemindersCoverImage.load(data)
+        } else {
+          coverImage = nil
+        }
+      }
+    } catch is CancellationError {
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  func refreshForCurrentDate() async {
+    await withErrorReporting {
+      try await $reminderRows.load(
+        Self.remindersQuery(
+          detailType: detailType,
+          ordering: ordering,
+          showCompleted: showCompleted
+        ),
+        animation: .default
+      )
+    }
+  }
+
+  func toggleShowCompleted() async {
+    showCompleted.toggle()
+    await persistSettingsAndReload()
+  }
+
+  func moveReminders(from source: IndexSet, to destination: Int) async {
+    guard
+      let move = ReminderMove(
+        visibleIDs: reminderRows.map(\.id),
+        source: source,
+        destination: destination
+      )
+    else { return }
+    let currentOrdering = ordering
+    let showCompleted = showCompleted
+    await withErrorReporting {
+      let didMove = try await OrbitDefaultDatabase.current.write { transaction in
+        let allIDs = try Self.allReminderIDsQuery(
+          ordering: currentOrdering,
+          showCompleted: showCompleted
+        ).fetchAll(transaction)
+        guard let reorderedIDs = move.applying(to: allIDs) else { return false }
+        for (position, id) in reorderedIDs.enumerated() {
+          try Reminder.find(id).update { $0.position = position }.execute(transaction)
+        }
+        return true
+      }
+      guard didMove else { return }
+      ordering = .manual
+      await persistSettingsAndReload()
+    }
+  }
+
+  func newReminderButtonTapped() {
+    guard canAddReminder else { return }
+    guard let list = detailType.remindersList ?? remindersLists.first else {
+      errorMessage = "Create a list before adding a reminder."
+      return
+    }
+    reminderForm = ReminderFormModel(remindersList: list)
+  }
+
+  private func persistSettingsAndReload() async {
+    let settings = RemindersDetailSettings(
+      id: detailType.id,
+      ordering: ordering,
+      showCompleted: showCompleted
+    )
+    let query = Self.remindersQuery(
+      detailType: detailType,
+      ordering: ordering,
+      showCompleted: showCompleted
+    )
+    await withErrorReporting {
+      async let persistSettings: Void = OrbitDefaultDatabase.current.write { transaction in
+        try RemindersDetailSettings.upsert {
+          RemindersDetailSettings.Draft(settings)
+        }
+        .execute(transaction)
+      }
+      async let reloadReminders = $reminderRows.load(
+        query,
+        animation: .default
+      )
+      _ = try await (persistSettings, reloadReminders)
+    }
+  }
+
+  private nonisolated static func allReminderIDsQuery(
+    ordering: ReminderOrdering,
+    showCompleted: Bool
+  ) -> some Statement<Reminder.ID> {
+    Reminder
+      .order {
+        if showCompleted { $0.isCompleted }
+      }
+      .order {
+        switch ordering {
+        case .dueDate: $0.dueDate.asc(nulls: .last)
+        case .manual: $0.position
+        case .priority: ($0.priority.desc(), $0.isFlagged.desc())
+        case .title: $0.title
+        }
+      }
+      .order(by: \.id)
+      .select(\.id)
+  }
+
+  private static func remindersQuery(
+    detailType: RemindersDetailType,
+    ordering: ReminderOrdering,
+    showCompleted: Bool
+  ) -> some Statement<ReminderDetailRow> {
+    Reminder
+      .where {
+        if !showCompleted {
+          !$0.isCompleted
+        }
+      }
+      .order {
+        if showCompleted {
+          $0.isCompleted
+        }
+      }
+      .order {
+        switch ordering {
+        case .dueDate: $0.dueDate.asc(nulls: .last)
+        case .manual: $0.position
+        case .priority: ($0.priority.desc(), $0.isFlagged.desc())
+        case .title: $0.title
+        }
+      }
+      .withTags
+      .where { reminder, _, tag in
+        switch detailType {
+        case .all: true
+        case .completed: reminder.isCompleted
+        case .flagged: reminder.isFlagged
+        case .list(let list): reminder.remindersListID.eq(list.id)
+        case .scheduled: reminder.isScheduled
+        case .tags(let tags): tag.primaryKey.ifnull("").in(tags.map(\.primaryKey))
+        case .today: reminder.isToday
+        }
+      }
+      .join(RemindersList.all) { $0.remindersListID.eq($3.id) }
+      .join(ReminderText.all) { $0.rowid.eq($4.rowid) }
+      .select {
+        ReminderDetailRow.Columns(
+          reminder: $0,
+          remindersList: $3,
+          isPastDue: $0.isPastDue,
+          notes: $4.notes.substr(0, 200),
+          tags: $4.tags
+        )
+      }
+  }
+}
+
+struct RemindersDetailView: View {
+  @Environment(\.scenePhase) private var scenePhase
+  @State private var model: RemindersDetailModel
+
+  init(model: RemindersDetailModel) {
+    _model = State(initialValue: model)
+  }
+
+  var body: some View {
+    @Bindable var model = model
+
+    List {
+      RemindersDetailHeader(
+        color: model.detailType.color,
+        coverImage: model.coverImage,
+        title: model.detailType.navigationTitle
+      )
+
+      ForEach(model.reminderRows) { row in
+        ReminderRow(
+          color: model.detailType.color,
+          isPastDue: row.isPastDue,
+          notes: row.notes,
+          reminder: row.reminder,
+          remindersList: row.remindersList,
+          remindersLists: model.remindersLists,
+          tags: row.tags
+        )
+        .listRowSeparator(.hidden)
+      }
+      .onMove { source, destination in
+        Task { await model.moveReminders(from: source, to: destination) }
+      }
+    }
+    .listStyle(.plain)
+    .scrollContentBackground(.hidden)
+    .background(Color(.systemBackground))
+    .navigationTitle("")
+    .task(id: scenePhase) {
+      guard scenePhase == .active else { return }
+      await model.load()
+      await refreshAtDayBoundaries { await model.refreshForCurrentDate() }
+    }
+    .task { await model.observeCoverImage() }
+    .toolbarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Menu("Sort By") {
+            ForEach(ReminderOrdering.allCases, id: \.self) { ordering in
+              CheckmarkedMenuButton(
+                title: ordering.rawValue,
+                isSelected: model.ordering == ordering
+              ) {
+                Task { await model.setOrdering(ordering) }
+              }
+            }
+          }
+          Button {
+            Task { await model.toggleShowCompleted() }
+          } label: {
+            Label(
+              model.showCompleted ? "Hide Completed" : "Show Completed",
+              systemImage: model.showCompleted ? "eye.slash" : "eye"
+            )
+          }
+        } label: {
+          Image(systemName: "ellipsis")
+        }
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      Color.clear.frame(height: model.canAddReminder ? 72 : 0)
+    }
+    .overlay(alignment: .bottomTrailing) {
+      if model.canAddReminder {
+        FloatingAddButton(tint: model.detailType.color, title: "New Reminder") {
+          model.newReminderButtonTapped()
+        }
+        .padding(24)
+      }
+    }
+    .sheet(item: $model.reminderForm) { formModel in
+      NavigationStack {
+        ReminderFormView(model: formModel)
+      }
+    }
+    .overlay {
+      if model.reminderRows.isEmpty {
+        ContentUnavailableView("No Reminders", systemImage: "checkmark.circle")
+      }
+    }
+    .errorAlert(message: $model.errorMessage)
+  }
+
+}
+
+private struct RemindersDetailHeader: View {
+  let color: Color
+  let coverImage: RemindersCoverImage?
+  let title: String
+
+  var body: some View {
+    if let coverImage {
+      ZStack(alignment: .bottomLeading) {
+        Image(uiImage: coverImage.uiImage)
+          .resizable()
+          .scaledToFill()
+          .frame(height: 200)
+          .clipped()
+        Text(title)
+          .font(.largeTitle.bold())
+          .foregroundStyle(.white)
+          .padding(10)
+          .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 10))
+          .padding()
+      }
+      .listRowInsets(EdgeInsets())
+      .listRowSeparator(.hidden)
+    } else {
+      Text(title)
+        .font(.largeTitle.bold())
+        .foregroundStyle(color)
+        .padding(.top, 12)
+        .listRowSeparator(.hidden)
+    }
+  }
+}
+
+private nonisolated struct ReminderMove: Sendable {
+  let movingIDs: [Reminder.ID]
+  let nextID: Reminder.ID?
+  let previousID: Reminder.ID?
+
+  init?(visibleIDs: [Reminder.ID], source: IndexSet, destination: Int) {
+    guard let firstSource = source.first else { return nil }
+    var reordered = visibleIDs
+    reordered.move(fromOffsets: source, toOffset: destination)
+    guard reordered != visibleIDs else { return nil }
+
+    movingIDs = source.map { visibleIDs[$0] }
+    guard let insertion = reordered.firstIndex(of: visibleIDs[firstSource]) else { return nil }
+    let nextIndex = insertion + movingIDs.count
+    nextID = nextIndex < reordered.count ? reordered[nextIndex] : nil
+    previousID = insertion > 0 ? reordered[insertion - 1] : nil
+  }
+
+  func applying(to allIDs: [Reminder.ID]) -> [Reminder.ID]? {
+    guard movingIDs.allSatisfy(allIDs.contains) else { return nil }
+    var result = allIDs.filter { !movingIDs.contains($0) }
+    let insertion = nextID.flatMap(result.firstIndex(of:))
+      ?? previousID.flatMap { result.firstIndex(of: $0).map { $0 + 1 } }
+      ?? result.count
+    result.insert(contentsOf: movingIDs, at: insertion)
+    return result
+  }
+}
