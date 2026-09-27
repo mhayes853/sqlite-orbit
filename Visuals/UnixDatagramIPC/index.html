@@ -1,0 +1,1873 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>SQLiteOrbit · The Unix datagram IPC transport</title>
+<style>
+:root{
+  --bg:#0a0d13; --bg2:#0e131c; --panel:#121925; --panel2:#182133; --line:#232f45; --line2:#31415f;
+  --text:#e8edf5; --muted:#9aa5ba; --dim:#606c84;
+  --c-obs:#dfe7f2; --c-rsub:#ffc3a0; --c-db:#8ea2ff; --c-tr:#b98cff; --c-hd:#d9bcff; --c-wire:#56c8ff;
+  --c-ep:#ffb454; --c-eq:#ff6b7d; --c-sk:#34d6c3; --c-cache:#ff8fcf; --c-watch:#e9d66b; --c-reg:#7ee08a;
+  --c-dir:#b5f0b0; --c-peer:#9aa5b8; --ok:#5ee39b; --bad:#ff6b6b;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;color:var(--text);font:15px/1.55 var(--sans);
+  background:radial-gradient(1100px 520px at 75% -8%, #172342 0%, rgba(23,35,66,0) 62%), var(--bg);}
+code{font-family:var(--mono);font-size:.9em}
+p code,li code,.caption code,.info code,.lede code,.hero code{color:#e3e9f5;background:#19233a;border:1px solid #26334d;padding:0 .28em;border-radius:4px;white-space:nowrap}
+a{color:var(--c-wire)}
+.hero{max-width:1140px;margin:0 auto;padding:44px 18px 18px}
+.eyebrow{font:600 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--c-ep)}
+h1{font-size:clamp(27px,4.4vw,42px);line-height:1.08;margin:.45em 0 .35em;letter-spacing:-.02em}
+h1 .t{font-family:var(--mono);font-weight:650;letter-spacing:-.03em;color:#fff}
+.hero p{color:var(--muted);max-width:790px;font-size:16px;margin:.2em 0 .6em}
+.facts{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.fact{font:12px/1.35 var(--mono);padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:rgba(18,25,37,.8);color:var(--muted)}
+.fact b{color:var(--text);font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:18px;font:12px var(--mono);color:var(--muted)}
+.legend span{white-space:nowrap}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;background:var(--c);margin-right:6px;vertical-align:-1px}
+nav.top{position:sticky;top:0;z-index:30;background:rgba(10,13,19,.84);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+nav.top .in{max-width:1140px;margin:0 auto;display:flex;gap:2px;overflow-x:auto;padding:8px 12px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+nav.top .in::-webkit-scrollbar{display:none}
+nav.top a{flex:none;color:var(--muted);text-decoration:none;font-size:13px;padding:7px 11px;border-radius:8px;white-space:nowrap}
+nav.top a:hover{color:var(--text);background:var(--panel)}
+nav.top a.on{color:var(--text);background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line2)}
+nav.top a .n{font-family:var(--mono);color:var(--dim);margin-right:6px;font-size:12px}
+main{max-width:1140px;margin:0 auto;padding:0 12px 70px}
+section.scene{margin-top:46px;scroll-margin-top:58px}
+.sh{display:flex;align-items:baseline;gap:12px;padding:0 4px}
+.sh .num{font:600 13px var(--mono);color:var(--dim)}
+h2{font-size:clamp(20px,2.7vw,27px);margin:0;letter-spacing:-.01em;line-height:1.2}
+.lede{color:var(--muted);max-width:860px;margin:.45em 4px 14px}
+.card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 20px 50px -30px rgba(0,0,0,.8)}
+.stage{padding:10px 10px 4px;position:relative}
+.stage svg{display:block;width:100%;height:auto;overflow:visible}
+.caption{padding:4px 18px 16px;min-height:112px}
+.caption .meta{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:3px}
+.caption .stepno{font:600 12px var(--mono);color:var(--c-ep);white-space:nowrap}
+.caption .title{font-weight:650;font-size:15.5px}
+.caption .text{color:#cfd7e5;font-size:14.5px;max-width:980px}
+.controls{display:flex;align-items:center;gap:6px;padding:10px 14px 8px;flex-wrap:wrap;border-top:1px solid var(--line)}
+.btn{appearance:none;-webkit-appearance:none;border:1px solid var(--line2);background:var(--panel2);color:var(--text);height:36px;min-width:40px;padding:0 12px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font:500 13px var(--sans);cursor:pointer;touch-action:manipulation}
+.btn:hover{border-color:#4a5f86;background:#1c2740}
+.btn:focus-visible,.seg button:focus-visible,.dot:focus-visible,.fieldrow:focus-visible,.pick button:focus-visible{outline:2px solid var(--c-wire);outline-offset:2px}
+.btn svg{width:14px;height:14px;fill:currentColor}
+.btn.primary{background:#24324f;border-color:#3a5078}
+.btn[disabled]{opacity:.4;cursor:default}
+.dots{display:flex;gap:3px;margin-left:auto;flex-wrap:wrap;align-items:center}
+.dot{appearance:none;border:0;background:transparent;padding:8px 2px;cursor:pointer;touch-action:manipulation}
+.dot::after{content:"";display:block;width:18px;height:6px;border-radius:3px;background:#28344b}
+.dot.done::after{background:#4b5e84}.dot.on::after{background:var(--c-ep)}
+.toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:12px 14px 0}
+.toolbar .lbl{font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.seg button,.pick button{appearance:none;border:0;background:transparent;color:var(--muted);padding:8px 12px;font:500 13px var(--sans);cursor:pointer;touch-action:manipulation}
+.seg button+button{border-left:1px solid var(--line2)}
+.seg button.on{background:#24324f;color:var(--text)}
+.seg button code{background:none;border:0;padding:0;color:inherit}
+.pick{display:flex;flex-wrap:wrap;gap:6px}
+.pick button{border:1px solid var(--line2);border-radius:9px;font-family:var(--mono);font-size:12px}
+.pick button.on{background:#24324f;color:var(--text);border-color:#3a5078}
+/* architecture */
+.arch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px}
+.arch-grid .stage{padding-bottom:10px}
+.info{border-left:1px solid var(--line);padding:16px 18px;font-size:14px;color:#cfd7e5}
+.info h3{margin:0 0 2px;font:650 15px var(--mono);color:var(--c,#fff);word-break:break-word}
+.info .file{font:11.5px var(--mono);color:var(--dim);margin-bottom:10px;word-break:break-all}
+.info p{margin:.3em 0 .8em}
+.info ul{margin:0;padding-left:16px;color:var(--muted);font-size:13px}
+.info li{margin:.2em 0}
+.info .hint{color:var(--muted)}
+@media (max-width:900px){.arch-grid{grid-template-columns:1fr}.info{border-left:0;border-top:1px solid var(--line)}}
+/* svg */
+svg text{font-family:var(--sans)}
+svg .mono{font-family:var(--mono)}
+.node{transition:opacity .3s}
+.node .nbox{transition:stroke-width .25s,fill-opacity .25s}
+.node.hot .nbox{stroke-width:2.6;fill-opacity:.2;stroke-opacity:1}
+.node.dim{opacity:.32}
+.node.clickable{cursor:pointer}
+.node.clickable:focus{outline:none}
+.node.clickable:focus-visible .nbox{stroke-width:2.6;stroke-dasharray:4 3}
+.node.sel .nbox{stroke-width:2.4;stroke-opacity:1}
+.edge{fill:none;stroke-width:1.4;opacity:.42;transition:opacity .25s,stroke-width .25s}
+.edge.dash{stroke-dasharray:5 4}
+.edge.hot{opacity:1;stroke-width:2.3}
+svg.focusing .edge{opacity:.1}
+svg.focusing .edge.rel{opacity:1;stroke-width:2.2}
+svg.focusing .node:not(.rel){opacity:.35}
+.trail{fill:none;stroke-width:1.6;stroke-dasharray:3 5;opacity:.6}
+.pkt text{font:700 10.5px var(--mono);fill:#0a0d13}
+/* wire inspector */
+.wire-wrap{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:0}
+.wire-left{padding:14px;min-width:0}
+.wire-right{border-left:1px solid var(--line);padding:14px 16px;min-width:0}
+@media (max-width:860px){.wire-wrap{grid-template-columns:1fr}.wire-right{border-left:0;border-top:1px solid var(--line)}}
+.bytes{font-family:var(--mono);display:grid;gap:3px;align-content:start}
+.bytes .off{font-size:10.5px;color:var(--dim);align-self:center;padding-right:4px}
+.bytes .b{border-radius:5px;padding:4px 0 3px;text-align:center;font-size:12.5px;line-height:1.05;cursor:pointer;border:1px solid transparent;user-select:none;-webkit-user-select:none;color:#0b0f16;font-weight:600;touch-action:manipulation;min-width:0}
+.bytes .b small{display:block;font-size:9.5px;height:11px;line-height:11px;opacity:.72;font-weight:500}
+.bytes .b.on{outline:2px solid #fff;outline-offset:-1px;filter:brightness(1.12)}
+.bytes .b.fade{opacity:.38}
+.sumline{font:12.5px/1.5 var(--mono);color:var(--muted);margin-top:12px}
+.sumline b{color:var(--text)}
+.klegend{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:12px}
+.klegend span{font:11px var(--mono);padding:2px 7px;border-radius:6px;color:#0b0f16;font-weight:600}
+.fdetail{background:var(--panel2);border:1px solid var(--line2);border-radius:12px;padding:12px 14px;min-height:150px}
+.fdetail .fname{font:650 14px var(--mono);word-break:break-word}
+.fdetail .fmeta{font:12px var(--mono);color:var(--muted);margin:4px 0 8px}
+.fdetail .fval{font:13px var(--mono);color:#fff;word-break:break-word}
+.fdetail .fdesc{font-size:13px;color:#cfd7e5;margin-top:8px}
+.fieldlist{margin-top:12px;max-height:330px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+.fieldrow{display:grid;grid-template-columns:44px 1fr;gap:6px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--line);color:var(--muted);font:11.5px/1.35 var(--mono);padding:5px 8px;cursor:pointer}
+.fieldrow:last-child{border-bottom:0}
+.fieldrow .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+.fieldrow.on{background:#1d2840;color:var(--text)}
+.fieldrow .grp{color:var(--dim)}
+.wire-controls{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;padding:12px 14px 0}
+.chk{display:inline-flex;align-items:center;gap:7px;font:12px var(--mono);color:var(--muted);cursor:pointer;padding:6px 9px;border:1px solid var(--line2);border-radius:9px}
+.chk input{accent-color:var(--c-wire);margin:0}
+.chk.on{color:var(--text);background:#1a2439}
+footer{max-width:1140px;margin:0 auto;padding:10px 18px 60px;color:var(--dim);font-size:13px}
+footer code{color:var(--muted)}
+.rmnote{display:none;font:12px var(--mono);color:var(--c-watch);margin-top:10px}
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{transition:none!important;animation:none!important}
+  .rmnote{display:block}
+}
+@media (max-width:560px){
+  .hero{padding-top:30px}
+  .caption{padding:4px 14px 14px;min-height:132px}
+  .caption .text{font-size:14px}
+  .controls{padding:10px 10px 8px}
+  .btn .lab{display:none}
+  .btn{min-width:44px;height:40px}
+  .stage{padding:6px 4px 2px}
+}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="eyebrow">SQLiteOrbit · IPC</div>
+  <h1>How <span class="t">UnixDatagramIPCTransport</span> tells other processes a transaction committed</h1>
+  <p>Every process that opens an <code>OrbitIPCDatabase</code> joins a shared coordination directory, binds one Unix datagram socket, and advertises the regions it cares about in marker files. A commit is sent only to the peers whose advertised region it concerns. One event-loop thread per transport moves the datagrams, with no broker and no Dispatch.</p>
+  <div class="facts">
+    <span class="fact">maximumDatagramByteCount <b>61 440 B</b> default · ≤ 65 535</span>
+    <span class="fact">receiveBufferByteCount <b>256 KiB</b></span>
+    <span class="fact">backPressure <b>.suspend(upTo: .milliseconds(250))</b></span>
+    <span class="fact">wire <b>v1</b> · big-endian</span>
+    <span class="fact">Darwin SO_SNDBUF <b>64 KiB</b></span>
+  </div>
+  <div class="legend" aria-label="Component colours">
+    <span style="--c:var(--c-db)">OrbitIPCDatabase</span>
+    <span style="--c:var(--c-tr)">UnixDatagramIPCTransport</span>
+    <span style="--c:var(--c-hd)">OrbitIPCHandlers</span>
+    <span style="--c:var(--c-wire)">OrbitIPCWireProtocol</span>
+    <span style="--c:var(--c-ep)">UnixDatagramEndpoint · loop thread</span>
+    <span style="--c:var(--c-eq)">UnixEventQueue</span>
+    <span style="--c:var(--c-sk)">sockets · datagrams</span>
+    <span style="--c:var(--c-cache)">OrbitIPCAdvertisementCache</span>
+    <span style="--c:var(--c-watch)">UnixDirectoryWatcher</span>
+    <span style="--c:var(--c-reg)">OrbitIPCEndpointRegistry · markers</span>
+    <span style="--c:var(--c-obs)">OrbitValueObservation</span>
+    <span style="--c:var(--c-rsub)">OrbitRegionSubscription</span>
+  </div>
+  <div class="rmnote">Reduced motion is on: scenes don't autoplay and nothing moves. Use Step to go through each scene.</div>
+</header>
+<nav class="top" aria-label="Scenes"><div class="in">
+  <a href="#arch"><span class="n">01</span>Architecture</a>
+  <a href="#discovery"><span class="n">02</span>Discovery</a>
+  <a href="#fanout"><span class="n">03</span>Fan-out</a>
+  <a href="#wire"><span class="n">04</span>Wire format</a>
+  <a href="#batching"><span class="n">05</span>Backpressure</a>
+  <a href="#loop"><span class="n">06</span>Event loop</a>
+  <a href="#widening"><span class="n">07</span>Region widening</a>
+</div></nav>
+<main>
+<section class="scene" id="arch">
+  <div class="sh"><span class="num">01</span><h2>Architecture map</h2></div>
+  <p class="lede">The components of one process's transport and how they connect. Tap or hover a component to see what it does and where it lives; the steps trace one commit from a write to the peers and back into an observation.</p>
+  <div class="card">
+    <div class="arch-grid"><div class="stage"></div><div class="info" id="arch-info"></div></div>
+  </div>
+</section>
+<section class="scene" id="discovery">
+  <div class="sh"><span class="num">02</span><h2>Discovery through the coordination directory</h2></div>
+  <p class="lede">Processes find each other through the filesystem: sockets in <code>v1/s/</code>, and one marker per endpoint per database in <code>v1/d/&lt;coordinationKey&gt;/</code>. Markers are replaced whole with a rename. Senders cache what they read until a directory watch reports a change.</p>
+  <div class="card"><div class="stage"></div></div>
+</section>
+<section class="scene" id="fanout">
+  <div class="sh"><span class="num">03</span><h2>Commit fan-out with sender-side filtering</h2></div>
+  <p class="lede">A commit goes only to peers whose advertised region it concerns, so a process that doesn't care is never woken. Pick a commit to see which peers it reaches.</p>
+  <div class="card"><div class="stage"></div></div>
+</section>
+<section class="scene" id="wire">
+  <div class="sh"><span class="num">04</span><h2>Wire format byte inspector</h2></div>
+  <p class="lede">The bytes below are computed in the page by a port of <code>OrbitIPCWireBatch.encoded()</code> and <code>OrbitIPCWireProtocol.encodeMarker(_:)</code>. Hover or tap a byte, or a row in the field list, to see which field it belongs to, its offset and its decoded value. Toggle commits to watch the shared string table change.</p>
+  <div class="card" id="wire-card"></div>
+</section>
+<section class="scene" id="batching">
+  <div class="sh"><span class="num">05</span><h2>Batching under backpressure</h2></div>
+  <p class="lede">What happens when a peer's receive queue is full. With <code>.suspend(upTo:)</code>, messages wait in order in one FIFO per peer and go out together once the peer has room, each sender waiting on its own continuation. With <code>.fail</code>, nothing waits.</p>
+  <div class="card"><div class="stage"></div></div>
+</section>
+<section class="scene" id="loop">
+  <div class="sh"><span class="num">06</span><h2>The event loop: Darwin and Linux/Android</h2></div>
+  <p class="lede">One “Orbit IPC” <code>DetachedThread</code> per transport blocks in <code>UnixEventQueue.wait(until:)</code>. The two platforms differ in one important way: Linux can report when a full peer has room, and Darwin can't, so Darwin retries on a timer that backs off.</p>
+  <div class="card"><div class="stage"></div></div>
+</section>
+<section class="scene" id="widening">
+  <div class="sh"><span class="num">07</span><h2>Region widening for value observations</h2></div>
+  <p class="lede">An observation whose fetch reads more than it had advertised must not miss a commit to the new part. It widens its advertisement first, and <code>updateRegion(_:)</code> returns only after the new marker is on disk. Then it reads again. Compare the real order with the order that would lose a commit.</p>
+  <div class="card"><div class="stage"></div></div>
+</section>
+</main>
+<footer>
+  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>IPC/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/Internal/UnixSystem.swift</code>, <code>IPC/Internal/OrbitIPCWireProtocol.swift</code>, <code>IPC/Internal/OrbitIPCEndpointRegistry.swift</code>, <code>IPC/Internal/OrbitIPCAdvertisementCache.swift</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>CLinuxEvents/shim.h</code>. Endpoint names, the database path and timings in the scenes are examples. Byte counts are computed by the page.</p>
+  <p>Keyboard: focus a scene's controls and use ← / → to step.</p>
+</footer>
+<noscript><p style="text-align:center;color:#ff6b7d">The visualizations need JavaScript.</p></noscript>
+<script>
+'use strict';
+/* ====================================================================================
+   Engine: every scene is rebuilt from scratch and replayed up to the current step, so a
+   step can be jumped to, re-laid-out on resize, and restarted deterministically.
+   ==================================================================================== */
+const NS = 'http://www.w3.org/2000/svg';
+const RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+const C = {
+  obs: '#dfe7f2', rsub: '#ffc3a0', db: '#8ea2ff', tr: '#b98cff', hd: '#d9bcff', wire: '#56c8ff',
+  ep: '#ffb454', eq: '#ff6b7d', sk: '#34d6c3', cache: '#ff8fcf', watch: '#e9d66b', reg: '#7ee08a',
+  dir: '#b5f0b0', peer: '#9aa5b8', ok: '#5ee39b', bad: '#ff6b6b', muted: '#9aa5ba', dim: '#606c84',
+  text: '#e8edf5', line: '#2a3750', panel: '#131b28'
+};
+
+function S(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  if (attrs) for (const k in attrs) { const v = attrs[k]; if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v); }
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function H(tag, attrs, parent, html) {
+  const e = document.createElement(tag);
+  if (attrs) for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (html != null) e.innerHTML = html;
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function tw(s, size, mono) { return String(s).length * size * (mono ? 0.61 : 0.53); }
+function wrap(str, n) {
+  const out = []; let line = '';
+  for (const w of String(str).split(' ')) {
+    if (line && (line + ' ' + w).length > n) { out.push(line); line = w; } else line = line ? line + ' ' + w : w;
+  }
+  if (line) out.push(line);
+  return out;
+}
+function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function stripTags(s) { return String(s).replace(/<[^>]+>/g, ''); }
+
+class Ctx {
+  constructor(scene, narrow) {
+    this.scene = scene; this.narrow = narrow; this.token = scene.token;
+    this.cur = false; this.motion = false; this.n = {}; this.edges = {}; this.d = {}; this.uid = scene.id;
+  }
+  alive() { return this.scene.token === this.token; }
+  svg(w, h, label) {
+    const s = S('svg', { viewBox: `0 0 ${w} ${h}`, role: 'img', 'aria-label': label || this.scene.id, preserveAspectRatio: 'xMidYMin meet' });
+    const defs = S('defs', null, s);
+    const f = S('filter', { id: 'glow-' + this.uid, x: '-40%', y: '-40%', width: '180%', height: '180%' }, defs);
+    S('feGaussianBlur', { stdDeviation: 5, result: 'b' }, f);
+    const m = S('feMerge', null, f); S('feMergeNode', { in: 'b' }, m); S('feMergeNode', { in: 'SourceGraphic' }, m);
+    this.defs = defs; this.markers = {}; this.root = s;
+    this.base = S('g', null, s);
+    this.edgeLayer = S('g', null, this.base);
+    this.nodeLayer = S('g', null, this.base);
+    this.dyn = S('g', null, s);
+    this.fx = S('g', null, s);
+    this.W = w; this.H = h;
+    this.scene.stage.appendChild(s);
+    return s;
+  }
+  at(ms, fn) {
+    if (this.cur && this.motion && ms > 0) setTimeout(() => { if (this.alive()) fn(); }, ms);
+    else fn();
+  }
+  marker(color) {
+    if (this.markers[color]) return this.markers[color];
+    const id = `m-${this.uid}-${Object.keys(this.markers).length}`;
+    const m = S('marker', { id, viewBox: '0 0 10 10', refX: 8.5, refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse', markerUnits: 'userSpaceOnUse' }, this.defs);
+    m.setAttribute('markerWidth', 9); m.setAttribute('markerHeight', 9);
+    S('path', { d: 'M0,0 L10,5 L0,10 z', fill: color }, m);
+    return (this.markers[color] = `url(#${id})`);
+  }
+  text(x, y, str, o = {}) {
+    const t = S('text', {
+      x, y, 'text-anchor': o.anchor || 'start', class: (o.mono ? 'mono ' : '') + (o.cls || ''),
+      fill: o.fill || C.text, 'font-size': o.size || 12, 'font-weight': o.weight || null, opacity: o.op != null ? o.op : null,
+      'font-style': o.italic ? 'italic' : null, 'text-decoration': o.strike ? 'line-through' : null
+    }, o.parent || this.nodeLayer);
+    const lines = Array.isArray(str) ? str : String(str).split('\n');
+    if (lines.length === 1) t.textContent = lines[0];
+    else lines.forEach((l, i) => { const ts = S('tspan', { x, dy: i ? (o.lh || (o.size || 12) * 1.32) : 0 }, t); ts.textContent = l; });
+    return t;
+  }
+  rect(x, y, w, h, o = {}) {
+    return S('rect', {
+      x, y, width: Math.max(0, w), height: Math.max(0, h), rx: o.rx != null ? o.rx : 8,
+      fill: o.fill || 'none', 'fill-opacity': o.fo != null ? o.fo : null,
+      stroke: o.stroke || null, 'stroke-opacity': o.so != null ? o.so : null, 'stroke-width': o.sw || (o.stroke ? 1.2 : null),
+      'stroke-dasharray': o.dash || null, opacity: o.op != null ? o.op : null, filter: o.glow ? `url(#glow-${this.uid})` : null
+    }, o.parent || this.nodeLayer);
+  }
+  line(x1, y1, x2, y2, o = {}) {
+    return S('line', { x1, y1, x2, y2, stroke: o.stroke || C.line, 'stroke-width': o.sw || 1.2, 'stroke-dasharray': o.dash || null, opacity: o.op != null ? o.op : null, 'marker-end': o.arrow ? this.marker(o.stroke || C.line) : null }, o.parent || this.nodeLayer);
+  }
+  path(d, o = {}) {
+    return S('path', { d, fill: 'none', stroke: o.stroke || C.line, 'stroke-width': o.sw || 1.2, 'stroke-dasharray': o.dash || null, opacity: o.op != null ? o.op : null, 'marker-end': o.arrow ? this.marker(o.stroke || C.line) : null }, o.parent || this.nodeLayer);
+  }
+  panel(x, y, w, h, title, color, o = {}) {
+    const p = o.parent || this.nodeLayer;
+    this.rect(x, y, w, h, { fill: color, fo: o.fo != null ? o.fo : 0.045, stroke: color, so: o.so != null ? o.so : 0.35, rx: 12, parent: p, dash: o.dash });
+    if (title) this.text(x + 14, y + 22, title, { mono: true, size: o.ts || 12.5, weight: 650, fill: color, parent: p });
+    if (o.sub) this.text(x + w - 12, y + 22, o.sub, { size: 11, fill: C.muted, anchor: 'end', parent: p });
+  }
+  box(id, x, y, w, h, color, title, sub, o = {}) {
+    const g = S('g', { class: 'node' + (o.cls ? ' ' + o.cls : ''), 'data-id': id }, o.parent || this.nodeLayer);
+    const r = S('rect', { x, y, width: w, height: h, rx: o.rx != null ? o.rx : 10, class: 'nbox', fill: color, 'fill-opacity': o.fo != null ? o.fo : 0.08, stroke: color, 'stroke-opacity': o.so != null ? o.so : 0.7, 'stroke-width': 1.2, 'stroke-dasharray': o.dash || null }, g);
+    const titles = Array.isArray(title) ? title : [title];
+    const subs = sub == null ? [] : (Array.isArray(sub) ? sub : [sub]);
+    const ts = o.ts || 12.5, ss = o.ss || 11, lh1 = ts * 1.25, lh2 = ss * 1.38;
+    const total = titles.length * lh1 + subs.length * lh2;
+    let yy = o.top != null ? y + o.top : y + h / 2 - total / 2 + ts * 0.9;
+    const cx = o.left ? x + 12 : x + w / 2, anchor = o.left ? 'start' : 'middle';
+    titles.forEach(t => { this.text(cx, yy, t, { anchor, mono: true, fill: color, size: ts, weight: 650, parent: g }); yy += lh1; });
+    yy += 1;
+    subs.forEach(t => { this.text(cx, yy, t, { anchor, size: ss, fill: C.muted, parent: g }); yy += lh2; });
+    this.n[id] = { x, y, w, h, g, r, color };
+    return g;
+  }
+  chip(x, y, str, color, o = {}) {
+    const size = o.size || 11, w = o.w || tw(str, size, !o.sans) + 14, h = o.h || size + 9;
+    const ax = o.anchor === 'middle' ? x - w / 2 : o.anchor === 'end' ? x - w : x;
+    const g = S('g', { class: 'chip' }, o.parent || this.nodeLayer);
+    S('rect', { x: ax, y: y - h / 2, width: w, height: h, rx: o.rx != null ? o.rx : h / 2, fill: o.solid ? color : color, 'fill-opacity': o.solid ? 1 : (o.fo != null ? o.fo : 0.14), stroke: color, 'stroke-opacity': o.so != null ? o.so : 0.6, filter: o.glow ? `url(#glow-${this.uid})` : null }, g);
+    this.text(ax + w / 2, y + size * 0.36, str, { anchor: 'middle', mono: !o.sans, size, fill: o.solid ? '#0a0d13' : (o.fill || color), parent: g, weight: o.weight || (o.solid ? 700 : null) });
+    g.w = w;
+    return g;
+  }
+  pt(p, side) {
+    if (typeof p !== 'string') return p;
+    const n = this.n[p]; if (!n) throw new Error('no node ' + p);
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+    switch (side) {
+      case 'l': return { x: n.x, y: cy }; case 'r': return { x: n.x + n.w, y: cy };
+      case 't': return { x: cx, y: n.y }; case 'b': return { x: cx, y: n.y + n.h };
+      default: return { x: cx, y: cy };
+    }
+  }
+  border(n, toward) {
+    const cx = n.x + n.w / 2, cy = n.y + n.h / 2, dx = toward.x - cx, dy = toward.y - cy;
+    if (!dx && !dy) return { x: cx, y: cy };
+    const tx = dx ? (n.w / 2 + 3) / Math.abs(dx) : Infinity, ty = dy ? (n.h / 2 + 3) / Math.abs(dy) : Infinity;
+    const t = Math.min(tx, ty);
+    return { x: cx + dx * t, y: cy + dy * t };
+  }
+  edge(a, b, color, o = {}) {
+    const A = this.n[a], B = this.n[b];
+    const ca = { x: A.x + A.w / 2, y: A.y + A.h / 2 }, cb = { x: B.x + B.w / 2, y: B.y + B.h / 2 };
+    const pts = o.route ? [this.border(A, o.route[0]), ...o.route, this.border(B, o.route[o.route.length - 1])] : [this.border(A, cb), this.border(B, ca)];
+    const d = 'M' + pts.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' L');
+    const el = S('path', { d, class: 'edge' + (o.dash ? ' dash' : ''), stroke: color, 'marker-end': this.marker(color), 'data-a': a, 'data-b': b }, this.edgeLayer);
+    this.edges[a + '>' + b] = el;
+    return el;
+  }
+  hot(...ids) {
+    if (!this.cur) return;
+    for (const id of ids) {
+      const n = this.n[id];
+      if (n) { n.g.classList.add('hot'); n.r.setAttribute('filter', `url(#glow-${this.uid})`); }
+      else if (this.edges[id]) this.edges[id].classList.add('hot');
+    }
+  }
+  packet(label, color, o = {}) {
+    const g = S('g', { class: 'pkt' }, this.fx);
+    const w = o.w || Math.max(16, tw(label, 10.5, true) + 14), h = o.h || 18;
+    S('rect', { x: -w / 2, y: -h / 2, width: w, height: h, rx: h / 2, fill: color, stroke: '#0a0d13', 'stroke-width': 1.5 }, g);
+    if (label) { const t = S('text', { x: 0, y: 3.8, 'text-anchor': 'middle' }, g); t.textContent = label; }
+    return g;
+  }
+  place(g, p) { g.setAttribute('transform', `translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`); }
+  // Moves a packet from `from` to `to` in the current step. `after` applies lasting state, and
+  // runs at once when a step is only being replayed.
+  fly(from, to, o = {}, after) {
+    const go = () => {
+      if (!this.cur) { if (after) after(); return; }
+      const color = o.color || C.sk;
+      let pathEl = null, rev = false, pointAt, dTrail;
+      if (!o.straight && typeof from === 'string' && typeof to === 'string') {
+        pathEl = this.edges[from + '>' + to];
+        if (!pathEl) { pathEl = this.edges[to + '>' + from]; rev = !!pathEl; }
+      }
+      if (pathEl) {
+        const L = pathEl.getTotalLength();
+        pointAt = t => pathEl.getPointAtLength(rev ? L * (1 - t) : L * t);
+        pathEl.classList.add('hot');
+      } else {
+        const a = this.pt(from, o.fs), b = this.pt(to, o.ts), bend = o.bend || 0;
+        const mx = (a.x + b.x) / 2 - (b.y - a.y) * bend, my = (a.y + b.y) / 2 + (b.x - a.x) * bend;
+        pointAt = t => ({ x: (1 - t) * (1 - t) * a.x + 2 * (1 - t) * t * mx + t * t * b.x, y: (1 - t) * (1 - t) * a.y + 2 * (1 - t) * t * my + t * t * b.y });
+        dTrail = `M${a.x},${a.y} Q${mx},${my} ${b.x},${b.y}`;
+        if (!o.noTrail) S('path', { d: dTrail, class: 'trail', stroke: color }, this.fx);
+      }
+      const stop = o.stopAt != null ? o.stopAt : 1;
+      const g = this.packet(o.label || '', color, o);
+      if (!this.motion) {
+        // A still frame shows the packet on its way, so it never hides what it arrives at.
+        this.place(g, pointAt(stop * (o.staticAt != null ? o.staticAt : 0.5)));
+        if (o.vanish) g.remove();
+        if (after) after();
+        return;
+      }
+      const dur = o.dur || 850, t0 = performance.now();
+      this.place(g, pointAt(0));
+      const tick = now => {
+        if (!this.alive()) return;
+        const t = Math.min(1, (now - t0) / dur), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        this.place(g, pointAt(e * stop));
+        if (t < 1) requestAnimationFrame(tick);
+        else {
+          if (!o.keep) { g.style.transition = 'opacity .4s'; g.style.opacity = '0'; setTimeout(() => g.remove(), 450); }
+          if (after) after();
+        }
+      };
+      requestAnimationFrame(tick);
+    };
+    if (o.delay) this.at(o.delay, go); else go();
+  }
+  // A short-lived label in the current step only.
+  flash(x, y, str, color, o = {}) {
+    if (!this.cur) return;
+    const go = () => {
+      const g = this.chip(x, y, str, color, Object.assign({ parent: this.fx, fo: 0.9, fill: '#0a0d13', so: 1, weight: 700 }, o));
+      g.querySelector('rect').setAttribute('fill-opacity', o.fo != null ? o.fo : 0.92);
+      g.querySelector('text').setAttribute('fill', o.fill || '#0a0d13');
+    };
+    if (o.delay) this.at(o.delay, go); else go();
+  }
+}
+
+const ICON = {
+  play: '<path d="M4 2.5v11l9.5-5.5z"/>',
+  pause: '<path d="M3.5 2.5h3.2v11H3.5zM9.3 2.5h3.2v11H9.3z"/>',
+  prev: '<path d="M2.5 2.5h2.2v11H2.5zM13.5 2.5v11L5.5 8z"/>',
+  next: '<path d="M11.3 2.5h2.2v11h-2.2zM2.5 2.5v11L10.5 8z"/>',
+  restart: '<path d="M8 1.6a6.4 6.4 0 1 1-6.1 4.5l1.9.6A4.4 4.4 0 1 0 8 3.6v2.6L4.2 2.7 8 -.8z"/>'
+};
+function btn(parent, icon, label, cls) {
+  const b = H('button', { type: 'button', class: 'btn' + (cls ? ' ' + cls : ''), 'aria-label': label }, parent,
+    `<svg viewBox="0 0 16 16" aria-hidden="true">${ICON[icon]}</svg><span class="lab">${label}</span>`);
+  return b;
+}
+
+const SCENES = [];
+class Scene {
+  constructor(d) {
+    Object.assign(this, d);
+    this.token = 0; this.step = 0; this.playing = false; this.userPaused = false; this.timer = null;
+    this.mode = d.modes ? d.modes[0].key : null; this.lastNarrow = null;
+    SCENES.push(this);
+  }
+  list() { return this.steps(this.mode, this); }
+  mount() {
+    this.sec = document.getElementById(this.id);
+    const card = this.sec.querySelector('.card');
+    this.stage = this.sec.querySelector('.stage');
+    const host = this.stage.parentElement === card ? this.stage : this.stage.parentElement;
+    if (this.modes || this.toolbar) {
+      const bar = H('div', { class: 'toolbar' }); card.insertBefore(bar, host);
+      if (this.modes) {
+        H('span', { class: 'lbl' }, bar, this.modesLabel || 'Scenario');
+        const seg = H('div', { class: 'seg', role: 'group', 'aria-label': this.modesLabel || 'Scenario' }, bar);
+        this.modes.forEach(m => {
+          const b = H('button', { type: 'button', 'aria-pressed': String(m.key === this.mode) }, seg, m.label);
+          if (m.key === this.mode) b.classList.add('on');
+          b.addEventListener('click', () => {
+            this.mode = m.key;
+            seg.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+            this.render(0, false);
+          });
+        });
+      }
+      if (this.toolbar) this.toolbar(bar);
+    }
+    // The controls sit above the caption, and the caption is as tall as the scene's longest one, so
+    // stepping never moves the buttons or the page.
+    const ctr = H('div', { class: 'controls' }, card);
+    this.capEl = H('div', { class: 'caption', 'aria-live': 'polite' }, card);
+    this.bRestart = btn(ctr, 'restart', 'Restart');
+    this.bPrev = btn(ctr, 'prev', 'Back');
+    this.bPlay = btn(ctr, 'play', 'Play', 'primary');
+    this.bNext = btn(ctr, 'next', 'Step');
+    this.dotsEl = H('div', { class: 'dots', role: 'group', 'aria-label': 'Steps' }, ctr);
+    this.bRestart.addEventListener('click', () => { this.render(0, true); if (this.playing) this.schedule(); });
+    this.bPrev.addEventListener('click', () => { this.userPause(); this.render(this.step - 1, true); });
+    this.bNext.addEventListener('click', () => { this.userPause(); this.render(this.step + 1, true); });
+    this.bPlay.addEventListener('click', () => { if (this.playing) this.userPause(); else this.play(true); });
+    this.sec.addEventListener('keydown', e => {
+      if (e.target.closest && e.target.closest('input,select,textarea')) return;
+      if (e.key === 'ArrowRight') { this.userPause(); this.render(this.step + 1, true); e.preventDefault(); }
+      else if (e.key === 'ArrowLeft') { this.userPause(); this.render(this.step - 1, true); e.preventDefault(); }
+    });
+    this.render(0, false);
+  }
+  durOf(s) { return s.dur || Math.min(15000, Math.max(4200, 1500 + stripTags(s.cap).length * 40)); }
+  render(k, anim) {
+    this.token++; clearTimeout(this.timer);
+    const list = this.list();
+    k = Math.max(0, Math.min(k, list.length - 1)); this.step = k;
+    this.stage.textContent = '';
+    const narrow = this.stage.clientWidth < (this.narrowAt || 660);
+    this.lastNarrow = narrow;
+    const ctx = new Ctx(this, narrow); this.ctx = ctx;
+    this.build(ctx);
+    for (let i = 0; i < k; i++) { ctx.cur = false; list[i].run(ctx); }
+    ctx.cur = true; ctx.motion = !!anim && !RM.matches;
+    list[k].run(ctx);
+    if (this.after) this.after(ctx);
+    const s = list[k];
+    const capHTML = (st, i) => `<div class="meta"><span class="stepno">Step ${i + 1} / ${list.length}</span><span class="title">${st.t}</span></div><div class="text">${st.cap}</div>`;
+    const capKey = this.mode + '|' + this.capEl.clientWidth;
+    if (capKey !== this.capKey) {
+      this.capKey = capKey;
+      this.capEl.style.minHeight = '';
+      let tallest = 0;
+      list.forEach((st, i) => { this.capEl.innerHTML = capHTML(st, i); tallest = Math.max(tallest, this.capEl.offsetHeight); });
+      this.capEl.style.minHeight = tallest + 'px';
+    }
+    this.capEl.innerHTML = capHTML(s, k);
+    this.dotsEl.textContent = '';
+    list.forEach((st, i) => {
+      const d = H('button', { type: 'button', class: 'dot' + (i === k ? ' on' : i < k ? ' done' : ''), 'aria-label': `Step ${i + 1}: ${stripTags(st.t)}` }, this.dotsEl);
+      if (i === k) d.setAttribute('aria-current', 'step');
+      d.addEventListener('click', () => { this.userPause(); this.render(i, true); });
+    });
+    this.bPrev.disabled = k === 0; this.bNext.disabled = k === list.length - 1;
+    if (this.playing) this.schedule();
+  }
+  schedule() {
+    clearTimeout(this.timer);
+    const list = this.list();
+    this.timer = setTimeout(() => {
+      if (this.step < list.length - 1) this.render(this.step + 1, true);
+      else this.pause();
+    }, this.durOf(list[this.step]));
+  }
+  setPlayIcon() {
+    this.bPlay.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true">${ICON[this.playing ? 'pause' : 'play']}</svg><span class="lab">${this.playing ? 'Pause' : 'Play'}</span>`;
+    this.bPlay.setAttribute('aria-label', this.playing ? 'Pause' : 'Play');
+  }
+  play(byUser) {
+    if (byUser) this.userPaused = false;
+    this.playing = true; this.setPlayIcon();
+    const list = this.list();
+    if (this.step >= list.length - 1) this.render(0, true);
+    else if (byUser) this.render(this.step + 1, true);
+    else this.schedule();
+  }
+  pause() { this.playing = false; clearTimeout(this.timer); this.setPlayIcon(); }
+  userPause() { this.userPaused = true; this.pause(); }
+}
+
+function onResize() {
+  for (const s of SCENES) {
+    if (!s.stage) continue;
+    const narrow = s.stage.clientWidth < (s.narrowAt || 660);
+    if (narrow !== s.lastNarrow || s.capEl.clientWidth + '' !== s.capKey.split('|')[1]) { const p = s.playing; s.render(s.step, false); if (p) s.schedule(); }
+  }
+}
+
+/* ====================================================================================
+   Model: regions and a port of the wire encoder (OrbitIPCWireProtocol.swift)
+   A region is { uTables, tables: [{ schema, name, uCols, ex: [columns] }] }.
+   ==================================================================================== */
+const R = {
+  full: () => ({ uTables: true, tables: [] }),
+  of: (...tables) => ({ uTables: false, tables }),
+  table: (name) => ({ schema: 'main', name, uCols: true, ex: [] }),
+  cols: (name, cols) => ({ schema: 'main', name, uCols: false, ex: cols.map(c => c.toLowerCase()) }),
+  except: (name, cols) => ({ schema: 'main', name, uCols: true, ex: cols.map(c => c.toLowerCase()) })
+};
+function describeRegion(r) {
+  if (r.uTables && !r.tables.length) return '.fullDatabase';
+  if (!r.uTables && !r.tables.length) return '.empty';
+  return r.tables.map(t => {
+    const q = t.schema === 'main' ? 'main.' + t.name : t.schema + '.' + t.name;
+    if (t.uCols && !t.ex.length) return q;
+    if (t.uCols) return `${q} except ${t.ex.slice().sort().join(', ')}`;
+    return `${q}(${t.ex.slice().sort().join(', ')})`;
+  }).join(' + ') + (r.uTables ? ' + every other table' : '');
+}
+const enc = new TextEncoder();
+function utf8(s) { return Array.from(enc.encode(s)); }
+function cmp(a, b) { return a < b ? -1 : a > b ? 1 : 0; }
+// Swift sorts tables by (schema, name) and column exceptions with String's <, which for these
+// ASCII names is the same order as JavaScript's.
+function sortedTables(region) { return region.tables.slice().sort((a, b) => cmp(a.schema, b.schema) || cmp(a.name, b.name)); }
+function regionStrings(region, preceding = []) {
+  const seen = new Set(preceding), out = preceding.slice();
+  for (const t of sortedTables(region))
+    for (const s of [t.schema, t.name, ...t.ex.slice().sort()])
+      if (!seen.has(s)) { seen.add(s); out.push(s); }
+  return out;
+}
+function regionByteCount(region) { let n = 3; for (const t of region.tables) n += 7 + 2 * t.ex.length; return n; }
+function wireEntry(db, region) {
+  const strings = regionStrings(region, [db]);
+  return { db, region, strings, byteCount: 3 + 2 + regionByteCount(region) };
+}
+class WireBatch {
+  constructor() { this.entries = []; this.byteCount = 10; this.strings = []; this.indices = new Map(); }
+  byteCountAppending(e) {
+    return e.strings.reduce((n, s) => this.indices.has(s) ? n : n + 2 + utf8(s).length, this.byteCount + e.byteCount);
+  }
+  append(e) {
+    this.byteCount = this.byteCountAppending(e);
+    for (const s of e.strings) if (!this.indices.has(s)) { this.indices.set(s, this.strings.length); this.strings.push(s); }
+    this.entries.push(e);
+  }
+}
+class Writer {
+  constructor() { this.bytes = []; this.fields = []; }
+  put(kind, name, arr, value, group) { this.fields.push({ kind, name, start: this.bytes.length, len: arr.length, value, group }); this.bytes.push(...arr); }
+  u16(kind, name, v, value, group) { this.put(kind, name, [(v >> 8) & 255, v & 255], value, group); }
+}
+function writeStringTable(w, strings, group) {
+  w.u16('strCount', 'stringCount', strings.length, `${strings.length} strings`, group);
+  strings.forEach((s, i) => {
+    const b = utf8(s);
+    w.u16('strLen', `string[${i}].length`, b.length, `${b.length} bytes`, group);
+    w.put('strBytes', `string[${i}]`, b, JSON.stringify(s), group);
+  });
+}
+function writeRegion(w, region, idx, prefix, group) {
+  w.put('rflags', prefix + 'region.flags', [region.uTables ? 1 : 0], region.uTables ? '1 · includesUnspecifiedTables' : '0 · only the tables listed', group);
+  const tables = sortedTables(region);
+  w.u16('tcount', prefix + 'region.tableCount', tables.length, `${tables.length} table${tables.length === 1 ? '' : 's'}`, group);
+  tables.forEach((t, j) => {
+    const p = `${prefix}table[${j}].`;
+    const si = idx.get(t.schema), ni = idx.get(t.name);
+    w.u16('schema', p + 'schema', si, `string #${si} → "${t.schema}"`, group);
+    w.u16('tname', p + 'name', ni, `string #${ni} → "${t.name}"`, group);
+    w.put('tflags', p + 'flags', [t.uCols ? 1 : 0], t.uCols ? '1 · includesUnspecifiedColumns: the columns listed are excluded' : '0 · only the columns listed', group);
+    const cols = t.ex.slice().sort();
+    w.u16('ccount', p + 'columnCount', cols.length, `${cols.length} column${cols.length === 1 ? '' : 's'}`, group);
+    cols.forEach((c, m) => { const ci = idx.get(c); w.u16('col', `${p}column[${m}]`, ci, `string #${ci} → "${c}"`, group); });
+  });
+}
+function encodeBatch(entries) {
+  const b = new WireBatch(); entries.forEach(e => b.append(e));
+  const w = new Writer();
+  w.put('magic', 'magic', [0x4F, 0x52, 0x42, 0x54], '"ORBT"', 'Header');
+  w.put('version', 'version', [1], '1', 'Header');
+  w.put('hflags', 'flags', [0], '0 · no flags', 'Header');
+  w.u16('entryCount', 'entryCount', b.entries.length, `${b.entries.length} entr${b.entries.length === 1 ? 'y' : 'ies'}`, 'Header');
+  writeStringTable(w, b.strings, 'String table');
+  b.entries.forEach((e, k) => {
+    const g = `Entry ${k}`, p = `entry[${k}].`;
+    w.put('kind', p + 'kind', [1], '1 · transactionDidCommit', g);
+    w.u16('plen', p + 'payloadLength', e.byteCount - 3, `${e.byteCount - 3} bytes follow`, g);
+    const di = b.indices.get(e.db);
+    w.u16('dbidx', p + 'database', di, `string #${di} → "${e.db}"`, g);
+    writeRegion(w, e.region, b.indices, p, g);
+  });
+  if (w.bytes.length !== b.byteCount) console.error('byteCount mismatch', w.bytes.length, b.byteCount);
+  return { bytes: w.bytes, fields: w.fields, batch: b };
+}
+function encodeMarker(region) {
+  const strings = regionStrings(region);
+  const idx = new Map(strings.map((s, i) => [s, i]));
+  const w = new Writer();
+  writeStringTable(w, strings, 'String table');
+  writeRegion(w, region, idx, '', 'Region');
+  return { bytes: w.bytes, fields: w.fields };
+}
+function batchSize(entries) { const b = new WireBatch(); entries.forEach(e => b.append(e)); return b.byteCount; }
+// The golden vector from OrbitIPCWireProtocolTests: "db", full database.
+(function selfTest() {
+  const got = encodeBatch([wireEntry('db', R.full())]).bytes.join(',');
+  const want = [0x4F, 0x52, 0x42, 0x54, 1, 0, 0, 1, 0, 1, 0, 2, 0x64, 0x62, 1, 0, 5, 0, 0, 1, 0, 0].join(',');
+  if (got !== want) console.error('wire encoder does not match the golden vector', got);
+})();
+function fnv1a64(s) {
+  let h = 0xcbf29ce484222325n; const p = 0x100000001b3n, m = (1n << 64n) - 1n;
+  for (const b of enc.encode(s)) { h ^= BigInt(b); h = (h * p) & m; }
+  return h.toString(16).padStart(16, '0');
+}
+const DBID = '/data/reminders.sqlite';
+const KEY = fnv1a64(DBID);
+const EP = { A: '3f9c2e71a0b84d65', B: '7be01d94c2a35f18', C: 'd44c8a0e6b1f9273' };
+
+/* ====================================================================================
+   Scene 1: Architecture map
+   ==================================================================================== */
+const ARCH = {
+  obs: { t: 'OrbitValueObservation', s: 'refetches when its region changes', short: ['OrbitValue', 'Observation'], c: C.obs,
+    file: 'Observation/OrbitValueObservation.swift · Observation/Internal/OrbitValueObservationRuntimeState.swift',
+    r: 'Refetches a value when a commit touches the region its fetch read. After each accepted fetch, <code>advertiseObservedRegion()</code> registers the observed region through its <code>OrbitRegionSubscription</code>. If the fetch read more than its <em>floor</em> (the region registered for the whole fetch), it widens the registration first, then makes one more covering fetch.' },
+  rsub: { t: 'OrbitRegionSubscription', s: 'updateRegion(_:) · cancel()', short: ['OrbitRegion', 'Subscription'], c: C.rsub,
+    file: 'OrbitRegionSubscription.swift',
+    r: 'A cancellable registration whose region can change. <code>updateRegion(_:)</code> is serialized, and it returns only once every announcement that starts afterwards honors the new region. For this transport, that means the new marker has been renamed into place. The subscription from <code>OrbitIPCDatabase</code> updates the transport, same-process and local sources in turn.' },
+  db: { t: 'OrbitIPCDatabase', s: 'announces every committed write', short: ['OrbitIPC', 'Database'], c: C.db,
+    file: 'OrbitIPCDatabase.swift · SQLite/OrbitIPCDatabase+SQLite.swift',
+    r: 'Opens a <code>SQLitePool</code> and joins <code>UnixDatagramIPCTransport.shared(configuration:)</code>. After a write commits, it tells other handles in this process through <code>OrbitDatabaseObservationHub</code>, then announces <code>.transactionDidCommit</code> with the union of the changed regions from its own <code>Task</code>, so cancelling the caller can\'t drop it. <code>subscribe(transactionObserver:region:)</code> merges local, same-process and transport commits into one stream.' },
+  tr: { t: 'UnixDatagramIPCTransport', s: 'one per Configuration', short: ['UnixDatagram', 'IPCTransport'], c: C.tr,
+    file: 'IPC/UnixDatagramIPCTransport.swift',
+    r: 'The production <code>OrbitIPCTransport</code>. <code>shared(configuration:)</code> gives every database in a process with the same configuration one endpoint. <code>send(_:)</code> measures the message, asks the advertisement cache which endpoints advertise the database, keeps the peers whose region the commit concerns, and hands them to the endpoint. It throws <code>OrbitIPCPartialDeliveryError</code> if a live peer did not take the message.' },
+  hd: { t: 'OrbitIPCHandlers', s: 'handlers · their markers', short: ['OrbitIPC', 'Handlers'], c: C.hd,
+    file: 'IPC/UnixDatagramIPCTransport.swift (private final class)',
+    r: 'Holds the subscribed handlers for each database, and one marker per coordination key that advertises the union of their regions. It rewrites the marker under its lock whenever the union changes, so a widened region is on disk before <code>subscribe</code> or <code>updateRegion</code> returns. On receive, it calls each handler whose own region the commit concerns, serially, on the loop thread.' },
+  wire: { t: 'OrbitIPCWireProtocol', s: 'batch datagrams · markers', short: ['OrbitIPCWire', 'Protocol'], c: C.wire,
+    file: 'IPC/Internal/OrbitIPCWireProtocol.swift',
+    r: 'The version 1 big-endian format: an 8-byte header, a string table shared by every entry, then entries with a kind and a length. <code>OrbitIPCWireEntry(_:fittingIn:)</code> measures a message, and broadens its region to <code>.fullDatabase</code> if a batch holding only that message would be too long. <code>OrbitIPCWireBatch</code> tracks its exact encoded length as entries are appended. It also encodes markers.' },
+  ep: { t: 'UnixDatagramEndpoint', s: '“Orbit IPC” DetachedThread', short: ['UnixDatagram', 'Endpoint'], c: C.ep,
+    file: 'IPC/Internal/UnixDatagramEndpoint.swift',
+    r: 'Owns the bound socket, one connected socket per peer, a FIFO of waiting messages per peer, and each suspended send\'s deadline and continuation. Its “Orbit IPC” <code>DetachedThread</code> loops: wait on the queue, drain the socket into one reused buffer, flush peers that have room, expire sends that are past their deadline, and resume continuations outside the lock.' },
+  eq: { t: 'UnixEventQueue', s: 'kqueue · epoll + eventfd', short: ['UnixEvent', 'Queue'], c: C.eq,
+    file: 'IPC/Internal/UnixSystem.swift · CLinuxEvents/shim.h',
+    r: 'The readiness queue the loop thread blocks on. On Darwin it is a kqueue with <code>EVFILT_READ</code> on the bound socket and an <code>EVFILT_USER</code> wakeup. On Linux and Android it is epoll with <code>EPOLLIN</code> on the socket and on an eventfd, plus <code>EPOLLOUT</code> on connected peer sockets that have messages waiting. Only <code>wake()</code> may be called from other threads.' },
+  sk: { t: 'Unix datagram sockets', s: 'bound + one per peer', short: ['datagram', 'sockets'], c: C.sk,
+    file: 'IPC/Internal/UnixSystem.swift (UnixSystem)',
+    r: 'Nonblocking <code>AF_UNIX</code> <code>SOCK_DGRAM</code> sockets. One is bound at <code>v1/s/&lt;endpoint&gt;.sock</code> with <code>SO_RCVBUF</code> = <code>receiveBufferByteCount</code>. Each peer gets a <code>connect()</code>ed socket, cached until the peer dies or stops advertising. Darwin sets <code>SO_NOSIGPIPE</code> and raises <code>SO_SNDBUF</code> to 64 KiB, because it refuses a datagram larger than the send buffer. Linux uses <code>SOCK_NONBLOCK | SOCK_CLOEXEC</code> and <code>MSG_NOSIGNAL</code>.' },
+  cache: { t: 'OrbitIPCAdvertisementCache', s: 'endpoint → advertised region', short: ['OrbitIPC', 'Advertisement', 'Cache'], c: C.cache,
+    file: 'IPC/Internal/OrbitIPCAdvertisementCache.swift',
+    r: 'Maps each database\'s coordination key to the region each endpoint advertises. Before every lookup it drains the directory watcher on the sending thread, under its lock. Any change forgets everything, watches included. A directory it can\'t watch is read again on every send, which is slower but always correct.' },
+  watch: { t: 'UnixDirectoryWatcher', s: 'EVFILT_VNODE · inotify', short: ['UnixDirectory', 'Watcher'], c: C.watch,
+    file: 'IPC/Internal/UnixSystem.swift',
+    r: 'Detects directory changes without blocking. Darwin uses a kqueue <code>EVFILT_VNODE</code> watch (<code>NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE</code>) on an <code>O_EVTONLY</code> descriptor. Linux and Android use inotify (<code>IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF</code>). <code>drainChanges()</code> only reports whether anything changed. No thread waits on it.' },
+  reg: { t: 'OrbitIPCEndpointRegistry', s: 'the directory layout · markers', short: ['OrbitIPC', 'Endpoint', 'Registry'], c: C.reg,
+    file: 'IPC/Internal/OrbitIPCEndpointRegistry.swift',
+    r: 'Knows the coordination directory layout. It creates <code>v1/s/</code> and <code>v1/d/</code>, writes a marker to <code>.&lt;endpoint&gt;.tmp</code> and renames it over the marker, and lists and decodes markers. A marker that is empty or can\'t be decoded counts as <code>.fullDatabase</code>. It also removes a dead peer\'s socket path, markers and leftover temp files.' },
+  dir: { t: 'Coordination directory', s: 'v1/s/*.sock · v1/d/<key>/*', short: ['coordination', 'directory'], c: C.dir,
+    file: 'Configuration.directory (default $TMPDIR/sqlite-orbit/)',
+    r: '<code>v1/s/&lt;endpoint&gt;.sock</code> holds the sockets. <code>v1/d/&lt;coordinationKey&gt;/&lt;endpoint&gt;</code> holds the markers, one per endpoint per database. The coordination key is the database identifier\'s 64-bit FNV-1a hash as 16 hex digits. Endpoint names are the first 16 hex digits of a UUID.' },
+  peers: { t: 'Peer processes', s: 'the same stack, elsewhere', short: ['peer', 'processes'], c: C.peer,
+    file: 'other processes sharing Configuration.directory',
+    r: 'Every other process has its own transport, loop thread and markers. Peers find each other only through markers. There is no broker, and one transport can serve many databases.' }
+};
+const ARCH_POS = { obs: [0, 0], watch: [3, 0], rsub: [0, 1], wire: [1, 1], cache: [3, 1], db: [0, 2], tr: [1, 2], ep: [2, 2], reg: [3, 2], hd: [1, 3], eq: [2, 3], peers: [0, 4], sk: [2, 4], dir: [3, 4] };
+const ARCH_EDGES = [
+  ['obs', 'rsub', 'updateRegion(_:) after accepting a fetch'],
+  ['db', 'rsub', 'subscribe(transactionObserver:region:) returns it', { dash: 1 }],
+  ['rsub', 'hd', 'update(identifier:databaseIdentifier:region:)', { route: 'rsub-hd' }],
+  ['db', 'tr', 'send(_:) · subscribe(to:region:onMessage:)'],
+  ['tr', 'wire', 'OrbitIPCWireEntry(_:fittingIn:)'],
+  ['tr', 'cache', 'advertisements(for:)', { route: 'tr-cache' }],
+  ['tr', 'hd', 'add · update · remove · shutdown'],
+  ['tr', 'ep', 'send(_:to:advertisedBy:suspendingUpTo:)'],
+  ['cache', 'watch', 'drainChanges() · watch(_:)'],
+  ['cache', 'reg', 'advertisements(coordinationKey:)'],
+  ['hd', 'reg', 'register(coordinationKey:region:) · unregister'],
+  ['reg', 'dir', 'write .<endpoint>.tmp, then rename'],
+  ['watch', 'dir', 'watches v1/d/<key>/', { route: 'watch-dir' }],
+  ['ep', 'eq', 'wait(until:) · wake() · watchWritability(of:)'],
+  ['eq', 'sk', 'readable / writable events'],
+  ['ep', 'sk', 'sendDatagram · receiveDatagram', { route: 'ep-sk' }],
+  ['ep', 'hd', 'decoded messages → receive(_:)'],
+  ['ep', 'reg', 'remove(_:coordinationKeys:) for a dead peer'],
+  ['sk', 'peers', 'datagrams'],
+  ['peers', 'dir', 'their own sockets and markers', { route: 'peers-dir', dash: 1 }]
+];
+function archLayout(n) {
+  return n ? { W: 432, H: 580, cx: i => 12 + i * 104, cw: 90, ry: j => 12 + j * 112, rh: 86, gh: 7 }
+           : { W: 960, H: 548, cx: i => 20 + i * 240, cw: 200, ry: j => 20 + j * 106, rh: 64, gh: 20 };
+}
+const archInfoDefault = '<p class="hint">Tap or hover a component to see what it does and which source file it lives in. Its connections are highlighted in the map.</p><p class="hint">The steps below trace one commit: from <code>OrbitIPCDatabase</code> through the transport to peers, into a peer\'s observation, and back out as a wider advertisement.</p>';
+function archInfo(id) {
+  const el = document.getElementById('arch-info');
+  if (!id) { el.innerHTML = archInfoDefault; el.style.removeProperty('--c'); return; }
+  const m = ARCH[id];
+  const rel = ARCH_EDGES.filter(e => e[0] === id || e[1] === id).map(e => {
+    const other = e[0] === id ? e[1] : e[0];
+    return `<li>${e[0] === id ? '→' : '←'} <b style="color:${ARCH[other].c}">${esc(ARCH[other].t)}</b>: ${esc(e[2])}</li>`;
+  }).join('');
+  el.style.setProperty('--c', m.c);
+  el.innerHTML = `<h3>${esc(m.t)}</h3><div class="file">${esc(m.file)}</div><p>${m.r}</p><ul>${rel}</ul>`;
+}
+new Scene({
+  id: 'arch', narrowAt: 600,
+  build(ctx) {
+    const L = archLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Architecture map of the Unix datagram transport');
+    const cc = i => L.cx(i) + L.cw / 2, rc = j => L.ry(j) + L.rh / 2, corr = i => L.cx(i) + L.cw + L.gh;
+    const right = L.cx(3) + L.cw + (L.W - (L.cx(3) + L.cw)) / 2;
+    const bottom = L.ry(4) + L.rh + (L.H - (L.ry(4) + L.rh)) / 2;
+    const routes = {
+      'rsub-hd': [{ x: corr(0), y: rc(1) }, { x: corr(0), y: rc(3) }],
+      'tr-cache': [{ x: corr(1), y: rc(2) - L.rh * 0.28 }, { x: corr(1), y: rc(1) }],
+      'watch-dir': [{ x: right, y: rc(0) }, { x: right, y: rc(4) }],
+      'ep-sk': [{ x: corr(2), y: rc(2) - L.rh * 0.28 }, { x: corr(2), y: rc(4) - L.rh * 0.22 }],
+      'peers-dir': [{ x: cc(0), y: bottom }, { x: cc(3), y: bottom }]
+    };
+    for (const [id, [i, j]] of Object.entries(ARCH_POS)) {
+      const m = ARCH[id];
+      const long = m.t.length > 22;
+      const g = ctx.box(id, L.cx(i), L.ry(j), L.cw, L.rh, m.c, ctx.narrow ? m.short : m.t, ctx.narrow ? null : m.s,
+        { ts: ctx.narrow ? 10.5 : (long ? 11.6 : 12.5), ss: 11, cls: 'clickable' });
+      g.setAttribute('tabindex', '0'); g.setAttribute('role', 'button'); g.setAttribute('aria-label', m.t);
+    }
+    for (const [a, b, , o] of ARCH_EDGES) {
+      ctx.edge(a, b, ARCH[a].c, { route: o && o.route ? routes[o.route] : null, dash: o && o.dash });
+    }
+    const svg = ctx.root;
+    const focus = id => {
+      svg.classList.add('focusing');
+      svg.querySelectorAll('.rel').forEach(e => e.classList.remove('rel'));
+      ctx.n[id].g.classList.add('rel');
+      for (const k in ctx.edges) {
+        const [a, b] = k.split('>');
+        if (a === id || b === id) { ctx.edges[k].classList.add('rel'); ctx.n[a === id ? b : a].g.classList.add('rel'); }
+      }
+      archInfo(id);
+    };
+    const unfocus = () => {
+      if (this.selected) { focus(this.selected); return; }
+      svg.classList.remove('focusing'); svg.querySelectorAll('.rel').forEach(e => e.classList.remove('rel')); archInfo(null);
+    };
+    for (const id in ARCH) {
+      const g = ctx.n[id].g;
+      g.addEventListener('mouseenter', () => focus(id));
+      g.addEventListener('mouseleave', unfocus);
+      g.addEventListener('focus', () => focus(id));
+      g.addEventListener('blur', unfocus);
+      const pick = e => {
+        e.stopPropagation();
+        this.selected = this.selected === id ? null : id;
+        svg.querySelectorAll('.node.sel').forEach(x => x.classList.remove('sel'));
+        if (this.selected) { g.classList.add('sel'); focus(id); } else unfocus();
+      };
+      g.addEventListener('click', pick);
+      g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(e); } });
+    }
+    svg.addEventListener('click', () => { if (this.selected) { this.selected = null; svg.querySelectorAll('.node.sel').forEach(x => x.classList.remove('sel')); unfocus(); } });
+    if (this.selected) { ctx.n[this.selected].g.classList.add('sel'); focus(this.selected); } else archInfo(null);
+  },
+  steps: () => [
+    { t: 'One transport per process', cap: 'A process gets one <code>UnixDatagramIPCTransport</code> per distinct <code>Configuration</code> from <code>shared(configuration:)</code>. It serves every database opened with that configuration. It is made of an endpoint with a loop thread, an event queue and sockets, plus the pieces that advertise and discover regions through a shared directory. Tap a component for details.',
+      run(c) {} },
+    { t: 'A write commits', cap: '<code>OrbitIPCDatabase.write</code> commits. <code>announce(_:)</code> tells other handles in this process through <code>OrbitDatabaseObservationHub</code>. Then, from its own <code>Task</code>, it calls <code>transport.send(.transactionDidCommit(…))</code> with the union of the regions the transaction changed.',
+      run(c) { c.hot('db', 'tr'); c.fly('db', 'tr', { label: 'commit', color: C.db }); } },
+    { t: 'Measure the entry', cap: '<code>OrbitIPCWireEntry(message, fittingIn: maximumDatagramByteCount)</code> works out the entry\'s strings and exact length. If a batch holding only this entry would be too long, it broadens the region to <code>.fullDatabase</code>. That is never wrong, and it only costs peers commits they ignore.',
+      run(c) { c.hot('tr', 'wire'); c.fly('tr', 'wire', { label: 'entry', color: C.tr }); } },
+    { t: 'Who advertises this database?', cap: '<code>OrbitIPCAdvertisementCache.advertisements(for:)</code> drains <code>UnixDirectoryWatcher</code> first. If anything in the watched <code>v1/d/&lt;key&gt;/</code> changed, it forgets its cache and reads the markers again through <code>OrbitIPCEndpointRegistry</code>. The result maps endpoint names to advertised regions.',
+      run(c) {
+        c.hot('tr', 'cache', 'watch', 'reg', 'dir');
+        c.fly('tr', 'cache', { color: C.tr, label: 'key' });
+        c.fly('cache', 'watch', { delay: 900, color: C.cache, label: 'drain' });
+        c.fly('dir', 'reg', { delay: 1500, color: C.reg, label: 'markers' });
+        c.fly('reg', 'cache', { delay: 2300, color: C.reg, label: 'regions' });
+      } },
+    { t: 'Filter, then hand off', cap: '<code>peers(concernedWith:)</code> keeps each endpoint that is not this one and whose advertised region the commit concerns. Then <code>endpoint.send(_:to:advertisedBy:suspendingUpTo:)</code> takes the entry, those peers, and the timeout from <code>BackPressurePolicy</code> (<code>nil</code> for <code>.fail</code>).',
+      run(c) { c.hot('tr', 'ep'); c.fly('tr', 'ep', { label: 'entry + peers', color: C.tr }); } },
+    { t: 'Datagrams leave', cap: 'The endpoint encodes a batch of one once. For each peer it sends on a cached <code>connect()</code>ed socket with <code>UnixSystem.sendDatagram</code>, all under its lock and on the sending thread. The loop thread gets involved only if a peer\'s queue is full.',
+      run(c) { c.hot('ep', 'sk', 'peers'); c.fly('ep', 'sk', { label: 'ORBT', color: C.sk }); c.fly('sk', 'peers', { delay: 850, label: 'ORBT', color: C.sk }); } },
+    { t: 'In a peer: wake, decode, deliver', cap: 'The same components on the receiving side. The loop thread wakes from <code>UnixEventQueue.wait</code> because the bound socket is readable. It drains it into its one buffer, <code>OrbitIPCWireProtocol.decode</code> splits the batch, and <code>OrbitIPCHandlers.receive</code> calls matching handlers. <code>OrbitIPCDatabase</code>\'s handler passes the commit to the observer as <code>databaseDidCommit</code> with origin <code>.external</code>.',
+      run(c) {
+        c.hot('sk', 'eq', 'ep', 'hd', 'obs');
+        c.fly('peers', 'sk', { label: 'ORBT', color: C.sk });
+        c.fly('sk', 'eq', { delay: 800, label: 'readable', color: C.eq });
+        c.fly('eq', 'ep', { delay: 1500, label: '.readable', color: C.eq });
+        c.fly('ep', 'hd', { delay: 2200, label: 'message', color: C.ep });
+        c.fly('hd', 'obs', { delay: 3000, label: 'commit', color: C.hd, straight: 1, bend: 0.12 });
+      } },
+    { t: 'Advertise a wider region', cap: 'When an observation\'s fetch reads more than it had advertised, it calls <code>updateRegion(_:)</code>. <code>OrbitIPCHandlers.update</code> recomputes the union and <code>register</code> writes a temp marker, then renames it over the old one, before the call returns. Other processes\' watchers see the rename the next time they send.',
+      run(c) {
+        c.hot('obs', 'rsub', 'hd', 'reg', 'dir');
+        c.fly('obs', 'rsub', { label: 'region', color: C.obs });
+        c.fly('rsub', 'hd', { delay: 850, label: 'update', color: C.rsub });
+        c.fly('hd', 'reg', { delay: 1700, label: 'union', color: C.hd });
+        c.fly('reg', 'dir', { delay: 2500, label: 'rename', color: C.reg });
+      } }
+  ]
+});
+
+/* ====================================================================================
+   Scene 2: Discovery
+   ==================================================================================== */
+const DISC_REGION = { B: R.of(R.table('reminders')), C: R.of(R.table('tags')) };
+const DISC_MARKER_BYTES = { B: encodeMarker(DISC_REGION.B).bytes.length, C: encodeMarker(DISC_REGION.C).bytes.length };
+const DISC_ROWS = [
+  { id: 'root', depth: 0, text: 'Configuration.directory/', kind: 'dir', note: '$TMPDIR/sqlite-orbit/' },
+  { id: 'v1', depth: 1, text: 'v1/', kind: 'dir' },
+  { id: 's', depth: 2, text: 's/', kind: 'dir', note: 'sockets' },
+  { id: 'sockA', depth: 3, text: EP.A + '.sock', kind: 'sock', owner: 'A' },
+  { id: 'sockB', depth: 3, text: EP.B + '.sock', kind: 'sock', owner: 'B' },
+  { id: 'sockC', depth: 3, text: EP.C + '.sock', kind: 'sock', owner: 'C' },
+  { id: 'd', depth: 2, text: 'd/', kind: 'dir', note: 'markers, by database' },
+  { id: 'key', depth: 3, text: KEY + '/', kind: 'dir', note: 'coordinationKey' },
+  { id: 'tmpB', depth: 4, text: '.' + EP.B + '.tmp', kind: 'tmp', owner: 'B' },
+  { id: 'mB', depth: 4, text: EP.B, kind: 'marker', owner: 'B', note: `${DISC_MARKER_BYTES.B} B · main.reminders` },
+  { id: 'tmpC', depth: 4, text: '.' + EP.C + '.tmp', kind: 'tmp', owner: 'C' },
+  { id: 'mC', depth: 4, text: EP.C, kind: 'marker', owner: 'C', note: `${DISC_MARKER_BYTES.C} B · main.tags` }
+];
+function discLayout(n) {
+  return n ? { W: 420, H: 772, A: { x: 6, y: 6, w: 408, h: 250 }, B: { x: 6, y: 266, w: 201, h: 118 }, C: { x: 213, y: 266, w: 201, h: 118 }, D: { x: 6, y: 394, w: 408, h: 372 }, rowH: 25, fs: 11.2 }
+           : { W: 960, H: 556, A: { x: 12, y: 12, w: 404, h: 270 }, B: { x: 12, y: 294, w: 404, h: 120 }, C: { x: 12, y: 424, w: 404, h: 120 }, D: { x: 436, y: 12, w: 512, h: 532 }, rowH: 28, fs: 12.5 };
+}
+function discDraw(ctx) {
+  const L = ctx.d.L, d = ctx.d, g = ctx.dyn;
+  g.textContent = '';
+  const o = { parent: g };
+  // Process A: the sender, with its cache and watcher.
+  const A = L.A;
+  ctx.rect(A.x + 12, A.y + 40, A.w - 24, L.A.h * 0.46, Object.assign({ fill: C.cache, fo: 0.06, stroke: C.cache, so: d.hot.has('cache') ? 1 : 0.45, sw: d.hot.has('cache') ? 2.2 : 1.2, glow: d.hot.has('cache') }, o));
+  ctx.text(A.x + 24, A.y + 60, 'OrbitIPCAdvertisementCache', Object.assign({ mono: true, size: ctx.narrow ? 11 : 12, weight: 650, fill: C.cache }, o));
+  ctx.text(A.x + A.w - 24, A.y + 60, d.cacheStatus || '', Object.assign({ anchor: 'end', size: 11, fill: C.muted }, o));
+  const cy0 = A.y + 82;
+  if (!d.cache) ctx.text(A.x + 24, cy0, 'empty: nothing read yet', Object.assign({ size: 11.5, fill: C.dim, italic: 1 }, o));
+  else {
+    ctx.text(A.x + 24, cy0, `[${KEY.slice(0, ctx.narrow ? 6 : 16)}${ctx.narrow ? '…' : ''}]`, Object.assign({ mono: true, size: 11, fill: C.muted }, o));
+    d.cache.forEach((e, i) => {
+      const y = cy0 + 20 + i * 19;
+      ctx.text(A.x + 34, y, (ctx.narrow ? e[0].slice(0, 8) + '…' : e[0]) + '  →  ' + e[1], Object.assign({ mono: true, size: 11.5, fill: C.text }, o));
+    });
+  }
+  const wy = A.y + 40 + L.A.h * 0.46 + 10, wh = A.h - (wy - A.y) - 12;
+  ctx.rect(A.x + 12, wy, A.w - 24, wh, Object.assign({ fill: C.watch, fo: 0.06, stroke: C.watch, so: d.hot.has('watch') ? 1 : 0.45, sw: d.hot.has('watch') ? 2.2 : 1.2, glow: d.hot.has('watch') }, o));
+  ctx.text(A.x + 24, wy + 20, 'UnixDirectoryWatcher', Object.assign({ mono: true, size: ctx.narrow ? 11 : 12, weight: 650, fill: C.watch }, o));
+  ctx.text(A.x + A.w - 24, wy + 20, d.watch ? `queued events: ${d.queued}` : 'not created', Object.assign({ anchor: 'end', size: 11, fill: d.queued ? C.watch : C.muted, weight: d.queued ? 700 : null }, o));
+  ctx.text(A.x + 24, wy + 40, d.watch ? (ctx.narrow ? 'watching v1/d/' + KEY.slice(0, 6) + '…/' : 'watching v1/d/' + KEY + '/') : 'created on the first lookup', Object.assign({ mono: true, size: 11, fill: C.muted }, o));
+  ctx.n.cacheBox = { x: A.x + 12, y: A.y + 40, w: A.w - 24, h: L.A.h * 0.46 };
+  ctx.n.watchBox = { x: A.x + 12, y: wy, w: A.w - 24, h: wh };
+  for (const k of ['A', 'B', 'C']) {
+    const P = L[k], st = d.proc[k];
+    ctx.text(P.x + 14, P.y + 23, `Process ${k}`, Object.assign({ size: 14, weight: 700, fill: st.dead ? C.bad : C.text }, o));
+    ctx.text(P.x + P.w - 12, P.y + 23, ctx.narrow && k !== 'A' ? EP[k].slice(0, 8) + '…' : EP[k], Object.assign({ mono: true, anchor: 'end', size: 11, fill: C.muted }, o));
+    if (k !== 'A') {
+      const lines = ctx.narrow ? wrap(st.status, 30) : wrap(st.status, 58);
+      lines.slice(0, 3).forEach((l, i) => ctx.text(P.x + 14, P.y + 48 + i * 16, l, Object.assign({ size: 11.5, fill: st.dead ? C.bad : C.muted }, o)));
+      if (st.sub) ctx.chip(P.x + 14, P.y + P.h - 20, (ctx.narrow ? '' : 'subscribed: ') + st.sub, C.hd, Object.assign({ size: 10.5 }, o));
+    }
+    if (d.hot.has('proc' + k)) ctx.rect(P.x, P.y, P.w, P.h, Object.assign({ stroke: C.ep, so: 0.9, sw: 2, rx: 12 }, o));
+  }
+  // The coordination directory tree.
+  const D = L.D;
+  let y = D.y + 56;
+  for (const r of DISC_ROWS) {
+    if (!d.fs.has(r.id)) continue;
+    const x = D.x + 16 + r.depth * (ctx.narrow ? 14 : 20);
+    const hot = d.hot.has(r.id), removing = d.removing.has(r.id);
+    const col = r.kind === 'sock' ? C.sk : r.kind === 'marker' ? C.reg : r.kind === 'tmp' ? C.reg : C.muted;
+    if (hot || removing) ctx.rect(D.x + 8, y - L.rowH * 0.66, D.w - 16, L.rowH - 3, Object.assign({ fill: removing ? C.bad : col, fo: 0.16, stroke: removing ? C.bad : col, so: 0.8, rx: 6 }, o));
+    if (r.kind === 'dir') ctx.path(`M${x},${y - 8} h4 l2,2 h6 v8 h-12 z`, Object.assign({ stroke: C.muted, sw: 1 }, o));
+    else if (r.kind === 'sock') S('circle', { cx: x + 6, cy: y - 4, r: 4.5, fill: C.sk }, g);
+    else ctx.rect(x + 1, y - 9, 10, 10, Object.assign({ rx: 2, fill: r.kind === 'marker' ? C.reg : 'none', stroke: C.reg, dash: r.kind === 'tmp' ? '2 2' : null }, o));
+    ctx.text(x + 18, y, r.text, Object.assign({ mono: true, size: L.fs, fill: r.kind === 'tmp' ? '#9fcf9f' : r.kind === 'dir' ? C.text : col, italic: r.kind === 'tmp', strike: removing }, o));
+    const noteX = D.x + D.w - 14;
+    if (r.note && (!ctx.narrow || r.kind === 'marker')) ctx.text(noteX, y, ctx.narrow ? r.note.split(' · ')[0] : r.note, Object.assign({ anchor: 'end', size: 10.5, fill: C.dim }, o));
+    if (r.owner && !ctx.narrow) ctx.chip(noteX - (r.note ? tw(r.note, 10.5) + 10 : 0), y - 4, r.owner, C.peer, Object.assign({ anchor: 'end', size: 10 }, o));
+    ctx.n['row:' + r.id] = { x: x, y: y - L.rowH * 0.66, w: Math.min(D.w - 40, tw(r.text, L.fs, true) + 24), h: L.rowH - 3 };
+    y += L.rowH;
+  }
+}
+new Scene({
+  id: 'discovery', narrowAt: 640,
+  build(ctx) {
+    const L = discLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Discovery through the coordination directory');
+    ctx.d = { L, fs: new Set(['root']), hot: new Set(), removing: new Set(), cache: null, cacheStatus: '', watch: false, queued: 0,
+      proc: { A: { status: '' }, B: { status: 'not started', sub: null }, C: { status: 'not started', sub: null } } };
+    for (const k of ['A', 'B', 'C']) ctx.panel(L[k].x, L[k].y, L[k].w, L[k].h, null, k === 'A' ? C.ep : C.peer, { fo: 0.035, so: 0.3 });
+    ctx.panel(L.D.x, L.D.y, L.D.w, L.D.h, 'Coordination directory', C.dir, { sub: ctx.narrow ? '' : 'shared by every process', fo: 0.03 });
+    ctx.text(L.D.x + 14, L.D.y + L.D.h - 14, `coordinationKey = FNV-1a 64 of "${DBID}"`, { mono: true, size: ctx.narrow ? 9.5 : 10.5, fill: C.dim });
+    ctx.redraw = () => discDraw(ctx);
+    ctx.redraw();
+  },
+  steps: () => {
+    const h = (c, ...ids) => { if (c.cur) ids.forEach(i => c.d.hot.add(i)); };
+    const add = (c, ...ids) => ids.forEach(i => c.d.fs.add(i));
+    const rm = (c, ...ids) => ids.forEach(i => { if (c.cur) c.d.removing.add(i); else c.d.fs.delete(i); });
+    return [
+      { t: 'Three processes, one directory', cap: 'Processes A, B and C open the same database with the same <code>Configuration.directory</code> (by default <code>$TMPDIR/sqlite-orbit/</code>). There is no broker. The directory is the only thing they share.',
+        run(c) { c.redraw(); } },
+      { t: 'A binds its socket', cap: `<code>UnixDatagramIPCTransport.init</code> names the endpoint with the first 16 hex digits of a UUID. <code>OrbitIPCEndpointRegistry</code> creates <code>v1/s/</code> and <code>v1/d/</code>. <code>UnixSystem.makeBoundDatagramSocket</code> binds <code>${EP.A}.sock</code> with <code>SO_RCVBUF</code> set to <code>receiveBufferByteCount</code>, and <code>endpoint.start</code> spawns the “Orbit IPC” thread.`,
+        run(c) { add(c, 'v1', 's', 'd', 'sockA'); h(c, 'sockA', 'procA'); c.redraw(); } },
+      { t: 'B and C bind theirs', cap: 'B and C do the same. A socket on its own advertises nothing. Senders find peers through markers, and <code>peer(named:)</code> derives a peer\'s socket path from its marker\'s name.',
+        run(c) { add(c, 'sockB', 'sockC'); c.d.proc.B.status = c.d.proc.C.status = '“Orbit IPC” thread blocked in UnixEventQueue.wait'; h(c, 'sockB', 'sockC'); c.redraw(); } },
+      { t: 'B writes its marker to a temp file', cap: `B calls <code>transport.subscribe(to:region:)</code>. <code>OrbitIPCHandlers</code> computes the union of B's handler regions for this coordination key, and <code>registry.register</code> writes <code>encodeMarker(region)</code> (a string table and one region, ${DISC_MARKER_BYTES.B} bytes here) to <code>.${EP.B}.tmp</code> in the database's directory.`,
+        run(c) { add(c, 'key', 'tmpB'); c.d.proc.B.sub = 'main.reminders'; c.d.proc.B.status = 'subscribe(to:region:) → register(coordinationKey:region:)'; h(c, 'tmpB', 'key'); c.redraw(); } },
+      { t: 'rename() publishes it atomically', cap: `<code>UnixSystem.renameFile</code> renames the temp file over <code>${EP.B}</code> in one step. A reader finds either the old marker or the new one, never a partial one. Listings skip names that start with a dot, and no endpoint name does. <code>subscribe</code> returns only after the rename.`,
+        run(c) { c.d.fs.delete('tmpB'); add(c, 'mB'); c.d.proc.B.status = 'advertising main.reminders; thread blocked in wait'; h(c, 'mB'); c.redraw(); } },
+      { t: 'A\'s first send reads the markers', cap: 'A commits, and <code>send(_:)</code> calls <code>OrbitIPCAdvertisementCache.advertisements(for:)</code>. Nothing is cached yet. The cache creates a <code>UnixDirectoryWatcher</code>, creates the database\'s directory, and watches it <em>before</em> reading it, so a change made during the read is still reported. Then <code>registry.advertisements</code> decodes each marker.',
+        run(c) {
+          c.d.watch = true; c.d.cacheStatus = 'miss → read'; h(c, 'watch', 'cache', 'mB', 'key'); c.redraw();
+          c.fly(c.pt('row:mB', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 40 }, { label: `${DISC_MARKER_BYTES.B} B`, color: C.reg, bend: 0.12 }, () => { c.d.cache = [[EP.B, 'main.reminders']]; c.redraw(); });
+        } },
+      { t: 'Later sends hit the cache', cap: 'On every send, the cache first calls <code>watcher.drainChanges()</code> on the sending thread, under its lock. This never blocks: it is a zero-timeout <code>kevent</code> on Darwin, or a nonblocking <code>read</code> of the inotify descriptor. Nothing changed, so no file is read.',
+        run(c) { c.d.cacheStatus = 'drainChanges() → false · hit'; h(c, 'watch', 'cache'); c.redraw(); } },
+      { t: 'C advertises; the kernel queues an event', cap: 'C subscribes: it writes a temp file, then renames it. The kernel queues an event on A\'s watch: <code>NOTE_WRITE</code> from <code>EVFILT_VNODE</code> on Darwin, or <code>IN_CREATE</code> and then <code>IN_MOVED_TO</code> from inotify on Linux and Android. Nothing in A runs yet, because no thread waits on the watcher. It is polled.',
+        run(c) {
+          add(c, 'tmpC');
+          c.d.proc.C.sub = 'main.tags'; c.d.proc.C.status = 'subscribe(to:region:) → .tmp, then rename'; h(c, 'tmpC', 'watch'); c.redraw();
+          c.at(1300, () => { c.d.fs.delete('tmpC'); add(c, 'mC'); c.d.queued = 2; h(c, 'mC'); c.d.proc.C.status = 'advertising main.tags; thread blocked in wait'; c.redraw(); });
+        } },
+      { t: 'A drains, forgets, reads again', cap: 'A\'s next send drains the watcher. <code>drainChanges()</code> returns <code>true</code>, so the cache resets to an empty <code>State()</code>. That drops every cached database <em>and the watcher itself</em>. The lookup then creates a new watch and reads the directory from scratch, and finds B and C.',
+        run(c) {
+          c.d.queued = 0; c.d.cache = null; c.d.cacheStatus = 'drainChanges() → true · reset'; h(c, 'watch', 'cache'); c.redraw();
+          c.at(900, () => { c.d.cacheStatus = 'miss → read'; c.redraw(); });
+          c.fly(c.pt('row:mB', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 40 }, { delay: 900, label: 'B', color: C.reg, bend: 0.1 });
+          c.fly(c.pt('row:mC', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 60 }, { delay: 1100, label: 'C', color: C.reg, bend: 0.1 },
+            () => { c.d.cache = [[EP.B, 'main.reminders'], [EP.C, 'main.tags']]; c.redraw(); });
+        } },
+      { t: 'C dies; A prunes it', cap: 'C crashes and leaves its socket and marker behind. The next commit that concerns C fails to reach it: <code>connect()</code> fails with <code>ECONNREFUSED</code> or <code>ENOENT</code>, or a cached socket fails with <code>ECONNREFUSED</code>, <code>ECONNRESET</code> or <code>ENOTCONN</code>. <code>isStalePeer</code> recognizes these, so C is not counted as a failure. <code>registry.remove(_:coordinationKeys:)</code> unlinks its socket path, marker and any leftover <code>.tmp</code>. A clean shutdown removes them itself in <code>deinit</code>.',
+        run(c) {
+          c.d.proc.C.dead = true; c.d.proc.C.status = 'crashed: its socket and marker are left behind'; c.d.proc.C.sub = null;
+          rm(c, 'sockC', 'mC'); if (!c.cur) c.d.cache = [[EP.B, 'main.reminders']];
+          c.d.cacheStatus = c.cur ? 'send → ECONNREFUSED' : 'reset by the removal';
+          h(c, 'procA'); c.redraw();
+        } }
+    ];
+  }
+});
+
+/* ====================================================================================
+   Scene 3: Fan-out with sender-side filtering
+   ==================================================================================== */
+const FAN_PEERS = [
+  { k: 'B', role: 'Reminders list', adv: { tables: { reminders: { all: true } } }, advTxt: 'main.reminders' },
+  { k: 'C', role: 'Tags editor', adv: { tables: { tags: { all: true } } }, advTxt: 'main.tags' },
+  { k: 'D', role: 'Sync agent', adv: { full: true }, advTxt: '.fullDatabase' },
+  { k: 'E', role: 'Notes pane', adv: { tables: { reminders: { cols: ['notes'] } } }, advTxt: 'main.reminders(notes)' }
+];
+const FAN_COMMITS = [
+  { k: 'title', sql: 'UPDATE reminders SET title = …', region: { tables: { reminders: { cols: ['title'] } } }, txt: 'main.reminders(title)' },
+  { k: 'tags', sql: 'INSERT INTO tags …', region: { tables: { tags: { all: true } } }, txt: 'main.tags' },
+  { k: 'notes', sql: 'UPDATE reminders SET notes = …', region: { tables: { reminders: { cols: ['notes'] } } }, txt: 'main.reminders(notes)' },
+  { k: 'full', sql: 'a region too large for one datagram', region: { full: true }, txt: '.fullDatabase' }
+];
+// OrbitDatabaseRegion.admits(_:) = isFullDatabase || overlaps(_:), reduced to these shapes.
+function fanAdmits(adv, com) {
+  if (adv.full) return [true, 'advertises .fullDatabase, which admits everything'];
+  if (com.full) return [true, 'a .fullDatabase commit overlaps any non-empty region'];
+  let why = 'no table in common';
+  for (const t in com.tables) {
+    const a = adv.tables[t]; if (!a) continue;
+    const c = com.tables[t];
+    if (a.all && c.all) return [true, `both cover all of main.${t}`];
+    if (a.all) return [true, `main.${t} includes ${c.cols.join(', ')}`];
+    if (c.all) return [true, `the commit covers all of main.${t}`];
+    const i = c.cols.filter(x => a.cols.includes(x));
+    if (i.length) return [true, `both include main.${t}.${i[0]}`];
+    why = `main.${t}: {${a.cols.join(', ')}} ∩ {${c.cols.join(', ')}} = ∅`;
+  }
+  return [false, why];
+}
+function fanLayout(n) {
+  return n ? { W: 420, H: 668, A: { x: 6, y: 6, w: 408, h: 104 }, gate: { x: 6, y: 122, w: 408, h: 34 }, peer: i => ({ x: 6, y: 168 + i * 124, w: 408, h: 112 }) }
+           : { W: 960, H: 492, A: { x: 12, y: 160, w: 262, h: 172 }, gate: { x: 316, y: 12, w: 150, h: 468 }, peer: i => ({ x: 512, y: 12 + i * 120, w: 436, h: 108 }) };
+}
+function fanDraw(ctx) {
+  const d = ctx.d, g = ctx.dyn, o = { parent: g }; g.textContent = '';
+  FAN_PEERS.forEach((p, i) => {
+    const P = d.L.peer(i), st = d.peer[p.k];
+    const awake = st.state === 'awake';
+    ctx.rect(P.x, P.y, P.w, P.h, Object.assign({ rx: 12, fill: awake ? C.ok : C.peer, fo: awake ? 0.1 : 0.04, stroke: awake ? C.ok : C.peer, so: awake ? 0.9 : 0.35, sw: awake ? 2 : 1.2, glow: awake && ctx.cur }, o));
+    ctx.text(P.x + 14, P.y + 23, `Process ${p.k}`, Object.assign({ size: 14, weight: 700 }, o));
+    ctx.text(P.x + 92, P.y + 23, p.role, Object.assign({ size: 12, fill: C.muted }, o));
+    ctx.chip(P.x + 14, P.y + 46, 'marker: ' + p.advTxt, C.reg, Object.assign({ size: 11 }, o));
+    const dot = awake ? C.ok : C.dim;
+    S('circle', { cx: P.x + 20, cy: P.y + 72, r: 4, fill: dot }, g);
+    const stTxt = awake ? (ctx.narrow ? 'awake · EPOLLIN / EVFILT_READ' : 'awake · readable (EPOLLIN / EVFILT_READ) → drain → decode')
+      : st.state === 'handled' ? 'handler ran · databaseDidCommit(origin: .external)' : 'asleep in UnixEventQueue.wait';
+    ctx.text(P.x + 30, P.y + 76, stTxt, Object.assign({ size: 11.5, fill: awake || st.state === 'handled' ? C.ok : C.muted }, o));
+    if (st.verdict) {
+      const [ok, why] = st.verdict;
+      ctx.text(P.x + 14, P.y + 97, (ok ? 'admits: ' : 'skipped: ') + why, Object.assign({ size: 11, fill: ok ? C.ok : C.bad, op: 0.95 }, o));
+      ctx.chip(P.x + P.w - 12, P.y + 23, ok ? '✓ concerned' : '✗ skipped', ok ? C.ok : C.bad, Object.assign({ anchor: 'end', size: 11, solid: ctx.cur && st.fresh }, o));
+    }
+  });
+  const A = d.L.A;
+  ctx.text(A.x + 14, A.y + 24, 'Process A', Object.assign({ size: 14, weight: 700 }, o));
+  ctx.text(A.x + A.w - 12, A.y + 24, EP.A, Object.assign({ mono: true, size: 10.5, fill: C.muted, anchor: 'end' }, o));
+  const com = d.commit;
+  ctx.text(A.x + 14, A.y + 46, 'OrbitIPCDatabase.write', Object.assign({ mono: true, size: 12, fill: C.db, weight: 650 }, o));
+  ctx.text(A.x + 14, A.y + 64, com.sql, Object.assign({ mono: true, size: 11, fill: C.muted }, o));
+  ctx.chip(A.x + 14, A.y + (ctx.narrow ? 88 : 90), 'region: ' + com.txt, C.db, Object.assign({ size: 11 }, o));
+  if (!ctx.narrow && d.result) ctx.text(A.x + 14, A.y + 124, d.result, Object.assign({ mono: true, size: 11, fill: C.ok }, o));
+  if (!ctx.narrow && d.result2) ctx.text(A.x + 14, A.y + 142, d.result2, Object.assign({ size: 11, fill: C.muted }, o));
+  if (ctx.narrow && d.result) ctx.text(A.x + A.w - 12, A.y + 88 + 4, d.result, Object.assign({ mono: true, size: 10.5, fill: C.ok, anchor: 'end' }, o));
+}
+new Scene({
+  id: 'fanout', narrowAt: 640,
+  toolbar(bar) {
+    this.commit = FAN_COMMITS[0];
+    H('span', { class: 'lbl' }, bar, 'A commits');
+    const pick = H('div', { class: 'pick', role: 'group', 'aria-label': 'Commit' }, bar);
+    FAN_COMMITS.forEach(cm => {
+      const b = H('button', { type: 'button', 'aria-pressed': String(cm === this.commit) }, pick, esc(cm.txt));
+      if (cm === this.commit) b.classList.add('on');
+      b.addEventListener('click', () => {
+        this.commit = cm;
+        pick.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+        this.render(0, false);
+      });
+    });
+  },
+  build(ctx) {
+    const L = fanLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Commit fan-out with sender-side filtering');
+    ctx.d = { L, commit: this.commit, peer: {} };
+    FAN_PEERS.forEach(p => ctx.d.peer[p.k] = { state: 'asleep', verdict: null });
+    ctx.panel(L.A.x, L.A.y, L.A.w, L.A.h, null, C.db, { fo: 0.05, so: 0.45 });
+    const G = L.gate;
+    ctx.rect(G.x, G.y, G.w, G.h, { fill: C.tr, fo: 0.05, stroke: C.tr, so: 0.4, dash: '5 4', rx: 12 });
+    if (ctx.narrow) ctx.text(G.x + G.w / 2, G.y + 22, 'UnixDatagramIPCTransport.peers(concernedWith:)', { anchor: 'middle', mono: true, size: 11, fill: C.tr, weight: 650 });
+    else {
+      ctx.text(G.x + G.w / 2, G.y + 24, 'peers(', { anchor: 'middle', mono: true, size: 12, fill: C.tr, weight: 650 });
+      ctx.text(G.x + G.w / 2, G.y + 40, 'concernedWith:)', { anchor: 'middle', mono: true, size: 12, fill: C.tr, weight: 650 });
+      ctx.text(G.x + G.w / 2, G.y + G.h - 30, 'region.admits(', { anchor: 'middle', mono: true, size: 10.5, fill: C.muted });
+      ctx.text(G.x + G.w / 2, G.y + G.h - 16, 'commit.region)', { anchor: 'middle', mono: true, size: 10.5, fill: C.muted });
+    }
+    ctx.n.A = { x: L.A.x, y: L.A.y, w: L.A.w, h: L.A.h };
+    FAN_PEERS.forEach((p, i) => {
+      const P = L.peer(i);
+      ctx.n['p' + p.k] = P;
+      ctx.n['g' + p.k] = ctx.narrow ? { x: P.x + P.w / 2 - 6 + (i - 1.5) * 60, y: G.y + G.h / 2 - 6, w: 12, h: 12 } : { x: G.x + G.w / 2 - 6, y: P.y + P.h / 2 - 6, w: 12, h: 12 };
+    });
+    ctx.redraw = () => fanDraw(ctx);
+    ctx.redraw();
+  },
+  steps(mode, sc) {
+    const com = sc.commit;
+    const verdicts = FAN_PEERS.map(p => [p, fanAdmits(p.adv, com.region)]);
+    const yes = verdicts.filter(v => v[1][0]).map(v => v[0].k), no = verdicts.filter(v => !v[1][0]).map(v => v[0].k);
+    const names = ks => ks.length ? ks.join(ks.length === 2 ? ' and ' : ', ') : 'none';
+    return [
+      { t: 'Four peers, four markers', cap: 'Each peer has written a marker advertising the union of its subscriptions\' regions for this database. Each one sleeps in <code>UnixEventQueue.wait</code>. Choose a commit above to change what A writes.',
+        run(c) { c.redraw(); } },
+      { t: 'A commits', cap: `A's <code>OrbitIPCDatabase.write</code> commits <code>${esc(com.sql)}</code>. <code>announce(_:)</code> tells other handles in this process first. Then a <code>Task</code> calls <code>transport.send(.transactionDidCommit(…))</code> with the region <code>${com.txt}</code>.`,
+        run(c) { if (c.cur) { c.rect(c.d.L.A.x, c.d.L.A.y, c.d.L.A.w, c.d.L.A.h, { stroke: C.db, sw: 2.2, glow: 1, rx: 12, parent: c.fx }); } } },
+      { t: 'Measure, then look up', cap: '<code>OrbitIPCWireEntry(message, fittingIn: maximumDatagramByteCount)</code> measures the entry. A region too big for a batch of one would be broadened to <code>.fullDatabase</code> here. Then <code>advertisements(for:)</code> returns each endpoint\'s advertised region from the cache, which was read from the markers.',
+        run(c) {
+          FAN_PEERS.forEach((p, i) => c.fly(c.pt('p' + p.k, c.narrow ? 't' : 'l'), c.pt('A', c.narrow ? 'b' : 'r'), { delay: i * 180, label: p.k, color: C.reg, bend: c.narrow ? 0 : 0.08 }));
+        } },
+      { t: 'Filter at the sender', cap: `<code>peers(concernedWith:)</code> keeps an endpoint if it isn't A itself and <code>message.concerns(region)</code>, which is <code>region.admits(commit.region)</code>: <code>isFullDatabase || overlaps(_:)</code>. Concerned: <b>${names(yes)}</b>. Skipped: <b>${names(no)}</b>.`,
+        run(c) {
+          verdicts.forEach(([p, v], i) => {
+            c.fly(c.pt('A', c.narrow ? 'b' : 'r'), c.pt('g' + p.k), { delay: i * 200, label: '?', color: C.tr, w: 18 }, () => { c.d.peer[p.k].verdict = v; c.d.peer[p.k].fresh = true; c.redraw(); });
+          });
+        } },
+      { t: yes.length ? 'One datagram, sent to each concerned peer' : 'Nothing to send', cap: yes.length
+          ? `<code>endpoint.send</code> encodes a batch of one once, then offers it to ${names(yes)} on the <code>connect()</code>ed socket cached for each (made on first use). Each <code>sendDatagram</code> succeeds because every queue had room. ${no.length ? names(no) + ' get nothing.' : ''}`
+          : 'No peer advertises a region this commit concerns, so <code>send</code> has no peers to offer it to and returns at once.',
+        run(c) {
+          yes.forEach((k, i) => {
+            c.fly(c.pt('A', c.narrow ? 'b' : 'r'), c.pt('g' + k), { delay: i * 200, label: 'ORBT', color: C.sk, dur: 600 });
+            c.fly(c.pt('g' + k), c.pt('p' + k, c.narrow ? 't' : 'l'), { delay: 600 + i * 200, label: 'ORBT', color: C.sk, dur: 600 }, () => { c.d.peer[k].state = 'awake'; c.redraw(); });
+          });
+        } },
+      { t: 'Only concerned peers wake', cap: yes.length
+          ? `${names(yes)} wake on <code>EVFILT_READ</code> or <code>EPOLLIN</code>, drain the socket, and decode the batch. <code>OrbitIPCHandlers.receive</code> then calls each handler whose own region the commit concerns, and the observer gets <code>databaseDidCommit</code> with origin <code>.external</code>. ${no.length ? names(no) + ' never wake: no datagram reached them, so their threads made no syscall and had no context switch.' : ''}`
+          : 'Nobody wakes. Filtering at the sender means an irrelevant commit costs peers nothing.',
+        run(c) { yes.forEach(k => c.d.peer[k].state = c.cur ? 'awake' : 'handled'); if (c.cur) c.at(1600, () => { yes.forEach(k => c.d.peer[k].state = 'handled'); c.redraw(); }); c.redraw(); } },
+      { t: 'send returns', cap: `Every concerned peer took the message, so the <code>Delivery</code> is <code>(delivered: ${yes.length}, failed: 0)</code>. <code>send</code> returns, and the delegate gets <code>didSuccessfullyAnnounce</code>. Success means the message is in each peer's receive queue, not that a handler has run. Along the way, <code>retain(_:advertising:)</code> closes cached sockets for endpoints that no longer advertise this database.`,
+        run(c) { c.d.result = `Delivery(delivered: ${yes.length}, failed: 0)`; c.d.result2 = 'send returns · didSuccessfullyAnnounce'; c.redraw(); } }
+    ];
+  }
+});
+
+/* ====================================================================================
+   Scene 4: Wire format byte inspector (interactive, not stepped)
+   ==================================================================================== */
+const KIND = {
+  magic: { c: '#56c8ff', l: 'magic', d: 'Identifies an Orbit IPC datagram: the ASCII bytes "ORBT". decode(_:) rejects anything else with invalidMagic.' },
+  version: { c: '#8fdcff', l: 'version', d: 'Protocol version. Only 1 is accepted; any other value throws unsupportedProtocolVersion.' },
+  hflags: { c: '#c3ecff', l: 'header flags', d: 'Header flags. They must be 0, or decoding fails with invalidFlags.' },
+  entryCount: { c: '#3fa9e6', l: 'entryCount', d: 'How many entries follow the string table. It must be at least 1 (emptyBatch). A single message is a batch of one.' },
+  strCount: { c: '#6fd67f', l: 'stringCount', d: 'How many strings the shared table holds. Every string a batch names appears once, in the order entries first name it.' },
+  strLen: { c: '#4fb862', l: 'string length', d: 'The UTF-8 byte length of the next string.' },
+  strBytes: { c: '#b5f0b0', l: 'string bytes', d: 'A string\'s UTF-8 bytes. Each is validated once per datagram; malformed UTF-8 rejects the whole datagram (invalidUTF8).' },
+  kind: { c: '#ffb454', l: 'entry kind', d: 'The entry\'s kind. 1 is transactionDidCommit. A decoder skips a kind it does not know by its payload length.' },
+  plen: { c: '#ffd08f', l: 'payloadLength', d: 'The payload\'s length after this field: 2 for the database index plus the region\'s length. The payload must be consumed exactly (payloadLengthMismatch).' },
+  dbidx: { c: '#8ea2ff', l: 'database index', d: 'The index in the string table of the OrbitDatabaseIdentifier\'s raw value, by default the database file\'s canonical path.' },
+  rflags: { c: '#ff8fcf', l: 'region flags', d: 'Region flags. Bit 0 is includesUnspecifiedTables, which is 1 for .fullDatabase. Values other than 0 and 1 are rejected.' },
+  tcount: { c: '#ffc0e3', l: 'tableCount', d: 'How many tables differ from the default the flag sets. Tables are sorted by (schema, name).' },
+  schema: { c: '#b98cff', l: 'schema index', d: 'The index of the table\'s schema name, such as "main", in the string table.' },
+  tname: { c: '#d9bcff', l: 'name index', d: 'The index of the table name, lowercased, in the string table.' },
+  tflags: { c: '#ff6b7d', l: 'table flags', d: 'Table flags. Bit 0 is includesUnspecifiedColumns. With 0, the listed columns are the only ones included. With 1, every column is included except the listed ones.' },
+  ccount: { c: '#ffa3ad', l: 'columnCount', d: 'How many column exceptions follow. For a whole table this is 0 and the flags are 1.' },
+  col: { c: '#34d6c3', l: 'column index', d: 'The index of a column exception, lowercased, in the string table. Columns are sorted and must not repeat (duplicateRegionEntry).' }
+};
+const WIRE_COMMITS = [
+  { k: 'c1', label: 'UPDATE reminders SET title, priority', region: R.of(R.cols('reminders', ['title', 'priority'])), on: true },
+  { k: 'c2', label: 'INSERT INTO tags', region: R.of(R.table('tags')), on: true },
+  { k: 'c3', label: 'rename a list, move its reminders', region: R.of(R.cols('lists', ['name']), R.cols('reminders', ['list_id'])), on: true },
+  { k: 'c4', label: 'UPDATE reminders, all but notes', region: R.of(R.except('reminders', ['notes'])), on: false }
+];
+const MARKER_REGION = R.of(R.cols('reminders', ['title', 'priority']), R.table('tags'));
+function hex2(n) { return n.toString(16).toUpperCase().padStart(2, '0'); }
+function hex4(n) { return '0x' + n.toString(16).toUpperCase().padStart(4, '0'); }
+function rgba(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; }
+const WIRE = { view: 'batch', sel: 0 };
+function mountWire() {
+  const card = document.getElementById('wire-card');
+  const ctr = H('div', { class: 'wire-controls' }, card);
+  H('span', { class: 'lbl', style: 'font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)' }, ctr, 'Show');
+  const seg = H('div', { class: 'seg', role: 'group', 'aria-label': 'Encoding' }, ctr);
+  const views = [['batch', 'Batch datagram'], ['marker', 'Marker file']];
+  const checks = H('div', { style: 'display:flex;flex-wrap:wrap;gap:6px' }, ctr);
+  views.forEach(([k, l]) => {
+    const b = H('button', { type: 'button', 'aria-pressed': String(k === WIRE.view) }, seg, l);
+    if (k === WIRE.view) b.classList.add('on');
+    b.addEventListener('click', () => {
+      WIRE.view = k; WIRE.sel = 0;
+      seg.querySelectorAll('button').forEach(x => { x.classList.toggle('on', x === b); x.setAttribute('aria-pressed', String(x === b)); });
+      checks.style.display = k === 'batch' ? 'flex' : 'none';
+      wireRender();
+    });
+  });
+  WIRE_COMMITS.forEach(cm => {
+    const lab = H('label', { class: 'chk' + (cm.on ? ' on' : '') }, checks);
+    const inp = H('input', { type: 'checkbox' }, lab); inp.checked = cm.on;
+    H('span', null, lab, esc(cm.label));
+    inp.addEventListener('change', () => {
+      cm.on = inp.checked;
+      if (!WIRE_COMMITS.some(x => x.on)) { cm.on = true; inp.checked = true; }
+      lab.classList.toggle('on', cm.on);
+      WIRE.sel = 0; wireRender();
+    });
+  });
+  const wrapEl = H('div', { class: 'wire-wrap' }, card);
+  const left = H('div', { class: 'wire-left' }, wrapEl);
+  WIRE.note = H('div', { class: 'sumline', style: 'margin:0 0 10px' }, left);
+  WIRE.bytes = H('div', { class: 'bytes', role: 'grid', 'aria-label': 'Encoded bytes' }, left);
+  WIRE.sum = H('div', { class: 'sumline' }, left);
+  const right = H('div', { class: 'wire-right' }, wrapEl);
+  WIRE.legend = H('div', { class: 'klegend' }, right);
+  WIRE.detail = H('div', { class: 'fdetail', 'aria-live': 'polite' }, right);
+  WIRE.list = H('div', { class: 'fieldlist', role: 'list' }, right);
+  const mq = window.matchMedia('(max-width:560px)');
+  const onMq = () => wireRender();
+  if (mq.addEventListener) mq.addEventListener('change', onMq); else if (mq.addListener) mq.addListener(onMq);
+  WIRE.mq = mq;
+  wireRender();
+}
+function wireRender() {
+  const cols = WIRE.mq.matches ? 8 : 16;
+  let res, note;
+  if (WIRE.view === 'batch') {
+    const chosen = WIRE_COMMITS.filter(c => c.on);
+    res = encodeBatch(chosen.map(c => wireEntry(DBID, c.region)));
+    note = `A batch of ${chosen.length} commit${chosen.length === 1 ? '' : 's'} to <b>${esc(DBID)}</b>, as <code>OrbitIPCWireBatch.encoded()</code> writes it: ` + chosen.map((c, i) => `entry[${i}] = <b>${esc(describeRegion(c.region))}</b>`).join(', ') + '.';
+  } else {
+    res = encodeMarker(MARKER_REGION);
+    note = `The marker a process writes to <code>v1/d/${KEY}/&lt;endpoint&gt;</code> when its subscriptions for the database cover <b>${esc(describeRegion(MARKER_REGION))}</b>: <code>encodeMarker(_:)</code> writes a string table and one region, with no header. The database is named by the directory, not the bytes.`;
+  }
+  WIRE.res = res;
+  WIRE.note.innerHTML = note;
+  const bytes = res.bytes, fields = res.fields;
+  const owner = new Array(bytes.length);
+  fields.forEach((f, i) => { for (let j = 0; j < f.len; j++) owner[f.start + j] = i; });
+  const el = WIRE.bytes;
+  el.textContent = '';
+  el.style.gridTemplateColumns = `${cols === 8 ? 34 : 42}px repeat(${cols}, minmax(0,1fr))`;
+  WIRE.cells = fields.map(() => []);
+  for (let i = 0; i < bytes.length; i++) {
+    if (i % cols === 0) H('div', { class: 'off' }, el, hex4(i).slice(2));
+    const f = fields[owner[i]], k = KIND[f.kind];
+    const ch = (f.kind === 'strBytes' || f.kind === 'magic') && bytes[i] >= 32 && bytes[i] < 127 ? String.fromCharCode(bytes[i]) : '';
+    const cell = H('div', { class: 'b', style: `background:${rgba(k.c, 0.92)}`, title: `${f.name} · offset ${i}` }, el, `${hex2(bytes[i])}<small>${esc(ch)}</small>`);
+    cell.addEventListener('mouseenter', () => wireSelect(owner[i]));
+    cell.addEventListener('click', () => wireSelect(owner[i]));
+    WIRE.cells[owner[i]].push(cell);
+  }
+  const used = [...new Set(fields.map(f => f.kind))];
+  WIRE.legend.innerHTML = used.map(k => `<span style="background:${KIND[k].c}">${esc(KIND[k].l)}</span>`).join('');
+  WIRE.list.textContent = '';
+  WIRE.rows = fields.map((f, i) => {
+    const b = H('button', { type: 'button', class: 'fieldrow', role: 'listitem' }, WIRE.list,
+      `<span>${hex4(f.start).slice(2)}</span><span><span class="sw" style="background:${KIND[f.kind].c}"></span>${esc(f.name)} <span class="grp">= ${esc(f.value)}</span></span>`);
+    b.addEventListener('mouseenter', () => wireSelect(i, false));
+    b.addEventListener('focus', () => wireSelect(i, false));
+    b.addEventListener('click', () => wireSelect(i, false));
+    return b;
+  });
+  if (WIRE.view === 'batch') {
+    const b = res.batch;
+    const ent = b.entries.reduce((n, e) => n + e.byteCount, 0);
+    const str = b.strings.reduce((n, s) => n + 2 + utf8(s).length, 0);
+    WIRE.sum.innerHTML = `<b>${bytes.length} bytes</b> = 10 (header + stringCount) + ${ent} (entries: 3 + 2 + region each: ${b.entries.map(e => e.byteCount).join(' + ')}) + ${str} (${b.strings.length} strings: 2 + UTF-8 each). This matches <code>OrbitIPCWireBatch.byteCount</code>, which <code>flush</code> compares with <code>maximumDatagramByteCount</code>.`;
+  } else {
+    const st = fields.filter(f => f.group === 'String table').reduce((n, f) => n + f.len, 0);
+    WIRE.sum.innerHTML = `<b>${bytes.length} bytes</b> = string table ${st} + region ${bytes.length - st} (3 + 7 per table + 2 per column). An empty or undecodable marker counts as <code>.fullDatabase</code>.`;
+  }
+  wireSelect(Math.min(WIRE.sel, fields.length - 1), false);
+}
+function wireSelect(i, scroll = true) {
+  WIRE.sel = i;
+  const f = WIRE.res.fields[i], k = KIND[f.kind];
+  WIRE.cells.forEach((cs, j) => cs.forEach(c => { c.classList.toggle('on', j === i); c.classList.toggle('fade', j !== i && WIRE.res.fields[j].group !== f.group); }));
+  WIRE.rows.forEach((r, j) => r.classList.toggle('on', j === i));
+  const raw = WIRE.res.bytes.slice(f.start, f.start + f.len).map(hex2).join(' ');
+  WIRE.detail.innerHTML = `<div class="fname" style="color:${k.c}">${esc(f.name)}</div>
+    <div class="fmeta">${esc(f.group)} · offset ${f.start} (${hex4(f.start)}) · ${f.len} byte${f.len === 1 ? '' : 's'}${f.len === 2 ? ' · u16 big-endian' : f.len === 1 ? ' · u8' : ''}</div>
+    <div class="fval">${esc(raw.length > 60 ? raw.slice(0, 60) + '…' : raw)}</div>
+    <div class="fval" style="margin-top:4px">= ${esc(f.value)}</div>
+    <div class="fdesc">${esc(k.d)}</div>`;
+  if (scroll && WIRE.rows[i]) {
+    const r = WIRE.rows[i], list = WIRE.list;
+    if (r.offsetTop < list.scrollTop || r.offsetTop > list.scrollTop + list.clientHeight - 30) list.scrollTop = r.offsetTop - 60;
+  }
+}
+
+/* ====================================================================================
+   Scene 5: Batching under backpressure
+   ==================================================================================== */
+const BE = {
+  t: wireEntry(DBID, R.of(R.cols('reminders', ['title']))),
+  p: wireEntry(DBID, R.of(R.cols('reminders', ['priority']))),
+  l: wireEntry(DBID, R.of(R.table('lists')))
+};
+const BSZ = {
+  one: batchSize([BE.t]), b4: batchSize([BE.t]), b45: batchSize([BE.t, BE.p]), b456: batchSize([BE.t, BE.p, BE.l]), b6: batchSize([BE.l])
+};
+const BMAX = BSZ.b45 + 8; // illustrative: the default is 61 440
+const BAT_SENDS = [
+  { n: 1, reg: 'main.reminders(title)' }, { n: 2, reg: 'main.reminders(title)' }, { n: 3, reg: 'main.reminders(title)' },
+  { n: 4, reg: 'main.reminders(title)' }, { n: 5, reg: 'main.reminders(priority)' }, { n: 6, reg: 'main.lists' }
+];
+const STATUS = { idle: ['not sent', C.dim], del: ['delivered', C.ok], susp: ['suspended', C.ep], res: ['resumed ✓', C.ok], fail: ['threw', C.bad], canc: ['cancelled', C.bad] };
+function batLayout(n) {
+  return n ? { W: 420, H: 772, S: { x: 6, y: 6, w: 408, h: 236 }, F: { x: 6, y: 252, w: 201, h: 236 }, Bt: { x: 213, y: 252, w: 201, h: 236 }, P: { x: 6, y: 498, w: 408, h: 268 } }
+           : { W: 960, H: 560, S: { x: 12, y: 12, w: 300, h: 536 }, F: { x: 328, y: 12, w: 304, h: 256 }, Bt: { x: 328, y: 280, w: 304, h: 268 }, P: { x: 648, y: 12, w: 300, h: 536 } };
+}
+function batGeom(ctx) {
+  const L = ctx.d.L, n = ctx.narrow;
+  const rowTop = i => n ? L.S.y + 36 + i * 32 : L.S.y + 44 + i * 80;
+  const qb = n ? { x: L.P.x + 10, y: L.P.y + 70, w: 196, h: 190 } : { x: L.P.x + 14, y: L.P.y + 100, w: L.P.w - 28, h: 200 };
+  return {
+    rowTop,
+    row: i => n ? { x: L.S.x + L.S.w - 8, y: rowTop(i) + 14 } : { x: L.S.x + L.S.w, y: rowTop(i) + 30 },
+    qb,
+    slot: k => n ? { x: qb.x + 10, y: qb.y + 30 + k * 52, w: qb.w - 20, h: 44 } : { x: qb.x + 12, y: qb.y + 32 + k * 54, w: qb.w - 24, h: 46 },
+    fifo: k => n ? { x: L.F.x + 10, y: L.F.y + 92 + k * 36, w: L.F.w - 20, h: 30 } : { x: L.F.x + 14, y: L.F.y + 84 + k * 44, w: L.F.w - 28, h: 36 },
+    recv: i => n ? { x: L.P.x + 222 + (i % 2) * 92, y: L.P.y + 100 + Math.floor(i / 2) * 30 } : { x: L.P.x + 16 + (i % 3) * 90, y: L.P.y + 346 + Math.floor(i / 3) * 32 },
+    batch: n ? { x: L.Bt.x + L.Bt.w / 2, y: L.Bt.y + L.Bt.h - 40 } : { x: L.Bt.x + L.Bt.w / 2, y: L.Bt.y + L.Bt.h - 44 }
+  };
+}
+function batDraw(ctx) {
+  const d = ctx.d, L = d.L, g = ctx.dyn, o = { parent: g }, G = batGeom(ctx), n = ctx.narrow;
+  g.textContent = '';
+  d.sends.forEach((s, i) => {
+    const top = G.rowTop(i), [st, col] = STATUS[s.status];
+    if (i) ctx.line(L.S.x + 10, top - (n ? 5 : 8), L.S.x + L.S.w - 10, top - (n ? 5 : 8), Object.assign({ stroke: C.line, op: 0.7 }, o));
+    if (n) {
+      ctx.text(L.S.x + 12, top + 18, `send #${s.n}`, Object.assign({ mono: true, size: 11.5, weight: 700 }, o));
+      ctx.text(L.S.x + 76, top + 18, s.reg.replace('main.', ''), Object.assign({ mono: true, size: 10.5, fill: C.muted }, o));
+      ctx.chip(L.S.x + L.S.w - 10, top + 14, st, col, Object.assign({ anchor: 'end', size: 10, solid: s.status !== 'idle' && s.fresh }, o));
+    } else {
+      ctx.text(L.S.x + 14, top + 20, `send #${s.n}`, Object.assign({ mono: true, size: 12.5, weight: 700 }, o));
+      ctx.chip(L.S.x + L.S.w - 12, top + 16, st, col, Object.assign({ anchor: 'end', size: 10.5, solid: s.status !== 'idle' && s.fresh }, o));
+      ctx.text(L.S.x + 14, top + 39, s.reg, Object.assign({ mono: true, size: 11, fill: C.muted }, o));
+      if (s.sub) wrap(s.sub, 50).slice(0, 2).forEach((l, k) => ctx.text(L.S.x + 14, top + 56 + k * 14, l, Object.assign({ size: 10.5, fill: col, op: 0.95 }, o)));
+    }
+  });
+  // FIFO
+  const fl = d.flags;
+  ctx.chip(L.F.x + 12, L.F.y + 46, fl.watched ? 'isWatched' : 'not watched', fl.watched ? C.eq : C.dim, Object.assign({ size: 10 }, o));
+  if (fl.note) wrap(fl.note, n ? 30 : 34).slice(0, 2).forEach((l, k) => ctx.text(L.F.x + (n ? 12 : 104), L.F.y + (n ? 68 : 50) + k * 14, l, Object.assign({ size: 10.5, fill: C.muted }, o)));
+  d.fifo.forEach((num, k) => {
+    const r = G.fifo(k), e = num === 4 ? BE.t : num === 5 ? BE.p : BE.l;
+    ctx.rect(r.x, r.y, r.w, r.h, Object.assign({ fill: C.ep, fo: 0.14, stroke: C.ep, so: 0.7, rx: 7 }, o));
+    ctx.text(r.x + 10, r.y + r.h / 2 + 4, n ? `#${num} · sendID ${num - 1}` : `Pending(entry: #${num}, sendID: ${num - 1})`, Object.assign({ mono: true, size: n ? 10.5 : 11, fill: C.text }, o));
+    if (!n) ctx.text(r.x + r.w - 10, r.y + r.h / 2 + 4, `${e.byteCount} B`, Object.assign({ mono: true, size: 10.5, fill: C.muted, anchor: 'end' }, o));
+  });
+  if (!d.fifo.length) ctx.text(L.F.x + L.F.w / 2, L.F.y + (n ? 130 : 150), 'empty', Object.assign({ anchor: 'middle', size: 12, fill: C.dim, italic: 1 }, o));
+  // Batch
+  d.batch.rows.forEach((r, k) => {
+    const y = L.Bt.y + (n ? 72 : 76) + k * (n ? 26 : 30);
+    ctx.text(L.Bt.x + 12, y, r.txt, Object.assign({ mono: true, size: n ? 10.5 : 11.5, fill: r.ok ? C.ok : C.bad }, o));
+  });
+  if (d.batch.status) wrap(d.batch.status, n ? 30 : 44).slice(0, 3).forEach((l, k) => ctx.text(L.Bt.x + 12, L.Bt.y + L.Bt.h - (n ? 52 : 50) + k * 15, l, Object.assign({ size: n ? 10.5 : 11, fill: C.text }, o)));
+  // Peer B
+  wrap(d.bstate, n ? 56 : 42).slice(0, 2).forEach((l, k) => ctx.text(L.P.x + 14, L.P.y + (n ? 44 : 46) + k * 15, l, Object.assign({ size: 11.5, fill: d.bstateCol || C.muted }, o)));
+  const qb = G.qb, full = d.q.length >= 3;
+  ctx.rect(qb.x, qb.y, qb.w, qb.h, Object.assign({ fill: full ? C.bad : C.sk, fo: 0.05, stroke: full ? C.bad : C.sk, so: 0.6, rx: 10, dash: '5 4' }, o));
+  ctx.text(qb.x + 10, qb.y + 18, 'receive queue', Object.assign({ mono: true, size: 11, fill: full ? C.bad : C.sk, weight: 650 }, o));
+  ctx.text(qb.x + qb.w - 10, qb.y + 18, full ? 'full' : `${d.q.length} / 3`, Object.assign({ anchor: 'end', size: 11, fill: full ? C.bad : C.muted, weight: full ? 700 : null }, o));
+  for (let k = 0; k < 3; k++) {
+    const s = G.slot(k), item = d.q[k];
+    ctx.rect(s.x, s.y, s.w, s.h, Object.assign({ fill: item ? C.sk : 'none', fo: item ? 0.18 : 0, stroke: C.sk, so: item ? 0.8 : 0.25, rx: 7, dash: item ? null : '3 3' }, o));
+    if (item) ctx.text(s.x + s.w / 2, s.y + s.h / 2 + 4, item, Object.assign({ anchor: 'middle', mono: true, size: 11.5, fill: C.text }, o));
+  }
+  d.recv.forEach((r, i) => { const p = G.recv(i); ctx.chip(p.x, p.y, r, C.hd, Object.assign({ size: 11, w: 80 }, o)); });
+}
+new Scene({
+  id: 'batching', narrowAt: 640, modesLabel: 'Policy',
+  modes: [
+    { key: 'drain', label: '<code>.suspend(upTo:)</code> · peer drains' },
+    { key: 'deadline', label: '<code>.suspend(upTo:)</code> · deadline passes' },
+    { key: 'fail', label: '<code>.fail</code>' }
+  ],
+  build(ctx) {
+    const L = batLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Batching under backpressure');
+    const sends = this.mode === 'deadline' ? BAT_SENDS.slice(0, 5) : BAT_SENDS;
+    ctx.d = { L, sends: sends.map(s => Object.assign({ status: 'idle', sub: '' }, s)), fifo: [], flags: { watched: false, note: '' }, batch: { rows: [], status: '' }, q: [], recv: [], bstate: '', bstateCol: null };
+    const pol = this.mode === 'fail' ? '.fail' : '.suspend(upTo: 250 ms)';
+    ctx.panel(L.S.x, L.S.y, L.S.w, L.S.h, 'Process A · send(_:) tasks', C.tr, { sub: ctx.narrow ? pol : '' });
+    if (!ctx.narrow) ctx.text(L.S.x + 14, L.S.y + L.S.h - 10, 'backPressure: ' + pol, { mono: true, size: 10.5, fill: C.dim });
+    ctx.panel(L.F.x, L.F.y, L.F.w, L.F.h, 'Peer(B).pending', C.ep, { sub: ctx.narrow ? '' : 'in A\'s UnixDatagramEndpoint' });
+    ctx.panel(L.Bt.x, L.Bt.y, L.Bt.w, L.Bt.h, ctx.narrow ? 'flush(_:)' : 'flush(_:) · OrbitIPCWireBatch', C.wire);
+    ctx.text(L.Bt.x + 12, L.Bt.y + (ctx.narrow ? 42 : 46), `max ${BMAX} B (illustrative)`, { mono: true, size: ctx.narrow ? 10 : 11, fill: C.muted });
+    ctx.panel(L.P.x, L.P.y, L.P.w, L.P.h, 'Process B', C.peer, { sub: ctx.narrow ? '' : EP.B });
+    const G = batGeom(ctx);
+    ctx.text(ctx.narrow ? L.P.x + 222 : L.P.x + 16, ctx.narrow ? L.P.y + 80 : L.P.y + 324, 'OrbitIPCHandlers.receive', { mono: true, size: 11, fill: C.hd, weight: 650 });
+    ctx.redraw = () => batDraw(ctx);
+    ctx.redraw();
+  },
+  steps(mode) {
+    const G = c => batGeom(c);
+    const set = (c, i, status, sub) => { const s = c.d.sends[i]; s.status = status; s.sub = sub; s.fresh = c.cur; };
+    const deliver = (c, idx, delay) => {
+      idx.forEach((i, j) => {
+        const slot = G(c).slot(c.d.q.length + j);
+        c.fly(G(c).row(i), { x: slot.x, y: slot.y + slot.h / 2 }, { delay: (delay || 0) + j * 450, label: `#${i + 1}`, color: C.sk }, () => {
+          c.d.q.push(`#${i + 1} · ${BSZ.one} B`); set(c, i, 'del', 'sendDatagram → true · returned Delivery(delivered: 1) without suspending'); c.redraw();
+        });
+      });
+    };
+    const bounce = (c, i, after) => {
+      const qb = G(c).qb;
+      const tgt = { x: qb.x + (c.narrow ? qb.w / 2 : 6), y: qb.y + (c.narrow ? 6 : qb.h / 2) };
+      c.fly(G(c).row(i), tgt, { label: `#${i + 1}`, color: C.sk, stopAt: 0.92, dur: 700 }, () => {
+        c.flash(tgt.x + (c.narrow ? 0 : 40), tgt.y - 14, 'EAGAIN / ENOBUFS', C.bad, { anchor: 'middle', size: 10 });
+        if (after) after(tgt);
+      });
+    };
+    // `split` lists the messages each queued datagram carries, in order.
+    const drainB = (c, split) => {
+      const per = split || c.d.q.map((_, k) => [`#${k + 1}`]);
+      c.d.bstate = 'draining: recv() into its one buffer until the queue is empty'; c.d.bstateCol = C.ok; c.redraw();
+      let idx = 0;
+      per.forEach((labels, k) => {
+        const s = G(c).slot(k);
+        labels.forEach(l => {
+          const r = G(c).recv(c.d.recv.length + idx);
+          c.fly({ x: s.x + s.w / 2, y: s.y + s.h / 2 }, { x: r.x + 40, y: r.y }, { delay: idx * 300, label: l, color: C.hd, dur: 700 });
+          idx++;
+        });
+      });
+      c.at(idx * 300 + 700, () => { per.forEach(ls => ls.forEach(l => c.d.recv.push(l))); c.d.q = []; c.redraw(); });
+    };
+    const common = [
+      { t: 'Setup', cap: mode === 'fail'
+          ? 'Process A sends commits to B with <code>backPressure: .fail</code>. B\'s loop thread is busy in a slow handler, so nothing drains its socket. The queue is drawn with three slots for illustration: on Linux the limit is a number of datagrams, and on Darwin it is bytes of the receive buffer.'
+          : `Process A sends commits to B with <code>backPressure: .suspend(upTo: .milliseconds(250))</code>. ${mode === 'deadline' ? 'B has stopped draining, for example because it was suspended in the background.' : 'B\'s loop thread is busy in a slow handler, so nothing drains its socket.'} The queue is drawn with three slots for illustration: on Linux the limit is a number of datagrams, and on Darwin it is bytes of the receive buffer. <code>maximumDatagramByteCount</code> is set to ${BMAX} bytes here so batching is visible; the default is 61 440.`,
+        run(c) { c.d.bstate = mode === 'deadline' ? 'stopped: its socket is not being drained' : 'busy in a slow handler: not draining its socket'; c.d.bstateCol = C.bad; c.redraw(); } },
+      { t: 'Sends go out immediately', cap: `<code>offer(…)</code> finds B's FIFO empty and calls <code>sendDatagram</code> directly on the connected socket. It succeeds, so the send never registers a <code>PendingSend</code> and returns <code>Delivery(delivered: 1)</code> without suspending. A batch of one is ${BSZ.one} bytes here. After three sends, B's queue is full.`,
+        run(c) { deliver(c, [0, 1, 2]); } }
+    ];
+    if (mode === 'fail') return common.concat([
+      { t: 'Full queue: fail at once', cap: '<code>sendDatagram</code> returns <code>false</code>: the queue is full (<code>EAGAIN</code> on Linux, <code>ENOBUFS</code> on Darwin), which is not an error. With <code>.fail</code> there is no <code>sendID</code>, so <code>offer</code> returns <code>.failed</code>. Nothing is queued, there is no continuation, and <code>send</code> throws <code>OrbitIPCPartialDeliveryError(discoveredPeerCount: 1, deliveredPeerCount: 0, failedPeerCount: 1)</code>. The database\'s delegate gets <code>didFailToAnnounce</code>.',
+        run(c) { bounce(c, 3, () => { set(c, 3, 'fail', 'OrbitIPCPartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
+      { t: 'Every refused send fails', cap: 'The next send fails the same way. <code>.fail</code> never uses the per-peer FIFO or the batch builder, and it never asks the loop thread for a writability event or a retry timer. The caller finds out at once and decides what to do.',
+        run(c) { bounce(c, 4, () => { set(c, 4, 'fail', 'OrbitIPCPartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
+      { t: 'B drains', cap: 'B\'s thread returns from the handler and drains its socket. <code>receiveDatagram</code> is called until the queue is empty, and each datagram is decoded and delivered on the loop thread.',
+        run(c) { drainB(c); } },
+      { t: 'Room again', cap: 'The next send finds room and is delivered immediately. The two commits that were refused were never delivered. Each <code>send</code> said so by throwing.',
+        run(c) { c.d.bstate = 'waiting in UnixEventQueue.wait'; c.d.bstateCol = C.muted; deliver(c, [5]); } }
+    ]);
+    const park = [
+      { t: 'Full queue: the send waits', cap: '<code>sendDatagram</code> returns <code>false</code>: the queue is full (<code>EAGAIN</code> on Linux, <code>ENOBUFS</code> on Darwin). The message goes into B\'s FIFO as <code>Pending(entry:sendID:)</code>. <code>watchWritability</code> adds <code>EPOLLOUT</code> on Linux; on Darwin it returns <code>false</code>, so <code>backOff()</code> schedules a retry in 1 ms. A <code>PendingSend</code> records the deadline (now + 250 ms). <code>queue.wake()</code> tells the loop thread about the new deadline, and the task suspends in <code>withCheckedThrowingContinuation</code>.',
+        run(c) {
+          bounce(c, 3, tgt => {
+            const f = G(c).fifo(0);
+            c.fly(tgt, { x: f.x + 20, y: f.y + f.h / 2 }, { label: '#4', color: C.ep, dur: 700 }, () => {
+              c.d.fifo = [4]; c.d.flags = { watched: true, note: 'Linux: EPOLLOUT · Darwin: retryAt +1 ms' };
+              set(c, 3, 'susp', 'sendID 3 · deadline now + 250 ms · waiting on its own continuation'); c.redraw();
+            });
+          });
+        } },
+      { t: 'Later sends queue behind it', cap: 'The next sends find B\'s FIFO non-empty, so they don\'t try the socket at all: “A message never overtakes one already waiting for the same peer.” Each has its own <code>sendID</code>, deadline and continuation.',
+        run(c) {
+          const nums = mode === 'deadline' ? [5] : [5, 6];
+          nums.forEach((num, j) => {
+            const f = G(c).fifo(j + 1);
+            c.fly(G(c).row(num - 1), { x: f.x + 20, y: f.y + f.h / 2 }, { delay: j * 500, label: `#${num}`, color: C.ep }, () => {
+              c.d.fifo.push(num); set(c, num - 1, 'susp', `sendID ${num - 1} · queued behind #4 · its own deadline`); c.redraw();
+            });
+          });
+        } }
+    ];
+    if (mode === 'deadline') return common.concat(park, [
+      { t: 'Nothing has room', cap: 'On Linux, <code>EPOLLOUT</code> never fires, because B\'s queue stays full. On Darwin, the loop thread times out at <code>retryAt</code> and tries again at 1, 3, 7, 15 and 31 ms, then every 16 ms. Each try gets <code>ENOBUFS</code>, and <code>backOff()</code> doubles the delay up to 16 ms. The senders stay suspended.',
+        run(c) { c.d.flags.note = 'Darwin: retries every ≤16 ms · Linux: no EPOLLOUT'; c.d.batch = { rows: [{ txt: 'retry → sendDatagram → false', ok: false }], status: 'backOff(): 1 → 2 → 4 → 8 → 16 ms, capped' }; c.redraw(); } },
+      { t: 'A deadline passes', cap: '<code>wait(until:)</code> returns at <code>nextDeadline</code>, the earliest deadline. <code>service</code> finds send #4 expired. It makes one last flush attempt first, because “the budget is time spent waiting”. B is still full, so <code>withdraw</code> takes #4 out of every FIFO and resolves it <code>.failed</code>. Its continuation is resumed after the lock is released, and <code>send</code> throws <code>OrbitIPCPartialDeliveryError(1, 0, 1)</code>.',
+        run(c) {
+          c.d.batch = { rows: [{ txt: `retry #4+#5 → ${BSZ.b45} B`, ok: true }, { txt: 'sendDatagram → false', ok: false }], status: 'withdraw(3) · resolve(3, .failed)' };
+          c.d.fifo = [5]; set(c, 3, 'fail', 'deadline passed · OrbitIPCPartialDeliveryError(1, 0, 1)'); c.redraw();
+        } },
+      { t: 'Or the task is cancelled', cap: 'Cancelling the task that sent #5 runs its <code>onCancel</code> handler, which calls <code>cancel(sendID)</code>. That withdraws #5 from every peer that has not taken it, and <code>send</code> throws <code>CancellationError</code>. B\'s FIFO is now empty, so <code>unwatch</code> removes <code>EPOLLOUT</code> on Linux, clears <code>retryAt</code> on Darwin, and resets the retry delay to 1 ms.',
+        run(c) { c.d.fifo = []; c.d.flags = { watched: false, note: 'unwatch: EPOLL_CTL_DEL · retryAt = nil' }; c.d.batch = { rows: [], status: '' }; set(c, 4, 'canc', 'Task cancelled · withdrawn · CancellationError'); c.redraw(); } }
+    ]);
+    return common.concat(park, [
+      { t: 'B drains its queue', cap: 'B\'s thread returns from its handler and drains the socket: <code>receiveDatagram</code> into its single buffer until the queue is empty, decoding and delivering each datagram. B now has room.',
+        run(c) { drainB(c); } },
+      { t: 'Flush: the longest prefix that fits', cap: `A's loop thread wakes: <code>EPOLLOUT</code> on Linux, or the next retry on Darwin. <code>service</code> calls <code>flush</code>, which builds an <code>OrbitIPCWireBatch</code> from the front of the FIFO while <code>byteCount(appending:)</code> is at most ${BMAX}. #4 is ${BSZ.b4} bytes. Adding #5 makes ${BSZ.b45}, because the strings are shared. Adding #6 would make ${BSZ.b456}, which doesn't fit, so the batch stops there.`,
+        run(c) {
+          c.d.flags.note = 'woken: EPOLLOUT (Linux) · retry (Darwin)';
+          const rows = [{ txt: `append #4 → ${BSZ.b4} B ✓`, ok: true }, { txt: `append #5 → ${BSZ.b45} B ✓`, ok: true }, { txt: `#6 → ${BSZ.b456} B > ${BMAX} ✗`, ok: false }];
+          c.d.batch = { rows: [], status: '' }; c.redraw();
+          rows.forEach((r, k) => c.at(500 + k * 700, () => { c.d.batch.rows.push(r); if (k === 2) c.d.batch.status = 'stop: the batch is #4 + #5'; c.redraw(); }));
+        } },
+      { t: 'One datagram, two continuations', cap: `<code>sendDatagram(batch.encoded())</code> sends one ${BSZ.b45}-byte datagram. For each entry in it, <code>resolve(sendID, .delivered)</code> brings that send's <code>remaining</code> count to 0 and queues its continuation. <code>removeFirst(2)</code> drops them from the FIFO, and <code>retryDelay</code> goes back to 1 ms. After the lock is released, sends #4 and #5 resume, each with its own <code>Delivery(delivered: 1)</code>.`,
+        run(c) {
+          c.d.batch.status = 'sendDatagram(batch.encoded()) → true'; c.redraw();
+          const s = G(c).slot(0);
+          c.fly(G(c).batch, { x: s.x + s.w / 2, y: s.y + s.h / 2 }, { label: '#4+#5', color: C.sk, dur: 900 }, () => {
+            c.d.q = [`#4+#5 · ${BSZ.b45} B`]; c.d.fifo = [6];
+            set(c, 3, 'res', 'resolved in the batch · Delivery(delivered: 1)'); set(c, 4, 'res', 'resolved in the batch · Delivery(delivered: 1)'); c.redraw();
+          });
+        } },
+      { t: 'Keep flushing until empty or full', cap: `<code>flush</code> loops while the FIFO is not empty. The next batch holds only #6 (${BSZ.b6} bytes), and B still has room. Now the FIFO is empty, so <code>unwatch</code> removes <code>EPOLLOUT</code> on Linux or clears <code>retryAt</code> on Darwin, and <code>nextDeadline</code> goes back to <code>nil</code>.`,
+        run(c) {
+          c.d.batch = { rows: [{ txt: `append #6 → ${BSZ.b6} B ✓`, ok: true }], status: 'sendDatagram → true · resolve(5)' }; c.redraw();
+          const s = G(c).slot(1);
+          c.fly(G(c).batch, { x: s.x + s.w / 2, y: s.y + s.h / 2 }, { delay: 400, label: '#6', color: C.sk }, () => {
+            c.d.q.push(`#6 · ${BSZ.b6} B`); c.d.fifo = []; c.d.flags = { watched: false, note: 'unwatch: EPOLL_CTL_DEL · retryAt = nil' };
+            set(c, 5, 'res', 'Delivery(delivered: 1)'); c.redraw();
+          });
+        } },
+      { t: 'B splits the batch', cap: 'B receives two datagrams. <code>OrbitIPCWireProtocol.decode</code> returns the batch\'s messages in the order they were encoded: #4, then #5. The receive closure passes each one to <code>OrbitIPCHandlers.receive</code> separately, so handlers never see batches. A malformed datagram would be dropped whole, and an entry of an unknown kind is skipped.',
+        run(c) { drainB(c, [['#4', '#5'], ['#6']]); } }
+    ]);
+  }
+});
+
+/* ====================================================================================
+   Scene 6: The event loop, Darwin and Linux/Android side by side
+   ==================================================================================== */
+const LOOP_ROWS = {
+  dar: [
+    { k: 'read', a: 'EVFILT_READ', b: 'bound socket · EV_ADD' },
+    { k: 'user', a: 'EVFILT_USER', b: 'ident 1 · EV_ADD | EV_CLEAR (wake)' },
+    { k: 'tmo', a: 'timeout', b: 'timespec from nextDeadline' },
+    { k: 'nowr', a: '(no write filter)', b: 'watchWritability(of:) → false' }
+  ],
+  lin: [
+    { k: 'in', a: 'EPOLLIN', b: 'bound socket' },
+    { k: 'efd', a: 'EPOLLIN', b: 'eventfd · EFD_NONBLOCK (wake)' },
+    { k: 'out', a: 'EPOLLOUT', b: 'peer socket, while messages wait' },
+    { k: 'tmo', a: 'timeout', b: 'milliseconds, rounded up' }
+  ]
+};
+const LOOP_STAGES = [['nextDeadline', 'under the lock'], ['wait(until:)', ''], ['handle', 'events'], ['service', '+ resume']];
+function loopLayout(n) {
+  return n ? { W: 440, H: 1086, P: [{ x: 6, y: 6, w: 428, h: 530 }, { x: 6, y: 550, w: 428, h: 530 }] }
+           : { W: 960, H: 546, P: [{ x: 8, y: 8, w: 464, h: 530 }, { x: 488, y: 8, w: 464, h: 530 }] };
+}
+function loopDraw(ctx) {
+  const g = ctx.dyn, o = { parent: g }; g.textContent = '';
+  ['dar', 'lin'].forEach((pk, pi) => {
+    const P = ctx.d.L.P[pi], st = ctx.d[pk];
+    const bw = (P.w - 28 - 18) / 4;
+    LOOP_STAGES.forEach((s, k) => {
+      const x = P.x + 14 + k * (bw + 6), y = P.y + 62, on = st.stage === k + 1;
+      ctx.rect(x, y, bw, 48, Object.assign({ fill: C.ep, fo: on ? 0.22 : 0.05, stroke: C.ep, so: on ? 1 : 0.35, sw: on ? 2 : 1.2, rx: 8, glow: on && ctx.cur }, o));
+      ctx.text(x + bw / 2, y + 21, s[0], Object.assign({ anchor: 'middle', mono: true, size: ctx.narrow ? 10 : 10.5, fill: on ? C.text : C.muted, weight: 650 }, o));
+      const sub = k === 1 ? (pk === 'dar' ? 'kevent' : 'epoll_wait') : s[1];
+      ctx.text(x + bw / 2, y + 37, sub, Object.assign({ anchor: 'middle', size: 10, fill: C.dim }, o));
+      if (k < 3) ctx.line(x + bw + 0.5, y + 24, x + bw + 5, y + 24, Object.assign({ stroke: C.ep, op: 0.6, arrow: 1 }, o));
+      if (on) {
+        S('circle', { cx: x + bw / 2, cy: y - 1, r: 6, fill: C.ep, stroke: '#0a0d13', 'stroke-width': 2 }, g);
+      }
+    });
+    const lx = P.x + 14, rx = P.x + 14 + 3 * (bw + 6) + bw;
+    ctx.path(`M${rx - bw / 2},${P.y + 110} v10 H${lx + bw / 2} v-10`, Object.assign({ stroke: C.ep, op: 0.5, arrow: 1 }, o));
+    if (st.stage === 'exit') ctx.chip(P.x + P.w / 2, P.y + 126, 'loop returned · thread exits', C.bad, Object.assign({ anchor: 'middle', size: 10.5, solid: 1 }, o));
+    // Interests.
+    ctx.text(P.x + 14, P.y + 152, 'Registered with the queue', Object.assign({ size: 11, fill: C.dim, weight: 650 }, o));
+    LOOP_ROWS[pk].forEach((r, k) => {
+      const y = P.y + 162 + k * 32, lit = st.lit.has(r.k), absent = r.k === 'out' && !st.outOn, muted = r.k === 'nowr';
+      ctx.rect(P.x + 12, y, P.w - 24, 26, Object.assign({ fill: C.eq, fo: lit ? 0.26 : 0.04, stroke: C.eq, so: lit ? 1 : absent || muted ? 0.25 : 0.45, sw: lit ? 2 : 1, rx: 6, dash: absent ? '4 3' : null, glow: lit && ctx.cur }, o));
+      ctx.text(P.x + 22, y + 17.5, r.a, Object.assign({ mono: true, size: 11.5, fill: absent || muted ? C.dim : (lit ? C.text : C.eq), weight: 650 }, o));
+      ctx.text(P.x + P.w - 22, y + 17.5, absent ? 'not registered' : r.b, Object.assign({ anchor: 'end', size: 10.5, fill: absent || muted ? C.dim : C.muted }, o));
+    });
+    // Status.
+    const lines = wrap(st.status, ctx.narrow ? 66 : 72);
+    lines.slice(0, 4).forEach((l, k) => ctx.text(P.x + 14, P.y + 310 + k * 16, l, Object.assign({ size: 11.5, fill: C.text }, o)));
+    // Timeline.
+    const ax0 = P.x + 22, ax1 = P.x + P.w - 22, ay = P.y + 424, X = t => ax0 + (t / 56) * (ax1 - ax0);
+    ctx.text(P.x + 14, P.y + 390, 'ms after the send parked', Object.assign({ size: 10.5, fill: C.dim }, o));
+    ctx.text(ax1, P.y + 390, 'its deadline: 250 ms →', Object.assign({ size: 10.5, fill: C.dim, anchor: 'end' }, o));
+    ctx.line(ax0, ay, ax1, ay, Object.assign({ stroke: C.line, sw: 1.5 }, o));
+    for (let t = 0; t <= 50; t += 10) { ctx.line(X(t), ay, X(t), ay + 4, Object.assign({ stroke: C.dim }, o)); ctx.text(X(t), ay + 16, String(t), Object.assign({ anchor: 'middle', size: 9.5, fill: C.dim, mono: true }, o)); }
+    st.marks.forEach(m => {
+      const x = X(m.t);
+      if (m.k === 'drain') {
+        ctx.line(x, ay - 30, x, ay, Object.assign({ stroke: C.muted, dash: '3 3' }, o));
+        ctx.text(x, ay - 34, 'peer drains', Object.assign({ anchor: 'middle', size: 10, fill: C.muted }, o));
+        return;
+      }
+      const col = m.k === 'fail' ? C.bad : m.k === 'ok' ? C.ok : m.k === 'out' ? C.sk : C.ep;
+      ctx.line(x, ay - 12, x, ay, Object.assign({ stroke: col, sw: 2 }, o));
+      S('circle', { cx: x, cy: ay - 14, r: 4, fill: col }, g);
+      if (m.label) ctx.text(x + (m.dx || 0), ay - 22, m.label, Object.assign({ anchor: 'middle', size: 9.5, fill: col, mono: true }, o));
+    });
+    // Code.
+    ctx.rect(P.x + 12, P.y + 450, P.w - 24, P.h - 462, Object.assign({ fill: '#0a0f18', stroke: C.line, rx: 8 }, o));
+    String(st.code).split('\n').forEach((l, k) => ctx.text(P.x + 22, P.y + 472 + k * 16, l, Object.assign({ mono: true, size: ctx.narrow ? 10 : 10.5, fill: '#cfe3ff' }, o)));
+  });
+}
+new Scene({
+  id: 'loop', narrowAt: 640,
+  build(ctx) {
+    const L = loopLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Event loop on Darwin and Linux');
+    ctx.d = { L };
+    ['dar', 'lin'].forEach((pk, i) => {
+      const P = L.P[i];
+      ctx.panel(P.x, P.y, P.w, P.h, null, C.eq, { fo: 0.035, so: 0.35 });
+      ctx.text(P.x + 14, P.y + 26, pk === 'dar' ? 'Darwin · kqueue' : 'Linux & Android · epoll + eventfd', { size: 15, weight: 700 });
+      ctx.text(P.x + 14, P.y + 45, pk === 'dar' ? 'kqueue() · kevent(…)' : 'epoll_create1 · eventfd · epoll_wait', { mono: true, size: 10.5, fill: C.muted });
+      ctx.text(P.x + P.w - 14, P.y + 26, '“Orbit IPC” thread', { anchor: 'end', size: 11, fill: C.ep });
+      ctx.d[pk] = { stage: 2, lit: new Set(), status: '', marks: [], code: '', outOn: false };
+    });
+    ctx.redraw = () => loopDraw(ctx);
+  },
+  steps: () => {
+    const both = (c, fn) => { c.d.dar.lit = new Set(); c.d.lin.lit = new Set(); fn(c.d.dar, c.d.lin); c.redraw(); };
+    return [
+      { t: 'Idle: block with no timeout', cap: '<code>run(receive:)</code> allocates one receive buffer of <code>maximumDatagramByteCount + 1</code> bytes and loops. Each pass reads <code>isStopped</code> and <code>nextDeadline</code> under the lock. Nothing waits for a peer, so the deadline is <code>nil</code> and the thread blocks with no timeout.',
+        run(c) { both(c, (d, l) => { d.stage = l.stage = 2; d.status = 'Nothing waits for a peer: nextDeadline is nil, so kevent blocks with no timeout.'; l.status = 'Nothing waits for a peer: nextDeadline is nil, so epoll_wait blocks with a timeout of -1.'; d.code = 'kevent(kq, nil, 0, events, 64, nil)'; l.code = 'epoll_wait(epfd, events, 64, -1)'; }); } },
+      { t: 'A datagram arrives', cap: 'The bound socket becomes readable (<code>EVFILT_READ</code> or <code>EPOLLIN</code>), and <code>wait</code> hands <code>Event.readable</code> to the loop. <code>drain</code> calls <code>recv</code> into the one buffer until the queue is empty. A datagram that fills all <code>max + 1</code> bytes was too long and is dropped. Each other one is decoded and delivered to handlers on this thread.',
+        run(c) { both(c, (d, l) => { d.stage = l.stage = 3; d.lit.add('read'); l.lit.add('in'); d.status = l.status = 'Event.readable → drain(): recv() until the queue is empty. Each datagram → OrbitIPCWireProtocol.decode → OrbitIPCHandlers.receive, on this thread.'; d.code = 'recv(socket, buffer, max + 1, 0)   // until it fails'; l.code = d.code; }); } },
+      { t: 'A send parks: wake the thread', cap: 'On another thread, a send finds a peer full and parks its message. Linux adds <code>EPOLLOUT</code> for that peer\'s connected socket, so no timer is needed. Darwin can\'t watch for that, so <code>backOff()</code> sets <code>retryAt</code> to 1 ms from now. Either way <code>queue.wake()</code> runs, because the thread\'s current deadline was worked out before this send existed.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = l.stage = 2; d.lit.add('user'); l.lit.add('efd'); l.lit.add('out'); l.outOn = true;
+            d.marks.push({ t: 0, k: 'wake', label: 'wake()' }); l.marks.push({ t: 0, k: 'wake', label: 'wake()' });
+            d.status = 'Sender thread: watchWritability → false, so backOff() sets retryAt = now + 1 ms. Then wake() triggers the EVFILT_USER event.';
+            l.status = 'Sender thread: epoll_ctl(EPOLL_CTL_ADD, peer, EPOLLOUT) succeeds, so the peer isWatched and gets no retryAt. Then wake() writes 1 to the eventfd.';
+            d.code = 'kevent(kq, [ident 1, EVFILT_USER, NOTE_TRIGGER], 1, nil, 0, nil)'; l.code = 'epoll_ctl(epfd, EPOLL_CTL_ADD, peer, EPOLLOUT)\nwrite(eventfd, 1)   // a UInt64';
+          });
+        } },
+      { t: 'Plan the next wait', cap: 'The wakeup event itself carries no work. Darwin skips anything that isn\'t <code>EVFILT_READ</code>; Linux reads the eventfd to reset its counter. The loop then computes <code>nextDeadline</code> again. On Darwin that is the retry 1 ms away. On Linux the peer is watched, so it is the send\'s own deadline, 250 ms away.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = l.stage = 1; d.lit.add('tmo'); l.lit.add('tmo');
+            d.status = 'The EVFILT_USER event is skipped. nextDeadline = min(retryAt, send deadlines) = t₀ + 1 ms.';
+            l.status = 'The eventfd is read to reset its counter. nextDeadline = the send\'s deadline = t₀ + 250 ms. EPOLLOUT stays registered.';
+            d.code = 'kevent(kq, nil, 0, events, 64, &timespec(tv_nsec: 1_000_000))'; l.code = 'read(eventfd, &counter, 8)\nepoll_wait(epfd, events, 64, 250)';
+          });
+        } },
+      { t: 'Darwin polls with backoff; Linux sleeps', cap: 'Darwin: each timeout runs <code>service</code>, which calls <code>flush</code>. <code>send</code> fails with <code>ENOBUFS</code>, and <code>backOff()</code> doubles the delay: 1, 2, 4, 8, then 16 ms, and it stays at 16. Linux: while the peer\'s queue is full, the kernel doesn\'t report <code>EPOLLOUT</code> on a connected datagram socket (<code>unix_dgram_poll</code> checks the peer\'s queue), so the thread isn\'t woken at all.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = 4; l.stage = 2; d.lit.add('tmo');
+            [1, 3, 7, 15, 31].forEach(t => d.marks.push({ t, k: 'fail', label: String(t) }));
+            d.status = 'Every timeout: service → flush → send() → ENOBUFS → backOff(). The retries land at 1, 3, 7, 15 and 31 ms.';
+            l.status = 'Asleep. The peer is still full, so EPOLLOUT is withheld and nothing wakes the thread until the peer has room or 250 ms pass.';
+            d.code = 'retryAt = .now + retryDelay\nretryDelay = min(retryDelay * 2, .milliseconds(16))'; l.code = 'epoll_wait(epfd, events, 64, 250)   // still blocked';
+          });
+        } },
+      { t: 'The peer drains', cap: 'The peer drains its queue 40 ms in. Linux reports <code>EPOLLOUT</code> right away, as <code>Event.writable(descriptor:)</code>, and <code>service</code> flushes that peer. Darwin finds out only at its next retry, 47 ms in, which succeeds, and <code>retryDelay</code> goes back to 1 ms. The polling costs Darwin up to 16 ms of latency and a few wasted wakeups.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = l.stage = 4; d.lit.add('tmo'); l.lit.add('out');
+            d.marks.push({ t: 40, k: 'drain' }); l.marks.push({ t: 40, k: 'drain' });
+            d.marks.push({ t: 47, k: 'ok', label: '47 ✓', dx: 8 }); l.marks.push({ t: 40, k: 'out', label: 'EPOLLOUT ✓', dx: 28 });
+            d.status = 'The peer has room, but nothing on Darwin says so. The retry at t₀ + 47 ms sends the batch; retryDelay resets to 1 ms.';
+            l.status = 'EPOLLOUT → Event.writable(descriptor: peer) → service() → flush(peer), at once.';
+            d.code = 'send(peer, batch, count, 0) == count'; l.code = 'send(peer, batch, count, MSG_NOSIGNAL) == count';
+          });
+        } },
+      { t: 'Back to idle', cap: 'The FIFO is empty, so <code>unwatch</code> removes <code>EPOLLOUT</code> on Linux and clears <code>retryAt</code> on Darwin. Continuations collected under the lock are resumed after it is released. <code>nextDeadline</code> is <code>nil</code> again. The loop never uses Dispatch, and it never blocks while holding the lock.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = l.stage = 2; l.outOn = false;
+            d.status = 'unwatch: retryAt = nil. Continuations resumed outside the lock. nextDeadline is nil again.';
+            l.status = 'unwatch: epoll_ctl(EPOLL_CTL_DEL, peer). Continuations resumed outside the lock. nextDeadline is nil again.';
+            d.code = 'kevent(kq, nil, 0, events, 64, nil)'; l.code = 'epoll_ctl(epfd, EPOLL_CTL_DEL, peer, …)\nepoll_wait(epfd, events, 64, -1)';
+          });
+        } },
+      { t: 'Stopping', cap: 'When the transport deinitializes, <code>handlers.shutdown()</code> removes its markers, <code>endpoint.removePath()</code> unlinks its socket path, and <code>stop()</code> sets <code>isStopped</code> and calls <code>wake()</code>. <code>stop()</code> doesn\'t wait, so it is safe even on the loop thread itself. The loop returns and frees its buffer. The descriptors close when the last of the transport and the thread lets go of the endpoint.',
+        run(c) {
+          both(c, (d, l) => {
+            d.stage = l.stage = 'exit'; d.lit.add('user'); l.lit.add('efd');
+            d.status = l.status = 'stop(): isStopped = true, then wake(). The loop reads isStopped and returns, and its buffer is deallocated.';
+            d.code = 'kevent(kq, [ident 1, EVFILT_USER, NOTE_TRIGGER], …)'; l.code = 'write(eventfd, 1)';
+          });
+        } }
+    ];
+  }
+});
+
+/* ====================================================================================
+   Scene 7: Region widening for value observations
+   ==================================================================================== */
+function widLayout(n) {
+  return n ? { W: 440, H: 560, x0: 78, x1: 432, P: { y: 38, h: 70 }, M: { y: 150, h: 38 }, Wl: { y: 232, h: 62 }, axisY: 320, sum: { x: 6, y: 342, w: 428, h: 212 } }
+           : { W: 960, H: 470, x0: 190, x1: 946, P: { y: 36, h: 76 }, M: { y: 150, h: 40 }, Wl: { y: 236, h: 64 }, axisY: 326, sum: { x: 12, y: 350, w: 936, h: 112 } };
+}
+function widDraw(ctx) {
+  const d = ctx.d, L = d.L, g = ctx.dyn, o = { parent: g }, n = ctx.narrow;
+  g.textContent = '';
+  const X = t => L.x0 + (t / 10) * (L.x1 - L.x0);
+  // Marker band.
+  d.mseg.forEach(s => {
+    ctx.rect(X(s.t0), L.M.y + 4, X(s.t1) - X(s.t0), L.M.h - 8, Object.assign({ fill: C.reg, fo: s.wide ? 0.28 : 0.13, stroke: C.reg, so: 0.6, rx: 5 }, o));
+    ctx.text(X(s.t0) + 8, L.M.y + L.M.h / 2 + 4, s.txt, Object.assign({ mono: true, size: n ? 10 : 11, fill: C.text }, o));
+  });
+  d.items.forEach(it => {
+    if (it.type === 'fetch') {
+      const y = L.P.y + 8, h = 26;
+      ctx.rect(X(it.t0), y, X(it.t1) - X(it.t0), h, Object.assign({ fill: C.obs, fo: 0.14, stroke: it.col || C.obs, so: 0.8, rx: 6 }, o));
+      ctx.text(X(it.t0) + 6, y + 17, it.label, Object.assign({ size: n ? 10 : 11, fill: C.text, weight: 650 }, o));
+      ctx.line(X(it.snap), y - 4, X(it.snap), y + h + 4, Object.assign({ stroke: C.watch, sw: 2 }, o));
+      if (it.sub) ctx.text(X(it.t0), y + h + 16, it.sub, Object.assign({ size: n ? 9.5 : 10.5, fill: it.subCol || C.muted }, o));
+    } else if (it.type === 'commit') {
+      const cy = L.Wl.y + 22;
+      S('circle', { cx: X(it.t), cy, r: 6, fill: C.db }, g);
+      ctx.text(X(it.t), cy + 22, it.label, Object.assign({ anchor: 'middle', mono: true, size: n ? 9.5 : 10.5, fill: C.db }, o));
+      if (it.fate === 'blocked') {
+        ctx.line(X(it.t), cy - 7, X(it.t), L.M.y + L.M.h + 6, Object.assign({ stroke: C.bad, sw: 1.6, dash: '3 3' }, o));
+        const x = X(it.t), y = L.M.y + L.M.h + 12;
+        ctx.path(`M${x - 5},${y - 5} L${x + 5},${y + 5} M${x + 5},${y - 5} L${x - 5},${y + 5}`, Object.assign({ stroke: C.bad, sw: 2.2 }, o));
+        ctx.text(x + 9, y + 4, n ? 'skipped' : 'skipped: P not concerned', Object.assign({ size: n ? 9.5 : 10.5, fill: C.bad }, o));
+      } else if (it.fate === 'sent') {
+        ctx.line(X(it.t), cy - 7, X(it.t) + 14, L.P.y + L.P.h - 4, Object.assign({ stroke: C.ok, sw: 1.8, arrow: 1 }, o));
+        ctx.text(X(it.t) + 12, L.M.y - 6, n ? 'sent' : 'sent to P', Object.assign({ size: n ? 9.5 : 10.5, fill: C.ok }, o));
+      }
+    } else if (it.type === 'note') {
+      const y = it.lane === 'M' ? L.M.y - 10 : L.P.y + L.P.h + 13;
+      ctx.chip(X(it.t), it.y != null ? it.y : y, it.txt, it.col || C.ep, Object.assign({ size: n ? 9.5 : 10.5, anchor: it.anchor || 'start' }, o));
+    } else if (it.type === 'update') {
+      ctx.rect(X(it.t0), L.M.y - 2, X(it.t1) - X(it.t0), L.M.h + 4, Object.assign({ fill: C.rsub, fo: 0.2, stroke: C.rsub, so: 0.9, rx: 6 }, o));
+      ctx.text((X(it.t0) + X(it.t1)) / 2, L.M.y - 8, n ? 'updateRegion' : 'updateRegion(_:) → .tmp + rename', Object.assign({ anchor: 'middle', mono: true, size: n ? 9.5 : 10.5, fill: C.rsub }, o));
+    } else if (it.type === 'stale') {
+      ctx.rect(X(it.t0), L.P.y + 2, X(it.t1) - X(it.t0), L.P.h - 4, Object.assign({ fill: C.bad, fo: 0.1, stroke: C.bad, so: 0.5, dash: '4 3', rx: 6 }, o));
+      ctx.text(X(it.t1) - 8, L.P.y + L.P.h - 10, 'value misses a commit', Object.assign({ anchor: 'end', size: n ? 9.5 : 10.5, fill: C.bad }, o));
+    }
+  });
+  if (d.now != null) ctx.line(X(d.now), L.P.y - 10, X(d.now), L.axisY, Object.assign({ stroke: C.ep, dash: '2 3', op: 0.8 }, o));
+  // Summary.
+  const S_ = L.sum;
+  const col = d.value[1];
+  ctx.text(S_.x + 16, S_.y + 26, 'P\'s value', Object.assign({ size: 11, fill: C.dim, weight: 650 }, o));
+  ctx.chip(S_.x + 16, S_.y + 48, d.value[0], col, Object.assign({ size: 11.5, sans: 1, solid: 1 }, o));
+  const lines = wrap(d.note, n ? 66 : 112);
+  lines.slice(0, n ? 8 : 4).forEach((l, k) => ctx.text(S_.x + (n ? 16 : 270), S_.y + (n ? 82 : 26) + k * 17, l, Object.assign({ size: 12, fill: '#cfd7e5' }, o)));
+}
+new Scene({
+  id: 'widening', narrowAt: 640, modesLabel: 'Order',
+  modes: [{ key: 'real', label: 'Real: widen, then read' }, { key: 'wrong', label: 'Hypothetical: read, then widen' }],
+  build(ctx) {
+    const L = widLayout(ctx.narrow);
+    ctx.svg(L.W, L.H, 'Region widening for value observations');
+    const n = ctx.narrow;
+    const lanes = [[L.P, n ? ['P', 'fetches'] : ['P · OrbitValueObservation', 'fetches (yellow tick = snapshot)'], C.obs],
+      [L.M, n ? ['P marker', ''] : ['P\'s marker', 'v1/d/<key>/P · what W sees'], C.reg],
+      [L.Wl, n ? ['W', 'commits'] : ['W · OrbitIPCDatabase', 'commits and announces'], C.db]];
+    lanes.forEach(([ln, [a, b], col]) => {
+      ctx.rect(L.x0 - 6, ln.y, L.x1 - L.x0 + 12, ln.h, { fill: col, fo: 0.03, stroke: col, so: 0.15, rx: 8 });
+      ctx.text(10, ln.y + ln.h / 2 - (b ? 2 : -4), a, { mono: true, size: n ? 10.5 : 12, fill: col, weight: 650 });
+      if (b) ctx.text(10, ln.y + ln.h / 2 + 13, b, { size: n ? 9.5 : 10.5, fill: C.dim });
+    });
+    const X = t => L.x0 + (t / 10) * (L.x1 - L.x0);
+    ctx.line(L.x0, L.axisY, L.x1, L.axisY, { stroke: C.line, sw: 1.4, arrow: 1 });
+    ctx.text(L.x1, L.axisY + 15, 'time', { anchor: 'end', size: 10.5, fill: C.dim });
+    ctx.panel(L.sum.x, L.sum.y, L.sum.w, L.sum.h, null, C.obs, { fo: 0.03, so: 0.25 });
+    ctx.d = { L, items: [], mseg: [{ t0: 0, t1: 10, txt: 'main.reminders' }], value: ['current', C.ok], note: '', now: null };
+    ctx.redraw = () => widDraw(ctx);
+  },
+  steps(mode) {
+    const n = c => c.narrow;
+    const add = (c, ...its) => { c.d.items.push(...its); };
+    const commitFly = (c, t, to) => {
+      const L = c.d.L, X = x => L.x0 + (x / 10) * (L.x1 - L.x0);
+      c.fly({ x: X(t), y: L.Wl.y + 16 }, { x: X(t) + (to === 'P' ? 14 : 0), y: to === 'P' ? L.P.y + L.P.h - 4 : L.M.y + L.M.h + 6 }, { label: 'commit', color: to === 'P' ? C.ok : C.bad, noTrail: 1, dur: 800 });
+    };
+    const shared = [
+      { t: 'Setup', cap: 'Process P observes a value with <code>OrbitValueObservation.tracking { … }</code>. Its last accepted fetch read only <code>main.reminders</code>, so the subscription (and P\'s marker) advertises <code>main.reminders</code>. Process W writes to the same database. Until a fetch reports what it read, an automatically tracked observation advertises <code>.fullDatabase</code>; <code>tracking(region:_:)</code> advertises its constant region from the start.',
+        run(c) { c.d.note = 'The advertisement only has to cover what P\'s last fetch read. A commit outside it may be skipped by the sender.'; c.redraw(); } },
+      { t: 'A fetch starts; its floor is recorded', cap: 'A commit to reminders triggers a refetch. Before the fetch takes its snapshot, <code>advertisement.beginFetch()</code> records the fetch\'s <em>floor</em>: the region that stays registered for the whole fetch, here <code>{reminders}</code>. Narrowing the registration while the fetch runs would shrink the floor too, because <code>beginUpdate(to:)</code> intersects every floor.',
+        run(c) { add(c, { type: 'fetch', t0: 1.0, t1: 2.8, snap: 1.15, label: n(c) ? 'fetch' : 'fetch #1', sub: 'floor: main.reminders' }); c.d.now = 1.15; c.d.note = 'The yellow tick is the fetch\'s snapshot. Commits after it aren\'t visible to this fetch.'; c.redraw(); } },
+      { t: 'It reads more than the floor', cap: 'This time a reminder is flagged, so the fetch also reads <code>main.lists</code>. The region recorder reports <code>{reminders, lists}</code>, which is more than the floor.',
+        run(c) { const f = c.d.items[c.d.items.length - 1]; f.sub = n(c) ? 'reads lists' : 'read: reminders + lists (> floor)'; f.subCol = C.ep; c.d.now = 2.0; c.redraw(); } },
+      { t: 'A commit falls into the gap', cap: 'W commits <code>UPDATE lists</code> after P\'s snapshot. W\'s cache still shows P advertising <code>main.reminders</code>, which doesn\'t admit <code>lists</code>, so <code>peers(concernedWith:)</code> skips P. P\'s snapshot didn\'t include the commit either. Nothing has told P about it.',
+        run(c) { add(c, { type: 'commit', t: 2.1, label: n(c) ? 'c1' : 'c1: UPDATE lists', fate: 'blocked' }); commitFly(c, 2.1, 'M'); c.d.now = 2.1; c.d.value = ['at risk: c1 unseen', C.ep]; c.d.note = 'c1 changed lists after the snapshot, and the sender skipped P. If nothing else happens, P never sees c1.'; c.redraw(); } },
+      { t: 'Accept, and owe a covering fetch', cap: '<code>accept(…)</code> finds that <code>floor.contains(output.region)</code> is false. The value is published anyway (a refetch controller\'s fetch would be withheld and required again instead). <code>observedRegion</code> becomes <code>{reminders, lists}</code>, and <code>owesCoveringFetch</code> is set.',
+        run(c) { add(c, { type: 'note', t: 2.85, txt: n(c) ? 'owes a fetch' : 'floor ⊉ read → owesCoveringFetch', col: C.ep }); c.d.now = 2.85; c.redraw(); } }
+    ];
+    if (mode === 'wrong') return shared.concat([
+      { t: 'Suppose P read again first', cap: 'Suppose P read again before widening. This fetch\'s snapshot does include c1, so for the moment the value is right.',
+        run(c) { add(c, { type: 'fetch', t0: 3.2, t1: 4.5, snap: 3.3, label: n(c) ? 're-read' : 're-read', sub: 'sees c1 ✓', subCol: C.ok }); c.d.now = 3.3; c.d.value = ['current, for now', C.ok]; c.d.note = 'The re-read sees c1. But P\'s marker still says main.reminders.'; c.redraw(); } },
+      { t: 'A second commit falls into a new gap', cap: 'W commits to <code>lists</code> again, after the re-read\'s snapshot but before P\'s marker changes. W still sees P advertising <code>main.reminders</code> and skips P. The re-read can\'t see c2, and nobody sent it.',
+        run(c) { add(c, { type: 'commit', t: 3.9, label: n(c) ? 'c2' : 'c2: UPDATE lists', fate: 'blocked' }); commitFly(c, 3.9, 'M'); c.d.now = 3.9; c.d.value = ['stale: misses c2', C.bad]; c.d.note = 'c2 landed after the re-read\'s snapshot, and the marker didn\'t cover lists yet, so the sender skipped P.'; c.redraw(); } },
+      { t: 'Widening now is too late', cap: 'P widens its marker only now. Later commits to <code>lists</code> reach P, but c2 was neither read nor sent. P shows a stale value until some unrelated commit triggers another fetch. That\'s why the real code widens first and reads second.',
+        run(c) {
+          add(c, { type: 'update', t0: 4.7, t1: 5.4 }, { type: 'stale', t0: 3.9, t1: 10 });
+          c.d.mseg = [{ t0: 0, t1: 5.4, txt: 'main.reminders' }, { t0: 5.4, t1: 10, txt: n(c) ? 'reminders + lists' : 'main.reminders + main.lists', wide: 1 }];
+          c.d.now = 5.4; c.d.note = 'Reading before widening leaves a window between the snapshot and the rename. A commit in that window is missed.'; c.redraw();
+        } }
+    ]);
+    return shared.concat([
+      { t: 'Widen first: updateRegion returns after the rename', cap: '<code>advertiseObservedRegion()</code> calls <code>subscription.updateRegion({reminders, lists})</code>. Through <code>OrbitIPCDatabase</code>\'s subscription this reaches <code>OrbitIPCHandlers.update</code>, which renames the new marker into place under its lock. <code>updateRegion</code> returns only after the rename, and then <code>finishUpdate(to:)</code> records the wider region. The rename queues an event on W\'s directory watch.',
+        run(c) {
+          add(c, { type: 'update', t0: 3.1, t1: 3.9 });
+          c.d.mseg = [{ t0: 0, t1: 3.9, txt: 'main.reminders' }, { t0: 3.9, t1: 10, txt: n(c) ? 'reminders + lists' : 'main.reminders + main.lists', wide: 1 }];
+          c.d.now = 3.9; c.d.note = 'Every send that starts after the rename drains W\'s watcher first, sees the change, and reads P\'s new marker.'; c.redraw();
+        } },
+      { t: 'Then read: the covering fetch', cap: 'Only now does the owed fetch start: <code>requestRefetch(source: .transaction(.external), …)</code>. Its snapshot comes after the rename, so it includes c1. The value is correct again.',
+        run(c) { add(c, { type: 'fetch', t0: 4.3, t1: 5.8, snap: 4.45, label: n(c) ? 'covering' : 'covering fetch', sub: 'sees c1 ✓', subCol: C.ok }); c.d.now = 4.45; c.d.value = ['current', C.ok]; c.d.note = 'The covering fetch reads after the widened region is advertised, so it sees every commit that was skipped before.'; c.redraw(); } },
+      { t: 'Later commits are sent', cap: 'W commits to <code>lists</code> again. Its <code>send</code> drains its watcher, which already holds the rename\'s event, so the cache resets and reads P\'s new marker. P is concerned now, so the datagram goes out and P refetches.',
+        run(c) { add(c, { type: 'commit', t: 6.6, label: n(c) ? 'c2' : 'c2: UPDATE lists', fate: 'sent' }); commitFly(c, 6.6, 'P'); add(c, { type: 'fetch', t0: 7.2, t1: 8.6, snap: 7.3, label: 'refetch', sub: 'sees c2 ✓', subCol: C.ok }); c.d.now = 6.6; c.redraw(); } },
+      { t: 'Why there is no gap', cap: 'Any commit to the new part lands either before the covering fetch\'s snapshot, and that fetch reads it, or after it. A commit after the snapshot is also after the rename, so its announcement starts after the rename and honors the wider marker. Narrowing counts as soon as it is decided; widening counts only once it has been applied.',
+        run(c) { c.d.now = null; c.d.note = 'Widen, wait for the rename, then read. updateRegion(_:) makes the widening synchronous, and the sender\'s watcher is drained on its own sending thread, so every send that starts after the rename sees it.'; c.redraw(); } }
+    ]);
+  }
+});
+
+/* ====================================================================================
+   Boot
+   ==================================================================================== */
+SCENES.forEach(s => s.mount());
+mountWire();
+if ('IntersectionObserver' in window) {
+  const io = new IntersectionObserver(entries => {
+    for (const e of entries) {
+      const s = SCENES.find(x => x.sec === e.target);
+      if (!s) continue;
+      if (e.isIntersecting && e.intersectionRatio >= 0.3) {
+        if (!RM.matches && !s.userPaused && !s.playing && s.step < s.list().length - 1) s.play(false);
+      } else if (e.intersectionRatio < 0.12 && s.playing) s.pause();
+    }
+  }, { threshold: [0, 0.12, 0.3, 0.6] });
+  SCENES.forEach(s => io.observe(s.sec));
+  const links = [...document.querySelectorAll('nav.top a')];
+  const nio = new IntersectionObserver(entries => {
+    for (const e of entries) if (e.isIntersecting) {
+      links.forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#' + e.target.id));
+      const on = links.find(a => a.classList.contains('on'));
+      if (on && on.scrollIntoView && on.parentElement.scrollWidth > on.parentElement.clientWidth) {
+        on.parentElement.scrollTo({ left: on.offsetLeft - 40, behavior: RM.matches ? 'auto' : 'smooth' });
+      }
+    }
+  }, { rootMargin: '-45% 0px -50% 0px' });
+  document.querySelectorAll('section.scene').forEach(s => nio.observe(s));
+}
+let resizeTimer = null;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(onResize, 150); });
+</script>
+</body>
+</html>
