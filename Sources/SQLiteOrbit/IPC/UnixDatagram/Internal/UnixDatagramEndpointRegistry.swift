@@ -120,26 +120,19 @@
       self.state.withLock { _ = $0.advertised.remove(coordinationKey) }
     }
 
-    /// Sends `entry` to every peer advertising a region its message concerns, and prunes the
-    /// peers that turn out to be dead.
+    /// Sends `entry` to every peer but this endpoint advertising a region its message concerns,
+    /// without waiting for any of them, and prunes the peers that turn out to be dead.
     ///
-    /// - Parameters:
-    ///   - entry: The message to send.
-    ///   - suspension: How long to wait for a peer whose receive queue is full, or `nil` to count
-    ///     it as failed at once.
-    /// - Returns: How many peers the message was sent to, how many took it, and how many did not.
-    /// - Throws: An error if the coordination directory cannot be read, or `CancellationError` if
-    ///   the task is cancelled while waiting for a peer.
-    func send(
-      _ entry: UnixDatagramWireEntry,
-      suspendingUpTo suspension: Duration?
-    ) async throws -> UnixDatagramEndpoint.Delivery {
+    /// - Parameter entry: The message to send.
+    /// - Returns: How many peers the message was sent to, how many took it, how many are owed its
+    ///   region, and how many it could not be sent to at all.
+    /// - Throws: An error if the coordination directory cannot be read.
+    func send(_ entry: UnixDatagramWireEntry) throws -> UnixDatagramEndpoint.Delivery {
       let advertisements = try self.peerRegions(for: entry.message.databaseIdentifier)
-      let delivery = try await self.endpoint.send(
+      let delivery = self.endpoint.send(
         entry,
         to: self.peers(concernedWith: entry.message, in: advertisements),
-        advertisedBy: advertisements.keys,
-        suspendingUpTo: suspension
+        advertisedBy: advertisements.keys
       )
       for stale in delivery.stale {
         try? self.remove(stale.peer, coordinationKeys: stale.coordinationKeys)
@@ -147,12 +140,12 @@
       return delivery
     }
 
-    /// How many messages wait for peers, across every peer.
-    var pendingMessageCount: Int {
-      self.endpoint.pendingMessageCount
+    /// What each peer whose receive queue was full is owed, by endpoint name.
+    var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
+      self.endpoint.owedRegions
     }
 
-    /// The peers ``send(_:suspendingUpTo:)`` would send `message` to now.
+    /// The peers ``send(_:)`` would send `message` to now.
     func peers(concernedWith message: OrbitIPCMessage) throws -> [UnixDatagramPeer] {
       let advertisements = try self.peerRegions(for: message.databaseIdentifier)
       return self.peers(concernedWith: message, in: advertisements)

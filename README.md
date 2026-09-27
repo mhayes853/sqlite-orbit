@@ -1187,10 +1187,7 @@ communicate must use the same coordination directory and database identifier:
 
 ```swift
 let transport = try UnixDatagramIPCTransport(
-  configuration: .init(
-    directory: coordinationDirectory,
-    backPressure: .suspend(upTo: .milliseconds(250))
-  )
+  configuration: .init(directory: coordinationDirectory)
 )
 
 let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "example.sqlite")
@@ -1220,14 +1217,18 @@ skips a process that union does not overlap, so an unrelated commit never wakes 
 region with `updateRegion(_:)` is advertised before the call returns.
 
 Delivery is bounded, at-most-once, and nondurable. Each send broadcasts to the peer processes that
-are discoverable at that moment. A successful return means every discovered peer accepted the
-message into its kernel receive queue, not that its handler has already run. No unbounded
-user-space queue is used:
+are discoverable at that moment, and never waits for one of them. A successful return means every
+discovered peer either accepted the message into its kernel receive queue or is owed it, not that
+its handler has already run.
 
-- `.fail` attempts every peer once and reports a `UnixDatagramIPCTransport.PartialDeliveryError` if
-  any queue is full or another peer fails.
-- `.suspend(upTo:)` retries only backpressured peers until the shared deadline, then reports partial
-  delivery. Task cancellation also cancels the wait.
+A peer whose receive queue is full, such as a suspended app, is owed the message's region instead.
+The regions of every commit it could not take are merged into one region per database, and a later
+commit to a peer that is owed anything joins what it is owed rather than overtaking it. Once the
+peer has room, the transport sends it one commit per database it is owed. A peer that falls behind
+hears about fewer, broader commits, but never misses a change, and no unbounded user-space queue is
+kept for it: what it is owed goes once it is sent, once the peer turns out to be dead, or once the
+peer stops subscribing to that database. `UnixDatagramIPCTransport.PartialDeliveryError` reports
+only peers the message could not be sent to at all.
 
 Messages use a private versioned binary envelope and are decoded from `Span`; callers exchange
 `OrbitIPCMessage` values rather than serialized `Data`. `OrbitIPCMessage` is nonexhaustive so
@@ -1259,7 +1260,7 @@ Group container:
 ```swift
 let database = try OrbitIPCDatabase(
   path: databasePath,
-  coordination: .init(directory: appGroupDirectory, backPressure: .suspend(upTo: .milliseconds(250)))
+  coordination: .init(directory: appGroupDirectory)
 )
 ```
 
@@ -1283,18 +1284,17 @@ try await database.write { transaction in
 ```
 
 The announcement is sent after the driver releases its write transaction, never inside it: a peer
-told about a commit must be able to read it, and holding SQLite's write lock while waiting on a
-backpressured peer would turn one stalled process into a stalled database.
+told about a commit must be able to read it.
 
 By the time a write commits it is already durable, so a failed announcement never fails the write.
 Set an `OrbitIPCDatabase.Delegate` to observe an announcement immediately before its transport
 attempt and after it either succeeds or fails. Success means every currently discoverable peer
-accepted the message into its transport receive queue, not that its handlers processed the message.
-On failure, the delegate receives the message that could not reach every peer and the transport's
-error; the database does not retry because a failed send may already have reached some peers.
-Announcing is likewise shielded from the writing task's cancellation, since peers still need to
-learn about a commit that happened. A write that throws is rolled back by its driver and is not
-announced.
+accepted the message into its transport receive queue or will be sent it once it has room, not that
+its handlers processed the message. On failure, the delegate receives the message that could not
+reach every peer and the transport's error; the database does not retry because a failed send may
+already have reached some peers. Announcing is likewise shielded from the writing task's
+cancellation, since peers still need to learn about a commit that happened. A write that throws is
+rolled back by its driver and is not announced.
 
 An observed `OrbitIPCDatabase` also subscribes to its peers. Incoming announcements are exposed
 as external transaction events and cause active value observations to refetch.

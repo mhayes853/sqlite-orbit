@@ -1,8 +1,10 @@
 /// Moves typed database coordination messages between processes.
 ///
-/// Transports provide bounded, at-most-once, nondurable delivery. They must surface back pressure
-/// by suspending ``send(_:)`` or throwing; they must not silently add messages to an unbounded
-/// user-space queue. A send may reach some peers before throwing.
+/// Transports provide bounded, at-most-once, nondurable delivery. They must not add messages to an
+/// unbounded user-space queue: a peer that cannot take a message now is either reported by
+/// throwing, or kept a bounded summary of what it missed, such as the union of the regions of the
+/// commits it could not take, which it is sent once it can. A send may reach some peers before
+/// throwing.
 ///
 /// A subscription can name the ``OrbitDatabaseRegion`` its handler cares about. Transports should
 /// filter at the sender: each peer advertises the union of its subscriptions' regions for a
@@ -52,8 +54,9 @@ public protocol OrbitIPCTransport: Sendable {
 
   /// Sends `message` to every currently discoverable subscribed peer process.
   ///
-  /// Returning successfully means each discovered peer accepted the message into its transport
-  /// receive queue. It does not mean peer handlers processed the message.
+  /// Returning successfully means each discovered peer either accepted the message into its
+  /// transport receive queue or, having no room, will be sent a message covering it once it does.
+  /// It does not mean peer handlers processed the message.
   ///
   /// - Parameter message: The message to broadcast.
   /// - Throws: An error describing a broadcast that did not reach every discovered peer.

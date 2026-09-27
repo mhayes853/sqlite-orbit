@@ -15,7 +15,7 @@
     ///     ``SQLiteConfiguration/library`` to run against your own SQLite build.
     ///   - id: The identity shared by every process that opens this database. Defaults to the
     ///     database's standardized path.
-    ///   - coordination: Describes the directory and back pressure this process uses to reach its
+    ///   - coordination: Describes the directory and buffer sizes this process uses to reach its
     ///     peers. Processes coordinate only when they share a coordination directory.
     ///   - delegate: Receives important events that cannot be surfaced through an operation. The
     ///     database holds it weakly.

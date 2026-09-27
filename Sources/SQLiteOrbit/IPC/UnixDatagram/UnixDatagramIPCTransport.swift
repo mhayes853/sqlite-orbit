@@ -7,34 +7,19 @@
   /// every database it subscribes to, so peers discover each other through the filesystem without
   /// a broker process. This is the transport ``OrbitIPCDatabase`` uses.
   ///
+  /// A send never waits for a peer. A datagram socket's receive queue is finite, so a peer that
+  /// stops reading, such as a suspended app, eventually has no room. Such a peer is owed the
+  /// message's region instead: the regions of every commit it could not take are merged, one
+  /// region per database, and a later commit to it joins what it is owed rather than overtaking
+  /// it. Once the peer has room, the transport's thread sends it one commit per database it is
+  /// owed. A peer that falls behind hears about fewer, broader commits, but never misses a change,
+  /// and all that is kept for it is at most one region per database.
+  ///
   /// ```swift
   /// let transport = try UnixDatagramIPCTransport.shared()
   /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
   /// ```
   public final class UnixDatagramIPCTransport: OrbitIPCTransport, Sendable {
-    /// Controls how a sender responds when a peer's bounded receive queue is full.
-    ///
-    /// A datagram socket's receive queue is finite, so a peer that stops draining it eventually
-    /// refuses new messages. Nothing is ever dropped silently: the send either waits for room or
-    /// throws ``PartialDeliveryError``.
-    ///
-    /// ```swift
-    /// let coordination = UnixDatagramIPCTransport.Configuration(
-    ///   backPressure: .suspend(upTo: .milliseconds(250))
-    /// )
-    /// ```
-    public enum BackPressurePolicy: Hashable, Sendable {
-      /// Fails the broadcast after attempting every currently discovered peer once.
-      case fail
-
-      /// Suspends until every backpressured peer takes the message, or this much time has elapsed.
-      ///
-      /// While a peer's queue is full, the messages sent to it wait in order and go out together,
-      /// in as few datagrams as fit them, once it has room. Each send still waits for, and
-      /// reports on, only its own message.
-      case suspend(upTo: Duration)
-    }
-
     /// Configuration for a Unix-domain datagram transport endpoint.
     ///
     /// Two transports coordinate only when they share a ``directory``, and
@@ -44,8 +29,7 @@
     ///
     /// ```swift
     /// let coordination = UnixDatagramIPCTransport.Configuration(
-    ///   directory: appGroupDirectory.appending(path: "coordination"),
-    ///   backPressure: .suspend(upTo: .milliseconds(250))
+    ///   directory: appGroupDirectory.appending(path: "coordination")
     /// )
     /// let database = try OrbitIPCDatabase(
     ///   path: OrbitDatabasePath("reminders.sqlite"), coordination: coordination
@@ -59,21 +43,16 @@
       public static let defaultDirectory = FileManager.default.temporaryDirectory
         .appending(path: "sqlite-orbit", directoryHint: .isDirectory)
 
-      /// The configuration used by a database that does not supply one.
-      ///
-      /// It uses ``defaultDirectory`` and suspends a backpressured broadcast for up to 250
-      /// milliseconds before reporting partial delivery.
-      public static let `default` = Self(backPressure: .suspend(upTo: .milliseconds(250)))
+      /// The configuration used by a database that does not supply one, which uses
+      /// ``defaultDirectory``.
+      public static let `default` = Self()
 
       /// The coordination directory this process shares with its peers.
       public var directory: URL
 
-      /// How a broadcast responds to a peer whose receive queue is full.
-      public var backPressure: BackPressurePolicy
-
       /// The largest datagram this endpoint sends or accepts, in bytes.
       ///
-      /// It also bounds each batch of messages waiting for a peer whose queue is full.
+      /// It also bounds each datagram of commits sent to a peer that was owed them.
       public var maximumDatagramByteCount: Int
 
       /// The size of this endpoint's socket receive buffer, in bytes.
@@ -86,34 +65,32 @@
       ///
       /// - Parameters:
       ///   - directory: The coordination directory this process shares with its peers.
-      ///   - backPressure: How a broadcast responds to a peer whose receive queue is full.
       ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
       ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
       ///     be at least `maximumDatagramByteCount`.
       public init(
         directory: URL = Self.defaultDirectory,
-        backPressure: BackPressurePolicy,
         maximumDatagramByteCount: Int = 60 * 1024,
         receiveBufferByteCount: Int = 256 * 1024
       ) {
         self.directory = directory
-        self.backPressure = backPressure
         self.maximumDatagramByteCount = maximumDatagramByteCount
         self.receiveBufferByteCount = receiveBufferByteCount
       }
     }
 
-    /// Describes a broadcast that reached only some currently discoverable peers.
+    /// Describes a broadcast that some currently discoverable peers could not be sent at all.
     ///
-    /// The counts need not add up: a peer discovered in the coordination directory that turns out
-    /// to be dead is pruned rather than counted as a failure.
+    /// A peer whose receive queue is full has not failed: it is owed the message's region, and
+    /// counted as deferred. The counts need not add up either way: a peer discovered in the
+    /// coordination directory that turns out to be dead is pruned rather than counted.
     ///
     /// ```swift
     /// do {
     ///   try await transport.send(message)
     /// } catch let error as UnixDatagramIPCTransport.PartialDeliveryError {
     ///   logger.warning(
-    ///     "reached \(error.deliveredPeerCount) of \(error.discoveredPeerCount) peers"
+    ///     "could not reach \(error.failedPeerCount) of \(error.discoveredPeerCount) peers"
     ///   )
     /// }
     /// ```
@@ -124,7 +101,10 @@
       /// How many peers accepted the message into their receive queue.
       public let deliveredPeerCount: Int
 
-      /// How many peers were live but did not accept the message.
+      /// How many peers had no room for the message, and will be sent its region once they do.
+      public let deferredPeerCount: Int
+
+      /// How many live peers the message could not be sent to at all.
       public let failedPeerCount: Int
 
       /// Creates an error describing a partial broadcast.
@@ -132,14 +112,17 @@
       /// - Parameters:
       ///   - discoveredPeerCount: How many peers were advertised.
       ///   - deliveredPeerCount: How many peers accepted the message.
-      ///   - failedPeerCount: How many live peers did not accept it.
+      ///   - deferredPeerCount: How many peers had no room for it, and are owed its region.
+      ///   - failedPeerCount: How many live peers it could not be sent to at all.
       public init(
         discoveredPeerCount: Int,
         deliveredPeerCount: Int,
+        deferredPeerCount: Int,
         failedPeerCount: Int
       ) {
         self.discoveredPeerCount = discoveredPeerCount
         self.deliveredPeerCount = deliveredPeerCount
+        self.deferredPeerCount = deferredPeerCount
         self.failedPeerCount = failedPeerCount
       }
     }
@@ -153,13 +136,11 @@
     /// Prefer ``shared(configuration:)``, which gives every database in a process one endpoint.
     ///
     /// ```swift
-    /// let transport = try UnixDatagramIPCTransport(
-    ///   configuration: .init(directory: directory, backPressure: .fail)
-    /// )
+    /// let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
     /// ```
     ///
-    /// - Parameter configuration: Describes the coordination directory, back pressure, and buffer
-    ///   sizes for this endpoint.
+    /// - Parameter configuration: Describes the coordination directory and buffer sizes for this
+    ///   endpoint.
     /// - Throws: A ``UnixSystemError`` if the configuration is invalid or the socket cannot
     ///   be created and bound.
     public init(configuration: Configuration) throws {
@@ -168,11 +149,6 @@
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
       else {
         throw UnixSystemError.invalidArgument("invalid transport configuration")
-      }
-      if case .suspend(upTo: let duration) = configuration.backPressure {
-        guard duration >= .zero else {
-          throw UnixSystemError.invalidArgument("negative back pressure duration")
-        }
       }
 
       let endpointName = UUID().uuidString
@@ -256,9 +232,10 @@
 
     /// Broadcasts `message` to every peer advertising a region that the message concerns.
     ///
+    /// This never waits for a peer. A peer whose receive queue is full is owed the message's region,
+    /// merged with whatever else it is owed for the database, and is sent it once it has room.
     /// Peers that have died are pruned from the coordination directory as they are discovered, so
-    /// a crashed process does not fail later broadcasts. A peer whose receive queue is full is
-    /// handled according to ``Configuration/backPressure``. If a commit's precise database region
+    /// a crashed process does not fail later broadcasts. If a commit's precise database region
     /// does not fit in one datagram, it is safely broadened to ``OrbitDatabaseRegion/fullDatabase``.
     ///
     /// ```swift
@@ -268,11 +245,11 @@
     /// ```
     ///
     /// - Parameter message: The message to broadcast.
-    /// - Throws: ``PartialDeliveryError`` when a live peer did not accept the message,
-    ///   a ``UnixSystemError`` if the message cannot be encoded or sent at all, or
-    ///   `CancellationError` if the task is cancelled while waiting for a backpressured peer, which
-    ///   withdraws the message from every peer that had not yet accepted it.
+    /// - Throws: ``PartialDeliveryError`` when the message could not be sent to a live peer at all,
+    ///   or a ``UnixSystemError`` if the message cannot be encoded or the coordination directory
+    ///   cannot be read.
     public func send(_ message: OrbitIPCMessage) async throws {
+      // Nothing here waits: this is `async` only because the protocol's requirement is.
       let entry: UnixDatagramWireEntry
       do {
         entry = try UnixDatagramWireEntry(
@@ -282,17 +259,13 @@
       } catch UnixDatagramWireError.datagramTooLarge {
         throw UnixSystemError.messageTooLong("datagram is too large")
       }
-      let suspension: Duration?
-      switch self.configuration.backPressure {
-      case .fail: suspension = nil
-      case .suspend(upTo: let duration): suspension = duration
-      }
-      let delivery = try await self.registry.send(entry, suspendingUpTo: suspension)
+      let delivery = try self.registry.send(entry)
 
       guard delivery.failed == 0 else {
         throw PartialDeliveryError(
           discoveredPeerCount: delivery.peerCount,
           deliveredPeerCount: delivery.delivered,
+          deferredPeerCount: delivery.deferred,
           failedPeerCount: delivery.failed
         )
       }
@@ -309,9 +282,9 @@
       self.handlers.advertisedRegion(for: databaseIdentifier)
     }
 
-    /// How many sent messages wait in pending batches for peers whose queues are full.
-    var pendingMessageCount: Int {
-      self.registry.pendingMessageCount
+    /// What each peer whose receive queue was full is owed, by endpoint name.
+    var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
+      self.registry.owedRegions
     }
   }
 

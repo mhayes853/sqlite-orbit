@@ -237,8 +237,7 @@
     guard let mode = environment[OrbitDatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
     let coordination = UnixDatagramIPCTransport.Configuration(
-      directory: URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.directory)),
-      backPressure: .fail
+      directory: URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.directory))
     )
     let path = try value(OrbitDatabaseProcessEnvironment.database)
     let ready = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.ready))
@@ -357,10 +356,7 @@
     let databasePath: String
 
     var coordination: UnixDatagramIPCTransport.Configuration {
-      UnixDatagramIPCTransport.Configuration(
-        directory: self.harness.directory,
-        backPressure: .fail
-      )
+      UnixDatagramIPCTransport.Configuration(directory: self.harness.directory)
     }
 
     init(name: String) throws {

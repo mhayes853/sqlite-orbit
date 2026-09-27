@@ -227,8 +227,7 @@
           case .unixDatagram:
             let configuration = UnixDatagramIPCTransport.Configuration(
               // Short, since the socket paths inside it must fit in `sun_path`.
-              directory: directory.appending(path: "c"),
-              backPressure: .suspend(upTo: .seconds(5))
+              directory: directory.appending(path: "c")
             )
             let observing = try UnixDatagramIPCTransport(configuration: configuration)
             return (
