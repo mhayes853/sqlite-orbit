@@ -103,8 +103,7 @@
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
     let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "malformed")
     let peer = try #require(registry.peers(databaseIdentifier: database).first)
-    let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
-    defer { UnixSystem.closeDescriptor(descriptor) }
+    let socket = try #require(try UnixDatagramSocket.connect(to: peer.socketPath))
     // One that fills the receive buffer, which the transport sizes a byte past the longest datagram
     // it accepts, is dropped rather than decoded from a prefix.
     let tooLong =
@@ -112,8 +111,7 @@
       + [UInt8](repeating: 0, count: 60 * 1024)
 
     for datagram in [[0xff, 0, 1], tooLong] {
-      #expect(try UnixSystem.sendDatagram(datagram, on: descriptor))
-
+      #expect(socket.send(datagram) == .sent)
     }
     let message = commit(database)
     try await sender.send(message)

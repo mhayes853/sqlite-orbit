@@ -21,7 +21,7 @@
 
     private let registry: UnixDatagramEndpointRegistry
     private let maximumDatagramByteCount: Int
-    private let descriptor: Int32
+    private let socket: UnixDatagramSocket
     private let queue: UnixEventQueue
     private let state = Lock(State())
 
@@ -37,30 +37,22 @@
       maximumDatagramByteCount: Int,
       receiveBufferByteCount: Int
     ) throws {
-      let descriptor = try UnixSystem.makeBoundDatagramSocket(
+      let socket = try UnixDatagramSocket.bind(
         path: registry.socketPath,
         receiveBufferByteCount: receiveBufferByteCount
       )
+      let queue: UnixEventQueue
       do {
-        self.queue = try UnixEventQueue(readingFrom: descriptor)
+        queue = try UnixEventQueue()
+        try queue.watchReadable(socket.descriptor.rawValue)
       } catch {
-        UnixSystem.closeDescriptor(descriptor)
-        UnixSystem.removeFile(atPath: registry.socketPath)
+        _ = UnixPlatform.removeFile(atPath: registry.socketPath)
         throw error
       }
       self.registry = registry
       self.maximumDatagramByteCount = maximumDatagramByteCount
-      self.descriptor = descriptor
-    }
-
-    deinit {
-      self.state.withLock { state in
-        for peer in state.peers.values {
-          UnixSystem.closeDescriptor(peer.descriptor)
-        }
-        state.peers.removeAll()
-      }
-      UnixSystem.closeDescriptor(self.descriptor)
+      self.socket = socket
+      self.queue = queue
     }
 
     /// Starts the thread that receives on this endpoint, which runs until ``stop()``.
@@ -84,7 +76,7 @@
     /// Removes the socket's path, which is what a peer finds this endpoint by, while leaving the
     /// socket itself open to whatever is still reading from it.
     func removePath() {
-      UnixSystem.removeFile(atPath: self.registry.socketPath)
+      _ = UnixPlatform.removeFile(atPath: self.registry.socketPath)
     }
 
     /// How many messages wait for peers, across every peer.
@@ -183,10 +175,10 @@
       let name = peer.endpointName
       if state.peers[name] == nil {
         do {
-          let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
-          state.peers[name] = Peer(peer: peer, descriptor: descriptor)
-        } catch let error as UnixSystemError where error.isStalePeer {
-          return .stale(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
+          guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
+            return .stale(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
+          }
+          state.peers[name] = Peer(peer: peer, socket: socket)
         } catch {
           return .failed
         }
@@ -196,24 +188,25 @@
       // A message never overtakes one already waiting for the same peer.
       let startsWaiting = state.peers[name]!.pending.isEmpty
       if startsWaiting {
-        do {
-          if try UnixSystem.sendDatagram(datagram, on: state.peers[name]!.descriptor) {
-            return .delivered
-          }
-        } catch let error as UnixSystemError where error.isStalePeer {
+        switch state.peers[name]!.socket.send(datagram) {
+        case .sent:
+          return .delivered
+        case .full:
+          break
+        case .peerGone:
           var completions: [Completion] = []
           let stale = self.forget(name, in: &state, completions: &completions)
           assert(completions.isEmpty, "A peer with nothing pending completes no send")
           return .stale(stale)
-        } catch {
+        case .failed:
           return .failed
         }
       }
       guard let sendID else { return .failed }
       state.peers[name]!.pending.append(Pending(entry: entry, sendID: sendID))
       if startsWaiting {
-        state.peers[name]!.isWatched = self.queue.watchWritability(
-          of: state.peers[name]!.descriptor
+        state.peers[name]!.isWatched = self.queue.watchWritable(
+          state.peers[name]!.socket.descriptor.rawValue
         )
         state.peers[name]!.backOff()
       }
@@ -228,7 +221,7 @@
       completions: inout [Completion],
       stale: inout [StalePeer]
     ) {
-      guard let descriptor = state.peers[name]?.descriptor else { return }
+      guard let socket = state.peers[name]?.socket else { return }
       while !state.peers[name]!.pending.isEmpty {
         // The longest run from the front that fits, which always holds at least the first.
         var batch = UnixDatagramWireBatch()
@@ -239,16 +232,16 @@
         }
 
         let outcome: Outcome
-        do {
-          guard try UnixSystem.sendDatagram(batch.encoded(), on: descriptor) else {
-            state.peers[name]!.backOff()
-            return
-          }
+        switch socket.send(batch.encoded()) {
+        case .sent:
           outcome = .delivered
-        } catch let error as UnixSystemError where error.isStalePeer {
+        case .full:
+          state.peers[name]!.backOff()
+          return
+        case .peerGone:
           stale.append(self.forget(name, in: &state, completions: &completions))
           return
-        } catch {
+        case .failed:
           outcome = .failed
         }
         state.peers[name]!.retryDelay = .milliseconds(1)
@@ -280,7 +273,7 @@
     private func unwatch(_ name: String, in state: inout State) {
       guard let peer = state.peers[name] else { return }
       if peer.isWatched {
-        self.queue.stopWatchingWritability(of: peer.descriptor)
+        self.queue.unwatchWritable(peer.socket.descriptor.rawValue)
       }
       state.peers[name]!.isWatched = false
       state.peers[name]!.retryAt = nil
@@ -294,8 +287,8 @@
       completions: inout [Completion]
     ) -> StalePeer {
       self.unwatch(name, in: &state)
+      // Its socket closes when this goes, at the end of the call.
       let peer = state.peers.removeValue(forKey: name)!
-      UnixSystem.closeDescriptor(peer.descriptor)
       for pending in peer.pending {
         self.resolve(pending.sendID, .pruned, in: &state, completions: &completions)
       }
@@ -436,7 +429,7 @@
       receive: (Span<UInt8>) -> Void
     ) {
       while !self.state.withLock({ $0.isStopped }),
-        let count = UnixSystem.receiveDatagram(into: buffer, from: self.descriptor)
+        let count = self.socket.receive(into: buffer)
       {
         guard count <= self.maximumDatagramByteCount else { continue }
         receive(Span(_unsafeElements: UnsafeBufferPointer(rebasing: buffer[..<count])))
@@ -454,7 +447,7 @@
       let now = ContinuousClock.now
       // An event for a socket closed since can name a new one given the same number, which at
       // worst sends that peer what waits for it a little early.
-      for (name, peer) in state.peers where writable.contains(peer.descriptor) {
+      for (name, peer) in state.peers where writable.contains(peer.socket.descriptor.rawValue) {
         self.flush(name, in: &state, completions: &completions, stale: &stale)
       }
       for (name, peer) in state.peers where peer.retryAt.map({ $0 <= now }) == true {
@@ -498,7 +491,7 @@
 
     private struct Peer {
       let peer: UnixDatagramPeer
-      let descriptor: Int32
+      let socket: UnixDatagramSocket
       /// The databases this peer was last seen advertising, by coordination key.
       var coordinationKeys: Set<String> = []
       /// The messages waiting for this peer, in the order they were sent.

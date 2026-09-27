@@ -57,10 +57,12 @@
       let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
       let temporary = directory.appending(path: ".\(self.endpointName).tmp")
       try Data(UnixDatagramWireProtocol.encodeMarker(region)).write(to: temporary)
-      try UnixSystem.renameFile(
-        atPath: temporary.path,
-        toPath: directory.appending(path: self.endpointName).path
-      )
+      guard
+        UnixPlatform.renameFile(
+          atPath: temporary.path,
+          toPath: directory.appending(path: self.endpointName).path
+        )
+      else { throw UnixSystemError.last("rename") }
     }
 
     func unregister(coordinationKey: String) throws {

@@ -10,7 +10,7 @@
       let locksDirectory = directory.appending(path: "open-locks", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: locksDirectory, withIntermediateDirectories: true)
       let path = locksDirectory.appending(path: "\(databaseIdentifier.coordinationKey).lock").path
-      return try UnixSystem.withExclusiveFileLock(atPath: path, body)
+      return try UnixFileLock.withExclusiveLock(atPath: path, body)
     }
   }
 #endif
