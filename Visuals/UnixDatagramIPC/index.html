@@ -10,7 +10,7 @@
   --bg:#0a0d13; --bg2:#0e131c; --panel:#121925; --panel2:#182133; --line:#232f45; --line2:#31415f;
   --text:#e8edf5; --muted:#9aa5ba; --dim:#606c84;
   --c-obs:#dfe7f2; --c-rsub:#ffc3a0; --c-db:#8ea2ff; --c-tr:#b98cff; --c-hd:#d9bcff; --c-wire:#56c8ff;
-  --c-ep:#ffb454; --c-eq:#ff6b7d; --c-sk:#34d6c3; --c-cache:#ff8fcf; --c-watch:#e9d66b; --c-reg:#7ee08a;
+  --c-ep:#ffb454; --c-eq:#ff6b7d; --c-sk:#34d6c3; --c-watch:#e9d66b; --c-reg:#7ee08a;
   --c-dir:#b5f0b0; --c-peer:#9aa5b8; --ok:#5ee39b; --bad:#ff6b6b;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, "JetBrains Mono", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -169,14 +169,13 @@ footer code{color:var(--muted)}
   <div class="legend" aria-label="Component colours">
     <span style="--c:var(--c-db)">OrbitIPCDatabase</span>
     <span style="--c:var(--c-tr)">UnixDatagramIPCTransport</span>
-    <span style="--c:var(--c-hd)">OrbitIPCHandlers</span>
-    <span style="--c:var(--c-wire)">OrbitIPCWireProtocol</span>
+    <span style="--c:var(--c-hd)">UnixDatagramHandlers</span>
+    <span style="--c:var(--c-wire)">UnixDatagramWireProtocol</span>
     <span style="--c:var(--c-ep)">UnixDatagramEndpoint · loop thread</span>
     <span style="--c:var(--c-eq)">UnixEventQueue</span>
     <span style="--c:var(--c-sk)">sockets · datagrams</span>
-    <span style="--c:var(--c-cache)">OrbitIPCAdvertisementCache</span>
     <span style="--c:var(--c-watch)">UnixDirectoryWatcher</span>
-    <span style="--c:var(--c-reg)">OrbitIPCEndpointRegistry · markers</span>
+    <span style="--c:var(--c-reg)">UnixDatagramEndpointRegistry · markers</span>
     <span style="--c:var(--c-obs)">OrbitValueObservation</span>
     <span style="--c:var(--c-rsub)">OrbitRegionSubscription</span>
   </div>
@@ -201,7 +200,7 @@ footer code{color:var(--muted)}
 </section>
 <section class="scene" id="discovery">
   <div class="sh"><span class="num">02</span><h2>Discovery through the coordination directory</h2></div>
-  <p class="lede">Processes find each other through the filesystem: sockets in <code>v1/s/</code>, and one marker per endpoint per database in <code>v1/d/&lt;coordinationKey&gt;/</code>. Markers are replaced whole with a rename. Senders cache what they read until a directory watch reports a change.</p>
+  <p class="lede">Processes find each other through the filesystem: sockets in <code>v1/s/</code>, and one marker per endpoint per database in <code>v1/d/&lt;coordinationKey&gt;/</code>. Markers are replaced whole with a rename. Each sender's registry keeps the peer regions it read until a directory watch reports a change.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
 <section class="scene" id="fanout">
@@ -211,7 +210,7 @@ footer code{color:var(--muted)}
 </section>
 <section class="scene" id="wire">
   <div class="sh"><span class="num">04</span><h2>Wire format byte inspector</h2></div>
-  <p class="lede">The bytes below are computed in the page by a port of <code>OrbitIPCWireBatch.encoded()</code> and <code>OrbitIPCWireProtocol.encodeMarker(_:)</code>. Hover or tap a byte, or a row in the field list, to see which field it belongs to, its offset and its decoded value. Toggle commits to watch the shared string table change.</p>
+  <p class="lede">The bytes below are computed in the page by a port of <code>UnixDatagramWireBatch.encoded()</code> and <code>UnixDatagramWireProtocol.encodeMarker(_:)</code>. Hover or tap a byte, or a row in the field list, to see which field it belongs to, its offset and its decoded value. Toggle commits to watch the shared string table change.</p>
   <div class="card" id="wire-card"></div>
 </section>
 <section class="scene" id="batching">
@@ -231,7 +230,7 @@ footer code{color:var(--muted)}
 </section>
 </main>
 <footer>
-  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>IPC/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/Internal/UnixSystem.swift</code>, <code>IPC/Internal/OrbitIPCWireProtocol.swift</code>, <code>IPC/Internal/OrbitIPCEndpointRegistry.swift</code>, <code>IPC/Internal/OrbitIPCAdvertisementCache.swift</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>CLinuxEvents/shim.h</code>. Endpoint names, the database path and timings in the scenes are examples. Byte counts are computed by the page.</p>
+  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagram/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/UnixDatagram/Internal/UnixSystem.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>CLinuxEvents/shim.h</code>. Endpoint names, the database path and timings in the scenes are examples. Byte counts are computed by the page.</p>
   <p>Keyboard: focus a scene's controls and use ← / → to step.</p>
 </footer>
 <noscript><p style="text-align:center;color:#ff6b7d">The visualizations need JavaScript.</p></noscript>
@@ -245,7 +244,7 @@ const NS = 'http://www.w3.org/2000/svg';
 const RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
 const C = {
   obs: '#dfe7f2', rsub: '#ffc3a0', db: '#8ea2ff', tr: '#b98cff', hd: '#d9bcff', wire: '#56c8ff',
-  ep: '#ffb454', eq: '#ff6b7d', sk: '#34d6c3', cache: '#ff8fcf', watch: '#e9d66b', reg: '#7ee08a',
+  ep: '#ffb454', eq: '#ff6b7d', sk: '#34d6c3', watch: '#e9d66b', reg: '#7ee08a',
   dir: '#b5f0b0', peer: '#9aa5b8', ok: '#5ee39b', bad: '#ff6b6b', muted: '#9aa5ba', dim: '#606c84',
   text: '#e8edf5', line: '#2a3750', panel: '#131b28'
 };
@@ -596,7 +595,7 @@ function onResize() {
 }
 
 /* ====================================================================================
-   Model: regions and a port of the wire encoder (OrbitIPCWireProtocol.swift)
+   Model: regions and a port of the wire encoder (UnixDatagramWireProtocol.swift)
    A region is { uTables, tables: [{ schema, name, uCols, ex: [columns] }] }.
    ==================================================================================== */
 const R = {
@@ -701,7 +700,7 @@ function encodeMarker(region) {
   return { bytes: w.bytes, fields: w.fields };
 }
 function batchSize(entries) { const b = new WireBatch(); entries.forEach(e => b.append(e)); return b.byteCount; }
-// The golden vector from OrbitIPCWireProtocolTests: "db", full database.
+// The golden vector from UnixDatagramWireProtocolTests: "db", full database.
 (function selfTest() {
   const got = encodeBatch([wireEntry('db', R.full())]).bytes.join(',');
   const want = [0x4F, 0x52, 0x42, 0x54, 1, 0, 0, 1, 0, 1, 0, 2, 0x64, 0x62, 1, 0, 5, 0, 0, 1, 0, 0].join(',');
@@ -730,32 +729,29 @@ const ARCH = {
     file: 'OrbitIPCDatabase.swift · SQLite/OrbitIPCDatabase+SQLite.swift',
     r: 'Opens a <code>SQLitePool</code> and joins <code>UnixDatagramIPCTransport.shared(configuration:)</code>. After a write commits, it tells other handles in this process through <code>OrbitDatabaseObservationHub</code>, then announces <code>.transactionDidCommit</code> with the union of the changed regions from its own <code>Task</code>, so cancelling the caller can\'t drop it. <code>subscribe(transactionObserver:region:)</code> merges local, same-process and transport commits into one stream.' },
   tr: { t: 'UnixDatagramIPCTransport', s: 'one per Configuration', short: ['UnixDatagram', 'IPCTransport'], c: C.tr,
-    file: 'IPC/UnixDatagramIPCTransport.swift',
-    r: 'The production <code>OrbitIPCTransport</code>. <code>shared(configuration:)</code> gives every database in a process with the same configuration one endpoint. <code>send(_:)</code> measures the message, asks the advertisement cache which endpoints advertise the database, keeps the peers whose region the commit concerns, and hands them to the endpoint. It throws <code>OrbitIPCPartialDeliveryError</code> if a live peer did not take the message.' },
-  hd: { t: 'OrbitIPCHandlers', s: 'handlers · their markers', short: ['OrbitIPC', 'Handlers'], c: C.hd,
-    file: 'IPC/UnixDatagramIPCTransport.swift (private final class)',
+    file: 'IPC/UnixDatagram/UnixDatagramIPCTransport.swift',
+    r: 'The production <code>OrbitIPCTransport</code>. <code>shared(configuration:)</code> gives every database in a process with the same configuration one endpoint. <code>send(_:)</code> measures the message, asks the registry which endpoints advertise the database, keeps the peers whose region the commit concerns, and hands them to the endpoint. It throws <code>UnixDatagramIPCTransport.PartialDeliveryError</code> if a live peer did not take the message.' },
+  hd: { t: 'UnixDatagramHandlers', s: 'handlers · their markers', short: ['UnixDatagram', 'Handlers'], c: C.hd,
+    file: 'IPC/UnixDatagram/UnixDatagramIPCTransport.swift (private final class)',
     r: 'Holds the subscribed handlers for each database, and one marker per coordination key that advertises the union of their regions. It rewrites the marker under its lock whenever the union changes, so a widened region is on disk before <code>subscribe</code> or <code>updateRegion</code> returns. On receive, it calls each handler whose own region the commit concerns, serially, on the loop thread.' },
-  wire: { t: 'OrbitIPCWireProtocol', s: 'batch datagrams · markers', short: ['OrbitIPCWire', 'Protocol'], c: C.wire,
-    file: 'IPC/Internal/OrbitIPCWireProtocol.swift',
-    r: 'The version 1 big-endian format: an 8-byte header, a string table shared by every entry, then entries with a kind and a length. <code>OrbitIPCWireEntry(_:fittingIn:)</code> measures a message, and broadens its region to <code>.fullDatabase</code> if a batch holding only that message would be too long. <code>OrbitIPCWireBatch</code> tracks its exact encoded length as entries are appended. It also encodes markers.' },
+  wire: { t: 'UnixDatagramWireProtocol', s: 'batch datagrams · markers', short: ['UnixDatagram', 'WireProtocol'], c: C.wire,
+    file: 'IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift',
+    r: 'The version 1 big-endian format: an 8-byte header, a string table shared by every entry, then entries with a kind and a length. <code>UnixDatagramWireEntry(_:fittingIn:)</code> measures a message, and broadens its region to <code>.fullDatabase</code> if a batch holding only that message would be too long. <code>UnixDatagramWireBatch</code> tracks its exact encoded length as entries are appended. It also encodes markers.' },
   ep: { t: 'UnixDatagramEndpoint', s: '“Orbit IPC” DetachedThread', short: ['UnixDatagram', 'Endpoint'], c: C.ep,
-    file: 'IPC/Internal/UnixDatagramEndpoint.swift',
+    file: 'IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift',
     r: 'Owns the bound socket, one connected socket per peer, a FIFO of waiting messages per peer, and each suspended send\'s deadline and continuation. Its “Orbit IPC” <code>DetachedThread</code> loops: wait on the queue, drain the socket into one reused buffer, flush peers that have room, expire sends that are past their deadline, and resume continuations outside the lock.' },
   eq: { t: 'UnixEventQueue', s: 'kqueue · epoll + eventfd', short: ['UnixEvent', 'Queue'], c: C.eq,
-    file: 'IPC/Internal/UnixSystem.swift · CLinuxEvents/shim.h',
+    file: 'IPC/UnixDatagram/Internal/UnixSystem.swift · CLinuxEvents/shim.h',
     r: 'The readiness queue the loop thread blocks on. On Darwin it is a kqueue with <code>EVFILT_READ</code> on the bound socket and an <code>EVFILT_USER</code> wakeup. On Linux and Android it is epoll with <code>EPOLLIN</code> on the socket and on an eventfd, plus <code>EPOLLOUT</code> on connected peer sockets that have messages waiting. Only <code>wake()</code> may be called from other threads.' },
   sk: { t: 'Unix datagram sockets', s: 'bound + one per peer', short: ['datagram', 'sockets'], c: C.sk,
-    file: 'IPC/Internal/UnixSystem.swift (UnixSystem)',
+    file: 'IPC/UnixDatagram/Internal/UnixSystem.swift (UnixSystem)',
     r: 'Nonblocking <code>AF_UNIX</code> <code>SOCK_DGRAM</code> sockets. One is bound at <code>v1/s/&lt;endpoint&gt;.sock</code> with <code>SO_RCVBUF</code> = <code>receiveBufferByteCount</code>. Each peer gets a <code>connect()</code>ed socket, cached until the peer dies or stops advertising. Darwin sets <code>SO_NOSIGPIPE</code> and raises <code>SO_SNDBUF</code> to 64 KiB, because it refuses a datagram larger than the send buffer. Linux uses <code>SOCK_NONBLOCK | SOCK_CLOEXEC</code> and <code>MSG_NOSIGNAL</code>.' },
-  cache: { t: 'OrbitIPCAdvertisementCache', s: 'endpoint → advertised region', short: ['OrbitIPC', 'Advertisement', 'Cache'], c: C.cache,
-    file: 'IPC/Internal/OrbitIPCAdvertisementCache.swift',
-    r: 'Maps each database\'s coordination key to the region each endpoint advertises. Before every lookup it drains the directory watcher on the sending thread, under its lock. Any change forgets everything, watches included. A directory it can\'t watch is read again on every send, which is slower but always correct.' },
   watch: { t: 'UnixDirectoryWatcher', s: 'EVFILT_VNODE · inotify', short: ['UnixDirectory', 'Watcher'], c: C.watch,
-    file: 'IPC/Internal/UnixSystem.swift',
+    file: 'IPC/UnixDatagram/Internal/UnixSystem.swift',
     r: 'Detects directory changes without blocking. Darwin uses a kqueue <code>EVFILT_VNODE</code> watch (<code>NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE</code>) on an <code>O_EVTONLY</code> descriptor. Linux and Android use inotify (<code>IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF</code>). <code>drainChanges()</code> only reports whether anything changed. No thread waits on it.' },
-  reg: { t: 'OrbitIPCEndpointRegistry', s: 'the directory layout · markers', short: ['OrbitIPC', 'Endpoint', 'Registry'], c: C.reg,
-    file: 'IPC/Internal/OrbitIPCEndpointRegistry.swift',
-    r: 'Knows the coordination directory layout. It creates <code>v1/s/</code> and <code>v1/d/</code>, writes a marker to <code>.&lt;endpoint&gt;.tmp</code> and renames it over the marker, and lists and decodes markers. A marker that is empty or can\'t be decoded counts as <code>.fullDatabase</code>. It also removes a dead peer\'s socket path, markers and leftover temp files.' },
+  reg: { t: 'UnixDatagramEndpointRegistry', s: 'markers · peer regions', short: ['UnixDatagram', 'Endpoint', 'Registry'], c: C.reg,
+    file: 'IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift',
+    r: 'Knows the coordination directory layout. It creates <code>v1/s/</code> and <code>v1/d/</code>, writes a marker to <code>.&lt;endpoint&gt;.tmp</code> and renames it over the marker, and lists and decodes markers. A marker that is empty or can\'t be decoded counts as <code>.fullDatabase</code>. It also removes a dead peer\'s socket path, markers and leftover temp files. <code>peerRegions(for:)</code> keeps, under its lock, the region each endpoint advertises for each coordination key. Before every lookup it drains the directory watcher on the sending thread. Any change forgets everything, watches included. A directory it can\'t watch is read again on every send, which is slower but always correct.' },
   dir: { t: 'Coordination directory', s: 'v1/s/*.sock · v1/d/<key>/*', short: ['coordination', 'directory'], c: C.dir,
     file: 'Configuration.directory (default $TMPDIR/sqlite-orbit/)',
     r: '<code>v1/s/&lt;endpoint&gt;.sock</code> holds the sockets. <code>v1/d/&lt;coordinationKey&gt;/&lt;endpoint&gt;</code> holds the markers, one per endpoint per database. The coordination key is the database identifier\'s 64-bit FNV-1a hash as 16 hex digits. Endpoint names are the first 16 hex digits of a UUID.' },
@@ -763,18 +759,17 @@ const ARCH = {
     file: 'other processes sharing Configuration.directory',
     r: 'Every other process has its own transport, loop thread and markers. Peers find each other only through markers. There is no broker, and one transport can serve many databases.' }
 };
-const ARCH_POS = { obs: [0, 0], watch: [3, 0], rsub: [0, 1], wire: [1, 1], cache: [3, 1], db: [0, 2], tr: [1, 2], ep: [2, 2], reg: [3, 2], hd: [1, 3], eq: [2, 3], peers: [0, 4], sk: [2, 4], dir: [3, 4] };
+const ARCH_POS = { obs: [0, 0], rsub: [0, 1], wire: [1, 1], watch: [3, 1], db: [0, 2], tr: [1, 2], ep: [2, 2], reg: [3, 2], hd: [1, 3], eq: [2, 3], peers: [0, 4], sk: [2, 4], dir: [3, 4] };
 const ARCH_EDGES = [
   ['obs', 'rsub', 'updateRegion(_:) after accepting a fetch'],
   ['db', 'rsub', 'subscribe(transactionObserver:region:) returns it', { dash: 1 }],
   ['rsub', 'hd', 'update(identifier:databaseIdentifier:region:)', { route: 'rsub-hd' }],
   ['db', 'tr', 'send(_:) · subscribe(to:region:onMessage:)'],
-  ['tr', 'wire', 'OrbitIPCWireEntry(_:fittingIn:)'],
-  ['tr', 'cache', 'advertisements(for:)', { route: 'tr-cache' }],
+  ['tr', 'wire', 'UnixDatagramWireEntry(_:fittingIn:)'],
+  ['tr', 'reg', 'peerRegions(for:)', { route: 'tr-reg' }],
   ['tr', 'hd', 'add · update · remove · shutdown'],
   ['tr', 'ep', 'send(_:to:advertisedBy:suspendingUpTo:)'],
-  ['cache', 'watch', 'drainChanges() · watch(_:)'],
-  ['cache', 'reg', 'advertisements(coordinationKey:)'],
+  ['reg', 'watch', 'drainChanges() · watch(_:)'],
   ['hd', 'reg', 'register(coordinationKey:region:) · unregister'],
   ['reg', 'dir', 'write .<endpoint>.tmp, then rename'],
   ['watch', 'dir', 'watches v1/d/<key>/', { route: 'watch-dir' }],
@@ -810,18 +805,20 @@ new Scene({
     const cc = i => L.cx(i) + L.cw / 2, rc = j => L.ry(j) + L.rh / 2, corr = i => L.cx(i) + L.cw + L.gh;
     const right = L.cx(3) + L.cw + (L.W - (L.cx(3) + L.cw)) / 2;
     const bottom = L.ry(4) + L.rh + (L.H - (L.ry(4) + L.rh)) / 2;
+    const gap12 = (L.ry(1) + L.rh + L.ry(2)) / 2;
     const routes = {
       'rsub-hd': [{ x: corr(0), y: rc(1) }, { x: corr(0), y: rc(3) }],
-      'tr-cache': [{ x: corr(1), y: rc(2) - L.rh * 0.28 }, { x: corr(1), y: rc(1) }],
-      'watch-dir': [{ x: right, y: rc(0) }, { x: right, y: rc(4) }],
+      // Over the endpoint, through the gap between rows 1 and 2, and down into the registry.
+      'tr-reg': [{ x: corr(1), y: rc(2) - L.rh * 0.28 }, { x: corr(1), y: gap12 }, { x: cc(3) - L.cw * 0.3, y: gap12 }],
+      'watch-dir': [{ x: right, y: rc(1) }, { x: right, y: rc(4) }],
       'ep-sk': [{ x: corr(2), y: rc(2) - L.rh * 0.28 }, { x: corr(2), y: rc(4) - L.rh * 0.22 }],
       'peers-dir': [{ x: cc(0), y: bottom }, { x: cc(3), y: bottom }]
     };
     for (const [id, [i, j]] of Object.entries(ARCH_POS)) {
       const m = ARCH[id];
-      const long = m.t.length > 22;
+      const long = m.t.length > 22, longest = m.t.length > 26;
       const g = ctx.box(id, L.cx(i), L.ry(j), L.cw, L.rh, m.c, ctx.narrow ? m.short : m.t, ctx.narrow ? null : m.s,
-        { ts: ctx.narrow ? 10.5 : (long ? 11.6 : 12.5), ss: 11, cls: 'clickable' });
+        { ts: ctx.narrow ? 10.5 : (longest ? 10.8 : long ? 11.6 : 12.5), ss: 11, cls: 'clickable' });
       g.setAttribute('tabindex', '0'); g.setAttribute('role', 'button'); g.setAttribute('aria-label', m.t);
     }
     for (const [a, b, , o] of ARCH_EDGES) {
@@ -865,21 +862,21 @@ new Scene({
       run(c) {} },
     { t: 'A write commits', cap: '<code>OrbitIPCDatabase.write</code> commits. <code>announce(_:)</code> tells other handles in this process through <code>OrbitDatabaseObservationHub</code>. Then, from its own <code>Task</code>, it calls <code>transport.send(.transactionDidCommit(…))</code> with the union of the regions the transaction changed.',
       run(c) { c.hot('db', 'tr'); c.fly('db', 'tr', { label: 'commit', color: C.db }); } },
-    { t: 'Measure the entry', cap: '<code>OrbitIPCWireEntry(message, fittingIn: maximumDatagramByteCount)</code> works out the entry\'s strings and exact length. If a batch holding only this entry would be too long, it broadens the region to <code>.fullDatabase</code>. That is never wrong, and it only costs peers commits they ignore.',
+    { t: 'Measure the entry', cap: '<code>UnixDatagramWireEntry(message, fittingIn: maximumDatagramByteCount)</code> works out the entry\'s strings and exact length. If a batch holding only this entry would be too long, it broadens the region to <code>.fullDatabase</code>. That is never wrong, and it only costs peers commits they ignore.',
       run(c) { c.hot('tr', 'wire'); c.fly('tr', 'wire', { label: 'entry', color: C.tr }); } },
-    { t: 'Who advertises this database?', cap: '<code>OrbitIPCAdvertisementCache.advertisements(for:)</code> drains <code>UnixDirectoryWatcher</code> first. If anything in the watched <code>v1/d/&lt;key&gt;/</code> changed, it forgets its cache and reads the markers again through <code>OrbitIPCEndpointRegistry</code>. The result maps endpoint names to advertised regions.',
+    { t: 'Who advertises this database?', cap: '<code>UnixDatagramEndpointRegistry.peerRegions(for:)</code> drains <code>UnixDirectoryWatcher</code> first. If anything in the watched <code>v1/d/&lt;key&gt;/</code> changed, it forgets the peer regions it kept and reads the markers again. The result maps endpoint names to advertised regions.',
       run(c) {
-        c.hot('tr', 'cache', 'watch', 'reg', 'dir');
-        c.fly('tr', 'cache', { color: C.tr, label: 'key' });
-        c.fly('cache', 'watch', { delay: 900, color: C.cache, label: 'drain' });
+        c.hot('tr', 'reg', 'watch', 'dir');
+        c.fly('tr', 'reg', { color: C.tr, label: 'key' });
+        c.fly('reg', 'watch', { delay: 900, color: C.reg, label: 'drain' });
         c.fly('dir', 'reg', { delay: 1500, color: C.reg, label: 'markers' });
-        c.fly('reg', 'cache', { delay: 2300, color: C.reg, label: 'regions' });
+        c.fly('reg', 'tr', { delay: 2300, color: C.reg, label: 'regions' });
       } },
     { t: 'Filter, then hand off', cap: '<code>peers(concernedWith:)</code> keeps each endpoint that is not this one and whose advertised region the commit concerns. Then <code>endpoint.send(_:to:advertisedBy:suspendingUpTo:)</code> takes the entry, those peers, and the timeout from <code>BackPressurePolicy</code> (<code>nil</code> for <code>.fail</code>).',
       run(c) { c.hot('tr', 'ep'); c.fly('tr', 'ep', { label: 'entry + peers', color: C.tr }); } },
     { t: 'Datagrams leave', cap: 'The endpoint encodes a batch of one once. For each peer it sends on a cached <code>connect()</code>ed socket with <code>UnixSystem.sendDatagram</code>, all under its lock and on the sending thread. The loop thread gets involved only if a peer\'s queue is full.',
       run(c) { c.hot('ep', 'sk', 'peers'); c.fly('ep', 'sk', { label: 'ORBT', color: C.sk }); c.fly('sk', 'peers', { delay: 850, label: 'ORBT', color: C.sk }); } },
-    { t: 'In a peer: wake, decode, deliver', cap: 'The same components on the receiving side. The loop thread wakes from <code>UnixEventQueue.wait</code> because the bound socket is readable. It drains it into its one buffer, <code>OrbitIPCWireProtocol.decode</code> splits the batch, and <code>OrbitIPCHandlers.receive</code> calls matching handlers. <code>OrbitIPCDatabase</code>\'s handler passes the commit to the observer as <code>databaseDidCommit</code> with origin <code>.external</code>.',
+    { t: 'In a peer: wake, decode, deliver', cap: 'The same components on the receiving side. The loop thread wakes from <code>UnixEventQueue.wait</code> because the bound socket is readable. It drains it into its one buffer, <code>UnixDatagramWireProtocol.decode</code> splits the batch, and <code>UnixDatagramHandlers.receive</code> calls matching handlers. <code>OrbitIPCDatabase</code>\'s handler passes the commit to the observer as <code>databaseDidCommit</code> with origin <code>.external</code>.',
       run(c) {
         c.hot('sk', 'eq', 'ep', 'hd', 'obs');
         c.fly('peers', 'sk', { label: 'ORBT', color: C.sk });
@@ -888,7 +885,7 @@ new Scene({
         c.fly('ep', 'hd', { delay: 2200, label: 'message', color: C.ep });
         c.fly('hd', 'obs', { delay: 3000, label: 'commit', color: C.hd, straight: 1, bend: 0.12 });
       } },
-    { t: 'Advertise a wider region', cap: 'When an observation\'s fetch reads more than it had advertised, it calls <code>updateRegion(_:)</code>. <code>OrbitIPCHandlers.update</code> recomputes the union and <code>register</code> writes a temp marker, then renames it over the old one, before the call returns. Other processes\' watchers see the rename the next time they send.',
+    { t: 'Advertise a wider region', cap: 'When an observation\'s fetch reads more than it had advertised, it calls <code>updateRegion(_:)</code>. <code>UnixDatagramHandlers.update</code> recomputes the union and <code>register</code> writes a temp marker, then renames it over the old one, before the call returns. Other processes\' watchers see the rename the next time they send.',
       run(c) {
         c.hot('obs', 'rsub', 'hd', 'reg', 'dir');
         c.fly('obs', 'rsub', { label: 'region', color: C.obs });
@@ -926,16 +923,17 @@ function discDraw(ctx) {
   const L = ctx.d.L, d = ctx.d, g = ctx.dyn;
   g.textContent = '';
   const o = { parent: g };
-  // Process A: the sender, with its cache and watcher.
+  // Process A: the sender, with its registry's peer regions and its watcher.
   const A = L.A;
-  ctx.rect(A.x + 12, A.y + 40, A.w - 24, L.A.h * 0.46, Object.assign({ fill: C.cache, fo: 0.06, stroke: C.cache, so: d.hot.has('cache') ? 1 : 0.45, sw: d.hot.has('cache') ? 2.2 : 1.2, glow: d.hot.has('cache') }, o));
-  ctx.text(A.x + 24, A.y + 60, 'OrbitIPCAdvertisementCache', Object.assign({ mono: true, size: ctx.narrow ? 11 : 12, weight: 650, fill: C.cache }, o));
-  ctx.text(A.x + A.w - 24, A.y + 60, d.cacheStatus || '', Object.assign({ anchor: 'end', size: 11, fill: C.muted }, o));
+  ctx.rect(A.x + 12, A.y + 40, A.w - 24, L.A.h * 0.46, Object.assign({ fill: C.reg, fo: 0.06, stroke: C.reg, so: d.hot.has('reg') ? 1 : 0.45, sw: d.hot.has('reg') ? 2.2 : 1.2, glow: d.hot.has('reg') }, o));
+  ctx.text(A.x + 24, A.y + 60, 'UnixDatagramEndpointRegistry', Object.assign({ mono: true, size: ctx.narrow ? 11 : 12, weight: 650, fill: C.reg }, o));
   const cy0 = A.y + 82;
-  if (!d.cache) ctx.text(A.x + 24, cy0, 'empty: nothing read yet', Object.assign({ size: 11.5, fill: C.dim, italic: 1 }, o));
+  // Beside the key rather than the name, which leaves no room for it.
+  ctx.text(A.x + A.w - 24, cy0, d.regionsStatus || '', Object.assign({ anchor: 'end', size: 11, fill: C.muted }, o));
+  if (!d.peerRegions) ctx.text(A.x + 24, cy0, 'nothing read yet', Object.assign({ size: 11.5, fill: C.dim, italic: 1 }, o));
   else {
     ctx.text(A.x + 24, cy0, `[${KEY.slice(0, ctx.narrow ? 6 : 16)}${ctx.narrow ? '…' : ''}]`, Object.assign({ mono: true, size: 11, fill: C.muted }, o));
-    d.cache.forEach((e, i) => {
+    d.peerRegions.forEach((e, i) => {
       const y = cy0 + 20 + i * 19;
       ctx.text(A.x + 34, y, (ctx.narrow ? e[0].slice(0, 8) + '…' : e[0]) + '  →  ' + e[1], Object.assign({ mono: true, size: 11.5, fill: C.text }, o));
     });
@@ -945,7 +943,7 @@ function discDraw(ctx) {
   ctx.text(A.x + 24, wy + 20, 'UnixDirectoryWatcher', Object.assign({ mono: true, size: ctx.narrow ? 11 : 12, weight: 650, fill: C.watch }, o));
   ctx.text(A.x + A.w - 24, wy + 20, d.watch ? `queued events: ${d.queued}` : 'not created', Object.assign({ anchor: 'end', size: 11, fill: d.queued ? C.watch : C.muted, weight: d.queued ? 700 : null }, o));
   ctx.text(A.x + 24, wy + 40, d.watch ? (ctx.narrow ? 'watching v1/d/' + KEY.slice(0, 6) + '…/' : 'watching v1/d/' + KEY + '/') : 'created on the first lookup', Object.assign({ mono: true, size: 11, fill: C.muted }, o));
-  ctx.n.cacheBox = { x: A.x + 12, y: A.y + 40, w: A.w - 24, h: L.A.h * 0.46 };
+  ctx.n.regionsBox = { x: A.x + 12, y: A.y + 40, w: A.w - 24, h: L.A.h * 0.46 };
   ctx.n.watchBox = { x: A.x + 12, y: wy, w: A.w - 24, h: wh };
   for (const k of ['A', 'B', 'C']) {
     const P = L[k], st = d.proc[k];
@@ -983,7 +981,7 @@ new Scene({
   build(ctx) {
     const L = discLayout(ctx.narrow);
     ctx.svg(L.W, L.H, 'Discovery through the coordination directory');
-    ctx.d = { L, fs: new Set(['root']), hot: new Set(), removing: new Set(), cache: null, cacheStatus: '', watch: false, queued: 0,
+    ctx.d = { L, fs: new Set(['root']), hot: new Set(), removing: new Set(), peerRegions: null, regionsStatus: '', watch: false, queued: 0,
       proc: { A: { status: '' }, B: { status: 'not started', sub: null }, C: { status: 'not started', sub: null } } };
     for (const k of ['A', 'B', 'C']) ctx.panel(L[k].x, L[k].y, L[k].w, L[k].h, null, k === 'A' ? C.ep : C.peer, { fo: 0.035, so: 0.3 });
     ctx.panel(L.D.x, L.D.y, L.D.w, L.D.h, 'Coordination directory', C.dir, { sub: ctx.narrow ? '' : 'shared by every process', fo: 0.03 });
@@ -998,40 +996,40 @@ new Scene({
     return [
       { t: 'Three processes, one directory', cap: 'Processes A, B and C open the same database with the same <code>Configuration.directory</code> (by default <code>$TMPDIR/sqlite-orbit/</code>). There is no broker. The directory is the only thing they share.',
         run(c) { c.redraw(); } },
-      { t: 'A binds its socket', cap: `<code>UnixDatagramIPCTransport.init</code> names the endpoint with the first 16 hex digits of a UUID. <code>OrbitIPCEndpointRegistry</code> creates <code>v1/s/</code> and <code>v1/d/</code>. <code>UnixSystem.makeBoundDatagramSocket</code> binds <code>${EP.A}.sock</code> with <code>SO_RCVBUF</code> set to <code>receiveBufferByteCount</code>, and <code>endpoint.start</code> spawns the “Orbit IPC” thread.`,
+      { t: 'A binds its socket', cap: `<code>UnixDatagramIPCTransport.init</code> names the endpoint with the first 16 hex digits of a UUID. <code>UnixDatagramEndpointRegistry</code> creates <code>v1/s/</code> and <code>v1/d/</code>. <code>UnixSystem.makeBoundDatagramSocket</code> binds <code>${EP.A}.sock</code> with <code>SO_RCVBUF</code> set to <code>receiveBufferByteCount</code>, and <code>endpoint.start</code> spawns the “Orbit IPC” thread.`,
         run(c) { add(c, 'v1', 's', 'd', 'sockA'); h(c, 'sockA', 'procA'); c.redraw(); } },
       { t: 'B and C bind theirs', cap: 'B and C do the same. A socket on its own advertises nothing. Senders find peers through markers, and <code>peer(named:)</code> derives a peer\'s socket path from its marker\'s name.',
         run(c) { add(c, 'sockB', 'sockC'); c.d.proc.B.status = c.d.proc.C.status = '“Orbit IPC” thread blocked in UnixEventQueue.wait'; h(c, 'sockB', 'sockC'); c.redraw(); } },
-      { t: 'B writes its marker to a temp file', cap: `B calls <code>transport.subscribe(to:region:)</code>. <code>OrbitIPCHandlers</code> computes the union of B's handler regions for this coordination key, and <code>registry.register</code> writes <code>encodeMarker(region)</code> (a string table and one region, ${DISC_MARKER_BYTES.B} bytes here) to <code>.${EP.B}.tmp</code> in the database's directory.`,
+      { t: 'B writes its marker to a temp file', cap: `B calls <code>transport.subscribe(to:region:)</code>. <code>UnixDatagramHandlers</code> computes the union of B's handler regions for this coordination key, and <code>registry.register</code> writes <code>encodeMarker(region)</code> (a string table and one region, ${DISC_MARKER_BYTES.B} bytes here) to <code>.${EP.B}.tmp</code> in the database's directory.`,
         run(c) { add(c, 'key', 'tmpB'); c.d.proc.B.sub = 'main.reminders'; c.d.proc.B.status = 'subscribe(to:region:) → register(coordinationKey:region:)'; h(c, 'tmpB', 'key'); c.redraw(); } },
       { t: 'rename() publishes it atomically', cap: `<code>UnixSystem.renameFile</code> renames the temp file over <code>${EP.B}</code> in one step. A reader finds either the old marker or the new one, never a partial one. Listings skip names that start with a dot, and no endpoint name does. <code>subscribe</code> returns only after the rename.`,
         run(c) { c.d.fs.delete('tmpB'); add(c, 'mB'); c.d.proc.B.status = 'advertising main.reminders; thread blocked in wait'; h(c, 'mB'); c.redraw(); } },
-      { t: 'A\'s first send reads the markers', cap: 'A commits, and <code>send(_:)</code> calls <code>OrbitIPCAdvertisementCache.advertisements(for:)</code>. Nothing is cached yet. The cache creates a <code>UnixDirectoryWatcher</code>, creates the database\'s directory, and watches it <em>before</em> reading it, so a change made during the read is still reported. Then <code>registry.advertisements</code> decodes each marker.',
+      { t: 'A\'s first send reads the markers', cap: 'A commits, and <code>send(_:)</code> calls <code>registry.peerRegions(for:)</code>. The registry has kept no peer regions yet, so it creates a <code>UnixDirectoryWatcher</code>, creates the database\'s directory, and watches it <em>before</em> reading it, so a change made during the read is still reported. Then it decodes each marker, and keeps what it read.',
         run(c) {
-          c.d.watch = true; c.d.cacheStatus = 'miss → read'; h(c, 'watch', 'cache', 'mB', 'key'); c.redraw();
-          c.fly(c.pt('row:mB', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 40 }, { label: `${DISC_MARKER_BYTES.B} B`, color: C.reg, bend: 0.12 }, () => { c.d.cache = [[EP.B, 'main.reminders']]; c.redraw(); });
+          c.d.watch = true; c.d.regionsStatus = 'miss → read'; h(c, 'watch', 'reg', 'mB', 'key'); c.redraw();
+          c.fly(c.pt('row:mB', 'r'), { x: c.n.regionsBox.x + c.n.regionsBox.w - 30, y: c.n.regionsBox.y + 40 }, { label: `${DISC_MARKER_BYTES.B} B`, color: C.reg, bend: 0.12 }, () => { c.d.peerRegions = [[EP.B, 'main.reminders']]; c.redraw(); });
         } },
-      { t: 'Later sends hit the cache', cap: 'On every send, the cache first calls <code>watcher.drainChanges()</code> on the sending thread, under its lock. This never blocks: it is a zero-timeout <code>kevent</code> on Darwin, or a nonblocking <code>read</code> of the inotify descriptor. Nothing changed, so no file is read.',
-        run(c) { c.d.cacheStatus = 'drainChanges() → false · hit'; h(c, 'watch', 'cache'); c.redraw(); } },
+      { t: 'Later sends reuse the peer regions', cap: 'On every send, <code>peerRegions(for:)</code> first calls <code>watcher.drainChanges()</code> on the sending thread, under the registry\'s lock. This never blocks: it is a zero-timeout <code>kevent</code> on Darwin, or a nonblocking <code>read</code> of the inotify descriptor. Nothing changed, so it returns the peer regions it kept and no file is read.',
+        run(c) { c.d.regionsStatus = 'drainChanges() → false · hit'; h(c, 'watch', 'reg'); c.redraw(); } },
       { t: 'C advertises; the kernel queues an event', cap: 'C subscribes: it writes a temp file, then renames it. The kernel queues an event on A\'s watch: <code>NOTE_WRITE</code> from <code>EVFILT_VNODE</code> on Darwin, or <code>IN_CREATE</code> and then <code>IN_MOVED_TO</code> from inotify on Linux and Android. Nothing in A runs yet, because no thread waits on the watcher. It is polled.',
         run(c) {
           add(c, 'tmpC');
           c.d.proc.C.sub = 'main.tags'; c.d.proc.C.status = 'subscribe(to:region:) → .tmp, then rename'; h(c, 'tmpC', 'watch'); c.redraw();
           c.at(1300, () => { c.d.fs.delete('tmpC'); add(c, 'mC'); c.d.queued = 2; h(c, 'mC'); c.d.proc.C.status = 'advertising main.tags; thread blocked in wait'; c.redraw(); });
         } },
-      { t: 'A drains, forgets, reads again', cap: 'A\'s next send drains the watcher. <code>drainChanges()</code> returns <code>true</code>, so the cache resets to an empty <code>State()</code>. That drops every cached database <em>and the watcher itself</em>. The lookup then creates a new watch and reads the directory from scratch, and finds B and C.',
+      { t: 'A drains, forgets, reads again', cap: 'A\'s next send drains the watcher. <code>drainChanges()</code> returns <code>true</code>, so the registry resets its state to an empty <code>State()</code>. That drops the peer regions it kept for every database <em>and the watcher itself</em>. The lookup then creates a new watch and reads the directory from scratch, and finds B and C.',
         run(c) {
-          c.d.queued = 0; c.d.cache = null; c.d.cacheStatus = 'drainChanges() → true · reset'; h(c, 'watch', 'cache'); c.redraw();
-          c.at(900, () => { c.d.cacheStatus = 'miss → read'; c.redraw(); });
-          c.fly(c.pt('row:mB', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 40 }, { delay: 900, label: 'B', color: C.reg, bend: 0.1 });
-          c.fly(c.pt('row:mC', 'r'), { x: c.n.cacheBox.x + c.n.cacheBox.w - 30, y: c.n.cacheBox.y + 60 }, { delay: 1100, label: 'C', color: C.reg, bend: 0.1 },
-            () => { c.d.cache = [[EP.B, 'main.reminders'], [EP.C, 'main.tags']]; c.redraw(); });
+          c.d.queued = 0; c.d.peerRegions = null; c.d.regionsStatus = 'drainChanges() → true · reset'; h(c, 'watch', 'reg'); c.redraw();
+          c.at(900, () => { c.d.regionsStatus = 'miss → read'; c.redraw(); });
+          c.fly(c.pt('row:mB', 'r'), { x: c.n.regionsBox.x + c.n.regionsBox.w - 30, y: c.n.regionsBox.y + 40 }, { delay: 900, label: 'B', color: C.reg, bend: 0.1 });
+          c.fly(c.pt('row:mC', 'r'), { x: c.n.regionsBox.x + c.n.regionsBox.w - 30, y: c.n.regionsBox.y + 60 }, { delay: 1100, label: 'C', color: C.reg, bend: 0.1 },
+            () => { c.d.peerRegions = [[EP.B, 'main.reminders'], [EP.C, 'main.tags']]; c.redraw(); });
         } },
       { t: 'C dies; A prunes it', cap: 'C crashes and leaves its socket and marker behind. The next commit that concerns C fails to reach it: <code>connect()</code> fails with <code>ECONNREFUSED</code> or <code>ENOENT</code>, or a cached socket fails with <code>ECONNREFUSED</code>, <code>ECONNRESET</code> or <code>ENOTCONN</code>. <code>isStalePeer</code> recognizes these, so C is not counted as a failure. <code>registry.remove(_:coordinationKeys:)</code> unlinks its socket path, marker and any leftover <code>.tmp</code>. A clean shutdown removes them itself in <code>deinit</code>.',
         run(c) {
           c.d.proc.C.dead = true; c.d.proc.C.status = 'crashed: its socket and marker are left behind'; c.d.proc.C.sub = null;
-          rm(c, 'sockC', 'mC'); if (!c.cur) c.d.cache = [[EP.B, 'main.reminders']];
-          c.d.cacheStatus = c.cur ? 'send → ECONNREFUSED' : 'reset by the removal';
+          rm(c, 'sockC', 'mC'); if (!c.cur) c.d.peerRegions = [[EP.B, 'main.reminders']];
+          c.d.regionsStatus = c.cur ? 'send → ECONNREFUSED' : 'reset by the removal';
           h(c, 'procA'); c.redraw();
         } }
     ];
@@ -1155,7 +1153,7 @@ new Scene({
         run(c) { c.redraw(); } },
       { t: 'A commits', cap: `A's <code>OrbitIPCDatabase.write</code> commits <code>${esc(com.sql)}</code>. <code>announce(_:)</code> tells other handles in this process first. Then a <code>Task</code> calls <code>transport.send(.transactionDidCommit(…))</code> with the region <code>${com.txt}</code>.`,
         run(c) { if (c.cur) { c.rect(c.d.L.A.x, c.d.L.A.y, c.d.L.A.w, c.d.L.A.h, { stroke: C.db, sw: 2.2, glow: 1, rx: 12, parent: c.fx }); } } },
-      { t: 'Measure, then look up', cap: '<code>OrbitIPCWireEntry(message, fittingIn: maximumDatagramByteCount)</code> measures the entry. A region too big for a batch of one would be broadened to <code>.fullDatabase</code> here. Then <code>advertisements(for:)</code> returns each endpoint\'s advertised region from the cache, which was read from the markers.',
+      { t: 'Measure, then look up', cap: '<code>UnixDatagramWireEntry(message, fittingIn: maximumDatagramByteCount)</code> measures the entry. A region too big for a batch of one would be broadened to <code>.fullDatabase</code> here. Then <code>registry.peerRegions(for:)</code> returns each endpoint\'s advertised region, kept since it last read the markers.',
         run(c) {
           FAN_PEERS.forEach((p, i) => c.fly(c.pt('p' + p.k, c.narrow ? 't' : 'l'), c.pt('A', c.narrow ? 'b' : 'r'), { delay: i * 180, label: p.k, color: C.reg, bend: c.narrow ? 0 : 0.08 }));
         } },
@@ -1175,7 +1173,7 @@ new Scene({
           });
         } },
       { t: 'Only concerned peers wake', cap: yes.length
-          ? `${names(yes)} wake on <code>EVFILT_READ</code> or <code>EPOLLIN</code>, drain the socket, and decode the batch. <code>OrbitIPCHandlers.receive</code> then calls each handler whose own region the commit concerns, and the observer gets <code>databaseDidCommit</code> with origin <code>.external</code>. ${no.length ? names(no) + ' never wake: no datagram reached them, so their threads made no syscall and had no context switch.' : ''}`
+          ? `${names(yes)} wake on <code>EVFILT_READ</code> or <code>EPOLLIN</code>, drain the socket, and decode the batch. <code>UnixDatagramHandlers.receive</code> then calls each handler whose own region the commit concerns, and the observer gets <code>databaseDidCommit</code> with origin <code>.external</code>. ${no.length ? names(no) + ' never wake: no datagram reached them, so their threads made no syscall and had no context switch.' : ''}`
           : 'Nobody wakes. Filtering at the sender means an irrelevant commit costs peers nothing.',
         run(c) { yes.forEach(k => c.d.peer[k].state = c.cur ? 'awake' : 'handled'); if (c.cur) c.at(1600, () => { yes.forEach(k => c.d.peer[k].state = 'handled'); c.redraw(); }); c.redraw(); } },
       { t: 'send returns', cap: `Every concerned peer took the message, so the <code>Delivery</code> is <code>(delivered: ${yes.length}, failed: 0)</code>. <code>send</code> returns, and the delegate gets <code>didSuccessfullyAnnounce</code>. Success means the message is in each peer's receive queue, not that a handler has run. Along the way, <code>retain(_:advertising:)</code> closes cached sockets for endpoints that no longer advertise this database.`,
@@ -1266,7 +1264,7 @@ function wireRender() {
   if (WIRE.view === 'batch') {
     const chosen = WIRE_COMMITS.filter(c => c.on);
     res = encodeBatch(chosen.map(c => wireEntry(DBID, c.region)));
-    note = `A batch of ${chosen.length} commit${chosen.length === 1 ? '' : 's'} to <b>${esc(DBID)}</b>, as <code>OrbitIPCWireBatch.encoded()</code> writes it: ` + chosen.map((c, i) => `entry[${i}] = <b>${esc(describeRegion(c.region))}</b>`).join(', ') + '.';
+    note = `A batch of ${chosen.length} commit${chosen.length === 1 ? '' : 's'} to <b>${esc(DBID)}</b>, as <code>UnixDatagramWireBatch.encoded()</code> writes it: ` + chosen.map((c, i) => `entry[${i}] = <b>${esc(describeRegion(c.region))}</b>`).join(', ') + '.';
   } else {
     res = encodeMarker(MARKER_REGION);
     note = `The marker a process writes to <code>v1/d/${KEY}/&lt;endpoint&gt;</code> when its subscriptions for the database cover <b>${esc(describeRegion(MARKER_REGION))}</b>: <code>encodeMarker(_:)</code> writes a string table and one region, with no header. The database is named by the directory, not the bytes.`;
@@ -1304,7 +1302,7 @@ function wireRender() {
     const b = res.batch;
     const ent = b.entries.reduce((n, e) => n + e.byteCount, 0);
     const str = b.strings.reduce((n, s) => n + 2 + utf8(s).length, 0);
-    WIRE.sum.innerHTML = `<b>${bytes.length} bytes</b> = 10 (header + stringCount) + ${ent} (entries: 3 + 2 + region each: ${b.entries.map(e => e.byteCount).join(' + ')}) + ${str} (${b.strings.length} strings: 2 + UTF-8 each). This matches <code>OrbitIPCWireBatch.byteCount</code>, which <code>flush</code> compares with <code>maximumDatagramByteCount</code>.`;
+    WIRE.sum.innerHTML = `<b>${bytes.length} bytes</b> = 10 (header + stringCount) + ${ent} (entries: 3 + 2 + region each: ${b.entries.map(e => e.byteCount).join(' + ')}) + ${str} (${b.strings.length} strings: 2 + UTF-8 each). This matches <code>UnixDatagramWireBatch.byteCount</code>, which <code>flush</code> compares with <code>maximumDatagramByteCount</code>.`;
   } else {
     const st = fields.filter(f => f.group === 'String table').reduce((n, f) => n + f.len, 0);
     WIRE.sum.innerHTML = `<b>${bytes.length} bytes</b> = string table ${st} + region ${bytes.length - st} (3 + 7 per table + 2 per column). An empty or undecodable marker counts as <code>.fullDatabase</code>.`;
@@ -1426,11 +1424,11 @@ new Scene({
     ctx.panel(L.S.x, L.S.y, L.S.w, L.S.h, 'Process A · send(_:) tasks', C.tr, { sub: ctx.narrow ? pol : '' });
     if (!ctx.narrow) ctx.text(L.S.x + 14, L.S.y + L.S.h - 10, 'backPressure: ' + pol, { mono: true, size: 10.5, fill: C.dim });
     ctx.panel(L.F.x, L.F.y, L.F.w, L.F.h, 'Peer(B).pending', C.ep, { sub: ctx.narrow ? '' : 'in A\'s UnixDatagramEndpoint' });
-    ctx.panel(L.Bt.x, L.Bt.y, L.Bt.w, L.Bt.h, ctx.narrow ? 'flush(_:)' : 'flush(_:) · OrbitIPCWireBatch', C.wire);
+    ctx.panel(L.Bt.x, L.Bt.y, L.Bt.w, L.Bt.h, ctx.narrow ? 'flush(_:)' : 'flush(_:) · UnixDatagramWireBatch', C.wire);
     ctx.text(L.Bt.x + 12, L.Bt.y + (ctx.narrow ? 42 : 46), `max ${BMAX} B (illustrative)`, { mono: true, size: ctx.narrow ? 10 : 11, fill: C.muted });
     ctx.panel(L.P.x, L.P.y, L.P.w, L.P.h, 'Process B', C.peer, { sub: ctx.narrow ? '' : EP.B });
     const G = batGeom(ctx);
-    ctx.text(ctx.narrow ? L.P.x + 222 : L.P.x + 16, ctx.narrow ? L.P.y + 80 : L.P.y + 324, 'OrbitIPCHandlers.receive', { mono: true, size: 11, fill: C.hd, weight: 650 });
+    ctx.text(ctx.narrow ? L.P.x + 222 : L.P.x + 16, ctx.narrow ? L.P.y + 80 : L.P.y + 324, 'UnixDatagramHandlers.receive', { mono: true, size: 11, fill: C.hd, weight: 650 });
     ctx.redraw = () => batDraw(ctx);
     ctx.redraw();
   },
@@ -1477,10 +1475,10 @@ new Scene({
         run(c) { deliver(c, [0, 1, 2]); } }
     ];
     if (mode === 'fail') return common.concat([
-      { t: 'Full queue: fail at once', cap: '<code>sendDatagram</code> returns <code>false</code>: the queue is full (<code>EAGAIN</code> on Linux, <code>ENOBUFS</code> on Darwin), which is not an error. With <code>.fail</code> there is no <code>sendID</code>, so <code>offer</code> returns <code>.failed</code>. Nothing is queued, there is no continuation, and <code>send</code> throws <code>OrbitIPCPartialDeliveryError(discoveredPeerCount: 1, deliveredPeerCount: 0, failedPeerCount: 1)</code>. The database\'s delegate gets <code>didFailToAnnounce</code>.',
-        run(c) { bounce(c, 3, () => { set(c, 3, 'fail', 'OrbitIPCPartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
+      { t: 'Full queue: fail at once', cap: '<code>sendDatagram</code> returns <code>false</code>: the queue is full (<code>EAGAIN</code> on Linux, <code>ENOBUFS</code> on Darwin), which is not an error. With <code>.fail</code> there is no <code>sendID</code>, so <code>offer</code> returns <code>.failed</code>. Nothing is queued, there is no continuation, and <code>send</code> throws <code>PartialDeliveryError(discoveredPeerCount: 1, deliveredPeerCount: 0, failedPeerCount: 1)</code>. The database\'s delegate gets <code>didFailToAnnounce</code>.',
+        run(c) { bounce(c, 3, () => { set(c, 3, 'fail', 'PartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
       { t: 'Every refused send fails', cap: 'The next send fails the same way. <code>.fail</code> never uses the per-peer FIFO or the batch builder, and it never asks the loop thread for a writability event or a retry timer. The caller finds out at once and decides what to do.',
-        run(c) { bounce(c, 4, () => { set(c, 4, 'fail', 'OrbitIPCPartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
+        run(c) { bounce(c, 4, () => { set(c, 4, 'fail', 'PartialDeliveryError(1, 0, 1) · nothing queued'); c.redraw(); }); } },
       { t: 'B drains', cap: 'B\'s thread returns from the handler and drains its socket. <code>receiveDatagram</code> is called until the queue is empty, and each datagram is decoded and delivered on the loop thread.',
         run(c) { drainB(c); } },
       { t: 'Room again', cap: 'The next send finds room and is delivered immediately. The two commits that were refused were never delivered. Each <code>send</code> said so by throwing.',
@@ -1511,10 +1509,10 @@ new Scene({
     if (mode === 'deadline') return common.concat(park, [
       { t: 'Nothing has room', cap: 'On Linux, <code>EPOLLOUT</code> never fires, because B\'s queue stays full. On Darwin, the loop thread times out at <code>retryAt</code> and tries again at 1, 3, 7, 15 and 31 ms, then every 16 ms. Each try gets <code>ENOBUFS</code>, and <code>backOff()</code> doubles the delay up to 16 ms. The senders stay suspended.',
         run(c) { c.d.flags.note = 'Darwin: retries every ≤16 ms · Linux: no EPOLLOUT'; c.d.batch = { rows: [{ txt: 'retry → sendDatagram → false', ok: false }], status: 'backOff(): 1 → 2 → 4 → 8 → 16 ms, capped' }; c.redraw(); } },
-      { t: 'A deadline passes', cap: '<code>wait(until:)</code> returns at <code>nextDeadline</code>, the earliest deadline. <code>service</code> finds send #4 expired. It makes one last flush attempt first, because “the budget is time spent waiting”. B is still full, so <code>withdraw</code> takes #4 out of every FIFO and resolves it <code>.failed</code>. Its continuation is resumed after the lock is released, and <code>send</code> throws <code>OrbitIPCPartialDeliveryError(1, 0, 1)</code>.',
+      { t: 'A deadline passes', cap: '<code>wait(until:)</code> returns at <code>nextDeadline</code>, the earliest deadline. <code>service</code> finds send #4 expired. It makes one last flush attempt first, because “the budget is time spent waiting”. B is still full, so <code>withdraw</code> takes #4 out of every FIFO and resolves it <code>.failed</code>. Its continuation is resumed after the lock is released, and <code>send</code> throws <code>PartialDeliveryError(1, 0, 1)</code>.',
         run(c) {
           c.d.batch = { rows: [{ txt: `retry #4+#5 → ${BSZ.b45} B`, ok: true }, { txt: 'sendDatagram → false', ok: false }], status: 'withdraw(3) · resolve(3, .failed)' };
-          c.d.fifo = [5]; set(c, 3, 'fail', 'deadline passed · OrbitIPCPartialDeliveryError(1, 0, 1)'); c.redraw();
+          c.d.fifo = [5]; set(c, 3, 'fail', 'deadline passed · PartialDeliveryError(1, 0, 1)'); c.redraw();
         } },
       { t: 'Or the task is cancelled', cap: 'Cancelling the task that sent #5 runs its <code>onCancel</code> handler, which calls <code>cancel(sendID)</code>. That withdraws #5 from every peer that has not taken it, and <code>send</code> throws <code>CancellationError</code>. B\'s FIFO is now empty, so <code>unwatch</code> removes <code>EPOLLOUT</code> on Linux, clears <code>retryAt</code> on Darwin, and resets the retry delay to 1 ms.',
         run(c) { c.d.fifo = []; c.d.flags = { watched: false, note: 'unwatch: EPOLL_CTL_DEL · retryAt = nil' }; c.d.batch = { rows: [], status: '' }; set(c, 4, 'canc', 'Task cancelled · withdrawn · CancellationError'); c.redraw(); } }
@@ -1522,7 +1520,7 @@ new Scene({
     return common.concat(park, [
       { t: 'B drains its queue', cap: 'B\'s thread returns from its handler and drains the socket: <code>receiveDatagram</code> into its single buffer until the queue is empty, decoding and delivering each datagram. B now has room.',
         run(c) { drainB(c); } },
-      { t: 'Flush: the longest prefix that fits', cap: `A's loop thread wakes: <code>EPOLLOUT</code> on Linux, or the next retry on Darwin. <code>service</code> calls <code>flush</code>, which builds an <code>OrbitIPCWireBatch</code> from the front of the FIFO while <code>byteCount(appending:)</code> is at most ${BMAX}. #4 is ${BSZ.b4} bytes. Adding #5 makes ${BSZ.b45}, because the strings are shared. Adding #6 would make ${BSZ.b456}, which doesn't fit, so the batch stops there.`,
+      { t: 'Flush: the longest prefix that fits', cap: `A's loop thread wakes: <code>EPOLLOUT</code> on Linux, or the next retry on Darwin. <code>service</code> calls <code>flush</code>, which builds a <code>UnixDatagramWireBatch</code> from the front of the FIFO while <code>byteCount(appending:)</code> is at most ${BMAX}. #4 is ${BSZ.b4} bytes. Adding #5 makes ${BSZ.b45}, because the strings are shared. Adding #6 would make ${BSZ.b456}, which doesn't fit, so the batch stops there.`,
         run(c) {
           c.d.flags.note = 'woken: EPOLLOUT (Linux) · retry (Darwin)';
           const rows = [{ txt: `append #4 → ${BSZ.b4} B ✓`, ok: true }, { txt: `append #5 → ${BSZ.b45} B ✓`, ok: true }, { txt: `#6 → ${BSZ.b456} B > ${BMAX} ✗`, ok: false }];
@@ -1547,7 +1545,7 @@ new Scene({
             set(c, 5, 'res', 'Delivery(delivered: 1)'); c.redraw();
           });
         } },
-      { t: 'B splits the batch', cap: 'B receives two datagrams. <code>OrbitIPCWireProtocol.decode</code> returns the batch\'s messages in the order they were encoded: #4, then #5. The receive closure passes each one to <code>OrbitIPCHandlers.receive</code> separately, so handlers never see batches. A malformed datagram would be dropped whole, and an entry of an unknown kind is skipped.',
+      { t: 'B splits the batch', cap: 'B receives two datagrams. <code>UnixDatagramWireProtocol.decode</code> returns the batch\'s messages in the order they were encoded: #4, then #5. The receive closure passes each one to <code>UnixDatagramHandlers.receive</code> separately, so handlers never see batches. A malformed datagram would be dropped whole, and an entry of an unknown kind is skipped.',
         run(c) { drainB(c, [['#4', '#5'], ['#6']]); } }
     ]);
   }
@@ -1650,7 +1648,7 @@ new Scene({
       { t: 'Idle: block with no timeout', cap: '<code>run(receive:)</code> allocates one receive buffer of <code>maximumDatagramByteCount + 1</code> bytes and loops. Each pass reads <code>isStopped</code> and <code>nextDeadline</code> under the lock. Nothing waits for a peer, so the deadline is <code>nil</code> and the thread blocks with no timeout.',
         run(c) { both(c, (d, l) => { d.stage = l.stage = 2; d.status = 'Nothing waits for a peer: nextDeadline is nil, so kevent blocks with no timeout.'; l.status = 'Nothing waits for a peer: nextDeadline is nil, so epoll_wait blocks with a timeout of -1.'; d.code = 'kevent(kq, nil, 0, events, 64, nil)'; l.code = 'epoll_wait(epfd, events, 64, -1)'; }); } },
       { t: 'A datagram arrives', cap: 'The bound socket becomes readable (<code>EVFILT_READ</code> or <code>EPOLLIN</code>), and <code>wait</code> hands <code>Event.readable</code> to the loop. <code>drain</code> calls <code>recv</code> into the one buffer until the queue is empty. A datagram that fills all <code>max + 1</code> bytes was too long and is dropped. Each other one is decoded and delivered to handlers on this thread.',
-        run(c) { both(c, (d, l) => { d.stage = l.stage = 3; d.lit.add('read'); l.lit.add('in'); d.status = l.status = 'Event.readable → drain(): recv() until the queue is empty. Each datagram → OrbitIPCWireProtocol.decode → OrbitIPCHandlers.receive, on this thread.'; d.code = 'recv(socket, buffer, max + 1, 0)   // until it fails'; l.code = d.code; }); } },
+        run(c) { both(c, (d, l) => { d.stage = l.stage = 3; d.lit.add('read'); l.lit.add('in'); d.status = l.status = 'Event.readable → drain(): recv() until the queue is empty. Each datagram → UnixDatagramWireProtocol.decode → UnixDatagramHandlers.receive, on this thread.'; d.code = 'recv(socket, buffer, max + 1, 0)   // until it fails'; l.code = d.code; }); } },
       { t: 'A send parks: wake the thread', cap: 'On another thread, a send finds a peer full and parks its message. Linux adds <code>EPOLLOUT</code> for that peer\'s connected socket, so no timer is needed. Darwin can\'t watch for that, so <code>backOff()</code> sets <code>retryAt</code> to 1 ms from now. Either way <code>queue.wake()</code> runs, because the thread\'s current deadline was worked out before this send existed.',
         run(c) {
           both(c, (d, l) => {
@@ -1804,7 +1802,7 @@ new Scene({
         run(c) { add(c, { type: 'fetch', t0: 1.0, t1: 2.8, snap: 1.15, label: n(c) ? 'fetch' : 'fetch #1', sub: 'floor: main.reminders' }); c.d.now = 1.15; c.d.note = 'The yellow tick is the fetch\'s snapshot. Commits after it aren\'t visible to this fetch.'; c.redraw(); } },
       { t: 'It reads more than the floor', cap: 'This time a reminder is flagged, so the fetch also reads <code>main.lists</code>. The region recorder reports <code>{reminders, lists}</code>, which is more than the floor.',
         run(c) { const f = c.d.items[c.d.items.length - 1]; f.sub = n(c) ? 'reads lists' : 'read: reminders + lists (> floor)'; f.subCol = C.ep; c.d.now = 2.0; c.redraw(); } },
-      { t: 'A commit falls into the gap', cap: 'W commits <code>UPDATE lists</code> after P\'s snapshot. W\'s cache still shows P advertising <code>main.reminders</code>, which doesn\'t admit <code>lists</code>, so <code>peers(concernedWith:)</code> skips P. P\'s snapshot didn\'t include the commit either. Nothing has told P about it.',
+      { t: 'A commit falls into the gap', cap: 'W commits <code>UPDATE lists</code> after P\'s snapshot. The peer regions W\'s registry kept still show P advertising <code>main.reminders</code>, which doesn\'t admit <code>lists</code>, so <code>peers(concernedWith:)</code> skips P. P\'s snapshot didn\'t include the commit either. Nothing has told P about it.',
         run(c) { add(c, { type: 'commit', t: 2.1, label: n(c) ? 'c1' : 'c1: UPDATE lists', fate: 'blocked' }); commitFly(c, 2.1, 'M'); c.d.now = 2.1; c.d.value = ['at risk: c1 unseen', C.ep]; c.d.note = 'c1 changed lists after the snapshot, and the sender skipped P. If nothing else happens, P never sees c1.'; c.redraw(); } },
       { t: 'Accept, and owe a covering fetch', cap: '<code>accept(…)</code> finds that <code>floor.contains(output.region)</code> is false. The value is published anyway (a refetch controller\'s fetch would be withheld and required again instead). <code>observedRegion</code> becomes <code>{reminders, lists}</code>, and <code>owesCoveringFetch</code> is set.',
         run(c) { add(c, { type: 'note', t: 2.85, txt: n(c) ? 'owes a fetch' : 'floor ⊉ read → owesCoveringFetch', col: C.ep }); c.d.now = 2.85; c.redraw(); } }
@@ -1822,7 +1820,7 @@ new Scene({
         } }
     ]);
     return shared.concat([
-      { t: 'Widen first: updateRegion returns after the rename', cap: '<code>advertiseObservedRegion()</code> calls <code>subscription.updateRegion({reminders, lists})</code>. Through <code>OrbitIPCDatabase</code>\'s subscription this reaches <code>OrbitIPCHandlers.update</code>, which renames the new marker into place under its lock. <code>updateRegion</code> returns only after the rename, and then <code>finishUpdate(to:)</code> records the wider region. The rename queues an event on W\'s directory watch.',
+      { t: 'Widen first: updateRegion returns after the rename', cap: '<code>advertiseObservedRegion()</code> calls <code>subscription.updateRegion({reminders, lists})</code>. Through <code>OrbitIPCDatabase</code>\'s subscription this reaches <code>UnixDatagramHandlers.update</code>, which renames the new marker into place under its lock. <code>updateRegion</code> returns only after the rename, and then <code>finishUpdate(to:)</code> records the wider region. The rename queues an event on W\'s directory watch.',
         run(c) {
           add(c, { type: 'update', t0: 3.1, t1: 3.9 });
           c.d.mseg = [{ t0: 0, t1: 3.9, txt: 'main.reminders' }, { t0: 3.9, t1: 10, txt: n(c) ? 'reminders + lists' : 'main.reminders + main.lists', wide: 1 }];
@@ -1830,7 +1828,7 @@ new Scene({
         } },
       { t: 'Then read: the covering fetch', cap: 'Only now does the owed fetch start: <code>requestRefetch(source: .transaction(.external), …)</code>. Its snapshot comes after the rename, so it includes c1. The value is correct again.',
         run(c) { add(c, { type: 'fetch', t0: 4.3, t1: 5.8, snap: 4.45, label: n(c) ? 'covering' : 'covering fetch', sub: 'sees c1 ✓', subCol: C.ok }); c.d.now = 4.45; c.d.value = ['current', C.ok]; c.d.note = 'The covering fetch reads after the widened region is advertised, so it sees every commit that was skipped before.'; c.redraw(); } },
-      { t: 'Later commits are sent', cap: 'W commits to <code>lists</code> again. Its <code>send</code> drains its watcher, which already holds the rename\'s event, so the cache resets and reads P\'s new marker. P is concerned now, so the datagram goes out and P refetches.',
+      { t: 'Later commits are sent', cap: 'W commits to <code>lists</code> again. Its <code>send</code> drains its watcher, which already holds the rename\'s event, so its registry forgets the peer regions it kept and reads P\'s new marker. P is concerned now, so the datagram goes out and P refetches.',
         run(c) { add(c, { type: 'commit', t: 6.6, label: n(c) ? 'c2' : 'c2: UPDATE lists', fate: 'sent' }); commitFly(c, 6.6, 'P'); add(c, { type: 'fetch', t0: 7.2, t1: 8.6, snap: 7.3, label: 'refetch', sub: 'sees c2 ✓', subCol: C.ok }); c.d.now = 6.6; c.redraw(); } },
       { t: 'Why there is no gap', cap: 'Any commit to the new part lands either before the covering fetch\'s snapshot, and that fetch reads it, or after it. A commit after the snapshot is also after the rename, so its announcement starts after the rename and honors the wider marker. Narrowing counts as soon as it is decided; widening counts only once it has been applied.',
         run(c) { c.d.now = null; c.d.note = 'Widen, wait for the rename, then read. updateRegion(_:) makes the widening synchronous, and the sender\'s watcher is drained on its own sending thread, so every send that starts after the rename sees it.'; c.redraw(); } }
