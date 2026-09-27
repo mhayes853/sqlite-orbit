@@ -1,8 +1,8 @@
 // The Unix datagram transport's I/O layer reaches the platform's C library through this file, and
-// through the one backend file for each readiness mechanism, which imports only the module that
-// mechanism lives in. This is the only file that imports Darwin, Glibc, Musl or Android. How a
-// constant is spelled, which flags a call can take and how `errno` is read are settled here, so
-// the rest of the layer needs no guard beyond the one that says it exists at all.
+// through the backend files for each readiness mechanism, which import the module that mechanism
+// lives in: Darwin for kqueue, and CLinuxEvents for epoll and inotify. Nothing else imports a C
+// library. How a constant is spelled, which flags a call can take and how `errno` is read are
+// settled here, so the rest of the layer needs no guard beyond the one that says it exists at all.
 #if canImport(Darwin) || os(Linux) || os(Android)
   #if canImport(Darwin)
     import Darwin
