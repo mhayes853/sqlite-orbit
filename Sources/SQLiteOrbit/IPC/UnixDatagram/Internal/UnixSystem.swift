@@ -23,7 +23,7 @@
   #endif
 
   /// A failed system call, named by what it was doing, and the `errno` it failed with.
-  struct OrbitIPCSystemError: Error, CustomStringConvertible, Sendable {
+  struct UnixSystemError: Error, CustomStringConvertible, Sendable {
     let operation: String
     let code: Int32
 
@@ -71,7 +71,7 @@
     /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
     /// one file or the other and never neither.
     static func renameFile(atPath source: String, toPath destination: String) throws {
-      guard rename(source, destination) == 0 else { throw OrbitIPCSystemError.last("rename") }
+      guard rename(source, destination) == 0 else { throw UnixSystemError.last("rename") }
     }
 
     /// Runs `body` holding an exclusive `flock` on the file at `path`, creating the file if needed.
@@ -82,11 +82,11 @@
       _ body: () throws -> Result
     ) throws -> Result {
       let descriptor = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)
-      guard descriptor >= 0 else { throw OrbitIPCSystemError.last("open") }
+      guard descriptor >= 0 else { throw UnixSystemError.last("open") }
       defer { _ = close(descriptor) }
       while flock(descriptor, LOCK_EX) != 0 {
         let code = errno
-        guard code == EINTR else { throw OrbitIPCSystemError(operation: "flock", code: code) }
+        guard code == EINTR else { throw UnixSystemError(operation: "flock", code: code) }
       }
       return try body()
     }
@@ -103,7 +103,7 @@
       guard setsockopt(descriptor, SOL_SOCKET, SO_RCVBUF, &byteCount, size) == 0,
         address.withSockAddr({ bind(descriptor, $0, $1) }) == 0
       else {
-        let error = OrbitIPCSystemError.last("bind")
+        let error = UnixSystemError.last("bind")
         _ = close(descriptor)
         throw error
       }
@@ -115,13 +115,13 @@
     /// Sending on it needs no address, and on Linux it reports itself unwritable while the peer's
     /// receive queue is full, which ``UnixEventQueue/watchWritability(of:)`` rests on.
     ///
-    /// - Throws: An ``OrbitIPCSystemError`` whose ``OrbitIPCSystemError/isStalePeer`` holds when
+    /// - Throws: A ``UnixSystemError`` whose ``UnixSystemError/isStalePeer`` holds when
     ///   nothing is bound at `path` any more.
     static func makeConnectedDatagramSocket(path: String) throws -> Int32 {
       var address = try UnixSocketAddress(path: path)
       let descriptor = try makeDatagramSocket()
       guard address.withSockAddr({ connect(descriptor, $0, $1) }) == 0 else {
-        let error = OrbitIPCSystemError.last("connect")
+        let error = UnixSystemError.last("connect")
         _ = close(descriptor)
         throw error
       }
@@ -138,10 +138,10 @@
       // ever waits in the kernel long enough for a signal to interrupt it.
       let count = bytes.withUnsafeBytes { send(descriptor, $0.baseAddress!, $0.count, sendFlags) }
       if count == bytes.count { return true }
-      guard count < 0 else { throw OrbitIPCSystemError.messageTooLong("send") }
+      guard count < 0 else { throw UnixSystemError.messageTooLong("send") }
       let code = errno
       if code == EAGAIN || code == EWOULDBLOCK || code == ENOBUFS { return false }
-      throw OrbitIPCSystemError(operation: "send", code: code)
+      throw UnixSystemError(operation: "send", code: code)
     }
 
     /// Receives one datagram into `buffer`.
@@ -162,7 +162,7 @@
         // Darwin cannot set these as it creates the socket, so they follow at once. A fork on
         // another thread in between would hand the child this descriptor for as long as it runs.
         let descriptor = socket(AF_UNIX, SOCK_DGRAM, 0)
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("socket") }
+        guard descriptor >= 0 else { throw UnixSystemError.last("socket") }
         var enabled: Int32 = 1
         // Darwin refuses a datagram larger than the sender's send buffer with `EMSGSIZE`, and that
         // buffer starts at 2 KiB, so it is raised past the longest datagram any endpoint accepts.
@@ -173,14 +173,14 @@
           setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0,
           setsockopt(descriptor, SOL_SOCKET, SO_SNDBUF, &sendBufferByteCount, size) == 0
         else {
-          let error = OrbitIPCSystemError.last("socket")
+          let error = UnixSystemError.last("socket")
           _ = close(descriptor)
           throw error
         }
         return descriptor
       #else
         let descriptor = socket(AF_UNIX, socketType, 0)
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("socket") }
+        guard descriptor >= 0 else { throw UnixSystemError.last("socket") }
         return descriptor
       #endif
     }
@@ -233,12 +233,12 @@
     init(readingFrom socket: Int32) throws {
       #if canImport(Darwin)
         let descriptor = kqueue()
-        guard descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
+        guard descriptor >= 0 else { throw UnixSystemError.last("kqueue") }
         _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
         guard Self.change(descriptor, UInt(socket), EVFILT_READ, EV_ADD),
           Self.change(descriptor, Self.wakeIdentifier, EVFILT_USER, EV_ADD | EV_CLEAR)
         else {
-          let error = OrbitIPCSystemError.last("kevent")
+          let error = UnixSystemError.last("kevent")
           _ = close(descriptor)
           throw error
         }
@@ -249,7 +249,7 @@
           Self.control(descriptor, orbit_epoll_ctl_add, socket, orbit_epoll_in),
           Self.control(descriptor, orbit_epoll_ctl_add, wakeDescriptor, orbit_epoll_in)
         else {
-          let error = OrbitIPCSystemError.last("creating an event queue")
+          let error = UnixSystemError.last("creating an event queue")
           _ = close(wakeDescriptor)
           _ = close(descriptor)
           throw error
@@ -411,11 +411,11 @@
     init() throws {
       #if canImport(Darwin)
         self.descriptor = kqueue()
-        guard self.descriptor >= 0 else { throw OrbitIPCSystemError.last("kqueue") }
+        guard self.descriptor >= 0 else { throw UnixSystemError.last("kqueue") }
         _ = fcntl(self.descriptor, F_SETFD, FD_CLOEXEC)
       #else
         self.descriptor = inotify_init1(orbit_in_nonblock | orbit_in_cloexec)
-        guard self.descriptor >= 0 else { throw OrbitIPCSystemError.last("inotify_init1") }
+        guard self.descriptor >= 0 else { throw UnixSystemError.last("inotify_init1") }
       #endif
     }
 
@@ -430,14 +430,14 @@
 
     /// Starts watching the directory at `path`.
     ///
-    /// - Throws: An ``OrbitIPCSystemError`` if the directory cannot be watched, which includes the
+    /// - Throws: A ``UnixSystemError`` if the directory cannot be watched, which includes the
     ///   system running out of watches.
     func watch(_ path: String) throws {
       #if canImport(Darwin)
         // `O_EVTONLY` opens the directory only to hear about it, so the watch does not keep the
         // volume it is on from being unmounted.
         let directory = open(path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
-        guard directory >= 0 else { throw OrbitIPCSystemError.last("open") }
+        guard directory >= 0 else { throw UnixSystemError.last("open") }
         var change = kevent(
           ident: UInt(directory),
           filter: Int16(EVFILT_VNODE),
@@ -447,14 +447,14 @@
           udata: nil
         )
         guard systemKevent(self.descriptor, &change, 1, nil, 0, nil) == 0 else {
-          let error = OrbitIPCSystemError.last("kevent")
+          let error = UnixSystemError.last("kevent")
           _ = close(directory)
           throw error
         }
         self.directories.append(directory)
       #else
         guard inotify_add_watch(self.descriptor, path, orbit_in_entries_changed) >= 0 else {
-          throw OrbitIPCSystemError.last("inotify_add_watch")
+          throw UnixSystemError.last("inotify_add_watch")
         }
       #endif
     }
@@ -509,10 +509,10 @@
     init(path: String) throws {
       let bytes = Array(path.utf8) + [0]
       guard !path.utf8.contains(0) else {
-        throw OrbitIPCSystemError.invalidArgument("socket path contains NUL")
+        throw UnixSystemError.invalidArgument("socket path contains NUL")
       }
       guard bytes.count <= MemoryLayout.size(ofValue: self.storage.sun_path) else {
-        throw OrbitIPCSystemError(operation: "socket path is too long", code: ENAMETOOLONG)
+        throw UnixSystemError(operation: "socket path is too long", code: ENAMETOOLONG)
       }
       self.storage.sun_family = sa_family_t(AF_UNIX)
       withUnsafeMutableBytes(of: &self.storage.sun_path) { $0.copyBytes(from: bytes) }

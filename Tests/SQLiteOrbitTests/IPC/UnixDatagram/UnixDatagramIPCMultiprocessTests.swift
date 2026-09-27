@@ -4,7 +4,7 @@
   import Testing
 
   @Suite(.serialized)
-  struct OrbitIPCMultiprocessTests {
+  struct UnixDatagramIPCMultiprocessTests {
     @Test(arguments: [1, 8, 32])
     func publisherFansOutToSubscriberProcesses(subscriberCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "fan-out")
@@ -336,7 +336,9 @@
     message: OrbitIPCMessage
   ) async throws -> Bool {
     for _ in 0..<10_000 {
-      do { try await transport.send(message) } catch is OrbitIPCPartialDeliveryError {
+      do {
+        try await transport.send(message)
+      } catch is UnixDatagramIPCTransport.PartialDeliveryError {
         return true
       }
     }

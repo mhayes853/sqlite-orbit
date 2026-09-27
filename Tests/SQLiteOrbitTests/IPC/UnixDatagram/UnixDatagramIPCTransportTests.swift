@@ -101,14 +101,14 @@
     let recorder = IPCMessageRecorder()
     let database = OrbitDatabaseIdentifier(rawValue: "malformed")
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
-    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "malformed")
+    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "malformed")
     let peer = try #require(registry.peers(databaseIdentifier: database).first)
     let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
     defer { UnixSystem.closeDescriptor(descriptor) }
     // One that fills the receive buffer, which the transport sizes a byte past the longest datagram
     // it accepts, is dropped rather than decoded from a prefix.
     let tooLong =
-      try OrbitIPCWireProtocol.encode(commit(database))
+      try UnixDatagramWireProtocol.encode(commit(database))
       + [UInt8](repeating: 0, count: 60 * 1024)
 
     for datagram in [[0xff, 0, 1], tooLong] {
@@ -159,7 +159,7 @@
       directory: directory,
       backPressure: .fail
     )
-    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "shared-lifetime")
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
@@ -187,7 +187,7 @@
     // endpoint up by — its marker and its socket path — may wait for that.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "socket-lifetime")
 
     var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
@@ -210,7 +210,7 @@
     // neither wait for that thread nor close the descriptors it is about to go back to waiting on.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "self-release")
     let sender = try ipcTransport(directory)
     let held = Lock<UnixDatagramIPCTransport?>(try ipcTransport(directory))
@@ -289,18 +289,18 @@
       configuration: .init(directory: directory, backPressure: .suspend(upTo: .milliseconds(20)))
     )
 
-    var failure: OrbitIPCPartialDeliveryError?
+    var failure: UnixDatagramIPCTransport.PartialDeliveryError?
     for index in 0..<10_000 where failure == nil {
       do {
         try await sender.send(stalledCommit(database, index: index))
-      } catch let error as OrbitIPCPartialDeliveryError {
+      } catch let error as UnixDatagramIPCTransport.PartialDeliveryError {
         failure = error
       }
     }
 
     #expect(
       failure
-        == OrbitIPCPartialDeliveryError(
+        == UnixDatagramIPCTransport.PartialDeliveryError(
           discoveredPeerCount: 1,
           deliveredPeerCount: 0,
           failedPeerCount: 1
@@ -353,7 +353,11 @@
     let lists = OrbitDatabaseRegion(table: "lists")
     let sender = try ipcTransport(directory)
     let receiver = try ipcTransport(directory)
-    let registry = try OrbitIPCEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try UnixDatagramEndpointRegistry(
+      directory: directory,
+      endpointName: "observer",
+      watchesDirectories: false
+    )
     let itemsRecorder = IPCMessageRecorder()
     let listsRecorder = IPCMessageRecorder()
     let itemsSubscription = try receiver.subscribe(
@@ -367,7 +371,7 @@
       onMessage: listsRecorder.append
     )
     func advertised() throws -> [OrbitDatabaseRegion] {
-      Array(try registry.advertisements(coordinationKey: database.coordinationKey).values)
+      Array(try registry.peerRegions(for: database).values)
     }
 
     #expect(receiver.advertisedRegion(for: database) == items.union(lists))

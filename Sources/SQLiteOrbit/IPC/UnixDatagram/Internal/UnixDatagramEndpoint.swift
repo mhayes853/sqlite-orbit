@@ -19,7 +19,7 @@
       var failed = 0
     }
 
-    private let registry: OrbitIPCEndpointRegistry
+    private let registry: UnixDatagramEndpointRegistry
     private let maximumDatagramByteCount: Int
     private let descriptor: Int32
     private let queue: UnixEventQueue
@@ -31,9 +31,9 @@
     ///   - registry: Where peers find this endpoint, and where dead ones are pruned from.
     ///   - maximumDatagramByteCount: The longest datagram to send or accept.
     ///   - receiveBufferByteCount: The size of the socket's receive buffer.
-    /// - Throws: An ``OrbitIPCSystemError`` if the socket cannot be created and bound.
+    /// - Throws: A ``UnixSystemError`` if the socket cannot be created and bound.
     init(
-      registry: OrbitIPCEndpointRegistry,
+      registry: UnixDatagramEndpointRegistry,
       maximumDatagramByteCount: Int,
       receiveBufferByteCount: Int
     ) throws {
@@ -108,13 +108,13 @@
     /// - Throws: `CancellationError` if the task is cancelled while waiting for a peer, in which
     ///   case the message is withdrawn from every peer that has not taken it.
     func send(
-      _ entry: OrbitIPCWireEntry,
-      to peers: [OrbitIPCPeer],
+      _ entry: UnixDatagramWireEntry,
+      to peers: [UnixDatagramPeer],
       advertisedBy advertisers: some Collection<String>,
       suspendingUpTo suspension: Duration?
     ) async throws -> Delivery {
       let coordinationKey = entry.message.databaseIdentifier.coordinationKey
-      var single = OrbitIPCWireBatch()
+      var single = UnixDatagramWireBatch()
       single.append(entry)
       let datagram = single.encoded()
       let deadline = suspension.map { ContinuousClock.now.advanced(by: $0) }
@@ -174,8 +174,8 @@
 
     private func offer(
       _ datagram: [UInt8],
-      _ entry: OrbitIPCWireEntry,
-      to peer: OrbitIPCPeer,
+      _ entry: UnixDatagramWireEntry,
+      to peer: UnixDatagramPeer,
       coordinationKey: String,
       sendID: UInt64?,
       in state: inout State
@@ -185,7 +185,7 @@
         do {
           let descriptor = try UnixSystem.makeConnectedDatagramSocket(path: peer.socketPath)
           state.peers[name] = Peer(peer: peer, descriptor: descriptor)
-        } catch let error as OrbitIPCSystemError where error.isStalePeer {
+        } catch let error as UnixSystemError where error.isStalePeer {
           return .stale(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
         } catch {
           return .failed
@@ -200,7 +200,7 @@
           if try UnixSystem.sendDatagram(datagram, on: state.peers[name]!.descriptor) {
             return .delivered
           }
-        } catch let error as OrbitIPCSystemError where error.isStalePeer {
+        } catch let error as UnixSystemError where error.isStalePeer {
           var completions: [Completion] = []
           let stale = self.forget(name, in: &state, completions: &completions)
           assert(completions.isEmpty, "A peer with nothing pending completes no send")
@@ -231,7 +231,7 @@
       guard let descriptor = state.peers[name]?.descriptor else { return }
       while !state.peers[name]!.pending.isEmpty {
         // The longest run from the front that fits, which always holds at least the first.
-        var batch = OrbitIPCWireBatch()
+        var batch = UnixDatagramWireBatch()
         for pending in state.peers[name]!.pending {
           guard batch.byteCount(appending: pending.entry) <= self.maximumDatagramByteCount
           else { break }
@@ -245,7 +245,7 @@
             return
           }
           outcome = .delivered
-        } catch let error as OrbitIPCSystemError where error.isStalePeer {
+        } catch let error as UnixSystemError where error.isStalePeer {
           stale.append(self.forget(name, in: &state, completions: &completions))
           return
         } catch {
@@ -478,7 +478,7 @@
     // MARK: - State
 
     private struct StalePeer {
-      let peer: OrbitIPCPeer
+      let peer: UnixDatagramPeer
       let coordinationKeys: Set<String>
     }
 
@@ -492,12 +492,12 @@
     }
 
     private struct Pending {
-      let entry: OrbitIPCWireEntry
+      let entry: UnixDatagramWireEntry
       let sendID: UInt64
     }
 
     private struct Peer {
-      let peer: OrbitIPCPeer
+      let peer: UnixDatagramPeer
       let descriptor: Int32
       /// The databases this peer was last seen advertising, by coordination key.
       var coordinationKeys: Set<String> = []

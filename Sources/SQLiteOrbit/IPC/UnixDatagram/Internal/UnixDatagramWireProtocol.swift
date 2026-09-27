@@ -1,4 +1,4 @@
-enum OrbitIPCWireError: Error, Equatable {
+enum UnixDatagramWireError: Error, Equatable {
   case databaseIdentifierTooLong
   case datagramTooLarge
   case duplicateRegionEntry
@@ -32,7 +32,7 @@ enum OrbitIPCWireError: Error, Equatable {
 ///
 /// A marker, which advertises the region an endpoint subscribes to, is a string table followed by
 /// one region.
-enum OrbitIPCWireProtocol {
+enum UnixDatagramWireProtocol {
   /// Encodes `message` as a batch of one.
   ///
   /// - Parameters:
@@ -44,8 +44,8 @@ enum OrbitIPCWireProtocol {
     _ message: OrbitIPCMessage,
     maximumByteCount: Int = Int(UInt16.max)
   ) throws -> [UInt8] {
-    var batch = OrbitIPCWireBatch()
-    batch.append(try OrbitIPCWireEntry(message, fittingIn: maximumByteCount))
+    var batch = UnixDatagramWireBatch()
+    batch.append(try UnixDatagramWireEntry(message, fittingIn: maximumByteCount))
     return batch.encoded()
   }
 
@@ -53,29 +53,29 @@ enum OrbitIPCWireProtocol {
   ///
   /// - Parameter bytes: The datagram.
   /// - Returns: The entries' messages, in the order they were encoded.
-  /// - Throws: An ``OrbitIPCWireError`` if any part of the datagram is malformed, in which case
+  /// - Throws: A ``UnixDatagramWireError`` if any part of the datagram is malformed, in which case
   ///   none of it is delivered.
   static func decode(_ bytes: Span<UInt8>) throws -> [OrbitIPCMessage] {
-    guard bytes.count >= 8 else { throw OrbitIPCWireError.truncated }
+    guard bytes.count >= 8 else { throw UnixDatagramWireError.truncated }
     guard bytes[0] == 0x4F, bytes[1] == 0x52, bytes[2] == 0x42, bytes[3] == 0x54 else {
-      throw OrbitIPCWireError.invalidMagic
+      throw UnixDatagramWireError.invalidMagic
     }
     guard bytes[4] == 1 else {
-      throw OrbitIPCWireError.unsupportedProtocolVersion(bytes[4])
+      throw UnixDatagramWireError.unsupportedProtocolVersion(bytes[4])
     }
-    guard bytes[5] == 0 else { throw OrbitIPCWireError.invalidFlags }
+    guard bytes[5] == 0 else { throw UnixDatagramWireError.invalidFlags }
     var offset = 6
     let entryCount = try readCount(from: bytes, at: &offset)
-    guard entryCount > 0 else { throw OrbitIPCWireError.emptyBatch }
+    guard entryCount > 0 else { throw UnixDatagramWireError.emptyBatch }
     let strings = try readStringTable(from: bytes, at: &offset)
 
     var messages: [OrbitIPCMessage] = []
     for _ in 0..<entryCount {
-      guard offset < bytes.count else { throw OrbitIPCWireError.truncated }
+      guard offset < bytes.count else { throw UnixDatagramWireError.truncated }
       let kind = bytes[offset]
       offset += 1
       let payloadCount = try readCount(from: bytes, at: &offset)
-      guard payloadCount <= bytes.count - offset else { throw OrbitIPCWireError.truncated }
+      guard payloadCount <= bytes.count - offset else { throw UnixDatagramWireError.truncated }
       let payload = bytes.extracting(offset..<(offset + payloadCount))
       offset += payloadCount
       guard kind == 1 else { continue }
@@ -84,7 +84,7 @@ enum OrbitIPCWireProtocol {
       let database = try readString(from: payload, at: &payloadOffset, in: strings)
       let region = try readRegion(from: payload, at: &payloadOffset, strings: strings)
       guard payloadOffset == payload.count else {
-        throw OrbitIPCWireError.payloadLengthMismatch
+        throw UnixDatagramWireError.payloadLengthMismatch
       }
       messages.append(
         .transactionDidCommit(
@@ -92,7 +92,7 @@ enum OrbitIPCWireProtocol {
         )
       )
     }
-    guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
+    guard offset == bytes.count else { throw UnixDatagramWireError.trailingBytes }
     return messages
   }
 
@@ -116,12 +116,12 @@ enum OrbitIPCWireProtocol {
 
   /// Decodes the region a marker advertises.
   ///
-  /// - Throws: An ``OrbitIPCWireError`` if the marker is malformed.
+  /// - Throws: A ``UnixDatagramWireError`` if the marker is malformed.
   static func decodeMarker(_ bytes: Span<UInt8>) throws -> OrbitDatabaseRegion {
     var offset = 0
     let strings = try readStringTable(from: bytes, at: &offset)
     let region = try readRegion(from: bytes, at: &offset, strings: strings)
-    guard offset == bytes.count else { throw OrbitIPCWireError.trailingBytes }
+    guard offset == bytes.count else { throw UnixDatagramWireError.trailingBytes }
     return region
   }
 
@@ -157,7 +157,7 @@ enum OrbitIPCWireProtocol {
     var strings: [String] = []
     for _ in 0..<(try readCount(from: bytes, at: &offset)) {
       let length = try readCount(from: bytes, at: &offset)
-      guard length <= bytes.count - offset else { throw OrbitIPCWireError.truncated }
+      guard length <= bytes.count - offset else { throw UnixDatagramWireError.truncated }
       let string = bytes.extracting(offset..<(offset + length))
         .withUnsafeBufferPointer { buffer -> String? in
           // `String(decoding:as:)` repairs malformed sequences rather than rejecting them, so the
@@ -166,7 +166,7 @@ enum OrbitIPCWireProtocol {
           let decoded = String(decoding: buffer, as: UTF8.self)
           return decoded.utf8.elementsEqual(buffer) ? decoded : nil
         }
-      guard let string else { throw OrbitIPCWireError.invalidUTF8 }
+      guard let string else { throw UnixDatagramWireError.invalidUTF8 }
       strings.append(string)
       offset += length
     }
@@ -177,16 +177,19 @@ enum OrbitIPCWireProtocol {
 
   /// The length of `region`'s encoding, which does not depend on the strings it refers to.
   ///
-  /// - Throws: ``OrbitIPCWireError/regionTooLarge`` if a count or string does not fit in 16 bits.
+  /// - Throws: ``UnixDatagramWireError/regionTooLarge`` if a count or string does not fit in 16
+  ///   bits.
   static func byteCount(of region: OrbitDatabaseRegion) throws -> Int {
-    guard region.tableRegions.count <= UInt16.max else { throw OrbitIPCWireError.regionTooLarge }
+    guard region.tableRegions.count <= UInt16.max else {
+      throw UnixDatagramWireError.regionTooLarge
+    }
     var byteCount = 3
     for (table, tableRegion) in region.tableRegions {
       guard tableRegion.exceptions.count <= UInt16.max,
         table.schema.rawValue.utf8.count <= UInt16.max,
         table.name.utf8.count <= UInt16.max,
         tableRegion.exceptions.allSatisfy({ $0.utf8.count <= UInt16.max })
-      else { throw OrbitIPCWireError.regionTooLarge }
+      else { throw UnixDatagramWireError.regionTooLarge }
       byteCount += 7 + 2 * tableRegion.exceptions.count
     }
     return byteCount
@@ -228,14 +231,14 @@ enum OrbitIPCWireProtocol {
         name: name
       )
       guard tables[table] == nil else {
-        throw OrbitIPCWireError.duplicateRegionEntry
+        throw UnixDatagramWireError.duplicateRegionEntry
       }
       let includesUnspecifiedColumns = try readFlag(from: bytes, at: &offset)
       var columns: Set<String> = []
       for _ in 0..<(try readCount(from: bytes, at: &offset)) {
         let column = try readString(from: bytes, at: &offset, in: strings).asciiLowercased
         guard columns.insert(column).inserted else {
-          throw OrbitIPCWireError.duplicateRegionEntry
+          throw UnixDatagramWireError.duplicateRegionEntry
         }
       }
       tables[table] = OrbitDatabaseRegion.TableRegion(
@@ -274,17 +277,17 @@ enum OrbitIPCWireProtocol {
   }
 
   private static func readFlag(from bytes: Span<UInt8>, at offset: inout Int) throws -> Bool {
-    guard offset < bytes.count else { throw OrbitIPCWireError.truncated }
+    guard offset < bytes.count else { throw UnixDatagramWireError.truncated }
     defer { offset += 1 }
     switch bytes[offset] {
     case 0: return false
     case 1: return true
-    default: throw OrbitIPCWireError.invalidFlags
+    default: throw UnixDatagramWireError.invalidFlags
     }
   }
 
   private static func readCount(from bytes: Span<UInt8>, at offset: inout Int) throws -> Int {
-    guard offset <= bytes.count - 2 else { throw OrbitIPCWireError.truncated }
+    guard offset <= bytes.count - 2 else { throw UnixDatagramWireError.truncated }
     defer { offset += 2 }
     return Int(UInt16(bytes[offset]) << 8 | UInt16(bytes[offset + 1]))
   }
@@ -295,7 +298,7 @@ enum OrbitIPCWireProtocol {
     in strings: [String]
   ) throws -> String {
     let index = try readCount(from: bytes, at: &offset)
-    guard index < strings.count else { throw OrbitIPCWireError.stringIndexOutOfRange }
+    guard index < strings.count else { throw UnixDatagramWireError.stringIndexOutOfRange }
     return strings[index]
   }
 }
@@ -305,7 +308,7 @@ enum OrbitIPCWireProtocol {
 /// An entry's length does not depend on where its strings land in a batch's table, so a batch
 /// needs to know only this to keep its own length exact: the entry's bytes, and the strings it
 /// adds to the table if no other entry has already.
-struct OrbitIPCWireEntry: Sendable {
+struct UnixDatagramWireEntry: Sendable {
   let message: OrbitIPCMessage
 
   /// Every string the entry refers to, each once, in the order the entry first refers to it.
@@ -316,19 +319,19 @@ struct OrbitIPCWireEntry: Sendable {
 
   /// Measures `message` as it is.
   ///
-  /// - Throws: ``OrbitIPCWireError/databaseIdentifierTooLong`` or
-  ///   ``OrbitIPCWireError/regionTooLarge`` if part of it cannot be encoded.
+  /// - Throws: ``UnixDatagramWireError/databaseIdentifierTooLong`` or
+  ///   ``UnixDatagramWireError/regionTooLarge`` if part of it cannot be encoded.
   init(_ message: OrbitIPCMessage) throws {
     switch message {
     case .transactionDidCommit(let commit):
       let database = commit.databaseIdentifier.rawValue
       guard database.utf8.count <= UInt16.max else {
-        throw OrbitIPCWireError.databaseIdentifierTooLong
+        throw UnixDatagramWireError.databaseIdentifierTooLong
       }
-      let payloadByteCount = 2 + (try OrbitIPCWireProtocol.byteCount(of: commit.region))
-      guard payloadByteCount <= UInt16.max else { throw OrbitIPCWireError.regionTooLarge }
+      let payloadByteCount = 2 + (try UnixDatagramWireProtocol.byteCount(of: commit.region))
+      guard payloadByteCount <= UInt16.max else { throw UnixDatagramWireError.regionTooLarge }
       self.message = message
-      self.strings = OrbitIPCWireProtocol.strings(in: commit.region, after: [database])
+      self.strings = UnixDatagramWireProtocol.strings(in: commit.region, after: [database])
       self.byteCount = 3 + payloadByteCount
     }
   }
@@ -336,20 +339,20 @@ struct OrbitIPCWireEntry: Sendable {
   /// Measures `message`, broadening its region to the full database if a batch holding nothing
   /// else would be longer than `maximumByteCount`.
   ///
-  /// - Throws: ``OrbitIPCWireError/datagramTooLarge`` if even the broadened message does not fit,
-  ///   or ``OrbitIPCWireError/databaseIdentifierTooLong``.
+  /// - Throws: ``UnixDatagramWireError/datagramTooLarge`` if even the broadened message does not
+  ///   fit, or ``UnixDatagramWireError/databaseIdentifierTooLong``.
   init(_ message: OrbitIPCMessage, fittingIn maximumByteCount: Int) throws {
     do {
       let entry = try Self(message)
-      if OrbitIPCWireBatch().byteCount(appending: entry) <= maximumByteCount {
+      if UnixDatagramWireBatch().byteCount(appending: entry) <= maximumByteCount {
         self = entry
         return
       }
-    } catch OrbitIPCWireError.regionTooLarge {
+    } catch UnixDatagramWireError.regionTooLarge {
     }
     let entry = try Self(message.withFullDatabaseRegion)
-    guard OrbitIPCWireBatch().byteCount(appending: entry) <= maximumByteCount else {
-      throw OrbitIPCWireError.datagramTooLarge
+    guard UnixDatagramWireBatch().byteCount(appending: entry) <= maximumByteCount else {
+      throw UnixDatagramWireError.datagramTooLarge
     }
     self = entry
   }
@@ -358,20 +361,20 @@ struct OrbitIPCWireEntry: Sendable {
     switch self.message {
     case .transactionDidCommit(let commit):
       bytes.append(1)
-      OrbitIPCWireProtocol.appendCount(self.byteCount - 3, to: &bytes)
-      OrbitIPCWireProtocol.appendIndex(
+      UnixDatagramWireProtocol.appendCount(self.byteCount - 3, to: &bytes)
+      UnixDatagramWireProtocol.appendIndex(
         of: commit.databaseIdentifier.rawValue,
         in: indices,
         to: &bytes
       )
-      OrbitIPCWireProtocol.appendRegion(commit.region, to: &bytes, indices: indices)
+      UnixDatagramWireProtocol.appendRegion(commit.region, to: &bytes, indices: indices)
     }
   }
 }
 
 /// Entries bound for one datagram, and the exact length of its encoding.
-struct OrbitIPCWireBatch {
-  private(set) var entries: [OrbitIPCWireEntry] = []
+struct UnixDatagramWireBatch {
+  private(set) var entries: [UnixDatagramWireEntry] = []
 
   /// The exact length of ``encoded()``, which starts as a header and an empty string table.
   private(set) var byteCount = 10
@@ -380,13 +383,13 @@ struct OrbitIPCWireBatch {
   private var indices: [String: UInt16] = [:]
 
   /// The length this batch would have with `entry` appended.
-  func byteCount(appending entry: OrbitIPCWireEntry) -> Int {
+  func byteCount(appending entry: UnixDatagramWireEntry) -> Int {
     entry.strings.reduce(self.byteCount + entry.byteCount) { byteCount, string in
       self.indices[string] == nil ? byteCount + 2 + string.utf8.count : byteCount
     }
   }
 
-  mutating func append(_ entry: OrbitIPCWireEntry) {
+  mutating func append(_ entry: UnixDatagramWireEntry) {
     self.byteCount = self.byteCount(appending: entry)
     for string in entry.strings where self.indices[string] == nil {
       self.indices[string] = UInt16(self.strings.count)
@@ -399,8 +402,8 @@ struct OrbitIPCWireBatch {
   func encoded() -> [UInt8] {
     precondition(!self.entries.isEmpty, "An empty batch has no encoding")
     var bytes: [UInt8] = [0x4F, 0x52, 0x42, 0x54, 1, 0]  // ORBT, version 1, no flags
-    OrbitIPCWireProtocol.appendCount(self.entries.count, to: &bytes)
-    OrbitIPCWireProtocol.appendStringTable(self.strings, to: &bytes)
+    UnixDatagramWireProtocol.appendCount(self.entries.count, to: &bytes)
+    UnixDatagramWireProtocol.appendStringTable(self.strings, to: &bytes)
     for entry in self.entries {
       entry.append(to: &bytes, indices: self.indices)
     }

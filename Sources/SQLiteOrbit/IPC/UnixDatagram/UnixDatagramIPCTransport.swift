@@ -16,7 +16,7 @@
     ///
     /// A datagram socket's receive queue is finite, so a peer that stops draining it eventually
     /// refuses new messages. Nothing is ever dropped silently: the send either waits for room or
-    /// throws ``OrbitIPCPartialDeliveryError``.
+    /// throws ``PartialDeliveryError``.
     ///
     /// ```swift
     /// let coordination = UnixDatagramIPCTransport.Configuration(
@@ -103,11 +103,51 @@
       }
     }
 
+    /// Describes a broadcast that reached only some currently discoverable peers.
+    ///
+    /// The counts need not add up: a peer discovered in the coordination directory that turns out
+    /// to be dead is pruned rather than counted as a failure.
+    ///
+    /// ```swift
+    /// do {
+    ///   try await transport.send(message)
+    /// } catch let error as UnixDatagramIPCTransport.PartialDeliveryError {
+    ///   logger.warning(
+    ///     "reached \(error.deliveredPeerCount) of \(error.discoveredPeerCount) peers"
+    ///   )
+    /// }
+    /// ```
+    public struct PartialDeliveryError: Error, Hashable, Sendable {
+      /// How many peers advertised, in the coordination directory, a region the message concerns.
+      public let discoveredPeerCount: Int
+
+      /// How many peers accepted the message into their receive queue.
+      public let deliveredPeerCount: Int
+
+      /// How many peers were live but did not accept the message.
+      public let failedPeerCount: Int
+
+      /// Creates an error describing a partial broadcast.
+      ///
+      /// - Parameters:
+      ///   - discoveredPeerCount: How many peers were advertised.
+      ///   - deliveredPeerCount: How many peers accepted the message.
+      ///   - failedPeerCount: How many live peers did not accept it.
+      public init(
+        discoveredPeerCount: Int,
+        deliveredPeerCount: Int,
+        failedPeerCount: Int
+      ) {
+        self.discoveredPeerCount = discoveredPeerCount
+        self.deliveredPeerCount = deliveredPeerCount
+        self.failedPeerCount = failedPeerCount
+      }
+    }
+
     private let configuration: Configuration
-    private let registry: OrbitIPCEndpointRegistry
+    private let registry: UnixDatagramEndpointRegistry
     private let endpoint: UnixDatagramEndpoint
-    private let handlers: OrbitIPCHandlers
-    private let advertisements: OrbitIPCAdvertisementCache
+    private let handlers: UnixDatagramHandlers
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -121,18 +161,18 @@
     ///
     /// - Parameter configuration: Describes the coordination directory, back pressure, and buffer
     ///   sizes for this endpoint.
-    /// - Throws: An ``OrbitIPCSystemError`` if the configuration is invalid or the socket cannot
+    /// - Throws: A ``UnixSystemError`` if the configuration is invalid or the socket cannot
     ///   be created and bound.
     public init(configuration: Configuration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
       else {
-        throw OrbitIPCSystemError.invalidArgument("invalid transport configuration")
+        throw UnixSystemError.invalidArgument("invalid transport configuration")
       }
       if case .suspend(upTo: let duration) = configuration.backPressure {
         guard duration >= .zero else {
-          throw OrbitIPCSystemError.invalidArgument("negative back pressure duration")
+          throw UnixSystemError.invalidArgument("negative back pressure duration")
         }
       }
 
@@ -140,7 +180,7 @@
         .lowercased()
         .replacingOccurrences(of: "-", with: "")
         .prefix(16)
-      let registry = try OrbitIPCEndpointRegistry(
+      let registry = try UnixDatagramEndpointRegistry(
         directory: configuration.directory,
         endpointName: String(endpointName)
       )
@@ -149,15 +189,14 @@
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
-      let handlers = OrbitIPCHandlers(registry: registry)
+      let handlers = UnixDatagramHandlers(registry: registry)
 
       self.configuration = configuration
       self.registry = registry
       self.endpoint = endpoint
       self.handlers = handlers
-      self.advertisements = OrbitIPCAdvertisementCache(registry: registry)
       endpoint.start { bytes in
-        guard let messages = try? OrbitIPCWireProtocol.decode(bytes) else { return }
+        guard let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
         for message in messages {
           handlers.receive(message)
         }
@@ -197,7 +236,7 @@
     ///   - onMessage: Receives each message concerning that database and region.
     /// - Returns: A subscription that stops delivery when cancelled or released, and through which
     ///   its region can change.
-    /// - Throws: An ``OrbitIPCSystemError`` if the transport is closed or the coordination
+    /// - Throws: A ``UnixSystemError`` if the transport is closed or the coordination
     ///   directory cannot be written to.
     public func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
@@ -235,21 +274,21 @@
     /// ```
     ///
     /// - Parameter message: The message to broadcast.
-    /// - Throws: ``OrbitIPCPartialDeliveryError`` when a live peer did not accept the message,
-    ///   an ``OrbitIPCSystemError`` if the message cannot be encoded or sent at all, or
+    /// - Throws: ``PartialDeliveryError`` when a live peer did not accept the message,
+    ///   a ``UnixSystemError`` if the message cannot be encoded or sent at all, or
     ///   `CancellationError` if the task is cancelled while waiting for a backpressured peer, which
     ///   withdraws the message from every peer that had not yet accepted it.
     public func send(_ message: OrbitIPCMessage) async throws {
-      let entry: OrbitIPCWireEntry
+      let entry: UnixDatagramWireEntry
       do {
-        entry = try OrbitIPCWireEntry(
+        entry = try UnixDatagramWireEntry(
           message,
           fittingIn: self.configuration.maximumDatagramByteCount
         )
-      } catch OrbitIPCWireError.datagramTooLarge {
-        throw OrbitIPCSystemError.messageTooLong("datagram is too large")
+      } catch UnixDatagramWireError.datagramTooLarge {
+        throw UnixSystemError.messageTooLong("datagram is too large")
       }
-      let advertisements = try self.advertisements.advertisements(for: message.databaseIdentifier)
+      let advertisements = try self.registry.peerRegions(for: message.databaseIdentifier)
       let peers = self.peers(concernedWith: entry.message, in: advertisements)
       let suspension: Duration?
       switch self.configuration.backPressure {
@@ -264,7 +303,7 @@
       )
 
       guard delivery.failed == 0 else {
-        throw OrbitIPCPartialDeliveryError(
+        throw PartialDeliveryError(
           discoveredPeerCount: peers.count,
           deliveredPeerCount: delivery.delivered,
           failedPeerCount: delivery.failed
@@ -273,8 +312,8 @@
     }
 
     /// The peers ``send(_:)`` would send `message` to now.
-    func peers(concernedWith message: OrbitIPCMessage) throws -> [OrbitIPCPeer] {
-      let advertisements = try self.advertisements.advertisements(for: message.databaseIdentifier)
+    func peers(concernedWith message: OrbitIPCMessage) throws -> [UnixDatagramPeer] {
+      let advertisements = try self.registry.peerRegions(for: message.databaseIdentifier)
       return self.peers(concernedWith: message, in: advertisements)
     }
 
@@ -292,7 +331,7 @@
     private func peers(
       concernedWith message: OrbitIPCMessage,
       in advertisements: [String: OrbitDatabaseRegion]
-    ) -> [OrbitIPCPeer] {
+    ) -> [UnixDatagramPeer] {
       advertisements.compactMap { name, region in
         guard name != self.registry.endpointName, message.concerns(region) else { return nil }
         return self.registry.peer(named: name)
@@ -316,7 +355,7 @@
     /// - Parameter configuration: Describes the endpoint. Callers passing equal configurations
     ///   share one transport.
     /// - Returns: This process's transport for `configuration`.
-    /// - Throws: An ``OrbitIPCSystemError`` if a new transport is needed and cannot be created.
+    /// - Throws: A ``UnixSystemError`` if a new transport is needed and cannot be created.
     public static func shared(
       configuration: Configuration = .default
     ) throws -> UnixDatagramIPCTransport {
@@ -337,52 +376,13 @@
   private let sharedTransports =
     Lock<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
 
-  /// Describes a broadcast that reached only some currently discoverable peers.
-  ///
-  /// The counts need not add up: a peer discovered in the coordination directory that turns out to
-  /// be dead is pruned rather than counted as a failure.
-  ///
-  /// ```swift
-  /// do {
-  ///   try await transport.send(message)
-  /// } catch let error as OrbitIPCPartialDeliveryError {
-  ///   logger.warning("reached \(error.deliveredPeerCount) of \(error.discoveredPeerCount) peers")
-  /// }
-  /// ```
-  public struct OrbitIPCPartialDeliveryError: Error, Hashable, Sendable {
-    /// How many peers advertised, in the coordination directory, a region the message concerns.
-    public let discoveredPeerCount: Int
-
-    /// How many peers accepted the message into their receive queue.
-    public let deliveredPeerCount: Int
-
-    /// How many peers were live but did not accept the message.
-    public let failedPeerCount: Int
-
-    /// Creates an error describing a partial broadcast.
-    ///
-    /// - Parameters:
-    ///   - discoveredPeerCount: How many peers were advertised.
-    ///   - deliveredPeerCount: How many peers accepted the message.
-    ///   - failedPeerCount: How many live peers did not accept it.
-    public init(
-      discoveredPeerCount: Int,
-      deliveredPeerCount: Int,
-      failedPeerCount: Int
-    ) {
-      self.discoveredPeerCount = discoveredPeerCount
-      self.deliveredPeerCount = deliveredPeerCount
-      self.failedPeerCount = failedPeerCount
-    }
-  }
-
   /// The handlers subscribed to this endpoint, and the markers that advertise what they cover.
   ///
   /// One marker stands for every identifier sharing a coordination key, so it advertises the union
   /// of all of their handlers' regions. It is rewritten, under the lock, whenever that union
   /// changes, so a region is advertised before the call that widened it returns, and two changes
   /// can never land in the directory in the opposite order to the one they were made in.
-  private final class OrbitIPCHandlers: Sendable {
+  private final class UnixDatagramHandlers: Sendable {
     private struct Handler: Sendable {
       var region: OrbitDatabaseRegion
       let onMessage: @Sendable (OrbitIPCMessage) -> Void
@@ -395,10 +395,10 @@
       var isShutdown = false
     }
 
-    private let registry: OrbitIPCEndpointRegistry
+    private let registry: UnixDatagramEndpointRegistry
     private let state = Lock(State())
 
-    init(registry: OrbitIPCEndpointRegistry) {
+    init(registry: UnixDatagramEndpointRegistry) {
       self.registry = registry
     }
 
@@ -409,7 +409,7 @@
     ) throws -> UInt64 {
       try self.state.withLock { state in
         guard !state.isShutdown else {
-          throw OrbitIPCSystemError.closed("transport is closed")
+          throw UnixSystemError.closed("transport is closed")
         }
         let identifier = state.handlers
           .insert(Handler(region: region, onMessage: handler), for: databaseIdentifier)

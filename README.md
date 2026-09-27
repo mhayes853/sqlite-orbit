@@ -1224,8 +1224,8 @@ are discoverable at that moment. A successful return means every discovered peer
 message into its kernel receive queue, not that its handler has already run. No unbounded
 user-space queue is used:
 
-- `.fail` attempts every peer once and reports an `OrbitIPCPartialDeliveryError` if any queue is
-  full or another peer fails.
+- `.fail` attempts every peer once and reports a `UnixDatagramIPCTransport.PartialDeliveryError` if
+  any queue is full or another peer fails.
 - `.suspend(upTo:)` retries only backpressured peers until the shared deadline, then reports partial
   delivery. Task cancellation also cancels the wait.
 

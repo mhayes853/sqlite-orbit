@@ -3,9 +3,9 @@ import Testing
 @testable import SQLiteOrbit
 
 @Test
-func databaseIPCWireProtocolHasStableVersionOneEncoding() throws {
+func unixDatagramWireProtocolHasStableVersionOneEncoding() throws {
   let message = databaseIPCMessage("db")
-  let encoded = try OrbitIPCWireProtocol.encode(message)
+  let encoded = try UnixDatagramWireProtocol.encode(message)
   #expect(
     encoded == [
       0x4F, 0x52, 0x42, 0x54, 1, 0, 0, 1,  // header: ORBT, version 1, no flags, one entry
@@ -17,26 +17,26 @@ func databaseIPCWireProtocolHasStableVersionOneEncoding() throws {
 }
 
 @Test
-func databaseIPCWireProtocolRoundTripsEveryRegionShape() throws {
+func unixDatagramWireProtocolRoundTripsEveryRegionShape() throws {
   for region in databaseIPCRegions {
     let message = databaseIPCMessage(region: region)
-    #expect(try decodeDatabaseIPCMessages(OrbitIPCWireProtocol.encode(message)) == [message])
+    #expect(try decodeDatabaseIPCMessages(UnixDatagramWireProtocol.encode(message)) == [message])
   }
 }
 
 @Test
-func databaseIPCWireBatchKeepsItsExactLengthAndRoundTripsInOrder() throws {
+func unixDatagramWireBatchKeepsItsExactLengthAndRoundTripsInOrder() throws {
   let messages = databaseIPCRegions.enumerated()
     .map { index, region in
       databaseIPCMessage(index.isMultiple(of: 3) ? "first" : "second", region: region)
     }
-  var batch = OrbitIPCWireBatch()
+  var batch = UnixDatagramWireBatch()
 
   for message in messages {
-    let entry = try OrbitIPCWireEntry(message)
+    let entry = try UnixDatagramWireEntry(message)
     #expect(
-      OrbitIPCWireBatch().byteCount(appending: entry)
-        == (try OrbitIPCWireProtocol.encode(message).count)
+      UnixDatagramWireBatch().byteCount(appending: entry)
+        == (try UnixDatagramWireProtocol.encode(message).count)
     )
     let expected = batch.byteCount(appending: entry)
     batch.append(entry)
@@ -48,12 +48,12 @@ func databaseIPCWireBatchKeepsItsExactLengthAndRoundTripsInOrder() throws {
 }
 
 @Test
-func databaseIPCWireProtocolSharesStringsAcrossABatch() throws {
+func unixDatagramWireProtocolSharesStringsAcrossABatch() throws {
   let title = OrbitDatabaseRegion(column: "title", in: "items")
   let notes = OrbitDatabaseRegion(column: "notes", in: "items")
-  var batch = OrbitIPCWireBatch()
+  var batch = UnixDatagramWireBatch()
   for region in [title, notes, title.union(notes), .fullDatabase] {
-    batch.append(try OrbitIPCWireEntry(databaseIPCMessage(region: region)))
+    batch.append(try UnixDatagramWireEntry(databaseIPCMessage(region: region)))
   }
   let encoded = batch.encoded()
 
@@ -66,33 +66,33 @@ func databaseIPCWireProtocolSharesStringsAcrossABatch() throws {
 }
 
 @Test
-func databaseIPCWireProtocolEncodingIsCanonical() throws {
+func unixDatagramWireProtocolEncodingIsCanonical() throws {
   let first = OrbitDatabaseRegion(column: "first", in: "items")
   let second = OrbitDatabaseRegion(column: "second", in: "items")
 
   #expect(
-    try OrbitIPCWireProtocol.encode(databaseIPCMessage(region: first.union(second)))
-      == OrbitIPCWireProtocol.encode(databaseIPCMessage(region: second.union(first)))
+    try UnixDatagramWireProtocol.encode(databaseIPCMessage(region: first.union(second)))
+      == UnixDatagramWireProtocol.encode(databaseIPCMessage(region: second.union(first)))
   )
 }
 
 @Test
-func databaseIPCWireProtocolRejectsEveryTruncatedPrefix() throws {
-  var batch = OrbitIPCWireBatch()
+func unixDatagramWireProtocolRejectsEveryTruncatedPrefix() throws {
+  var batch = UnixDatagramWireBatch()
   for region in [OrbitDatabaseRegion(column: "title", in: "items"), .fullDatabase] {
-    batch.append(try OrbitIPCWireEntry(databaseIPCMessage("example-database", region: region)))
+    batch.append(try UnixDatagramWireEntry(databaseIPCMessage("example-database", region: region)))
   }
 
   let encoded = batch.encoded()
   for count in encoded.indices {
-    #expect(throws: OrbitIPCWireError.self) {
+    #expect(throws: UnixDatagramWireError.self) {
       try decodeDatabaseIPCMessages(Array(encoded.prefix(count)))
     }
   }
 }
 
 @Test
-func databaseIPCWireProtocolSkipsEntriesOfUnknownKinds() throws {
+func unixDatagramWireProtocolSkipsEntriesOfUnknownKinds() throws {
   let datagram = rawDatagram(
     strings: utf8("db"),
     entries: [
@@ -110,24 +110,24 @@ func databaseIPCWireProtocolSkipsEntriesOfUnknownKinds() throws {
 }
 
 @Test
-func databaseIPCWireProtocolRejectsMalformedHeaders() {
+func unixDatagramWireProtocolRejectsMalformedHeaders() {
   var badMagic = rawDatagram(strings: utf8("db"), entries: [(1, commitPayload())])
   badMagic[0] = 0
-  #expect(throws: OrbitIPCWireError.invalidMagic) { try decodeDatabaseIPCMessages(badMagic) }
-  #expect(throws: OrbitIPCWireError.unsupportedProtocolVersion(2)) {
+  #expect(throws: UnixDatagramWireError.invalidMagic) { try decodeDatabaseIPCMessages(badMagic) }
+  #expect(throws: UnixDatagramWireError.unsupportedProtocolVersion(2)) {
     try decodeDatabaseIPCMessages(
       rawDatagram(version: 2, strings: utf8("db"), entries: [(1, commitPayload())])
     )
   }
-  #expect(throws: OrbitIPCWireError.invalidFlags) {
+  #expect(throws: UnixDatagramWireError.invalidFlags) {
     try decodeDatabaseIPCMessages(
       rawDatagram(flags: 1, strings: utf8("db"), entries: [(1, commitPayload())])
     )
   }
-  #expect(throws: OrbitIPCWireError.emptyBatch) {
+  #expect(throws: UnixDatagramWireError.emptyBatch) {
     try decodeDatabaseIPCMessages(rawDatagram(strings: utf8("db"), entries: []))
   }
-  #expect(throws: OrbitIPCWireError.trailingBytes) {
+  #expect(throws: UnixDatagramWireError.trailingBytes) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: utf8("db"), entries: [(1, commitPayload())]) + [0]
     )
@@ -135,18 +135,18 @@ func databaseIPCWireProtocolRejectsMalformedHeaders() {
 }
 
 @Test
-func databaseIPCWireProtocolRejectsMalformedStrings() {
-  #expect(throws: OrbitIPCWireError.invalidUTF8) {
+func unixDatagramWireProtocolRejectsMalformedStrings() {
+  #expect(throws: UnixDatagramWireError.invalidUTF8) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: [[0xff]], entries: [(1, commitPayload())])
     )
   }
-  #expect(throws: OrbitIPCWireError.stringIndexOutOfRange) {
+  #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: utf8("db"), entries: [(1, commitPayload(database: 1))])
     )
   }
-  #expect(throws: OrbitIPCWireError.stringIndexOutOfRange) {
+  #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
     try decodeDatabaseIPCMessages(
       rawDatagram(
         strings: utf8("db", "main"),
@@ -157,23 +157,23 @@ func databaseIPCWireProtocolRejectsMalformedStrings() {
 }
 
 @Test
-func databaseIPCWireProtocolRejectsMalformedPayloads() {
-  #expect(throws: OrbitIPCWireError.payloadLengthMismatch) {
+func unixDatagramWireProtocolRejectsMalformedPayloads() {
+  #expect(throws: UnixDatagramWireError.payloadLengthMismatch) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: utf8("db"), entries: [(1, commitPayload() + [0])])
     )
   }
-  #expect(throws: OrbitIPCWireError.truncated) {
+  #expect(throws: UnixDatagramWireError.truncated) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: utf8("db"), entries: [(1, Array(commitPayload().dropLast()))])
     )
   }
-  #expect(throws: OrbitIPCWireError.invalidFlags) {
+  #expect(throws: UnixDatagramWireError.invalidFlags) {
     try decodeDatabaseIPCMessages(
       rawDatagram(strings: utf8("db"), entries: [(1, commitPayload(regionFlags: 2))])
     )
   }
-  #expect(throws: OrbitIPCWireError.invalidFlags) {
+  #expect(throws: UnixDatagramWireError.invalidFlags) {
     try decodeDatabaseIPCMessages(
       rawDatagram(
         strings: utf8("db", "main", "items"),
@@ -184,11 +184,11 @@ func databaseIPCWireProtocolRejectsMalformedPayloads() {
 }
 
 @Test
-func databaseIPCWireProtocolRejectsDuplicateRegionEntries() {
+func unixDatagramWireProtocolRejectsDuplicateRegionEntries() {
   // Table names and columns compare without regard to ASCII case, so differently spelled strings
   // can still name the same one.
   let strings = utf8("db", "main", "items", "Items", "title", "TITLE")
-  #expect(throws: OrbitIPCWireError.duplicateRegionEntry) {
+  #expect(throws: UnixDatagramWireError.duplicateRegionEntry) {
     try decodeDatabaseIPCMessages(
       rawDatagram(
         strings: strings,
@@ -196,7 +196,7 @@ func databaseIPCWireProtocolRejectsDuplicateRegionEntries() {
       )
     )
   }
-  #expect(throws: OrbitIPCWireError.duplicateRegionEntry) {
+  #expect(throws: UnixDatagramWireError.duplicateRegionEntry) {
     try decodeDatabaseIPCMessages(
       rawDatagram(
         strings: strings,
@@ -207,36 +207,36 @@ func databaseIPCWireProtocolRejectsDuplicateRegionEntries() {
 }
 
 @Test
-func databaseIPCWireProtocolBroadensOversizedRegions() throws {
+func unixDatagramWireProtocolBroadensOversizedRegions() throws {
   let message = databaseIPCMessage(
     region: OrbitDatabaseRegion(column: "title", in: "items")
   )
-  let exact = try OrbitIPCWireProtocol.encode(message)
-  let encoded = try OrbitIPCWireProtocol.encode(message, maximumByteCount: exact.count - 1)
+  let exact = try UnixDatagramWireProtocol.encode(message)
+  let encoded = try UnixDatagramWireProtocol.encode(message, maximumByteCount: exact.count - 1)
 
   #expect(try decodeDatabaseIPCMessages(exact) == [message])
   #expect(try decodeDatabaseIPCMessages(encoded) == [databaseIPCMessage(region: .fullDatabase)])
-  #expect(throws: OrbitIPCWireError.datagramTooLarge) {
-    try OrbitIPCWireProtocol.encode(message, maximumByteCount: 21)
+  #expect(throws: UnixDatagramWireError.datagramTooLarge) {
+    try UnixDatagramWireProtocol.encode(message, maximumByteCount: 21)
   }
 }
 
 @Test
-func databaseIPCWireProtocolRejectsOversizedDatabaseIdentifiers() {
-  #expect(throws: OrbitIPCWireError.databaseIdentifierTooLong) {
-    try OrbitIPCWireProtocol.encode(databaseIPCMessage(String(repeating: "x", count: 65_536)))
+func unixDatagramWireProtocolRejectsOversizedDatabaseIdentifiers() {
+  #expect(throws: UnixDatagramWireError.databaseIdentifierTooLong) {
+    try UnixDatagramWireProtocol.encode(databaseIPCMessage(String(repeating: "x", count: 65_536)))
   }
 }
 
 @Test
-func databaseIPCMarkersRoundTripEveryRegionShape() throws {
+func unixDatagramMarkersRoundTripEveryRegionShape() throws {
   for region in databaseIPCRegions {
-    let encoded = OrbitIPCWireProtocol.encodeMarker(region)
+    let encoded = UnixDatagramWireProtocol.encodeMarker(region)
     #expect(try decodeDatabaseIPCMarker(encoded) == region)
   }
   // "main", "items" and "title" once each, then the region naming them by index.
   #expect(
-    OrbitIPCWireProtocol.encodeMarker(OrbitDatabaseRegion(column: "title", in: "items")) == [
+    UnixDatagramWireProtocol.encodeMarker(OrbitDatabaseRegion(column: "title", in: "items")) == [
       0, 3, 0, 4, 0x6D, 0x61, 0x69, 0x6E, 0, 5, 0x69, 0x74, 0x65, 0x6D, 0x73,
       0, 5, 0x74, 0x69, 0x74, 0x6C, 0x65,
       0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 2
@@ -245,19 +245,23 @@ func databaseIPCMarkersRoundTripEveryRegionShape() throws {
 }
 
 @Test
-func databaseIPCMarkersRejectMalformedContents() throws {
-  let encoded = OrbitIPCWireProtocol.encodeMarker(OrbitDatabaseRegion(column: "title", in: "items"))
+func unixDatagramMarkersRejectMalformedContents() throws {
+  let encoded = UnixDatagramWireProtocol.encodeMarker(
+    OrbitDatabaseRegion(column: "title", in: "items")
+  )
   for count in encoded.indices {
-    #expect(throws: OrbitIPCWireError.self) {
+    #expect(throws: UnixDatagramWireError.self) {
       try decodeDatabaseIPCMarker(Array(encoded.prefix(count)))
     }
   }
-  #expect(throws: OrbitIPCWireError.trailingBytes) { try decodeDatabaseIPCMarker(encoded + [0]) }
+  #expect(throws: UnixDatagramWireError.trailingBytes) {
+    try decodeDatabaseIPCMarker(encoded + [0])
+  }
 }
 
 private func decodeDatabaseIPCMarker(_ bytes: [UInt8]) throws -> OrbitDatabaseRegion {
   try bytes.withUnsafeBufferPointer {
-    try OrbitIPCWireProtocol.decodeMarker(Span(_unsafeElements: $0))
+    try UnixDatagramWireProtocol.decodeMarker(Span(_unsafeElements: $0))
   }
 }
 
@@ -292,7 +296,7 @@ private func databaseIPCMessage(
 
 private func decodeDatabaseIPCMessages(_ bytes: [UInt8]) throws -> [OrbitIPCMessage] {
   try bytes.withUnsafeBufferPointer {
-    try OrbitIPCWireProtocol.decode(Span(_unsafeElements: $0))
+    try UnixDatagramWireProtocol.decode(Span(_unsafeElements: $0))
   }
 }
 
