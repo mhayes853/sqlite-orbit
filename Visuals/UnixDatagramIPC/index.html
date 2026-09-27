@@ -135,6 +135,61 @@ svg.focusing .node:not(.rel){opacity:.35}
 .chk{display:inline-flex;align-items:center;gap:7px;font:12px var(--mono);color:var(--muted);cursor:pointer;padding:6px 9px;border:1px solid var(--line2);border-radius:9px}
 .chk input{accent-color:var(--c-wire);margin:0}
 .chk.on{color:var(--text);background:#1a2439}
+/* coordination directory explorer */
+.stage.cd-stage{padding:0}
+.cd{display:grid;grid-template-columns:minmax(0,1fr) 390px}
+.cd-main{padding:12px;min-width:0}
+.cd-side{position:relative;border-left:1px solid var(--line);min-width:0}
+.cd-detail{position:absolute;inset:0;overflow:auto;padding:14px 16px 16px;font-size:13.5px;color:#cfd7e5;overscroll-behavior:contain}
+.cd-procs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.cd-proc{border:1px solid var(--line);border-radius:10px;padding:6px 9px;height:64px;overflow:hidden;background:rgba(18,25,37,.6);transition:border-color .25s,background .25s,opacity .25s}
+.cd-proc .pn{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-weight:700;font-size:12.5px;white-space:nowrap}
+.cd-proc .pn span{font:500 10.5px var(--mono);color:var(--dim);overflow:hidden;text-overflow:ellipsis}
+.cd-proc .ps{font-size:11.5px;line-height:1.3;color:var(--muted);margin-top:3px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cd-proc.hot{border-color:var(--c-ep);background:rgba(255,180,84,.08)}
+.cd-proc.dead{border-color:rgba(255,107,107,.7)}
+.cd-proc.dead .pn,.cd-proc.dead .ps{color:var(--bad)}
+.cd-proc.off{opacity:.45}
+.cd-tree{margin-top:10px;border:1px solid var(--line);border-radius:12px;padding:5px 0;background:rgba(10,13,19,.35)}
+.cd-row{display:flex;align-items:center;gap:7px;width:100%;height:27px;padding:0 10px 0 calc(8px + var(--d) * 18px);background:transparent;border:0;border-left:3px solid transparent;color:var(--text);font:12.5px var(--mono);text-align:left;cursor:pointer;white-space:nowrap;touch-action:manipulation;transition:background .25s,opacity .25s,box-shadow .25s}
+.cd-row:hover,.cd-row.sel{background:#1a2439}
+.cd-row.sel{border-left-color:var(--c-wire)}
+.cd-row:focus-visible{outline:2px solid var(--c-wire);outline-offset:-2px}
+.cd-row svg{flex:none;width:14px;height:14px}
+.cd-row .nm{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.cd-row .own{flex:none;font-size:10px;line-height:1;padding:3px 5px;border-radius:5px;border:1px solid var(--line2);color:var(--muted)}
+.cd-row .own.dead{border-color:rgba(255,107,107,.6);color:var(--bad)}
+.cd-row .tag{flex:none;font:700 10px/1 var(--mono);padding:3px 6px;border-radius:6px;background:var(--c-watch);color:#0a0d13}
+.cd-row .pinned{flex:none;font:600 10px/1 var(--mono);color:var(--c-wire)}
+.cd-row .nt{margin-left:auto;flex:none;padding-left:8px;color:var(--dim);font-size:11px}
+.cd-row.ghost{opacity:.38}
+.cd-row.ghost .nm{font-style:italic}
+.cd-row.hot{background:rgba(126,224,138,.13);box-shadow:inset 0 0 0 1px rgba(126,224,138,.6)}
+.cd-row.gone{background:rgba(255,107,107,.1);box-shadow:inset 0 0 0 1px rgba(255,107,107,.5)}
+.cd-row.gone .nm{text-decoration:line-through;color:var(--bad)}
+.cd-row.gone .tag{background:var(--bad)}
+.cd-cache{margin-top:10px;border:1px solid rgba(126,224,138,.4);border-radius:12px;padding:7px 12px;font:11.5px/1.65 var(--mono);color:var(--muted)}
+.cd-cache{height:118px;overflow:hidden}
+.cd-cache div{overflow-wrap:anywhere}
+.cd-cache b{color:var(--c-reg);font-weight:650}
+.cd-cache .q{color:var(--c-watch)}
+.cd-detail h3{margin:0;font:650 15px var(--mono);word-break:break-all;display:flex;gap:8px;align-items:center}
+.cd-detail h3 svg{flex:none;width:15px;height:15px}
+.cd-detail .kind{font:12px var(--mono);color:var(--muted);margin-top:4px}
+.cd-detail .path{font:11.5px var(--mono);color:var(--dim);word-break:break-all;margin-top:2px}
+.cd-detail h4{margin:13px 0 3px;font:600 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim)}
+.cd-detail p{margin:.25em 0 .45em}
+.cd-detail code,.cd-detail p code{color:#e3e9f5;background:#19233a;border:1px solid #26334d;padding:0 .28em;border-radius:4px;white-space:normal;overflow-wrap:anywhere}
+.cd-detail .banner{margin-top:10px;padding:6px 10px;border-radius:8px;font-size:12.5px;border:1px dashed var(--line2);color:var(--muted)}
+.cd-detail .banner.gone{border:1px solid rgba(255,107,107,.5);color:#ffb3b3;background:rgba(255,107,107,.07)}
+.cd-detail .hint{color:var(--dim);font-size:12px;margin-top:12px}
+.cd-code{font:11.5px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;background:#0e1420;border:1px solid var(--line);border-radius:8px;padding:7px 9px;color:#cfd7e5;margin:6px 0}
+.cd-bytes{grid-template-columns:30px repeat(8,minmax(0,1fr));margin-top:6px}
+.cd-bytes .b{font-size:11.5px}
+.cd-field{font:11.5px/1.45 var(--mono);color:var(--muted);min-height:3em;margin-top:6px}
+.cd-field b{color:var(--text);font-weight:600}
+@media (max-width:900px){.cd{grid-template-columns:1fr}.cd-side{border-left:0;border-top:1px solid var(--line);height:470px}}
+@media (max-width:560px){.cd-main{padding:8px}.cd-cache{height:188px}.cd-procs{grid-template-columns:repeat(2,minmax(0,1fr))}.cd-row{font-size:11.5px;padding-left:calc(6px + var(--d) * 12px);gap:5px}.cd-row .nt{display:none}.cd-detail{padding:12px}}
 footer{max-width:1140px;margin:0 auto;padding:10px 18px 60px;color:var(--dim);font-size:13px}
 footer code{color:var(--muted)}
 .rmnote{display:none;font:12px var(--mono);color:var(--c-watch);margin-top:10px}
@@ -151,6 +206,7 @@ footer code{color:var(--muted)}
   .btn .lab{display:none}
   .btn{min-width:44px;height:40px}
   .stage{padding:6px 4px 2px}
+  p code,li code,.caption code,.info code,.lede code,.hero code,footer code{white-space:normal;overflow-wrap:anywhere}
 }
 </style>
 </head>
@@ -184,11 +240,12 @@ footer code{color:var(--muted)}
 <nav class="top" aria-label="Scenes"><div class="in">
   <a href="#arch"><span class="n">01</span>Architecture</a>
   <a href="#discovery"><span class="n">02</span>Discovery</a>
-  <a href="#fanout"><span class="n">03</span>Fan-out</a>
-  <a href="#wire"><span class="n">04</span>Wire format</a>
-  <a href="#batching"><span class="n">05</span>Backpressure</a>
-  <a href="#loop"><span class="n">06</span>Event loop</a>
-  <a href="#widening"><span class="n">07</span>Region widening</a>
+  <a href="#coordir"><span class="n">03</span>Directory contents</a>
+  <a href="#fanout"><span class="n">04</span>Fan-out</a>
+  <a href="#wire"><span class="n">05</span>Wire format</a>
+  <a href="#batching"><span class="n">06</span>Backpressure</a>
+  <a href="#loop"><span class="n">07</span>Event loop</a>
+  <a href="#widening"><span class="n">08</span>Region widening</a>
 </div></nav>
 <main>
 <section class="scene" id="arch">
@@ -200,37 +257,42 @@ footer code{color:var(--muted)}
 </section>
 <section class="scene" id="discovery">
   <div class="sh"><span class="num">02</span><h2>Discovery through the coordination directory</h2></div>
-  <p class="lede">Processes find each other through the filesystem: sockets in <code>v1/s/</code>, and one marker per endpoint per database in <code>v1/d/&lt;coordinationKey&gt;/</code>. Markers are replaced whole with a rename. Each sender's registry keeps the peer regions it read until a directory watch reports a change.</p>
+  <p class="lede">Processes find each other through the filesystem: sockets in <code>v1/s/</code>, and one marker per endpoint per database in <code>v1/d/&lt;coordinationKey&gt;/</code>. Markers are replaced whole with a rename. Each sender's registry keeps the peer regions it read until a directory watch reports a change. The next scene goes through each file.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
+<section class="scene" id="coordir">
+  <div class="sh"><span class="num">03</span><h2>Inside the coordination directory</h2></div>
+  <p class="lede">Every file the transport and <code>SQLitePool</code> keep in <code>Configuration.directory</code>: what it is, its exact bytes, and who creates, reads and removes it. Hover or tap an entry, and click to pin it while you step. The steps follow one process, D, from opening a database until another process prunes it after a crash. The processes, database paths and endpoint names are examples. The name formats, bytes and calls come from the code.</p>
+  <div class="card"><div class="stage cd-stage"></div></div>
+</section>
 <section class="scene" id="fanout">
-  <div class="sh"><span class="num">03</span><h2>Commit fan-out with sender-side filtering</h2></div>
+  <div class="sh"><span class="num">04</span><h2>Commit fan-out with sender-side filtering</h2></div>
   <p class="lede">A commit goes only to peers whose advertised region it concerns, so a process that doesn't care is never woken. Pick a commit to see which peers it reaches.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
 <section class="scene" id="wire">
-  <div class="sh"><span class="num">04</span><h2>Wire format byte inspector</h2></div>
+  <div class="sh"><span class="num">05</span><h2>Wire format byte inspector</h2></div>
   <p class="lede">The bytes below are computed in the page by a port of <code>UnixDatagramWireBatch.encoded()</code> and <code>UnixDatagramWireProtocol.encodeMarker(_:)</code>. Hover or tap a byte, or a row in the field list, to see which field it belongs to, its offset and its decoded value. Toggle commits to watch the shared string table change.</p>
   <div class="card" id="wire-card"></div>
 </section>
 <section class="scene" id="batching">
-  <div class="sh"><span class="num">05</span><h2>Batching under backpressure</h2></div>
+  <div class="sh"><span class="num">06</span><h2>Batching under backpressure</h2></div>
   <p class="lede">What happens when a peer's receive queue is full. With <code>.suspend(upTo:)</code>, messages wait in order in one FIFO per peer and go out together once the peer has room, each sender waiting on its own continuation. With <code>.fail</code>, nothing waits.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
 <section class="scene" id="loop">
-  <div class="sh"><span class="num">06</span><h2>The event loop: Darwin and Linux/Android</h2></div>
+  <div class="sh"><span class="num">07</span><h2>The event loop: Darwin and Linux/Android</h2></div>
   <p class="lede">One “Orbit IPC” <code>DetachedThread</code> per transport blocks in <code>UnixEventQueue.wait(until:)</code>. The two platforms differ in one important way: Linux can report when a full peer has room, and Darwin can't, so Darwin retries on a timer that backs off.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
 <section class="scene" id="widening">
-  <div class="sh"><span class="num">07</span><h2>Region widening for value observations</h2></div>
+  <div class="sh"><span class="num">08</span><h2>Region widening for value observations</h2></div>
   <p class="lede">An observation whose fetch reads more than it had advertised must not miss a commit to the new part. It widens its advertisement first, and <code>updateRegion(_:)</code> returns only after the new marker is on disk. Then it reads again. Compare the real order with the order that would lose a commit.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
 </main>
 <footer>
-  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagram/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/UnixDatagram/Internal/UnixSystem.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>CLinuxEvents/shim.h</code>. Endpoint names, the database path and timings in the scenes are examples. Byte counts are computed by the page.</p>
+  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagram/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/UnixDatagram/Internal/UnixSystem.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>CLinuxEvents/shim.h</code>, <code>IPC/Internal/OrbitDatabaseOpenLock.swift</code>, <code>IPC/Internal/OrbitDatabaseIdentifier+CoordinationKey.swift</code>, <code>Internal/String+StableHash.swift</code>, <code>SQLite/SQLitePool.swift</code>. Endpoint names, database paths, directory paths and timings in the scenes are examples. Byte counts are computed by the page.</p>
   <p>Keyboard: focus a scene's controls and use ← / → to step.</p>
 </footer>
 <noscript><p style="text-align:center;color:#ff6b7d">The visualizations need JavaScript.</p></noscript>
@@ -713,7 +775,8 @@ function fnv1a64(s) {
 }
 const DBID = '/data/reminders.sqlite';
 const KEY = fnv1a64(DBID);
-const EP = { A: '3f9c2e71a0b84d65', B: '7be01d94c2a35f18', C: 'd44c8a0e6b1f9273' };
+// Example endpoint names. Each is a UUID's first 16 hex digits, so the 13th is its version, 4.
+const EP = { A: '3f9c2e71a0b84d65', B: '7be01d94c2a34f18', C: 'd44c8a0e6b1f4273', D: 'a61e3b07c95d4e28' };
 
 /* ====================================================================================
    Scene 1: Architecture map
@@ -727,7 +790,7 @@ const ARCH = {
     r: 'A cancellable registration whose region can change. <code>updateRegion(_:)</code> is serialized, and it returns only once every announcement that starts afterwards honors the new region. For this transport, that means the new marker has been renamed into place. The subscription from <code>OrbitIPCDatabase</code> updates the transport, same-process and local sources in turn.' },
   db: { t: 'OrbitIPCDatabase', s: 'announces every committed write', short: ['OrbitIPC', 'Database'], c: C.db,
     file: 'OrbitIPCDatabase.swift · SQLite/OrbitIPCDatabase+SQLite.swift',
-    r: 'Opens a <code>SQLitePool</code> and joins <code>UnixDatagramIPCTransport.shared(configuration:)</code>. After a write commits, it tells other handles in this process through <code>OrbitDatabaseObservationHub</code>, then announces <code>.transactionDidCommit</code> with the union of the changed regions from its own <code>Task</code>, so cancelling the caller can\'t drop it. <code>subscribe(transactionObserver:region:)</code> merges local, same-process and transport commits into one stream.' },
+    r: 'Opens a <code>SQLitePool</code>, which holds <code>open-locks/&lt;coordinationKey&gt;.lock</code> while it opens its connections, then joins <code>UnixDatagramIPCTransport.shared(configuration:)</code>. After a write commits, it tells other handles in this process through <code>OrbitDatabaseObservationHub</code>, then announces <code>.transactionDidCommit</code> with the union of the changed regions from its own <code>Task</code>, so cancelling the caller can\'t drop it. <code>subscribe(transactionObserver:region:)</code> merges local, same-process and transport commits into one stream.' },
   tr: { t: 'UnixDatagramIPCTransport', s: 'one per Configuration', short: ['UnixDatagram', 'IPCTransport'], c: C.tr,
     file: 'IPC/UnixDatagram/UnixDatagramIPCTransport.swift',
     r: 'The production <code>OrbitIPCTransport</code>. <code>shared(configuration:)</code> gives every database in a process with the same configuration one endpoint. <code>send(_:)</code> measures the message, asks the registry which endpoints advertise the database, keeps the peers whose region the commit concerns, and hands them to the endpoint. It throws <code>UnixDatagramIPCTransport.PartialDeliveryError</code> if a live peer did not take the message.' },
@@ -751,10 +814,10 @@ const ARCH = {
     r: 'Detects directory changes without blocking. Darwin uses a kqueue <code>EVFILT_VNODE</code> watch (<code>NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE</code>) on an <code>O_EVTONLY</code> descriptor. Linux and Android use inotify (<code>IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF</code>). <code>drainChanges()</code> only reports whether anything changed. No thread waits on it.' },
   reg: { t: 'UnixDatagramEndpointRegistry', s: 'markers · peer regions', short: ['UnixDatagram', 'Endpoint', 'Registry'], c: C.reg,
     file: 'IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift',
-    r: 'Knows the coordination directory layout. It creates <code>v1/s/</code> and <code>v1/d/</code>, writes a marker to <code>.&lt;endpoint&gt;.tmp</code> and renames it over the marker, and lists and decodes markers. A marker that is empty or can\'t be decoded counts as <code>.fullDatabase</code>. It also removes a dead peer\'s socket path, markers and leftover temp files. <code>peerRegions(for:)</code> keeps, under its lock, the region each endpoint advertises for each coordination key. Before every lookup it drains the directory watcher on the sending thread. Any change forgets everything, watches included. A directory it can\'t watch is read again on every send, which is slower but always correct.' },
+    r: 'Knows the coordination directory layout. It creates <code>v1/s/</code> and <code>v1/d/</code>, writes a marker to <code>.&lt;endpoint&gt;.tmp</code> and renames it over the marker, and lists and decodes markers. A marker that is empty, unreadable or undecodable counts as <code>.fullDatabase</code>. For a dead peer, it removes the socket path, and the marker and any leftover temp file in each database the sender saw it advertising. <code>peerRegions(for:)</code> keeps, under its lock, the region each endpoint advertises for each coordination key. Before every lookup it drains the directory watcher on the sending thread. Any change forgets everything, watches included. A directory it can\'t watch is read again on every send, which is slower but always correct.' },
   dir: { t: 'Coordination directory', s: 'v1/s/*.sock · v1/d/<key>/*', short: ['coordination', 'directory'], c: C.dir,
     file: 'Configuration.directory (default $TMPDIR/sqlite-orbit/)',
-    r: '<code>v1/s/&lt;endpoint&gt;.sock</code> holds the sockets. <code>v1/d/&lt;coordinationKey&gt;/&lt;endpoint&gt;</code> holds the markers, one per endpoint per database. The coordination key is the database identifier\'s 64-bit FNV-1a hash as 16 hex digits. Endpoint names are the first 16 hex digits of a UUID.' },
+    r: 'The transport keeps its sockets at <code>v1/s/&lt;endpoint&gt;.sock</code> and its markers at <code>v1/d/&lt;coordinationKey&gt;/&lt;endpoint&gt;</code>, one per endpoint per database. <code>SQLitePool</code> keeps <code>open-locks/&lt;coordinationKey&gt;.lock</code> beside them. The coordination key is the identifier\'s 64-bit FNV-1a hash in 16 hex digits, and an endpoint name is 16 hex digits of a UUID. Scene 03 goes through every file.' },
   peers: { t: 'Peer processes', s: 'the same stack, elsewhere', short: ['peer', 'processes'], c: C.peer,
     file: 'other processes sharing Configuration.directory',
     r: 'Every other process has its own transport, loop thread and markers. Peers find each other only through markers. There is no broker, and one transport can serve many databases.' }
@@ -996,7 +1059,7 @@ new Scene({
     return [
       { t: 'Three processes, one directory', cap: 'Processes A, B and C open the same database with the same <code>Configuration.directory</code> (by default <code>$TMPDIR/sqlite-orbit/</code>). There is no broker. The directory is the only thing they share.',
         run(c) { c.redraw(); } },
-      { t: 'A binds its socket', cap: `<code>UnixDatagramIPCTransport.init</code> names the endpoint with the first 16 hex digits of a UUID. <code>UnixDatagramEndpointRegistry</code> creates <code>v1/s/</code> and <code>v1/d/</code>. <code>UnixSystem.makeBoundDatagramSocket</code> binds <code>${EP.A}.sock</code> with <code>SO_RCVBUF</code> set to <code>receiveBufferByteCount</code>, and <code>endpoint.start</code> spawns the “Orbit IPC” thread.`,
+      { t: 'A binds its socket', cap: `A's transport picks a random endpoint name. Its registry creates <code>v1/s/</code> and <code>v1/d/</code>, <code>UnixSystem.makeBoundDatagramSocket</code> binds <code>${EP.A}.sock</code>, and <code>endpoint.start</code> spawns the “Orbit IPC” thread.`,
         run(c) { add(c, 'v1', 's', 'd', 'sockA'); h(c, 'sockA', 'procA'); c.redraw(); } },
       { t: 'B and C bind theirs', cap: 'B and C do the same. A socket on its own advertises nothing. Senders find peers through markers, and <code>peer(named:)</code> derives a peer\'s socket path from its marker\'s name.',
         run(c) { add(c, 'sockB', 'sockC'); c.d.proc.B.status = c.d.proc.C.status = '“Orbit IPC” thread blocked in UnixEventQueue.wait'; h(c, 'sockB', 'sockC'); c.redraw(); } },
@@ -1011,7 +1074,7 @@ new Scene({
         } },
       { t: 'Later sends reuse the peer regions', cap: 'On every send, <code>peerRegions(for:)</code> first calls <code>watcher.drainChanges()</code> on the sending thread, under the registry\'s lock. This never blocks: it is a zero-timeout <code>kevent</code> on Darwin, or a nonblocking <code>read</code> of the inotify descriptor. Nothing changed, so it returns the peer regions it kept and no file is read.',
         run(c) { c.d.regionsStatus = 'drainChanges() → false · hit'; h(c, 'watch', 'reg'); c.redraw(); } },
-      { t: 'C advertises; the kernel queues an event', cap: 'C subscribes: it writes a temp file, then renames it. The kernel queues an event on A\'s watch: <code>NOTE_WRITE</code> from <code>EVFILT_VNODE</code> on Darwin, or <code>IN_CREATE</code> and then <code>IN_MOVED_TO</code> from inotify on Linux and Android. Nothing in A runs yet, because no thread waits on the watcher. It is polled.',
+      { t: 'C advertises; the kernel queues an event', cap: 'C subscribes: it writes a temp file, then renames it. The kernel queues an event on A\'s watch: <code>NOTE_WRITE</code> from <code>EVFILT_VNODE</code> on Darwin, or, from inotify on Linux and Android, <code>IN_CREATE</code> for the temp file and <code>IN_MOVED_FROM</code> and <code>IN_MOVED_TO</code> for the rename. Nothing in A runs yet, because no thread waits on the watcher. It is polled.',
         run(c) {
           add(c, 'tmpC');
           c.d.proc.C.sub = 'main.tags'; c.d.proc.C.status = 'subscribe(to:region:) → .tmp, then rename'; h(c, 'tmpC', 'watch'); c.redraw();
@@ -1025,7 +1088,7 @@ new Scene({
           c.fly(c.pt('row:mC', 'r'), { x: c.n.regionsBox.x + c.n.regionsBox.w - 30, y: c.n.regionsBox.y + 60 }, { delay: 1100, label: 'C', color: C.reg, bend: 0.1 },
             () => { c.d.peerRegions = [[EP.B, 'main.reminders'], [EP.C, 'main.tags']]; c.redraw(); });
         } },
-      { t: 'C dies; A prunes it', cap: 'C crashes and leaves its socket and marker behind. The next commit that concerns C fails to reach it: <code>connect()</code> fails with <code>ECONNREFUSED</code> or <code>ENOENT</code>, or a cached socket fails with <code>ECONNREFUSED</code>, <code>ECONNRESET</code> or <code>ENOTCONN</code>. <code>isStalePeer</code> recognizes these, so C is not counted as a failure. <code>registry.remove(_:coordinationKeys:)</code> unlinks its socket path, marker and any leftover <code>.tmp</code>. A clean shutdown removes them itself in <code>deinit</code>.',
+      { t: 'C dies; A prunes it', cap: 'C crashes and leaves its socket and marker behind. The next commit that concerns C fails to reach it: <code>connect()</code> or the send fails with <code>ENOENT</code>, <code>ECONNREFUSED</code>, <code>ECONNRESET</code> or <code>ENOTCONN</code>. <code>isStalePeer</code> recognizes these, so C is not counted as a failure. <code>registry.remove(_:coordinationKeys:)</code> unlinks its socket path, and its marker and any leftover <code>.tmp</code> in this database. A clean shutdown removes them itself in <code>deinit</code>.',
         run(c) {
           c.d.proc.C.dead = true; c.d.proc.C.status = 'crashed: its socket and marker are left behind'; c.d.proc.C.sub = null;
           rm(c, 'sockC', 'mC'); if (!c.cur) c.d.peerRegions = [[EP.B, 'main.reminders']];
@@ -1037,7 +1100,324 @@ new Scene({
 });
 
 /* ====================================================================================
-   Scene 3: Fan-out with sender-side filtering
+   Scene 3: Inside the coordination directory (file-tree explorer + one process's lifecycle)
+   ==================================================================================== */
+const CD_ROOT = '/tmp/sqlite-orbit/';
+const CD_DB = {
+  R: { path: DBID, key: KEY, file: 'reminders.sqlite' },
+  N: { path: '/data/notes.sqlite', key: fnv1a64('/data/notes.sqlite'), file: 'notes.sqlite' }
+};
+const CD_P = { A: 'Reminders app', B: 'Widget', C: 'Sync agent', D: 'Share extension' };
+const CD_RG = {
+  aR: R.of(R.cols('reminders', ['title', 'priority']), R.table('tags')),
+  bR: R.of(R.table('reminders')),
+  aN: R.full(),
+  cN: R.of(R.table('notes')),
+  d1: R.of(R.cols('reminders', ['title'])),
+  d2: R.of(R.cols('lists', ['name']), R.cols('reminders', ['title']))
+};
+// The tree, in the order `ls -a` would list it: a leading dot sorts before hex digits.
+const CD_ROWS = (() => {
+  const rows = [], parents = [];
+  const push = (id, depth, name, kind, o) => {
+    const path = depth ? parents[depth - 1] + name : CD_ROOT;
+    parents[depth] = path;
+    rows.push(Object.assign({ id, depth, name, kind, path }, o));
+  };
+  const keys = Object.keys(CD_DB).sort((a, b) => cmp(CD_DB[a].key, CD_DB[b].key));
+  push('root', 0, 'sqlite-orbit/', 'dir', { note: 'Configuration.directory' });
+  push('locks', 1, 'open-locks/', 'dir', { note: 'SQLitePool open locks' });
+  keys.forEach(k => push('lock' + k, 2, CD_DB[k].key + '.lock', 'lock', { db: k, note: CD_DB[k].file }));
+  push('v1', 1, 'v1/', 'dir', { note: 'the transport' });
+  push('s', 2, 's/', 'dir', { note: 'one socket per endpoint' });
+  'ABCD'.split('').sort((a, b) => cmp(EP[a], EP[b])).forEach(p => push('sock' + p, 3, EP[p] + '.sock', 'sock', { ep: p }));
+  push('d', 2, 'd/', 'dir', { note: 'one directory per database' });
+  keys.forEach(k => {
+    push('dir' + k, 3, CD_DB[k].key + '/', 'dir', { db: k, note: CD_DB[k].file });
+    const entries = k === 'R' ? [['tmp', 'D'], ['m', 'A'], ['m', 'B'], ['m', 'D']] : [['tmp', 'C'], ['m', 'A'], ['m', 'C']];
+    entries.map(([t, p]) => ({ t, p, name: t === 'tmp' ? '.' + EP[p] + '.tmp' : EP[p] }))
+      .sort((a, b) => cmp(a.name, b.name))
+      .forEach(e => push(e.t + e.p + k, 4, e.name, e.t === 'tmp' ? 'tmp' : 'marker', { db: k, ep: e.p, note: e.t === 'tmp' ? 'temporary' : 'marker' }));
+  });
+  return rows;
+})();
+const CD_BY = Object.fromEntries(CD_ROWS.map(r => [r.id, r]));
+const cdShort = s => s.slice(0, 4) + '…';
+const cdRegion = r => describeRegion(r).replace(/main\./g, '');
+const CD_ICON = {
+  dir: `<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 3.5h4l1.2 1.3h5.8v6.7h-11z" fill="none" stroke="${C.muted}" stroke-width="1.1"/></svg>`,
+  lock: `<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M4.3 6.2V4.6a2.7 2.7 0 0 1 5.4 0v1.6" fill="none" stroke="${C.ep}" stroke-width="1.3"/><rect x="2.8" y="6.2" width="8.4" height="6" rx="1.4" fill="${C.ep}"/></svg>`,
+  sock: `<svg viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="${C.sk}" stroke-width="1.4"/><circle cx="7" cy="7" r="2" fill="${C.sk}"/></svg>`,
+  marker: `<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="1.5" width="10" height="11" rx="1.5" fill="${C.reg}"/><path d="M4.3 5h5.4M4.3 7.5h5.4M4.3 10h3.4" stroke="#0a0d13" stroke-width="1.1"/></svg>`,
+  tmp: `<svg viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="1.5" width="10" height="11" rx="1.5" fill="none" stroke="${C.reg}" stroke-width="1.2" stroke-dasharray="2 1.6"/></svg>`
+};
+const CD_COLOR = { dir: C.text, lock: C.ep, sock: C.sk, marker: C.reg, tmp: '#9fcf9f' };
+function cdState() {
+  return {
+    ver: 0,
+    present: new Set(['root', 'locks', 'lockR', 'lockN', 'v1', 's', 'sockA', 'sockB', 'sockC', 'd', 'dirR', 'dirN', 'mAR', 'mBR', 'mAN', 'tmpCN']),
+    region: { mAR: CD_RG.aR, mBR: CD_RG.bR, mAN: CD_RG.aN, mCN: CD_RG.cN, tmpCN: CD_RG.cN, mDR: CD_RG.d1, tmpDR: CD_RG.d1 },
+    partial: { tmpCN: 'C is between writing this file and renaming it, so right now it may hold only a prefix of these bytes.' },
+    hot: new Set(), gone: {}, tag: {}, focus: 'root', phot: new Set(),
+    proc: {
+      A: { s: 'both databases open · subscribed to both · commits' },
+      B: { s: 'reminders open · subscribed' },
+      C: { s: 'notes open · subscribing: .tmp written, rename next' },
+      D: { s: 'not running yet', off: 1 }
+    },
+    cache: { R: [['A', CD_RG.aR], ['B', CD_RG.bR]], N: [['A', CD_RG.aN]] },
+    watching: ['R', 'N'],
+    queued: `yes (C created .${cdShort(EP.C)}.tmp)`
+  };
+}
+function cdDraw(ctx) {
+  const d = ctx.d, els = d.els;
+  d.ver++;
+  els.procs.innerHTML = 'ABCD'.split('').map(k => {
+    const p = d.proc[k];
+    const cls = 'cd-proc' + (d.phot.has(k) ? ' hot' : '') + (p.dead ? ' dead' : '') + (p.off ? ' off' : '');
+    return `<div class="${cls}"><div class="pn">${k} · ${esc(CD_P[k])}<span>${esc(cdShort(EP[k]))}</span></div><div class="ps">${esc(p.s)}</div></div>`;
+  }).join('');
+  els.tree.innerHTML = CD_ROWS.map(r => {
+    const present = d.present.has(r.id), gone = !present && d.gone[r.id];
+    const state = present ? (d.hot.has(r.id) ? ' hot' : '') : gone ? ' gone' : ' ghost';
+    const tag = gone || (present && d.tag[r.id]);
+    const own = r.ep ? `<span class="own${d.proc[r.ep].dead ? ' dead' : ''}">${r.ep}</span>` : '';
+    const label = `${r.name}${present ? '' : gone ? ', just ' + gone : ', not there at this step'}`;
+    return `<button type="button" class="cd-row${state}" data-id="${r.id}" style="--d:${r.depth}" aria-label="${esc(label)}">${CD_ICON[r.kind]}<span class="nm" style="color:${present || gone ? CD_COLOR[r.kind] : C.muted}">${esc(r.name)}</span>${own}${tag ? `<span class="tag">${esc(tag)}</span>` : ''}<span class="pinned"></span><span class="nt">${esc(r.note || '')}</span></button>`;
+  }).join('');
+  const kl = k => `d/${cdShort(CD_DB[k].key)}/`;
+  const line = k => {
+    const e = d.cache[k];
+    return `<div>peerRegions[${cdShort(CD_DB[k].key)}] ${e ? '= ' + esc(e.map(([p, r]) => `${p}${p === 'A' ? ' (self)' : ''} → ${cdRegion(r)}`).join(' · ')) : '<span style="color:var(--dim)">not kept</span>'}</div>`;
+  };
+  els.cache.innerHTML = `<div><b>Process A's UnixDatagramEndpointRegistry</b> · in memory, not on disk</div>
+    <div>watcher: ${d.watching.length ? 'watching ' + d.watching.map(kl).join(', ') : 'none'} · <span class="${/^yes/.test(d.queued) ? 'q' : ''}">changes queued: ${esc(d.queued)}</span></div>
+    ${line('R')}${line('N')}`;
+  cdShow(ctx);
+}
+function cdShow(ctx) {
+  const sc = ctx.scene, d = ctx.d, els = d.els;
+  const id = sc.cdHover || sc.cdPin || d.focus;
+  els.tree.querySelectorAll('.cd-row').forEach(b => {
+    const i = b.dataset.id;
+    b.classList.toggle('sel', i === id);
+    b.setAttribute('aria-pressed', String(i === sc.cdPin));
+    b.querySelector('.pinned').textContent = i === sc.cdPin ? 'pinned' : '';
+  });
+  const key = id + '|' + d.ver;
+  if (els.detail.dataset.key === key) return;
+  els.detail.dataset.key = key;
+  els.detail.innerHTML = cdInfo(id, d);
+  els.detail.scrollTop = 0;
+  const grid = els.detail.querySelector('.cd-bytes'), out = els.detail.querySelector('.cd-field');
+  if (!grid) return;
+  const pick = e => {
+    const cell = e.target.closest('.b'); if (!cell) return;
+    grid.querySelectorAll('.b').forEach(x => { x.classList.toggle('on', x.dataset.f === cell.dataset.f); x.classList.toggle('fade', x.dataset.f !== cell.dataset.f); });
+    out.innerHTML = `<b>${esc(cell.dataset.n)}</b> · offset ${cell.dataset.o}<br>= ${esc(cell.dataset.v)}`;
+  };
+  grid.addEventListener('mouseover', pick);
+  grid.addEventListener('click', pick);
+}
+function cdAttr(s) { return esc(s).replace(/"/g, '&quot;'); }
+function cdBytes(region) {
+  const res = encodeMarker(region), owner = [];
+  res.fields.forEach((f, i) => { for (let j = 0; j < f.len; j++) owner[f.start + j] = i; });
+  let h = '<div class="bytes cd-bytes" aria-label="Marker bytes">';
+  res.bytes.forEach((b, i) => {
+    if (i % 8 === 0) h += `<div class="off">${hex4(i).slice(2)}</div>`;
+    const f = res.fields[owner[i]], k = KIND[f.kind];
+    const ch = f.kind === 'strBytes' && b >= 32 && b < 127 ? String.fromCharCode(b) : '';
+    h += `<div class="b" data-f="${owner[i]}" data-n="${cdAttr(f.name)}" data-v="${cdAttr(f.value)}" data-o="${f.start}" style="background:${rgba(k.c, 0.92)}" title="${cdAttr(f.name)} · offset ${i}">${hex2(b)}<small>${esc(ch)}</small></div>`;
+  });
+  return { html: h + '</div>', n: res.bytes.length };
+}
+function cdKeyCode(k) {
+  const db = CD_DB[k];
+  return `<div class="cd-code">identifier  ${esc(JSON.stringify(db.path))} (example)
+stableHash  FNV-1a, 64-bit, over its UTF-8 bytes:
+            h = 0xcbf29ce484222325
+            h = (h ^ byte) &amp;* 0x100000001b3
+key         String(format: "%016llx", h)
+          = ${db.key}</div>`;
+}
+function cdEpCode(p) {
+  const e = EP[p], u = `${e.slice(0, 8)}-${e.slice(8, 12)}-${e.slice(12, 16)}-…`.toUpperCase();
+  return `<div class="cd-code">UUID().uuidString   ${u} (example)
+.lowercased(), "-" removed, .prefix(16)
+endpoint name       ${e}</div>`;
+}
+function cdInfo(id, d) {
+  const r = CD_BY[id], present = d.present.has(id), gone = d.gone[id];
+  const sec = (t, html) => `<h4>${t}</h4>${html}`;
+  const K = r.db && CD_DB[r.db], P = r.ep, e = P && EP[P];
+  const kinds = {
+    dir: 'Directory', lock: 'Regular file, always empty · flock(2) target', sock: 'Unix-domain socket (ls -l shows s) · AF_UNIX, SOCK_DGRAM',
+    marker: 'Regular file · marker', tmp: 'Regular file · temporary marker'
+  };
+  let h = `<h3 style="color:${CD_COLOR[r.kind]}">${CD_ICON[r.kind]}<span>${esc(r.name)}</span></h3><div class="kind">${kinds[r.kind]}</div><div class="path">${esc(r.path)} (example path)</div>`;
+  if (!present) h += `<div class="banner${gone ? ' gone' : ''}">${gone ? `Just ${esc(gone)}: it is gone after this step.` : 'Not there at this step. This is what it is when it exists.'}</div>`;
+  switch (id) {
+    case 'root':
+      h += sec('What it is', `<p>The coordination directory, <code>Configuration.directory</code>. The default, <code>Configuration.defaultDirectory</code>, is <code>FileManager.default.temporaryDirectory</code> + <code>sqlite-orbit/</code>: <code>/tmp/sqlite-orbit/</code> on Linux without <code>TMPDIR</code>, and a per-user <code>/var/folders/…/T/sqlite-orbit/</code> on Darwin. Processes coordinate only if they share it, so sandboxed apps pass one both can reach, such as an App Group container.</p>`);
+      h += sec('Contents', `<p><code>open-locks/</code>, used by <code>SQLitePool</code>, and <code>v1/</code>, the transport's layout. Nothing reads the directory itself.</p>`);
+      h += sec('Created', `<p>By <code>createDirectory(withIntermediateDirectories: true)</code> in <code>UnixDatagramEndpointRegistry.init</code> (for <code>v1/s/</code> and <code>v1/d/</code>) or in <code>OrbitDatabaseOpenLock.withLock</code> (for <code>open-locks/</code>), whichever runs first.</p>`);
+      h += sec('Removed', '<p>Never, by the library.</p>');
+      break;
+    case 'locks':
+      h += sec('What it is', `<p>One lock file per database opened through <code>SQLitePool</code> with this directory. It sits outside <code>v1/</code> because it belongs to the pool, not the transport.</p>`);
+      h += sec('Created', `<p>By <code>OrbitDatabaseOpenLock.withLock</code> on every pool open. <code>OrbitIPCDatabase</code> passes <code>coordination.directory</code>. A <code>SQLitePool</code> created with <code>coordinationDirectory: nil</code> uses <code>Configuration.defaultDirectory</code>, so even a pool that never uses IPC creates this directory.</p>`);
+      h += sec('Removed', '<p>Never.</p>');
+      break;
+    case 'v1':
+      h += sec('What it is', `<p>The transport's layout. Its name versions it. Everything a <code>UnixDatagramIPCTransport</code> creates is under it.</p>`);
+      h += sec('Created', `<p><code>UnixDatagramEndpointRegistry.init</code> creates <code>v1/s/</code> and <code>v1/d/</code> with intermediate directories when a transport is created.</p>`);
+      h += sec('Removed', '<p>Never.</p>');
+      break;
+    case 's':
+      h += sec('What it is', `<p>One socket per endpoint. A process has one endpoint per distinct <code>Configuration</code>, whatever the number of databases.</p>`);
+      h += sec('Read', `<p>Nobody lists or watches it. A sender builds a peer's socket path from the name of its marker with <code>registry.peer(named:)</code>, so a socket with no marker is never found.</p>`);
+      h += sec('Removed', '<p>Never.</p>');
+      break;
+    case 'd':
+      h += sec('What it is', '<p>One directory per coordination key, which holds that database\'s markers.</p>');
+      h += sec('Created', '<p><code>UnixDatagramEndpointRegistry.init</code>.</p>');
+      h += sec('Removed', '<p>Never.</p>');
+      break;
+  }
+  if (r.kind === 'lock') {
+    h += sec('Name', `<p>The database's coordination key and <code>.lock</code>. It is the same key as <code>v1/d/${K.key}/</code>, derived from the identifier the pool is opened with.</p>${cdKeyCode(r.db)}`);
+    h += sec('Contents', `<p>0 bytes. Nothing is ever written. What matters is the exclusive <code>flock(2)</code> an opener holds on it.</p>`);
+    h += sec('What it protects', `<p><code>SQLitePool.init</code> opening its connections: the writer runs <code>PRAGMA journal_mode = WAL</code> and a first read, which creates <code>-wal</code> and <code>-shm</code>, and then the readers open. Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes opening it at the same moment would otherwise contend for it. It is held only while opening, not while the database is used.</p>`);
+    h += sec('Written', `<p><code>UnixSystem.withExclusiveFileLock</code> calls <code>open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)</code>, which creates it on the first open, and then <code>flock(LOCK_EX)</code>, retried on <code>EINTR</code>. Called by <code>OrbitDatabaseOpenLock.withLock</code>, from <code>SQLitePool.init</code>.</p>`);
+    h += sec('Read', `<p>Never read. A second opener's <code>flock</code> blocks until the first one closes the file.</p>`);
+    h += sec('Released · removed', `<p>The lock goes when the descriptor is closed, once the connections have opened or failed, or when the process dies, because the lock belongs to the open file. The file itself is never removed.</p>`);
+  } else if (r.kind === 'sock') {
+    const len = r.path.length + 1;
+    h += sec('Name', `<p>The endpoint name and <code>.sock</code>. The name is random per transport. Its 13th digit is always <code>4</code>, the UUID's version.</p>${cdEpCode(P)}<p>With the NUL, this path is ${len} bytes. It must fit in <code>sun_path</code>, which is 104 bytes on Darwin and 108 on Linux, or binding fails with <code>ENAMETOOLONG</code>.</p>`);
+    h += sec('Contents', `<p>Nothing on disk. The file is only the address <code>bind()</code> gave the socket. Datagrams sent to it go to the kernel's receive queue for the socket that process holds open, which is <code>receiveBufferByteCount</code> (<code>SO_RCVBUF</code>, 256 KiB by default).</p>`);
+    h += sec('Written', `<p>When the transport is created: <code>UnixDatagramIPCTransport.init</code> → <code>UnixDatagramEndpoint.init</code> → <code>UnixSystem.makeBoundDatagramSocket</code> (<code>socket</code>, <code>setsockopt(SO_RCVBUF)</code>, <code>bind</code>). That happens once per transport, and <code>shared(configuration:)</code> gives every database in a process with the same configuration one transport.</p>`);
+    h += sec('Read', `<p>Senders <code>connect()</code> a socket to this path the first time they send to this endpoint, and keep it until the endpoint stops advertising (<code>retain</code>) or turns out to be dead. The path comes from a marker's name, through <code>registry.peer(named:)</code>.</p>`);
+    h += sec('Removed', `<p>On a clean shutdown, <code>deinit</code> calls <code>handlers.shutdown()</code>, which removes every marker, and then <code>endpoint.removePath()</code> unlinks this path. The socket stays open until the loop thread lets go of it. After a crash, a sender whose <code>connect()</code> or send fails with <code>ENOENT</code>, <code>ECONNREFUSED</code>, <code>ECONNRESET</code> or <code>ENOTCONN</code> (<code>isStalePeer</code>) unlinks it with <code>registry.remove</code>. A process that crashed without advertising anything is never found, so its socket path stays.</p>`);
+  } else if (r.kind === 'dir' && K) {
+    h += sec('Name', `<p>The coordination key of <code>${esc(K.file)}</code>'s <code>OrbitDatabaseIdentifier</code>. By default, the identifier is the database file's canonical path, with symbolic links resolved (<code>forDatabase(path:)</code>), unless you pass <code>id:</code>.</p>${cdKeyCode(r.db)}`);
+    h += sec('Contents', `<p>One marker for each endpoint advertising this database, named after the endpoint. There is also a <code>.&lt;endpoint&gt;.tmp</code> while a marker is being replaced. Identifiers whose hashes collide share the directory. Then one marker advertises the union of an endpoint's subscriptions to both, and receivers still filter by the exact identifier.</p>`);
+    h += sec('Created', `<p>By <code>registry.createDatabaseDirectory</code>: when an endpoint first advertises the database, and in a sender's <code>peerRegions(for:)</code> before it starts watching, so there is always something to watch.</p>`);
+    h += sec('Read · watched', `<p>A sender lists it (<code>contentsOfDirectory</code>) in <code>peerRegions(for:)</code> when it has nothing kept for this key. It watches it first, so a change during the listing is still reported. On Linux and Android, that's inotify with <code>IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF</code>. On Darwin, it's <code>EVFILT_VNODE</code> with <code>NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE</code>. On a sender's next send, <code>drainChanges()</code> returns <code>true</code> after any event, and its registry forgets the peer regions for every database, and the watcher too. A directory that can't be watched is read on every send.</p>`);
+    h += sec('Removed', '<p>Never, even when empty.</p>');
+  } else if (r.kind === 'marker' || r.kind === 'tmp') {
+    const region = d.region[id], b = cdBytes(region), tmp = r.kind === 'tmp';
+    h += sec('Name', tmp
+      ? `<p><code>.</code> + the endpoint name + <code>.tmp</code>, in the database's directory: one per endpoint per database. The leading dot hides it from listings, and no endpoint name starts with one.</p>`
+      : `<p>Exactly the endpoint name, with no extension: the same 16 hex digits as <code>v1/s/${e}.sock</code>. It is process ${P}'s marker for <code>${esc(K.file)}</code>.</p>${cdEpCode(P)}`);
+    h += sec('Contents', `<p>${tmp ? 'What' : 'The'} <code>encodeMarker(_:)</code> ${tmp ? 'wrote for' : 'output for'} <b>${esc(describeRegion(region))}</b>: ${b.n} bytes, a string table and one region, big-endian, with no header. The directory names the database, so the bytes don't. Hover or tap a byte.</p>${d.partial[id] ? `<p style="color:var(--c-watch)">${esc(d.partial[id])}</p>` : ''}${b.html}<div class="cd-field">Decoded: ${esc(describeRegion(region))}</div>${tmp ? '' : `<p>A marker that is empty, can't be read, or doesn't decode is taken as <code>.fullDatabase</code>. That is never wrong, and it only costs this endpoint messages it ignores. A marker removed between the listing and the read is skipped.</p>`}`);
+    h += sec('Written', tmp
+      ? `<p><code>registry.register</code> writes it with <code>Data(encodeMarker(region)).write(to:)</code> and renames it over the marker straight away.</p>`
+      : `<p><code>UnixDatagramHandlers.advertise</code>, under the handlers' lock, whenever the union of the regions of the endpoint's handlers changes, over every identifier with this coordination key. That happens on <code>subscribe</code> (<code>add</code>), <code>updateRegion(_:)</code> (<code>update</code>) and cancel (<code>remove</code>, while handlers remain). <code>registry.register</code> writes <code>.${e}.tmp</code> and then calls <code>rename(2)</code> over this name, so a reader sees the old marker or the new one, never part of one. <code>subscribe</code> and <code>updateRegion</code> return only after the rename. An unchanged union writes nothing.</p>`);
+    h += sec('Read', tmp
+      ? `<p>Never. <code>advertisements(coordinationKey:)</code> skips every name that starts with a dot. Creating it does count as a change to watchers (<code>IN_CREATE</code>, <code>NOTE_WRITE</code>), so a sender may read the directory again slightly early, which is harmless.</p>`
+      : `<p>By senders, on the send path. <code>send(_:)</code> → <code>registry.peerRegions(for:)</code>, which reads and decodes every marker when it has nothing kept for this key, and keeps the result until a watch event. <code>peers(concernedWith:)</code> then sends to this endpoint only if <code>message.concerns(region)</code>, and never to itself.</p>`);
+    h += sec('Removed', tmp
+      ? `<p>By the rename, which turns it into the marker. If the writer died between the write and the rename, a sender's <code>registry.remove</code> removes it when it prunes that endpoint. If the writer is alive, its next <code>register</code> overwrites it.</p>`
+      : `<p>By <code>registry.unregister</code> when the endpoint's last handler for this key is cancelled, and for every key when the transport shuts down (<code>deinit</code> → <code>handlers.shutdown()</code>). After a crash, a sender prunes it with <code>registry.remove</code> once sending to the endpoint fails with a stale-peer error, but only for the databases that sender saw it advertising. Each rename replaces it; nothing else changes it in place.</p>`);
+  }
+  h += `<div class="hint">Hover or tap an entry to show it here. Click it to pin it while you step.</div>`;
+  return h;
+}
+new Scene({
+  id: 'coordir',
+  build(ctx) {
+    const sc = ctx.scene;
+    sc.cdHover = null;
+    this.stage.innerHTML = '<div class="cd"><div class="cd-main"><div class="cd-procs"></div><div class="cd-tree" role="group" aria-label="Coordination directory"></div><div class="cd-cache"></div></div><div class="cd-side"><div class="cd-detail"></div></div></div>';
+    ctx.d = cdState();
+    const q = s => this.stage.querySelector(s);
+    const els = ctx.d.els = { procs: q('.cd-procs'), tree: q('.cd-tree'), cache: q('.cd-cache'), detail: q('.cd-detail') };
+    const rowOf = e => e.target.closest && e.target.closest('.cd-row');
+    els.tree.addEventListener('mouseover', e => { const r = rowOf(e); if (r && sc.cdHover !== r.dataset.id) { sc.cdHover = r.dataset.id; cdShow(ctx); } });
+    els.tree.addEventListener('mouseleave', () => { sc.cdHover = null; cdShow(ctx); });
+    els.tree.addEventListener('focusin', e => { const r = rowOf(e); if (r) { sc.cdHover = r.dataset.id; cdShow(ctx); } });
+    els.tree.addEventListener('focusout', e => { if (!(e.relatedTarget && els.tree.contains(e.relatedTarget))) { sc.cdHover = null; cdShow(ctx); } });
+    els.tree.addEventListener('click', e => { const r = rowOf(e); if (!r) return; sc.cdPin = sc.cdPin === r.dataset.id ? null : r.dataset.id; sc.cdHover = r.dataset.id; cdShow(ctx); });
+    els.tree.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const rows = [...els.tree.querySelectorAll('.cd-row')], i = rows.indexOf(document.activeElement);
+      if (i < 0) return;
+      e.preventDefault();
+      const n = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === 'ArrowDown' ? 1 : -1)))];
+      n.focus();
+    });
+    ctx.redraw = () => cdDraw(ctx);
+  },
+  after(ctx) { ctx.redraw(); },
+  steps: () => {
+    const on = (c, ...ids) => ids.forEach(i => { c.d.present.add(i); delete c.d.gone[i]; });
+    const off = (c, why, ...ids) => ids.forEach(i => { c.d.present.delete(i); if (c.cur) c.d.gone[i] = why; });
+    const hot = (c, ...ids) => { if (c.cur) ids.forEach(i => c.d.hot.add(i)); };
+    const tag = (c, id, t) => { if (c.cur) c.d.tag[id] = t; };
+    const focus = (c, id) => { if (c.cur) c.d.focus = id; };
+    const proc = (c, k, s, o) => { c.d.proc[k] = Object.assign({ s }, o); if (c.cur) c.d.phot.add(k); };
+    const later = (c, ms, fn) => c.at(ms, () => { fn(); if (c.cur) c.redraw(); });
+    const kR = cdShort(KEY), eD = cdShort(EP.D);
+    const n1 = encodeMarker(CD_RG.d1).bytes.length, n2 = encodeMarker(CD_RG.d2).bytes.length;
+    return [
+      { t: 'A directory in use', cap: `Three example processes share <code>${CD_ROOT}</code>. A has both databases open, B has reminders open, and C is subscribing to notes: it has written its temp file but not renamed it yet. Dimmed rows don't exist yet; the steps below create them, for a fourth process, D. Hover or tap any entry to see its bytes and who touches it, and click to pin it while you step.`,
+        run(c) { focus(c, 'root'); } },
+      { t: 'D opens reminders: the open lock', cap: `D creates an <code>OrbitIPCDatabase</code> for reminders. <code>SQLitePool.init</code> first runs <code>OrbitDatabaseOpenLock.withLock</code>: it opens <code>open-locks/${kR}.lock</code>, which already exists, and takes <code>flock(LOCK_EX)</code>. Holding the lock, it opens the writer (WAL, then a first read) and the readers. Closing the file releases the lock. The file stays, still empty. Meanwhile, C's rename has landed.`,
+        run(c) {
+          c.d.present.delete('tmpCN'); on(c, 'mCN'); delete c.d.partial.tmpCN; c.d.proc.C = { s: 'advertising notes' };
+          c.d.queued = 'yes (C created and renamed its marker)';
+          proc(c, 'D', 'SQLitePool.init: holding the open lock'); hot(c, 'lockR'); tag(c, 'lockR', 'flock(LOCK_EX)'); focus(c, 'lockR');
+          later(c, 1500, () => { tag(c, 'lockR', 'close → released'); c.d.proc.D.s = 'pool open · lock released'; });
+        } },
+      { t: 'D binds its socket', cap: `Then <code>UnixDatagramIPCTransport.shared(configuration:)</code> finds no transport in D for this configuration and creates one. It names the endpoint with the first 16 hex digits of a new UUID, <code>${EP.D}</code>. The registry creates <code>v1/s/</code> and <code>v1/d/</code> if they are missing, and <code>makeBoundDatagramSocket</code> binds <code>v1/s/${EP.D}.sock</code>. No one lists or watches <code>v1/s/</code>, so no one can find D yet.`,
+        run(c) { on(c, 'sockD'); hot(c, 'sockD'); tag(c, 'sockD', 'bind()'); focus(c, 'sockD'); proc(c, 'D', 'transport created · socket bound · advertises nothing'); } },
+      { t: 'subscribe writes a temp file', cap: `D subscribes to <code>main.reminders(title)</code>. Under its lock, <code>UnixDatagramHandlers.add</code> takes the union of D's handler regions for every identifier with this coordination key. The union changed, so <code>registry.register</code> writes <code>encodeMarker(union)</code>, ${n1} bytes, to <code>.${EP.D}.tmp</code>. Listings skip it, because its name starts with a dot. Creating it already queues an event on A's watch.`,
+        run(c) { on(c, 'tmpDR'); c.d.region.tmpDR = CD_RG.d1; hot(c, 'tmpDR', 'dirR'); tag(c, 'tmpDR', 'write'); tag(c, 'dirR', 'event'); focus(c, 'tmpDR'); proc(c, 'D', 'subscribe(to:region:) → register'); c.d.queued = `yes (D created .${eD}.tmp)`; } },
+      { t: 'rename(2) publishes the marker', cap: `<code>UnixSystem.renameFile</code> renames the temp file over <code>${EP.D}</code>, which is the endpoint name with no extension. A reader opens either the old file or the new one, never a partial one. <code>subscribe</code> returns only after the rename, so every send that starts afterwards, in any process, finds D.`,
+        run(c) {
+          hot(c, 'tmpDR'); tag(c, 'tmpDR', 'rename(2)'); focus(c, 'mDR'); proc(c, 'D', 'subscribe: renaming the marker into place');
+          later(c, 1000, () => { off(c, 'renamed', 'tmpDR'); on(c, 'mDR'); c.d.region.mDR = CD_RG.d1; hot(c, 'mDR'); tag(c, 'mDR', 'renamed in'); c.d.proc.D.s = 'advertising reminders(title)'; });
+        } },
+      { t: 'A second subscription widens it', cap: `D subscribes again, to <code>main.lists(name)</code>. The union becomes <code>main.lists(name) + main.reminders(title)</code>, so <code>advertise</code> writes it to the same temp file and renames it over the marker, which grows to ${n2} bytes. <code>updateRegion(_:)</code> takes the same path. A change that leaves the union as it was writes nothing.`,
+        run(c) {
+          on(c, 'tmpDR'); c.d.region.tmpDR = CD_RG.d2; hot(c, 'tmpDR'); tag(c, 'tmpDR', 'write'); focus(c, 'mDR'); proc(c, 'D', 'second subscribe → union changed');
+          later(c, 1100, () => { off(c, 'renamed', 'tmpDR'); c.d.region.mDR = CD_RG.d2; hot(c, 'mDR'); tag(c, 'mDR', 'replaced'); c.d.proc.D.s = 'advertising lists(name) + reminders(title)'; });
+        } },
+      { t: 'A sends: drain, forget, read, keep', cap: `A commits <code>UPDATE reminders SET title = …</code>. <code>peerRegions(for:)</code> first drains A's watcher: D's writes queued events, so the registry forgets <em>everything</em> it kept, including the notes entry and the watcher. It watches <code>d/${kR}/</code>, lists it, and decodes each name without a leading dot, then keeps the result, A's own marker included. B and D are concerned, and A connects a socket to D's path for the first time.`,
+        run(c) {
+          proc(c, 'A', 'send(_:) → peerRegions(for:) → drainChanges() = true'); focus(c, 'dirR');
+          c.d.cache = {}; c.d.watching = []; c.d.queued = 'drained · State() reset';
+          later(c, 900, () => {
+            c.d.watching = ['R']; c.d.cache = { R: [['A', CD_RG.aR], ['B', CD_RG.bR], ['D', CD_RG.d2]] }; c.d.queued = 'no';
+            hot(c, 'dirR', 'mAR', 'mBR', 'mDR'); tag(c, 'dirR', 'watch + list'); ['mAR', 'mBR', 'mDR'].forEach(i => tag(c, i, 'read'));
+            c.d.proc.A.s = 'kept 3 peer regions · sends to B and D';
+          });
+          later(c, 1800, () => { hot(c, 'sockD'); tag(c, 'sockD', 'connect()'); });
+        } },
+      { t: 'D cancels everything: unlink', cap: `D cancels both subscriptions. Cancelling one would rewrite the marker narrower. Cancelling the last one for this coordination key makes <code>advertise</code> call <code>registry.unregister</code>, which unlinks the marker. D's socket stays for as long as its transport lives. The unlink queues an event on A's watch, so A's next send reads the directory again. Releasing the transport would also unregister every marker, then unlink the socket.`,
+        run(c) { off(c, 'unlinked', 'mDR'); hot(c, 'dirR'); tag(c, 'dirR', 'event'); focus(c, 'mDR'); proc(c, 'D', 'no subscriptions · socket still bound'); c.d.queued = 'yes (D unlinked its marker)'; } },
+      { t: 'D crashes in the middle of a rewrite', cap: `Later, D subscribes again, which brings its marker back, and starts to widen it. It writes <code>.${EP.D}.tmp</code> and is killed before the rename. The kernel closes D's sockets, but its files stay: a socket path with nothing bound to it, a marker that still advertises <code>main.reminders(title)</code>, and the temp file.`,
+        run(c) {
+          on(c, 'mDR', 'tmpDR'); c.d.region.mDR = CD_RG.d1; c.d.region.tmpDR = CD_RG.d2;
+          c.d.partial.tmpDR = 'D was killed before the rename, possibly in the middle of the write, so this file may hold only a prefix of these bytes. Nothing ever reads it.';
+          proc(c, 'D', 'killed · its files stay behind', { dead: 1 }); hot(c, 'sockD', 'mDR', 'tmpDR'); tag(c, 'sockD', 'nothing bound'); tag(c, 'tmpDR', 'orphaned'); focus(c, 'tmpDR');
+          c.d.queued = 'yes (D wrote, renamed and wrote again)';
+        } },
+      { t: 'A prunes the leftovers', cap: `A's next send reads the directory again, skips the temp file, and finds D concerned. Sending to D fails with an error that <code>isStalePeer</code> accepts: <code>ECONNREFUSED</code> here, or <code>ENOENT</code> if the path were gone. D doesn't count as a failure. <code>registry.remove(_:coordinationKeys:)</code> unlinks D's socket path, and its marker and temp file in each database where A saw it. The lock file is never removed.`,
+        run(c) {
+          proc(c, 'A', 'send(_:) → D is stale → registry.remove'); focus(c, 'sockD');
+          c.d.watching = ['R']; c.d.cache = { R: [['A', CD_RG.aR], ['B', CD_RG.bR], ['D', CD_RG.d1]] }; c.d.queued = 'no';
+          hot(c, 'mDR', 'sockD'); tag(c, 'mDR', 'read'); tag(c, 'sockD', 'ECONNREFUSED');
+          later(c, 1400, () => { off(c, 'pruned', 'sockD', 'mDR', 'tmpDR'); c.d.queued = "yes (A's own unlinks)"; c.d.proc.D.s = 'dead · pruned by A'; c.d.proc.A.s = 'sent to B · pruned D'; });
+        } }
+    ];
+  }
+});
+
+/* ====================================================================================
+   Scene 4: Fan-out with sender-side filtering
    ==================================================================================== */
 const FAN_PEERS = [
   { k: 'B', role: 'Reminders list', adv: { tables: { reminders: { all: true } } }, advTxt: 'main.reminders' },
@@ -1183,7 +1563,7 @@ new Scene({
 });
 
 /* ====================================================================================
-   Scene 4: Wire format byte inspector (interactive, not stepped)
+   Scene 5: Wire format byte inspector (interactive, not stepped)
    ==================================================================================== */
 const KIND = {
   magic: { c: '#56c8ff', l: 'magic', d: 'Identifies an Orbit IPC datagram: the ASCII bytes "ORBT". decode(_:) rejects anything else with invalidMagic.' },
@@ -1327,7 +1707,7 @@ function wireSelect(i, scroll = true) {
 }
 
 /* ====================================================================================
-   Scene 5: Batching under backpressure
+   Scene 6: Batching under backpressure
    ==================================================================================== */
 const BE = {
   t: wireEntry(DBID, R.of(R.cols('reminders', ['title']))),
@@ -1552,7 +1932,7 @@ new Scene({
 });
 
 /* ====================================================================================
-   Scene 6: The event loop, Darwin and Linux/Android side by side
+   Scene 7: The event loop, Darwin and Linux/Android side by side
    ==================================================================================== */
 const LOOP_ROWS = {
   dar: [
@@ -1711,7 +2091,7 @@ new Scene({
 });
 
 /* ====================================================================================
-   Scene 7: Region widening for value observations
+   Scene 8: Region widening for value observations
    ==================================================================================== */
 function widLayout(n) {
   return n ? { W: 440, H: 560, x0: 78, x1: 432, P: { y: 38, h: 70 }, M: { y: 150, h: 38 }, Wl: { y: 232, h: 62 }, axisY: 320, sum: { x: 6, y: 342, w: 428, h: 212 } }
