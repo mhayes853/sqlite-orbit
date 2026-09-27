@@ -101,7 +101,7 @@
     let recorder = IPCMessageRecorder()
     let database = OrbitDatabaseIdentifier(rawValue: "malformed")
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
-    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "malformed")
+    let registry = try unixDatagramRegistry(directory, endpointName: "malformed")
     let peer = try #require(registry.peers(databaseIdentifier: database).first)
     let socket = try #require(try UnixDatagramSocket.connect(to: peer.socketPath))
     // One that fills the receive buffer, which the transport sizes a byte past the longest datagram
@@ -157,7 +157,7 @@
       directory: directory,
       backPressure: .fail
     )
-    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try unixDatagramRegistry(directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "shared-lifetime")
 
     var first: UnixDatagramIPCTransport? = try .shared(configuration: configuration)
@@ -185,7 +185,7 @@
     // endpoint up by — its marker and its socket path — may wait for that.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try unixDatagramRegistry(directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "socket-lifetime")
 
     var transport: UnixDatagramIPCTransport? = try ipcTransport(directory)
@@ -208,7 +208,7 @@
     // neither wait for that thread nor close the descriptors it is about to go back to waiting on.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
-    let registry = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "observer")
+    let registry = try unixDatagramRegistry(directory, endpointName: "observer")
     let database = OrbitDatabaseIdentifier(rawValue: "self-release")
     let sender = try ipcTransport(directory)
     let held = Lock<UnixDatagramIPCTransport?>(try ipcTransport(directory))
@@ -351,8 +351,8 @@
     let lists = OrbitDatabaseRegion(table: "lists")
     let sender = try ipcTransport(directory)
     let receiver = try ipcTransport(directory)
-    let registry = try UnixDatagramEndpointRegistry(
-      directory: directory,
+    let registry = try unixDatagramRegistry(
+      directory,
       endpointName: "observer",
       watchesDirectories: false
     )

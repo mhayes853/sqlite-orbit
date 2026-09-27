@@ -14,29 +14,29 @@
     func picksUpPeersAppearingChangingAndDisappearing(watchesDirectories: Bool) throws {
       let directory = try makeShortTemporaryDirectory("registry")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let sender = try UnixDatagramEndpointRegistry(
-        directory: directory,
+      let sender = try unixDatagramRegistry(
+        directory,
         endpointName: "sender",
         watchesDirectories: watchesDirectories
       )
-      let first = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "first")
-      let second = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "second")
+      let first = try unixDatagramRegistry(directory, endpointName: "first")
+      let second = try unixDatagramRegistry(directory, endpointName: "second")
       let key = self.database.coordinationKey
 
       #expect(try sender.peerRegions(for: self.database).isEmpty)
 
-      try first.register(coordinationKey: key, region: self.items)
+      try first.advertise(self.items, coordinationKey: key)
       #expect(try sender.peerRegions(for: self.database) == ["first": self.items])
 
-      try second.register(coordinationKey: key, region: self.lists)
-      try first.register(coordinationKey: key, region: self.items.union(self.lists))
+      try second.advertise(self.lists, coordinationKey: key)
+      try first.advertise(self.items.union(self.lists), coordinationKey: key)
       #expect(
         try sender.peerRegions(for: self.database) == [
           "first": self.items.union(self.lists), "second": self.lists
         ]
       )
 
-      try first.unregister(coordinationKey: key)
+      try first.withdraw(coordinationKey: key)
       #expect(try sender.peerRegions(for: self.database) == ["second": self.lists])
 
       try second.remove(second.peer(named: "second"), coordinationKeys: [key])
@@ -47,10 +47,10 @@
     func keepsWhatItReadUntilTheDirectoryChanges() throws {
       let directory = try makeShortTemporaryDirectory("registry")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let sender = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "sender")
-      let peer = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "peer")
+      let sender = try unixDatagramRegistry(directory, endpointName: "sender")
+      let peer = try unixDatagramRegistry(directory, endpointName: "peer")
       let key = self.database.coordinationKey
-      try peer.register(coordinationKey: key, region: self.items)
+      try peer.advertise(self.items, coordinationKey: key)
       #expect(try sender.peerRegions(for: self.database) == ["peer": self.items])
 
       // Written in place, which no endpoint does, so no entry of the directory changes and the
@@ -66,7 +66,7 @@
     func unreadableMarkersAdvertiseTheFullDatabaseAndTemporaryOnesNothing() throws {
       let directory = try makeShortTemporaryDirectory("registry")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let sender = try UnixDatagramEndpointRegistry(directory: directory, endpointName: "sender")
+      let sender = try unixDatagramRegistry(directory, endpointName: "sender")
       let markers = try sender.createDatabaseDirectory(
         coordinationKey: self.database.coordinationKey
       )
@@ -81,5 +81,21 @@
         try sender.peerRegions(for: self.database) == corrupt.mapValues { _ in .fullDatabase }
       )
     }
+  }
+
+  /// A registry for an endpoint that is never started, which tests use to write markers and to
+  /// read what peers advertise.
+  func unixDatagramRegistry(
+    _ directory: URL,
+    endpointName: String,
+    watchesDirectories: Bool = true
+  ) throws -> UnixDatagramEndpointRegistry {
+    try UnixDatagramEndpointRegistry(
+      directory: directory,
+      endpointName: endpointName,
+      maximumDatagramByteCount: 60 * 1024,
+      receiveBufferByteCount: 256 * 1024,
+      watchesDirectories: watchesDirectories
+    )
   }
 #endif

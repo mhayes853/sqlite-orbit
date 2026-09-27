@@ -6,7 +6,8 @@
     let socketPath: String
   }
 
-  /// The coordination directory endpoints find each other through.
+  /// An endpoint's place in the coordination directory endpoints find each other through, and the
+  /// endpoint itself.
   ///
   /// Every endpoint binds a socket in `v1/s/`, and advertises its interest in a database with a
   /// marker in `v1/d/<coordination key>/`, named after the endpoint. A marker holds the region the
@@ -15,58 +16,146 @@
   /// name does, so a listing never mistakes one for a marker.
   ///
   /// What peers advertise for the databases this endpoint sends to is read from their markers and
-  /// kept until a watch on the coordination directory reports a change.
+  /// kept until a watch on the coordination directory reports a change. A send goes to the peers
+  /// whose markers the message concerns, and a peer the endpoint finds dead is pruned from the
+  /// directory.
   final class UnixDatagramEndpointRegistry: Sendable {
     private struct State {
       var watcher: UnixDirectoryWatcher?
       var peerRegions: [String: [String: OrbitDatabaseRegion]] = [:]
+      /// The databases this endpoint has a marker for, by coordination key.
+      var advertised: Set<String> = []
     }
 
     let endpointName: String
     let socketPath: String
+    private let endpoint: UnixDatagramEndpoint
     private let socketsDirectory: URL
     private let databasesDirectory: URL
     private let watchesDirectories: Bool
     private let state = Lock(State())
 
-    /// Creates the coordination directory's layout under `directory`, if it is not there yet.
+    /// Creates the coordination directory's layout under `directory`, if it is not there yet, and
+    /// binds this endpoint's socket in it.
     ///
     /// - Parameters:
     ///   - directory: The coordination directory.
     ///   - endpointName: The name this endpoint's socket and markers go by.
+    ///   - maximumDatagramByteCount: The longest datagram to send or accept.
+    ///   - receiveBufferByteCount: The size of the socket's receive buffer.
     ///   - watchesDirectories: Whether to keep what peers advertise until a directory watch says
     ///     it changed, rather than reading it again on every send.
-    init(directory: URL, endpointName: String, watchesDirectories: Bool = true) throws {
+    /// - Throws: A ``UnixSystemError`` if the socket cannot be created and bound, or an error if
+    ///   the directory cannot be created.
+    init(
+      directory: URL,
+      endpointName: String,
+      maximumDatagramByteCount: Int,
+      receiveBufferByteCount: Int,
+      watchesDirectories: Bool = true
+    ) throws {
       let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
       let socketsDirectory = versionDirectory.appending(path: "s", directoryHint: .isDirectory)
       let databasesDirectory = versionDirectory.appending(path: "d", directoryHint: .isDirectory)
       for directory in [socketsDirectory, databasesDirectory] {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       }
+      let socketPath = socketsDirectory.appending(path: "\(endpointName).sock").path
+      self.endpoint = try UnixDatagramEndpoint(
+        socketPath: socketPath,
+        maximumDatagramByteCount: maximumDatagramByteCount,
+        receiveBufferByteCount: receiveBufferByteCount
+      )
       self.endpointName = endpointName
-      self.socketPath = socketsDirectory.appending(path: "\(endpointName).sock").path
+      self.socketPath = socketPath
       self.socketsDirectory = socketsDirectory
       self.databasesDirectory = databasesDirectory
       self.watchesDirectories = watchesDirectories
     }
 
+    /// Starts the endpoint's thread, which runs until ``shutdown()``.
+    ///
+    /// - Parameter receive: Receives each datagram no longer than the maximum, on the endpoint's
+    ///   thread. The bytes are only valid for the duration of the call.
+    func start(receive: @escaping @Sendable (Span<UInt8>) -> Void) {
+      self.endpoint.start(receive: receive)
+    }
+
+    /// Withdraws every marker this endpoint wrote and removes its socket's path, so a peer that
+    /// looks in the coordination directory afterwards finds nothing of it, then stops its thread.
+    ///
+    /// The socket itself closes once the thread has woken and let go of it, so this is safe to
+    /// call from the thread itself.
+    func shutdown() {
+      let coordinationKeys = self.state.withLock { state in
+        defer { state.advertised.removeAll() }
+        return state.advertised
+      }
+      for coordinationKey in coordinationKeys {
+        try? Self.remove(self.marker(coordinationKey))
+      }
+      _ = UnixPlatform.removeFile(atPath: self.socketPath)
+      self.endpoint.stop()
+    }
+
     /// Advertises `region` for a database, replacing whatever this endpoint advertised for it.
     ///
     /// When this returns, a peer that lists the database's directory finds the new region.
-    func register(coordinationKey: String, region: OrbitDatabaseRegion) throws {
+    func advertise(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
       let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
       let temporary = directory.appending(path: ".\(self.endpointName).tmp")
       try Data(UnixDatagramWireProtocol.encodeMarker(region)).write(to: temporary)
       guard
         UnixPlatform.renameFile(
           atPath: temporary.path,
-          toPath: directory.appending(path: self.endpointName).path
+          toPath: self.marker(coordinationKey).path
         )
       else { throw UnixSystemError.last("rename") }
+      self.state.withLock { _ = $0.advertised.insert(coordinationKey) }
     }
 
-    func unregister(coordinationKey: String) throws {
-      try Self.remove(self.databaseDirectory(coordinationKey).appending(path: self.endpointName))
+    /// Removes this endpoint's marker for a database, if it has one.
+    func withdraw(coordinationKey: String) throws {
+      try Self.remove(self.marker(coordinationKey))
+      self.state.withLock { _ = $0.advertised.remove(coordinationKey) }
+    }
+
+    /// Sends `entry` to every peer advertising a region its message concerns, and prunes the
+    /// peers that turn out to be dead.
+    ///
+    /// - Parameters:
+    ///   - entry: The message to send.
+    ///   - suspension: How long to wait for a peer whose receive queue is full, or `nil` to count
+    ///     it as failed at once.
+    /// - Returns: How many peers the message was sent to, how many took it, and how many did not.
+    /// - Throws: An error if the coordination directory cannot be read, or `CancellationError` if
+    ///   the task is cancelled while waiting for a peer.
+    func send(
+      _ entry: UnixDatagramWireEntry,
+      suspendingUpTo suspension: Duration?
+    ) async throws -> UnixDatagramEndpoint.Delivery {
+      let advertisements = try self.peerRegions(for: entry.message.databaseIdentifier)
+      let delivery = try await self.endpoint.send(
+        entry,
+        to: self.peers(concernedWith: entry.message, in: advertisements),
+        advertisedBy: advertisements.keys,
+        suspendingUpTo: suspension
+      )
+      for stale in delivery.stale {
+        try? self.remove(stale.peer, coordinationKeys: stale.coordinationKeys)
+      }
+      return delivery
+    }
+
+    /// How many messages wait for peers, across every peer.
+    var pendingMessageCount: Int {
+      self.endpoint.pendingMessageCount
+    }
+
+    /// The peers ``send(_:suspendingUpTo:)`` would send `message` to now.
+    func peers(concernedWith message: OrbitIPCMessage) throws -> [UnixDatagramPeer] {
+      let advertisements = try self.peerRegions(for: message.databaseIdentifier)
+      return self.peers(concernedWith: message, in: advertisements)
     }
 
     /// Creates the directory a database's markers go in, if it is not there yet.
@@ -177,6 +266,21 @@
             }) ?? .fullDatabase
       }
       return advertisements
+    }
+
+    /// Every peer but this endpoint whose advertised region `message` concerns.
+    private func peers(
+      concernedWith message: OrbitIPCMessage,
+      in advertisements: [String: OrbitDatabaseRegion]
+    ) -> [UnixDatagramPeer] {
+      advertisements.compactMap { name, region in
+        guard name != self.endpointName, message.concerns(region) else { return nil }
+        return self.peer(named: name)
+      }
+    }
+
+    private func marker(_ coordinationKey: String) -> URL {
+      self.databaseDirectory(coordinationKey).appending(path: self.endpointName)
     }
 
     private static func remove(_ url: URL) throws {

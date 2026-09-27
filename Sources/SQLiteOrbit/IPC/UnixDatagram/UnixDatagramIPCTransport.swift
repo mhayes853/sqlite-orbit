@@ -146,7 +146,6 @@
 
     private let configuration: Configuration
     private let registry: UnixDatagramEndpointRegistry
-    private let endpoint: UnixDatagramEndpoint
     private let handlers: UnixDatagramHandlers
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
@@ -182,10 +181,7 @@
         .prefix(16)
       let registry = try UnixDatagramEndpointRegistry(
         directory: configuration.directory,
-        endpointName: String(endpointName)
-      )
-      let endpoint = try UnixDatagramEndpoint(
-        registry: registry,
+        endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
@@ -193,9 +189,8 @@
 
       self.configuration = configuration
       self.registry = registry
-      self.endpoint = endpoint
       self.handlers = handlers
-      endpoint.start { bytes in
+      registry.start { bytes in
         guard let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
         for message in messages {
           handlers.receive(message)
@@ -208,8 +203,7 @@
       // directory after this transport is released finds nothing of it. The descriptors
       // themselves close once the receive thread has woken and let go of the endpoint.
       self.handlers.shutdown()
-      self.endpoint.removePath()
-      self.endpoint.stop()
+      self.registry.shutdown()
     }
 
     /// Subscribes to messages concerning `databaseIdentifier` and `region`.
@@ -288,23 +282,16 @@
       } catch UnixDatagramWireError.datagramTooLarge {
         throw UnixSystemError.messageTooLong("datagram is too large")
       }
-      let advertisements = try self.registry.peerRegions(for: message.databaseIdentifier)
-      let peers = self.peers(concernedWith: entry.message, in: advertisements)
       let suspension: Duration?
       switch self.configuration.backPressure {
       case .fail: suspension = nil
       case .suspend(upTo: let duration): suspension = duration
       }
-      let delivery = try await self.endpoint.send(
-        entry,
-        to: peers,
-        advertisedBy: advertisements.keys,
-        suspendingUpTo: suspension
-      )
+      let delivery = try await self.registry.send(entry, suspendingUpTo: suspension)
 
       guard delivery.failed == 0 else {
         throw PartialDeliveryError(
-          discoveredPeerCount: peers.count,
+          discoveredPeerCount: delivery.peerCount,
           deliveredPeerCount: delivery.delivered,
           failedPeerCount: delivery.failed
         )
@@ -313,8 +300,7 @@
 
     /// The peers ``send(_:)`` would send `message` to now.
     func peers(concernedWith message: OrbitIPCMessage) throws -> [UnixDatagramPeer] {
-      let advertisements = try self.registry.peerRegions(for: message.databaseIdentifier)
-      return self.peers(concernedWith: message, in: advertisements)
+      try self.registry.peers(concernedWith: message)
     }
 
     /// The region this transport advertises to its peers for a database, or `nil` if it is not
@@ -325,17 +311,7 @@
 
     /// How many sent messages wait in pending batches for peers whose queues are full.
     var pendingMessageCount: Int {
-      self.endpoint.pendingMessageCount
-    }
-
-    private func peers(
-      concernedWith message: OrbitIPCMessage,
-      in advertisements: [String: OrbitDatabaseRegion]
-    ) -> [UnixDatagramPeer] {
-      advertisements.compactMap { name, region in
-        guard name != self.registry.endpointName, message.concerns(region) else { return nil }
-        return self.registry.peer(named: name)
-      }
+      self.registry.pendingMessageCount
     }
   }
 
@@ -468,16 +444,12 @@
       }
     }
 
+    /// Removes every handler, and refuses new ones. The registry withdraws the markers.
     func shutdown() {
-      let coordinationKeys = self.state.withLock { state -> [String] in
-        guard !state.isShutdown else { return [] }
+      self.state.withLock { state in
         state.isShutdown = true
         _ = state.handlers.removeAll()
-        defer { state.advertised.removeAll() }
-        return Array(state.advertised.keys)
-      }
-      for coordinationKey in coordinationKeys {
-        try? self.registry.unregister(coordinationKey: coordinationKey)
+        state.advertised.removeAll()
       }
     }
 
@@ -488,13 +460,13 @@
         .flatMap { state.handlers.handlers(for: $0) }
       guard !handlers.isEmpty else {
         guard state.advertised[coordinationKey] != nil else { return }
-        try self.registry.unregister(coordinationKey: coordinationKey)
+        try self.registry.withdraw(coordinationKey: coordinationKey)
         state.advertised[coordinationKey] = nil
         return
       }
       let region = handlers.reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
       guard state.advertised[coordinationKey] != region else { return }
-      try self.registry.register(coordinationKey: coordinationKey, region: region)
+      try self.registry.advertise(region, coordinationKey: coordinationKey)
       state.advertised[coordinationKey] = region
     }
   }

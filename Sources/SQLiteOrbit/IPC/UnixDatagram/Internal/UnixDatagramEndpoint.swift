@@ -8,37 +8,54 @@
   /// few datagrams as fit it. Each message's sender waits for its own outcome at every peer, up to
   /// its deadline.
   ///
+  /// The endpoint knows nothing of the coordination directory: it is told which peers to send to,
+  /// and reports the ones it finds dead rather than removing anything of theirs.
+  ///
   /// The receive thread keeps the endpoint alive for as long as it runs, and ``stop()`` is what
-  /// ends it. Whichever of the transport and the thread lets go of the endpoint last closes its
-  /// descriptors, so nothing is still waiting on one when it closes, and a transport released on
-  /// the receive thread itself has nothing to wait for.
+  /// ends it. Whichever of its owner and the thread lets go of the endpoint last closes its
+  /// descriptors, so nothing is still waiting on one when it closes, and an owner released on the
+  /// receive thread itself has nothing to wait for.
   final class UnixDatagramEndpoint: Sendable {
-    /// How many peers took a message, and how many live ones did not.
+    /// What became of a message at the peers it was sent to.
     struct Delivery: Sendable {
+      /// How many peers the message was sent to.
+      var peerCount = 0
+
+      /// How many peers took the message.
       var delivered = 0
+
+      /// How many live peers did not take the message.
       var failed = 0
+
+      /// The peers that turned out to be dead, which are counted neither way.
+      var stale: [StalePeer] = []
     }
 
-    private let registry: UnixDatagramEndpointRegistry
+    /// A peer that turned out to be dead, and the databases this endpoint had seen it advertise.
+    struct StalePeer: Sendable {
+      let peer: UnixDatagramPeer
+      let coordinationKeys: Set<String>
+    }
+
     private let maximumDatagramByteCount: Int
     private let socket: UnixDatagramSocket
     private let queue: UnixEventQueue
     private let state = Lock(State())
 
-    /// Binds a socket at `registry`'s socket path.
+    /// Binds a socket at `socketPath`.
     ///
     /// - Parameters:
-    ///   - registry: Where peers find this endpoint, and where dead ones are pruned from.
+    ///   - socketPath: Where to bind the socket, which is where peers send to.
     ///   - maximumDatagramByteCount: The longest datagram to send or accept.
     ///   - receiveBufferByteCount: The size of the socket's receive buffer.
     /// - Throws: A ``UnixSystemError`` if the socket cannot be created and bound.
     init(
-      registry: UnixDatagramEndpointRegistry,
+      socketPath: String,
       maximumDatagramByteCount: Int,
       receiveBufferByteCount: Int
     ) throws {
       let socket = try UnixDatagramSocket.bind(
-        path: registry.socketPath,
+        path: socketPath,
         receiveBufferByteCount: receiveBufferByteCount
       )
       let queue: UnixEventQueue
@@ -46,10 +63,9 @@
         queue = try UnixEventQueue()
         try queue.watchReadable(socket.descriptor.rawValue)
       } catch {
-        _ = UnixPlatform.removeFile(atPath: registry.socketPath)
+        _ = UnixPlatform.removeFile(atPath: socketPath)
         throw error
       }
-      self.registry = registry
       self.maximumDatagramByteCount = maximumDatagramByteCount
       self.socket = socket
       self.queue = queue
@@ -73,12 +89,6 @@
       self.queue.wake()
     }
 
-    /// Removes the socket's path, which is what a peer finds this endpoint by, while leaving the
-    /// socket itself open to whatever is still reading from it.
-    func removePath() {
-      _ = UnixPlatform.removeFile(atPath: self.registry.socketPath)
-    }
-
     /// How many messages wait for peers, across every peer.
     var pendingMessageCount: Int {
       self.state.withLock { $0.peers.values.reduce(0) { $0 + $1.pending.count } }
@@ -86,7 +96,7 @@
 
     /// Sends `entry` to every peer in `peers`, on the connected socket kept for each.
     ///
-    /// A peer that turns out to be dead is pruned from the registry rather than counted.
+    /// A peer that turns out to be dead is reported in the delivery rather than counted.
     ///
     /// - Parameters:
     ///   - entry: The message to send.
@@ -96,7 +106,7 @@
     ///     database are closed.
     ///   - suspension: How long to wait for a peer whose receive queue is full, or `nil` to count
     ///     it as failed at once.
-    /// - Returns: How many peers took the message, and how many did not.
+    /// - Returns: How many peers took the message, how many did not, and which were dead.
     /// - Throws: `CancellationError` if the task is cancelled while waiting for a peer, in which
     ///   case the message is withdrawn from every peer that has not taken it.
     func send(
@@ -111,12 +121,11 @@
       let datagram = single.encoded()
       let deadline = suspension.map { ContinuousClock.now.advanced(by: $0) }
 
-      let (sendID, delivery, stale) = self.state.withLock { state in
+      let (sendID, delivery) = self.state.withLock { state in
         self.retain(advertisers, advertising: coordinationKey, in: &state)
-        var stale: [StalePeer] = []
         let sendID = state.nextSendID
         state.nextSendID += 1
-        var delivery = Delivery()
+        var delivery = Delivery(peerCount: peers.count)
         var pendingCount = 0
         for peer in peers {
           switch self.offer(
@@ -130,18 +139,17 @@
           case .delivered: delivery.delivered += 1
           case .failed: delivery.failed += 1
           case .pending: pendingCount += 1
-          case .stale(let peer): stale.append(peer)
+          case .stale(let peer): delivery.stale.append(peer)
           }
         }
-        guard let deadline, pendingCount > 0 else { return (UInt64?.none, delivery, stale) }
+        guard let deadline, pendingCount > 0 else { return (UInt64?.none, delivery) }
         state.sends[sendID] = PendingSend(
           deadline: deadline,
           remaining: pendingCount,
           delivery: delivery
         )
-        return (sendID, delivery, stale)
+        return (sendID, delivery)
       }
-      self.prune(stale)
       guard let sendID else { return delivery }
 
       // The thread waits on a deadline it worked out before this send existed.
@@ -218,8 +226,7 @@
     private func flush(
       _ name: String,
       in state: inout State,
-      completions: inout [Completion],
-      stale: inout [StalePeer]
+      completions: inout [Completion]
     ) {
       guard let socket = state.peers[name]?.socket else { return }
       while !state.peers[name]!.pending.isEmpty {
@@ -239,7 +246,7 @@
           state.peers[name]!.backOff()
           return
         case .peerGone:
-          stale.append(self.forget(name, in: &state, completions: &completions))
+          _ = self.forget(name, in: &state, completions: &completions)
           return
         case .failed:
           outcome = .failed
@@ -280,7 +287,10 @@
       state.peers[name]!.retryDelay = .milliseconds(1)
     }
 
-    /// Closes the socket kept for a peer, and settles whatever was waiting for it.
+    /// Closes the socket kept for a peer, and settles whatever was waiting for it, each send
+    /// learning that the peer was dead.
+    ///
+    /// - Returns: The peer, with the databases it was seen advertising.
     private func forget(
       _ name: String,
       in state: inout State,
@@ -289,10 +299,11 @@
       self.unwatch(name, in: &state)
       // Its socket closes when this goes, at the end of the call.
       let peer = state.peers.removeValue(forKey: name)!
+      let stale = StalePeer(peer: peer.peer, coordinationKeys: peer.coordinationKeys)
       for pending in peer.pending {
-        self.resolve(pending.sendID, .pruned, in: &state, completions: &completions)
+        self.resolve(pending.sendID, .stale(stale), in: &state, completions: &completions)
       }
-      return StalePeer(peer: peer.peer, coordinationKeys: peer.coordinationKeys)
+      return stale
     }
 
     /// Closes the sockets kept for peers that stopped advertising `coordinationKey` and advertise
@@ -310,15 +321,9 @@
       {
         state.peers[name]!.coordinationKeys.remove(coordinationKey)
         guard state.peers[name]!.coordinationKeys.isEmpty else { continue }
-        // Nothing of it is pruned from the registry: it withdrew its own advertisements.
+        // Not reported as dead: it withdrew its own advertisements.
         var completions: [Completion] = []
         _ = self.forget(name, in: &state, completions: &completions)
-      }
-    }
-
-    private func prune(_ stale: [StalePeer]) {
-      for stale in stale {
-        try? self.registry.remove(stale.peer, coordinationKeys: stale.coordinationKeys)
       }
     }
 
@@ -327,7 +332,7 @@
     private enum Outcome {
       case delivered
       case failed
-      case pruned
+      case stale(StalePeer)
     }
 
     private typealias Completion = (
@@ -345,7 +350,7 @@
       switch outcome {
       case .delivered: state.sends[sendID]!.delivery.delivered += 1
       case .failed: state.sends[sendID]!.delivery.failed += 1
-      case .pruned: break
+      case .stale(let stale): state.sends[sendID]!.delivery.stale.append(stale)
       }
       state.sends[sendID]!.remaining -= 1
       guard state.sends[sendID]!.remaining == 0,
@@ -414,10 +419,9 @@
           }
         }
         var completions: [Completion] = []
-        let stale = self.state.withLock { state in
+        self.state.withLock { state in
           self.service(writable, in: &state, completions: &completions)
         }
-        self.prune(stale)
         for completion in completions {
           completion.continuation.resume(with: completion.result)
         }
@@ -442,38 +446,31 @@
       _ writable: [Int32],
       in state: inout State,
       completions: inout [Completion]
-    ) -> [StalePeer] {
-      var stale: [StalePeer] = []
+    ) {
       let now = ContinuousClock.now
       // An event for a socket closed since can name a new one given the same number, which at
       // worst sends that peer what waits for it a little early.
       for (name, peer) in state.peers where writable.contains(peer.socket.descriptor.rawValue) {
-        self.flush(name, in: &state, completions: &completions, stale: &stale)
+        self.flush(name, in: &state, completions: &completions)
       }
       for (name, peer) in state.peers where peer.retryAt.map({ $0 <= now }) == true {
-        self.flush(name, in: &state, completions: &completions, stale: &stale)
+        self.flush(name, in: &state, completions: &completions)
       }
 
       let expired = state.sends.filter { $0.value.remaining > 0 && $0.value.deadline <= now }
-      guard !expired.isEmpty else { return stale }
+      guard !expired.isEmpty else { return }
       // The attempt that lands on the deadline still happens: the budget is time spent waiting.
       for (name, peer) in state.peers where !peer.pending.isEmpty {
-        self.flush(name, in: &state, completions: &completions, stale: &stale)
+        self.flush(name, in: &state, completions: &completions)
       }
       for sendID in expired.keys {
         for _ in 0..<self.withdraw(sendID, in: &state) {
           self.resolve(sendID, .failed, in: &state, completions: &completions)
         }
       }
-      return stale
     }
 
     // MARK: - State
-
-    private struct StalePeer {
-      let peer: UnixDatagramPeer
-      let coordinationKeys: Set<String>
-    }
 
     private struct PendingSend {
       let deadline: ContinuousClock.Instant
