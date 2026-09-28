@@ -177,7 +177,9 @@
         try await sender.send(message)
         queued.append(message)
       }
-      queued.removeLast()
+      // The commit that found the queue full is owed, unless the sender's thread finds room for it
+      // before the files go.
+      let owed = queued.removeLast()
 
       files.removeAsTheCleanerWould()
       let unseen = removedFilesCommit(self.database, column: 10_000)
@@ -191,7 +193,10 @@
       try await sender.send(later)
       try await waitUntil { receiver.recorder.values.contains(later) }
       // Its queue is read to the end before the thread hears its files were removed.
-      #expect(receiver.recorder.values == queued + [self.notice, later])
+      let values = receiver.recorder.values
+      #expect(
+        values == queued + [self.notice, later] || values == queued + [owed, self.notice, later]
+      )
     }
 
     @Test
