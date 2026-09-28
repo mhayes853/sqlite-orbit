@@ -129,7 +129,7 @@
       defer { harness.cleanup() }
       _ = try harness.fill(self.database)
 
-      harness.closePeer()
+      try harness.closePeer()
       harness.sender.start { _ in }
 
       // Nothing is bound at its path any more, so the thread takes it for dead as soon as it
@@ -255,14 +255,22 @@
     }
 
     /// Closes the peer's socket, leaving its path and markers behind, as a process that dies does.
-    func closePeer() {
+    func closePeer() throws {
+      // A process another test spawns at the same moment holds a copy of every descriptor until it
+      // execs, so the socket can outlive its closing here by a little. Something connected to it
+      // is told once it has really gone.
+      guard let watcher = try UnixDatagramSocket.connect(to: self.socketPath) else { return }
       self.peer = nil
+      let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+      while watcher.send([0]) != .peerGone, ContinuousClock.now < deadline {
+        Thread.sleep(forTimeInterval: 0.001)
+      }
     }
 
     /// Closes the peer's socket and binds a new one at its path, leaving its markers as they are,
     /// as an endpoint does that binds its socket again.
     func rebindPeer() throws {
-      self.peer = nil
+      try self.closePeer()
       _ = UnixPlatform.removeFile(atPath: self.socketPath)
       self.peer = try UnixDatagramSocket.bind(path: self.socketPath, receiveBufferByteCount: 4_096)
     }
