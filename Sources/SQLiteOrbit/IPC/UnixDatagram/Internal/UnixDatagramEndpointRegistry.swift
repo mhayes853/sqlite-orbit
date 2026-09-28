@@ -76,6 +76,8 @@
       var repairCount = 0
       /// Whether a file was put back since the endpoint's thread last reported a repair.
       var hasRepaired = false
+      /// When a send or a receive next touches this endpoint's files.
+      var nextRefresh: ContinuousClock.Instant
     }
 
     /// How long after this endpoint last touched its files a send or a receive touches them again.
@@ -95,9 +97,7 @@
     private let watchesDirectories: Bool
     private let refreshInterval: Duration
     private let state = Lock(State())
-    private let own = Lock(OwnFiles())
-    /// When a send or a receive next touches this endpoint's files.
-    private let nextRefresh: Lock<ContinuousClock.Instant>
+    private let own: Lock<OwnFiles>
 
     /// Creates the coordination directory's layout under `directory`, if it is not there yet, and
     /// binds this endpoint's socket in it.
@@ -141,7 +141,7 @@
       self.databasesDirectory = databasesDirectory
       self.watchesDirectories = watchesDirectories
       self.refreshInterval = refreshInterval
-      self.nextRefresh = Lock(.now.advanced(by: refreshInterval))
+      self.own = Lock(OwnFiles(nextRefresh: .now.advanced(by: refreshInterval)))
     }
 
     /// Starts the endpoint's thread, which runs until ``shutdown()``, and from then on keeps this
@@ -194,9 +194,7 @@
         }
         own.advertised.removeAll()
         _ = UnixPlatform.removeFile(atPath: self.socketPath)
-        own.watched.removeAll()
-        defer { own.watcher = nil }
-        return own.watcher
+        return own.watcher.take()
       }
       // The thread stops waiting on the watch before it closes.
       withExtendedLifetime(watcher) {
@@ -207,9 +205,11 @@
 
     /// Advertises `region` for a database, replacing whatever this endpoint advertised for it.
     ///
-    /// When this returns, a peer that lists the database's directory finds the new region.
+    /// When this returns, a peer that lists the database's directory finds the new region. The
+    /// region it already advertises is not written again.
     func advertise(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
       try self.own.withLock { own in
+        guard own.advertised[coordinationKey] != region else { return }
         // A marker removed since it was written is put back here rather than by a repair, which
         // must be reported all the same.
         let isMissing =
@@ -233,7 +233,16 @@
       // want of the directory, which the next attempt creates again.
       for attempt in 1...Self.maximumAdvertiseAttemptCount {
         do {
-          try self.write(marker, coordinationKey: coordinationKey)
+          // Renamed over the marker, so a peer never reads one half written.
+          let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
+          let temporary = directory.appending(path: ".\(self.endpointName).tmp")
+          try marker.write(to: temporary)
+          guard
+            UnixPlatform.renameFile(
+              atPath: temporary.path,
+              toPath: self.marker(coordinationKey).path
+            )
+          else { throw UnixSystemError.last("rename") }
           return
         } catch let error
           where attempt < Self.maximumAdvertiseAttemptCount && Self.isMissingFile(error)
@@ -246,20 +255,6 @@
     /// How many times ``advertise(_:coordinationKey:)`` writes a marker whose directory keeps
     /// disappearing before it gives up.
     private static let maximumAdvertiseAttemptCount = 3
-
-    /// Writes this endpoint's marker for a database by renaming a temporary file over it, creating
-    /// the database's directory first if it is not there.
-    private func write(_ marker: Data, coordinationKey: String) throws {
-      let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
-      let temporary = directory.appending(path: ".\(self.endpointName).tmp")
-      try marker.write(to: temporary)
-      guard
-        UnixPlatform.renameFile(
-          atPath: temporary.path,
-          toPath: self.marker(coordinationKey).path
-        )
-      else { throw UnixSystemError.last("rename") }
-    }
 
     private static func isMissingFile(_ error: any Error) -> Bool {
       switch error {
@@ -275,6 +270,7 @@
     /// Removes this endpoint's marker for a database, if it has one.
     func withdraw(coordinationKey: String) throws {
       try self.own.withLock { own in
+        guard own.advertised[coordinationKey] != nil else { return }
         try Self.remove(self.marker(coordinationKey))
         own.advertised[coordinationKey] = nil
         self.reclaimDatabaseDirectory(coordinationKey)
@@ -307,6 +303,11 @@
     /// What each peer whose receive queue was full is owed, by endpoint name.
     var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
       self.endpoint.owedRegions
+    }
+
+    /// The region this endpoint advertises for a database, or `nil` if it advertises nothing.
+    func advertisedRegion(coordinationKey: String) -> OrbitDatabaseRegion? {
+      self.own.withLock { $0.advertised[coordinationKey] }
     }
 
     /// How many of this endpoint's files have been put back since it started.
@@ -571,21 +572,18 @@
     /// is due. A file that is gone is not created again here, which is left to the repair its
     /// removal sets off.
     private func refreshIfDue() {
-      let now = ContinuousClock.now
-      let isDue = self.nextRefresh.withLock { next in
-        guard now >= next else { return false }
-        next = now.advanced(by: self.refreshInterval)
-        return true
-      }
-      guard isDue else { return }
-      let coordinationKeys = self.own.withLock { Array($0.advertised.keys) }
-      var paths = [self.socketPath, self.socketsDirectory.path]
-      for coordinationKey in coordinationKeys {
-        paths.append(self.marker(coordinationKey).path)
-        paths.append(self.databaseDirectory(coordinationKey).path)
-      }
-      for path in paths {
-        _ = UnixPlatform.touchFile(atPath: path)
+      self.own.withLock { own in
+        let now = ContinuousClock.now
+        guard now >= own.nextRefresh else { return }
+        own.nextRefresh = now.advanced(by: self.refreshInterval)
+        var paths = [self.socketPath, self.socketsDirectory.path]
+        for coordinationKey in own.advertised.keys {
+          paths.append(self.marker(coordinationKey).path)
+          paths.append(self.databaseDirectory(coordinationKey).path)
+        }
+        for path in paths {
+          _ = UnixPlatform.touchFile(atPath: path)
+        }
       }
     }
 

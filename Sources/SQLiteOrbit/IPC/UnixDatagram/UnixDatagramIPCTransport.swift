@@ -146,21 +146,16 @@
       }
     }
 
-    /// The handlers subscribed to this endpoint, and what each marker it wrote advertises, by
-    /// coordination key.
-    ///
-    /// One marker stands for every identifier sharing a coordination key, so it advertises the
-    /// union of all of their handlers' regions. It is rewritten, under the lock, whenever that
-    /// union changes, so a region is advertised before the call that widened it returns, and two
-    /// changes can never land in the directory in the opposite order to the one they were made in.
-    private struct State {
-      var handlers = KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>()
-      var advertised: [String: OrbitDatabaseRegion] = [:]
-    }
+    private typealias Handlers = KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>
 
     private let configuration: Configuration
     private let registry: UnixDatagramEndpointRegistry
-    private let state = Lock(State())
+    /// The handlers subscribed to this endpoint.
+    ///
+    /// A marker is rewritten under this lock whenever the union of the regions of its handlers
+    /// changes, so a region is advertised before the call that widened it returns, and two changes
+    /// can never land in the directory in the opposite order to the one they were made in.
+    private let handlers = Lock(Handlers())
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -210,44 +205,29 @@
       )
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
       // up holding the last reference, the registry is shut down from the thread, which it allows.
-      self.registry.start { [weak self] bytes in
-        guard let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
-        for message in messages {
-          // Held only for the lookup, so a handler that lets go of the last reference releases
-          // this transport there and then, not once every handler has returned.
-          guard let callbacks = self?.state.withLock({ $0.handlers.callbacks(for: message) })
-          else { return }
-          for callback in callbacks {
-            callback(message)
-          }
+      // It is held only for each lookup, so a handler that lets go of the last reference releases
+      // this transport there and then, not once every handler has returned.
+      let deliver: @Sendable (OrbitIPCMessage) -> Void = { [weak self] message in
+        for callback in self?.handlers.withLock({ $0.callbacks(for: message) }) ?? [] {
+          callback(message)
+        }
+      }
+      self.registry.start { bytes in
+        for message in (try? UnixDatagramWireProtocol.decode(bytes)) ?? [] {
+          deliver(message)
         }
       } onRepair: { [weak self] in
         // Peers may have left this transport out of any commit made while its files were
         // missing, so every database it has handlers for may have changed in any way.
-        guard let deliveries = self?.state.withLock({ Self.possibleChanges(in: $0) }) else {
-          return
-        }
-        for (message, callbacks) in deliveries {
-          for callback in callbacks {
-            callback(message)
-          }
+        let databases = self?.handlers.withLock { $0.keys.sorted { $0.rawValue < $1.rawValue } }
+        for databaseIdentifier in databases ?? [] {
+          deliver(
+            .transactionDidCommit(
+              .init(databaseIdentifier: databaseIdentifier, region: .fullDatabase)
+            )
+          )
         }
       }
-    }
-
-    /// A commit to the full database for every database with handlers, in a stable order, and the
-    /// handlers each goes to.
-    private static func possibleChanges(
-      in state: State
-    ) -> [(OrbitIPCMessage, [@Sendable (OrbitIPCMessage) -> Void])] {
-      state.handlers.keys
-        .sorted { $0.rawValue < $1.rawValue }
-        .map { databaseIdentifier in
-          let message = OrbitIPCMessage.transactionDidCommit(
-            .init(databaseIdentifier: databaseIdentifier, region: .fullDatabase)
-          )
-          return (message, state.handlers.callbacks(for: message))
-        }
     }
 
     deinit {
@@ -290,14 +270,15 @@
       region: OrbitDatabaseRegion,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitRegionSubscription {
-      let identifier = try self.state.withLock { state in
-        let identifier = state.handlers
+      let identifier = try self.handlers.withLock { handlers in
+        let identifier =
+          handlers
           .insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
           .identifier
         do {
-          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+          try self.advertise(databaseIdentifier.coordinationKey, for: handlers)
         } catch {
-          state.handlers.remove(identifier, for: databaseIdentifier)
+          handlers.remove(identifier, for: databaseIdentifier)
           throw error
         }
         return identifier
@@ -360,7 +341,7 @@
     /// The region this transport advertises to its peers for a database, or `nil` if it is not
     /// discoverable for that database.
     func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
-      self.state.withLock { $0.advertised[databaseIdentifier.coordinationKey] }
+      self.registry.advertisedRegion(coordinationKey: databaseIdentifier.coordinationKey)
     }
 
     /// What each peer whose receive queue was full is owed, by endpoint name.
@@ -379,45 +360,43 @@
       for databaseIdentifier: OrbitDatabaseIdentifier,
       region: OrbitDatabaseRegion
     ) throws {
-      try self.state.withLock { state in
+      try self.handlers.withLock { handlers in
         var previous: OrbitDatabaseRegion?
-        state.handlers.update(identifier, for: databaseIdentifier) { handler in
+        handlers.update(identifier, for: databaseIdentifier) { handler in
           previous = handler.region
           handler.region = region
         }
         guard let previous else { return }
         do {
-          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+          try self.advertise(databaseIdentifier.coordinationKey, for: handlers)
         } catch {
-          state.handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
+          handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
           throw error
         }
       }
     }
 
     private func remove(_ identifier: UInt64, for databaseIdentifier: OrbitDatabaseIdentifier) {
-      self.state.withLock { state in
-        guard state.handlers.remove(identifier, for: databaseIdentifier).didRemove else { return }
+      self.handlers.withLock { handlers in
+        guard handlers.remove(identifier, for: databaseIdentifier).didRemove else { return }
         // A marker left wider than the handlers need only costs this endpoint messages it ignores.
-        try? self.advertise(databaseIdentifier.coordinationKey, in: &state)
+        try? self.advertise(databaseIdentifier.coordinationKey, for: handlers)
       }
     }
 
     /// Brings the marker for `coordinationKey` in line with the handlers that share it.
-    private func advertise(_ coordinationKey: String, in state: inout State) throws {
-      let identifiers = state.handlers.keys.filter { $0.coordinationKey == coordinationKey }
+    ///
+    /// One marker stands for every identifier sharing a coordination key, so it advertises the
+    /// union of all of their handlers' regions.
+    private func advertise(_ coordinationKey: String, for handlers: Handlers) throws {
+      let identifiers = handlers.keys.filter { $0.coordinationKey == coordinationKey }
       guard !identifiers.isEmpty else {
-        guard state.advertised[coordinationKey] != nil else { return }
-        try self.registry.withdraw(coordinationKey: coordinationKey)
-        state.advertised[coordinationKey] = nil
-        return
+        return try self.registry.withdraw(coordinationKey: coordinationKey)
       }
       let region = identifiers.reduce(into: OrbitDatabaseRegion.empty) {
-        $0.formUnion(state.handlers.region(for: $1))
+        $0.formUnion(handlers.region(for: $1))
       }
-      guard state.advertised[coordinationKey] != region else { return }
       try self.registry.advertise(region, coordinationKey: coordinationKey)
-      state.advertised[coordinationKey] = region
     }
   }
 
