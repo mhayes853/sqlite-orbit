@@ -21,13 +21,5 @@
     deinit {
       UnixPlatform.closeDescriptor(self.rawValue)
     }
-
-    func setNonBlocking() throws {
-      guard UnixPlatform.setNonBlocking(self.rawValue) else { throw UnixSystemError.last("fcntl") }
-    }
-
-    func setCloseOnExec() throws {
-      guard UnixPlatform.setCloseOnExec(self.rawValue) else { throw UnixSystemError.last("fcntl") }
-    }
   }
 #endif

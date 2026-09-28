@@ -41,7 +41,6 @@
       static let invalidArgument: Int32 = EINVAL
       static let badDescriptor: Int32 = EBADF
       static let messageTooLong: Int32 = EMSGSIZE
-      static let nameTooLong: Int32 = ENAMETOOLONG
       static let noSuchFile: Int32 = ENOENT
       static let connectionRefused: Int32 = ECONNREFUSED
       static let connectionReset: Int32 = ECONNRESET
@@ -52,16 +51,6 @@
 
     static func closeDescriptor(_ descriptor: Int32) {
       _ = close(descriptor)
-    }
-
-    static func setNonBlocking(_ descriptor: Int32) -> Bool {
-      let flags = fcntl(descriptor, F_GETFL, 0)
-      return flags >= 0 && fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0
-    }
-
-    static func setCloseOnExec(_ descriptor: Int32) -> Bool {
-      let flags = fcntl(descriptor, F_GETFD, 0)
-      return flags >= 0 && fcntl(descriptor, F_SETFD, flags | FD_CLOEXEC) == 0
     }
 
     /// Reads into `buffer`, which must not be empty.
@@ -106,15 +95,16 @@
       #if canImport(Darwin)
         // Darwin cannot set these as it creates the socket, so they follow at once. A fork on
         // another thread in between would hand the child this descriptor for as long as it runs.
+        // A new socket has no other flags to keep, so each is set rather than added.
         let descriptor = try UnixDescriptor(socket(AF_UNIX, SOCK_DGRAM, 0), from: "socket")
-        try descriptor.setNonBlocking()
-        try descriptor.setCloseOnExec()
         var enabled: Int32 = 1
         // Darwin refuses a datagram larger than the sender's send buffer with `EMSGSIZE`, and that
         // buffer starts at 2 KiB, so it is raised past the longest datagram any endpoint accepts.
         var sendBufferByteCount: Int32 = 65_536
         let size = socklen_t(MemoryLayout<Int32>.size)
         guard
+          fcntl(descriptor.rawValue, F_SETFL, O_NONBLOCK) == 0,
+          fcntl(descriptor.rawValue, F_SETFD, FD_CLOEXEC) == 0,
           setsockopt(descriptor.rawValue, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0,
           setsockopt(descriptor.rawValue, SOL_SOCKET, SO_SNDBUF, &sendBufferByteCount, size) == 0
         else { throw UnixSystemError.last("socket") }

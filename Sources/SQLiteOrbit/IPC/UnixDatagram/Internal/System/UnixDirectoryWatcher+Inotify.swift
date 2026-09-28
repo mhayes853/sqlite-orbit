@@ -3,42 +3,51 @@
   // Glibc module leaves it out. Everything else goes through `UnixPlatform`.
   import CLinuxEvents
 
-  extension UnixDirectoryWatcher {
-    typealias Backend = Inotify
+  /// Watches directories for entries appearing, disappearing or being renamed, and says, without
+  /// blocking, whether any of them has changed.
+  ///
+  /// It is inotify on Linux and Android, and on Darwin a kqueue watching each directory's vnode. A
+  /// directory that is removed or moved away also counts as a change, after which its watch reports
+  /// nothing more. Nothing about it is thread-safe: the caller serializes every use.
+  final class UnixDirectoryWatcher: @unchecked Sendable {
+    private let descriptor: UnixDescriptor
 
-    /// The inotify instance behind a ``UnixDirectoryWatcher`` on Linux and Android.
-    final class Inotify {
-      private let descriptor: UnixDescriptor
+    init() throws {
+      self.descriptor = try UnixDescriptor(
+        inotify_init1(orbit_in_nonblock | orbit_in_cloexec),
+        from: "inotify_init1"
+      )
+    }
 
-      init() throws {
-        self.descriptor = try UnixDescriptor(
-          inotify_init1(orbit_in_nonblock | orbit_in_cloexec),
-          from: "inotify_init1"
-        )
-      }
+    /// Starts watching the directory at `path`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if the directory cannot be watched, which includes the
+    ///   system running out of watches.
+    func watch(_ path: String) throws {
+      guard inotify_add_watch(self.descriptor.rawValue, path, orbit_in_entries_changed) >= 0
+      else { throw UnixSystemError.last("inotify_add_watch") }
+    }
 
-      func watch(_ path: String) throws {
-        guard inotify_add_watch(self.descriptor.rawValue, path, orbit_in_entries_changed) >= 0
-        else { throw UnixSystemError.last("inotify_add_watch") }
-      }
-
-      func drainChanges() -> Bool {
-        var changed = false
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-          let count = buffer.withUnsafeMutableBytes {
-            UnixPlatform.readBytes(from: self.descriptor.rawValue, into: $0)
-          }
-          if count > 0 {
-            changed = true
-            continue
-          }
-          let code = UnixPlatform.lastErrorCode
-          if count < 0, code == UnixPlatform.ErrorCode.interrupted { continue }
-          return changed
-            || (count < 0 && code != UnixPlatform.ErrorCode.tryAgain
-              && code != UnixPlatform.ErrorCode.wouldBlock)
+    /// Takes every change the kernel has queued, without waiting for more.
+    ///
+    /// - Returns: Whether anything changed since the last call. A queue that cannot be read counts
+    ///   as a change, because it could be hiding one.
+    func drainChanges() -> Bool {
+      var changed = false
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = buffer.withUnsafeMutableBytes {
+          UnixPlatform.readBytes(from: self.descriptor.rawValue, into: $0)
         }
+        if count > 0 {
+          changed = true
+          continue
+        }
+        let code = UnixPlatform.lastErrorCode
+        if count < 0, code == UnixPlatform.ErrorCode.interrupted { continue }
+        return changed
+          || (count < 0 && code != UnixPlatform.ErrorCode.tryAgain
+            && code != UnixPlatform.ErrorCode.wouldBlock)
       }
     }
   }
