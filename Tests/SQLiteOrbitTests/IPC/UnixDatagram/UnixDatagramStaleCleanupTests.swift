@@ -6,11 +6,19 @@
   @testable import SQLiteOrbit
 
   @Suite
-  struct UnixDatagramStaleCleanupTests {
+  final class UnixDatagramStaleCleanupTests: Sendable {
+    let coordination: StaleCleanupDirectory
+
+    init() throws {
+      self.coordination = try StaleCleanupDirectory()
+    }
+
+    deinit {
+      self.coordination.remove()
+    }
+
     @Test
     func removesADeadEndpointsSocketAndMarkersAndKeepsLiveOnesAndItsOwn() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let live = try coordination.bindSocket("live")
       try coordination.leaveDeadSocket("dead")
       // The sweeping endpoint's own files are left alone even when it looks dead.
@@ -33,8 +41,6 @@
 
     @Test
     func removesMarkersWithoutASocketAndTemporaryMarkersOfDeadEndpoints() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let live = try coordination.bindSocket("live")
       try coordination.leaveDeadSocket("dead")
       try coordination.writeMarker("ghost", in: "k1")
@@ -53,8 +59,6 @@
 
     @Test
     func removesADeadHiddenSocketOnlyOnceItIsOlderThanTheGracePeriod() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       // Bound under the hidden name, as a bind that died before renaming its socket leaves it.
       try coordination.leaveDeadSocket(".dead")
       let live = try coordination.bindSocket(".live")
@@ -77,8 +81,6 @@
 
     @Test
     func removesEmptyDatabaseDirectoriesOnly() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let live = try coordination.bindSocket("live")
       try coordination.writeMarker("live", in: "full")
       try FileManager.default.createDirectory(
@@ -95,8 +97,6 @@
 
     @Test
     func removesLockFilesNobodyHolds() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let locks = coordination.directory.appending(path: "open-locks")
       try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
       try Data().write(to: locks.appending(path: "abandoned.lock"))
@@ -117,8 +117,6 @@
 
     @Test
     func skipsTheSweepWhileAnotherIsUnderWay() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       try coordination.leaveDeadSocket("dead")
       try coordination.writeMarker("dead", in: "k1")
       let lock = coordination.directory.appending(path: "v1/cleanup-stale.lock").path
@@ -145,8 +143,6 @@
       // Dead as the sweep starts, its socket's file gone, as a live endpoint's is once macOS's
       // cleaner of temporary files has removed it, and back, bound at the same path, by the time
       // the sweep resumes after its first removal.
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let keys = ["k1", "k2", "k3"]
       for key in keys {
         try coordination.writeMarker("back", in: key)
@@ -171,8 +167,6 @@
 
     @Test
     func concurrentSweepsAndStartingEndpointsLeaveEveryLiveFileAndNoDeadOne() throws {
-      let coordination = try StaleCleanupDirectory()
-      defer { coordination.remove() }
       let deadCount = 20
       let keys = (0..<5).map { "k\($0)" }
       for index in 0..<deadCount {
@@ -220,22 +214,13 @@
 
     @Test
     func removesEverythingOfAKilledProcess() async throws {
-      let harness = try ProcessTestHarness(
-        helper: "staleCleanupProcessPeer",
-        environmentPrefix: StaleCleanupEnvironment.prefix,
-        name: "stale"
-      )
-      defer { harness.cleanup() }
-      let coordination = StaleCleanupDirectory(harness.file("c"))
-      let ready = harness.file("ready")
-      let process = try harness.spawn([
-        "MODE": "crash",
-        "DIRECTORY": coordination.directory.path,
-        "READY": ready.path
-      ])
-      try await waitForFile(ready)
-      harness.kill(process)
-      try await harness.waitForExit(process)
+      let peer = try StaleCleanupPeer("stale")
+      defer { peer.cleanup() }
+      let coordination = peer.coordination
+      let process = try peer.spawn("advertise-and-hang")
+      try await peer.waitUntilReady()
+      peer.kill(process)
+      try await peer.waitForExit(process)
       let locks = coordination.directory.appending(path: "open-locks").path
       #expect(try coordination.sockets().count == 1)
       #expect(try coordination.markers().values.map(\.count) == [1])
@@ -256,37 +241,6 @@
       #expect(try coordination.markers().isEmpty)
       #expect(try FileManager.default.contentsOfDirectory(atPath: locks).isEmpty)
     }
-  }
-
-  /// A process that advertises a database and holds its open lock until it is killed.
-  @Test
-  func staleCleanupProcessPeer() throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard environment[StaleCleanupEnvironment.mode] == "crash" else { return }
-    let directory = URL(
-      fileURLWithPath: try #require(environment[StaleCleanupEnvironment.directory])
-    )
-    let ready = URL(fileURLWithPath: try #require(environment[StaleCleanupEnvironment.ready]))
-    let database = OrbitDatabaseIdentifier(rawValue: "crashed")
-    let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
-    let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
-    try OrbitDatabaseOpenLock.withLock(
-      databaseIdentifier: database,
-      directory: directory,
-      configuration: .default
-    ) {
-      try touch(ready)
-      Thread.sleep(forTimeInterval: 30)
-    }
-    _ = subscription
-    processTestExit(0)
-  }
-
-  private enum StaleCleanupEnvironment {
-    static let prefix = "SQLITE_ORBIT_STALE_HELPER_"
-    static let mode = prefix + "MODE"
-    static let directory = prefix + "DIRECTORY"
-    static let ready = prefix + "READY"
   }
 
   /// A socket bound for as long as this is kept.

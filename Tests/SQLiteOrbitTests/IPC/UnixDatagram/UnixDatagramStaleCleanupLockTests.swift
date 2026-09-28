@@ -14,19 +14,19 @@
   struct UnixDatagramStaleCleanupLockTests {
     @Test
     func aHolderOfTheSweepsLockThatIsKilledLeavesItToTheNextSweep() async throws {
-      let peer = try StaleCleanupLockPeer("killed")
+      let peer = try StaleCleanupPeer("killed")
       defer { peer.cleanup() }
-      try peer.coordination.leaveDeadSocket("dead")
-      try peer.coordination.writeMarker("dead", in: "k1")
+      let coordination = peer.coordination
+      try coordination.leaveDeadSocket("dead")
+      try coordination.writeMarker("dead", in: "k1")
       let holder = try peer.spawn("hold")
       try await peer.waitUntilReady()
 
-      peer.harness.kill(holder)
-      try await peer.harness.waitForExit(holder)
+      peer.kill(holder)
+      try await peer.waitForExit(holder)
       // Killed before it could unlink it.
-      #expect(FileManager.default.fileExists(atPath: peer.coordination.sweepLock.path))
+      #expect(FileManager.default.fileExists(atPath: coordination.sweepLock.path))
 
-      let coordination = peer.coordination
       let summary = try await withDeadline { coordination.sweep() }
 
       #expect(summary?.socketCount == 1)
@@ -38,7 +38,7 @@
 
     @Test
     func aSweepKilledPartwayLeavesTheRestToTheNextAndTheLiveFilesAlone() async throws {
-      let peer = try StaleCleanupLockPeer("partway")
+      let peer = try StaleCleanupPeer("partway")
       defer { peer.cleanup() }
       let coordination = peer.coordination
       let keys = ["k0", "k1", "k2"]
@@ -58,8 +58,8 @@
       // It stalls for good right after its first removal, which is of a dead socket's file.
       let sweeper = try peer.spawn("sweep-and-hang")
       try await peer.waitUntilReady()
-      peer.harness.kill(sweeper)
-      try await peer.harness.waitForExit(sweeper)
+      peer.kill(sweeper)
+      try await peer.waitForExit(sweeper)
       #expect(try coordination.sockets().count == deadCount)
       #expect(FileManager.default.fileExists(atPath: coordination.sweepLock.path))
 
@@ -83,14 +83,14 @@
 
     @Test
     func aFrozenHolderOfTheSweepsLockHoldsUpNeitherSweepsNorStartingTransports() async throws {
-      let peer = try StaleCleanupLockPeer("frozen")
+      let peer = try StaleCleanupPeer("frozen")
       defer { peer.cleanup() }
       let coordination = peer.coordination
       try coordination.leaveDeadSocket("dead")
       try coordination.writeMarker("dead", in: "k1")
       let holder = try peer.spawn("hold")
       try await peer.waitUntilReady()
-      peer.harness.suspend(holder)
+      peer.suspend(holder)
 
       // Skipped rather than waited for.
       let skipped = try await withDeadline(.seconds(5)) { coordination.sweep() }
@@ -109,8 +109,8 @@
       try await recorder.waitForCount(1)
       #expect(try coordination.sockets().contains("dead.sock"))
 
-      peer.harness.kill(holder)
-      try await peer.harness.waitForExit(holder)
+      peer.kill(holder)
+      try await peer.waitForExit(holder)
       let summary = try await withDeadline { coordination.sweep() }
 
       #expect(summary?.socketCount == 1)
@@ -122,19 +122,19 @@
 
     @Test
     func aFrozenHolderOfTheSweepsLockThatResumesFinishesAndLetsTheNextSweepRun() async throws {
-      let peer = try StaleCleanupLockPeer("resumed")
+      let peer = try StaleCleanupPeer("resumed")
       defer { peer.cleanup() }
       let coordination = peer.coordination
       try coordination.leaveDeadSocket("dead")
       let holder = try peer.spawn("hold")
       try await peer.waitUntilReady()
-      peer.harness.suspend(holder)
+      peer.suspend(holder)
       let skipped = try await withDeadline(.seconds(5)) { coordination.sweep() }
       #expect(skipped == nil)
 
       try peer.go()
-      peer.harness.resume(holder)
-      try await peer.harness.waitForSuccessfulExit(holder)
+      peer.resume(holder)
+      try await peer.waitForSuccessfulExit(holder)
       // Let go of, and unlinked, as it always is.
       #expect(!FileManager.default.fileExists(atPath: coordination.sweepLock.path))
 
@@ -148,7 +148,7 @@
     func aSweepStoppedPartwayLeavesTheFilesOfAnEndpointThatCameBackMeanwhile() async throws {
       // What `UnixDatagramStaleCleanupTests` does to a sweep in this process, done to one in a
       // process of its own that is stopped between its first removal and the rest.
-      let peer = try StaleCleanupLockPeer("stopped")
+      let peer = try StaleCleanupPeer("stopped")
       defer { peer.cleanup() }
       let coordination = peer.coordination
       let keys = ["k0", "k1", "k2"]
@@ -157,12 +157,12 @@
       }
       let sweeper = try peer.spawn("sweep-and-wait")
       try await peer.waitUntilReady()
-      peer.harness.suspend(sweeper)
+      peer.suspend(sweeper)
 
       let back = try coordination.bindSocket("back")
       try peer.go()
-      peer.harness.resume(sweeper)
-      try await peer.harness.waitForSuccessfulExit(sweeper)
+      peer.resume(sweeper)
+      try await peer.waitForSuccessfulExit(sweeper)
 
       #expect(try peer.result() == 1)
       #expect(try coordination.markers().values.reduce(0) { $0 + $1.count } == keys.count - 1)
@@ -171,31 +171,27 @@
     }
   }
 
-  /// A process that holds the sweep's lock, or sweeps, in a coordination directory another
-  /// process set up, and stalls where its mode says.
+  /// A process that holds the sweep's lock, sweeps, or holds what an endpoint holds, in a
+  /// coordination directory another process set up, and stalls where its mode says.
   ///
   /// - `hold`: holds the lock until told to go on.
   /// - `sweep-and-hang`: sweeps, and stalls for good after its first removal.
   /// - `sweep-and-wait`: sweeps, stalls after its first removal until told to go on, and reports
   ///   how many markers it removed.
+  /// - `advertise-and-hang`: advertises a database, and holds its open lock until it is killed.
   @Test
-  func staleCleanupLockProcessPeer() throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard let mode = environment[StaleCleanupLockEnvironment.mode] else { return }
-    func url(_ key: String) throws -> URL { URL(fileURLWithPath: try #require(environment[key])) }
-    let coordination = StaleCleanupDirectory(try url(StaleCleanupLockEnvironment.directory))
-    let ready = try url(StaleCleanupLockEnvironment.ready)
-    let go = try url(StaleCleanupLockEnvironment.go)
-    let result = try url(StaleCleanupLockEnvironment.result)
-
-    /// Waits for the test to say go on, and fails if it never does.
-    func waitForGo() { processTestWaitForFile(go) }
+  func staleCleanupProcessPeer() throws {
+    let environment = ProcessTestEnvironment(prefix: StaleCleanupPeer.prefix)
+    guard let mode = environment["MODE"] else { return }
+    let coordination = StaleCleanupDirectory(try environment.url("DIRECTORY"))
+    let ready = try environment.url("READY")
+    let go = try environment.url("GO")
 
     switch mode {
     case "hold":
       _ = try UnixFileLock.withExclusiveLockIfAvailable(atPath: coordination.sweepLock.path) {
         try touch(ready)
-        waitForGo()
+        processTestWaitForFile(go)
       }
     case "sweep-and-hang", "sweep-and-wait":
       var hasStalled = false
@@ -207,60 +203,53 @@
           Thread.sleep(forTimeInterval: 30)
           processTestExit(1)
         }
-        waitForGo()
+        processTestWaitForFile(go)
       }
+      let result = try environment.url("RESULT")
       try Data(String(summary?.markerCount ?? -1).utf8).write(to: result, options: .atomic)
+    case "advertise-and-hang":
+      let database = OrbitDatabaseIdentifier(rawValue: "crashed")
+      let directory = coordination.directory
+      let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
+      let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
+      try OrbitDatabaseOpenLock.withLock(
+        databaseIdentifier: database,
+        directory: directory,
+        configuration: .default
+      ) {
+        try touch(ready)
+        Thread.sleep(forTimeInterval: 30)
+      }
+      _ = subscription
     default:
       processTestExit(1)
     }
     processTestExit(0)
   }
 
-  private enum StaleCleanupLockEnvironment {
-    static let prefix = "SQLITE_ORBIT_STALE_LOCK_HELPER_"
-    static let mode = prefix + "MODE"
-    static let directory = prefix + "DIRECTORY"
-    static let ready = prefix + "READY"
-    static let go = prefix + "GO"
-    static let result = prefix + "RESULT"
-  }
-
   /// A coordination directory, and the one helper process a test runs in it.
-  private final class StaleCleanupLockPeer {
-    let harness: ProcessTestHarness
-    let coordination: StaleCleanupDirectory
+  final class StaleCleanupPeer: ProcessTestHarness {
+    static let prefix = "SQLITE_ORBIT_STALE_HELPER_"
+
+    lazy var coordination = StaleCleanupDirectory(self.file("c"))
 
     init(_ name: String) throws {
-      self.harness = try ProcessTestHarness(
-        helper: "staleCleanupLockProcessPeer",
-        environmentPrefix: StaleCleanupLockEnvironment.prefix,
-        name: name
-      )
-      self.coordination = StaleCleanupDirectory(self.harness.file("c"))
+      try super.init(helper: "staleCleanupProcessPeer", environmentPrefix: Self.prefix, name: name)
     }
 
     func spawn(_ mode: String) throws -> Process {
-      try self.harness.spawn([
+      try self.spawn([
         "MODE": mode,
         "DIRECTORY": self.coordination.directory.path,
-        "READY": self.harness.file("ready").path,
-        "GO": self.harness.file("go").path,
-        "RESULT": self.harness.file("result").path
+        "READY": self.file("ready").path,
+        "GO": self.file("go").path,
+        "RESULT": self.file("result").path
       ])
     }
 
-    /// Waits for the helper to hold the lock, or to have stalled.
-    func waitUntilReady() async throws { try await waitForFile(self.harness.file("ready")) }
-
-    /// Tells a helper that stalled until told to go on.
-    func go() throws { try touch(self.harness.file("go")) }
-
     /// How many markers the helper's sweep removed.
     func result() throws -> Int {
-      try #require(Int(String(contentsOf: self.harness.file("result"), encoding: .utf8)))
+      try #require(Int(String(contentsOf: self.file("result"), encoding: .utf8)))
     }
-
-    /// Kills the helper, stopped or not, and removes the directory.
-    func cleanup() { self.harness.cleanup() }
   }
 #endif

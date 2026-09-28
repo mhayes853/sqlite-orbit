@@ -5,11 +5,19 @@
   @testable import SQLiteOrbit
 
   @Suite
-  struct UnixSystemTests {
+  final class UnixSystemTests {
+    let directory: URL
+
+    init() throws {
+      self.directory = try makeShortTemporaryDirectory("system")
+    }
+
+    deinit {
+      try? FileManager.default.removeItem(at: self.directory)
+    }
+
     @Test
     func bindsUnderAHiddenNameAndRenamesIntoPlace() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let path = directory.appending(path: "a.sock").path
       #expect(
         UnixDatagramSocket.temporaryPath(binding: path)
@@ -17,7 +25,7 @@
       )
       #expect(UnixDatagramSocket.temporaryPath(binding: "a.sock") == ".a.sock")
 
-      let socket = try UnixDatagramSocket.bind(path: path, receiveBufferByteCount: 64 * 1024)
+      let socket = try Self.bind(path)
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
       #expect(socket.boundFile != nil)
       #expect(socket.boundFile == UnixPlatform.fileIdentity(atPath: path))
@@ -25,40 +33,34 @@
 
     @Test
     func bindReplacesWhateverIsAtThePath() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let path = directory.appending(path: "a.sock").path
       try Self.bindAndClose(path)
       #expect(UnixDatagramSocket.probe(path) == .dead)
 
-      let socket = try UnixDatagramSocket.bind(path: path, receiveBufferByteCount: 64 * 1024)
+      let socket = try Self.bind(path)
       #expect(UnixDatagramSocket.probe(path) == .alive)
       #expect(socket.boundFile == UnixPlatform.fileIdentity(atPath: path))
     }
 
     @Test
     func bindLeavesNothingBehindWhenItFails() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       // Renaming a socket over a directory fails.
       let path = directory.appending(path: "a.sock", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
 
       #expect(throws: UnixSystemError.self) {
-        _ = try UnixDatagramSocket.bind(path: path.path, receiveBufferByteCount: 64 * 1024)
+        _ = try Self.bind(path.path)
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
     }
 
     @Test
     func probesWhetherASocketIsBoundAtAPath() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let path = directory.appending(path: "a.sock").path
 
       #expect(UnixDatagramSocket.probe(path) == .dead)
 
-      let socket = try UnixDatagramSocket.bind(path: path, receiveBufferByteCount: 64 * 1024)
+      let socket = try Self.bind(path)
       #expect(UnixDatagramSocket.probe(path) == .alive)
       // A probe sends nothing.
       var buffer = [UInt8](repeating: 0, count: 16)
@@ -72,12 +74,10 @@
 
     @Test
     func touchingAFileMakesItsTimesNow() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let file = directory.appending(path: "file").path
       #expect(FileManager.default.createFile(atPath: file, contents: nil))
       let socketPath = directory.appending(path: "a.sock").path
-      let socket = try UnixDatagramSocket.bind(path: socketPath, receiveBufferByteCount: 64 * 1024)
+      let socket = try Self.bind(socketPath)
 
       let past = Date(timeIntervalSinceNow: -10 * 24 * 60 * 60)
       for path in [file, socketPath] {
@@ -95,8 +95,6 @@
 
     @Test
     func removesADirectoryOnlyIfItIsEmpty() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let child = directory.appending(path: "child", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
       let file = child.appending(path: "f")
@@ -118,8 +116,6 @@
 
     @Test
     func identifiesTheFileAtAPath() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let path = directory.appending(path: "file").path
       #expect(UnixPlatform.fileIdentity(atPath: path) == nil)
 
@@ -136,8 +132,6 @@
 
     @Test
     func aDirectoryWatcherWakesAnEventQueueWaitingOnIt() throws {
-      let directory = try makeShortTemporaryDirectory("system")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let watched = directory.appending(path: "watched", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: watched, withIntermediateDirectories: false)
       let file = watched.appending(path: "file")
@@ -177,11 +171,14 @@
       return descriptors
     }
 
+    private static func bind(_ path: String) throws -> UnixDatagramSocket {
+      try UnixDatagramSocket.bind(path: path, receiveBufferByteCount: 64 * 1024)
+    }
+
     /// Binds a socket at `path` and closes it, leaving its file behind as a process that died
     /// would.
     private static func bindAndClose(_ path: String) throws {
-      let socket = try UnixDatagramSocket.bind(path: path, receiveBufferByteCount: 64 * 1024)
-      _ = socket.boundFile
+      _ = try Self.bind(path).boundFile
     }
 
     private static func modificationDate(_ path: String) throws -> Date {
