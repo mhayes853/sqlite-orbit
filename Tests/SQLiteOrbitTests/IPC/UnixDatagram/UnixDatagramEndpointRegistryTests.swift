@@ -111,7 +111,8 @@
       #expect(!FileManager.default.fileExists(atPath: socketPath))
       #expect(try sender.peerRegions(for: self.database).isEmpty)
       #expect(try sender.peerRegions(for: unsent).isEmpty)
-      #expect(try FileManager.default.contentsOfDirectory(atPath: interrupted.path).isEmpty)
+      // Reclaimed once nothing is left in it.
+      #expect(!FileManager.default.fileExists(atPath: interrupted.path))
     }
 
     @Test(arguments: [true, false])
@@ -141,15 +142,38 @@
       try peer.advertise(self.items, coordinationKey: key)
       #expect(try send().delivered == 1)
 
-      // Gone from under what the sender read and watched.
+      // Gone from under what the sender read and watched, reclaimed by the peer as it withdrew.
       try peer.withdraw(coordinationKey: key)
-      try reclaim()
+      #expect(!FileManager.default.fileExists(atPath: databaseDirectory.path))
       #expect(try send().peerCount == 0)
 
       // Gone from under the advertiser.
       try reclaim()
       try peer.advertise(self.items, coordinationKey: key)
       #expect(try send().delivered == 1)
+    }
+
+    @Test
+    func aDatabasesDirectoryIsReclaimedOnceItsLastMarkerIsWithdrawn() throws {
+      let directory = try makeShortTemporaryDirectory("registry")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let first = try unixDatagramRegistry(directory, endpointName: "first")
+      let second = try unixDatagramRegistry(directory, endpointName: "second")
+      let key = self.database.coordinationKey
+      let databaseDirectory = directory.appending(path: "v1/d/\(key)").path
+      try first.advertise(self.items, coordinationKey: key)
+      try second.advertise(self.lists, coordinationKey: key)
+
+      // Kept while it holds another endpoint's marker.
+      try first.withdraw(coordinationKey: key)
+      #expect(try FileManager.default.contentsOfDirectory(atPath: databaseDirectory) == ["second"])
+
+      try second.withdraw(coordinationKey: key)
+      #expect(!FileManager.default.fileExists(atPath: databaseDirectory))
+
+      // Created again by the next endpoint that advertises the database.
+      try first.advertise(self.items, coordinationKey: key)
+      #expect(try second.peerRegions(for: self.database) == ["first": self.items])
     }
 
     @Test

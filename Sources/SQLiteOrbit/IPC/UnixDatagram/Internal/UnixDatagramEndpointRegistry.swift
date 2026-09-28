@@ -337,11 +337,12 @@
     /// database any endpoint ever advertised.
     ///
     /// A directory that holds anything must be left alone, because what it holds may be a marker
-    /// another endpoint has just written, and an endpoint that finds its directory gone creates it
-    /// again, both to advertise and to send. Foundation removes a directory only together with
-    /// everything in it, so this removes nothing until the system layer offers a call that
-    /// removes a directory only if it is empty.
+    /// another endpoint has just written, so this asks the system to remove it only if it is
+    /// empty, which it checks and does in one step. A directory that is not empty, or already
+    /// gone, stays as it is. An endpoint that finds the directory gone creates it again, both to
+    /// advertise and to send, and retries a marker whose directory this removed from under it.
     private func reclaimDatabaseDirectory(_ coordinationKey: String) {
+      _ = UnixPlatform.removeDirectory(atPath: self.databaseDirectory(coordinationKey).path)
     }
 
     private static func remove(_ url: URL) throws {
