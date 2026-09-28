@@ -140,6 +140,35 @@
     }
 
     @Test
+    func aSweepThatStallsLeavesTheFilesOfAnEndpointThatCameBackMeanwhile() throws {
+      // Dead as the sweep starts, its socket's file gone, as a live endpoint's is once macOS's
+      // cleaner of temporary files has removed it, and back, bound at the same path, by the time
+      // the sweep resumes after its first removal.
+      let coordination = try StaleCleanupDirectory()
+      defer { coordination.remove() }
+      let keys = ["k1", "k2", "k3"]
+      for key in keys {
+        try coordination.writeMarker("back", in: key)
+      }
+      try coordination.writeMarker(".back.tmp", in: "k1")
+      var back: LiveSocket?
+      var removedCount = 0
+
+      let summary = coordination.sweep { _ in
+        removedCount += 1
+        guard back == nil else { return }
+        back = try? coordination.bindSocket("back")
+      }
+
+      #expect(back != nil)
+      #expect(removedCount == 1)
+      #expect(summary?.markerCount == 1)
+      #expect(try coordination.markers().values.reduce(0) { $0 + $1.count } == keys.count)
+      #expect(try coordination.sockets() == ["back.sock"])
+      withExtendedLifetime(back) {}
+    }
+
+    @Test
     func concurrentSweepsAndStartingEndpointsLeaveEveryLiveFileAndNoDeadOne() throws {
       let coordination = try StaleCleanupDirectory()
       defer { coordination.remove() }
@@ -256,7 +285,7 @@
   }
 
   /// A socket bound for as long as this is kept.
-  private final class LiveSocket: Sendable {
+  final class LiveSocket: Sendable {
     let socket: UnixDatagramSocket
 
     init(_ socket: consuming UnixDatagramSocket) {
@@ -265,7 +294,7 @@
   }
 
   /// A coordination directory laid out as endpoints lay it out, and filled by hand.
-  private struct StaleCleanupDirectory: Sendable {
+  struct StaleCleanupDirectory: Sendable {
     let directory: URL
 
     var socketsDirectory: URL {
@@ -286,15 +315,21 @@
 
     func remove() { try? FileManager.default.removeItem(at: self.directory) }
 
-    /// Sweeps as an endpoint named `self` would.
+    /// The lock a sweep holds while it runs.
+    var sweepLock: URL { self.directory.appending(path: "v1/cleanup-stale.lock") }
+
+    /// Sweeps as an endpoint named `self` would, calling `didRemove` after each file of an
+    /// endpoint's it removes.
     func sweep(
       temporarySocketGracePeriod: Duration = UnixDatagramStaleCleanup
-        .defaultTemporarySocketGracePeriod
+        .defaultTemporarySocketGracePeriod,
+      didRemove: (_ path: String) -> Void = { _ in }
     ) -> UnixDatagramStaleCleanup.Summary? {
       UnixDatagramStaleCleanup.sweep(
         directory: self.directory,
         keeping: "self",
-        temporarySocketGracePeriod: temporarySocketGracePeriod
+        temporarySocketGracePeriod: temporarySocketGracePeriod,
+        didRemove: didRemove
       )
     }
 

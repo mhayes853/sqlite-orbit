@@ -26,9 +26,17 @@
   /// - A live endpoint whose socket's file something else deleted is found dead and loses its
   ///   markers, which is what a sender pruning it would do as well, and it writes them again once
   ///   it notices.
+  /// - An endpoint is probed again right before each of its files is removed, never once for all
+  ///   of them, so a verdict is never acted on later than the removal it is for. A sweep that
+  ///   stalls between two removals, its process stopped or suspended in the background for hours,
+  ///   finds an endpoint that has come back in the meantime alive, and leaves the rest of its
+  ///   files alone.
   ///
   /// Sweeps are one at a time, under a lock no sweep waits for: whoever finds it held skips its
-  /// sweep, as the holder is removing the same things.
+  /// sweep, as the holder is removing the same things. Nothing ever waits on a sweep, so one that
+  /// stalls holds up nothing but the sweeps it makes skip, and one whose process dies lets go of
+  /// the lock with it, leaving its lock file for the next sweep to take over and remove, and the
+  /// rest of what it would have removed for that sweep to find.
   enum UnixDatagramStaleCleanup {
     /// What a sweep removed.
     struct Summary: Equatable, Sendable {
@@ -61,13 +69,17 @@
     ///   - directory: The coordination directory.
     ///   - endpointName: The name of the endpoint sweeping, whose own files are never touched.
     ///   - temporarySocketGracePeriod: How old a hidden socket found dead must be to be removed.
+    ///   - didRemove: Called with the path of each socket's file and marker removed, right after
+    ///     it goes. It exists for tests, to stall a sweep between two removals, and does nothing
+    ///     otherwise.
     /// - Returns: What was removed, or `nil` if another sweep was under way, or the sweep's lock
     ///   could not be taken, and nothing was removed.
     @discardableResult
     static func sweep(
       directory: URL,
       keeping endpointName: String,
-      temporarySocketGracePeriod: Duration = Self.defaultTemporarySocketGracePeriod
+      temporarySocketGracePeriod: Duration = Self.defaultTemporarySocketGracePeriod,
+      didRemove: (_ path: String) -> Void = { _ in }
     ) -> Summary? {
       let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
       let lock = versionDirectory.appending(path: "cleanup-stale.lock").path
@@ -78,8 +90,8 @@
           endpointName: endpointName,
           temporarySocketGracePeriod: temporarySocketGracePeriod
         )
-        sweep.removeDeadSockets()
-        sweep.removeDeadMarkers()
+        sweep.removeDeadSockets(didRemove: didRemove)
+        sweep.removeDeadMarkers(didRemove: didRemove)
         sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory)
         return sweep.summary
       }
@@ -93,13 +105,9 @@
       let temporarySocketGracePeriod: Duration
       var summary = Summary()
 
-      /// Whether each endpoint looked at is dead, by name, so each is probed once however many
-      /// files it left.
-      var isDead: [String: Bool] = [:]
-
       /// Removes the file of every socket in `v1/s/` nothing is bound to any more, and of every
       /// hidden one besides that is older than the grace period.
-      mutating func removeDeadSockets() {
+      mutating func removeDeadSockets(didRemove: (_ path: String) -> Void) {
         for name in Self.contents(of: self.socketsDirectory) where name.hasSuffix(".sock") {
           let path = self.socketsDirectory.appending(path: name).path
           let isTemporary = name.hasPrefix(".")
@@ -110,15 +118,19 @@
             UnixPlatform.removeFile(atPath: path)
           else { continue }
           self.summary[keyPath: isTemporary ? \Summary.temporarySocketCount : \.socketCount] += 1
+          didRemove(path)
         }
       }
 
       /// Removes every marker and temporary marker file of an endpoint whose socket nothing is
       /// bound to, or which has no socket at all, then every database's directory left empty.
       ///
+      /// The endpoint is probed for each file, however many it left, since it may have come back
+      /// since the last one went.
+      ///
       /// Every directory found empty goes, not only those this emptied, since one left by an
       /// endpoint that died after withdrawing its last marker would otherwise stay forever.
-      mutating func removeDeadMarkers() {
+      mutating func removeDeadMarkers(didRemove: (_ path: String) -> Void) {
         for coordinationKey in Self.contents(of: self.databasesDirectory) {
           let directory = self.databasesDirectory.appending(
             path: coordinationKey,
@@ -129,9 +141,11 @@
               endpointName != self.endpointName,
               self.isEndpointDead(endpointName)
             else { continue }
+            let path = directory.appending(path: name).path
             // Fails, harmlessly, on a file something else removed first.
-            if UnixPlatform.removeFile(atPath: directory.appending(path: name).path) {
+            if UnixPlatform.removeFile(atPath: path) {
               self.summary.markerCount += 1
+              didRemove(path)
             }
           }
           // Fails, harmlessly, on a directory that is not empty, or no longer there.
@@ -143,12 +157,13 @@
 
       /// Whether nothing is bound at the socket's path of the endpoint named `endpointName`,
       /// including when nothing is there at all.
-      private mutating func isEndpointDead(_ endpointName: String) -> Bool {
-        if let isDead = self.isDead[endpointName] { return isDead }
+      ///
+      /// Asked right before each removal, and never remembered: an endpoint found dead can bind
+      /// its socket again an instant later, and a sweep can be stalled for any length of time
+      /// between one removal and the next.
+      private func isEndpointDead(_ endpointName: String) -> Bool {
         let path = self.socketsDirectory.appending(path: "\(endpointName).sock").path
-        let isDead = UnixDatagramSocket.probe(path) == .dead
-        self.isDead[endpointName] = isDead
-        return isDead
+        return UnixDatagramSocket.probe(path) == .dead
       }
 
       /// Whether the hidden socket at `path` was left by a bind that will never finish: nothing
