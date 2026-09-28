@@ -130,77 +130,70 @@
       single.append(entry)
       let datagram = single.encoded()
 
-      let (delivery, startedOwing) = self.state.withLock { state in
+      return self.state.withLock { state in
         self.retain(advertisers, advertising: coordinationKey, in: &state)
         var delivery = Delivery(peerCount: peers.count)
-        var startedOwing = false
         for peer in peers {
-          switch self.offer(datagram, entry, to: peer, coordinationKey: coordinationKey, in: &state)
-          {
-          case .delivered:
-            delivery.delivered += 1
-          case .deferred(let startsOwing):
-            delivery.deferred += 1
-            startedOwing = startedOwing || startsOwing
-          case .failed:
-            delivery.failed += 1
-          case .stale(let peer):
-            delivery.stale.append(peer)
-          }
+          self.offer(
+            datagram,
+            entry,
+            to: peer,
+            coordinationKey: coordinationKey,
+            in: &state,
+            counting: &delivery
+          )
         }
-        return (delivery, startedOwing)
+        return delivery
       }
-      if startedOwing {
-        // The thread waits on a deadline it worked out before this peer owed anything.
-        self.queue.wake()
-      }
-      return delivery
     }
 
     // MARK: - Sending
 
-    private enum Offer {
-      case delivered
-      /// The peer is owed the message's region, and the payload says whether it owed nothing
-      /// before.
-      case deferred(Bool)
-      case failed
-      case stale(StalePeer)
-    }
-
+    /// Sends `datagram` to a peer, or makes it owe `entry`'s region, and counts which in
+    /// `delivery`.
     private func offer(
       _ datagram: [UInt8],
       _ entry: UnixDatagramWireEntry,
       to peer: UnixDatagramPeer,
       coordinationKey: String,
-      in state: inout State
-    ) -> Offer {
+      in state: inout State,
+      counting delivery: inout Delivery
+    ) {
       let name = peer.endpointName
       if state.peers[name] == nil {
         do {
           guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
-            return .stale(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
+            delivery.stale.append(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
+            return
           }
           state.peers[name] = Peer(peer: peer, socket: socket)
         } catch {
-          return .failed
+          delivery.failed += 1
+          return
         }
       }
       state.peers[name]!.coordinationKeys.insert(coordinationKey)
 
       // A peer that is owed anything is not sent to until it has taken what it is owed, so the
       // message joins that rather than overtaking it.
-      let startsOwing = state.peers[name]!.owed.isEmpty
-      if startsOwing {
+      if state.peers[name]!.owed.isEmpty {
         switch state.peers[name]!.socket.send(datagram) {
         case .sent:
-          return .delivered
+          delivery.delivered += 1
+          return
         case .full:
-          break
+          state.peers[name]!.isWatched = self.queue.watchWritable(
+            state.peers[name]!.socket.descriptor.rawValue
+          )
+          state.peers[name]!.backOff()
+          // The thread waits on a deadline it worked out before this peer owed anything.
+          self.queue.wake()
         case .peerGone:
-          return .stale(self.forget(name, in: &state))
+          delivery.stale.append(self.forget(name, in: &state))
+          return
         case .failed:
-          return .failed
+          delivery.failed += 1
+          return
         }
       }
       switch entry.message {
@@ -208,13 +201,7 @@
         state.peers[name]!.owed[commit.databaseIdentifier, default: .empty]
           .formUnion(commit.region)
       }
-      if startsOwing {
-        state.peers[name]!.isWatched = self.queue.watchWritable(
-          state.peers[name]!.socket.descriptor.rawValue
-        )
-        state.peers[name]!.backOff()
-      }
-      return .deferred(startsOwing)
+      delivery.deferred += 1
     }
 
     /// Sends a peer what it is owed, one commit per database in as few datagrams as fit them, until
@@ -223,7 +210,7 @@
     /// A peer this finds dead is dropped, along with what it was owed.
     private func flush(_ name: String, in state: inout State) {
       guard let peer = state.peers[name], !peer.owed.isEmpty else { return }
-      let owed = peer.owed
+      var entries = peer.owed
         .sorted { $0.key.rawValue < $1.key.rawValue }
         .compactMap { database, region in
           // A region too large for a datagram of its own is broadened to the full database, which
@@ -233,8 +220,7 @@
             .transactionDidCommit(.init(databaseIdentifier: database, region: region)),
             fittingIn: self.maximumDatagramByteCount
           )
-        }
-      var entries = owed[...]
+        }[...]
       while !entries.isEmpty {
         // The longest run from the front that fits, which always holds at least the first.
         var batch = UnixDatagramWireBatch()
@@ -312,11 +298,14 @@
     private func run(receive: (Span<UInt8>) -> Void) {
       // Every datagram lands in this one buffer, which only this thread touches. It is a byte
       // longer than any datagram the transport accepts, so one that fills it was too long.
-      let capacity = self.maximumDatagramByteCount + 1
-      let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: capacity)
+      let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(
+        capacity: self.maximumDatagramByteCount + 1
+      )
       defer { buffer.deallocate() }
       while true {
-        let (isStopped, deadline) = self.state.withLock { ($0.isStopped, $0.nextRetry) }
+        let (isStopped, deadline) = self.state.withLock {
+          ($0.isStopped, $0.peers.values.lazy.compactMap(\.retryAt).min())
+        }
         guard !isStopped else { return }
         var writable: [Int32] = []
         self.queue.wait(until: deadline) { event in
@@ -327,8 +316,17 @@
             writable.append(descriptor)
           }
         }
+        // Flushes the peers that have room or are due another attempt. An event for a socket
+        // closed since can name a new one given the same number, which at worst attempts that
+        // peer a little early.
         self.state.withLock { state in
-          self.service(writable, in: &state)
+          let now = ContinuousClock.now
+          for (name, peer) in state.peers
+          where writable.contains(peer.socket.descriptor.rawValue)
+            || peer.retryAt.map({ $0 <= now }) == true
+          {
+            self.flush(name, in: &state)
+          }
         }
       }
     }
@@ -342,19 +340,6 @@
       {
         guard count <= self.maximumDatagramByteCount else { continue }
         receive(Span(_unsafeElements: UnsafeBufferPointer(rebasing: buffer[..<count])))
-      }
-    }
-
-    /// Flushes the peers that have room or are due another attempt.
-    private func service(_ writable: [Int32], in state: inout State) {
-      let now = ContinuousClock.now
-      // An event for a socket closed since can name a new one given the same number, which at
-      // worst attempts that peer a little early.
-      for (name, peer) in state.peers
-      where writable.contains(peer.socket.descriptor.rawValue)
-        || peer.retryAt.map({ $0 <= now }) == true
-      {
-        self.flush(name, in: &state)
       }
     }
 
@@ -382,11 +367,6 @@
     private struct State {
       var isStopped = false
       var peers: [String: Peer] = [:]
-
-      /// When the thread next has something to do without being woken.
-      var nextRetry: ContinuousClock.Instant? {
-        self.peers.values.lazy.compactMap(\.retryAt).min()
-      }
     }
   }
 #endif

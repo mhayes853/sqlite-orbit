@@ -147,14 +147,12 @@
 
     /// The peers ``send(_:)`` would send `message` to now.
     func peers(concernedWith message: OrbitIPCMessage) throws -> [UnixDatagramPeer] {
-      let advertisements = try self.peerRegions(for: message.databaseIdentifier)
-      return self.peers(concernedWith: message, in: advertisements)
+      try self.peers(concernedWith: message, in: self.peerRegions(for: message.databaseIdentifier))
     }
 
     /// Creates the directory a database's markers go in, if it is not there yet.
     ///
     /// - Returns: The directory.
-    @discardableResult
     func createDatabaseDirectory(coordinationKey: String) throws -> URL {
       let directory = self.databaseDirectory(coordinationKey)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
