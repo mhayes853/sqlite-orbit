@@ -10,37 +10,29 @@
   struct OrbitDatabaseMigratorTests {
     // MARK: - Order
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func migrationsRunOnceInRegistrationOrder(_ kind: SQLiteTestDriver) async throws {
+    @Test(arguments: SQLiteTestDriver.allCases, [false, true])
+    func migrationsRunOnceInRegistrationOrder(
+      _ kind: SQLiteTestDriver,
+      isBlocking: Bool
+    ) async throws {
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
       let migrator = loggingMigrator(["one", "two", "three"])
       #expect(migrator.migrations == ["one", "two", "three"])
 
-      try await migrator.migrate(driver)
-      try await migrator.migrate(driver)
+      for _ in 0..<2 {
+        if isBlocking {
+          try migrator.migrateBlocking(driver)
+        } else {
+          try await migrator.migrate(driver)
+        }
+      }
 
       #expect(try await log(in: driver) == ["one", "two", "three"])
       #expect(
         try await driver.read { try migrator.appliedMigrations($0) } == ["one", "two", "three"]
       )
-    }
-
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func blockingMigrationRunsOnceInRegistrationOrder(_ kind: SQLiteTestDriver) throws {
-      let directory = try makeShortTemporaryDirectory("migrate")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let driver = try kind.open(in: directory)
-      let migrator = loggingMigrator(["one", "two"])
-
-      try migrator.migrateBlocking(driver)
-      try migrator.migrateBlocking(driver)
-
-      let log = try driver.readBlocking { transaction in
-        try transaction.fetchAll(#sql("SELECT identifier FROM log ORDER BY rowid", as: String.self))
-      }
-      #expect(log == ["one", "two"])
     }
 
     @Test(arguments: SQLiteTestDriver.allCases, [false, true])
@@ -557,8 +549,6 @@
     func failingMigrationRethrowsItsErrorAndRestoresTheConnection(
       _ kind: SQLiteTestDriver
     ) async throws {
-      struct MigrationFailure: Error, Equatable {}
-
       let directory = try makeShortTemporaryDirectory("migrate")
       defer { try? FileManager.default.removeItem(at: directory) }
       let driver = try kind.open(in: directory)
@@ -584,8 +574,6 @@
 
     @Test(arguments: [true, false])
     func failedMigrationPutsBackTheCallersForeignKeys(_ callerValue: Bool) async throws {
-      struct MigrationFailure: Error {}
-
       let driver = try SQLiteQueue(path: .memory)
       let during = Lock<Int?>(nil)
       var migrator = makeMigrator()
@@ -931,7 +919,7 @@
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
-    func hasSchemaChangesIsTrueWhenAShippedMigrationsBodyChanges(
+    func hasSchemaChangesIsTrueWhenAShippedMigrationsBodyChangesAndLeavesNoScratchFilesBehind(
       _ kind: SQLiteTestDriver
     ) async throws {
       let directory = try makeShortTemporaryDirectory("schema")
@@ -943,7 +931,15 @@
       // The identifier never changed, but what it creates now has an extra column.
       let changed = itemsMigrator(hasNote: true)
 
+      let before = try scratchDatabaseFileNames()
       #expect(try await driver.read { try changed.hasSchemaChanges($0) } == true)
+
+      // This call's own scratch file is gone by the time it returns. Anything left matching the
+      // pattern belongs to another test running in parallel, so wait for it to clean up its own
+      // rather than assume this call is the only one running.
+      try await waitUntil(timeout: .seconds(5)) {
+        (try? scratchDatabaseFileNames().subtracting(before))?.isEmpty ?? false
+      }
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
@@ -1061,28 +1057,6 @@
         #expect(try await driver.read { try migrator.hasSchemaChanges($0) } == false)
       }
     #endif
-
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func hasSchemaChangesLeavesNoScratchDatabaseFilesBehind(_ kind: SQLiteTestDriver) async throws {
-      let directory = try makeShortTemporaryDirectory("schema")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let driver = try kind.open(in: directory)
-      let original = itemsMigrator()
-      try await original.migrate(driver)
-      let changed = itemsMigrator(hasNote: true)
-
-      let before = try scratchDatabaseFileNames()
-      _ = try await driver.read { try changed.hasSchemaChanges($0) }
-
-      // This call's own scratch file is gone by the time it returns. Anything left matching the
-      // pattern belongs to another test running in parallel, so wait for it to clean up its own
-      // rather than assume this call is the only one running.
-      try await waitUntil(timeout: .seconds(5)) {
-        (try? scratchDatabaseFileNames().subtracting(before))?.isEmpty ?? false
-      }
-    }
-
-    // MARK: Erasing
 
     @Test(arguments: SQLiteTestDriver.allCases)
     func erasingRunsEveryMigrationAgainDropsPriorDataAndResetsUserVersion(
@@ -1519,6 +1493,8 @@
   }
 
   // MARK: - Support
+
+  private struct MigrationFailure: Error, Equatable {}
 
   /// `base`, set up so that the deferred migrations registered on it run under every trait.
   ///
