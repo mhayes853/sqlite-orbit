@@ -41,7 +41,7 @@
   }
 
   @Test
-  func joinedSelectsDecodeEveryTableInTheRow() async throws {
+  func joinedSelectsDecodeEveryTableInTheRowEagerlyAndLazily() async throws {
     let database = try await seededDatabase()
 
     let joined = try await database.read { transaction in
@@ -63,11 +63,6 @@
     }
     #expect(first?.0 == Reminder(id: 10, listID: 1, title: "Milk"))
     #expect(first?.1 == List(id: 1, name: "Home"))
-  }
-
-  @Test
-  func joinedSelectsCanBeConsumedLazily() async throws {
-    let database = try await seededDatabase()
 
     let titles = try await database.read { transaction in
       var cursor = try transaction.fetchCursor(
