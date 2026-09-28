@@ -22,12 +22,12 @@
       var owed = try harness.fill(self.database)
       for index in 10_000..<10_003 {
         #expect(try harness.send(self.database, column: index).deferred == 1)
-        owed.formUnion(column(index))
+        owed.formUnion(itemsColumn(index))
       }
       #expect(try harness.send(self.other, column: 0).deferred == 1)
 
       #expect(
-        harness.sender.owedRegions == ["peer": [self.database: owed, self.other: column(0)]]
+        harness.sender.owedRegions == ["peer": [self.database: owed, self.other: itemsColumn(0)]]
       )
     }
 
@@ -44,7 +44,9 @@
       #expect(delivery.delivered == 0)
       #expect(delivery.deferred == 1)
       #expect(try harness.drain().isEmpty)
-      #expect(harness.sender.owedRegions == ["peer": [self.database: owed.union(column(10_000))]])
+      #expect(
+        harness.sender.owedRegions == ["peer": [self.database: owed.union(itemsColumn(10_000))]]
+      )
     }
 
     @Test
@@ -61,7 +63,7 @@
       // Both fit in one datagram, in the order of their databases' identifiers.
       #expect(
         try harness.drain() == [
-          [commit(self.database, region: owed), commit(self.other, region: column(0))]
+          [commit(self.database, region: owed), commit(self.other, region: itemsColumn(0))]
         ]
       )
     }
@@ -114,7 +116,7 @@
 
       try harness.withdraw(self.database)
       #expect(try harness.send(self.database, column: 10_000).peerCount == 0)
-      #expect(harness.sender.owedRegions == ["peer": [self.other: column(0)]])
+      #expect(harness.sender.owedRegions == ["peer": [self.other: itemsColumn(0)]])
 
       try harness.withdraw(self.other)
       #expect(try harness.send(self.other, column: 1).peerCount == 0)
@@ -153,7 +155,7 @@
 
       #expect(delivery.delivered == 1)
       #expect(delivery.stale.isEmpty)
-      #expect(try harness.drain() == [[commit(self.database, region: column(1))]])
+      #expect(try harness.drain() == [[commit(self.database, region: itemsColumn(1))]])
       #expect(harness.hasSocketPath && harness.isAdvertising(self.database))
     }
 
@@ -215,7 +217,7 @@
     ) throws -> UnixDatagramEndpoint.Delivery {
       try self.sender.send(
         UnixDatagramWireEntry(
-          commit(database, region: column(index)),
+          commit(database, region: itemsColumn(index)),
           fittingIn: self.maximumDatagramByteCount
         )
       )
@@ -226,7 +228,7 @@
     /// - Returns: The region of that commit, which the peer is now owed.
     func fill(_ database: OrbitDatabaseIdentifier) throws -> OrbitDatabaseRegion {
       for index in 0..<10_000 {
-        if try self.send(database, column: index).deferred == 1 { return column(index) }
+        if try self.send(database, column: index).deferred == 1 { return itemsColumn(index) }
       }
       throw TestTimeout()
     }
@@ -284,9 +286,5 @@
     private func marker(_ database: OrbitDatabaseIdentifier) -> URL {
       self.directory.appending(path: "v1/d/\(database.coordinationKey)/peer")
     }
-  }
-
-  private func column(_ index: Int) -> OrbitDatabaseRegion {
-    OrbitDatabaseRegion(column: "c\(index)", in: "items")
   }
 #endif

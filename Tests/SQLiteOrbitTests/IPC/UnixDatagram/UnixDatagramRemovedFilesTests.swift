@@ -1,5 +1,4 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  import Dispatch
   import Foundation
   import Testing
 
@@ -29,31 +28,31 @@
     func anIdleEndpointWhoseFilesTheCleanerRemovesPutsThemBackAndKeepsReceiving() async throws {
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let receiver = try removedFilesTransport(directory)
+      let receiver = try ipcTransport(directory)
       let recorder = IPCMessageRecorder()
       let subscription = try receiver.subscribe(
         to: self.database,
         region: self.items,
         onMessage: recorder.append
       )
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
       // Connected to the receiver's socket before it is replaced, so the sender has to find out
       // it is gone and connect to the new one.
-      try await sender.send(removedFilesCommit(self.database, column: 0))
+      try await sender.send(columnCommit(self.database, 0))
       try await recorder.waitForCount(1)
 
       files.removeAsTheCleanerWould()
 
       // Under the same name, so at the same paths.
       try await waitUntil { files.isRestored(advertising: self.items) }
-      let later = removedFilesCommit(self.database, column: 1)
+      let later = columnCommit(self.database, 1)
       try await sender.send(later)
       try await waitUntil { recorder.values.contains(later) }
       // The cleaner's removals can land on either side of a repair, so it may take more than one,
       // and each tells the subscriber. The last one's notice comes before anything sent after it.
       let values = recorder.values
-      #expect(values.first == removedFilesCommit(self.database, column: 0))
+      #expect(values.first == columnCommit(self.database, 0))
       #expect(values.last == later)
       let notices = values.dropFirst().dropLast()
       #expect(!notices.isEmpty && notices.allSatisfy { $0 == self.notice })
@@ -66,12 +65,12 @@
       // repair closes it. A peer connected to it then finds it gone and connects to the path.
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let receiver = try removedFilesTransport(directory)
+      let receiver = try ipcTransport(directory)
       let recorder = IPCMessageRecorder()
       let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
-      try await sender.send(removedFilesCommit(self.database, column: 0))
+      try await sender.send(columnCommit(self.database, 0))
       try await recorder.waitForCount(1)
       // Connected to the first socket as the sender is, to tell when it closes. What it sends is
       // too short to decode, which the receiver drops.
@@ -83,14 +82,14 @@
       files.removeAsTheCleanerWould()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       #expect(first.send([0]) == .sent)
-      let second = removedFilesCommit(self.database, column: 1)
+      let second = columnCommit(self.database, 1)
       try await sender.send(second)
       try await waitUntil { recorder.values.contains(second) }
 
       files.removeAsTheCleanerWould()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       try await waitUntil { first.send([0]) == .peerGone }
-      let third = removedFilesCommit(self.database, column: 2)
+      let third = columnCommit(self.database, 2)
       try await sender.send(third)
       try await waitUntil { recorder.values.contains(third) }
 
@@ -98,7 +97,7 @@
       let values = recorder.values
       #expect(
         values.filter { $0 != self.notice }
-          == (0..<3).map { removedFilesCommit(self.database, column: $0) }
+          == (0..<3).map { columnCommit(self.database, $0) }
       )
       let secondIndex = try #require(values.firstIndex(of: second))
       #expect(values[1] == self.notice)
@@ -114,24 +113,19 @@
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
       let receiver = try HeldReceiver(directory: directory, database: self.database)
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
       // Held in its handler before its queue fills, so its thread frees no room afterwards.
-      var queued = [removedFilesCommit(self.database, column: 0)]
+      var queued = [columnCommit(self.database, 0)]
       try await sender.send(queued[0])
       try await receiver.recorder.waitForCount(1)
-      while sender.owedRegions.isEmpty {
-        guard queued.count < 10_000 else { throw TestTimeout() }
-        let message = removedFilesCommit(self.database, column: queued.count)
-        try await sender.send(message)
-        queued.append(message)
-      }
-      var owed = removedFilesColumn(queued.count - 1)
+      queued += try await sendColumnsUntilOwed(sender, self.database, from: 1)
+      var owed = itemsColumn(queued.count - 1)
       queued.removeLast()
       for index in 10_000..<10_003 {
-        try await sender.send(removedFilesCommit(self.database, column: index))
-        owed.formUnion(removedFilesColumn(index))
+        try await sender.send(columnCommit(self.database, index))
+        owed.formUnion(itemsColumn(index))
       }
       #expect(Array(sender.owedRegions.values) == [[self.database: owed]])
 
@@ -149,7 +143,7 @@
         let values = receiver.recorder.values
         return values.contains(missed) && values.contains(self.notice)
       }
-      let later = removedFilesCommit(self.database, column: 20_000)
+      let later = columnCommit(self.database, 20_000)
       try await sender.send(later)
       try await waitUntil { receiver.recorder.values.contains(later) }
       // Everything its queue held first.
@@ -170,32 +164,27 @@
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
       let receiver = try HeldReceiver(directory: directory, database: self.database)
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
       // Held in its handler before its queue fills, so its thread frees no room afterwards.
-      var queued = [removedFilesCommit(self.database, column: 0)]
+      var queued = [columnCommit(self.database, 0)]
       try await sender.send(queued[0])
       try await receiver.recorder.waitForCount(1)
-      while sender.owedRegions.isEmpty {
-        guard queued.count < 10_000 else { throw TestTimeout() }
-        let message = removedFilesCommit(self.database, column: queued.count)
-        try await sender.send(message)
-        queued.append(message)
-      }
+      queued += try await sendColumnsUntilOwed(sender, self.database, from: 1)
       // The commit that found the queue full is owed, unless the sender's thread finds room for it
       // before the files go.
       let owed = queued.removeLast()
 
       files.removeAsTheCleanerWould()
-      let unseen = removedFilesCommit(self.database, column: 10_000)
+      let unseen = columnCommit(self.database, 10_000)
       #expect(try sender.peers(concernedWith: unseen).isEmpty)
       try await sender.send(unseen)
       #expect(sender.owedRegions.isEmpty)
 
       receiver.resume()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
-      let later = removedFilesCommit(self.database, column: 20_000)
+      let later = columnCommit(self.database, 20_000)
       try await sender.send(later)
       try await waitUntil { receiver.recorder.values.contains(later) }
       // Its queue is read to the end before the thread hears its files were removed.
@@ -212,22 +201,22 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let receiver = try HeldReceiver(directory: directory, database: self.database)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
-      let first = removedFilesCommit(self.database, column: 0)
-      try await removedFilesTransport(directory).send(first)
+      let first = columnCommit(self.database, 0)
+      try await ipcTransport(directory).send(first)
       try await receiver.recorder.waitForCount(1)
 
       // Started first, so its sweep of the coordination directory runs before anything is missing.
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       _ = UnixPlatform.removeFile(atPath: files.socketPath)
       // It has never connected to the receiver, so it finds nothing at the path and prunes it.
       #expect(try sender.peers(concernedWith: first).count == 1)
-      try await sender.send(removedFilesCommit(self.database, column: 1))
+      try await sender.send(columnCommit(self.database, 1))
       #expect(!FileManager.default.fileExists(atPath: files.marker.path))
       #expect(try sender.peers(concernedWith: first).isEmpty)
 
       receiver.resume()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
-      let later = removedFilesCommit(self.database, column: 2)
+      let later = columnCommit(self.database, 2)
       try await sender.send(later)
       try await waitUntil { receiver.recorder.values.contains(later) }
       // The commit the sender made while it took the receiver for dead only shows as the notice.
@@ -240,19 +229,19 @@
       // look at its own, which finds nothing to put back.
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let receiver = try removedFilesTransport(directory)
+      let receiver = try ipcTransport(directory)
       let recorder = IPCMessageRecorder()
       let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
 
       // A socket in `v1/s/` and a marker beside the receiver's, which go again once it is released.
       do {
-        let other = try removedFilesTransport(directory)
+        let other = try ipcTransport(directory)
         let otherSubscription = try other.subscribe(to: self.database) { _ in }
         _ = otherSubscription
       }
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       try await Task.sleep(for: .milliseconds(200))
-      let commit = removedFilesCommit(self.database, column: 0)
+      let commit = columnCommit(self.database, 0)
       try await sender.send(commit)
       try await recorder.waitForCount(1)
       try await Task.sleep(for: .milliseconds(200))
@@ -268,7 +257,7 @@
       // once, and the socket bound in its place stays.
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let receiver = try removedFilesTransport(directory)
+      let receiver = try ipcTransport(directory)
       let subscription = try receiver.subscribe(to: self.database, region: self.items) { _ in }
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
       #expect(receiver.repairCount == 0)
@@ -293,17 +282,17 @@
       )
       let recorder = IPCMessageRecorder()
       let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
       // A send, which has no peer to go to.
       try files.backdate()
-      try await receiver.send(removedFilesCommit(self.database, column: 0))
+      try await receiver.send(columnCommit(self.database, 0))
       #expect(try files.areTouched)
 
       // A receive.
       try files.backdate()
-      try await sender.send(removedFilesCommit(self.database, column: 1))
+      try await sender.send(columnCommit(self.database, 1))
       try await recorder.waitForCount(1)
       #expect(try files.areTouched)
       _ = subscription
@@ -313,15 +302,15 @@
     func anEndpointLeavesItsFilesAloneUntilItsRefreshIntervalHasPassed() async throws {
       let directory = try makeShortTemporaryDirectory("cleaner")
       defer { try? FileManager.default.removeItem(at: directory) }
-      let receiver = try removedFilesTransport(directory)
+      let receiver = try ipcTransport(directory)
       let recorder = IPCMessageRecorder()
       let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
-      let sender = try removedFilesTransport(directory)
+      let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
       try files.backdate()
-      try await receiver.send(removedFilesCommit(self.database, column: 0))
-      try await sender.send(removedFilesCommit(self.database, column: 1))
+      try await receiver.send(columnCommit(self.database, 0))
+      try await sender.send(columnCommit(self.database, 1))
       try await recorder.waitForCount(1)
 
       #expect(try files.areBackdated)
@@ -428,50 +417,4 @@
     }
   }
 
-  /// A receiver whose handler holds the transport's thread at the first message until
-  /// ``resume()``, as a suspended process holds it, so its queue fills and it repairs nothing.
-  private final class HeldReceiver: Sendable {
-    let recorder = IPCMessageRecorder()
-    private let gate = DispatchSemaphore(value: 0)
-    private let transport: UnixDatagramIPCTransport
-    private let subscription: OrbitRegionSubscription
-
-    init(directory: URL, database: OrbitDatabaseIdentifier) throws {
-      let recorder = self.recorder
-      let gate = self.gate
-      let isHeld = Lock(true)
-      self.transport = try removedFilesTransport(directory)
-      self.subscription = try self.transport.subscribe(to: database) { message in
-        recorder.append(message)
-        let holds = isHeld.withLock { isHeld in
-          defer { isHeld = false }
-          return isHeld
-        }
-        if holds { gate.blockingWait() }
-      }
-    }
-
-    deinit {
-      // A test that fails before resuming must not leave the transport's thread held for good.
-      self.gate.signal()
-    }
-
-    func resume() { self.gate.signal() }
-  }
-
-  private func removedFilesTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
-    try .init(configuration: .init(directory: directory))
-  }
-
-  /// A commit to a column no other index writes, so the order commits arrive in shows.
-  private func removedFilesCommit(
-    _ database: OrbitDatabaseIdentifier,
-    column index: Int
-  ) -> OrbitIPCMessage {
-    .transactionDidCommit(.init(databaseIdentifier: database, region: removedFilesColumn(index)))
-  }
-
-  private func removedFilesColumn(_ index: Int) -> OrbitDatabaseRegion {
-    OrbitDatabaseRegion(column: "c\(index)", in: "items")
-  }
 #endif

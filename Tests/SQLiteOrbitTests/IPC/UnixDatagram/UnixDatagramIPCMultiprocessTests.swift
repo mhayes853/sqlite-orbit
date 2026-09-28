@@ -113,9 +113,7 @@
       let transport = try harness.transport()
       for index in 0..<columnCount {
         try await transport.send(
-          .transactionDidCommit(
-            .init(databaseIdentifier: harness.database, region: ipcProcessColumn(index))
-          )
+          columnCommit(harness.database, index)
         )
       }
       #expect(transport.owedRegions.count == 1)
@@ -369,8 +367,4 @@
     return false
   }
 
-  /// The region of the commit that writes the column numbered `index`.
-  private func ipcProcessColumn(_ index: Int) -> OrbitDatabaseRegion {
-    OrbitDatabaseRegion(column: "c\(index)", in: "items")
-  }
 #endif

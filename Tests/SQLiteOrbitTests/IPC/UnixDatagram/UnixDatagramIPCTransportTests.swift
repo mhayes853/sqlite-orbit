@@ -222,29 +222,22 @@
   }
 
   @Test
-  func aStalledReceiverIsSentWhatItMissedOnceItResumes() async throws {
+  func aHeldReceiverIsSentWhatItMissedOnceItResumes() async throws {
     // The receiver stops reading at its first commit, so its queue fills. The commit it has no
     // room for, and every one after it, are merged into what it is owed, which reaches it as one
     // commit once it reads again, after everything its queue held.
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
     let database = OrbitDatabaseIdentifier(rawValue: "stalled")
-    let receiver = try StalledReceiver(directory: directory, database: database)
+    let receiver = try HeldReceiver(directory: directory, database: database)
     let sender = try ipcTransport(directory)
 
-    var queued: [OrbitIPCMessage] = []
-    var owed = OrbitDatabaseRegion.empty
-    while sender.owedRegions.isEmpty {
-      guard queued.count < 10_000 else { throw TestTimeout() }
-      let message = stalledCommit(database, index: queued.count)
-      try await sender.send(message)
-      queued.append(message)
-    }
-    owed.formUnion(stalledColumn(queued.count - 1))
+    var queued = try await sendColumnsUntilOwed(sender, database)
+    var owed = itemsColumn(queued.count - 1)
     queued.removeLast()
     for index in 10_000..<10_003 {
-      try await sender.send(stalledCommit(database, index: index))
-      owed.formUnion(stalledColumn(index))
+      try await sender.send(columnCommit(database, index))
+      owed.formUnion(itemsColumn(index))
     }
     #expect(Array(sender.owedRegions.values) == [[database: owed]])
 
@@ -252,7 +245,7 @@
     try await receiver.recorder.waitForCount(queued.count + 1)
     try await waitUntil { sender.owedRegions.isEmpty }
 
-    #expect(receiver.recorder.values == queued + [regionCommit(database, owed)])
+    #expect(receiver.recorder.values == queued + [commit(database, region: owed)])
   }
 
   @Test
@@ -279,8 +272,8 @@
       let table = OrbitDatabaseRegion(table: "t\(index)")
       region.formUnion(table)
       try subscription.updateRegion(region)
-      #expect(try sender.peers(concernedWith: regionCommit(database, .init(table: "t0"))).isEmpty)
-      let message = regionCommit(database, table)
+      #expect(try sender.peers(concernedWith: commit(database, region: .init(table: "t0"))).isEmpty)
+      let message = commit(database, region: table)
       expected.append(message)
       try await sender.send(message)
     }
@@ -323,18 +316,18 @@
     #expect(try advertised() == [items.union(lists)])
 
     // Each handler hears only about its own region, whatever the union lets through.
-    try await sender.send(regionCommit(database, lists))
+    try await sender.send(commit(database, region: lists))
     try await listsRecorder.waitForCount(1)
     #expect(itemsRecorder.values.isEmpty)
 
     listsSubscription.cancel()
     #expect(receiver.advertisedRegion(for: database) == items)
     #expect(try advertised() == [items])
-    #expect(try sender.peers(concernedWith: regionCommit(database, lists)).isEmpty)
+    #expect(try sender.peers(concernedWith: commit(database, region: lists)).isEmpty)
 
     try itemsSubscription.updateRegion(.empty)
     #expect(try advertised() == [.empty])
-    #expect(try sender.peers(concernedWith: regionCommit(database, items)).isEmpty)
+    #expect(try sender.peers(concernedWith: commit(database, region: items)).isEmpty)
 
     itemsSubscription.cancel()
     #expect(receiver.advertisedRegion(for: database) == nil)
@@ -348,14 +341,14 @@
     let directory = try ipcTestDirectory()
     defer { remove(directory) }
     let database = OrbitDatabaseIdentifier(rawValue: "regions")
-    let receiver = try StalledReceiver(
+    let receiver = try HeldReceiver(
       directory: directory,
       database: database,
       region: OrbitDatabaseRegion(table: "items")
     )
     let sender = try ipcTransport(directory)
-    let disjoint = regionCommit(database, OrbitDatabaseRegion(table: "lists"))
-    let overlapping = regionCommit(database, OrbitDatabaseRegion(column: "title", in: "items"))
+    let disjoint = commit(database, region: OrbitDatabaseRegion(table: "lists"))
+    let overlapping = commit(database, region: OrbitDatabaseRegion(column: "title", in: "items"))
     #expect(try sender.peers(concernedWith: disjoint).isEmpty)
     #expect(try sender.peers(concernedWith: overlapping).count == 1)
 
@@ -386,9 +379,10 @@
     }
   }
 
-  /// A receiver whose handler blocks on the first message until ``resume()``, so its socket's
-  /// queue fills and senders see it as full.
-  private final class StalledReceiver: Sendable {
+  /// A receiver whose handler holds the transport's thread at the first message until
+  /// ``resume()``, as a suspended process holds it, so its queue fills and senders see it as full,
+  /// and it repairs nothing.
+  final class HeldReceiver: Sendable {
     let recorder = IPCMessageRecorder()
     private let gate = DispatchSemaphore(value: 0)
     private let transport: UnixDatagramIPCTransport
@@ -401,47 +395,59 @@
     ) throws {
       let recorder = self.recorder
       let gate = self.gate
-      let isStalled = Lock(true)
+      let isHeld = Lock(true)
       self.transport = try ipcTransport(directory)
       self.subscription = try self.transport.subscribe(to: database, region: region) { message in
         recorder.append(message)
-        let stalls = isStalled.withLock { isStalled in
-          defer { isStalled = false }
-          return isStalled
+        let holds = isHeld.withLock { isHeld in
+          defer { isHeld = false }
+          return isHeld
         }
-        if stalls { gate.wait() }
+        if holds { gate.blockingWait() }
       }
     }
 
     deinit {
-      // A test that fails before resuming must not leave the transport's thread blocked for good.
+      // A test that fails before resuming must not leave the transport's thread held for good.
       self.gate.signal()
     }
 
     func resume() { self.gate.signal() }
   }
 
-  /// A commit no other index produces, so the order commits arrive in shows.
-  private func stalledCommit(_ database: OrbitDatabaseIdentifier, index: Int) -> OrbitIPCMessage {
-    regionCommit(database, stalledColumn(index))
-  }
-
-  private func stalledColumn(_ index: Int) -> OrbitDatabaseRegion {
-    OrbitDatabaseRegion(column: "c\(index)", in: "items")
-  }
-
-  private func regionCommit(
+  /// Sends commits to `database`, each to a column of its own from `first` on, until `sender` owes
+  /// a peer one.
+  ///
+  /// - Returns: The commits sent, the one `sender` owes last.
+  func sendColumnsUntilOwed(
+    _ sender: UnixDatagramIPCTransport,
     _ database: OrbitDatabaseIdentifier,
-    _ region: OrbitDatabaseRegion
-  ) -> OrbitIPCMessage {
-    .transactionDidCommit(.init(databaseIdentifier: database, region: region))
+    from first: Int = 0
+  ) async throws -> [OrbitIPCMessage] {
+    var sent: [OrbitIPCMessage] = []
+    while sender.owedRegions.isEmpty {
+      guard sent.count < 10_000 else { throw TestTimeout() }
+      let message = columnCommit(database, first + sent.count)
+      try await sender.send(message)
+      sent.append(message)
+    }
+    return sent
+  }
+
+  /// A commit to a column no other index writes, so the order commits arrive in shows.
+  func columnCommit(_ database: OrbitDatabaseIdentifier, _ index: Int) -> OrbitIPCMessage {
+    commit(database, region: itemsColumn(index))
+  }
+
+  func itemsColumn(_ index: Int) -> OrbitDatabaseRegion {
+    OrbitDatabaseRegion(column: "c\(index)", in: "items")
   }
 
   private func ipcTestDirectory() throws -> URL {
     try makeShortTemporaryDirectory("ipc")
   }
 
-  private func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
+  func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
     try .init(configuration: .init(directory: directory))
   }
 
