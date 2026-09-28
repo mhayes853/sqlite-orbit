@@ -1,7 +1,6 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
   import Dispatch
   import Foundation
-  import Synchronization
   import Testing
 
   @testable import SQLiteOrbit
@@ -65,7 +64,7 @@
         }
       }
 
-      #expect(state.overlaps.load(ordering: .relaxed) == 0)
+      #expect(state.overlaps.withLock { $0 } == 0)
       #expect(state.count == threadCount * iterationCount)
       #expect(!FileManager.default.fileExists(atPath: path))
     }
@@ -126,19 +125,23 @@
   /// Counts holders of a lock, with a count only the lock protects and a tally of the times a
   /// holder found another already inside.
   private final class ExclusionState: @unchecked Sendable {
-    let overlaps = Atomic(0)
-    private let inside = Atomic(0)
+    let overlaps = Lock(0)
+    private let inside = Lock(0)
     private(set) var count = 0
 
     func enter() {
-      if self.inside.add(1, ordering: .relaxed).newValue != 1 {
-        self.overlaps.add(1, ordering: .relaxed)
+      let isAlone = self.inside.withLock { inside in
+        inside += 1
+        return inside == 1
+      }
+      if !isAlone {
+        self.overlaps.withLock { $0 += 1 }
       }
       // A read and a write apart, so two holders at once would lose an increment.
       let count = self.count
-      for _ in 0..<50 { _ = self.inside.load(ordering: .relaxed) }
+      for _ in 0..<50 { _ = self.inside.withLock { $0 } }
       self.count = count + 1
-      self.inside.subtract(1, ordering: .relaxed)
+      self.inside.withLock { $0 -= 1 }
     }
   }
 
