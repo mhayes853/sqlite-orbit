@@ -15,6 +15,13 @@
   /// owed. A peer that falls behind hears about fewer, broader commits, but never misses a change,
   /// and all that is kept for it is at most one region per database.
   ///
+  /// A transport keeps its files in the coordination directory for as long as it lives. If they
+  /// are removed, whether by a system that removes temporary files nobody has used, as macOS does
+  /// after three days, by hand, or by a peer that took this transport for dead, its thread hears
+  /// about it, binds its socket again at the same path, and writes its markers again, and its
+  /// peers go on sending to it, what they owed it included. A transport whose thread is held up,
+  /// such as one in a suspended process, puts them back once it runs again.
+  ///
   /// ```swift
   /// let transport = try UnixDatagramIPCTransport.shared()
   /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
@@ -303,6 +310,12 @@
     /// What each peer whose receive queue was full is owed, by endpoint name.
     var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
       self.registry.owedRegions
+    }
+
+    /// How many of this transport's files in the coordination directory it has put back since it
+    /// started.
+    var repairCount: Int {
+      self.registry.repairCount
     }
 
     private func update(

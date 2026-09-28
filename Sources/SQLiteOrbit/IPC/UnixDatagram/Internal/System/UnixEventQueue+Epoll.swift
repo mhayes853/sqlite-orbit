@@ -38,6 +38,12 @@
       try self.watch(descriptor, orbit_epoll_in, .readable)
     }
 
+    /// Stops reporting a descriptor ``watchReadable(_:)`` was given, which must be done before it
+    /// closes.
+    func unwatchReadable(_ descriptor: Int32) {
+      _ = epoll_ctl(self.descriptor.rawValue, orbit_epoll_ctl_del, descriptor, nil)
+    }
+
     /// Starts reporting ``Event/writable(descriptor:)`` whenever a connected datagram socket's
     /// peer has room.
     ///

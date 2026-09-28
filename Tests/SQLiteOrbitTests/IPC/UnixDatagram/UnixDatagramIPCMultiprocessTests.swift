@@ -175,6 +175,27 @@
       // Only the transport's own socket is left.
       #expect(try harness.socketCount() == 1)
     }
+
+    @Test
+    func aProcessWhoseFilesTheCleanerRemovesPutsThemBackAndKeepsReceiving() async throws {
+      // What `UnixDatagramRemovedFilesTests` does to an idle endpoint in this process, done to one
+      // in a process of its own, as macOS's cleaner of temporary files would.
+      let harness = try IPCProcessHarness(database: "cleaned")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen", expected: 1)
+      try await harness.waitUntilReady(1)
+      let files = try UnixDatagramEndpointFiles(
+        advertising: harness.database,
+        in: harness.directory
+      )
+
+      files.removeAsTheCleanerWould()
+      try await waitUntil { files.isRestored(advertising: .fullDatabase) }
+      try await harness.transport().send(harness.message)
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == 1)
+    }
   }
 
   @Test

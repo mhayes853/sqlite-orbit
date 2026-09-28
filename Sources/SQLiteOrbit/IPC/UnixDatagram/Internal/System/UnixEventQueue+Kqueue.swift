@@ -27,6 +27,12 @@
       try self.change(UInt(descriptor), EVFILT_READ, EV_ADD)
     }
 
+    /// Stops reporting a descriptor ``watchReadable(_:)`` was given, which must be done before it
+    /// closes.
+    func unwatchReadable(_ descriptor: Int32) {
+      try? self.change(UInt(descriptor), EVFILT_READ, EV_DELETE)
+    }
+
     /// Always `false`: Darwin's write filter looks only at the sender's own buffer, which a Unix
     /// datagram never waits in, so the caller has to retry on a timer instead.
     func watchWritable(_ descriptor: Int32) -> Bool {

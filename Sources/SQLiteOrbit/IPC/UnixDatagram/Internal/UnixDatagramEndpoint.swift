@@ -18,7 +18,19 @@
   ///
   /// The endpoint knows nothing of the coordination directory: it is told which peers to send to,
   /// and reports the ones it finds dead rather than removing anything of theirs, those a send finds
-  /// to the send's caller and those its thread finds to the callback it was started with.
+  /// to the send's caller and those its thread finds to the callback it was started with. Its
+  /// thread also waits on a descriptor its owner gives it, which says that something its owner
+  /// watches has changed, and calls its owner back, so its owner can repair its files on a thread
+  /// that is waiting anyway rather than one of its own.
+  ///
+  /// The socket can be bound again at the same path, if its file is removed from under it. The
+  /// new socket takes the old one's place at the path, where every peer that connects from then
+  /// on finds it, and the old one is still read, for the peers connected to it, until the socket
+  /// is bound again or the endpoint stops. Closing it at once would lose any datagram a peer sent
+  /// it between the thread reading it for the last time and closing it. Kept, it loses nothing,
+  /// and costs one descriptor. A socket replaced a second time is read to the end and closed, and
+  /// a peer still connected to it finds it gone, connects to the path again, and keeps what it is
+  /// owed.
   ///
   /// The receive thread keeps the endpoint alive for as long as it runs, and ``stop()`` is what
   /// ends it. Whichever of its owner and the thread lets go of the endpoint last closes its
@@ -49,10 +61,11 @@
     /// so the attempts back off until they cost next to nothing.
     static let maximumRetryDelay = Duration.seconds(1)
 
+    private let socketPath: String
     private let maximumDatagramByteCount: Int
-    private let socket: UnixDatagramSocket
+    private let receiveBufferByteCount: Int
     private let queue: UnixEventQueue
-    private let state = Lock(State())
+    private let state: Lock<State>
 
     /// Binds a socket at `socketPath`.
     ///
@@ -78,9 +91,11 @@
         _ = UnixPlatform.removeFile(atPath: socketPath)
         throw error
       }
+      self.socketPath = socketPath
       self.maximumDatagramByteCount = maximumDatagramByteCount
-      self.socket = socket
+      self.receiveBufferByteCount = receiveBufferByteCount
       self.queue = queue
+      self.state = Lock(State(socket: BoundSocket(socket)))
     }
 
     /// Starts the thread that receives on this endpoint and sends peers what they are owed, which
@@ -91,13 +106,73 @@
     ///     The bytes are only valid for the duration of the call.
     ///   - onStalePeer: Receives each peer the thread finds dead while sending it what it is owed,
     ///     once the endpoint has forgotten it, on the endpoint's thread and without its lock held.
+    ///   - onChange: Called on the endpoint's thread, without its lock held, whenever the
+    ///     descriptor given to ``waitForChanges(on:)`` is readable. It is what drains that
+    ///     descriptor.
     func start(
       receive: @escaping @Sendable (Span<UInt8>) -> Void,
-      onStalePeer: @escaping @Sendable (UnixDatagramPeer) -> Void
+      onStalePeer: @escaping @Sendable (UnixDatagramPeer) -> Void,
+      onChange: @escaping @Sendable () -> Void
     ) {
       DetachedThread.spawn(name: "Orbit IPC") {
-        self.run(receive: receive, onStalePeer: onStalePeer)
+        self.run(receive: receive, onStalePeer: onStalePeer, onChange: onChange)
       }
+    }
+
+    /// Makes the thread wait on `descriptor` too, in place of whatever descriptor it waited on
+    /// before, and call the `onChange` it was started with whenever it is readable.
+    ///
+    /// - Parameter descriptor: The descriptor to wait on, which must stay open until another one
+    ///   replaces it, or `nil` to wait on none.
+    /// - Throws: A ``UnixSystemError`` if the thread cannot wait on `descriptor`, in which case it
+    ///   still waits on the one it waited on before.
+    func waitForChanges(on descriptor: Int32?) throws {
+      if let descriptor {
+        try self.queue.watchReadable(descriptor)
+      }
+      let previous = self.state.withLock { state in
+        defer { state.changeDescriptor = descriptor }
+        return state.changeDescriptor
+      }
+      if let previous {
+        self.queue.unwatchReadable(previous)
+      }
+    }
+
+    /// The file the socket was bound to, which the socket's path names for as long as nothing
+    /// removes or replaces it.
+    var boundFile: UnixFileIdentity? {
+      self.state.withLock { $0.socket.socket.boundFile }
+    }
+
+    /// Binds a new socket at the path the endpoint's socket was bound to, in place of the old
+    /// one, which is still read for the peers connected to it until the next time this is called.
+    /// The one it replaced before that closes once the thread has read what is queued on it.
+    ///
+    /// - Throws: A ``UnixSystemError`` if the new socket cannot be created, bound or waited on, in
+    ///   which case the endpoint keeps receiving on the old one.
+    func rebind() throws {
+      let socket = BoundSocket(
+        try UnixDatagramSocket.bind(
+          path: self.socketPath,
+          receiveBufferByteCount: self.receiveBufferByteCount
+        )
+      )
+      try self.queue.watchReadable(socket.socket.descriptor.rawValue)
+      let retired = self.state.withLock { state in
+        let retired = state.replaced
+        state.replaced = state.socket
+        state.socket = socket
+        if let retired {
+          state.retired.append(retired)
+        }
+        return retired
+      }
+      guard let retired else { return }
+      self.queue.unwatchReadable(retired.socket.descriptor.rawValue)
+      // So the thread reads the retired socket to the end, and closes it, without waiting for
+      // anything else to wake it.
+      self.queue.wake()
     }
 
     /// Ends the receive thread, which lets go of the endpoint once it has woken.
@@ -348,7 +423,11 @@
 
     // MARK: - The Thread
 
-    private func run(receive: (Span<UInt8>) -> Void, onStalePeer: (UnixDatagramPeer) -> Void) {
+    private func run(
+      receive: (Span<UInt8>) -> Void,
+      onStalePeer: (UnixDatagramPeer) -> Void,
+      onChange: () -> Void
+    ) {
       // Every datagram lands in this one buffer, which only this thread touches. It is a byte
       // longer than any datagram the transport accepts, so one that fills it was too long.
       let buffer = UnsafeMutableBufferPointer<UInt8>
@@ -362,13 +441,39 @@
         }
         guard !isStopped else { return }
         var writable: [Int32] = []
+        var changed = false
         self.queue.wait(until: deadline) { event in
           switch event {
-          case .readable:
-            self.drain(into: buffer, receive: receive)
+          case .readable(let descriptor):
+            // Looked up for each event, since a socket can be bound again while the thread waits.
+            // An event for a descriptor no longer waited on at worst drains a socket early.
+            let socket = self.state.withLock { state -> BoundSocket? in
+              guard state.changeDescriptor != descriptor else { return nil }
+              if let replaced = state.replaced, replaced.socket.descriptor.rawValue == descriptor {
+                return replaced
+              }
+              return state.socket
+            }
+            if let socket {
+              self.drain(socket, into: buffer, receive: receive)
+            } else {
+              changed = true
+            }
           case .writable(let descriptor):
             writable.append(descriptor)
           }
+        }
+        if changed {
+          onChange()
+        }
+        // A socket retired since the last pass may still have datagrams queued, so it is read to
+        // the end before it closes here.
+        let retired = self.state.withLock { state in
+          defer { state.retired.removeAll() }
+          return state.retired
+        }
+        for socket in retired {
+          self.drain(socket, into: buffer, receive: receive)
         }
         // Flushes the peers that have room or are due another attempt. An event for a socket
         // closed since can name a new one given the same number, which at worst attempts that
@@ -388,11 +493,12 @@
     }
 
     private func drain(
+      _ socket: BoundSocket,
       into buffer: UnsafeMutableBufferPointer<UInt8>,
       receive: (Span<UInt8>) -> Void
     ) {
       while !self.state.withLock({ $0.isStopped }),
-        let count = self.socket.receive(into: buffer)
+        let count = socket.socket.receive(into: buffer)
       {
         guard count <= self.maximumDatagramByteCount else { continue }
         receive(Span(_unsafeElements: UnsafeBufferPointer(rebasing: buffer[..<count])))
@@ -432,9 +538,29 @@
       }
     }
 
+    /// A socket the endpoint receives on.
+    ///
+    /// It is a class so the thread can go on reading one that ``rebind()`` retired, without the
+    /// endpoint's lock, until it has read everything queued on it. It closes once nothing holds it.
+    private final class BoundSocket: Sendable {
+      let socket: UnixDatagramSocket
+
+      init(_ socket: consuming UnixDatagramSocket) {
+        self.socket = socket
+      }
+    }
+
     private struct State {
       var isStopped = false
       var peers: [String: Peer] = [:]
+      /// The socket bound at the path, which peers that connect from now on send to.
+      var socket: BoundSocket
+      /// The socket ``rebind()`` last replaced, which peers connected to it still send to.
+      var replaced: BoundSocket?
+      /// The sockets ``rebind()`` retired, which the thread reads to the end and then closes.
+      var retired: [BoundSocket] = []
+      /// The descriptor given to ``waitForChanges(on:)``, if any.
+      var changeDescriptor: Int32?
     }
   }
 #endif

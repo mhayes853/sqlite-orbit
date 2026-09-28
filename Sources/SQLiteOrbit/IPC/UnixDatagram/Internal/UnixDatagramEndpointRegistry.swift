@@ -20,22 +20,58 @@
   /// whose markers the message concerns. A peer the endpoint finds dead, whether a send finds it or
   /// the endpoint's thread does, is pruned from the directory: its socket's path, and its marker
   /// and any temporary file it left in every database's directory, not only the ones it was found
-  /// in, so nothing of it is left for any endpoint to find.
+  /// in, so nothing of it is left for any endpoint to find. A database's directory is removed
+  /// once the last marker in it is.
+  ///
+  /// An endpoint's own files can be removed from under it while it runs: by a peer that took it
+  /// for dead because its socket's path was missing, or by the system, as macOS removes temporary
+  /// files nobody has used for three days. So once it is started, the endpoint keeps them. Its
+  /// thread waits on a directory watch of its own, apart from the one that keeps what peers
+  /// advertise, on the coordination directory, `v1/`, `v1/s/`, and the directory of every
+  /// database it advertises. On any change there, the registry checks that its socket's path
+  /// still names the socket it bound and that every marker it wrote is still there. If not, it
+  /// watches those directories afresh, creating whichever are missing, binds a new socket at the
+  /// same path and writes every missing marker again, with the region it last advertised. A peer
+  /// connected to the old socket goes on sending there, which the endpoint still reads, and one
+  /// that connects afterwards finds the new one. Repairing changes the watched directories
+  /// itself, but a repair drains what it changed before it checks its work, so it never sets off
+  /// another. Nothing waits on a timer: an endpoint whose files nothing touches costs nothing.
   final class UnixDatagramEndpointRegistry: Sendable {
     private struct State {
       var watcher: UnixDirectoryWatcher?
       var peerRegions: [String: [String: OrbitDatabaseRegion]] = [:]
-      /// The databases this endpoint has a marker for, by coordination key.
-      var advertised: Set<String> = []
+    }
+
+    /// What the registry keeps about its own files in the coordination directory.
+    ///
+    /// Everything that writes or removes them does so under the lock that holds this, so a repair
+    /// never writes back a marker older than the one being written, or one being withdrawn.
+    private struct OwnFiles {
+      /// The region each marker this endpoint wrote advertises, by coordination key.
+      var advertised: [String: OrbitDatabaseRegion] = [:]
+      /// Whether the endpoint's thread runs, which is what hears about changes to repair.
+      var isStarted = false
+      var isShutDown = false
+      /// The watch the endpoint's thread waits on, on the directories this endpoint's files are
+      /// in.
+      var watcher: UnixDirectoryWatcher?
+      /// The directory at each path the watch was started on, when it was, by path. A directory
+      /// removed or replaced since is no longer watched.
+      var watched: [String: UnixFileIdentity] = [:]
+      /// How many files a repair has put back.
+      var repairCount = 0
     }
 
     let endpointName: String
     let socketPath: String
     private let endpoint: UnixDatagramEndpoint
+    private let coordinationDirectory: URL
+    private let versionDirectory: URL
     private let socketsDirectory: URL
     private let databasesDirectory: URL
     private let watchesDirectories: Bool
     private let state = Lock(State())
+    private let own = Lock(OwnFiles())
 
     /// Creates the coordination directory's layout under `directory`, if it is not there yet, and
     /// binds this endpoint's socket in it.
@@ -70,38 +106,58 @@
       )
       self.endpointName = endpointName
       self.socketPath = socketPath
+      self.coordinationDirectory = directory
+      self.versionDirectory = versionDirectory
       self.socketsDirectory = socketsDirectory
       self.databasesDirectory = databasesDirectory
       self.watchesDirectories = watchesDirectories
     }
 
-    /// Starts the endpoint's thread, which runs until ``shutdown()``.
+    /// Starts the endpoint's thread, which runs until ``shutdown()``, and from then on keeps this
+    /// endpoint's files in the coordination directory, putting back any that are removed.
     ///
     /// - Parameter receive: Receives each datagram no longer than the maximum, on the endpoint's
     ///   thread. The bytes are only valid for the duration of the call.
     func start(receive: @escaping @Sendable (Span<UInt8>) -> Void) {
       // Weakly, so that the thread, which the endpoint keeps until it is stopped, keeps nothing
       // else alive.
-      self.endpoint.start(receive: receive) { [weak self] peer in
-        self?.prune(peer)
+      self.endpoint.start(
+        receive: receive,
+        onStalePeer: { [weak self] peer in
+          self?.prune(peer)
+        },
+        onChange: { [weak self] in
+          self?.repairIfChanged()
+        }
+      )
+      self.own.withLock { own in
+        own.isStarted = true
+        self.repair(&own)
       }
     }
 
     /// Withdraws every marker this endpoint wrote and removes its socket's path, so a peer that
     /// looks in the coordination directory afterwards finds nothing of it, then stops its thread.
     ///
-    /// The socket itself closes once the thread has woken and let go of it, so this is safe to
-    /// call from the thread itself.
+    /// Nothing is put back once this has begun. The socket itself closes once the thread has
+    /// woken and let go of it, so this is safe to call from the thread itself.
     func shutdown() {
-      let coordinationKeys = self.state.withLock { state in
-        defer { state.advertised.removeAll() }
-        return state.advertised
+      let watcher = self.own.withLock { own in
+        own.isShutDown = true
+        for coordinationKey in own.advertised.keys {
+          try? Self.remove(self.marker(coordinationKey))
+          self.reclaimDatabaseDirectory(coordinationKey)
+        }
+        own.advertised.removeAll()
+        _ = UnixPlatform.removeFile(atPath: self.socketPath)
+        own.watched.removeAll()
+        defer { own.watcher = nil }
+        return own.watcher
       }
-      for coordinationKey in coordinationKeys {
-        try? Self.remove(self.marker(coordinationKey))
-        self.reclaimDatabaseDirectory(coordinationKey)
+      // The thread stops waiting on the watch before it closes.
+      withExtendedLifetime(watcher) {
+        try? self.endpoint.waitForChanges(on: nil)
       }
-      _ = UnixPlatform.removeFile(atPath: self.socketPath)
       self.endpoint.stop()
     }
 
@@ -109,6 +165,16 @@
     ///
     /// When this returns, a peer that lists the database's directory finds the new region.
     func advertise(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
+      try self.own.withLock { own in
+        try self.writeMarker(region, coordinationKey: coordinationKey)
+        guard own.advertised.updateValue(region, forKey: coordinationKey) == nil else { return }
+        // The database's directory holds a file of this endpoint's now, so it is watched too.
+        self.repair(&own)
+      }
+    }
+
+    /// Writes this endpoint's marker for a database.
+    private func writeMarker(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
       let marker = Data(UnixDatagramWireProtocol.encodeMarker(region))
       // Another endpoint reclaims the database's directory once it is empty, which it is between
       // being created here and the temporary file landing in it. Writing that file then fails for
@@ -116,14 +182,13 @@
       for attempt in 1...Self.maximumAdvertiseAttemptCount {
         do {
           try self.write(marker, coordinationKey: coordinationKey)
-          break
+          return
         } catch let error
           where attempt < Self.maximumAdvertiseAttemptCount && Self.isMissingFile(error)
         {
           continue
         }
       }
-      self.state.withLock { _ = $0.advertised.insert(coordinationKey) }
     }
 
     /// How many times ``advertise(_:coordinationKey:)`` writes a marker whose directory keeps
@@ -157,9 +222,13 @@
 
     /// Removes this endpoint's marker for a database, if it has one.
     func withdraw(coordinationKey: String) throws {
-      try Self.remove(self.marker(coordinationKey))
-      self.state.withLock { _ = $0.advertised.remove(coordinationKey) }
-      self.reclaimDatabaseDirectory(coordinationKey)
+      try self.own.withLock { own in
+        try Self.remove(self.marker(coordinationKey))
+        own.advertised[coordinationKey] = nil
+        self.reclaimDatabaseDirectory(coordinationKey)
+        // Its directory holds no file of this endpoint's any more, so it is no longer watched.
+        self.repair(&own)
+      }
     }
 
     /// Sends `entry` to every peer but this endpoint advertising a region its message concerns,
@@ -185,6 +254,11 @@
     /// What each peer whose receive queue was full is owed, by endpoint name.
     var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
       self.endpoint.owedRegions
+    }
+
+    /// How many of this endpoint's files have been put back since it started.
+    var repairCount: Int {
+      self.own.withLock { $0.repairCount }
     }
 
     /// The peers ``send(_:)`` would send `message` to now.
@@ -344,6 +418,83 @@
     private func reclaimDatabaseDirectory(_ coordinationKey: String) {
       _ = UnixPlatform.removeDirectory(atPath: self.databaseDirectory(coordinationKey).path)
     }
+
+    // MARK: - Keeping This Endpoint's Files
+
+    /// Repairs this endpoint's files if the watch the thread waits on reports a change, and any
+    /// of them is not as this endpoint left it.
+    ///
+    /// Most changes are other endpoints' files coming and going beside this one's, which only
+    /// cost a look at this endpoint's own.
+    private func repairIfChanged() {
+      self.own.withLock { own in
+        guard own.watcher?.drainChanges() == true, !self.isIntact(own) else { return }
+        self.repair(&own)
+      }
+    }
+
+    /// Whether this endpoint's socket's path still names the socket it bound, every marker it
+    /// wrote is still there, and every directory its watch was started on is still the one it was
+    /// started on.
+    private func isIntact(_ own: OwnFiles) -> Bool {
+      UnixPlatform.fileIdentity(atPath: self.socketPath) == self.endpoint.boundFile
+        && own.advertised.keys.allSatisfy {
+          UnixPlatform.fileIdentity(atPath: self.marker($0).path) != nil
+        }
+        && own.watched.allSatisfy { UnixPlatform.fileIdentity(atPath: $0.key) == $0.value }
+    }
+
+    /// Starts a new watch on the directories this endpoint's files are in, creating whichever are
+    /// missing, then puts back whichever of its files is missing: its socket, bound again at the
+    /// same path, and each marker, with the region it last advertised.
+    ///
+    /// The watch starts first, so a change made while this runs is heard about. What this changes
+    /// itself is then drained from the watch, so a repair never sets off another, and the files
+    /// are checked once more: something that changed them meanwhile has this start over, a few
+    /// times at most, after which the next change the thread hears about tries again.
+    private func repair(_ own: inout OwnFiles) {
+      guard own.isStarted, !own.isShutDown else { return }
+      for _ in 0..<Self.maximumRepairAttemptCount {
+        let watcher = try? UnixDirectoryWatcher()
+        var watched: [String: UnixFileIdentity] = [:]
+        let directories =
+          [self.coordinationDirectory, self.versionDirectory, self.socketsDirectory]
+          + own.advertised.keys.sorted().map(self.databaseDirectory)
+        for directory in directories {
+          try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          // Looked up before the watch starts, so a directory replaced in between is found
+          // replaced by the next check, rather than taken for the one watched.
+          guard let watcher, let identity = UnixPlatform.fileIdentity(atPath: directory.path),
+            (try? watcher.watch(directory.path)) != nil
+          else { continue }
+          watched[directory.path] = identity
+        }
+
+        if UnixPlatform.fileIdentity(atPath: self.socketPath) != self.endpoint.boundFile,
+          (try? self.endpoint.rebind()) != nil
+        {
+          own.repairCount += 1
+        }
+        for (coordinationKey, region) in own.advertised
+        where UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) == nil {
+          if (try? self.writeMarker(region, coordinationKey: coordinationKey)) != nil {
+            own.repairCount += 1
+          }
+        }
+
+        // The watch this replaces closes once the thread no longer waits on it.
+        if (try? self.endpoint.waitForChanges(on: watcher?.descriptor)) != nil {
+          own.watcher = watcher
+          own.watched = watched
+        }
+        _ = own.watcher?.drainChanges()
+        if self.isIntact(own) { return }
+      }
+    }
+
+    /// How many times in a row ``repair(_:)`` starts over when this endpoint's files keep changing
+    /// under it.
+    private static let maximumRepairAttemptCount = 3
 
     private static func remove(_ url: URL) throws {
       do {
