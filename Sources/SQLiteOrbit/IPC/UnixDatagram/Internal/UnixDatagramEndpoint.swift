@@ -210,7 +210,8 @@
     /// A peer this finds dead is dropped, along with what it was owed.
     private func flush(_ name: String, in state: inout State) {
       guard let peer = state.peers[name], !peer.owed.isEmpty else { return }
-      var entries = peer.owed
+      var entries =
+        peer.owed
         .sorted { $0.key.rawValue < $1.key.rawValue }
         .compactMap { database, region in
           // A region too large for a datagram of its own is broadened to the full database, which
@@ -298,9 +299,10 @@
     private func run(receive: (Span<UInt8>) -> Void) {
       // Every datagram lands in this one buffer, which only this thread touches. It is a byte
       // longer than any datagram the transport accepts, so one that fills it was too long.
-      let buffer = UnsafeMutableBufferPointer<UInt8>.allocate(
-        capacity: self.maximumDatagramByteCount + 1
-      )
+      let buffer = UnsafeMutableBufferPointer<UInt8>
+        .allocate(
+          capacity: self.maximumDatagramByteCount + 1
+        )
       defer { buffer.deallocate() }
       while true {
         let (isStopped, deadline) = self.state.withLock {

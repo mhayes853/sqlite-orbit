@@ -39,7 +39,6 @@
       static let wouldBlock: Int32 = EWOULDBLOCK
       static let noBufferSpace: Int32 = ENOBUFS
       static let invalidArgument: Int32 = EINVAL
-      static let badDescriptor: Int32 = EBADF
       static let messageTooLong: Int32 = EMSGSIZE
       static let noSuchFile: Int32 = ENOENT
       static let connectionRefused: Int32 = ECONNREFUSED

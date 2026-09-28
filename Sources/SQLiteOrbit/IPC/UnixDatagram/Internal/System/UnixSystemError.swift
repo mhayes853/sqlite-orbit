@@ -17,10 +17,6 @@
       Self(operation: operation, code: UnixPlatform.ErrorCode.invalidArgument)
     }
 
-    static func closed(_ operation: String) -> Self {
-      Self(operation: operation, code: UnixPlatform.ErrorCode.badDescriptor)
-    }
-
     static func messageTooLong(_ operation: String) -> Self {
       Self(operation: operation, code: UnixPlatform.ErrorCode.messageTooLong)
     }
