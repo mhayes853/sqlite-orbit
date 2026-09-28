@@ -328,6 +328,13 @@
     /// died leaves it.
     func leaveDeadSocket(_ name: String) throws {
       _ = try self.bindSocket(name)
+      let path = self.socketsDirectory.appending(path: "\(name).sock").path
+      // A process another test spawns at the same moment holds a copy of every descriptor until it
+      // execs, so the socket can outlive its closing here by a little.
+      let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+      while UnixDatagramSocket.probe(path) == .alive, ContinuousClock.now < deadline {
+        Thread.sleep(forTimeInterval: 0.001)
+      }
     }
 
     /// Writes a file named `name` in the directory of the database `key`, creating the directory
