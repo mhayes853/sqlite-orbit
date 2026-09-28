@@ -190,8 +190,7 @@
       let watcher = self.own.withLock { own in
         own.isShutDown = true
         for coordinationKey in own.advertised.keys {
-          try? Self.remove(self.marker(coordinationKey))
-          self.reclaimDatabaseDirectory(coordinationKey)
+          try? self.removeMarker(coordinationKey)
         }
         own.advertised.removeAll()
         _ = UnixPlatform.removeFile(atPath: self.socketPath)
@@ -213,9 +212,7 @@
         guard own.advertised[coordinationKey] != region else { return }
         // A marker removed since it was written is put back here rather than by a repair, which
         // must be reported all the same.
-        let isMissing =
-          own.advertised[coordinationKey] != nil
-          && UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) == nil
+        let isMissing = own.advertised[coordinationKey] != nil && !self.hasMarker(coordinationKey)
         try self.writeMarker(region, coordinationKey: coordinationKey)
         if isMissing {
           self.notePutBack(&own)
@@ -272,9 +269,8 @@
     func withdraw(coordinationKey: String) throws {
       try self.own.withLock { own in
         guard own.advertised[coordinationKey] != nil else { return }
-        try Self.remove(self.marker(coordinationKey))
+        try self.removeMarker(coordinationKey)
         own.advertised[coordinationKey] = nil
-        self.reclaimDatabaseDirectory(coordinationKey)
         // Its directory holds no file of this endpoint's any more, so it is no longer watched.
         self.repair(&own)
       }
@@ -328,11 +324,6 @@
       let directory = self.databaseDirectory(coordinationKey)
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
       return directory
-    }
-
-    func peers(databaseIdentifier: OrbitDatabaseIdentifier) throws -> [UnixDatagramPeer] {
-      try self.advertisements(coordinationKey: databaseIdentifier.coordinationKey).keys
-        .map(self.peer(named:))
     }
 
     /// What every endpoint advertising a database advertises now.
@@ -506,11 +497,17 @@
     /// wrote is still there, and every directory its watch was started on is still the one it was
     /// started on.
     private func isIntact(_ own: OwnFiles) -> Bool {
-      UnixPlatform.fileIdentity(atPath: self.socketPath) == self.endpoint.boundFile
-        && own.advertised.keys.allSatisfy {
-          UnixPlatform.fileIdentity(atPath: self.marker($0).path) != nil
-        }
+      self.isSocketInPlace && own.advertised.keys.allSatisfy(self.hasMarker)
         && own.watched.allSatisfy { UnixPlatform.fileIdentity(atPath: $0.key) == $0.value }
+    }
+
+    /// Whether this endpoint's socket's path still names the socket it bound.
+    private var isSocketInPlace: Bool {
+      UnixPlatform.fileIdentity(atPath: self.socketPath) == self.endpoint.boundFile
+    }
+
+    private func hasMarker(_ coordinationKey: String) -> Bool {
+      UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) != nil
     }
 
     /// Starts a new watch on the directories this endpoint's files are in, creating whichever are
@@ -539,13 +536,10 @@
           watched[directory.path] = identity
         }
 
-        if UnixPlatform.fileIdentity(atPath: self.socketPath) != self.endpoint.boundFile,
-          (try? self.endpoint.rebind()) != nil
-        {
+        if !self.isSocketInPlace, (try? self.endpoint.rebind()) != nil {
           self.notePutBack(&own)
         }
-        for (coordinationKey, region) in own.advertised
-        where UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) == nil {
+        for (coordinationKey, region) in own.advertised where !self.hasMarker(coordinationKey) {
           if (try? self.writeMarker(region, coordinationKey: coordinationKey)) != nil {
             self.notePutBack(&own)
           }
@@ -594,11 +588,14 @@
       }
     }
 
-    private static func remove(_ url: URL) throws {
+    /// Removes this endpoint's marker for a database, if it is there, and then the database's
+    /// directory, if that leaves it empty.
+    private func removeMarker(_ coordinationKey: String) throws {
       do {
-        try FileManager.default.removeItem(at: url)
+        try FileManager.default.removeItem(at: self.marker(coordinationKey))
       } catch CocoaError.fileNoSuchFile {
       }
+      self.reclaimDatabaseDirectory(coordinationKey)
     }
 
     private func databaseDirectory(_ coordinationKey: String) -> URL {

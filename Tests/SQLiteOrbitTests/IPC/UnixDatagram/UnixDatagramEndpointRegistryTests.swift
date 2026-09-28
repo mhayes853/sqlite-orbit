@@ -210,4 +210,11 @@
       watchesDirectories: watchesDirectories
     )
   }
+
+  extension UnixDatagramEndpointRegistry {
+    /// Every endpoint advertising a database now, this one included.
+    func peers(databaseIdentifier: OrbitDatabaseIdentifier) throws -> [UnixDatagramPeer] {
+      try self.peerRegions(for: databaseIdentifier).keys.map(self.peer(named:))
+    }
+  }
 #endif
