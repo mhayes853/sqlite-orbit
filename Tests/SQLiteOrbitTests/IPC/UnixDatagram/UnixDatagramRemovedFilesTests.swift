@@ -117,7 +117,10 @@
       let sender = try removedFilesTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
-      var queued: [OrbitIPCMessage] = []
+      // Held in its handler before its queue fills, so its thread frees no room afterwards.
+      var queued = [removedFilesCommit(self.database, column: 0)]
+      try await sender.send(queued[0])
+      try await receiver.recorder.waitForCount(1)
       while sender.owedRegions.isEmpty {
         guard queued.count < 10_000 else { throw TestTimeout() }
         let message = removedFilesCommit(self.database, column: queued.count)
@@ -170,7 +173,10 @@
       let sender = try removedFilesTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
-      var queued: [OrbitIPCMessage] = []
+      // Held in its handler before its queue fills, so its thread frees no room afterwards.
+      var queued = [removedFilesCommit(self.database, column: 0)]
+      try await sender.send(queued[0])
+      try await receiver.recorder.waitForCount(1)
       while sender.owedRegions.isEmpty {
         guard queued.count < 10_000 else { throw TestTimeout() }
         let message = removedFilesCommit(self.database, column: queued.count)
