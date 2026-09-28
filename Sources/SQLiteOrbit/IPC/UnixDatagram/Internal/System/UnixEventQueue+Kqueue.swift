@@ -69,14 +69,7 @@
           timeout == nil ? nil : interval
         )
       }
-      // A signal that interrupts the wait only ends it early. Any other failure means a
-      // descriptor this queue owns is gone, which nothing here can recover from.
-      let code = UnixPlatform.lastErrorCode
-      precondition(
-        count >= 0 || code == UnixPlatform.ErrorCode.interrupted,
-        "waiting for events failed with errno \(code)"
-      )
-      for event in self.events.prefix(max(0, Int(count))) {
+      for event in self.events.prefix(Self.readyCount(count)) {
         // The wake event only ends the wait, and nothing is watched for writability.
         guard event.filter == Int16(EVFILT_READ) else { continue }
         handle(.readable(descriptor: Int32(truncatingIfNeeded: event.ident)))

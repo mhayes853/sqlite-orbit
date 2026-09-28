@@ -92,14 +92,7 @@
         Int32(self.events.count),
         milliseconds ?? -1
       )
-      // A signal that interrupts the wait only ends it early. Any other failure means a
-      // descriptor this queue owns is gone, which nothing here can recover from.
-      let code = UnixPlatform.lastErrorCode
-      precondition(
-        count >= 0 || code == UnixPlatform.ErrorCode.interrupted,
-        "waiting for events failed with errno \(code)"
-      )
-      for event in self.events.prefix(max(0, Int(count))) {
+      for event in self.events.prefix(Self.readyCount(count)) {
         let descriptor = Int32(bitPattern: UInt32(truncatingIfNeeded: event.data.u64))
         switch Registration(rawValue: event.data.u64 >> 32) {
         case .wake:

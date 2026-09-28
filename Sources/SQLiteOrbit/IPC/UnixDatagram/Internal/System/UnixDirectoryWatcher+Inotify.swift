@@ -47,15 +47,11 @@
         let count = buffer.withUnsafeMutableBytes {
           UnixPlatform.readBytes(from: self.inotify.rawValue, into: $0)
         }
-        if count > 0 {
-          changed = true
-          continue
+        guard count > 0 else {
+          return changed
+            || (count < 0 && UnixPlatform.lastErrorCode != UnixPlatform.ErrorCode.wouldBlock)
         }
-        let code = UnixPlatform.lastErrorCode
-        if count < 0, code == UnixPlatform.ErrorCode.interrupted { continue }
-        return changed
-          || (count < 0 && code != UnixPlatform.ErrorCode.tryAgain
-            && code != UnixPlatform.ErrorCode.wouldBlock)
+        changed = true
       }
     }
   }

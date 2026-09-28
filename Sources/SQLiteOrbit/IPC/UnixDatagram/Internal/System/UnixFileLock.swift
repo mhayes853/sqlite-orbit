@@ -24,7 +24,7 @@
       _ body: () throws -> Result
     ) throws -> Result {
       // A lock that waits is always taken, so there is always a result.
-      try Self.withLock(atPath: path, waits: true) { try body() }!
+      try Self.withLock(atPath: path, waits: true, body)!
     }
 
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
@@ -52,9 +52,8 @@
         let descriptor = try? UnixDescriptor(
           UnixPlatform.openExistingFile(atPath: path),
           from: "open"
-        )
-      else { return false }
-      guard (try? Self.lock(descriptor.rawValue, waits: false)) == true,
+        ),
+        (try? Self.lock(descriptor.rawValue, waits: false)) == true,
         Self.isStillAtPath(descriptor.rawValue, path) == true
       else { return false }
       // Closing the descriptor, when it goes, lets go of the lock, after the file is gone.
@@ -86,25 +85,14 @@
       }
     }
 
-    /// Takes the lock on an open file, retrying a wait a signal interrupts.
+    /// Takes the lock on an open file.
     ///
     /// - Returns: Whether the lock was taken, which is always the case if `waits` is `true`.
     private static func lock(_ descriptor: Int32, waits: Bool) throws -> Bool {
-      while true {
-        let isLocked =
-          waits
-          ? UnixPlatform.lockExclusively(descriptor)
-          : UnixPlatform.tryLockExclusively(descriptor)
-        if isLocked { return true }
-        let code = UnixPlatform.lastErrorCode
-        if code == UnixPlatform.ErrorCode.interrupted { continue }
-        if !waits,
-          code == UnixPlatform.ErrorCode.wouldBlock || code == UnixPlatform.ErrorCode.tryAgain
-        {
-          return false
-        }
-        throw UnixSystemError(operation: "flock", code: code)
-      }
+      if UnixPlatform.lockExclusively(descriptor, waits: waits) { return true }
+      let code = UnixPlatform.lastErrorCode
+      if !waits, code == UnixPlatform.ErrorCode.wouldBlock { return false }
+      throw UnixSystemError(operation: "flock", code: code)
     }
 
     /// Whether the file `descriptor` has open is still the one at `path`.

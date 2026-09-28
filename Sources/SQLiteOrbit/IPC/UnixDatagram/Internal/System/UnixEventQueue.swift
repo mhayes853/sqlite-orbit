@@ -16,5 +16,18 @@
       /// A descriptor watched by `watchWritable(_:)` has room to write.
       case writable(descriptor: Int32)
     }
+
+    /// How many events a wait that returned `count` handed back.
+    ///
+    /// A signal that interrupts the wait only ends it early. Any other failure means a descriptor
+    /// the queue owns is gone, which nothing here can recover from.
+    static func readyCount(_ count: Int32) -> Int {
+      let code = UnixPlatform.lastErrorCode
+      precondition(
+        count >= 0 || code == UnixPlatform.ErrorCode.interrupted,
+        "waiting for events failed with errno \(code)"
+      )
+      return max(0, Int(count))
+    }
   }
 #endif

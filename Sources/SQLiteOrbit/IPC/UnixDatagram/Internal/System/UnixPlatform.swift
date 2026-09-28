@@ -25,7 +25,8 @@
   /// the same Swift types on every platform.
   ///
   /// Each call returns what the C call returned and leaves `errno` as the C call left it, so a
-  /// failure is read, through ``lastErrorCode``, by the caller that knows what it means.
+  /// failure is read, through ``lastErrorCode``, by the caller that knows what it means. Where
+  /// noted, a call a signal interrupts is made again rather than failing with `EINTR`.
   enum UnixPlatform {
     /// The `errno` the calling thread's last failed call left behind.
     static var lastErrorCode: Int32 {
@@ -35,7 +36,7 @@
     /// The `errno` values the layer tells apart.
     enum ErrorCode {
       static let interrupted: Int32 = EINTR
-      static let tryAgain: Int32 = EAGAIN
+      /// Also `EAGAIN`, which is the same value on every platform this supports.
       static let wouldBlock: Int32 = EWOULDBLOCK
       static let noBufferSpace: Int32 = ENOBUFS
       static let invalidArgument: Int32 = EINVAL
@@ -54,12 +55,12 @@
       _ = close(descriptor)
     }
 
-    /// Reads into `buffer`, which must not be empty.
+    /// Reads into `buffer`, which must not be empty, retrying a read a signal interrupts.
     static func readBytes(
       from descriptor: Int32,
       into buffer: UnsafeMutableRawBufferPointer
     ) -> Int {
-      read(descriptor, buffer.baseAddress!, buffer.count)
+      Self.retryingInterruptions { read(descriptor, buffer.baseAddress!, buffer.count) }
     }
 
     /// Writes `bytes`, which must not be empty.
@@ -103,15 +104,12 @@
       open(path, O_RDONLY | O_CLOEXEC)
     }
 
-    /// Takes an exclusive `flock` on an open file, waiting for it.
-    static func lockExclusively(_ descriptor: Int32) -> Bool {
-      flock(descriptor, LOCK_EX) == 0
-    }
-
-    /// Takes an exclusive `flock` on an open file if nobody else holds one, failing with
-    /// `EWOULDBLOCK` rather than waiting if somebody does.
-    static func tryLockExclusively(_ descriptor: Int32) -> Bool {
-      flock(descriptor, LOCK_EX | LOCK_NB) == 0
+    /// Takes an exclusive `flock` on an open file, retrying a wait a signal interrupts.
+    ///
+    /// - Parameter waits: Whether to wait for somebody else to let go of it, rather than fail
+    ///   with `EWOULDBLOCK`.
+    static func lockExclusively(_ descriptor: Int32, waits: Bool) -> Bool {
+      Self.retryingInterruptions { flock(descriptor, waits ? LOCK_EX : LOCK_EX | LOCK_NB) } == 0
     }
 
     /// Which file the path `path` names now, following a symbolic link.
@@ -119,9 +117,7 @@
     /// - Returns: The file's identity, or `nil` if it cannot be looked up, as when nothing is
     ///   at `path`.
     static func fileIdentity(atPath path: String) -> UnixFileIdentity? {
-      var status = stat()
-      guard stat(path, &status) == 0 else { return nil }
-      return UnixFileIdentity(status)
+      UnixFileIdentity { stat(path, &$0) }
     }
 
     /// Which file an open descriptor refers to, which stays the same however the file is renamed
@@ -129,9 +125,7 @@
     ///
     /// - Returns: The file's identity, or `nil` if it cannot be looked up.
     static func fileIdentity(ofDescriptor descriptor: Int32) -> UnixFileIdentity? {
-      var status = stat()
-      guard fstat(descriptor, &status) == 0 else { return nil }
-      return UnixFileIdentity(status)
+      UnixFileIdentity { fstat(descriptor, &$0) }
     }
 
     // MARK: - Sockets
@@ -190,6 +184,15 @@
       recv(descriptor, buffer.baseAddress!, buffer.count, 0)
     }
 
+    private static func retryingInterruptions<Result: BinaryInteger>(
+      _ call: () -> Result
+    ) -> Result {
+      while true {
+        let result = call()
+        if result >= 0 || errno != EINTR { return result }
+      }
+    }
+
     #if canImport(Darwin)
       // Darwin raises no `SIGPIPE` from these sockets, because each is made with `SO_NOSIGPIPE`.
       private static let sendFlags: Int32 = 0
@@ -218,8 +221,11 @@
     let device: UInt64
     let inode: UInt64
 
-    // Each C library gives `dev_t` and `ino_t` a width and signedness of its own.
-    fileprivate init(_ status: stat) {
+    /// Reads the identity `lookUp` fills in, or fails if `lookUp` does not return 0.
+    fileprivate init?(_ lookUp: (inout stat) -> Int32) {
+      var status = stat()
+      guard lookUp(&status) == 0 else { return nil }
+      // Each C library gives `dev_t` and `ino_t` a width and signedness of its own.
       self.device = UInt64(truncatingIfNeeded: status.st_dev)
       self.inode = UInt64(truncatingIfNeeded: status.st_ino)
     }

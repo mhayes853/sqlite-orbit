@@ -63,17 +63,18 @@
       guard UnixPlatform.bindSocket(descriptor.rawValue, to: address) else {
         throw UnixSystemError.last("bind")
       }
-      guard let boundFile = UnixPlatform.fileIdentity(atPath: temporaryPath) else {
-        let error = UnixSystemError.last("stat")
+      do {
+        guard let boundFile = UnixPlatform.fileIdentity(atPath: temporaryPath) else {
+          throw UnixSystemError.last("stat")
+        }
+        guard UnixPlatform.renameFile(atPath: temporaryPath, toPath: path) else {
+          throw UnixSystemError.last("rename")
+        }
+        return Self(descriptor: descriptor, boundFile: boundFile)
+      } catch {
         _ = UnixPlatform.removeFile(atPath: temporaryPath)
         throw error
       }
-      guard UnixPlatform.renameFile(atPath: temporaryPath, toPath: path) else {
-        let error = UnixSystemError.last("rename")
-        _ = UnixPlatform.removeFile(atPath: temporaryPath)
-        throw error
-      }
-      return Self(descriptor: descriptor, boundFile: boundFile)
     }
 
     /// Finds whether a socket is bound at `path` by connecting to it, which sends nothing and
@@ -148,7 +149,6 @@
 
     /// What a full receive queue fails a send with: `EAGAIN` on Linux, and `ENOBUFS` on Darwin.
     private static let fullCodes: Set<Int32> = [
-      UnixPlatform.ErrorCode.tryAgain,
       UnixPlatform.ErrorCode.wouldBlock,
       UnixPlatform.ErrorCode.noBufferSpace
     ]
