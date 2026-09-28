@@ -232,7 +232,11 @@
     let receiver = try HeldReceiver(directory: directory, database: database)
     let sender = try ipcTransport(directory)
 
-    var queued = try await sendColumnsUntilOwed(sender, database)
+    // Held in its handler before its queue fills, so its thread frees no room afterwards.
+    var queued = [columnCommit(database, 0)]
+    try await sender.send(queued[0])
+    try await receiver.recorder.waitForCount(1)
+    queued += try await sendColumnsUntilOwed(sender, database, from: 1)
     var owed = itemsColumn(queued.count - 1)
     queued.removeLast()
     for index in 10_000..<10_003 {
