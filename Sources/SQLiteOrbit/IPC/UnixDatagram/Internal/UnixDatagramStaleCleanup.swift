@@ -83,7 +83,7 @@
     ) -> Summary? {
       let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
       let lock = versionDirectory.appending(path: "cleanup-stale.lock").path
-      let summary = try? UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) {
+      return try? UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) {
         var sweep = Sweep(
           socketsDirectory: versionDirectory.appending(path: "s", directoryHint: .isDirectory),
           databasesDirectory: versionDirectory.appending(path: "d", directoryHint: .isDirectory),
@@ -95,7 +95,6 @@
         sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory)
         return sweep.summary
       }
-      return summary ?? nil
     }
 
     private struct Sweep {

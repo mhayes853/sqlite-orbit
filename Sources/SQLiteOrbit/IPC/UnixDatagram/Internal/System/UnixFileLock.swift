@@ -40,7 +40,29 @@
       waitingWhile keepsWaiting: (_ attempt: Int) -> Bool,
       _ body: () throws -> Result
     ) throws -> Result? {
-      try Self.withLock(atPath: path, keepsWaiting: keepsWaiting, body)
+      var attempt = 0
+      while true {
+        // Each try opens the path afresh, so it never waits on a file its holder unlinked.
+        let descriptor = try UnixDescriptor(
+          UnixPlatform.openCreatingFile(atPath: path),
+          from: "open"
+        )
+        switch try Self.lock(descriptor.rawValue, openedFrom: path) {
+        case .held:
+          attempt += 1
+          guard keepsWaiting(attempt) else { return nil }
+        case .unlinked:
+          continue
+        case .taken:
+          // Closing the descriptor is what lets go of the lock, so it is held until `body`
+          // returns, and the file is unlinked before it is let go of, while nobody else can hold
+          // it.
+          return try withExtendedLifetime(descriptor) {
+            defer { _ = UnixPlatform.removeFile(atPath: path) }
+            return try body()
+          }
+        }
+      }
     }
 
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
@@ -69,65 +91,38 @@
           UnixPlatform.openExistingFile(atPath: path),
           from: "open"
         ),
-        (try? Self.lock(descriptor.rawValue)) == true,
-        Self.isStillAtPath(descriptor.rawValue, path) == true
+        (try? Self.lock(descriptor.rawValue, openedFrom: path)) == .taken
       else { return false }
       // Closing the descriptor, when it goes, lets go of the lock, after the file is gone.
       return withExtendedLifetime(descriptor) { UnixPlatform.removeFile(atPath: path) }
     }
 
-    private static func withLock<Result>(
-      atPath path: String,
-      keepsWaiting: (_ attempt: Int) -> Bool,
-      _ body: () throws -> Result
-    ) throws -> Result? {
-      var attempt = 0
-      while true {
-        let descriptor = try UnixDescriptor(
-          UnixPlatform.openCreatingFile(atPath: path),
-          from: "open"
-        )
-        guard try Self.lock(descriptor.rawValue) else {
-          attempt += 1
-          // Each try opens the path afresh, so it never waits on a file its holder unlinked.
-          guard keepsWaiting(attempt) else { return nil }
-          continue
+    /// What one try found: the lock taken on the file at the path, held by somebody else, or
+    /// taken on a file its holder unlinked between its opening and its locking, which guards
+    /// nothing.
+    private enum Attempt { case taken, held, unlinked }
+
+    /// Tries once, without waiting, for the lock on the file `descriptor` opened from `path`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if the lock cannot be tried, or the file looked up.
+    private static func lock(_ descriptor: Int32, openedFrom path: String) throws -> Attempt {
+      guard UnixPlatform.tryLockExclusively(descriptor) else {
+        let code = UnixPlatform.lastErrorCode
+        guard code == UnixPlatform.ErrorCode.wouldBlock else {
+          throw UnixSystemError(operation: "flock", code: code)
         }
-        guard let isStillAtPath = Self.isStillAtPath(descriptor.rawValue, path) else {
+        return .held
+      }
+      guard let locked = UnixPlatform.fileIdentity(ofDescriptor: descriptor) else {
+        throw UnixSystemError.last("stat")
+      }
+      guard let current = UnixPlatform.fileIdentity(atPath: path) else {
+        guard UnixPlatform.lastErrorCode == UnixPlatform.ErrorCode.noSuchFile else {
           throw UnixSystemError.last("stat")
         }
-        // Its holder unlinked the file between this opening and locking it, so the lock guards
-        // nothing.
-        guard isStillAtPath else { continue }
-        // Closing the descriptor is what lets go of the lock, so it is held until `body` returns,
-        // and the file is unlinked before it is let go of, while nobody else can hold it.
-        return try withExtendedLifetime(descriptor) {
-          defer { _ = UnixPlatform.removeFile(atPath: path) }
-          return try body()
-        }
+        return .unlinked
       }
-    }
-
-    /// Takes the lock on an open file, without waiting.
-    ///
-    /// - Returns: Whether the lock was taken, rather than found held.
-    private static func lock(_ descriptor: Int32) throws -> Bool {
-      if UnixPlatform.tryLockExclusively(descriptor) { return true }
-      let code = UnixPlatform.lastErrorCode
-      if code == UnixPlatform.ErrorCode.wouldBlock { return false }
-      throw UnixSystemError(operation: "flock", code: code)
-    }
-
-    /// Whether the file `descriptor` has open is still the one at `path`.
-    ///
-    /// - Returns: `false` if another file, or nothing, is at `path`, and `nil` if either could
-    ///   not be looked up for any other reason, with `errno` saying why.
-    private static func isStillAtPath(_ descriptor: Int32, _ path: String) -> Bool? {
-      guard let held = UnixPlatform.fileIdentity(ofDescriptor: descriptor) else { return nil }
-      guard let current = UnixPlatform.fileIdentity(atPath: path) else {
-        return UnixPlatform.lastErrorCode == UnixPlatform.ErrorCode.noSuchFile ? false : nil
-      }
-      return held == current
+      return locked == current ? .taken : .unlinked
     }
   }
 #endif

@@ -60,7 +60,10 @@
       from descriptor: Int32,
       into buffer: UnsafeMutableRawBufferPointer
     ) -> Int {
-      Self.retryingInterruptions { read(descriptor, buffer.baseAddress!, buffer.count) }
+      while true {
+        let count = read(descriptor, buffer.baseAddress!, buffer.count)
+        if count >= 0 || errno != EINTR { return count }
+      }
     }
 
     /// Writes `bytes`, which must not be empty.
@@ -180,15 +183,6 @@
       from descriptor: Int32
     ) -> Int {
       recv(descriptor, buffer.baseAddress!, buffer.count, 0)
-    }
-
-    private static func retryingInterruptions<Result: BinaryInteger>(
-      _ call: () -> Result
-    ) -> Result {
-      while true {
-        let result = call()
-        if result >= 0 || errno != EINTR { return result }
-      }
     }
 
     #if canImport(Darwin)

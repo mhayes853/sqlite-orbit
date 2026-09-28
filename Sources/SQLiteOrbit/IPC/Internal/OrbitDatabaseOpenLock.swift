@@ -31,26 +31,24 @@
       let locksDirectory = Self.locksDirectory(in: directory)
       try FileManager.default.createDirectory(at: locksDirectory, withIntermediateDirectories: true)
       let path = locksDirectory.appending(path: "\(databaseIdentifier.coordinationKey).lock").path
-      let busyTimeout = BusyTimeout(configuration.busyTimeout)
-      let keepsWaiting: (Int) -> Bool = configuration.busyHandler ?? busyTimeout.keepsWaiting
-      guard
-        let result = try UnixFileLock.withExclusiveLock(
-          atPath: path,
-          waitingWhile: keepsWaiting,
-          body
-        )
-      else {
-        let gaveUp =
-          configuration.busyHandler == nil ? "the busy timeout ran out" : "the busy handler gave up"
-        throw SQLiteError(
-          code: .busy,
-          message: """
-            database is locked: another process opening "\(databaseIdentifier.rawValue)" held \
-            its open lock until \(gaveUp), and may be stopped or suspended
-            """
-        )
+      let keepsWaiting =
+        configuration.busyHandler ?? Self.waiting(within: configuration.busyTimeout)
+      if let result = try UnixFileLock.withExclusiveLock(
+        atPath: path,
+        waitingWhile: keepsWaiting,
+        body
+      ) {
+        return result
       }
-      return result
+      let gaveUp =
+        configuration.busyHandler == nil ? "the busy timeout ran out" : "the busy handler gave up"
+      throw SQLiteError(
+        code: .busy,
+        message: """
+          database is locked: another process opening "\(databaseIdentifier.rawValue)" held its \
+          open lock until \(gaveUp), and may be stopped or suspended
+          """
+      )
     }
 
     /// Removes every lock file in the coordination directory `directory` that nobody holds.
@@ -70,26 +68,17 @@
       directory.appending(path: "open-locks", directoryHint: .isDirectory)
     }
 
-    /// Waits between tries at the lock as SQLite's own busy timeout waits between tries at its
-    /// locks: briefly at first, then 100 ms at a time, and never past the timeout.
-    private struct BusyTimeout {
-      /// The milliseconds SQLite sleeps before each try again, the last repeating from then on.
-      private static let delays = [1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100]
-
-      private let deadline: ContinuousClock.Instant
-
-      /// Starts the timeout now.
-      init(_ timeout: SQLiteBusyTimeout) {
-        self.deadline = .now + .milliseconds(timeout.milliseconds)
-      }
-
-      /// Sleeps until the next try, cut short at the deadline, and says whether there is one.
-      func keepsWaiting(attempt: Int) -> Bool {
-        let remaining = ContinuousClock.now.duration(to: self.deadline)
+    /// Waits before each try again as SQLite's own busy timeout waits between tries at its locks:
+    /// briefly at first, then 100 ms at a time, and never past `timeout`, counted from now.
+    private static func waiting(within timeout: SQLiteBusyTimeout) -> (_ attempt: Int) -> Bool {
+      // The milliseconds SQLite sleeps before each try again, the last repeating from then on.
+      let delays = [1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100]
+      let deadline = ContinuousClock.now + .milliseconds(timeout.milliseconds)
+      return { attempt in
+        let remaining = ContinuousClock.now.duration(to: deadline)
         guard remaining > .zero else { return false }
-        let delay = Duration.milliseconds(Self.delays[min(attempt, Self.delays.count) - 1])
-        let (seconds, attoseconds) = min(delay, remaining).components
-        Thread.sleep(forTimeInterval: Double(seconds) + Double(attoseconds) / 1e18)
+        let delay = Duration.milliseconds(delays[min(attempt, delays.count) - 1])
+        Thread.sleep(forTimeInterval: min(delay, remaining) / .seconds(1))
         return true
       }
     }
