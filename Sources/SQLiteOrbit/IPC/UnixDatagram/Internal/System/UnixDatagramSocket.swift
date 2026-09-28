@@ -4,7 +4,7 @@
   ///
   /// Every judgment of what a failed call means is made here, so what reaches the caller is
   /// already an outcome: a peer with no room, a peer that is gone, or a real failure.
-  struct UnixDatagramSocket: Sendable {
+  struct UnixDatagramSocket: ~Copyable, Sendable {
     /// What became of a datagram offered to a connected socket.
     enum SendOutcome: Equatable {
       /// The peer's receive queue took it.

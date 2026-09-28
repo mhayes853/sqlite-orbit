@@ -1,10 +1,10 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  /// An open file descriptor, closed exactly once, when the last reference to it goes.
+  /// An open file descriptor, closed exactly once, when the one value that owns it goes.
   ///
-  /// It is a class rather than a noncopyable struct so that it can live in ordinary collections,
-  /// such as the sockets an endpoint keeps for each of its peers. Whatever uses ``rawValue`` must
-  /// keep the descriptor itself alive for as long as it does.
-  final class UnixDescriptor: Sendable {
+  /// It cannot be copied, so nothing can close it behind its owner's back or keep it open after.
+  /// Whatever uses ``rawValue`` must keep the descriptor itself alive for as long as it does,
+  /// since it may close as soon as its owner is last used rather than at the end of a scope.
+  struct UnixDescriptor: ~Copyable, Sendable {
     let rawValue: Int32
 
     /// Takes ownership of the descriptor a call returned.

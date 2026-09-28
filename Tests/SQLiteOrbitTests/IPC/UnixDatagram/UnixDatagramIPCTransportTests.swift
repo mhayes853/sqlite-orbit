@@ -102,7 +102,10 @@
     let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
     let registry = try unixDatagramRegistry(directory, endpointName: "malformed")
     let peer = try #require(registry.peers(databaseIdentifier: database).first)
-    let socket = try #require(try UnixDatagramSocket.connect(to: peer.socketPath))
+    guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
+      Issue.record("Nothing is bound at \(peer.socketPath)")
+      return
+    }
     // One that fills the receive buffer, which the transport sizes a byte past the longest datagram
     // it accepts, is dropped rather than decoded from a prefix.
     let tooLong =

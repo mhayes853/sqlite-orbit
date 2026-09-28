@@ -11,11 +11,19 @@
   /// nothing more. Nothing about it is thread-safe: the caller serializes every use.
   final class UnixDirectoryWatcher: @unchecked Sendable {
     private let descriptor: UnixDescriptor
-    private var directories: [UnixDescriptor] = []
+    /// The descriptor of each directory watched, which this closes itself: an array holds only
+    /// values that can be copied, which a ``UnixDescriptor`` cannot.
+    private var directories: [Int32] = []
 
     init() throws {
       self.descriptor = try UnixDescriptor(kqueue(), from: "kqueue")
       _ = fcntl(self.descriptor.rawValue, F_SETFD, FD_CLOEXEC)
+    }
+
+    deinit {
+      for directory in self.directories {
+        UnixPlatform.closeDescriptor(directory)
+      }
     }
 
     /// Starts watching the directory at `path`.
@@ -25,12 +33,10 @@
     func watch(_ path: String) throws {
       // `O_EVTONLY` opens the directory only to hear about it, so the watch does not keep the
       // volume it is on from being unmounted.
-      let directory = try UnixDescriptor(
-        open(path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC),
-        from: "open"
-      )
+      let directory = open(path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
+      guard directory >= 0 else { throw UnixSystemError.last("open") }
       var change = kevent(
-        ident: UInt(directory.rawValue),
+        ident: UInt(directory),
         filter: Int16(EVFILT_VNODE),
         flags: UInt16(EV_ADD | EV_CLEAR),
         fflags: UInt32(NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE),
@@ -38,7 +44,9 @@
         udata: nil
       )
       guard systemKevent(self.descriptor.rawValue, &change, 1, nil, 0, nil) == 0 else {
-        throw UnixSystemError.last("kevent")
+        let error = UnixSystemError.last("kevent")
+        UnixPlatform.closeDescriptor(directory)
+        throw error
       }
       self.directories.append(directory)
     }

@@ -160,32 +160,34 @@
       counting delivery: inout Delivery
     ) {
       let name = peer.endpointName
-      if state.peers[name] == nil {
+      let known: Peer
+      if let existing = state.peers[name] {
+        known = existing
+      } else {
         do {
           guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
             delivery.stale.append(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
             return
           }
-          state.peers[name] = Peer(peer: peer, socket: socket)
+          known = Peer(peer: peer, socket: socket)
+          state.peers[name] = known
         } catch {
           delivery.failed += 1
           return
         }
       }
-      state.peers[name]!.coordinationKeys.insert(coordinationKey)
+      known.coordinationKeys.insert(coordinationKey)
 
       // A peer that is owed anything is not sent to until it has taken what it is owed, so the
       // message joins that rather than overtaking it.
-      if state.peers[name]!.owed.isEmpty {
-        switch state.peers[name]!.socket.send(datagram) {
+      if known.owed.isEmpty {
+        switch known.socket.send(datagram) {
         case .sent:
           delivery.delivered += 1
           return
         case .full:
-          state.peers[name]!.isWatched = self.queue.watchWritable(
-            state.peers[name]!.socket.descriptor.rawValue
-          )
-          state.peers[name]!.backOff()
+          known.isWatched = self.queue.watchWritable(known.socket.descriptor.rawValue)
+          known.backOff()
           // The thread waits on a deadline it worked out before this peer owed anything.
           self.queue.wake()
         case .peerGone:
@@ -198,8 +200,7 @@
       }
       switch entry.message {
       case .transactionDidCommit(let commit):
-        state.peers[name]!.owed[commit.databaseIdentifier, default: .empty]
-          .formUnion(commit.region)
+        known.owed[commit.databaseIdentifier, default: .empty].formUnion(commit.region)
       }
       delivery.deferred += 1
     }
@@ -232,9 +233,9 @@
 
         switch peer.socket.send(batch.encoded()) {
         case .sent:
-          state.peers[name]!.retryDelay = .milliseconds(1)
+          peer.retryDelay = .milliseconds(1)
         case .full:
-          state.peers[name]!.backOff()
+          peer.backOff()
           return
         case .peerGone:
           _ = self.forget(name, in: &state)
@@ -245,31 +246,30 @@
           break
         }
         for entry in batch.entries {
-          state.peers[name]!.owed[entry.message.databaseIdentifier] = nil
+          peer.owed[entry.message.databaseIdentifier] = nil
         }
         entries.removeFirst(batch.entries.count)
       }
-      state.peers[name]!.owed.removeAll()
-      self.unwatch(name, in: &state)
+      peer.owed.removeAll()
+      self.unwatch(peer)
     }
 
-    private func unwatch(_ name: String, in state: inout State) {
-      guard let peer = state.peers[name] else { return }
+    private func unwatch(_ peer: Peer) {
       if peer.isWatched {
         self.queue.unwatchWritable(peer.socket.descriptor.rawValue)
       }
-      state.peers[name]!.isWatched = false
-      state.peers[name]!.retryAt = nil
-      state.peers[name]!.retryDelay = .milliseconds(1)
+      peer.isWatched = false
+      peer.retryAt = nil
+      peer.retryDelay = .milliseconds(1)
     }
 
     /// Closes the socket kept for a peer, and drops what it is owed.
     ///
     /// - Returns: The peer, with the databases it was seen advertising.
     private func forget(_ name: String, in state: inout State) -> StalePeer {
-      self.unwatch(name, in: &state)
-      // Its socket closes when this goes, at the end of the call.
+      // Its socket closes once nothing holds the peer any more, which is before the lock is let go.
       let peer = state.peers.removeValue(forKey: name)!
+      self.unwatch(peer)
       return StalePeer(peer: peer.peer, coordinationKeys: peer.coordinationKeys)
     }
 
@@ -283,13 +283,13 @@
       let advertised = Set(advertisers)
       for (name, peer) in state.peers
       where peer.coordinationKeys.contains(coordinationKey) && !advertised.contains(name) {
-        state.peers[name]!.coordinationKeys.remove(coordinationKey)
-        state.peers[name]!.owed = peer.owed.filter { $0.key.coordinationKey != coordinationKey }
-        if state.peers[name]!.coordinationKeys.isEmpty {
+        peer.coordinationKeys.remove(coordinationKey)
+        peer.owed = peer.owed.filter { $0.key.coordinationKey != coordinationKey }
+        if peer.coordinationKeys.isEmpty {
           // Not reported as dead: it withdrew its own advertisements.
           _ = self.forget(name, in: &state)
-        } else if state.peers[name]!.owed.isEmpty {
-          self.unwatch(name, in: &state)
+        } else if peer.owed.isEmpty {
+          self.unwatch(peer)
         }
       }
     }
@@ -347,7 +347,12 @@
 
     // MARK: - State
 
-    private struct Peer {
+    /// A peer this endpoint keeps a connected socket for.
+    ///
+    /// It is a class because its socket cannot be copied, and a dictionary holds only values that
+    /// can. It is only touched while holding the endpoint's lock, which is what makes it safe to
+    /// send.
+    private final class Peer: @unchecked Sendable {
       let peer: UnixDatagramPeer
       let socket: UnixDatagramSocket
       /// The databases this peer was last seen advertising, by coordination key.
@@ -358,8 +363,13 @@
       var retryAt: ContinuousClock.Instant?
       var retryDelay = Duration.milliseconds(1)
 
+      init(peer: UnixDatagramPeer, socket: consuming UnixDatagramSocket) {
+        self.peer = peer
+        self.socket = socket
+      }
+
       /// Schedules the next attempt at a peer the queue cannot say has room.
-      mutating func backOff() {
+      func backOff() {
         guard !self.isWatched else { return }
         self.retryAt = .now.advanced(by: self.retryDelay)
         self.retryDelay = min(self.retryDelay * 2, UnixDatagramEndpoint.maximumRetryDelay)

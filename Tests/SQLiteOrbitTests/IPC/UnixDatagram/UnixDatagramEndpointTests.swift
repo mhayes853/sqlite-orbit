@@ -199,12 +199,15 @@
     ///
     /// - Returns: The messages in each datagram, in the order they arrived.
     func drain() throws -> [[OrbitIPCMessage]] {
-      let peer = try #require(self.peer)
+      // A closed peer has nothing to drain, which would pass for an empty queue. The check is
+      // spelled apart from the macro, which cannot take a noncopyable operand.
+      let isOpen = self.peer != nil
+      try #require(isOpen)
       var buffer = [UInt8](repeating: 0, count: 65_536)
       var datagrams: [[OrbitIPCMessage]] = []
       while true {
         let messages = try buffer.withUnsafeMutableBufferPointer { buffer -> [OrbitIPCMessage]? in
-          guard let count = peer.receive(into: buffer) else { return nil }
+          guard let count = self.peer?.receive(into: buffer) else { return nil }
           let datagram = UnsafeBufferPointer(rebasing: buffer[..<count])
           return try UnixDatagramWireProtocol.decode(Span(_unsafeElements: datagram))
         }
