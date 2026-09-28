@@ -55,6 +55,19 @@ func waitUntil(
     try await waitUntil(timeout: timeout) { FileManager.default.fileExists(atPath: url.path) }
   }
 
+  /// Waits, for a few seconds at most, until nothing is bound at the socket path `path` whose
+  /// socket this process has just closed.
+  ///
+  /// A process another test spawns at the same moment holds a copy of every descriptor until it
+  /// execs, so a socket can outlive its closing here by a little, and still take what is sent to
+  /// it.
+  func waitUntilNothingIsBound(at path: String) {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while UnixDatagramSocket.probe(path) == .alive, ContinuousClock.now < deadline {
+      Thread.sleep(forTimeInterval: 0.001)
+    }
+  }
+
   func processTestSignal(_ process: Process, _ signal: Int32) {
     _ = kill(process.processIdentifier, signal)
   }

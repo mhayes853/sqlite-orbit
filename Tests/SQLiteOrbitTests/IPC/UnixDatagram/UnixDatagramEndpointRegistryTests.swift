@@ -102,6 +102,7 @@
       // Released without being shut down, which closes its socket and leaves everything else, as
       // a process that dies does.
       crashed = nil
+      waitUntilNothingIsBound(at: socketPath)
       #expect(FileManager.default.fileExists(atPath: socketPath))
       let delivery = try sender.send(
         UnixDatagramWireEntry(commit(self.database, region: self.items), fittingIn: 1_024)
