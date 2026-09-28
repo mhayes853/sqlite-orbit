@@ -127,9 +127,21 @@
       }
     }
 
+    /// The handlers subscribed to this endpoint, and what each marker it wrote advertises, by
+    /// coordination key.
+    ///
+    /// One marker stands for every identifier sharing a coordination key, so it advertises the
+    /// union of all of their handlers' regions. It is rewritten, under the lock, whenever that
+    /// union changes, so a region is advertised before the call that widened it returns, and two
+    /// changes can never land in the directory in the opposite order to the one they were made in.
+    private struct State {
+      var handlers = KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>()
+      var advertised: [String: OrbitDatabaseRegion] = [:]
+    }
+
     private let configuration: Configuration
     private let registry: UnixDatagramEndpointRegistry
-    private let handlers: UnixDatagramHandlers
+    private let state = Lock(State())
 
     /// Creates a transport endpoint in `configuration`'s coordination directory.
     ///
@@ -155,21 +167,22 @@
         .lowercased()
         .replacingOccurrences(of: "-", with: "")
         .prefix(16)
-      let registry = try UnixDatagramEndpointRegistry(
+      self.configuration = configuration
+      self.registry = try UnixDatagramEndpointRegistry(
         directory: configuration.directory,
         endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount
       )
-      let handlers = UnixDatagramHandlers(registry: registry)
-
-      self.configuration = configuration
-      self.registry = registry
-      self.handlers = handlers
-      registry.start { bytes in
-        guard let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
+      // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
+      // up holding the last reference, the registry is shut down from the thread, which it allows.
+      self.registry.start { [weak self] bytes in
+        guard let self, let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
         for message in messages {
-          handlers.receive(message)
+          let callbacks = self.state.withLock { $0.handlers.callbacks(for: message) }
+          for callback in callbacks {
+            callback(message)
+          }
         }
       }
     }
@@ -178,7 +191,6 @@
       // Everything a peer finds this endpoint by goes now, so one that looks in the coordination
       // directory after this transport is released finds nothing of it. The descriptors
       // themselves close once the receive thread has woken and let go of the endpoint.
-      self.handlers.shutdown()
       self.registry.shutdown()
     }
 
@@ -206,27 +218,28 @@
     ///   - onMessage: Receives each message concerning that database and region.
     /// - Returns: A subscription that stops delivery when cancelled or released, and through which
     ///   its region can change.
-    /// - Throws: A ``UnixSystemError`` if the transport is closed or the coordination
-    ///   directory cannot be written to.
+    /// - Throws: A ``UnixSystemError`` if the coordination directory cannot be written to.
     public func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
       region: OrbitDatabaseRegion,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitRegionSubscription {
-      let identifier = try self.handlers.add(
-        databaseIdentifier: databaseIdentifier,
-        region: region,
-        handler: onMessage
-      )
-      return OrbitRegionSubscription(region: region) { [weak handlers = self.handlers] region in
-        guard let handlers else { return }
-        try handlers.update(
-          identifier: identifier,
-          databaseIdentifier: databaseIdentifier,
-          region: region
-        )
-      } onCancel: { [weak handlers = self.handlers] in
-        handlers?.remove(identifier: identifier, databaseIdentifier: databaseIdentifier)
+      let identifier = try self.state.withLock { state in
+        let identifier = state.handlers
+          .insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
+          .identifier
+        do {
+          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+        } catch {
+          state.handlers.remove(identifier, for: databaseIdentifier)
+          throw error
+        }
+        return identifier
+      }
+      return OrbitRegionSubscription(region: region) { [weak self] region in
+        try self?.update(identifier, for: databaseIdentifier, region: region)
+      } onCancel: { [weak self] in
+        self?.remove(identifier, for: databaseIdentifier)
       }
     }
 
@@ -279,12 +292,58 @@
     /// The region this transport advertises to its peers for a database, or `nil` if it is not
     /// discoverable for that database.
     func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
-      self.handlers.advertisedRegion(for: databaseIdentifier)
+      self.state.withLock { $0.advertised[databaseIdentifier.coordinationKey] }
     }
 
     /// What each peer whose receive queue was full is owed, by endpoint name.
     var owedRegions: [String: [OrbitDatabaseIdentifier: OrbitDatabaseRegion]] {
       self.registry.owedRegions
+    }
+
+    private func update(
+      _ identifier: UInt64,
+      for databaseIdentifier: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion
+    ) throws {
+      try self.state.withLock { state in
+        var previous: OrbitDatabaseRegion?
+        state.handlers.update(identifier, for: databaseIdentifier) { handler in
+          previous = handler.region
+          handler.region = region
+        }
+        guard let previous else { return }
+        do {
+          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
+        } catch {
+          state.handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
+          throw error
+        }
+      }
+    }
+
+    private func remove(_ identifier: UInt64, for databaseIdentifier: OrbitDatabaseIdentifier) {
+      self.state.withLock { state in
+        guard state.handlers.remove(identifier, for: databaseIdentifier).didRemove else { return }
+        // A marker left wider than the handlers need only costs this endpoint messages it ignores.
+        try? self.advertise(databaseIdentifier.coordinationKey, in: &state)
+      }
+    }
+
+    /// Brings the marker for `coordinationKey` in line with the handlers that share it.
+    private func advertise(_ coordinationKey: String, in state: inout State) throws {
+      let identifiers = state.handlers.keys.filter { $0.coordinationKey == coordinationKey }
+      guard !identifiers.isEmpty else {
+        guard state.advertised[coordinationKey] != nil else { return }
+        try self.registry.withdraw(coordinationKey: coordinationKey)
+        state.advertised[coordinationKey] = nil
+        return
+      }
+      let region = identifiers.reduce(into: OrbitDatabaseRegion.empty) {
+        $0.formUnion(state.handlers.region(for: $1))
+      }
+      guard state.advertised[coordinationKey] != region else { return }
+      try self.registry.advertise(region, coordinationKey: coordinationKey)
+      state.advertised[coordinationKey] = region
     }
   }
 
@@ -324,124 +383,5 @@
 
   private let sharedTransports =
     Lock<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
-
-  /// The handlers subscribed to this endpoint, and the markers that advertise what they cover.
-  ///
-  /// One marker stands for every identifier sharing a coordination key, so it advertises the union
-  /// of all of their handlers' regions. It is rewritten, under the lock, whenever that union
-  /// changes, so a region is advertised before the call that widened it returns, and two changes
-  /// can never land in the directory in the opposite order to the one they were made in.
-  private final class UnixDatagramHandlers: Sendable {
-    private struct Handler: Sendable {
-      var region: OrbitDatabaseRegion
-      let onMessage: @Sendable (OrbitIPCMessage) -> Void
-    }
-
-    private struct State: Sendable {
-      var handlers = KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>()
-      /// What each marker this endpoint wrote advertises, by coordination key.
-      var advertised: [String: OrbitDatabaseRegion] = [:]
-      var isShutdown = false
-    }
-
-    private let registry: UnixDatagramEndpointRegistry
-    private let state = Lock(State())
-
-    init(registry: UnixDatagramEndpointRegistry) {
-      self.registry = registry
-    }
-
-    func add(
-      databaseIdentifier: OrbitDatabaseIdentifier,
-      region: OrbitDatabaseRegion,
-      handler: @escaping @Sendable (OrbitIPCMessage) -> Void
-    ) throws -> UInt64 {
-      try self.state.withLock { state in
-        guard !state.isShutdown else {
-          throw UnixSystemError.closed("transport is closed")
-        }
-        let identifier = state.handlers
-          .insert(Handler(region: region, onMessage: handler), for: databaseIdentifier)
-          .identifier
-        do {
-          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
-        } catch {
-          state.handlers.remove(identifier, for: databaseIdentifier)
-          throw error
-        }
-        return identifier
-      }
-    }
-
-    func update(
-      identifier: UInt64,
-      databaseIdentifier: OrbitDatabaseIdentifier,
-      region: OrbitDatabaseRegion
-    ) throws {
-      try self.state.withLock { state in
-        var previous: OrbitDatabaseRegion?
-        state.handlers.update(identifier, for: databaseIdentifier) { handler in
-          previous = handler.region
-          handler.region = region
-        }
-        guard let previous else { return }
-        do {
-          try self.advertise(databaseIdentifier.coordinationKey, in: &state)
-        } catch {
-          state.handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
-          throw error
-        }
-      }
-    }
-
-    func remove(identifier: UInt64, databaseIdentifier: OrbitDatabaseIdentifier) {
-      self.state.withLock { state in
-        guard state.handlers.remove(identifier, for: databaseIdentifier).didRemove else { return }
-        // A marker left wider than the handlers need only costs this endpoint messages it ignores.
-        try? self.advertise(databaseIdentifier.coordinationKey, in: &state)
-      }
-    }
-
-    func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
-      self.state.withLock { $0.advertised[databaseIdentifier.coordinationKey] }
-    }
-
-    func receive(_ message: OrbitIPCMessage) {
-      let callbacks = self.state.withLock { state in
-        state.handlers.handlers(for: message.databaseIdentifier)
-          .filter { message.concerns($0.region) }
-          .map(\.onMessage)
-      }
-      for callback in callbacks {
-        callback(message)
-      }
-    }
-
-    /// Removes every handler, and refuses new ones. The registry withdraws the markers.
-    func shutdown() {
-      self.state.withLock { state in
-        state.isShutdown = true
-        _ = state.handlers.removeAll()
-        state.advertised.removeAll()
-      }
-    }
-
-    /// Brings the marker for `coordinationKey` in line with the handlers that share it.
-    private func advertise(_ coordinationKey: String, in state: inout State) throws {
-      let handlers = state.handlers.keys
-        .filter { $0.coordinationKey == coordinationKey }
-        .flatMap { state.handlers.handlers(for: $0) }
-      guard !handlers.isEmpty else {
-        guard state.advertised[coordinationKey] != nil else { return }
-        try self.registry.withdraw(coordinationKey: coordinationKey)
-        state.advertised[coordinationKey] = nil
-        return
-      }
-      let region = handlers.reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
-      guard state.advertised[coordinationKey] != region else { return }
-      try self.registry.advertise(region, coordinationKey: coordinationKey)
-      state.advertised[coordinationKey] = region
-    }
-  }
 
 #endif
