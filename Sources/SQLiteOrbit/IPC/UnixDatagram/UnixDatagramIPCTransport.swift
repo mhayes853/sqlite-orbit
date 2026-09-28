@@ -177,9 +177,12 @@
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
       // up holding the last reference, the registry is shut down from the thread, which it allows.
       self.registry.start { [weak self] bytes in
-        guard let self, let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
+        guard let messages = try? UnixDatagramWireProtocol.decode(bytes) else { return }
         for message in messages {
-          let callbacks = self.state.withLock { $0.handlers.callbacks(for: message) }
+          // Held only for the lookup, so a handler that lets go of the last reference releases
+          // this transport there and then, not once every handler has returned.
+          guard let callbacks = self?.state.withLock({ $0.handlers.callbacks(for: message) })
+          else { return }
           for callback in callbacks {
             callback(message)
           }
