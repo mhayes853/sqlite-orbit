@@ -139,9 +139,10 @@
       try await removedFilesTransport(directory).send(first)
       try await receiver.recorder.waitForCount(1)
 
+      // Started first, so its sweep of the coordination directory runs before anything is missing.
+      let sender = try removedFilesTransport(directory)
       _ = UnixPlatform.removeFile(atPath: files.socketPath)
       // It has never connected to the receiver, so it finds nothing at the path and prunes it.
-      let sender = try removedFilesTransport(directory)
       #expect(try sender.peers(concernedWith: first).count == 1)
       try await sender.send(removedFilesCommit(self.database, column: 1))
       #expect(!FileManager.default.fileExists(atPath: files.marker.path))

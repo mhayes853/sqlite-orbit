@@ -192,6 +192,11 @@
         receiveBufferByteCount: configuration.receiveBufferByteCount,
         refreshInterval: refreshInterval
       )
+      // After binding, so the sweep can never take this endpoint for one of the dead it removes.
+      UnixDatagramStaleCleanup.sweep(
+        directory: configuration.directory,
+        keeping: self.registry.endpointName
+      )
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
       // up holding the last reference, the registry is shut down from the thread, which it allows.
       self.registry.start { [weak self] bytes in
