@@ -587,12 +587,12 @@ footer code{color:var(--muted)}
   </div>
 
   <div class="policy tg" id="t-locks">
-    <div class="ph"><span class="pk">Guarantee · <a href="#coordir">scene 03</a> · <a href="#cleanup">scene 07</a></span><span class="pn">A file lock has one holder at a time, and lock files never pile up.</span><span class="pc">A lock's file is unlinked as it is let go of, and one a dead holder left is reclaimed.</span></div>
+    <div class="ph"><span class="pk">Guarantee · <a href="#coordir">scene 03</a> · <a href="#cleanup">scene 07</a></span><span class="pn">A file lock has one holder at a time, a frozen holder never holds anyone up for good, and lock files never pile up.</span><span class="pc">Nothing waits in <code>flock</code>. A lock's file is unlinked as it is let go of, and one a dead holder left is reclaimed.</span></div>
     <ol class="tests">
       <li>
         <div class="tn"><code class="fn">excludes<wbr>Every<wbr>Other<wbr>Holder<wbr>While<wbr>Files<wbr>Are<wbr>Unlinked<wbr>And<wbr>Created<wbr>Again</code><span class="tf">UnixFileLockTests.swift</span><span class="tags"><span class="tag">threads</span></span></div>
         <dl>
-          <dt>Simulates</dt><dd>6 threads take the same lock 300 times each, and every holder unlinks its file as it lets go, so the next creates it again. A third of the attempts only try, and try again until they get it. Each holder reads a counter, waits, and writes it back, so two holders at once would lose an increment.</dd>
+          <dt>Simulates</dt><dd>6 threads take the same lock 300 times each, and every holder unlinks its file as it lets go, so the next creates it again. A third of the attempts only try, looping until they get it, a third are told to try again at once, and a third pause between tries. Each holder reads a counter, waits, and writes it back, so two holders at once would lose an increment.</dd>
           <dt>Asserts</dt><dd>No holder ever found another inside, the counter is exactly 1,800, and no lock file is left.</dd>
           <dt>Rules out</dt><dd>Two holders at once when one locks a file another has just unlinked.</dd>
         </dl>
@@ -603,6 +603,38 @@ footer code{color:var(--muted)}
           <dt>Simulates</dt><dd>A lock held on another thread, and then a lock file nobody holds, as a process that died holding the lock leaves it.</dd>
           <dt>Asserts</dt><dd><code>removeIfUnlocked</code> leaves the held one in place and removes the one nobody holds.</dd>
           <dt>Rules out</dt><dd>Reclaiming a lock someone holds, and lock files left by the dead accumulating.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Pool<wbr>Gives<wbr>Up<wbr>With<wbr>Busy<wbr>On<wbr>AFrozen<wbr>Opener<wbr>Once<wbr>Its<wbr>Busy<wbr>Timeout<wbr>Runs<wbr>Out</code><span class="tf">OrbitDatabaseOpenLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper takes the database's open lock, as a <code>SQLitePool</code> opening it does, and is stopped with <code>SIGSTOP</code> while holding it, as an app suspended partway through its open would be. The test then opens a <code>SQLitePool</code> on the same database with a 200 ms busy timeout.</dd>
+          <dt>Asserts</dt><dd>The open throws <code>SQLiteError</code> with <code>SQLITE_BUSY</code> after at least 200 ms and well within its 5 s deadline, and the frozen holder's lock file is left alone.</dd>
+          <dt>Rules out</dt><dd>Opening a database hanging for good behind another process that froze while opening it.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Pool<wbr>Opens<wbr>Once<wbr>AFrozen<wbr>Opener<wbr>Is<wbr>Resumed<wbr>Or<wbr>Killed<wbr>Within<wbr>Its<wbr>Busy<wbr>Timeout(_:)</code><span class="tf">OrbitDatabaseOpenLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span><span class="tag s">SIGKILL</span><span class="tag">resumed · killed</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The same frozen holder, with a 30 s busy timeout. Once the pool has been waiting 300 ms, the helper is resumed with <code>SIGCONT</code>, or killed with <code>SIGKILL</code>, one case each.</dd>
+          <dt>Asserts</dt><dd>The pool opens after at least 300 ms and well before its timeout, and the lock file is gone afterwards.</dd>
+          <dt>Rules out</dt><dd>A wait that gives up early, or misses the lock coming free, whether its holder finished or died.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Pool<wbr>Opens<wbr>At<wbr>Once<wbr>After<wbr>An<wbr>Opener<wbr>Is<wbr>Killed<wbr>And<wbr>Removes<wbr>The<wbr>Lock<wbr>File<wbr>It<wbr>Left</code><span class="tf">OrbitDatabaseOpenLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGKILL</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper killed with <code>SIGKILL</code> while holding the open lock, which leaves its lock file behind. The test then opens a pool with a busy timeout of zero, so it never waits.</dd>
+          <dt>Asserts</dt><dd>The pool opens on its first try, since the kernel let go of the dead holder's lock, and the file it left is gone afterwards.</dd>
+          <dt>Rules out</dt><dd>A lock file left by a crash blocking the database, or piling up.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Pool<wbr>Gives<wbr>Up<wbr>With<wbr>Busy<wbr>At<wbr>Once<wbr>When<wbr>Its<wbr>Busy<wbr>Handler<wbr>Does</code><span class="tf">OrbitDatabaseOpenLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The frozen holder again, and a pool whose <code>busyHandler</code> answers <code>false</code>, with its busy timeout at <code>.maximum</code>.</dd>
+          <dt>Asserts</dt><dd>The open throws <code>SQLITE_BUSY</code> at once, and the handler was asked exactly once.</dd>
+          <dt>Rules out</dt><dd>The open lock waiting by anything other than what the configuration tells SQLite to wait by.</dd>
         </dl>
       </li>
     </ol>
@@ -1174,7 +1206,7 @@ const ARCH = {
       ['UnixEventQueue+Epoll.swift', 'The Linux and Android <code>UnixEventQueue</code>: <code>EPOLLIN</code> on the socket, on one a rebind replaced, on the registry\'s directory watch and on an eventfd wakeup, and <code>EPOLLOUT</code> on the connected socket of each peer that is owed something. Here <code>watchWritable</code> returns whether the queue will say when that peer has room.'],
       ['UnixDirectoryWatcher+Kqueue.swift', 'Darwin\'s <code>UnixDirectoryWatcher</code>, with <code>watch(_:)</code>, <code>drainChanges()</code>, which never blocks and only says whether anything changed, and a <code>descriptor</code> an event queue can wait on: <code>EVFILT_VNODE</code> on an <code>O_EVTONLY</code> descriptor, for <code>NOTE_WRITE | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE</code>.'],
       ['UnixDirectoryWatcher+Inotify.swift', 'The Linux and Android <code>UnixDirectoryWatcher</code>: inotify, for <code>IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF | IN_MOVE_SELF</code>.'],
-      ['UnixFileLock.swift', 'An exclusive <code>flock</code> on a file that exists only while it is held. <code>withExclusiveLock(atPath:_:)</code> and <code>withExclusiveLockIfAvailable(atPath:_:)</code> <code>open(O_RDWR | O_CREAT | O_CLOEXEC)</code>, take <code>flock(LOCK_EX)</code> (with <code>LOCK_NB</code> for the second), retried on <code>EINTR</code>, and then check that the locked file is still the one at the path, starting over if not. The holder unlinks the file before it lets go. <code>removeIfUnlocked(atPath:)</code> reclaims a file left by a process that died holding it. <code>SQLitePool</code>\'s open lock and the sweep\'s lock use it.'],
+      ['UnixFileLock.swift', 'An exclusive <code>flock</code> on a file that exists only while it is held. Nothing ever waits in <code>flock</code>, since a frozen holder would never let go: <code>withExclusiveLock(atPath:waitingWhile:_:)</code> and <code>withExclusiveLockIfAvailable(atPath:_:)</code> <code>open(O_RDWR | O_CREAT | O_CLOEXEC)</code> and try <code>flock(LOCK_EX | LOCK_NB)</code>. A try that finds the lock held asks <code>waitingWhile</code> whether to try again, as a SQLite busy handler is asked, and the second never tries again. A lock taken is checked to be on the file still at the path, starting over if not. The holder unlinks the file before it lets go. <code>removeIfUnlocked(atPath:)</code> reclaims a file left by a process that died holding it. <code>SQLitePool</code>\'s open lock and the sweep\'s lock use it.'],
       ['UnixSystemError.swift', 'A failed call: what it was doing, and its <code>errno</code>.']
     ] },
   dir: { t: 'Coordination directory', s: 'v1/s/*.sock · v1/d/<key>/*', short: ['coordination', 'directory'], c: C.dir,
@@ -1675,9 +1707,9 @@ function cdInfo(id, d) {
     h += sec('Name', `<p>The database's coordination key and <code>.lock</code>. It is the same key as <code>v1/d/${K.key}/</code>, derived from the identifier the pool is opened with.</p>${cdKeyCode(r.db)}`);
     h += sec('Contents', `<p>0 bytes. Nothing is ever written. What matters is the exclusive <code>flock(2)</code> an opener holds on it.</p>`);
     h += sec('What it protects', `<p><code>SQLitePool.init</code> opening its connections: the writer runs <code>PRAGMA journal_mode = WAL</code> and a first read, which creates <code>-wal</code> and <code>-shm</code>, and then the readers open. Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes opening it at the same moment would otherwise contend for it. It is held only while opening, not while the database is used.</p>`);
-    h += sec('Written', `<p><code>UnixFileLock.withExclusiveLock(atPath:_:)</code>, in the I/O layer, calls <code>open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)</code>, which creates the file, and then <code>flock(LOCK_EX)</code>, retried on <code>EINTR</code>. Then it compares the file it locked with the file at the path (<code>fstat</code> and <code>stat</code>: device and inode), and starts over if they differ. Called by <code>OrbitDatabaseOpenLock.withLock</code>, from <code>SQLitePool.init</code>.</p>`);
-    h += sec('Why the check', `<p>The holder unlinks the file when it lets go. A waiter that opened the file just before that would lock a file nobody else will ever open, while a newcomer creates and locks a new one at the same path, and both would think they hold the lock. The waiter sees that its file is no longer the one at the path, and starts over.</p>`);
-    h += sec('Read', `<p>Never read. A second opener's <code>flock</code> blocks until the first one lets go.</p>`);
+    h += sec('Written', `<p><code>UnixFileLock.withExclusiveLock(atPath:waitingWhile:_:)</code>, in the I/O layer, calls <code>open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)</code>, which creates the file, and then <code>flock(LOCK_EX | LOCK_NB)</code>, which never waits. Then it compares the file it locked with the file at the path (<code>fstat</code> and <code>stat</code>: device and inode), and starts over if they differ. Called by <code>OrbitDatabaseOpenLock.withLock</code>, from <code>SQLitePool.init</code>.</p>`);
+    h += sec('Why the check', `<p>The holder unlinks the file when it lets go. A try that opened the file just before that would lock a file nobody else will ever open, while a newcomer creates and locks a new one at the same path, and both would think they hold the lock. The try sees that its file is no longer the one at the path, and starts over.</p>`);
+    h += sec('Read', `<p>Never read. A second opener's <code>flock</code> fails with <code>EWOULDBLOCK</code> while the first holds it, and it tries again the way SQLite waits for a lock of its own: its configuration's <code>busyHandler</code> decides, or else it backs off (1, 2, 5 … 100 ms) until <code>busyTimeout</code>, 5 s by default, runs out. Then <code>SQLitePool.init</code> throws <code>SQLiteError</code> with <code>SQLITE_BUSY</code>, so an opener that is stopped or suspended partway through its open holds others up for one busy timeout, never for good. Migrations run after the open, outside this lock, and wait on SQLite's own locks.</p>`);
     h += sec('Released · removed', `<p>Once the connections have opened or failed, the holder unlinks the file while still holding the lock, then closes it, which lets go of the lock. So lock files don't pile up, one for every database ever opened. If a process dies holding one, the kernel lets go of its lock, but the file stays. The next sweep (scene 07) reclaims it with <code>removeIfUnlocked(atPath:)</code>: it opens the file without creating it, takes <code>flock(LOCK_EX | LOCK_NB)</code>, checks that the file is still the one at the path, and unlinks it. A lock someone holds is never taken away.</p>`);
   } else if (r.kind === 'sock') {
     const len = r.path.length + 1;
@@ -1758,11 +1790,11 @@ new Scene({
     return [
       { t: 'A directory in use', cap: `Three example processes share <code>${CD_ROOT}</code>. A has both databases open, B has reminders open, and C is subscribing to notes: it has written its temp file but not renamed it yet. <code>open-locks/</code> is empty, because a lock file exists only while someone holds it. Dimmed rows don't exist yet; the steps below create them, for a fourth process, D. Hover or tap any entry to see its bytes and who touches it, and click to pin it while you step.`,
         run(c) { focus(c, 'root'); } },
-      { t: 'D opens reminders: the open lock', cap: `D creates an <code>OrbitIPCDatabase</code> for reminders. <code>SQLitePool.init</code> first runs <code>OrbitDatabaseOpenLock.withLock</code>. <code>open</code> with <code>O_CREAT</code> creates <code>open-locks/${kR}.lock</code>, <code>flock(LOCK_EX)</code> locks it, and a check confirms that the file it locked is still the one at the path. Holding the lock, D opens the writer (WAL, then a first read) and the readers. To let go, it unlinks the file while still holding the lock, then closes it. Meanwhile, C's rename has landed.`,
+      { t: 'D opens reminders: the open lock', cap: `D creates an <code>OrbitIPCDatabase</code> for reminders. <code>SQLitePool.init</code> first runs <code>OrbitDatabaseOpenLock.withLock</code>. <code>open</code> with <code>O_CREAT</code> creates <code>open-locks/${kR}.lock</code>, <code>flock(LOCK_EX | LOCK_NB)</code> locks it (another opener would be tried again until the busy timeout, and never waited on in <code>flock</code>), and a check confirms that the file it locked is still the one at the path. Holding the lock, D opens the writer (WAL, then a first read) and the readers. To let go, it unlinks the file while still holding the lock, then closes it. Meanwhile, C's rename has landed.`,
         run(c) {
           c.d.present.delete('tmpCN'); on(c, 'mCN'); delete c.d.partial.tmpCN; c.d.proc.C = { s: 'advertising notes' };
           c.d.queued = 'yes (C created and renamed its marker)';
-          on(c, 'lockR'); proc(c, 'D', 'SQLitePool.init: holding the open lock'); hot(c, 'lockR'); tag(c, 'lockR', 'flock(LOCK_EX)'); focus(c, 'lockR');
+          on(c, 'lockR'); proc(c, 'D', 'SQLitePool.init: holding the open lock'); hot(c, 'lockR'); tag(c, 'lockR', 'flock(LOCK_EX | LOCK_NB)'); focus(c, 'lockR');
           later(c, 1500, () => { off(c, 'unlinked on release', 'lockR'); c.d.proc.D.s = 'pool open · lock file unlinked, then closed'; });
         } },
       { t: 'D binds its socket under a hidden name', cap: `Then <code>UnixDatagramIPCTransport.shared(configuration:)</code> finds no transport in D for this configuration and creates one, named with the first 16 hex digits of a new UUID, <code>${EP.D}</code>. The registry creates <code>v1/s/</code> and <code>v1/d/</code> if they are missing. <code>UnixDatagramSocket.bind</code> binds D's socket at <code>v1/s/.${EP.D}.sock</code>, records which file it bound, and renames it to <code>${EP.D}.sock</code>, so a visible socket's file always has a socket bound to it. Senders never list <code>v1/s/</code>, so no one can find D yet.`,
