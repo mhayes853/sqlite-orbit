@@ -36,6 +36,10 @@
   /// that connects afterwards finds the new one. Repairing changes the watched directories
   /// itself, but a repair drains what it changed before it checks its work, so it never sets off
   /// another. Nothing waits on a timer: an endpoint whose files nothing touches costs nothing.
+  ///
+  /// To keep the system from removing its files in the first place, every send and every receive
+  /// touches the endpoint's socket, its markers and the directories they are in, if it has been
+  /// ``defaultRefreshInterval`` since it last did.
   final class UnixDatagramEndpointRegistry: Sendable {
     private struct State {
       var watcher: UnixDirectoryWatcher?
@@ -62,6 +66,13 @@
       var repairCount = 0
     }
 
+    /// How long after this endpoint last touched its files a send or a receive touches them again.
+    ///
+    /// Far shorter than the three days after which macOS removes temporary files nobody has used,
+    /// and far longer than the time between the operations it is checked on, so it costs next to
+    /// nothing.
+    static let defaultRefreshInterval = Duration.seconds(60 * 60)
+
     let endpointName: String
     let socketPath: String
     private let endpoint: UnixDatagramEndpoint
@@ -70,8 +81,11 @@
     private let socketsDirectory: URL
     private let databasesDirectory: URL
     private let watchesDirectories: Bool
+    private let refreshInterval: Duration
     private let state = Lock(State())
     private let own = Lock(OwnFiles())
+    /// When a send or a receive next touches this endpoint's files.
+    private let nextRefresh: Lock<ContinuousClock.Instant>
 
     /// Creates the coordination directory's layout under `directory`, if it is not there yet, and
     /// binds this endpoint's socket in it.
@@ -83,6 +97,8 @@
     ///   - receiveBufferByteCount: The size of the socket's receive buffer.
     ///   - watchesDirectories: Whether to keep what peers advertise until a directory watch says
     ///     it changed, rather than reading it again on every send.
+    ///   - refreshInterval: How long after this endpoint last touched its files a send or a
+    ///     receive touches them again.
     /// - Throws: A ``UnixSystemError`` if the socket cannot be created and bound, or an error if
     ///   the directory cannot be created.
     init(
@@ -90,7 +106,8 @@
       endpointName: String,
       maximumDatagramByteCount: Int,
       receiveBufferByteCount: Int,
-      watchesDirectories: Bool = true
+      watchesDirectories: Bool = true,
+      refreshInterval: Duration = defaultRefreshInterval
     ) throws {
       let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
       let socketsDirectory = versionDirectory.appending(path: "s", directoryHint: .isDirectory)
@@ -111,6 +128,8 @@
       self.socketsDirectory = socketsDirectory
       self.databasesDirectory = databasesDirectory
       self.watchesDirectories = watchesDirectories
+      self.refreshInterval = refreshInterval
+      self.nextRefresh = Lock(.now.advanced(by: refreshInterval))
     }
 
     /// Starts the endpoint's thread, which runs until ``shutdown()``, and from then on keeps this
@@ -122,7 +141,10 @@
       // Weakly, so that the thread, which the endpoint keeps until it is stopped, keeps nothing
       // else alive.
       self.endpoint.start(
-        receive: receive,
+        receive: { [weak self] bytes in
+          self?.refreshIfDue()
+          receive(bytes)
+        },
         onStalePeer: { [weak self] peer in
           self?.prune(peer)
         },
@@ -239,6 +261,7 @@
     ///   region, and how many it could not be sent to at all.
     /// - Throws: An error if the coordination directory cannot be read.
     func send(_ entry: UnixDatagramWireEntry) throws -> UnixDatagramEndpoint.Delivery {
+      self.refreshIfDue()
       let advertisements = try self.peerRegions(for: entry.message.databaseIdentifier)
       let delivery = self.endpoint.send(
         entry,
@@ -495,6 +518,32 @@
     /// How many times in a row ``repair(_:)`` starts over when this endpoint's files keep changing
     /// under it.
     private static let maximumRepairAttemptCount = 3
+
+    /// Touches this endpoint's socket, its markers and the directories they are in, if it has
+    /// been ``refreshInterval`` since it last did, so a system that removes temporary files nobody
+    /// has used for a while leaves them alone for as long as the endpoint is in use.
+    ///
+    /// It is called on every send and every receive, and costs one look at the clock unless it
+    /// is due. A file that is gone is not created again here, which is left to the repair its
+    /// removal sets off.
+    private func refreshIfDue() {
+      let now = ContinuousClock.now
+      let isDue = self.nextRefresh.withLock { next in
+        guard now >= next else { return false }
+        next = now.advanced(by: self.refreshInterval)
+        return true
+      }
+      guard isDue else { return }
+      let coordinationKeys = self.own.withLock { Array($0.advertised.keys) }
+      var paths = [self.socketPath, self.socketsDirectory.path]
+      for coordinationKey in coordinationKeys {
+        paths.append(self.marker(coordinationKey).path)
+        paths.append(self.databaseDirectory(coordinationKey).path)
+      }
+      for path in paths {
+        _ = UnixPlatform.touchFile(atPath: path)
+      }
+    }
 
     private static func remove(_ url: URL) throws {
       do {

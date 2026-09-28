@@ -6,7 +6,8 @@
   @testable import SQLiteOrbit
 
   /// What becomes of a live endpoint whose files are removed from under it, as macOS removes
-  /// temporary files nobody has used for three days.
+  /// temporary files nobody has used for three days, and how an endpoint in use keeps that from
+  /// happening.
   ///
   /// The removal is done by hand, the way the system's cleaner does it: the socket's file and the
   /// marker go, then every directory they leave empty. Nothing here depends on the platform, so
@@ -174,6 +175,51 @@
       #expect(files.socketIdentity == socket)
       _ = subscription
     }
+
+    @Test
+    func anEndpointInUseTouchesItsFilesSoTheCleanerLeavesThemAlone() async throws {
+      let directory = try makeShortTemporaryDirectory("cleaner")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let receiver = try UnixDatagramIPCTransport(
+        configuration: .init(directory: directory),
+        refreshInterval: .zero
+      )
+      let recorder = IPCMessageRecorder()
+      let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
+      let sender = try removedFilesTransport(directory)
+      let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
+
+      // A send, which has no peer to go to.
+      try files.backdate()
+      try await receiver.send(removedFilesCommit(self.database, column: 0))
+      #expect(try files.areTouched)
+
+      // A receive.
+      try files.backdate()
+      try await sender.send(removedFilesCommit(self.database, column: 1))
+      try await recorder.waitForCount(1)
+      #expect(try files.areTouched)
+      _ = subscription
+    }
+
+    @Test
+    func anEndpointLeavesItsFilesAloneUntilItsRefreshIntervalHasPassed() async throws {
+      let directory = try makeShortTemporaryDirectory("cleaner")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let receiver = try removedFilesTransport(directory)
+      let recorder = IPCMessageRecorder()
+      let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
+      let sender = try removedFilesTransport(directory)
+      let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
+
+      try files.backdate()
+      try await receiver.send(removedFilesCommit(self.database, column: 0))
+      try await sender.send(removedFilesCommit(self.database, column: 1))
+      try await recorder.waitForCount(1)
+
+      #expect(try files.areBackdated)
+      _ = subscription
+    }
   }
 
   /// The files one endpoint keeps in a coordination directory: its socket's path, and its marker
@@ -183,6 +229,9 @@
     let marker: URL
     private let directory: URL
 
+    /// How far into the past ``backdate()`` sets each file's modification date.
+    private static let age: TimeInterval = 10 * 24 * 60 * 60
+
     init(advertising database: OrbitDatabaseIdentifier, in directory: URL) throws {
       let markers = directory.appending(path: "v1/d/\(database.coordinationKey)")
       let names = try FileManager.default.contentsOfDirectory(atPath: markers.path)
@@ -191,6 +240,16 @@
       self.socketPath = directory.appending(path: "v1/s/\(names[0]).sock").path
       self.marker = markers.appending(path: names[0])
       self.directory = directory
+    }
+
+    /// The socket's file and the marker, and the directories they are in.
+    private var paths: [String] {
+      [
+        self.socketPath,
+        URL(fileURLWithPath: self.socketPath).deletingLastPathComponent().path,
+        self.marker.path,
+        self.marker.deletingLastPathComponent().path
+      ]
     }
 
     var socketIdentity: UnixFileIdentity? {
@@ -224,6 +283,41 @@
         try UnixDatagramWireProtocol.decodeMarker(Span(_unsafeElements: $0))
       }
       return advertised == region
+    }
+
+    /// Sets every file's modification date well into the past, as though nothing had used them
+    /// for days.
+    func backdate() throws {
+      let date = Date(timeIntervalSinceNow: -Self.age)
+      for path in self.paths {
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
+      }
+    }
+
+    /// Whether every file was touched since ``backdate()``.
+    var areTouched: Bool {
+      get throws {
+        try self.modificationDates.allSatisfy { $0 > Date(timeIntervalSinceNow: -60 * 60) }
+      }
+    }
+
+    /// Whether every file is as old as ``backdate()`` left it.
+    var areBackdated: Bool {
+      get throws {
+        try self.modificationDates.allSatisfy {
+          $0 < Date(timeIntervalSinceNow: -Self.age + 60 * 60)
+        }
+      }
+    }
+
+    private var modificationDates: [Date] {
+      get throws {
+        try self.paths.map { path in
+          try #require(
+            try FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
+          )
+        }
+      }
     }
   }
 

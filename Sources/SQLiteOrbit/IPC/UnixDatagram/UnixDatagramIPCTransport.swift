@@ -15,12 +15,13 @@
   /// owed. A peer that falls behind hears about fewer, broader commits, but never misses a change,
   /// and all that is kept for it is at most one region per database.
   ///
-  /// A transport keeps its files in the coordination directory for as long as it lives. If they
-  /// are removed, whether by a system that removes temporary files nobody has used, as macOS does
-  /// after three days, by hand, or by a peer that took this transport for dead, its thread hears
-  /// about it, binds its socket again at the same path, and writes its markers again, and its
-  /// peers go on sending to it, what they owed it included. A transport whose thread is held up,
-  /// such as one in a suspended process, puts them back once it runs again.
+  /// A transport keeps its files in the coordination directory for as long as it lives. Each
+  /// send and receive touches them now and then, so a system that removes temporary files nobody
+  /// has used, as macOS does after three days, leaves them alone. If they are removed all the
+  /// same, whether by the system, by hand, or by a peer that took this transport for dead, its
+  /// thread hears about it, binds its socket again at the same path, and writes its markers
+  /// again, and its peers go on sending to it, what they owed it included. A transport whose
+  /// thread is held up, such as one in a suspended process, puts them back once it runs again.
   ///
   /// ```swift
   /// let transport = try UnixDatagramIPCTransport.shared()
@@ -162,7 +163,16 @@
     ///   endpoint.
     /// - Throws: A ``UnixSystemError`` if the configuration is invalid or the socket cannot
     ///   be created and bound.
-    public init(configuration: Configuration) throws {
+    public convenience init(configuration: Configuration) throws {
+      try self.init(
+        configuration: configuration,
+        refreshInterval: UnixDatagramEndpointRegistry.defaultRefreshInterval
+      )
+    }
+
+    /// Creates a transport endpoint that touches its files in the coordination directory on a
+    /// send or a receive `refreshInterval` after it last did.
+    init(configuration: Configuration, refreshInterval: Duration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
@@ -179,7 +189,8 @@
         directory: configuration.directory,
         endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
-        receiveBufferByteCount: configuration.receiveBufferByteCount
+        receiveBufferByteCount: configuration.receiveBufferByteCount,
+        refreshInterval: refreshInterval
       )
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
       // up holding the last reference, the registry is shut down from the thread, which it allows.
