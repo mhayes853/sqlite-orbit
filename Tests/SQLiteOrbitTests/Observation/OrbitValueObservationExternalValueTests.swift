@@ -8,10 +8,37 @@
 
   @Suite
   struct OrbitValueObservationExternalValueTests {
-    private struct Filters: Sendable {
+    struct Filters: Sendable {
       var usesPrimary = true
       var primary = 1
       var secondary = 10
+    }
+
+    /// The ways to change `primary` from 1 to 2 through its own member.
+    enum MemberMutation: CaseIterable, Sendable {
+      case assignment, modify, keyPathUpdate
+
+      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+      func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        switch self {
+        case .assignment: filters.primary = 2
+        case .modify: filters.primary += 1
+        case .keyPathUpdate: filters.update(\.primary) { $0 += 1 }
+        }
+      }
+    }
+
+    /// The ways to change `primary` from 1 to 2 through the whole value.
+    enum WholeValueMutation: CaseIterable, Sendable {
+      case replacement, modify
+
+      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+      func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        switch self {
+        case .replacement: filters.value = Filters(primary: 2)
+        case .modify: filters.value.primary += 1
+        }
+      }
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -36,22 +63,47 @@
       }
     }
 
-    @Test
-    func dynamicMemberObservationTracksOnlyTheAccessedField() {
+    @Test(arguments: MemberMutation.allCases)
+    func aMemberMutationInvalidatesOnlyThatMembersObservers(_ mutation: MemberMutation) {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Lock(0)
+      let primaryChanges = Lock(0)
+      let secondaryChanges = Lock(0)
 
       withObservationTracking {
         _ = filters.primary
       } onChange: {
+        primaryChanges.withLock { $0 += 1 }
+      }
+      withObservationTracking {
+        _ = filters.secondary
+      } onChange: {
+        secondaryChanges.withLock { $0 += 1 }
+      }
+
+      mutation.apply(to: filters)
+
+      #expect(filters.primary == 2)
+      #expect(primaryChanges.withLock { $0 } == 1)
+      #expect(secondaryChanges.withLock { $0 } == 0)
+    }
+
+    @Test(arguments: WholeValueMutation.allCases)
+    func aWholeValueMutationInvalidatesEveryMembersObservers(_ mutation: WholeValueMutation) {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
+      let filters = OrbitValueObservation.ExternalValue(Filters())
+      let changes = Lock(0)
+
+      // The member it changes is not the one observed, so only a whole-value change reaches it.
+      withObservationTracking {
+        _ = filters.secondary
+      } onChange: {
         changes.withLock { $0 += 1 }
       }
 
-      filters.secondary = 11
-      #expect(changes.withLock { $0 } == 0)
+      mutation.apply(to: filters)
 
-      filters.primary = 2
+      #expect(filters.primary == 2)
       #expect(changes.withLock { $0 } == 1)
     }
 
@@ -69,77 +121,6 @@
 
       filters.secondary = 11
       #expect(changes.withLock { $0 } == 1)
-    }
-
-    @Test
-    func replacingTheWholeValueInvalidatesMemberObservation() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        changes.withLock { $0 += 1 }
-      }
-
-      filters.value = Filters(primary: 2)
-      #expect(changes.withLock { $0 } == 1)
-    }
-
-    @Test
-    func keyPathUpdateIsAtomicAndFieldSpecific() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Lock(0)
-      let secondaryChanges = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        primaryChanges.withLock { $0 += 1 }
-      }
-      withObservationTracking {
-        _ = filters.secondary
-      } onChange: {
-        secondaryChanges.withLock { $0 += 1 }
-      }
-
-      filters.update(\.primary) { $0 += 1 }
-
-      #expect(filters.primary == 2)
-      #expect(primaryChanges.withLock { $0 } == 1)
-      #expect(secondaryChanges.withLock { $0 } == 0)
-    }
-
-    @Test
-    func modifyAccessorsPreserveObservationGranularity() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Lock(0)
-      let secondaryChanges = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        primaryChanges.withLock { $0 += 1 }
-      }
-      withObservationTracking {
-        _ = filters.secondary
-      } onChange: {
-        secondaryChanges.withLock { $0 += 1 }
-      }
-
-      filters.primary += 1
-
-      #expect(filters.primary == 2)
-      #expect(primaryChanges.withLock { $0 } == 1)
-      #expect(secondaryChanges.withLock { $0 } == 0)
-
-      filters.value.primary += 1
-
-      #expect(filters.primary == 3)
-      #expect(secondaryChanges.withLock { $0 } == 1)
     }
 
     @Test

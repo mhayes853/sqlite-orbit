@@ -7,14 +7,29 @@
 
   @Suite
   struct OrbitDatabaseTransactionObservationTests {
-    @Test
-    func localDriverReportsCommitLifecycleAndFinalTransactionState() async throws {
-      let driver = try await itemsDatabase()
+    @Test(arguments: LifecycleWrite.allCases)
+    func aWriteReportsCommitLifecycleAndFinalTransactionState(_ write: LifecycleWrite) async throws
+    {
+      let directory = try makeShortTemporaryDirectory("obs")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let driver: any OrbitObservableDatabase =
+        write == .pool
+        ? try SQLitePool(path: .file(directory.appending(component: "database.sqlite")))
+        : try SQLiteQueue(path: .memory)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
 
-      try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+      if write == .blocking {
+        try driver.writeBlocking { transaction in
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        }
+      } else {
+        try await driver.write { transaction in
+          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        }
       }
 
       #expect(
@@ -37,8 +52,6 @@
 
     @Test
     func bodyFailureReportsRollbackWithoutWillCommit() async throws {
-      struct Abort: Error {}
-
       let driver = try SQLiteQueue(path: .memory)
       let observer = RecordingTransactionObserver()
       let subscription = try driver.subscribe(transactionObserver: observer)
@@ -56,10 +69,8 @@
 
     @Test
     func willCommitFailureAbortsTheWriteAndReportsRollback() async throws {
-      struct Abort: Error {}
-
       let driver = try await itemsDatabase()
-      let observer = FailingTransactionObserver(error: Abort())
+      let observer = RecordingTransactionObserver(willCommitError: Abort())
       let subscription = try driver.subscribe(transactionObserver: observer)
 
       await #expect(throws: Abort.self) {
@@ -68,7 +79,7 @@
         }
       }
 
-      #expect(observer.didRollback)
+      #expect(observer.events == [.didChange(OrbitDatabaseRegion(table: "items")), .didRollback])
       let count = try await driver.read { transaction in
         try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
       }
@@ -150,57 +161,6 @@
 
       #expect(explicitRegion == .fullDatabase)
       #expect(observer.regions == [.fullDatabase])
-      _ = subscription
-    }
-
-    @Test
-    func blockingWritesUseTheSameObserverLifecycle() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
-      let observer = RecordingTransactionObserver()
-      let subscription = try driver.subscribe(transactionObserver: observer)
-
-      try driver.writeBlocking { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-      }
-
-      #expect(
-        observer.events == [
-          .didChange(OrbitDatabaseRegion(table: "items")),
-          .willCommit(1),
-          .didCommit(.local)
-        ]
-      )
-      _ = subscription
-    }
-
-    @Test
-    func poolWritesUseTheSameObserverLifecycle() async throws {
-      let directory = try makeShortTemporaryDirectory("obs")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
-      let driver = try SQLitePool(
-        path: .file(directory.appending(component: "database.sqlite"))
-      )
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
-      let observer = RecordingTransactionObserver()
-      let subscription = try driver.subscribe(transactionObserver: observer)
-
-      try await driver.write { transaction in
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-      }
-
-      #expect(
-        observer.events == [
-          .didChange(OrbitDatabaseRegion(table: "items")),
-          .willCommit(1),
-          .didCommit(.local)
-        ]
-      )
       _ = subscription
     }
 
@@ -571,12 +531,25 @@
     case didRollback
   }
 
+  private struct Abort: Error {}
+
+  enum LifecycleWrite: CaseIterable, Sendable {
+    case queue, blocking, pool
+  }
+
+  /// Records every event it is sent, and, given an error, throws it from `databaseWillCommit`
+  /// rather than record that event.
   private final class RecordingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
     private let recordedEvents = Lock([RecordedTransactionEvent]())
     private let recordedCommits = Lock([OrbitDatabaseCommit]())
+    private let willCommitError: (any Error)?
 
     var events: [RecordedTransactionEvent] { recordedEvents.withLock { $0 } }
     var commits: [OrbitDatabaseCommit] { recordedCommits.withLock { $0 } }
+
+    init(willCommitError: (any Error)? = nil) {
+      self.willCommitError = willCommitError
+    }
 
     func databaseDidChange(in region: OrbitDatabaseRegion) {
       recordedEvents.withLock { $0.append(.didChange(region)) }
@@ -585,6 +558,7 @@
     func databaseWillCommit(
       _ transaction: borrowing SQLiteReadTransaction
     ) throws {
+      if let willCommitError { throw willCommitError }
       let count = try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
       recordedEvents.withLock { $0.append(.willCommit(count)) }
     }
@@ -609,27 +583,6 @@
 
     func databaseDidRead(in region: OrbitDatabaseRegion) {
       recordedRegions.withLock { $0.append(region) }
-    }
-  }
-
-  private final class FailingTransactionObserver: OrbitDatabaseTransactionObserver, Sendable {
-    private let error: any Error
-    private let rollback = Lock(false)
-
-    var didRollback: Bool { rollback.withLock { $0 } }
-
-    init(error: any Error) {
-      self.error = error
-    }
-
-    func databaseWillCommit(
-      _ transaction: borrowing SQLiteReadTransaction
-    ) throws {
-      throw error
-    }
-
-    func databaseDidRollback() {
-      rollback.withLock { $0 = true }
     }
   }
 #endif
