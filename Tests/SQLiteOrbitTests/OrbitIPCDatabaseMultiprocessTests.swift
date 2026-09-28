@@ -1,4 +1,4 @@
-#if BuiltInSQLite && (canImport(Darwin) || canImport(Glibc))
+#if BuiltInSQLite && (canImport(Darwin) || os(Linux) || os(Android))
   import Foundation
   @testable import SQLiteOrbit
   import StructuredQueries
@@ -47,7 +47,11 @@
       let mayRelease = Lock(false)
 
       Thread.detachNewThread {
-        try? OrbitDatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
+        try? OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: identifier,
+          directory: directory,
+          configuration: .default
+        ) {
           isHeld.withLock { $0 = true }
           while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
         }
@@ -237,8 +241,7 @@
     guard let mode = environment[OrbitDatabaseProcessEnvironment.mode] else { return }
     func value(_ key: String) throws -> String { try #require(environment[key]) }
     let coordination = UnixDatagramIPCTransport.Configuration(
-      directory: URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.directory)),
-      backPressure: .fail
+      directory: URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.directory))
     )
     let path = try value(OrbitDatabaseProcessEnvironment.database)
     let ready = URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.ready))
@@ -248,7 +251,15 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      // Waits for the test's hold on the open lock as long as it takes, not the default five
+      // seconds, which a loaded machine can spend before the test lets go.
+      var configuration = SQLiteConfiguration.default
+      configuration.busyTimeout = .maximum
+      _ = try OrbitIPCDatabase(
+        path: OrbitDatabasePath(path),
+        configuration: configuration,
+        coordination: coordination
+      )
       try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.opened)))
 
     case "write":
@@ -338,7 +349,8 @@
       let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(path))
       try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
-        directory: coordination.directory
+        directory: coordination.directory,
+        configuration: .default
       ) {
         try touch(ready)
         Thread.sleep(forTimeInterval: 30)
@@ -357,10 +369,7 @@
     let databasePath: String
 
     var coordination: UnixDatagramIPCTransport.Configuration {
-      UnixDatagramIPCTransport.Configuration(
-        directory: self.harness.directory,
-        backPressure: .fail
-      )
+      UnixDatagramIPCTransport.Configuration(directory: self.harness.directory)
     }
 
     init(name: String) throws {

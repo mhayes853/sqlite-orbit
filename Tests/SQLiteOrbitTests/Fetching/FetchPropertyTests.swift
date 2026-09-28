@@ -1355,10 +1355,11 @@
     }
 
     func subscribe(
-      transactionObserver: any OrbitDatabaseTransactionObserver
-    ) throws -> OrbitSubscription {
+      transactionObserver: any OrbitDatabaseTransactionObserver,
+      region: OrbitDatabaseRegion
+    ) throws -> OrbitRegionSubscription {
       subscriptions.withLock { $0 += 1 }
-      return observers.subscribe(transactionObserver)
+      return observers.subscribe(transactionObserver, region: region)
     }
 
     private func announceCommit(region: OrbitDatabaseRegion) {

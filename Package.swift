@@ -57,11 +57,19 @@ let packageTarget0: Target = .systemLibrary(
   providers: sqliteProviders
 )
 
+// Swift's Glibc module leaves out `sys/epoll.h` and `sys/eventfd.h`, which the Unix datagram
+// transport's thread waits with on Linux and Android, so this header-only module imports them.
+let linuxEventsTarget: Target = .systemLibrary(
+  name: "CLinuxEvents",
+  path: "Sources/CLinuxEvents"
+)
+
 let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
     .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .target(name: "CLinuxEvents", condition: .when(platforms: [.linux, .android])),
     .target(
       name: "CSQLite3",
       condition: .when(traits: ["SystemSQLite"])
@@ -168,6 +176,7 @@ let packageTarget5: Target = .testTarget(
 
 let packageTargets: [Target] = [
   packageTarget0,
+  linuxEventsTarget,
   packageTarget1,
   packageTarget2,
   packageTarget3,

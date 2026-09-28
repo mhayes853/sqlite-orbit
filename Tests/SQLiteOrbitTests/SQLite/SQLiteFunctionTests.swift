@@ -312,7 +312,7 @@
     let database = try OrbitIPCDatabase(
       path: .file(directory.appendingPathComponent("db.sqlite")),
       configuration: configuration,
-      coordination: .init(directory: directory, backPressure: .fail)
+      coordination: .init(directory: directory)
     )
 
     try await database.write { transaction in

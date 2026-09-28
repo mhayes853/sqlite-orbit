@@ -235,3 +235,47 @@ struct OrbitValueObservationDeliveryQueue<Value: Sendable>: Sendable {
     return self.publications.removeFirst()
   }
 }
+
+/// The region an observation has registered with its database, and, for each fetch in flight, the
+/// part of it the database has honored since the fetch began.
+///
+/// A database may skip commits outside the registered region, so a fetch that read beyond its
+/// floor may have missed a commit made after its snapshot. The region is kept conservatively: an
+/// update that narrows it counts as soon as it is decided, since the database may honor it at any
+/// moment, and one that widens it counts only once the database has applied it.
+struct OrbitValueObservationAdvertisement: Sendable {
+  private(set) var region: OrbitDatabaseRegion
+  private var floors = [UInt64: OrbitDatabaseRegion]()
+  private var nextFetch: UInt64 = 0
+
+  init(region: OrbitDatabaseRegion) {
+    self.region = region
+  }
+
+  /// Starts tracking a fetch, which must happen before its snapshot.
+  mutating func beginFetch() -> UInt64 {
+    defer { nextFetch &+= 1 }
+    floors[nextFetch] = region
+    return nextFetch
+  }
+
+  /// Stops tracking a fetch, returning the region honored for all of its duration.
+  mutating func endFetch(_ fetch: UInt64) -> OrbitDatabaseRegion {
+    floors.removeValue(forKey: fetch) ?? .empty
+  }
+
+  /// Decides to register `target`, returning it, or `nil` if it is registered already.
+  mutating func beginUpdate(to target: OrbitDatabaseRegion) -> OrbitDatabaseRegion? {
+    guard target != region else { return nil }
+    region.formIntersection(target)
+    for fetch in floors.keys {
+      floors[fetch]?.formIntersection(target)
+    }
+    return target
+  }
+
+  /// Records that the database applied `target`.
+  mutating func finishUpdate(to target: OrbitDatabaseRegion) {
+    region = target
+  }
+}

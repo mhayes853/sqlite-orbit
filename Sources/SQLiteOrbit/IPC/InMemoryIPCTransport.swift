@@ -6,6 +6,10 @@
 /// Delivery calls a peer's handlers directly instead of going through any OS resource, so peers can
 /// live in the same process and a test needs no filesystem or socket cleanup.
 ///
+/// Delivery is filtered at the sender. Each peer advertises, for each database, the union of its
+/// subscriptions' regions, and a commit is only delivered to the peers whose union it overlaps,
+/// and within one of them only to the handlers whose own region it overlaps.
+///
 /// ```swift
 /// let network = InMemoryIPCTransport.Network()
 /// let database = OrbitIPCDatabase(
@@ -29,45 +33,54 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// let receiver = InMemoryIPCTransport(network: network)
   /// ```
   public final class Network: Sendable {
-    fileprivate let state = Lock(State())
-    fileprivate struct State {
-      var endpoints: [OrbitDatabaseIdentifier: [ObjectIdentifier: Endpoint]] = [:]
+    private let endpoints = Lock([OrbitDatabaseIdentifier: [ObjectIdentifier: Advertisement]]())
+
+    /// An endpoint discoverable for a database, and the union of its handlers' regions there.
+    private struct Advertisement {
+      let endpoint: Endpoint
+      let region: OrbitDatabaseRegion
     }
 
     /// Creates an empty network.
     public init() {}
 
-    fileprivate func register(_ endpoint: Endpoint, for databaseIdentifier: OrbitDatabaseIdentifier)
-    {
-      self.state.withLock {
-        $0.endpoints[databaseIdentifier, default: [:]][ObjectIdentifier(endpoint)] = endpoint
-      }
-    }
-
-    fileprivate func unregister(
+    /// Makes `endpoint` discoverable for a database with `region`, replacing the region it
+    /// advertised before, or undiscoverable if `region` is `nil`.
+    fileprivate func advertise(
       _ endpoint: Endpoint,
+      region: OrbitDatabaseRegion?,
       for databaseIdentifier: OrbitDatabaseIdentifier
     ) {
-      self.state.withLock {
-        $0.endpoints[databaseIdentifier]?.removeValue(forKey: ObjectIdentifier(endpoint))
-        if $0.endpoints[databaseIdentifier]?.isEmpty == true {
-          $0.endpoints.removeValue(forKey: databaseIdentifier)
+      self.endpoints.withLock {
+        $0[databaseIdentifier, default: [:]][ObjectIdentifier(endpoint)] =
+          region.map { Advertisement(endpoint: endpoint, region: $0) }
+        if $0[databaseIdentifier]?.isEmpty == true {
+          $0[databaseIdentifier] = nil
         }
       }
     }
 
+    fileprivate func advertisedRegion(
+      of endpoint: Endpoint,
+      for databaseIdentifier: OrbitDatabaseIdentifier
+    ) -> OrbitDatabaseRegion? {
+      self.endpoints.withLock { $0[databaseIdentifier]?[ObjectIdentifier(endpoint)]?.region }
+    }
+
     fileprivate func peers(
-      for databaseIdentifier: OrbitDatabaseIdentifier,
+      concernedWith message: OrbitIPCMessage,
       excluding endpoint: Endpoint
     ) -> [Endpoint] {
-      self.state.withLock {
-        ($0.endpoints[databaseIdentifier]?.values).map { $0.filter { $0 !== endpoint } } ?? []
+      self.endpoints.withLock {
+        ($0[message.databaseIdentifier] ?? [:]).values
+          .filter { $0.endpoint !== endpoint && message.concerns($0.region) }
+          .map(\.endpoint)
       }
     }
   }
 
   private let network: Network
-  private let endpoint = Endpoint()
+  private let endpoint: Endpoint
 
   /// Creates a transport on `network`, or on a private network of its own if none is given.
   ///
@@ -77,46 +90,62 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// - Parameter network: The medium this transport discovers peers through.
   public init(network: Network = Network()) {
     self.network = network
+    self.endpoint = Endpoint(network: network)
   }
 
   deinit {
-    self.endpoint.shutdown(network: self.network)
+    self.endpoint.shutdown()
   }
 
-  /// Subscribes to messages concerning `databaseIdentifier`.
+  /// Subscribes to messages concerning `databaseIdentifier` and `region`.
   ///
   /// The first subscription for a database makes this transport discoverable to its peers for that
-  /// database, and cancelling the last one makes it undiscoverable again.
+  /// database, and cancelling the last one makes it undiscoverable again. A peer only sends this
+  /// transport a commit that overlaps one of its subscriptions' regions, and updating a region
+  /// changes what peers send before ``OrbitRegionSubscription/updateRegion(_:)`` returns.
   ///
   /// ```swift
-  /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
+  /// let subscription = try transport.subscribe(
+  ///   to: database.id,
+  ///   region: Reminder.databaseRegion
+  /// ) { _ in refreshReminders() }
   /// ```
   ///
   /// - Parameters:
   ///   - databaseIdentifier: The database whose messages to receive.
-  ///   - onMessage: Receives each message concerning that database.
-  /// - Returns: A subscription that stops delivery when cancelled or released.
+  ///   - region: The region whose commits to receive.
+  ///   - onMessage: Receives each message concerning that database and region.
+  /// - Returns: A subscription that stops delivery when cancelled or released, and through which
+  ///   its region can change.
   public func subscribe(
     to databaseIdentifier: OrbitDatabaseIdentifier,
+    region: OrbitDatabaseRegion,
     onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-  ) throws -> OrbitSubscription {
+  ) throws -> OrbitRegionSubscription {
     let endpoint = self.endpoint
-    let network = self.network
-    let identifier = endpoint.add(
-      databaseIdentifier: databaseIdentifier,
-      handler: onMessage,
-      network: network
-    )
-    return OrbitSubscription {
-      endpoint.remove(
-        identifier: identifier,
-        databaseIdentifier: databaseIdentifier,
-        network: network
-      )
+    let identifier = endpoint.withHandlers(for: databaseIdentifier) {
+      $0.insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
+        .identifier
+    }
+    return OrbitRegionSubscription(region: region) { region in
+      endpoint.withHandlers(for: databaseIdentifier) {
+        _ = $0.update(identifier, for: databaseIdentifier) { $0.region = region }
+      }
+    } onCancel: {
+      endpoint.withHandlers(for: databaseIdentifier) {
+        _ = $0.remove(identifier, for: databaseIdentifier)
+      }
     }
   }
 
-  /// Delivers `message` to every peer on this transport's network, but not to itself.
+  /// The region this transport advertises to its peers for a database, or `nil` if it is not
+  /// discoverable for that database.
+  func advertisedRegion(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion? {
+    self.network.advertisedRegion(of: self.endpoint, for: databaseIdentifier)
+  }
+
+  /// Delivers `message` to every peer on this transport's network concerned with it, but not to
+  /// itself.
   ///
   /// Handlers run before this method returns, so a test can assert on what a peer received without
   /// waiting.
@@ -129,7 +158,7 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   ///
   /// - Parameter message: The message to broadcast.
   public func send(_ message: OrbitIPCMessage) async throws {
-    let peers = self.network.peers(for: message.databaseIdentifier, excluding: self.endpoint)
+    let peers = self.network.peers(concernedWith: message, excluding: self.endpoint)
     for peer in peers {
       peer.deliver(message)
     }
@@ -137,52 +166,50 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
 }
 
 private final class Endpoint: Sendable {
-  private let handlers = Lock(
-    KeyedHandlerRegistry<OrbitDatabaseIdentifier, @Sendable (OrbitIPCMessage) -> Void>()
-  )
+  private let network: InMemoryIPCTransport.Network
+  private let handlers = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>())
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
   // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Lock(())
 
-  // Discoverability is changed while the handlers it describes are locked, so that a subscription
-  // added concurrently with the removal of the last one cannot have its registration undone by the
-  // removal that raced it, leaving a live subscriber undiscoverable.
-  func add(
-    databaseIdentifier: OrbitDatabaseIdentifier,
-    handler: @escaping @Sendable (OrbitIPCMessage) -> Void,
-    network: InMemoryIPCTransport.Network
-  ) -> UInt64 {
-    self.handlers.withLock { handlers in
-      let added = handlers.insert(handler, for: databaseIdentifier)
-      if added.isFirstForKey { network.register(self, for: databaseIdentifier) }
-      return added.identifier
-    }
+  init(network: InMemoryIPCTransport.Network) {
+    self.network = network
   }
 
-  func remove(
-    identifier: UInt64,
-    databaseIdentifier: OrbitDatabaseIdentifier,
-    network: InMemoryIPCTransport.Network
-  ) {
+  /// Changes a database's handlers, then tells the network the union of their regions, or that
+  /// there are none.
+  ///
+  /// The network is told while the handlers are still locked, so that a subscription added
+  /// concurrently with the removal of the last one cannot have its registration undone by the
+  /// removal that raced it, and so that concurrent region updates cannot leave a stale union.
+  func withHandlers<Result>(
+    for databaseIdentifier: OrbitDatabaseIdentifier,
+    _ body: (inout KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>) -> Result
+  ) -> Result {
     self.handlers.withLock { handlers in
-      if handlers.remove(identifier, for: databaseIdentifier).isLastForKey {
-        network.unregister(self, for: databaseIdentifier)
-      }
+      let result = body(&handlers)
+      self.network.advertise(
+        self,
+        region: handlers.contains(databaseIdentifier)
+          ? handlers.region(for: databaseIdentifier) : nil,
+        for: databaseIdentifier
+      )
+      return result
     }
   }
 
   func deliver(_ message: OrbitIPCMessage) {
-    let callbacks = self.handlers.withLock { $0.handlers(for: message.databaseIdentifier) }
+    let callbacks = self.handlers.withLock { $0.callbacks(for: message) }
     guard !callbacks.isEmpty else { return }
     self.deliveryLock.withLock { _ in
       for callback in callbacks { callback(message) }
     }
   }
 
-  func shutdown(network: InMemoryIPCTransport.Network) {
+  func shutdown() {
     self.handlers.withLock { handlers in
       for databaseIdentifier in handlers.removeAll() {
-        network.unregister(self, for: databaseIdentifier)
+        self.network.advertise(self, region: nil, for: databaseIdentifier)
       }
     }
   }

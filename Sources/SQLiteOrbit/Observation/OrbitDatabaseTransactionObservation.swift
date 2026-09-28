@@ -172,14 +172,51 @@ extension OrbitDatabaseTransactionObserver {
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
 public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
-  /// Registers `transactionObserver` until the returned subscription is cancelled.
+  /// Registers `transactionObserver` for commits concerning `region` until the returned
+  /// subscription is cancelled.
+  ///
+  /// The region is a lower bound: a commit that overlaps it is always reported, and a commit
+  /// outside it may or may not be. A database that coordinates with other processes can use it to
+  /// spare them from announcing commits the observer does not care about. A database whose
+  /// transactions all happen in this process can ignore it, since observers filter those
+  /// transactions themselves. Reads and the callbacks of this handle's own transactions are
+  /// reported regardless of the region.
+  ///
+  /// ```swift
+  /// let subscription = try database.subscribe(
+  ///   transactionObserver: CommitLogger(),
+  ///   region: Reminder.databaseRegion
+  /// )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - transactionObserver: The observer to register.
+  ///   - region: The region whose commits the observer must be told about.
+  /// - Returns: A subscription that unregisters the observer when cancelled or released, and
+  ///   through which its region can change.
+  /// - Throws: An error if the observer cannot be registered.
+  func subscribe(
+    transactionObserver: any OrbitDatabaseTransactionObserver,
+    region: OrbitDatabaseRegion
+  ) throws -> OrbitRegionSubscription
+}
+
+extension OrbitObservableDatabase {
+  /// Registers `transactionObserver` for every commit until the returned subscription is
+  /// cancelled.
+  ///
+  /// ```swift
+  /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
+  /// ```
   ///
   /// - Parameter transactionObserver: The observer to register.
   /// - Returns: A subscription that unregisters the observer when cancelled or released.
   /// - Throws: An error if the observer cannot be registered.
-  func subscribe(
+  public func subscribe(
     transactionObserver: any OrbitDatabaseTransactionObserver
-  ) throws -> OrbitSubscription
+  ) throws -> OrbitRegionSubscription {
+    try subscribe(transactionObserver: transactionObserver, region: .fullDatabase)
+  }
 }
 
 /// A writer whose database file can be opened and coordinated across processes.
@@ -196,11 +233,14 @@ public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter {
 final class OrbitDatabaseTransactionObservers: Sendable {
   private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
 
+  /// Registers `observer` on behalf of a database whose transactions all happen in this process,
+  /// which reports every one of them whatever the region.
   func subscribe(
-    _ observer: any OrbitDatabaseTransactionObserver
-  ) -> OrbitSubscription {
+    _ observer: any OrbitDatabaseTransactionObserver,
+    region: OrbitDatabaseRegion = .fullDatabase
+  ) -> OrbitRegionSubscription {
     let identifier = observers.withLock { $0.insert(observer) }
-    return OrbitSubscription { [weak self] in
+    return OrbitRegionSubscription(region: region) { [weak self] in
       _ = self?.observers.withLock { $0.remove(identifier) }
     }
   }

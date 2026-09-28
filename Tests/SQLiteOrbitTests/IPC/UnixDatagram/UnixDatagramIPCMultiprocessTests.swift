@@ -1,10 +1,10 @@
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
   import Foundation
   @testable import SQLiteOrbit
   import Testing
 
   @Suite(.serialized)
-  struct OrbitIPCMultiprocessTests {
+  struct UnixDatagramIPCMultiprocessTests {
     @Test(arguments: [1, 8, 32])
     func publisherFansOutToSubscriberProcesses(subscriberCount: Int) async throws {
       let harness = try IPCProcessHarness(database: "fan-out")
@@ -15,7 +15,7 @@
         }
       try await harness.waitUntilReady(subscriberCount)
 
-      try await harness.transport(.fail).send(harness.message)
+      try await harness.transport().send(harness.message)
 
       for (index, listener) in listeners.enumerated() {
         try await harness.waitForSuccessfulExit(listener)
@@ -33,7 +33,7 @@
         OrbitDatabaseRegion(column: "title", in: "items")
       )
 
-      try await harness.transport(.fail)
+      try await harness.transport()
         .send(
           .transactionDidCommit(.init(databaseIdentifier: harness.database, region: region))
         )
@@ -71,57 +71,135 @@
       #expect(try harness.registrationCount() == 1)
       #expect(try harness.socketCount() == 1)
 
-      try await harness.transport(.fail).send(harness.message)
+      try await harness.transport().send(harness.message)
 
       #expect(try harness.registrationCount() == 0)
       #expect(try harness.socketCount() == 0)
     }
 
     @Test
-    func backPressureFailsOrSuspendsWithoutDroppingSilently() async throws {
-      let harness = try IPCProcessHarness(database: "back-pressure")
+    func sendsToAStoppedProcessNeitherWaitNorFail() async throws {
+      let harness = try IPCProcessHarness(database: "stopped")
       defer { harness.cleanup() }
       let listener = try harness.spawn("idle")
       try await harness.waitUntilReady(1)
       harness.suspend(listener)
+      let transport = try harness.transport()
 
-      #expect(
-        try await reachesBackPressure(
-          harness.transport(.fail, receiveBufferByteCount: 65_535),
-          message: harness.message
-        )
-      )
+      #expect(try await reachesAFullQueue(transport, message: harness.message))
+      for _ in 0..<1_000 {
+        try await transport.send(harness.message)
+      }
+      #expect(transport.owedRegions.count == 1)
 
-      let transport = try harness.transport(
-        .suspend(upTo: .seconds(2)),
-        receiveBufferByteCount: 65_535
-      )
-      let message = harness.message
-      let send = Task { try await transport.send(message) }
-      try await Task.sleep(for: .milliseconds(20))
       harness.resume(listener)
-      try await send.value
+      try await waitUntil { transport.owedRegions.isEmpty }
       try harness.stop()
       try await harness.waitForSuccessfulExit(listener)
     }
 
     @Test
-    func suspendedSendTimesOutWhenAReceiverDoesNotDrain() async throws {
-      let harness = try IPCProcessHarness(database: "back-pressure-timeout")
+    func aStoppedProcessHearsAboutEveryRegionWrittenOnceItResumes() async throws {
+      // Far more commits than the stopped process's queue holds, each to a column of its own. Most
+      // are merged into what it is owed, so it hears about far fewer commits than were sent, whose
+      // regions still cover every column written.
+      let harness = try IPCProcessHarness(database: "owed")
+      defer { harness.cleanup() }
+      let columnCount = 4_000
+      let listener = try harness.spawn("listen-columns", expected: columnCount)
+      try await harness.waitUntilReady(1)
+      harness.suspend(listener)
+
+      let transport = try harness.transport()
+      for index in 0..<columnCount {
+        try await transport.send(
+          columnCommit(harness.database, index)
+        )
+      }
+      #expect(transport.owedRegions.count == 1)
+      harness.resume(listener)
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) < columnCount)
+    }
+
+    @Test
+    func aProcessIsOnlySentCommitsToTheTablesItSubscribedTo() async throws {
+      // The listener is stopped while commits to a table it does not read are sent, so had any
+      // been sent to it, its queue would have filled and the sender would owe it.
+      let harness = try IPCProcessHarness(database: "table-filter")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen-table-a", expected: 1)
+      try await harness.waitUntilReady(1)
+      harness.suspend(listener)
+      let transport = try harness.transport()
+
+      for _ in 0..<2_000 {
+        try await transport.send(
+          .transactionDidCommit(
+            .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "b"))
+          )
+        )
+      }
+      #expect(transport.owedRegions.isEmpty)
+      harness.resume(listener)
+      try await transport.send(
+        .transactionDidCommit(
+          .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "a"))
+        )
+      )
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == 1)
+    }
+
+    @Test
+    func aProcessThatDiesWhileOwedIsDroppedAndPrunedByTheTransportsThread() async throws {
+      let harness = try IPCProcessHarness(database: "owed-dead")
       defer { harness.cleanup() }
       let listener = try harness.spawn("idle")
       try await harness.waitUntilReady(1)
       harness.suspend(listener)
-
-      #expect(
-        try await reachesBackPressure(
-          harness.transport(.suspend(upTo: .milliseconds(20))),
-          message: harness.message
-        )
-      )
+      let transport = try harness.transport()
+      #expect(try await reachesAFullQueue(transport, message: harness.message))
 
       harness.kill(listener)
       try await harness.waitForExit(listener)
+      // The transport's thread finds it dead when it next tries it, drops what it was owed, and
+      // prunes it without waiting for another send.
+      try await waitUntil {
+        transport.owedRegions.isEmpty && (try? harness.registrationCount()) == 0
+      }
+      // Only the transport's own socket is left.
+      #expect(try harness.socketCount() == 1)
+    }
+
+    @Test
+    func aProcessWhoseFilesTheCleanerRemovesPutsThemBackAndKeepsReceiving() async throws {
+      // What `UnixDatagramRemovedFilesTests` does to an idle endpoint in this process, done to one
+      // in a process of its own, as macOS's cleaner of temporary files would.
+      // The listener counts only this commit, and exits once it has also been told, by its
+      // repair, that the database may have changed.
+      let harness = try IPCProcessHarness(database: "cleaned")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn("listen-repaired", expected: 1)
+      try await harness.waitUntilReady(1)
+      let files = try UnixDatagramEndpointFiles(
+        advertising: harness.database,
+        in: harness.directory
+      )
+
+      files.removeAsTheCleanerWould()
+      try await waitUntil { files.isRestored(advertising: .fullDatabase) }
+      try await harness.transport()
+        .send(
+          .transactionDidCommit(
+            .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "items"))
+          )
+        )
+
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(try harness.result(0) == 1)
     }
   }
 
@@ -135,14 +213,28 @@
     let ready = URL(fileURLWithPath: try value(IPCProcessEnvironment.ready))
     let result = URL(fileURLWithPath: try value(IPCProcessEnvironment.result))
     let expected = try #require(Int(try value(IPCProcessEnvironment.expected)))
+    // The smallest receive buffer a transport allows, so a stopped peer fills up after a
+    // predictable number of commits. Darwin bounds the queue by bytes, and a default buffer holds
+    // thousands of these small datagrams.
     let transport = try UnixDatagramIPCTransport(
-      configuration: .init(
-        directory: directory,
-        backPressure: .suspend(upTo: .seconds(5))
-      )
+      configuration: .init(directory: directory, receiveBufferByteCount: 60 * 1024)
     )
     let received = Lock(0)
-    let subscription = try transport.subscribe(to: database) { message in
+    let covered = Lock(OrbitDatabaseRegion.empty)
+    let isNotified = Lock(false)
+    let region: OrbitDatabaseRegion =
+      mode == "listen-table-a" ? OrbitDatabaseRegion(table: "a") : .fullDatabase
+    let subscription = try transport.subscribe(to: database, region: region) { message in
+      if case .transactionDidCommit(let commit) = message {
+        covered.withLock { $0.formUnion(commit.region) }
+      }
+      if mode == "listen-repaired",
+        message == .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+      {
+        // What a repair tells subscribers, which no peer sends in this mode.
+        isNotified.withLock { $0 = true }
+        return
+      }
       if mode == "listen-region" {
         let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
           OrbitDatabaseRegion(column: "title", in: "items")
@@ -166,6 +258,11 @@
     }
     if mode == "idle" {
       try await waitForFile(directory.appending(path: "stop"), timeout: .seconds(30))
+    } else if mode == "listen-columns" {
+      let columns = OrbitDatabaseRegion(columns: (0..<expected).map { "c\($0)" }, in: "items")
+      try await waitUntil(timeout: .seconds(30)) { covered.withLock { $0.contains(columns) } }
+    } else if mode == "listen-repaired" {
+      try await waitUntil { received.withLock { $0 } >= expected && isNotified.withLock { $0 } }
     } else {
       try await waitUntil { received.withLock { $0 } >= expected }
     }
@@ -194,17 +291,8 @@
       self.database = OrbitDatabaseIdentifier(rawValue: database)
     }
 
-    func transport(
-      _ backPressure: UnixDatagramIPCTransport.BackPressurePolicy,
-      receiveBufferByteCount: Int = 256 * 1024
-    ) throws -> UnixDatagramIPCTransport {
-      try UnixDatagramIPCTransport(
-        configuration: .init(
-          directory: self.directory,
-          backPressure: backPressure,
-          receiveBufferByteCount: receiveBufferByteCount
-        )
-      )
+    func transport() throws -> UnixDatagramIPCTransport {
+      try UnixDatagramIPCTransport(configuration: .init(directory: self.directory))
     }
 
     func spawn(_ mode: String, index: Int = 0, expected: Int = 0) throws -> Process {
@@ -267,15 +355,16 @@
     static let expected = prefix + "EXPECTED_COUNT"
   }
 
-  private func reachesBackPressure(
+  /// Sends `message` until a peer has no room for it, and is owed its region instead.
+  func reachesAFullQueue(
     _ transport: UnixDatagramIPCTransport,
     message: OrbitIPCMessage
   ) async throws -> Bool {
     for _ in 0..<10_000 {
-      do { try await transport.send(message) } catch is OrbitIPCPartialDeliveryError {
-        return true
-      }
+      try await transport.send(message)
+      if !transport.owedRegions.isEmpty { return true }
     }
     return false
   }
+
 #endif

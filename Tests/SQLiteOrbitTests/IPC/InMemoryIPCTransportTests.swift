@@ -95,8 +95,123 @@ func inMemoryTransportStopsDeliveringAfterDeinit() async throws {
   #expect(recorder.values.isEmpty)
 }
 
-func commit(_ database: OrbitDatabaseIdentifier) -> OrbitIPCMessage {
-  .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+@Suite
+struct InMemoryIPCTransportRegionTests {
+  private let database = OrbitDatabaseIdentifier(rawValue: "regions")
+  private let items = OrbitDatabaseRegion(table: "items")
+  private let lists = OrbitDatabaseRegion(table: "lists")
+  private let network = InMemoryIPCTransport.Network()
+
+  @Test
+  func senderSkipsAPeerWhoseRegionTheCommitMisses() async throws {
+    let sender = InMemoryIPCTransport(network: network)
+    let receiver = InMemoryIPCTransport(network: network)
+    let itemsRecorder = IPCMessageRecorder()
+    let everythingRecorder = IPCMessageRecorder()
+    let itemsSubscription = try receiver.subscribe(
+      to: database,
+      region: items,
+      onMessage: itemsRecorder.append
+    )
+    let peer = InMemoryIPCTransport(network: network)
+    let everythingSubscription = try peer.subscribe(
+      to: database,
+      onMessage: everythingRecorder.append
+    )
+    let itemsColumn = OrbitDatabaseRegion(column: "id", in: "items")
+
+    for region in [lists, .empty, itemsColumn, .fullDatabase] {
+      try await sender.send(commit(database, region: region))
+    }
+
+    #expect(
+      itemsRecorder.values == [
+        commit(database, region: itemsColumn), commit(database, region: .fullDatabase)
+      ]
+    )
+    #expect(everythingRecorder.values.count == 4)
+    #expect(peer.advertisedRegion(for: database) == .fullDatabase)
+    _ = (itemsSubscription, everythingSubscription)
+  }
+
+  @Test
+  func updatedRegionTakesEffectForTheNextSend() async throws {
+    let sender = InMemoryIPCTransport(network: network)
+    let receiver = InMemoryIPCTransport(network: network)
+    let recorder = IPCMessageRecorder()
+    let subscription = try receiver.subscribe(
+      to: database,
+      region: items,
+      onMessage: recorder.append
+    )
+
+    try await sender.send(commit(database, region: lists))
+    try subscription.updateRegion(items.union(lists))
+    let widened = receiver.advertisedRegion(for: database)
+    try await sender.send(commit(database, region: lists))
+    try subscription.updateRegion(items)
+    try await sender.send(commit(database, region: lists))
+
+    #expect(recorder.values == [commit(database, region: lists)])
+    #expect(widened == items.union(lists))
+    #expect(receiver.advertisedRegion(for: database) == items)
+  }
+
+  @Test
+  func peerAdvertisesTheUnionOfItsHandlersAndEachHandlerHearsOnlyItsOwn() async throws {
+    let sender = InMemoryIPCTransport(network: network)
+    let receiver = InMemoryIPCTransport(network: network)
+    let itemsRecorder = IPCMessageRecorder()
+    let listsRecorder = IPCMessageRecorder()
+    let itemsSubscription = try receiver.subscribe(
+      to: database,
+      region: items,
+      onMessage: itemsRecorder.append
+    )
+    let listsSubscription = try receiver.subscribe(
+      to: database,
+      region: lists,
+      onMessage: listsRecorder.append
+    )
+
+    #expect(receiver.advertisedRegion(for: database) == items.union(lists))
+    try await sender.send(commit(database, region: items))
+    try await sender.send(commit(database, region: lists))
+
+    #expect(itemsRecorder.values == [commit(database, region: items)])
+    #expect(listsRecorder.values == [commit(database, region: lists)])
+    _ = (itemsSubscription, listsSubscription)
+  }
+
+  @Test
+  func cancellingAHandlerRecomputesTheAdvertisedUnion() async throws {
+    let sender = InMemoryIPCTransport(network: network)
+    let receiver = InMemoryIPCTransport(network: network)
+    let itemsRecorder = IPCMessageRecorder()
+    let itemsSubscription = try receiver.subscribe(
+      to: database,
+      region: items,
+      onMessage: itemsRecorder.append
+    )
+    let listsSubscription = try receiver.subscribe(to: database, region: lists) { _ in }
+
+    listsSubscription.cancel()
+    try listsSubscription.updateRegion(.fullDatabase)
+    #expect(receiver.advertisedRegion(for: database) == items)
+    try await sender.send(commit(database, region: lists))
+    itemsSubscription.cancel()
+    #expect(receiver.advertisedRegion(for: database) == nil)
+    try await sender.send(commit(database, region: items))
+
+    #expect(itemsRecorder.values.isEmpty)
+  }
+}
+
+func commit(
+  _ database: OrbitDatabaseIdentifier,
+  region: OrbitDatabaseRegion = .fullDatabase
+) -> OrbitIPCMessage {
+  .transactionDidCommit(.init(databaseIdentifier: database, region: region))
 }
 
 final class IPCMessageRecorder: Sendable {

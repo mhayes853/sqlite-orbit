@@ -1,7 +1,10 @@
-// Only the pthread executor starts threads of its own, so this is built only where that executor
-// is. Darwin and Windows keep libdispatch, and a runtime without threads cannot start one.
-#if !canImport(Darwin) && !os(Windows) && _runtime(_multithreaded)
-  #if canImport(Glibc)
+// The pthread executor and the Unix datagram transport start threads of their own, so this is
+// built wherever either is. Windows keeps libdispatch, and a runtime without threads cannot start
+// one.
+#if !os(Windows) && _runtime(_multithreaded)
+  #if canImport(Darwin)
+    import Darwin
+  #elseif canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
     import Musl
@@ -17,7 +20,7 @@
     ///
     /// - Parameters:
     ///   - name: What the thread is called in debuggers, hang reports and crash tombstones. Linux
-    ///     and Android keep only its first 15 bytes.
+    ///     and Android keep only its first 15 bytes, and Darwin its first 63.
     ///   - body: The work the thread does before it ends.
     static func spawn(name: String, _ body: @escaping @Sendable () -> Void) {
       let run = Context {
@@ -48,7 +51,7 @@
         )
       }
 
-      #if canImport(Musl) || os(WASI)
+      #if canImport(Darwin) || canImport(Musl) || os(WASI)
         var thread: pthread_t? = nil
       #else
         var thread = pthread_t()
@@ -77,10 +80,12 @@
 
     // Linux and Android read a thread's name from its `comm` file, and writing that file is a way
     // to name a thread Swift can reach: Glibc and Musl declare `pthread_setname_np` only under
-    // `_GNU_SOURCE`, which Swift does not read their headers with. A thread that goes unnamed
-    // still runs, so a failure is ignored.
+    // `_GNU_SOURCE`, which Swift does not read their headers with. Darwin declares it, for the
+    // calling thread only. A thread that goes unnamed still runs, so a failure is ignored.
     private static func nameCurrentThread(_ name: String) {
-      #if os(Linux) || os(Android)
+      #if canImport(Darwin)
+        _ = pthread_setname_np(name)
+      #elseif os(Linux) || os(Android)
         let descriptor = open("/proc/thread-self/comm", O_WRONLY | O_CLOEXEC)
         guard descriptor >= 0 else { return }
         var name = name

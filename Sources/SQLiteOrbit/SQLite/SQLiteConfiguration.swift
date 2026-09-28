@@ -39,6 +39,10 @@ public struct SQLiteConfiguration: Sendable {
   /// A ``busyHandler`` takes precedence over this. SQLite implements the timeout as a busy handler
   /// of its own and keeps only one per connection, so a configuration that sets both waits by the
   /// handler and never by the timeout.
+  ///
+  /// A ``SQLitePool`` waits by it too, before opening any connection, for another process that is
+  /// opening the same database, and fails with `SQLITE_BUSY` if that process is still at it when
+  /// the timeout runs out, as one that is stopped or suspended would be.
   public var busyTimeout: SQLiteBusyTimeout
 
   /// Decides, each time a lock is still held, whether to keep waiting for it.
@@ -66,6 +70,10 @@ public struct SQLiteConfiguration: Sendable {
   /// the timeout never applies. An access that changes
   /// ``SQLiteWriteConnection/busyTimeout`` replaces the handler for its own duration, and the
   /// handler is reinstalled when the access ends along with the configured timeout.
+  ///
+  /// A ``SQLitePool`` asks it too, in place of ``busyTimeout``, while another process that is
+  /// opening the same database holds up its own open, with `attempt` counting the tries of that
+  /// one wait, and fails with `SQLITE_BUSY` when it answers `false`.
   ///
   /// Setting this for a ``SQLiteLibrary`` without ``SQLiteLibrary/busyHandler`` fails the open with
   /// ``SQLiteFeatureUnavailableError``.

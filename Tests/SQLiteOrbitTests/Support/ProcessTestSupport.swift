@@ -33,14 +33,21 @@ func waitUntil(
   }
 }
 
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || os(Linux) || os(Android)
+  import Dispatch
   import Testing
 
   #if canImport(Darwin)
     import Darwin
-  #else
+  #elseif canImport(Glibc)
     import Glibc
+  #elseif canImport(Musl)
+    import Musl
+  #elseif canImport(Android)
+    import Android
   #endif
+
+  @testable import SQLiteOrbit
 
   func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
 
@@ -48,23 +55,107 @@ func waitUntil(
     try await waitUntil(timeout: timeout) { FileManager.default.fileExists(atPath: url.path) }
   }
 
+  /// Waits, for a few seconds at most, until nothing is bound at the socket path `path` whose
+  /// socket this process has just closed.
+  ///
+  /// A process another test spawns at the same moment holds a copy of every descriptor until it
+  /// execs, so a socket can outlive its closing here by a little, and still take what is sent to
+  /// it.
+  func waitUntilNothingIsBound(at path: String) {
+    let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while UnixDatagramSocket.probe(path) == .alive, ContinuousClock.now < deadline {
+      Thread.sleep(forTimeInterval: 0.001)
+    }
+  }
+
   func processTestSignal(_ process: Process, _ signal: Int32) {
-    #if canImport(Darwin)
-      _ = Darwin.kill(process.processIdentifier, signal)
-    #else
-      _ = Glibc.kill(process.processIdentifier, signal)
-    #endif
+    _ = kill(process.processIdentifier, signal)
   }
 
   func processTestExit(_ status: Int32) -> Never {
-    #if canImport(Darwin)
-      Darwin.exit(status)
-    #else
-      Glibc.exit(status)
-    #endif
+    exit(status)
   }
 
-  final class ProcessTestHarness {
+  /// Waits, in a helper process, for the test to create `url`, and exits with a failure if it
+  /// never does, so a helper the test forgot never outlives it for long.
+  func processTestWaitForFile(_ url: URL, timeout: Duration = .seconds(30)) {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while !FileManager.default.fileExists(atPath: url.path) {
+      guard ContinuousClock.now < deadline else { processTestExit(1) }
+      Thread.sleep(forTimeInterval: 0.002)
+    }
+  }
+
+  /// Runs `body` on a thread of its own, and waits at most `timeout` for it to return.
+  ///
+  /// Whatever might block runs this way, so a change that makes it wait on a stalled process fails
+  /// the test with a ``TestTimeout`` rather than hanging it. The thread is left behind if it never
+  /// returns.
+  func withDeadline<Value: Sendable>(
+    _ timeout: Duration = .seconds(10),
+    _ body: @escaping @Sendable () throws -> Value
+  ) async throws -> Value {
+    let outcome = DeadlineOutcome<Value>()
+    Thread.detachNewThread {
+      let result = Result { try body() }
+      outcome.result.withLock { $0 = result }
+    }
+    try await waitUntil(timeout: timeout) { outcome.result.withLock { $0 != nil } }
+    return try outcome.result.withLock { $0! }.get()
+  }
+
+  private final class DeadlineOutcome<Value: Sendable>: Sendable {
+    let result = Lock<Result<Value, any Error>?>(nil)
+  }
+
+  /// Holds a lock on a thread of its own, from when it is made until it is released.
+  final class LockHolder: Sendable {
+    private let acquired = DispatchSemaphore(value: 0)
+    private let mayRelease = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+
+    /// Returns once `withLock` is holding its lock.
+    ///
+    /// - Parameter withLock: Takes the lock, and runs the closure it is handed while holding it.
+    init(_ withLock: @escaping @Sendable (_ whileHeld: () -> Void) throws -> Void) {
+      Thread.detachNewThread {
+        try? withLock {
+          self.acquired.signal()
+          self.mayRelease.wait()
+        }
+        self.released.signal()
+      }
+      self.acquired.wait()
+    }
+
+    /// Lets go of the lock, and returns once it has.
+    func release() {
+      self.mayRelease.signal()
+      self.released.wait()
+    }
+  }
+
+  /// The variables a ``ProcessTestHarness`` spawned a helper with, read in the helper.
+  struct ProcessTestEnvironment {
+    /// The prefix the harness put before each name.
+    let prefix: String
+
+    subscript(name: String) -> String? {
+      ProcessInfo.processInfo.environment[self.prefix + name]
+    }
+
+    /// The file the variable `name` holds the path of.
+    func url(_ name: String) throws -> URL {
+      URL(fileURLWithPath: try #require(self[name]))
+    }
+  }
+
+  /// Runs a helper test in processes of its own, with a directory of its own for the test and its
+  /// helpers to signal each other through with files.
+  ///
+  /// A test whose one helper says it is ready by creating the file `ready`, and waits for the file
+  /// `go` to go on, needs nothing more than this. One that needs more subclasses it.
+  class ProcessTestHarness {
     let directory: URL
     private let helper: String
     private let environmentPrefix: String
@@ -136,6 +227,12 @@ func waitUntil(
     func helperOutput(_ index: Int) -> String {
       (try? String(contentsOf: self.file("h-\(index).log"), encoding: .utf8)) ?? ""
     }
+
+    /// Waits for a helper to create the file `ready`.
+    func waitUntilReady() async throws { try await waitForFile(self.file("ready")) }
+
+    /// Creates the file `go`, which a helper waits for to go on.
+    func go() throws { try touch(self.file("go")) }
 
     func waitForSuccessfulExit(_ process: Process) async throws {
       try await self.waitForExit(process)

@@ -33,10 +33,7 @@ extension OrbitIPCDatabase {
         directoryHint: .isDirectory
       )
     #endif
-    let coordination = UnixDatagramIPCTransport.Configuration(
-      directory: coordinationDirectory,
-      backPressure: .suspend(upTo: .milliseconds(250))
-    )
+    let coordination = UnixDatagramIPCTransport.Configuration(directory: coordinationDirectory)
     var configuration = SQLiteConfiguration.default
     configuration.register(function: RemindersClock().$currentDate)
     let database = try OrbitIPCDatabase(

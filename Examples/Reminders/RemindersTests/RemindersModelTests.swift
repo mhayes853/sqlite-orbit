@@ -476,7 +476,9 @@ struct RemindersModelTests {
       id: identifier,
       transport: InMemoryIPCTransport(network: network)
     )
-    try remindersMigrator().migrateBlocking(appDatabase)
+    // Migrated asynchronously, so the migration's own announcement is over before the reloader
+    // becomes the delegate. A blocking migration announces in a task that could reach it later.
+    try await remindersMigrator().migrate(appDatabase)
     let refreshCount = Mutex(0)
     let reloader = try RemindersWidgetReloader(database: appDatabase) {
       refreshCount.withLock { $0 += 1 }

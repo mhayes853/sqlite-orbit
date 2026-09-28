@@ -642,10 +642,11 @@
 
     func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
+      region: OrbitDatabaseRegion,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
-    ) throws -> OrbitSubscription {
+    ) throws -> OrbitRegionSubscription {
       if rejectsSubscriptions { throw AnnouncementFailure() }
-      return OrbitSubscription {}
+      return OrbitRegionSubscription(region: region) {}
     }
 
     func send(_ message: OrbitIPCMessage) async throws {
