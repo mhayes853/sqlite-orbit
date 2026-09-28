@@ -34,6 +34,7 @@ func waitUntil(
 }
 
 #if canImport(Darwin) || os(Linux) || os(Android)
+  import Dispatch
   import Testing
 
   #if canImport(Darwin)
@@ -94,7 +95,54 @@ func waitUntil(
     let result = Lock<Result<Value, any Error>?>(nil)
   }
 
-  final class ProcessTestHarness {
+  /// Holds a lock on a thread of its own, from when it is made until it is released.
+  final class LockHolder: Sendable {
+    private let acquired = DispatchSemaphore(value: 0)
+    private let mayRelease = DispatchSemaphore(value: 0)
+    private let released = DispatchSemaphore(value: 0)
+
+    /// Returns once `withLock` is holding its lock.
+    ///
+    /// - Parameter withLock: Takes the lock, and runs the closure it is handed while holding it.
+    init(_ withLock: @escaping @Sendable (_ whileHeld: () -> Void) throws -> Void) {
+      Thread.detachNewThread {
+        try? withLock {
+          self.acquired.signal()
+          self.mayRelease.wait()
+        }
+        self.released.signal()
+      }
+      self.acquired.wait()
+    }
+
+    /// Lets go of the lock, and returns once it has.
+    func release() {
+      self.mayRelease.signal()
+      self.released.wait()
+    }
+  }
+
+  /// The variables a ``ProcessTestHarness`` spawned a helper with, read in the helper.
+  struct ProcessTestEnvironment {
+    /// The prefix the harness put before each name.
+    let prefix: String
+
+    subscript(name: String) -> String? {
+      ProcessInfo.processInfo.environment[self.prefix + name]
+    }
+
+    /// The file the variable `name` holds the path of.
+    func url(_ name: String) throws -> URL {
+      URL(fileURLWithPath: try #require(self[name]))
+    }
+  }
+
+  /// Runs a helper test in processes of its own, with a directory of its own for the test and its
+  /// helpers to signal each other through with files.
+  ///
+  /// A test whose one helper says it is ready by creating the file `ready`, and waits for the file
+  /// `go` to go on, needs nothing more than this. One that needs more subclasses it.
+  class ProcessTestHarness {
     let directory: URL
     private let helper: String
     private let environmentPrefix: String
@@ -166,6 +214,12 @@ func waitUntil(
     func helperOutput(_ index: Int) -> String {
       (try? String(contentsOf: self.file("h-\(index).log"), encoding: .utf8)) ?? ""
     }
+
+    /// Waits for a helper to create the file `ready`.
+    func waitUntilReady() async throws { try await waitForFile(self.file("ready")) }
+
+    /// Creates the file `go`, which a helper waits for to go on.
+    func go() throws { try touch(self.file("go")) }
 
     func waitForSuccessfulExit(_ process: Process) async throws {
       try await self.waitForExit(process)

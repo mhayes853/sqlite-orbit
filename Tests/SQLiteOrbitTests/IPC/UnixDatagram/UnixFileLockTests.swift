@@ -6,13 +6,21 @@
   @testable import SQLiteOrbit
 
   @Suite
-  struct UnixFileLockTests {
+  final class UnixFileLockTests: Sendable {
+    let directory: URL
+    let path: String
+
+    init() throws {
+      self.directory = try makeShortTemporaryDirectory("flock")
+      self.path = self.directory.appending(path: "a.lock").path
+    }
+
+    deinit {
+      try? FileManager.default.removeItem(at: self.directory)
+    }
+
     @Test
     func removesTheLockFileOnceLetGoOf() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
-
       let existedWhileHeld = try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) {
         FileManager.default.fileExists(atPath: path)
       }
@@ -30,9 +38,6 @@
 
     @Test
     func openLockLeavesNoLockFilesBehind() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
       for name in ["one", "two"] {
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: name),
@@ -46,9 +51,6 @@
 
     @Test
     func excludesEveryOtherHolderWhileFilesAreUnlinkedAndCreatedAgain() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
       let state = ExclusionState()
       let threadCount = 6
       let iterationCount = 300
@@ -80,11 +82,7 @@
 
     @Test
     func skipsTheBodyWhileAnotherHolderHasTheLock() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
-
-      let holder = FileLockHolder(path)
+      let holder = holdLock(path)
       var didRun = false
       #expect(try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) { didRun = true } == nil)
       #expect(!didRun)
@@ -96,39 +94,33 @@
 
     @Test
     func waitingWhileAsksOnEveryTryThatFindsTheLockHeldAndGivesUpWhenToldTo() async throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
-      let holder = FileLockHolder(path)
+      let holder = holdLock(path)
       defer { holder.release() }
 
-      let (result, attempts) = try await withDeadline {
-        var attempts: [Int] = []
-        let result = try UnixFileLock.withExclusiveLock(
-          atPath: path,
-          waitingWhile: { attempt in
-            attempts.append(attempt)
-            return attempt < 3
-          },
-          { true }
-        )
-        return (result, attempts)
+      let path = self.path
+      // Tries for the lock until `keepsWaiting` gives up, and records every try it is asked about.
+      func attempts(
+        _ keepsWaiting: @escaping @Sendable (Int) -> Bool
+      ) async throws -> (result: Bool?, attempts: [Int]) {
+        try await withDeadline {
+          var attempts: [Int] = []
+          let result = try UnixFileLock.withExclusiveLock(
+            atPath: path,
+            waitingWhile: { attempt in
+              attempts.append(attempt)
+              return keepsWaiting(attempt)
+            },
+            { true }
+          )
+          return (result, attempts)
+        }
       }
-      #expect(result == nil)
-      #expect(attempts == [1, 2, 3])
 
-      let (gaveUpAtOnce, firstAttempts) = try await withDeadline {
-        var attempts: [Int] = []
-        let result = try UnixFileLock.withExclusiveLock(
-          atPath: path,
-          waitingWhile: { attempt in
-            attempts.append(attempt)
-            return false
-          },
-          { true }
-        )
-        return (result, attempts)
-      }
+      let (result, tries) = try await attempts { $0 < 3 }
+      #expect(result == nil)
+      #expect(tries == [1, 2, 3])
+
+      let (gaveUpAtOnce, firstAttempts) = try await attempts { _ in false }
       #expect(gaveUpAtOnce == nil)
       #expect(firstAttempts == [1])
       // Still the holder's, and still there.
@@ -137,10 +129,8 @@
 
     @Test
     func waitingWhileTakesTheLockOnceItsHolderLetsGoMidWait() async throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
-      let holder = FileLockHolder(path)
+      let path = self.path
+      let holder = holdLock(path)
 
       let (result, lastAttempt) = try await withDeadline {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
@@ -166,13 +156,9 @@
 
     @Test
     func removesOnlyALockFileNobodyHolds() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = directory.appending(path: "a.lock").path
-
       #expect(!UnixFileLock.removeIfUnlocked(atPath: path))
 
-      let holder = FileLockHolder(path)
+      let holder = holdLock(path)
       #expect(!UnixFileLock.removeIfUnlocked(atPath: path))
       #expect(FileManager.default.fileExists(atPath: path))
       holder.release()
@@ -185,15 +171,13 @@
 
     @Test
     func openLockRemovesTheLocksNobodyHolds() throws {
-      let directory = try makeShortTemporaryDirectory("flock")
-      defer { try? FileManager.default.removeItem(at: directory) }
       let locks = directory.appending(path: "open-locks", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
       for name in ["left.lock", "behind.lock"] {
         let path = locks.appending(path: name).path
         #expect(FileManager.default.createFile(atPath: path, contents: nil))
       }
-      let holder = FileLockHolder(locks.appending(path: "held.lock").path)
+      let holder = holdLock(locks.appending(path: "held.lock").path)
       defer { holder.release() }
 
       #expect(OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory) == 2)
@@ -224,26 +208,10 @@
     }
   }
 
-  /// Holds a file lock on a thread of its own until released.
-  private final class FileLockHolder: Sendable {
-    private let acquired = DispatchSemaphore(value: 0)
-    private let mayRelease = DispatchSemaphore(value: 0)
-    private let released = DispatchSemaphore(value: 0)
-
-    init(_ path: String) {
-      Thread.detachNewThread {
-        _ = try? UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: { _ in true }) {
-          self.acquired.signal()
-          self.mayRelease.wait()
-        }
-        self.released.signal()
-      }
-      self.acquired.wait()
-    }
-
-    func release() {
-      self.mayRelease.signal()
-      self.released.wait()
+  /// Holds the lock on `path` on a thread of its own until released.
+  private func holdLock(_ path: String) -> LockHolder {
+    LockHolder { whileHeld in
+      _ = try UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: { _ in true }, whileHeld)
     }
   }
 #endif
