@@ -48,11 +48,15 @@
     }
 
     let didAcquireSecond = Lock(false)
-    Thread.detachNewThread {
+    // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
+    // before the holder lets go.
+    var patient = SQLiteConfiguration.default
+    patient.busyTimeout = .maximum
+    Thread.detachNewThread { [patient] in
       try? OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: databaseIdentifier,
         directory: directory,
-        configuration: .default
+        configuration: patient
       ) {
         order.withLock { $0.append("second") }
         didAcquireSecond.withLock { $0 = true }

@@ -251,7 +251,15 @@
     case "open":
       try touch(ready)
       try await waitForFile(start)
-      _ = try OrbitIPCDatabase(path: OrbitDatabasePath(path), coordination: coordination)
+      // Waits for the test's hold on the open lock as long as it takes, not the default five
+      // seconds, which a loaded machine can spend before the test lets go.
+      var configuration = SQLiteConfiguration.default
+      configuration.busyTimeout = .maximum
+      _ = try OrbitIPCDatabase(
+        path: OrbitDatabasePath(path),
+        configuration: configuration,
+        coordination: coordination
+      )
       try touch(URL(fileURLWithPath: try value(OrbitDatabaseProcessEnvironment.opened)))
 
     case "write":
