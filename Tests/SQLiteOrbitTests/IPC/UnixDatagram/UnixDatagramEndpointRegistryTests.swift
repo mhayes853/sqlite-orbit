@@ -114,6 +114,44 @@
       #expect(try FileManager.default.contentsOfDirectory(atPath: interrupted.path).isEmpty)
     }
 
+    @Test(arguments: [true, false])
+    func aDatabaseWhoseDirectoryIsRemovedIsSentToAndAdvertisedAgain(
+      watchesDirectories: Bool
+    ) throws {
+      let directory = try makeShortTemporaryDirectory("registry")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let sender = try unixDatagramRegistry(
+        directory,
+        endpointName: "sender",
+        watchesDirectories: watchesDirectories
+      )
+      let peer = try unixDatagramRegistry(directory, endpointName: "peer")
+      let key = self.database.coordinationKey
+      let databaseDirectory = directory.appending(path: "v1/d/\(key)")
+      // As an endpoint that removes the last marker from a database's directory reclaims it.
+      func reclaim() throws {
+        #expect(try FileManager.default.contentsOfDirectory(atPath: databaseDirectory.path) == [])
+        try FileManager.default.removeItem(at: databaseDirectory)
+      }
+      func send() throws -> UnixDatagramEndpoint.Delivery {
+        try sender.send(
+          UnixDatagramWireEntry(commit(self.database, region: self.items), fittingIn: 1_024)
+        )
+      }
+      try peer.advertise(self.items, coordinationKey: key)
+      #expect(try send().delivered == 1)
+
+      // Gone from under what the sender read and watched.
+      try peer.withdraw(coordinationKey: key)
+      try reclaim()
+      #expect(try send().peerCount == 0)
+
+      // Gone from under the advertiser.
+      try reclaim()
+      try peer.advertise(self.items, coordinationKey: key)
+      #expect(try send().delivered == 1)
+    }
+
     @Test
     func keepsTrackOfItsOwnMarkersAcrossChangesToOthers() throws {
       let directory = try makeShortTemporaryDirectory("registry")

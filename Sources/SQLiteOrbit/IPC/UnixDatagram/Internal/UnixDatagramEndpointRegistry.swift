@@ -99,6 +99,7 @@
       }
       for coordinationKey in coordinationKeys {
         try? Self.remove(self.marker(coordinationKey))
+        self.reclaimDatabaseDirectory(coordinationKey)
       }
       _ = UnixPlatform.removeFile(atPath: self.socketPath)
       self.endpoint.stop()
@@ -108,22 +109,57 @@
     ///
     /// When this returns, a peer that lists the database's directory finds the new region.
     func advertise(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
+      let marker = Data(UnixDatagramWireProtocol.encodeMarker(region))
+      // Another endpoint reclaims the database's directory once it is empty, which it is between
+      // being created here and the temporary file landing in it. Writing that file then fails for
+      // want of the directory, which the next attempt creates again.
+      for attempt in 1...Self.maximumAdvertiseAttemptCount {
+        do {
+          try self.write(marker, coordinationKey: coordinationKey)
+          break
+        } catch let error
+          where attempt < Self.maximumAdvertiseAttemptCount && Self.isMissingFile(error)
+        {
+          continue
+        }
+      }
+      self.state.withLock { _ = $0.advertised.insert(coordinationKey) }
+    }
+
+    /// How many times ``advertise(_:coordinationKey:)`` writes a marker whose directory keeps
+    /// disappearing before it gives up.
+    private static let maximumAdvertiseAttemptCount = 3
+
+    /// Writes this endpoint's marker for a database by renaming a temporary file over it, creating
+    /// the database's directory first if it is not there.
+    private func write(_ marker: Data, coordinationKey: String) throws {
       let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
       let temporary = directory.appending(path: ".\(self.endpointName).tmp")
-      try Data(UnixDatagramWireProtocol.encodeMarker(region)).write(to: temporary)
+      try marker.write(to: temporary)
       guard
         UnixPlatform.renameFile(
           atPath: temporary.path,
           toPath: self.marker(coordinationKey).path
         )
       else { throw UnixSystemError.last("rename") }
-      self.state.withLock { _ = $0.advertised.insert(coordinationKey) }
+    }
+
+    private static func isMissingFile(_ error: any Error) -> Bool {
+      switch error {
+      case CocoaError.fileNoSuchFile:
+        true
+      case let error as UnixSystemError:
+        error.code == UnixPlatform.ErrorCode.noSuchFile
+      default:
+        false
+      }
     }
 
     /// Removes this endpoint's marker for a database, if it has one.
     func withdraw(coordinationKey: String) throws {
       try Self.remove(self.marker(coordinationKey))
       self.state.withLock { _ = $0.advertised.remove(coordinationKey) }
+      self.reclaimDatabaseDirectory(coordinationKey)
     }
 
     /// Sends `entry` to every peer but this endpoint advertising a region its message concerns,
@@ -179,8 +215,9 @@
     /// on some other thread could still be behind.
     ///
     /// Any change forgets everything read, watches included, so a database is read and watched
-    /// again from scratch by the next send to it. A database whose directory cannot be watched is
-    /// read on every send, which is slower and always correct.
+    /// again from scratch by the next send to it, which re-creates its directory if it was removed.
+    /// A database whose directory cannot be watched is read on every send, which is slower and
+    /// always correct.
     ///
     /// - Returns: The region each endpoint's subscriptions cover, by endpoint name.
     func peerRegions(
@@ -233,11 +270,16 @@
         (try? FileManager.default.contentsOfDirectory(atPath: self.databasesDirectory.path)) ?? []
       for coordinationKey in coordinationKeys {
         let directory = self.databaseDirectory(coordinationKey)
-        _ = UnixPlatform.removeFile(atPath: directory.appending(path: peer.endpointName).path)
+        let removedMarker = UnixPlatform.removeFile(
+          atPath: directory.appending(path: peer.endpointName).path
+        )
         // Left behind if the peer died between writing a marker and renaming it into place.
-        _ = UnixPlatform.removeFile(
+        let removedTemporary = UnixPlatform.removeFile(
           atPath: directory.appending(path: ".\(peer.endpointName).tmp").path
         )
+        if removedMarker || removedTemporary {
+          self.reclaimDatabaseDirectory(coordinationKey)
+        }
       }
     }
 
@@ -288,6 +330,18 @@
 
     private func marker(_ coordinationKey: String) -> URL {
       self.databaseDirectory(coordinationKey).appending(path: self.endpointName)
+    }
+
+    /// Removes a database's directory if nothing is left in it, now that this endpoint has removed
+    /// a marker from it, so the coordination directory does not keep a directory for every
+    /// database any endpoint ever advertised.
+    ///
+    /// A directory that holds anything must be left alone, because what it holds may be a marker
+    /// another endpoint has just written, and an endpoint that finds its directory gone creates it
+    /// again, both to advertise and to send. Foundation removes a directory only together with
+    /// everything in it, so this removes nothing until the system layer offers a call that
+    /// removes a directory only if it is empty.
+    private func reclaimDatabaseDirectory(_ coordinationKey: String) {
     }
 
     private static func remove(_ url: URL) throws {
