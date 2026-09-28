@@ -218,22 +218,49 @@
       advertisedBy advertisers: some Collection<String>
     ) -> Delivery {
       let coordinationKey = entry.message.databaseIdentifier.coordinationKey
-      var single = UnixDatagramWireBatch()
-      single.append(entry)
-      let datagram = single.encoded()
-
       return self.state.withLock { state in
         self.retain(advertisers, advertising: coordinationKey, in: &state)
         var delivery = Delivery(peerCount: peers.count)
         for peer in peers {
-          self.offer(
-            datagram,
-            entry,
-            to: peer,
-            coordinationKey: coordinationKey,
-            in: &state,
-            counting: &delivery
-          )
+          let name = peer.endpointName
+          // A socket connected just now has already shown that something is bound at the path.
+          let isNew = state.peers[name] == nil
+          if isNew {
+            do {
+              guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
+                delivery.stale.append(peer)
+                continue
+              }
+              state.peers[name] = Peer(peer: peer, socket: socket)
+            } catch {
+              delivery.failed += 1
+              continue
+            }
+          }
+          let known = state.peers[name]!
+          known.coordinationKeys.insert(coordinationKey)
+
+          // A peer that is owed anything is not sent to until it has taken what it is owed, so the
+          // message joins that rather than overtaking it. One that is owed nothing is sent the
+          // message as what it is owed, which it is owed still if it has no room.
+          let isOwed = !known.owed.isEmpty
+          known.addToOwed(entry.message)
+          guard !isOwed else {
+            delivery.deferred += 1
+            continue
+          }
+          switch self.flush(known, [entry], mayReconnect: !isNew) {
+          case .sent:
+            delivery.delivered += 1
+          case .full:
+            delivery.deferred += 1
+            // The thread waits on a deadline it worked out before this peer owed anything.
+            self.queue.wake()
+          case .peerGone:
+            delivery.stale.append(self.forget(name, in: &state))
+          case .failed:
+            delivery.failed += 1
+          }
         }
         return delivery
       }
@@ -241,86 +268,27 @@
 
     // MARK: - Sending
 
-    /// Sends `datagram` to a peer, or makes it owe `entry`'s region, and counts which in
-    /// `delivery`.
-    private func offer(
-      _ datagram: [UInt8],
-      _ entry: UnixDatagramWireEntry,
-      to peer: UnixDatagramPeer,
-      coordinationKey: String,
-      in state: inout State,
-      counting delivery: inout Delivery
-    ) {
-      let name = peer.endpointName
-      // A socket connected just now has already shown that something is bound at the path.
-      var mayReconnect = true
-      let known: Peer
-      if let existing = state.peers[name] {
-        known = existing
-      } else {
-        do {
-          guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
-            delivery.stale.append(peer)
-            return
-          }
-          known = Peer(peer: peer, socket: socket)
-          state.peers[name] = known
-          mayReconnect = false
-        } catch {
-          delivery.failed += 1
-          return
-        }
-      }
-      known.coordinationKeys.insert(coordinationKey)
-
-      // A peer that is owed anything is not sent to until it has taken what it is owed, so the
-      // message joins that rather than overtaking it.
-      if known.owed.isEmpty {
-        switch self.send(datagram, to: known, mayReconnect: &mayReconnect) {
-        case .sent:
-          delivery.delivered += 1
-          return
-        case .full:
-          known.isWatched = self.queue.watchWritable(known.socket.descriptor.rawValue)
-          known.backOff()
-          // The thread waits on a deadline it worked out before this peer owed anything.
-          self.queue.wake()
-        case .peerGone:
-          delivery.stale.append(self.forget(name, in: &state))
-          return
-        case .failed:
-          delivery.failed += 1
-          return
-        }
-      }
-      switch entry.message {
-      case .transactionDidCommit(let commit):
-        known.owed[commit.databaseIdentifier, default: .empty].formUnion(commit.region)
-      }
-      delivery.deferred += 1
-    }
-
-    /// Sends a peer what it is owed, one commit per database in as few datagrams as fit them, until
-    /// the peer has no room or is owed nothing.
+    /// Sends a peer `entries`, which is what it is owed, in as few datagrams as fit them, until the
+    /// peer has no room or is owed nothing.
     ///
-    /// A peer this finds dead is forgotten, along with what it was owed.
+    /// A peer with no room starts waiting for room: the queue reports it where it can, and it is
+    /// attempted again on a backoff where it cannot.
     ///
-    /// - Returns: The peer, if this found it dead.
-    private func flush(_ name: String, in state: inout State) -> UnixDatagramPeer? {
-      guard let peer = state.peers[name], !peer.owed.isEmpty else { return nil }
-      var entries =
-        peer.owed
-        .sorted { $0.key.rawValue < $1.key.rawValue }
-        .compactMap { database, region in
-          // A region too large for a datagram of its own is broadened to the full database, which
-          // always fits: the commit that made the peer owe anything fitted, and its region was no
-          // smaller.
-          try? UnixDatagramWireEntry(
-            .transactionDidCommit(.init(databaseIdentifier: database, region: region)),
-            fittingIn: self.maximumDatagramByteCount
-          )
-        }[...]
-      var mayReconnect = true
+    /// - Parameters:
+    ///   - peer: The peer.
+    ///   - entries: One commit per database the peer is owed, in the order to send them.
+    ///   - mayReconnect: Whether the peer's path may be connected to again if its socket reports
+    ///     it gone.
+    /// - Returns: What became of the last datagram sent. A peer this finds gone is left for the
+    ///   caller to forget.
+    private func flush(
+      _ peer: Peer,
+      _ entries: [UnixDatagramWireEntry],
+      mayReconnect: Bool
+    ) -> UnixDatagramSocket.SendOutcome {
+      var entries = entries[...]
+      var mayReconnect = mayReconnect
+      var outcome = UnixDatagramSocket.SendOutcome.sent
       while !entries.isEmpty {
         // The longest run from the front that fits, which always holds at least the first.
         var batch = UnixDatagramWireBatch()
@@ -329,14 +297,18 @@
           batch.append(entry)
         }
 
-        switch self.send(batch.encoded(), to: peer, mayReconnect: &mayReconnect) {
+        outcome = self.send(batch.encoded(), to: peer, mayReconnect: &mayReconnect)
+        switch outcome {
         case .sent:
           peer.retryDelay = .milliseconds(1)
         case .full:
+          if !peer.isWatched {
+            peer.isWatched = self.queue.watchWritable(peer.socket.descriptor.rawValue)
+          }
           peer.backOff()
-          return nil
+          return outcome
         case .peerGone:
-          return self.forget(name, in: &state)
+          return outcome
         case .failed:
           // Nothing about a datagram that failed this way changes on another attempt, so what it
           // held is dropped rather than attempted forever.
@@ -349,7 +321,22 @@
       }
       peer.owed.removeAll()
       self.unwatch(peer)
-      return nil
+      return outcome
+    }
+
+    /// One commit per database a peer is owed, in the order of their databases' identifiers.
+    private func entries(owedTo peer: Peer) -> [UnixDatagramWireEntry] {
+      peer.owed
+        .sorted { $0.key.rawValue < $1.key.rawValue }
+        .compactMap { database, region in
+          // A region too large for a datagram of its own is broadened to the full database, which
+          // always fits: the commit that made the peer owe anything fitted, and its region was no
+          // smaller.
+          try? UnixDatagramWireEntry(
+            .transactionDidCommit(.init(databaseIdentifier: database, region: region)),
+            fittingIn: self.maximumDatagramByteCount
+          )
+        }
     }
 
     /// Sends `datagram` on the socket kept for `peer`, and if that socket reports the peer gone,
@@ -473,21 +460,18 @@
             writable.append(descriptor)
           }
         }
-        // Taken after the wait, which a request made at any point before it cuts short.
-        if self.state.withLock({ state in
-          defer { state.isChangeRequested = false }
-          return state.isChangeRequested
-        }) {
-          changed = true
+        // Taken after the wait, which a request made at any point before it cuts short. A socket
+        // retired since the last pass may still have datagrams queued, so it is read to the end
+        // before it closes here, and one retired by `onChange` is read on the pass its wake starts.
+        let (isChangeRequested, retired) = self.state.withLock { state in
+          defer {
+            state.isChangeRequested = false
+            state.retired.removeAll()
+          }
+          return (state.isChangeRequested, state.retired)
         }
-        if changed {
+        if changed || isChangeRequested {
           onChange()
-        }
-        // A socket retired since the last pass may still have datagrams queued, so it is read to
-        // the end before it closes here.
-        let retired = self.state.withLock { state in
-          defer { state.retired.removeAll() }
-          return state.retired
         }
         for socket in retired {
           self.drain(socket, into: buffer, receive: receive)
@@ -501,7 +485,10 @@
             writable.contains(peer.socket.descriptor.rawValue)
               || peer.retryAt.map({ $0 <= now }) == true
           }
-          return due.keys.compactMap { self.flush($0, in: &state) }
+          return due.compactMap { name, peer in
+            let outcome = self.flush(peer, self.entries(owedTo: peer), mayReconnect: true)
+            return outcome == .peerGone ? self.forget(name, in: &state) : nil
+          }
         }
         for peer in stale {
           onStalePeer(peer)
@@ -545,6 +532,14 @@
       init(peer: UnixDatagramPeer, socket: consuming UnixDatagramSocket) {
         self.peer = peer
         self.socket = socket
+      }
+
+      /// Adds `message`'s region to what the peer is owed for its database.
+      func addToOwed(_ message: OrbitIPCMessage) {
+        switch message {
+        case .transactionDidCommit(let commit):
+          self.owed[commit.databaseIdentifier, default: .empty].formUnion(commit.region)
+        }
       }
 
       /// Schedules the next attempt at a peer the queue cannot say has room.
