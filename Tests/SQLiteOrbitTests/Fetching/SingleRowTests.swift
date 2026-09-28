@@ -32,17 +32,6 @@
     }
 
     @Test
-    func saveHelperRejectsADifferentPrimaryKey() async throws {
-      let database = try await settingsDatabase(enforceSingleton: false)
-
-      await #expect(throws: OrbitRowIdentityMismatchError.self) {
-        try await database.write { transaction in
-          try Settings(id: 1, theme: "dark", launchCount: 0).save(in: transaction)
-        }
-      }
-    }
-
-    @Test
     func anEmptyTableReadsItsDefaultWithoutInsertingIt() async throws {
       let database = try await settingsDatabase()
 
@@ -79,22 +68,12 @@
     }
 
     @Test
-    func saveReplacesTheSingleton() async throws {
+    func saveReplacesTheSingletonAndDeletingItRestoresTheDefault() async throws {
       let database = try await settingsDatabase()
 
       @SingleRow(Settings.self, database: database) var settings
-      try await $settings.save(Settings(id: 0, theme: "light", launchCount: 4))
-
-      try await waitUntil { settings.theme == "light" && settings.launchCount == 4 }
-    }
-
-    @Test
-    func deletingThePersistedSingletonRestoresTheDefault() async throws {
-      let database = try await settingsDatabase()
-
-      @SingleRow(Settings.self, database: database) var settings
-      try await $settings.save(Settings(id: 0, theme: "dark", launchCount: 1))
-      try await waitUntil { settings.theme == "dark" }
+      try await $settings.save(Settings(id: 0, theme: "dark", launchCount: 4))
+      try await waitUntil { settings.theme == "dark" && settings.launchCount == 4 }
 
       try await database.write { transaction in
         try transaction.execute(Settings.find(0).delete())
@@ -113,6 +92,12 @@
         try await $settings.save(Settings(id: 1, theme: "dark", launchCount: 0))
       }
       #expect($settings.saveError is OrbitRowIdentityMismatchError)
+      // The query helper refuses it the same way.
+      await #expect(throws: OrbitRowIdentityMismatchError.self) {
+        try await database.write { transaction in
+          try Settings(id: 1, theme: "dark", launchCount: 0).save(in: transaction)
+        }
+      }
       let count = try await database.read { try $0.fetchCount(Settings.all) }
       #expect(count == 0)
     }
