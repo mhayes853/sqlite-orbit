@@ -44,6 +44,8 @@
       static let connectionRefused: Int32 = ECONNREFUSED
       static let connectionReset: Int32 = ECONNRESET
       static let notConnected: Int32 = ENOTCONN
+      static let notEmpty: Int32 = ENOTEMPTY
+      static let fileExists: Int32 = EEXIST
     }
 
     // MARK: - Descriptors
@@ -75,6 +77,20 @@
     /// one file or the other and never neither.
     static func renameFile(atPath source: String, toPath destination: String) -> Bool {
       rename(source, destination) == 0
+    }
+
+    /// Sets the access and modification times of the file at `path`, whatever kind it is, to
+    /// now, which needs the caller to own it or be able to write to it.
+    static func touchFile(atPath path: String) -> Bool {
+      utimes(path, nil) == 0
+    }
+
+    /// Removes the directory at `path` if it is empty.
+    ///
+    /// A directory that is not empty fails with `ENOTEMPTY`, or on some systems `EEXIST`, and one
+    /// that is not there with `ENOENT`.
+    static func removeDirectory(atPath path: String) -> Bool {
+      rmdir(path) == 0
     }
 
     /// Opens the file at `path` for reading and writing, creating it if needed.
