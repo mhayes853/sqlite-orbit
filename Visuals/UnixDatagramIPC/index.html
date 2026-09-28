@@ -36,7 +36,7 @@ h1 .t{font-family:var(--mono);font-weight:650;letter-spacing:-.03em;color:#fff}
 nav.top{position:sticky;top:0;z-index:30;background:rgba(10,13,19,.84);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
 nav.top .in{max-width:1140px;margin:0 auto;display:flex;gap:2px;overflow-x:auto;padding:8px 12px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 nav.top .in::-webkit-scrollbar{display:none}
-nav.top a{flex:none;color:var(--muted);text-decoration:none;font-size:13px;padding:7px 11px;border-radius:8px;white-space:nowrap}
+nav.top a{flex:none;color:var(--muted);text-decoration:none;font-size:13px;padding:7px 8px;border-radius:8px;white-space:nowrap}
 nav.top a:hover{color:var(--text);background:var(--panel)}
 nav.top a.on{color:var(--text);background:var(--panel2);box-shadow:inset 0 0 0 1px var(--line2)}
 nav.top a .n{font-family:var(--mono);color:var(--dim);margin-right:6px;font-size:12px}
@@ -60,6 +60,27 @@ h2{font-size:clamp(20px,2.7vw,27px);margin:0;letter-spacing:-.01em;line-height:1
 @media (max-width:760px){.policy dl{grid-template-columns:1fr}.policy{padding:12px 14px 10px}}
 .policy.alt{border-color:rgba(255,107,107,.45);background:linear-gradient(180deg,rgba(255,107,107,.07),rgba(18,25,37,.55))}
 .policy.alt .pk,.policy.alt dt{color:#ff8f8f}
+/* tests (scene 10) */
+.tjump{display:flex;flex-wrap:wrap;gap:6px;margin:0 4px 14px}
+.tjump a{font:12px/1.35 var(--mono);padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:rgba(18,25,37,.8);color:var(--muted);text-decoration:none}
+.tjump a:hover{color:var(--text);border-color:var(--line2)}
+.policy.tg{border-color:rgba(126,224,138,.4);background:linear-gradient(180deg,rgba(126,224,138,.06),rgba(18,25,37,.55));scroll-margin-top:62px}
+.policy.tg .pk{color:var(--c-reg)}
+.policy.tg .pk a{color:inherit}
+.tests{list-style:none;margin:0;padding:0}
+.tests>li{display:grid;grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:8px 22px;padding:12px 0;border-top:1px solid var(--line)}
+.tests>li:first-child{border-top:0;padding-top:4px}
+.tests>li:last-child{padding-bottom:4px}
+.tn{min-width:0}
+.policy .tn code.fn{display:block;font:650 12.5px/1.45 var(--mono);color:#e4f6e6;background:none;border:0;padding:0;white-space:normal;overflow-wrap:anywhere}
+.tn .tf{display:block;font:11.5px/1.4 var(--mono);color:var(--dim);margin-top:3px;overflow-wrap:anywhere}
+.tn .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:7px}
+.tn .tag{font:600 10.5px/1 var(--mono);padding:3px 6px;border-radius:6px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap}
+.tn .tag.p{border-color:rgba(86,200,255,.5);color:var(--c-wire)}
+.tn .tag.s{border-color:rgba(255,107,125,.5);color:#ff8f9c}
+.policy .tests dl{display:grid;grid-template-columns:80px minmax(0,1fr);gap:5px 12px}
+.policy .tests dt{font:600 10.5px/1.95 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--dim);margin:0}
+@media (max-width:760px){.tests>li{grid-template-columns:1fr}.policy .tests dl{grid-template-columns:1fr;gap:0}.policy .tests dd{margin-bottom:7px}.policy .tests dd:last-child{margin-bottom:0}}
 .card{background:linear-gradient(180deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 20px 50px -30px rgba(0,0,0,.8)}
 .stage{padding:10px 10px 4px;position:relative}
 .stage svg{display:block;width:100%;height:auto;overflow:visible}
@@ -232,7 +253,7 @@ footer code{color:var(--muted)}
 <header class="hero">
   <div class="eyebrow">SQLiteOrbit · IPC</div>
   <h1>How <span class="t">UnixDatagramIPCTransport</span> tells other processes a transaction committed</h1>
-  <p>Every process that opens an <code>OrbitIPCDatabase</code> joins a shared coordination directory, binds one Unix datagram socket, and advertises the regions it cares about in marker files. A commit is sent only to the peers whose advertised region it concerns. The backpressure policy is <a href="#batching">never block, never drop a change</a>: a send never waits, and a peer with no room is owed the commit's region instead. One event-loop thread per transport receives datagrams and sends full peers what they are owed, with no broker and no Dispatch.</p>
+  <p>Every process that opens an <code>OrbitIPCDatabase</code> joins a shared coordination directory, binds one Unix datagram socket, and advertises the regions it cares about in marker files. A commit is sent only to the peers whose advertised region it concerns. The backpressure policy is <a href="#batching">never block, never drop a change</a>: a send never waits, and a peer with no room is owed the commit's region instead. One event-loop thread per transport receives datagrams and sends full peers what they are owed, with no broker and no Dispatch. <a href="#tests">Scene 10</a> lists the tests that pin each of these guarantees, and how each one brings about the failure it guards against.</p>
   <div class="facts">
     <span class="fact">maximumDatagramByteCount <b>61 440 B</b> default · ≤ 65 535</span>
     <span class="fact">receiveBufferByteCount <b>256 KiB</b></span>
@@ -269,6 +290,7 @@ footer code{color:var(--muted)}
   <a href="#cleanup"><span class="n">07</span>Crashes &amp; cleanup</a>
   <a href="#loop"><span class="n">08</span>Event loop</a>
   <a href="#widening"><span class="n">09</span>Region widening</a>
+  <a href="#tests"><span class="n">10</span>Tests</a>
 </div></nav>
 <main>
 <section class="scene" id="arch">
@@ -345,9 +367,288 @@ footer code{color:var(--muted)}
   <p class="lede">An observation whose fetch reads more than it had advertised must not miss a commit to the new part. It widens its advertisement first, and <code>updateRegion(_:)</code> returns only after the new marker is on disk. Then it reads again. Compare the real order with the order that would lose a commit.</p>
   <div class="card"><div class="stage"></div></div>
 </section>
+<section class="scene" id="tests">
+  <div class="sh"><span class="num">10</span><h2>Robustness, and the tests that pin it</h2></div>
+  <p class="lede">Which tests hold the transport to each guarantee the scenes describe, and how each one brings about the failure it guards against. They are Swift Testing tests in <code>Tests/SQLiteOrbitTests/IPC/UnixDatagram/</code>. A test tagged <b>process</b> runs the test executable again as a helper, a process of its own with its own transport, which the test can stop with <code>SIGSTOP</code>, resume with <code>SIGCONT</code> or kill with <code>SIGKILL</code>. A <b>held handler</b> is a subscription whose handler blocks the transport's thread at its first message, as a suspended process would, so its socket's queue fills and it repairs nothing until the test lets it go.</p>
+  <nav class="tjump" aria-label="Guarantees">
+    <a href="#t-backpressure">Never block, never drop</a>
+    <a href="#t-regions">Only peers that care</a>
+    <a href="#t-dead">Crashes are found and cleaned</a>
+    <a href="#t-sweeper">Stalled sweepers hold no one</a>
+    <a href="#t-removed">Removed files come back</a>
+    <a href="#t-processes">Many processes</a>
+    <a href="#t-locks">Locks</a>
+    <a href="#t-wire">Wire format</a>
+  </nav>
+  <!-- One group per guarantee. Each test is one <li>: the name and file with tags, then Simulates / Asserts / Rules out. -->
+
+  <div class="policy tg" id="t-backpressure">
+    <div class="ph"><span class="pk">Guarantee · <a href="#batching">scene 06</a></span><span class="pn">Never block, never drop a change.</span><span class="pc">A full or stopped peer costs a sender nothing, and still hears about every region written, in order.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">sends<wbr>To<wbr>AStopped<wbr>Process<wbr>Neither<wbr>Wait<wbr>Nor<wbr>Fail</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper subscribes with the smallest receive buffer a transport allows, 60 KiB, and is stopped with <code>SIGSTOP</code>. The test's transport sends it full-database commits until one finds its queue full, then sends 1,000 more.</dd>
+          <dt>Asserts</dt><dd>Every send returns without throwing, and exactly one peer is owed. After <code>SIGCONT</code>, what it is owed is delivered, nothing is owed any more, and the helper exits cleanly.</dd>
+          <dt>Rules out</dt><dd>A send that waits, times out or fails because one peer can't read.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Stopped<wbr>Process<wbr>Hears<wbr>About<wbr>Every<wbr>Region<wbr>Written<wbr>Once<wbr>It<wbr>Resumes</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>While a helper is stopped, 4,000 commits are sent, each to a column of its own, <code>items.c0</code> to <code>items.c3999</code>: far more than its queue holds.</dd>
+          <dt>Asserts</dt><dd>One peer is owed. After <code>SIGCONT</code>, the helper exits successfully only once the union of the regions it received covers all 4,000 columns, and it received fewer than 4,000 commits.</dd>
+          <dt>Rules out</dt><dd>A column lost when later commits are merged into what is owed. The count shows the merging really happened.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Held<wbr>Receiver<wbr>Is<wbr>Sent<wbr>What<wbr>It<wbr>Missed<wbr>Once<wbr>It<wbr>Resumes</code><span class="tf">UnixDatagramIPCTransportTests.swift</span><span class="tags"><span class="tag">held handler</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The receiver's handler holds its thread at the first commit. The sender sends a commit per column until one finds the queue full, then three more.</dd>
+          <dt>Asserts</dt><dd>The sender owes exactly one region: the union of the four commits the queue had no room for. Once the receiver resumes it gets every queued commit in the order sent, then one commit with the owed region, and nothing is owed any more.</dd>
+          <dt>Rules out</dt><dd>A commit lost, reordered, or delivered ahead of what the queue held.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Send<wbr>To<wbr>APeer<wbr>That<wbr>Is<wbr>Owed<wbr>Joins<wbr>What<wbr>It<wbr>Is<wbr>Owed<wbr>Rather<wbr>Than<wbr>Overtaking<wbr>It</code><span class="tf">UnixDatagramEndpointTests.swift</span><span class="tags"><span class="tag">bare socket</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The peer is a bare socket with a 4 KiB buffer that the test reads by hand, and the sender's thread, which would send what is owed, is never started. The test fills the peer until it is owed, then drains it, so it has room again.</dd>
+          <dt>Asserts</dt><dd>The next send is deferred rather than delivered, nothing reaches the peer, and what it is owed widens to take in the new column.</dd>
+          <dt>Rules out</dt><dd>A new commit sent to a peer ahead of an older region it is owed.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-regions">
+    <div class="ph"><span class="pk">Guarantee · <a href="#fanout">scene 04</a> · <a href="#widening">scene 09</a></span><span class="pn">Only peers whose region a commit concerns are sent it.</span><span class="pc">A process that doesn't care is never woken, and a widened region counts from the moment <code>updateRegion(_:)</code> returns.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Process<wbr>Is<wbr>Only<wbr>Sent<wbr>Commits<wbr>To<wbr>The<wbr>Tables<wbr>It<wbr>Subscribed<wbr>To</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper subscribes to table <code>a</code> only and is stopped. The test sends 2,000 commits to table <code>b</code>: had any gone to the helper, its queue would have filled and the sender would owe it.</dd>
+          <dt>Asserts</dt><dd>Nothing is owed after the 2,000 sends. After <code>SIGCONT</code>, a commit to <code>a</code> is sent, and the helper counts exactly one message.</dd>
+          <dt>Rules out</dt><dd>Filtering only at the receiver, which would wake, and fill up, processes that don't read what changed.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Send<wbr>That<wbr>Starts<wbr>After<wbr>ARegion<wbr>Widens<wbr>Honors<wbr>It</code><span class="tf">UnixDatagramIPCTransportTests.swift</span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A subscription starts on table <code>t0</code> and is updated 200 times, each update widening it by one more table, the first also narrowing away <code>t0</code>. Each send starts right after the update returns, with a commit to the table just added.</dd>
+          <dt>Asserts</dt><dd>After each update the sender finds no peer concerned with <code>t0</code>, and the receiver gets all 200 commits, in order.</dd>
+          <dt>Rules out</dt><dd>A send that still reads the old marker after the widening returned, and so skips a commit to the new part.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-dead">
+    <div class="ph"><span class="pk">Guarantee · <a href="#cleanup">scene 07</a></span><span class="pn">A crashed process is found by a probe, and its files are removed from every database.</span><span class="pc">Dead means nothing is bound at its socket's path. A peer that only bound its socket again keeps everything.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">probes<wbr>Whether<wbr>ASocket<wbr>Is<wbr>Bound<wbr>At<wbr>APath</code><span class="tf">UnixSystemTests.swift</span><span class="tags"><span class="tag">bare socket</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Probes a path with no file, a path with a bound socket, and the file a socket leaves when it is bound and closed, as a process that died leaves it.</dd>
+          <dt>Asserts</dt><dd><code>.dead</code>, <code>.alive</code> and <code>.dead</code>, and the bound socket receives nothing from the probe.</dd>
+          <dt>Rules out</dt><dd>A leftover file taken for a live endpoint, and a probe that disturbs the owner.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">removes<wbr>Everything<wbr>Of<wbr>AKilled<wbr>Process</code><span class="tf">UnixDatagramStaleCleanupTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGKILL</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper starts a transport, subscribes to a database and holds its open lock, and is killed with <code>SIGKILL</code>. It leaves a socket's file, a marker and a lock file.</dd>
+          <dt>Asserts</dt><dd>A sweep reports exactly one socket, one marker, one database directory and one lock removed, and <code>v1/s/</code>, <code>v1/d/</code> and <code>open-locks/</code> are empty afterwards.</dd>
+          <dt>Rules out</dt><dd>Anything a crash leaves behind outliving the next transport's start.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">one<wbr>Send<wbr>Prunes<wbr>ADead<wbr>Peer<wbr>From<wbr>Every<wbr>Database</code><span class="tf">UnixDatagramEndpointRegistryTests.swift</span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A peer's registry advertises two databases and is released without being shut down, which closes its socket and leaves its files, as a process that dies does. A third database's directory holds only its <code>.crashed.tmp</code>, as a peer that died between writing a marker and renaming it leaves it.</dd>
+          <dt>Asserts</dt><dd>One send to one database reports the peer stale and removes its socket's file, its markers in both databases, and the directory that held only its temporary file.</dd>
+          <dt>Rules out</dt><dd>A dead peer lingering in the databases nobody has sent to yet.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Process<wbr>That<wbr>Dies<wbr>While<wbr>Owed<wbr>Is<wbr>Dropped<wbr>And<wbr>Pruned<wbr>By<wbr>The<wbr>Transports<wbr>Thread</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span><span class="tag s">SIGKILL</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper is stopped, the test's transport sends until the helper is owed, and then the helper is killed with <code>SIGKILL</code>.</dd>
+          <dt>Asserts</dt><dd>Without another send, nothing is owed any more and no marker is left, and the only socket left in <code>v1/s/</code> is the sender's own.</dd>
+          <dt>Rules out</dt><dd>A region owed for good to a dead peer, and cleanup that waits for the next commit.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Peer<wbr>Whose<wbr>Socket<wbr>Is<wbr>Bound<wbr>Again<wbr>While<wbr>Owed<wbr>Is<wbr>Sent<wbr>What<wbr>It<wbr>Is<wbr>Owed<wbr>There</code><span class="tf">UnixDatagramEndpointTests.swift</span><span class="tags"><span class="tag">bare socket</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A bare-socket peer is filled until it is owed. Its socket is then closed and a new one bound at the same path, with its markers left as they are, as an endpoint that binds again does. The socket the sender keeps for it now reports it gone.</dd>
+          <dt>Asserts</dt><dd>The sender's thread sends what is owed, as one commit, to the new socket. The socket's file and the marker are still there, and the next send is delivered.</dd>
+          <dt>Rules out</dt><dd>Taking <code>.peerGone</code> as proof of death, and losing what is owed across a rebind.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-sweeper">
+    <div class="ph"><span class="pk">Guarantee · <a href="#cleanup">scene 07</a></span><span class="pn">A sweeper that dies, freezes or races never holds anyone up, or removes a live file.</span><span class="pc">The sweep's lock is only ever tried, and an endpoint is probed again right before each of its files is removed. In the lock tests, everything that could block runs with a deadline, so a change that makes it wait fails the test rather than hanging it.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Frozen<wbr>Holder<wbr>Of<wbr>The<wbr>Sweeps<wbr>Lock<wbr>Holds<wbr>Up<wbr>Neither<wbr>Sweeps<wbr>Nor<wbr>Starting<wbr>Transports</code><span class="tf">UnixDatagramStaleCleanupLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag s">SIGSTOP</span><span class="tag s">SIGKILL</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A helper takes <code>v1/cleanup-stale.lock</code> and is stopped with <code>SIGSTOP</code> while holding it, with a dead socket and marker waiting to be swept.</dd>
+          <dt>Asserts</dt><dd>A sweep returns within 5 s, skipped, and leaves the dead socket. Two new transports start, skipping their sweeps too, and exchange a commit. Once the holder is killed, the next sweep removes the dead socket and marker and unlinks the lock file.</dd>
+          <dt>Rules out</dt><dd>Waiting on the sweep's lock, and a lock left by a dead holder blocking every later sweep.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Sweep<wbr>Killed<wbr>Partway<wbr>Leaves<wbr>The<wbr>Rest<wbr>To<wbr>The<wbr>Next<wbr>And<wbr>The<wbr>Live<wbr>Files<wbr>Alone</code><span class="tf">UnixDatagramStaleCleanupLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag">test seam</span><span class="tag s">SIGKILL</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Four dead endpoints, each with markers in three databases, and one <code>.tmp</code>, beside a live one. A helper sweeps, the sweep's <code>didRemove</code> hook stalls it for good after its first removal, a dead socket's file, and the helper is killed.</dd>
+          <dt>Asserts</dt><dd>The next sweep removes exactly the other three sockets and all 13 marker files, the <code>.tmp</code> among them, leaves the live socket and its three markers, and unlinks the lock the killed sweeper left.</dd>
+          <dt>Rules out</dt><dd>A sweep cut short leaving anything half done, or keeping the next one from running.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Sweep<wbr>Stopped<wbr>Partway<wbr>Leaves<wbr>The<wbr>Files<wbr>Of<wbr>An<wbr>Endpoint<wbr>That<wbr>Came<wbr>Back<wbr>Meanwhile</code><span class="tf">UnixDatagramStaleCleanupLockTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag">test seam</span><span class="tag s">SIGSTOP</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Endpoint <code>back</code> has markers in three databases and no socket, so it looks dead. A helper's sweep stalls after removing the first of them and is stopped. Meanwhile the test binds <code>back.sock</code>, then resumes the helper.</dd>
+          <dt>Asserts</dt><dd>The sweep removed only that one marker. The other two and <code>back.sock</code> are still there.</dd>
+          <dt>Rules out</dt><dd>A sweeper that was frozen acting on what it found before it froze.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">concurrent<wbr>Sweeps<wbr>And<wbr>Starting<wbr>Endpoints<wbr>Leave<wbr>Every<wbr>Live<wbr>File<wbr>And<wbr>No<wbr>Dead<wbr>One</code><span class="tf">UnixDatagramStaleCleanupTests.swift</span><span class="tags"><span class="tag">threads</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>20 dead endpoints with markers in five databases. 16 threads run at once: half sweep, and half start endpoints the way one does, socket first, markers after.</dd>
+          <dt>Asserts</dt><dd>Every endpoint starts. Between them the sweeps removed exactly 20 sockets and 100 markers, so each once, and every live socket and marker is left.</dd>
+          <dt>Rules out</dt><dd>A sweep removing a starting endpoint's files, or two sweeps both removing the same file.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-removed">
+    <div class="ph"><span class="pk">Guarantee · <a href="#cleanup">scene 07</a></span><span class="pn">A live endpoint whose files are removed puts them back, and misses no commit silently.</span><span class="pc">Each repair ends with a full-database commit to the endpoint's own subscribers, which stands in for whatever peers left it out of.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Process<wbr>Whose<wbr>Files<wbr>The<wbr>Cleaner<wbr>Removes<wbr>Puts<wbr>Them<wbr>Back<wbr>And<wbr>Keeps<wbr>Receiving</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag">unlink</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The test unlinks a helper's socket file and marker, then every directory that leaves empty, as macOS's cleaner of temporary files would.</dd>
+          <dt>Asserts</dt><dd>A socket is bound at the same path again and the marker advertises the full database again. A commit sent then reaches the helper, which exits only once it has also had the repair's full-database notice.</dd>
+          <dt>Rules out</dt><dd>An endpoint silently dropping out of discovery when its files vanish.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">a<wbr>Suspended<wbr>Endpoint<wbr>Owed<wbr>Regions<wbr>Puts<wbr>Its<wbr>Files<wbr>Back<wbr>And<wbr>Is<wbr>Sent<wbr>What<wbr>It<wbr>Missed</code><span class="tf">UnixDatagramRemovedFilesTests.swift</span><span class="tags"><span class="tag">held handler</span><span class="tag">unlink</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A held receiver's queue fills and the sender owes it the union of four commits. Its files are removed as the cleaner would while it is held, and then it resumes.</dd>
+          <dt>Asserts</dt><dd>Its files are back and nothing is owed. It got everything its queue held first, in order, then the owed region as one commit, then a later commit, with nothing else but repair notices.</dd>
+          <dt>Rules out</dt><dd>What is owed being lost because the socket's file was replaced: the sender sends it to the socket it is connected to.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">an<wbr>Endpoint<wbr>ASender<wbr>Took<wbr>For<wbr>Dead<wbr>While<wbr>Its<wbr>Socket<wbr>Was<wbr>Missing<wbr>Puts<wbr>Back<wbr>What<wbr>Was<wbr>Pruned</code><span class="tf">UnixDatagramRemovedFilesTests.swift</span><span class="tags"><span class="tag">held handler</span><span class="tag">unlink</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A held receiver's socket file is unlinked. A sender that never connected to it sends a commit, finds nothing at the path, and prunes the receiver's marker. Then the receiver resumes.</dd>
+          <dt>Asserts</dt><dd>Its files are back, and it received exactly the first commit, the repair's full-database notice, and a later commit.</dd>
+          <dt>Rules out</dt><dd>The commit made while it was taken for dead being missed without a trace: the notice stands in for it.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">an<wbr>Endpoint<wbr>In<wbr>Use<wbr>Touches<wbr>Its<wbr>Files<wbr>So<wbr>The<wbr>Cleaner<wbr>Leaves<wbr>Them<wbr>Alone</code><span class="tf">UnixDatagramRemovedFilesTests.swift</span><span class="tags"><span class="tag">backdated</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>The modification dates of the socket's file, the marker and their two directories are set ten days back, on a transport whose refresh interval is zero.</dd>
+          <dt>Asserts</dt><dd>After one send, which has no peer to go to, all four are touched, and again after one receive.</dd>
+          <dt>Rules out</dt><dd>The files of an endpoint in use looking unused to macOS's cleaner. <code>anEndpointLeavesItsFilesAloneUntilItsRefreshIntervalHasPassed</code> checks that under the default interval, an hour, a send and a receive leave them as they are.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-processes">
+    <div class="ph"><span class="pk">Guarantee · <a href="#fanout">scene 04</a></span><span class="pn">A commit reaches every other process, and never the sender.</span><span class="pc">Real processes, each with a transport of its own. Most of the process tests above also stop or kill them.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">publisher<wbr>Fans<wbr>Out<wbr>To<wbr>Subscriber<wbr>Processes<wbr>(subscriber<wbr>Count:)</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag">1 · 8 · 32</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>1, 8 or 32 helpers subscribe, and the test's transport sends one commit.</dd>
+          <dt>Asserts</dt><dd>Each helper receives exactly one commit and exits cleanly.</dd>
+          <dt>Rules out</dt><dd>Peers missed by discovery or fan-out as their number grows.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">subscribed<wbr>Processes<wbr>Broadcast<wbr>To<wbr>Every<wbr>Other<wbr>Process<wbr>(process<wbr>Count:)</code><span class="tf">UnixDatagramIPCMultiprocessTests.swift</span><span class="tags"><span class="tag p">process</span><span class="tag">2 · 8</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>2 or 8 helpers subscribe, and when the test creates a start file, each sends one commit.</dd>
+          <dt>Asserts</dt><dd>Each receives exactly one fewer commit than there are processes: every other process's, and never its own.</dd>
+          <dt>Rules out</dt><dd>A commit echoed to its sender, and peers missed when every process sends at once.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-locks">
+    <div class="ph"><span class="pk">Guarantee · <a href="#coordir">scene 03</a> · <a href="#cleanup">scene 07</a></span><span class="pn">A file lock has one holder at a time, and lock files never pile up.</span><span class="pc">A lock's file is unlinked as it is let go of, and one a dead holder left is reclaimed.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">excludes<wbr>Every<wbr>Other<wbr>Holder<wbr>While<wbr>Files<wbr>Are<wbr>Unlinked<wbr>And<wbr>Created<wbr>Again</code><span class="tf">UnixFileLockTests.swift</span><span class="tags"><span class="tag">threads</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>6 threads take the same lock 300 times each, and every holder unlinks its file as it lets go, so the next creates it again. A third of the attempts only try, and try again until they get it. Each holder reads a counter, waits, and writes it back, so two holders at once would lose an increment.</dd>
+          <dt>Asserts</dt><dd>No holder ever found another inside, the counter is exactly 1,800, and no lock file is left.</dd>
+          <dt>Rules out</dt><dd>Two holders at once when one locks a file another has just unlinked.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">removes<wbr>Only<wbr>ALock<wbr>File<wbr>Nobody<wbr>Holds</code><span class="tf">UnixFileLockTests.swift</span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A lock held on another thread, and then a lock file nobody holds, as a process that died holding the lock leaves it.</dd>
+          <dt>Asserts</dt><dd><code>removeIfUnlocked</code> leaves the held one in place and removes the one nobody holds.</dd>
+          <dt>Rules out</dt><dd>Reclaiming a lock someone holds, and lock files left by the dead accumulating.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+
+  <div class="policy tg" id="t-wire">
+    <div class="ph"><span class="pk">Guarantee · <a href="#wire">scene 05</a></span><span class="pn">The wire format is fixed byte for byte, and malformed input is rejected.</span><span class="pc">A bad datagram or marker never stops a receiver, and never hides a change.</span></div>
+    <ol class="tests">
+      <li>
+        <div class="tn"><code class="fn">unix<wbr>Datagram<wbr>Wire<wbr>Protocol<wbr>Has<wbr>Stable<wbr>Version<wbr>One<wbr>Encoding</code><span class="tf">UnixDatagramWireProtocolTests.swift</span><span class="tags"><span class="tag">bytes</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Encodes a full-database commit to database <code>db</code>, the golden vector scene 05 starts from.</dd>
+          <dt>Asserts</dt><dd>Exactly 22 bytes: the header <code>ORBT</code>, version 1, no flags and one entry, the string table holding <code>"db"</code>, and the commit entry. They decode back to the same message.</dd>
+          <dt>Rules out</dt><dd>A change to the format that processes built from different versions would read differently.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">unix<wbr>Datagram<wbr>Wire<wbr>Protocol<wbr>Rejects<wbr>Every<wbr>Truncated<wbr>Prefix</code><span class="tf">UnixDatagramWireProtocolTests.swift</span><span class="tags"><span class="tag">bytes</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Decodes every prefix of a batch of two commits, from none of its bytes to all but the last.</dd>
+          <dt>Asserts</dt><dd>Each one throws a <code>UnixDatagramWireError</code>.</dd>
+          <dt>Rules out</dt><dd>A datagram cut short decoding as a shorter valid one.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">unix<wbr>Datagram<wbr>Transport<wbr>Continues<wbr>After<wbr>Malformed<wbr>Datagrams</code><span class="tf">UnixDatagramIPCTransportTests.swift</span><span class="tags"><span class="tag">bare socket</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>A bare socket connected to the receiver's path sends it <code>ff 00 01</code>, then a valid commit followed by 60 KiB of zeros, which fills the receive buffer the transport sizes one byte past the longest datagram it accepts.</dd>
+          <dt>Asserts</dt><dd>Both are dropped: the next real commit is the only message the subscriber gets.</dd>
+          <dt>Rules out</dt><dd>A receiving thread stopped by garbage, and a datagram that is too long decoded from its valid start.</dd>
+        </dl>
+      </li>
+      <li>
+        <div class="tn"><code class="fn">unreadable<wbr>Markers<wbr>Advertise<wbr>The<wbr>Full<wbr>Database<wbr>And<wbr>Temporary<wbr>Ones<wbr>Nothing</code><span class="tf">UnixDatagramEndpointRegistryTests.swift</span><span class="tags"><span class="tag">bytes</span></span></div>
+        <dl>
+          <dt>Simulates</dt><dd>Markers that are empty, one byte long, or cut short, and a <code>.peer.tmp</code> beside them.</dd>
+          <dt>Asserts</dt><dd>Each unreadable marker is read as advertising the full database, and the temporary file as no peer at all.</dd>
+          <dt>Rules out</dt><dd>A damaged marker hiding a peer from commits. It is sent more, never less.</dd>
+        </dl>
+      </li>
+    </ol>
+  </div>
+</section>
 </main>
 <footer>
-  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagram/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>OrbitSubscription.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramStaleCleanup.swift</code>, the I/O layer in <code>IPC/UnixDatagram/Internal/System/</code> (<code>UnixPlatform.swift</code>, <code>UnixDescriptor.swift</code>, <code>UnixSystemError.swift</code>, <code>UnixDatagramSocket.swift</code>, <code>UnixEventQueue.swift</code>, <code>UnixEventQueue+Kqueue.swift</code>, <code>UnixEventQueue+Epoll.swift</code>, <code>UnixDirectoryWatcher+Kqueue.swift</code>, <code>UnixDirectoryWatcher+Inotify.swift</code>, <code>UnixFileLock.swift</code>), <code>CLinuxEvents/shim.h</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>IPC/Internal/OrbitDatabaseOpenLock.swift</code>, <code>IPC/Internal/OrbitDatabaseIdentifier+CoordinationKey.swift</code>, <code>Internal/String+StableHash.swift</code>, <code>SQLite/SQLitePool.swift</code>, and the tests in <code>UnixDatagramEndpointTests.swift</code>. Endpoint names, database paths, directory paths and timings in the scenes are examples. Byte counts are computed by the page.</p>
+  <p>Built from the sources on branch <code>t3code/improve-unix-datagram-transport</code>: <code>IPC/UnixDatagram/UnixDatagramIPCTransport.swift</code>, <code>IPC/OrbitIPCTransport.swift</code>, <code>IPC/OrbitIPCMessage.swift</code>, <code>OrbitSubscription.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpointRegistry.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramEndpoint.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramWireProtocol.swift</code>, <code>IPC/UnixDatagram/Internal/UnixDatagramStaleCleanup.swift</code>, the I/O layer in <code>IPC/UnixDatagram/Internal/System/</code> (<code>UnixPlatform.swift</code>, <code>UnixDescriptor.swift</code>, <code>UnixSystemError.swift</code>, <code>UnixDatagramSocket.swift</code>, <code>UnixEventQueue.swift</code>, <code>UnixEventQueue+Kqueue.swift</code>, <code>UnixEventQueue+Epoll.swift</code>, <code>UnixDirectoryWatcher+Kqueue.swift</code>, <code>UnixDirectoryWatcher+Inotify.swift</code>, <code>UnixFileLock.swift</code>), <code>CLinuxEvents/shim.h</code>, <code>OrbitRegionSubscription.swift</code>, <code>OrbitIPCDatabase.swift</code>, <code>Observation/OrbitValueObservation.swift</code>, <code>Observation/Internal/OrbitValueObservationRuntimeState.swift</code>, <code>IPC/Internal/OrbitDatabaseOpenLock.swift</code>, <code>IPC/Internal/OrbitDatabaseIdentifier+CoordinationKey.swift</code>, <code>Internal/String+StableHash.swift</code>, <code>SQLite/SQLitePool.swift</code>, and the tests in <code>Tests/SQLiteOrbitTests/IPC/UnixDatagram/</code>, which scene 10 goes through. Endpoint names, database paths, directory paths and timings in the scenes are examples. Byte counts are computed by the page.</p>
   <p>Keyboard: focus a scene's controls and use ← / → to step.</p>
 </footer>
 <noscript><p style="text-align:center;color:#ff6b7d">The visualizations need JavaScript.</p></noscript>
