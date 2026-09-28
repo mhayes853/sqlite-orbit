@@ -269,23 +269,6 @@
     #expect(try await second.value == [2])
   }
 
-  private final class OverlapTracker: Sendable {
-    private let state = Lock((inFlight: 0, peak: 0))
-
-    var peak: Int { state.withLock { $0.peak } }
-
-    func enter() {
-      state.withLock { state in
-        state.inFlight += 1
-        state.peak = max(state.peak, state.inFlight)
-      }
-    }
-
-    func leave() {
-      state.withLock { $0.inFlight -= 1 }
-    }
-  }
-
   @Test
   func accessesOnOneConnectionNeverOverlap() async throws {
     let driver = try SQLiteQueue(path: ":memory:")
