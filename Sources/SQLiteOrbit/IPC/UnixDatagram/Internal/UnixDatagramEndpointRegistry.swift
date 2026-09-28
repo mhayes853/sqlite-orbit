@@ -37,6 +37,16 @@
   /// itself, but a repair drains what it changed before it checks its work, so it never sets off
   /// another. Nothing waits on a timer: an endpoint whose files nothing touches costs nothing.
   ///
+  /// While its files are missing, peers cannot tell the endpoint is there. A peer that finds no
+  /// marker does not send it the commit, and drops what it owed it for the database, and one that
+  /// finds nothing at the socket's path prunes it. So a repair that put anything back reports it,
+  /// on the endpoint's thread, once the files are back, and the endpoint's owner tells its
+  /// subscribers that every database it advertises may have changed entirely. After its files are
+  /// removed, an endpoint therefore never silently misses a commit: it either receives it, or its
+  /// subscribers are told the database may have changed, after peers can reach it again. A repair
+  /// that found every file in place, as most changes to the watched directories leave it,
+  /// reports nothing.
+  ///
   /// To keep the system from removing its files in the first place, every send and every receive
   /// touches the endpoint's socket, its markers and the directories they are in, if it has been
   /// ``defaultRefreshInterval`` since it last did.
@@ -64,6 +74,8 @@
       var watched: [String: UnixFileIdentity] = [:]
       /// How many files a repair has put back.
       var repairCount = 0
+      /// Whether a file was put back since the endpoint's thread last reported a repair.
+      var hasRepaired = false
     }
 
     /// How long after this endpoint last touched its files a send or a receive touches them again.
@@ -135,9 +147,17 @@
     /// Starts the endpoint's thread, which runs until ``shutdown()``, and from then on keeps this
     /// endpoint's files in the coordination directory, putting back any that are removed.
     ///
-    /// - Parameter receive: Receives each datagram no longer than the maximum, on the endpoint's
-    ///   thread. The bytes are only valid for the duration of the call.
-    func start(receive: @escaping @Sendable (Span<UInt8>) -> Void) {
+    /// - Parameters:
+    ///   - receive: Receives each datagram no longer than the maximum, on the endpoint's thread.
+    ///     The bytes are only valid for the duration of the call.
+    ///   - onRepair: Called on the endpoint's thread, without any lock held, after a repair put
+    ///     back any of this endpoint's files, on whichever thread the repair ran. Peers may have
+    ///     left out, while the files were missing, commits to any database this endpoint
+    ///     advertises. Repairs that run before it is called are reported by the one call.
+    func start(
+      receive: @escaping @Sendable (Span<UInt8>) -> Void,
+      onRepair: @escaping @Sendable () -> Void = {}
+    ) {
       // Weakly, so that the thread, which the endpoint keeps until it is stopped, keeps nothing
       // else alive.
       self.endpoint.start(
@@ -149,7 +169,9 @@
           self?.prune(peer)
         },
         onChange: { [weak self] in
-          self?.repairIfChanged()
+          if self?.repairIfChanged() == true {
+            onRepair()
+          }
         }
       )
       self.own.withLock { own in
@@ -188,7 +210,15 @@
     /// When this returns, a peer that lists the database's directory finds the new region.
     func advertise(_ region: OrbitDatabaseRegion, coordinationKey: String) throws {
       try self.own.withLock { own in
+        // A marker removed since it was written is put back here rather than by a repair, which
+        // must be reported all the same.
+        let isMissing =
+          own.advertised[coordinationKey] != nil
+          && UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) == nil
         try self.writeMarker(region, coordinationKey: coordinationKey)
+        if isMissing {
+          self.notePutBack(&own)
+        }
         guard own.advertised.updateValue(region, forKey: coordinationKey) == nil else { return }
         // The database's directory holds a file of this endpoint's now, so it is watched too.
         self.repair(&own)
@@ -449,11 +479,25 @@
     ///
     /// Most changes are other endpoints' files coming and going beside this one's, which only
     /// cost a look at this endpoint's own.
-    private func repairIfChanged() {
+    ///
+    /// - Returns: Whether this, or a repair on another thread since the last call, put back any
+    ///   file.
+    private func repairIfChanged() -> Bool {
       self.own.withLock { own in
-        guard own.watcher?.drainChanges() == true, !self.isIntact(own) else { return }
-        self.repair(&own)
+        if own.watcher?.drainChanges() == true, !self.isIntact(own) {
+          self.repair(&own)
+        }
+        defer { own.hasRepaired = false }
+        return own.hasRepaired && !own.isShutDown
       }
+    }
+
+    /// Counts a file put back, and has the endpoint's thread report it, which it does even if
+    /// this runs on some other thread.
+    private func notePutBack(_ own: inout OwnFiles) {
+      own.repairCount += 1
+      own.hasRepaired = true
+      self.endpoint.requestChange()
     }
 
     /// Whether this endpoint's socket's path still names the socket it bound, every marker it
@@ -496,12 +540,12 @@
         if UnixPlatform.fileIdentity(atPath: self.socketPath) != self.endpoint.boundFile,
           (try? self.endpoint.rebind()) != nil
         {
-          own.repairCount += 1
+          self.notePutBack(&own)
         }
         for (coordinationKey, region) in own.advertised
         where UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).path) == nil {
           if (try? self.writeMarker(region, coordinationKey: coordinationKey)) != nil {
-            own.repairCount += 1
+            self.notePutBack(&own)
           }
         }
 

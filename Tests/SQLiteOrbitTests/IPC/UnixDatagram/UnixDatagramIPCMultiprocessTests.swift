@@ -180,9 +180,11 @@
     func aProcessWhoseFilesTheCleanerRemovesPutsThemBackAndKeepsReceiving() async throws {
       // What `UnixDatagramRemovedFilesTests` does to an idle endpoint in this process, done to one
       // in a process of its own, as macOS's cleaner of temporary files would.
+      // The listener counts only this commit, and exits once it has also been told, by its
+      // repair, that the database may have changed.
       let harness = try IPCProcessHarness(database: "cleaned")
       defer { harness.cleanup() }
-      let listener = try harness.spawn("listen", expected: 1)
+      let listener = try harness.spawn("listen-repaired", expected: 1)
       try await harness.waitUntilReady(1)
       let files = try UnixDatagramEndpointFiles(
         advertising: harness.database,
@@ -191,7 +193,12 @@
 
       files.removeAsTheCleanerWould()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
-      try await harness.transport().send(harness.message)
+      try await harness.transport()
+        .send(
+          .transactionDidCommit(
+            .init(databaseIdentifier: harness.database, region: OrbitDatabaseRegion(table: "items"))
+          )
+        )
 
       try await harness.waitForSuccessfulExit(listener)
       #expect(try harness.result(0) == 1)
@@ -216,11 +223,19 @@
     )
     let received = Lock(0)
     let covered = Lock(OrbitDatabaseRegion.empty)
+    let isNotified = Lock(false)
     let region: OrbitDatabaseRegion =
       mode == "listen-table-a" ? OrbitDatabaseRegion(table: "a") : .fullDatabase
     let subscription = try transport.subscribe(to: database, region: region) { message in
       if case .transactionDidCommit(let commit) = message {
         covered.withLock { $0.formUnion(commit.region) }
+      }
+      if mode == "listen-repaired",
+        message == .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+      {
+        // What a repair tells subscribers, which no peer sends in this mode.
+        isNotified.withLock { $0 = true }
+        return
       }
       if mode == "listen-region" {
         let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
@@ -248,6 +263,8 @@
     } else if mode == "listen-columns" {
       let columns = OrbitDatabaseRegion(columns: (0..<expected).map { "c\($0)" }, in: "items")
       try await waitUntil(timeout: .seconds(30)) { covered.withLock { $0.contains(columns) } }
+    } else if mode == "listen-repaired" {
+      try await waitUntil { received.withLock { $0 } >= expected && isNotified.withLock { $0 } }
     } else {
       try await waitUntil { received.withLock { $0 } >= expected }
     }

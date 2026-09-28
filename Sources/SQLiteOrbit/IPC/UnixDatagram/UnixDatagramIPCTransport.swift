@@ -23,6 +23,17 @@
   /// again, and its peers go on sending to it, what they owed it included. A transport whose
   /// thread is held up, such as one in a suspended process, puts them back once it runs again.
   ///
+  /// While they are missing, a peer that commits cannot tell this transport is there, and may
+  /// leave it out of the commit, or of what it owed it. So once a transport has put back any of
+  /// its files, it tells its own subscribers that every database they subscribe to may have
+  /// changed entirely: each handler whose region is not empty receives a
+  /// ``OrbitIPCMessage/transactionDidCommit(_:)`` with the
+  /// ``OrbitDatabaseRegion/fullDatabase`` region, on the transport's thread, after peers can
+  /// reach the transport again. A transport whose files are removed therefore never silently
+  /// misses a commit: it either receives it, or its subscribers are told the database may have
+  /// changed. Changes to the coordination directory that leave its files in place tell them
+  /// nothing.
+  ///
   /// ```swift
   /// let transport = try UnixDatagramIPCTransport.shared()
   /// let subscription = try transport.subscribe(to: database.id) { _ in refresh() }
@@ -210,7 +221,33 @@
             callback(message)
           }
         }
+      } onRepair: { [weak self] in
+        // Peers may have left this transport out of any commit made while its files were
+        // missing, so every database it has handlers for may have changed in any way.
+        guard let deliveries = self?.state.withLock({ Self.possibleChanges(in: $0) }) else {
+          return
+        }
+        for (message, callbacks) in deliveries {
+          for callback in callbacks {
+            callback(message)
+          }
+        }
       }
+    }
+
+    /// A commit to the full database for every database with handlers, in a stable order, and the
+    /// handlers each goes to.
+    private static func possibleChanges(
+      in state: State
+    ) -> [(OrbitIPCMessage, [@Sendable (OrbitIPCMessage) -> Void])] {
+      state.handlers.keys
+        .sorted { $0.rawValue < $1.rawValue }
+        .map { databaseIdentifier in
+          let message = OrbitIPCMessage.transactionDidCommit(
+            .init(databaseIdentifier: databaseIdentifier, region: .fullDatabase)
+          )
+          return (message, state.handlers.callbacks(for: message))
+        }
     }
 
     deinit {
@@ -226,7 +263,10 @@
     /// subscriptions for each database, and peers send it only the commits that union admits.
     /// The first subscription for a database makes the endpoint discoverable for it, and cancelling
     /// the last one withdraws the advertisement. Handlers run serially on the transport's receive
-    /// thread, and each is only called for the commits its own region admits.
+    /// thread, and each is only called for the commits its own region admits. A handler is also
+    /// sent a commit to the full database that no peer made whenever this transport has put back
+    /// its files in the coordination directory, since peers may have left it out of commits made
+    /// while they were missing.
     ///
     /// A widened region is advertised before ``OrbitRegionSubscription/updateRegion(_:)`` returns,
     /// so every send that starts afterwards, in any process, honors it.

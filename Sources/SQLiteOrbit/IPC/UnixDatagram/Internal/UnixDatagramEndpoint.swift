@@ -21,7 +21,8 @@
   /// to the send's caller and those its thread finds to the callback it was started with. Its
   /// thread also waits on a descriptor its owner gives it, which says that something its owner
   /// watches has changed, and calls its owner back, so its owner can repair its files on a thread
-  /// that is waiting anyway rather than one of its own.
+  /// that is waiting anyway rather than one of its own. Its owner can ask to be called back all
+  /// the same, to finish on that thread what it did on another.
   ///
   /// The socket can be bound again at the same path, if its file is removed from under it. The
   /// new socket takes the old one's place at the path, where every peer that connects from then
@@ -107,8 +108,8 @@
     ///   - onStalePeer: Receives each peer the thread finds dead while sending it what it is owed,
     ///     once the endpoint has forgotten it, on the endpoint's thread and without its lock held.
     ///   - onChange: Called on the endpoint's thread, without its lock held, whenever the
-    ///     descriptor given to ``waitForChanges(on:)`` is readable. It is what drains that
-    ///     descriptor.
+    ///     descriptor given to ``waitForChanges(on:)`` is readable, and once after each
+    ///     ``requestChange()``. It is what drains that descriptor.
     func start(
       receive: @escaping @Sendable (Span<UInt8>) -> Void,
       onStalePeer: @escaping @Sendable (UnixDatagramPeer) -> Void,
@@ -137,6 +138,16 @@
       if let previous {
         self.queue.unwatchReadable(previous)
       }
+    }
+
+    /// Has the thread call the `onChange` it was started with once more, soon, whether or not the
+    /// descriptor given to ``waitForChanges(on:)`` is readable.
+    ///
+    /// This does not wait for the thread, so it is safe to call from any thread, the endpoint's
+    /// own included.
+    func requestChange() {
+      self.state.withLock { $0.isChangeRequested = true }
+      self.queue.wake()
     }
 
     /// The file the socket was bound to, which the socket's path names for as long as nothing
@@ -463,6 +474,13 @@
             writable.append(descriptor)
           }
         }
+        // Taken after the wait, which a request made at any point before it cuts short.
+        if self.state.withLock({ state in
+          defer { state.isChangeRequested = false }
+          return state.isChangeRequested
+        }) {
+          changed = true
+        }
         if changed {
           onChange()
         }
@@ -561,6 +579,8 @@
       var retired: [BoundSocket] = []
       /// The descriptor given to ``waitForChanges(on:)``, if any.
       var changeDescriptor: Int32?
+      /// Whether ``requestChange()`` was called since the thread last called `onChange`.
+      var isChangeRequested = false
     }
   }
 #endif

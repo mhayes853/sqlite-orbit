@@ -12,10 +12,18 @@
   /// The removal is done by hand, the way the system's cleaner does it: the socket's file and the
   /// marker go, then every directory they leave empty. Nothing here depends on the platform, so
   /// the same scenario runs on Linux and Darwin alike.
+  ///
+  /// An endpoint that puts back any of its files tells its subscribers the database may have
+  /// changed entirely, since peers may have left it out of commits made while they were missing.
   @Suite
   struct UnixDatagramRemovedFilesTests {
     private let database = OrbitDatabaseIdentifier(rawValue: "cleaned")
     private let items = OrbitDatabaseRegion(table: "items")
+
+    /// What a repair tells the endpoint's subscribers.
+    private var notice: OrbitIPCMessage {
+      .transactionDidCommit(.init(databaseIdentifier: self.database, region: .fullDatabase))
+    }
 
     @Test
     func anIdleEndpointWhoseFilesTheCleanerRemovesPutsThemBackAndKeepsReceiving() async throws {
@@ -39,14 +47,16 @@
 
       // Under the same name, so at the same paths.
       try await waitUntil { files.isRestored(advertising: self.items) }
-      try await sender.send(removedFilesCommit(self.database, column: 1))
-      try await recorder.waitForCount(2)
-      #expect(
-        recorder.values == [
-          removedFilesCommit(self.database, column: 0),
-          removedFilesCommit(self.database, column: 1)
-        ]
-      )
+      let later = removedFilesCommit(self.database, column: 1)
+      try await sender.send(later)
+      try await waitUntil { recorder.values.contains(later) }
+      // The cleaner's removals can land on either side of a repair, so it may take more than one,
+      // and each tells the subscriber. The last one's notice comes before anything sent after it.
+      let values = recorder.values
+      #expect(values.first == removedFilesCommit(self.database, column: 0))
+      #expect(values.last == later)
+      let notices = values.dropFirst().dropLast()
+      #expect(!notices.isEmpty && notices.allSatisfy { $0 == self.notice })
       _ = subscription
     }
 
@@ -73,16 +83,27 @@
       files.removeAsTheCleanerWould()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       #expect(first.send([0]) == .sent)
-      try await sender.send(removedFilesCommit(self.database, column: 1))
-      try await recorder.waitForCount(2)
+      let second = removedFilesCommit(self.database, column: 1)
+      try await sender.send(second)
+      try await waitUntil { recorder.values.contains(second) }
 
       files.removeAsTheCleanerWould()
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       try await waitUntil { first.send([0]) == .peerGone }
-      try await sender.send(removedFilesCommit(self.database, column: 2))
-      try await recorder.waitForCount(3)
+      let third = removedFilesCommit(self.database, column: 2)
+      try await sender.send(third)
+      try await waitUntil { recorder.values.contains(third) }
 
-      #expect(recorder.values == (0..<3).map { removedFilesCommit(self.database, column: $0) })
+      // Each removal told the subscriber at least once, before the commit sent after its repair.
+      let values = recorder.values
+      #expect(
+        values.filter { $0 != self.notice }
+          == (0..<3).map { removedFilesCommit(self.database, column: $0) }
+      )
+      let secondIndex = try #require(values.firstIndex(of: second))
+      #expect(values[1] == self.notice)
+      #expect(values[secondIndex + 1] == self.notice)
+      #expect(values.last == third)
       _ = subscription
     }
 
@@ -116,16 +137,61 @@
 
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       try await waitUntil { sender.owedRegions.isEmpty }
-      try await receiver.recorder.waitForCount(queued.count + 1)
-      // Everything its queue held, then the union of every region it missed, as one commit.
+      // The union of every region it missed, as one commit, which the sender sends to the socket
+      // it is connected to, and the notice of the repair, in whichever order they land.
       let missed = OrbitIPCMessage.transactionDidCommit(
         .init(databaseIdentifier: self.database, region: owed)
       )
-      #expect(receiver.recorder.values == queued + [missed])
+      try await waitUntil {
+        let values = receiver.recorder.values
+        return values.contains(missed) && values.contains(self.notice)
+      }
       let later = removedFilesCommit(self.database, column: 20_000)
       try await sender.send(later)
-      try await receiver.recorder.waitForCount(queued.count + 2)
-      #expect(receiver.recorder.values.last == later)
+      try await waitUntil { receiver.recorder.values.contains(later) }
+      // Everything its queue held first.
+      let values = receiver.recorder.values
+      #expect(Array(values.prefix(queued.count)) == queued)
+      let rest = values.dropFirst(queued.count)
+      #expect(rest.filter { $0 != self.notice } == [missed, later])
+      #expect(rest.last == later)
+    }
+
+    @Test
+    func aSuspendedEndpointASenderStoppedOwingWhileItsMarkerWasMissingIsToldItMayHaveChanged()
+      async throws
+    {
+      // A commit made while the receiver's marker is missing finds no one to send to, and the
+      // sender drops what it owed the receiver, so the receiver can only learn of either from
+      // the notice its repair gives its subscribers.
+      let directory = try makeShortTemporaryDirectory("cleaner")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let receiver = try HeldReceiver(directory: directory, database: self.database)
+      let sender = try removedFilesTransport(directory)
+      let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
+
+      var queued: [OrbitIPCMessage] = []
+      while sender.owedRegions.isEmpty {
+        guard queued.count < 10_000 else { throw TestTimeout() }
+        let message = removedFilesCommit(self.database, column: queued.count)
+        try await sender.send(message)
+        queued.append(message)
+      }
+      queued.removeLast()
+
+      files.removeAsTheCleanerWould()
+      let unseen = removedFilesCommit(self.database, column: 10_000)
+      #expect(try sender.peers(concernedWith: unseen).isEmpty)
+      try await sender.send(unseen)
+      #expect(sender.owedRegions.isEmpty)
+
+      receiver.resume()
+      try await waitUntil { files.isRestored(advertising: .fullDatabase) }
+      let later = removedFilesCommit(self.database, column: 20_000)
+      try await sender.send(later)
+      try await waitUntil { receiver.recorder.values.contains(later) }
+      // Its queue is read to the end before the thread hears its files were removed.
+      #expect(receiver.recorder.values == queued + [self.notice, later])
     }
 
     @Test
@@ -152,8 +218,37 @@
       try await waitUntil { files.isRestored(advertising: .fullDatabase) }
       let later = removedFilesCommit(self.database, column: 2)
       try await sender.send(later)
-      try await receiver.recorder.waitForCount(2)
-      #expect(receiver.recorder.values == [first, later])
+      try await waitUntil { receiver.recorder.values.contains(later) }
+      // The commit the sender made while it took the receiver for dead only shows as the notice.
+      #expect(receiver.recorder.values == [first, self.notice, later])
+    }
+
+    @Test
+    func aChangeBesideAnEndpointsFilesTellsItsSubscribersNothing() async throws {
+      // Other endpoints' files coming and going in the directories the endpoint watches set off a
+      // look at its own, which finds nothing to put back.
+      let directory = try makeShortTemporaryDirectory("cleaner")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let receiver = try removedFilesTransport(directory)
+      let recorder = IPCMessageRecorder()
+      let subscription = try receiver.subscribe(to: self.database, onMessage: recorder.append)
+
+      // A socket in `v1/s/` and a marker beside the receiver's, which go again once it is released.
+      do {
+        let other = try removedFilesTransport(directory)
+        let otherSubscription = try other.subscribe(to: self.database) { _ in }
+        _ = otherSubscription
+      }
+      let sender = try removedFilesTransport(directory)
+      try await Task.sleep(for: .milliseconds(200))
+      let commit = removedFilesCommit(self.database, column: 0)
+      try await sender.send(commit)
+      try await recorder.waitForCount(1)
+      try await Task.sleep(for: .milliseconds(200))
+
+      #expect(recorder.values == [commit])
+      #expect(receiver.repairCount == 0)
+      _ = subscription
     }
 
     @Test
