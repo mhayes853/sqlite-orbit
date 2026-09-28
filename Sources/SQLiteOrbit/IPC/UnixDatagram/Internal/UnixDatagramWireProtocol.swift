@@ -71,9 +71,7 @@ enum UnixDatagramWireProtocol {
 
     var messages: [OrbitIPCMessage] = []
     for _ in 0..<entryCount {
-      guard offset < bytes.count else { throw UnixDatagramWireError.truncated }
-      let kind = bytes[offset]
-      offset += 1
+      let kind = try readByte(from: bytes, at: &offset)
       let payloadCount = try readCount(from: bytes, at: &offset)
       guard payloadCount <= bytes.count - offset else { throw UnixDatagramWireError.truncated }
       let payload = bytes.extracting(offset..<(offset + payloadCount))
@@ -109,7 +107,7 @@ enum UnixDatagramWireProtocol {
     appendRegion(
       region,
       to: &bytes,
-      indices: Dictionary(uniqueKeysWithValues: strings.enumerated().map { ($1, UInt16($0)) })
+      indices: Dictionary(uniqueKeysWithValues: strings.enumerated().map { ($1, $0) })
     )
     return bytes
   }
@@ -199,18 +197,18 @@ enum UnixDatagramWireProtocol {
   static func appendRegion(
     _ region: OrbitDatabaseRegion,
     to bytes: inout [UInt8],
-    indices: [String: UInt16]
+    indices: [String: Int]
   ) {
     bytes.append(region.includesUnspecifiedTables ? 1 : 0)
     let tables = sortedTables(of: region)
     appendCount(tables.count, to: &bytes)
     for (table, tableRegion) in tables {
-      appendIndex(of: table.schema.rawValue, in: indices, to: &bytes)
-      appendIndex(of: table.name, in: indices, to: &bytes)
+      appendCount(indices[table.schema.rawValue]!, to: &bytes)
+      appendCount(indices[table.name]!, to: &bytes)
       bytes.append(tableRegion.includesUnspecifiedColumns ? 1 : 0)
       appendCount(tableRegion.exceptions.count, to: &bytes)
       for column in tableRegion.exceptions.sorted() {
-        appendIndex(of: column, in: indices, to: &bytes)
+        appendCount(indices[column]!, to: &bytes)
       }
     }
   }
@@ -268,20 +266,16 @@ enum UnixDatagramWireProtocol {
     bytes.append(UInt8(truncatingIfNeeded: count))
   }
 
-  static func appendIndex(
-    of string: String,
-    in indices: [String: UInt16],
-    to bytes: inout [UInt8]
-  ) {
-    appendCount(Int(indices[string]!), to: &bytes)
+  private static func readByte(from bytes: Span<UInt8>, at offset: inout Int) throws -> UInt8 {
+    guard offset < bytes.count else { throw UnixDatagramWireError.truncated }
+    defer { offset += 1 }
+    return bytes[offset]
   }
 
   private static func readFlag(from bytes: Span<UInt8>, at offset: inout Int) throws -> Bool {
-    guard offset < bytes.count else { throw UnixDatagramWireError.truncated }
-    defer { offset += 1 }
-    switch bytes[offset] {
-    case 0: return false
-    case 1: return true
+    switch try readByte(from: bytes, at: &offset) {
+    case 0: false
+    case 1: true
     default: throw UnixDatagramWireError.invalidFlags
     }
   }
@@ -342,31 +336,27 @@ struct UnixDatagramWireEntry: Sendable {
   /// - Throws: ``UnixDatagramWireError/datagramTooLarge`` if even the broadened message does not
   ///   fit, or ``UnixDatagramWireError/databaseIdentifierTooLong``.
   init(_ message: OrbitIPCMessage, fittingIn maximumByteCount: Int) throws {
-    do {
-      let entry = try Self(message)
-      if UnixDatagramWireBatch().byteCount(appending: entry) <= maximumByteCount {
-        self = entry
-        return
-      }
-    } catch UnixDatagramWireError.regionTooLarge {
+    let fits = { UnixDatagramWireBatch().byteCount(appending: $0) <= maximumByteCount }
+    if let entry = try? Self(message), fits(entry) {
+      self = entry
+      return
     }
-    let entry = try Self(message.withFullDatabaseRegion)
-    guard UnixDatagramWireBatch().byteCount(appending: entry) <= maximumByteCount else {
-      throw UnixDatagramWireError.datagramTooLarge
-    }
+    // An identifier too long to encode fails here again, broadened or not.
+    let entry = try Self(
+      .transactionDidCommit(
+        .init(databaseIdentifier: message.databaseIdentifier, region: .fullDatabase)
+      )
+    )
+    guard fits(entry) else { throw UnixDatagramWireError.datagramTooLarge }
     self = entry
   }
 
-  fileprivate func append(to bytes: inout [UInt8], indices: [String: UInt16]) {
+  fileprivate func append(to bytes: inout [UInt8], indices: [String: Int]) {
     switch self.message {
     case .transactionDidCommit(let commit):
       bytes.append(1)
       UnixDatagramWireProtocol.appendCount(self.byteCount - 3, to: &bytes)
-      UnixDatagramWireProtocol.appendIndex(
-        of: commit.databaseIdentifier.rawValue,
-        in: indices,
-        to: &bytes
-      )
+      UnixDatagramWireProtocol.appendCount(indices[commit.databaseIdentifier.rawValue]!, to: &bytes)
       UnixDatagramWireProtocol.appendRegion(commit.region, to: &bytes, indices: indices)
     }
   }
@@ -380,7 +370,7 @@ struct UnixDatagramWireBatch {
   private(set) var byteCount = 10
 
   private var strings: [String] = []
-  private var indices: [String: UInt16] = [:]
+  private var indices: [String: Int] = [:]
 
   /// The length this batch would have with `entry` appended.
   func byteCount(appending entry: UnixDatagramWireEntry) -> Int {
@@ -392,7 +382,7 @@ struct UnixDatagramWireBatch {
   mutating func append(_ entry: UnixDatagramWireEntry) {
     self.byteCount = self.byteCount(appending: entry)
     for string in entry.strings where self.indices[string] == nil {
-      self.indices[string] = UInt16(self.strings.count)
+      self.indices[string] = self.strings.count
       self.strings.append(string)
     }
     self.entries.append(entry)
@@ -409,16 +399,5 @@ struct UnixDatagramWireBatch {
     }
     assert(bytes.count == self.byteCount)
     return bytes
-  }
-}
-
-extension OrbitIPCMessage {
-  fileprivate var withFullDatabaseRegion: Self {
-    switch self {
-    case .transactionDidCommit(let commit):
-      .transactionDidCommit(
-        .init(databaseIdentifier: commit.databaseIdentifier, region: .fullDatabase)
-      )
-    }
   }
 }
