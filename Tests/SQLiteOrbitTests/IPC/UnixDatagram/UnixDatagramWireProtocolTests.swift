@@ -94,7 +94,6 @@ func unixDatagramWireProtocolRejectsEveryTruncatedPrefix() throws {
 @Test
 func unixDatagramWireProtocolSkipsEntriesOfUnknownKinds() throws {
   let datagram = rawDatagram(
-    strings: utf8("db"),
     entries: [
       (1, commitPayload()),
       (9, [0xff, 0xff, 0xff]),
@@ -111,40 +110,30 @@ func unixDatagramWireProtocolSkipsEntriesOfUnknownKinds() throws {
 
 @Test
 func unixDatagramWireProtocolRejectsMalformedHeaders() {
-  var badMagic = rawDatagram(strings: utf8("db"), entries: [(1, commitPayload())])
+  var badMagic = rawDatagram()
   badMagic[0] = 0
   #expect(throws: UnixDatagramWireError.invalidMagic) { try decodeDatabaseIPCMessages(badMagic) }
   #expect(throws: UnixDatagramWireError.unsupportedProtocolVersion(2)) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(version: 2, strings: utf8("db"), entries: [(1, commitPayload())])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(version: 2))
   }
   #expect(throws: UnixDatagramWireError.invalidFlags) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(flags: 1, strings: utf8("db"), entries: [(1, commitPayload())])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(flags: 1))
   }
   #expect(throws: UnixDatagramWireError.emptyBatch) {
-    try decodeDatabaseIPCMessages(rawDatagram(strings: utf8("db"), entries: []))
+    try decodeDatabaseIPCMessages(rawDatagram(entries: []))
   }
   #expect(throws: UnixDatagramWireError.trailingBytes) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: utf8("db"), entries: [(1, commitPayload())]) + [0]
-    )
+    try decodeDatabaseIPCMessages(rawDatagram() + [0])
   }
 }
 
 @Test
 func unixDatagramWireProtocolRejectsMalformedStrings() {
   #expect(throws: UnixDatagramWireError.invalidUTF8) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: [[0xff]], entries: [(1, commitPayload())])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(strings: [[0xff]]))
   }
   #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: utf8("db"), entries: [(1, commitPayload(database: 1))])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload(database: 1))]))
   }
   #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
     try decodeDatabaseIPCMessages(
@@ -159,19 +148,13 @@ func unixDatagramWireProtocolRejectsMalformedStrings() {
 @Test
 func unixDatagramWireProtocolRejectsMalformedPayloads() {
   #expect(throws: UnixDatagramWireError.payloadLengthMismatch) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: utf8("db"), entries: [(1, commitPayload() + [0])])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload() + [0])]))
   }
   #expect(throws: UnixDatagramWireError.truncated) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: utf8("db"), entries: [(1, Array(commitPayload().dropLast()))])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, Array(commitPayload().dropLast()))]))
   }
   #expect(throws: UnixDatagramWireError.invalidFlags) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(strings: utf8("db"), entries: [(1, commitPayload(regionFlags: 2))])
-    )
+    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload(regionFlags: 2))]))
   }
   #expect(throws: UnixDatagramWireError.invalidFlags) {
     try decodeDatabaseIPCMessages(
@@ -300,12 +283,13 @@ private func decodeDatabaseIPCMessages(_ bytes: [UInt8]) throws -> [OrbitIPCMess
   }
 }
 
-/// Lays out a datagram field by field, so a test can get any one of them wrong.
+/// Lays out a datagram field by field, so a test can get any one of them wrong, by default one
+/// committing the full database `db`.
 private func rawDatagram(
   version: UInt8 = 1,
   flags: UInt8 = 0,
-  strings: [[UInt8]],
-  entries: [(kind: UInt8, payload: [UInt8])]
+  strings: [[UInt8]] = utf8("db"),
+  entries: [(kind: UInt8, payload: [UInt8])] = [(1, commitPayload())]
 ) -> [UInt8] {
   var bytes: [UInt8] = [0x4F, 0x52, 0x42, 0x54, version, flags] + bigEndian(entries.count)
   bytes += bigEndian(strings.count)
