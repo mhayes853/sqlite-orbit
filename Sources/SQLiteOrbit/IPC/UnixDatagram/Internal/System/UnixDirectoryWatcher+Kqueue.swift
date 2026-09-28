@@ -10,20 +10,31 @@
   /// directory that is removed or moved away also counts as a change, after which its watch reports
   /// nothing more. Nothing about it is thread-safe: the caller serializes every use.
   final class UnixDirectoryWatcher: @unchecked Sendable {
-    private let descriptor: UnixDescriptor
+    private let queue: UnixDescriptor
     /// The descriptor of each directory watched, which this closes itself: an array holds only
     /// values that can be copied, which a ``UnixDescriptor`` cannot.
     private var directories: [Int32] = []
 
     init() throws {
-      self.descriptor = try UnixDescriptor(kqueue(), from: "kqueue")
-      _ = fcntl(self.descriptor.rawValue, F_SETFD, FD_CLOEXEC)
+      self.queue = try UnixDescriptor(kqueue(), from: "kqueue")
+      _ = fcntl(self.queue.rawValue, F_SETFD, FD_CLOEXEC)
     }
 
     deinit {
       for directory in self.directories {
         UnixPlatform.closeDescriptor(directory)
       }
+    }
+
+    /// A descriptor that is readable while a change is waiting to be drained, so a thread can
+    /// wait for changes along with everything else by handing it to
+    /// ``UnixEventQueue/watchReadable(_:)``. It stays readable until ``drainChanges()`` takes
+    /// what is queued, and is valid for as long as the watcher is.
+    ///
+    /// It is this watcher's kqueue, which another kqueue's read filter reports as readable while
+    /// it has events pending.
+    var descriptor: Int32 {
+      self.queue.rawValue
     }
 
     /// Starts watching the directory at `path`.
@@ -43,7 +54,7 @@
         data: 0,
         udata: nil
       )
-      guard systemKevent(self.descriptor.rawValue, &change, 1, nil, 0, nil) == 0 else {
+      guard systemKevent(self.queue.rawValue, &change, 1, nil, 0, nil) == 0 else {
         let error = UnixSystemError.last("kevent")
         UnixPlatform.closeDescriptor(directory)
         throw error
@@ -64,7 +75,7 @@
       var timeout = timespec(tv_sec: 0, tv_nsec: 0)
       while true {
         let count = systemKevent(
-          self.descriptor.rawValue,
+          self.queue.rawValue,
           nil,
           0,
           &events,

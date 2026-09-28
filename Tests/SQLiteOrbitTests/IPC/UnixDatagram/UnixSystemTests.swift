@@ -45,7 +45,7 @@
       try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
 
       #expect(throws: UnixSystemError.self) {
-        try UnixDatagramSocket.bind(path: path.path, receiveBufferByteCount: 64 * 1024)
+        _ = try UnixDatagramSocket.bind(path: path.path, receiveBufferByteCount: 64 * 1024)
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
     }
@@ -132,6 +132,49 @@
       #expect(FileManager.default.createFile(atPath: other, contents: nil))
       #expect(UnixPlatform.renameFile(atPath: other, toPath: path))
       #expect(UnixPlatform.fileIdentity(atPath: path) != first)
+    }
+
+    @Test
+    func aDirectoryWatcherWakesAnEventQueueWaitingOnIt() throws {
+      let directory = try makeShortTemporaryDirectory("system")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let watched = directory.appending(path: "watched", directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: watched, withIntermediateDirectories: false)
+      let file = watched.appending(path: "file")
+      #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
+      let watcher = try UnixDirectoryWatcher()
+      try watcher.watch(watched.path)
+      let queue = try UnixEventQueue()
+      try queue.watchReadable(watcher.descriptor)
+
+      #expect(Self.readableDescriptors(queue, within: .milliseconds(20)).isEmpty)
+
+      try FileManager.default.removeItem(at: file)
+      #expect(Self.readableDescriptors(queue, within: .seconds(5)) == [watcher.descriptor])
+      #expect(watcher.drainChanges())
+      #expect(Self.readableDescriptors(queue, within: .milliseconds(20)).isEmpty)
+
+      #expect(UnixPlatform.removeDirectory(atPath: watched.path))
+      #expect(Self.readableDescriptors(queue, within: .seconds(5)) == [watcher.descriptor])
+      #expect(watcher.drainChanges())
+    }
+
+    /// Waits on `queue` until something is readable or `timeout` passes.
+    ///
+    /// - Returns: The descriptors reported readable.
+    private static func readableDescriptors(
+      _ queue: UnixEventQueue,
+      within timeout: Duration
+    ) -> [Int32] {
+      let deadline = ContinuousClock.now + timeout
+      var descriptors: [Int32] = []
+      // A signal can end a wait early, with nothing to report.
+      while descriptors.isEmpty, ContinuousClock.now < deadline {
+        queue.wait(until: deadline) { event in
+          if case .readable(let descriptor) = event { descriptors.append(descriptor) }
+        }
+      }
+      return descriptors
     }
 
     /// Binds a socket at `path` and closes it, leaving its file behind as a process that died
