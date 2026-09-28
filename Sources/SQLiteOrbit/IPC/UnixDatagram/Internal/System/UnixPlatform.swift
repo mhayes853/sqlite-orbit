@@ -82,9 +82,40 @@
       open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)
     }
 
+    /// Opens the file at `path` for reading, failing with `ENOENT` rather than creating it.
+    static func openExistingFile(atPath path: String) -> Int32 {
+      open(path, O_RDONLY | O_CLOEXEC)
+    }
+
     /// Takes an exclusive `flock` on an open file, waiting for it.
     static func lockExclusively(_ descriptor: Int32) -> Bool {
       flock(descriptor, LOCK_EX) == 0
+    }
+
+    /// Takes an exclusive `flock` on an open file if nobody else holds one, failing with
+    /// `EWOULDBLOCK` rather than waiting if somebody does.
+    static func tryLockExclusively(_ descriptor: Int32) -> Bool {
+      flock(descriptor, LOCK_EX | LOCK_NB) == 0
+    }
+
+    /// Which file the path `path` names now, following a symbolic link.
+    ///
+    /// - Returns: The file's identity, or `nil` if it cannot be looked up, as when nothing is
+    ///   at `path`.
+    static func fileIdentity(atPath path: String) -> UnixFileIdentity? {
+      var status = stat()
+      guard stat(path, &status) == 0 else { return nil }
+      return UnixFileIdentity(status)
+    }
+
+    /// Which file an open descriptor refers to, which stays the same however the file is renamed
+    /// or unlinked. A socket's descriptor names the socket, not the file it is bound to.
+    ///
+    /// - Returns: The file's identity, or `nil` if it cannot be looked up.
+    static func fileIdentity(ofDescriptor descriptor: Int32) -> UnixFileIdentity? {
+      var status = stat()
+      guard fstat(descriptor, &status) == 0 else { return nil }
+      return UnixFileIdentity(status)
     }
 
     // MARK: - Sockets
@@ -159,6 +190,23 @@
       #endif
       private static let sendFlags = Int32(MSG_NOSIGNAL)
     #endif
+  }
+
+  /// Which file a path or descriptor refers to: its device and inode, which no two files that
+  /// exist at the same time share.
+  ///
+  /// A path can come to name a different file at any moment, when another process unlinks or
+  /// renames over it, so comparing identities is how a caller tells whether the file it holds is
+  /// still the one at the path.
+  struct UnixFileIdentity: Hashable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+
+    // Each C library gives `dev_t` and `ino_t` a width and signedness of its own.
+    fileprivate init(_ status: stat) {
+      self.device = UInt64(truncatingIfNeeded: status.st_dev)
+      self.inode = UInt64(truncatingIfNeeded: status.st_ino)
+    }
   }
 
   /// A Unix-domain socket address naming a path.
