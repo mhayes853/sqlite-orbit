@@ -13,9 +13,15 @@
   /// the path, and a waiter that finds otherwise starts over. The path cannot change behind a
   /// holder who has checked: only a holder unlinks it, and nothing else can hold the file at the
   /// path without holding this lock.
+  ///
+  /// `flock` either waits for good or not at all, and a holder that is frozen rather than dead,
+  /// stopped by a signal or a debugger or suspended by its OS, never lets go. So whatever must not
+  /// wait on such a process takes the lock with ``withExclusiveLock(atPath:waitingWhile:_:)``,
+  /// which tries without waiting and asks between tries whether to go on, as SQLite does for its
+  /// own locks.
   enum UnixFileLock {
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed
-    /// and waiting for whoever holds it.
+    /// and waiting for whoever holds it, however long that takes.
     ///
     /// - Throws: A ``UnixSystemError`` if the file cannot be opened or locked, or whatever `body`
     ///   throws.
@@ -24,7 +30,30 @@
       _ body: () throws -> Result
     ) throws -> Result {
       // A lock that waits is always taken, so there is always a result.
-      try Self.withLock(atPath: path, waits: true, body)!
+      try Self.withLock(atPath: path, waits: true, keepsWaiting: { _ in true }, body)!
+    }
+
+    /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
+    /// and waiting for whoever holds it for as long as `keepsWaiting` says.
+    ///
+    /// Each try takes the lock without waiting. One that finds it held asks `keepsWaiting`, which
+    /// does whatever waiting there is before it answers, as a busy handler does for SQLite: `true`
+    /// tries again at once, and `false` gives up. A try that starts over on a file its holder
+    /// unlinked has found the lock free, and asks nothing.
+    ///
+    /// - Parameters:
+    ///   - keepsWaiting: Receives how many tries have found the lock held, counting from `1` and
+    ///     rising across the whole wait.
+    ///   - body: Runs once the lock is held.
+    /// - Returns: What `body` returned, or `nil`, without running it, if `keepsWaiting` gave up.
+    /// - Throws: A ``UnixSystemError`` if the file cannot be opened or locked, or whatever `body`
+    ///   throws.
+    static func withExclusiveLock<Result>(
+      atPath path: String,
+      waitingWhile keepsWaiting: (_ attempt: Int) -> Bool,
+      _ body: () throws -> Result
+    ) throws -> Result? {
+      try Self.withLock(atPath: path, waits: false, keepsWaiting: keepsWaiting, body)
     }
 
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
@@ -37,7 +66,7 @@
       atPath path: String,
       _ body: () throws -> Result
     ) throws -> Result? {
-      try Self.withLock(atPath: path, waits: false, body)
+      try Self.withLock(atPath: path, waits: false, keepsWaiting: { _ in false }, body)
     }
 
     /// Removes the lock file at `path` if nobody holds it, as when the process that held it died.
@@ -60,17 +89,26 @@
       return withExtendedLifetime(descriptor) { UnixPlatform.removeFile(atPath: path) }
     }
 
+    /// Takes the lock, waiting in `flock` if `waits`, and otherwise asking `keepsWaiting` each
+    /// time a try finds it held.
     private static func withLock<Result>(
       atPath path: String,
       waits: Bool,
+      keepsWaiting: (_ attempt: Int) -> Bool,
       _ body: () throws -> Result
     ) throws -> Result? {
+      var attempt = 0
       while true {
         let descriptor = try UnixDescriptor(
           UnixPlatform.openCreatingFile(atPath: path),
           from: "open"
         )
-        guard try Self.lock(descriptor.rawValue, waits: waits) else { return nil }
+        guard try Self.lock(descriptor.rawValue, waits: waits) else {
+          attempt += 1
+          // Each try opens the path afresh, so it never waits on a file its holder unlinked.
+          guard keepsWaiting(attempt) else { return nil }
+          continue
+        }
         guard let isStillAtPath = Self.isStillAtPath(descriptor.rawValue, path) else {
           throw UnixSystemError.last("stat")
         }

@@ -52,9 +52,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///   - configuration: The settings applied to every connection.
   ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
   ///   - coordinationDirectory: Where the advisory lock that serializes opening lives. Processes
-  ///     coordinate only when they share it.
+  ///     coordinate only when they share it. Another process opening the same database holds
+  ///     this one up for as long as `configuration`'s busy timeout or busy handler lets SQLite
+  ///     wait for a lock, and no longer, so one frozen partway through its open cannot hold it up
+  ///     for good.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-  ///   ``SQLiteError`` when a connection cannot be opened or configured.
+  ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
+  ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy timeout
+  ///   or busy handler waits.
   public init(
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
@@ -70,7 +75,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     // opening it at the same moment would otherwise contend for it.
     let (writer, readers) = try Self.withOpenLock(
       identifier: identifier,
-      directory: coordinationDirectory
+      directory: coordinationDirectory,
+      configuration: configuration
     ) {
       try Self.openConnections(path: path, configuration: configuration)
     }
@@ -113,12 +119,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   private static func withOpenLock<Result>(
     identifier: OrbitDatabaseIdentifier,
     directory: URL?,
+    configuration: SQLiteConfiguration,
     _ body: () throws -> Result
   ) throws -> Result {
     #if canImport(Darwin) || os(Linux) || os(Android)
       return try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
         directory: directory ?? UnixDatagramIPCTransport.Configuration.defaultDirectory,
+        configuration: configuration,
         body
       )
     #else

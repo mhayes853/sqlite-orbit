@@ -47,7 +47,11 @@
       let mayRelease = Lock(false)
 
       Thread.detachNewThread {
-        try? OrbitDatabaseOpenLock.withLock(databaseIdentifier: identifier, directory: directory) {
+        try? OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: identifier,
+          directory: directory,
+          configuration: .default
+        ) {
           isHeld.withLock { $0 = true }
           while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
         }
@@ -337,7 +341,8 @@
       let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(path))
       try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
-        directory: coordination.directory
+        directory: coordination.directory,
+        configuration: .default
       ) {
         try touch(ready)
         Thread.sleep(forTimeInterval: 30)

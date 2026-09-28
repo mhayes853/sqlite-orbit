@@ -104,7 +104,8 @@
 
       let (summary, remaining) = try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: held,
-        directory: coordination.directory
+        directory: coordination.directory,
+        configuration: .default
       ) {
         let summary = coordination.sweep()
         return (summary, try FileManager.default.contentsOfDirectory(atPath: locks.path))
@@ -269,7 +270,11 @@
     let database = OrbitDatabaseIdentifier(rawValue: "crashed")
     let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
     let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
-    try OrbitDatabaseOpenLock.withLock(databaseIdentifier: database, directory: directory) {
+    try OrbitDatabaseOpenLock.withLock(
+      databaseIdentifier: database,
+      directory: directory,
+      configuration: .default
+    ) {
       try touch(ready)
       Thread.sleep(forTimeInterval: 30)
     }

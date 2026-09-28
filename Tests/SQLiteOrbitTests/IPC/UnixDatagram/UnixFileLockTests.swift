@@ -36,7 +36,8 @@
       for name in ["one", "two"] {
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: name),
-          directory: directory
+          directory: directory,
+          configuration: .default
         ) {}
       }
       let locks = directory.appending(path: "open-locks").path

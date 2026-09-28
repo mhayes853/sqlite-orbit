@@ -18,7 +18,8 @@
       Thread.detachNewThread {
         try? OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: databaseIdentifier,
-          directory: directory
+          directory: directory,
+          configuration: .default
         ) {
           self.acquired.signal()
           self.mayRelease.wait()
@@ -50,7 +51,8 @@
     Thread.detachNewThread {
       try? OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: databaseIdentifier,
-        directory: directory
+        directory: directory,
+        configuration: .default
       ) {
         order.withLock { $0.append("second") }
         didAcquireSecond.withLock { $0 = true }
@@ -76,7 +78,8 @@
 
     let didAcquire = try OrbitDatabaseOpenLock.withLock(
       databaseIdentifier: OrbitDatabaseIdentifier(rawValue: "two"),
-      directory: directory
+      directory: directory,
+      configuration: .default
     ) { true }
     #expect(didAcquire)
   }
