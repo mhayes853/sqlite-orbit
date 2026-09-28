@@ -373,20 +373,10 @@
   }
 
   extension SQLiteTestDriver {
-    fileprivate func open(
-      in directory: URL,
-      configuration: SQLiteConfiguration
-    ) throws -> any OrbitObservableDatabase {
-      switch self {
-      case .queue: try SQLiteQueue(path: path(in: directory), configuration: configuration)
-      case .pool: try SQLitePool(path: path(in: directory), configuration: configuration)
-      }
-    }
-
     fileprivate func openWithLists(
       in directory: URL,
       probe: PragmaProbe? = nil
-    ) async throws -> any OrbitObservableDatabase {
+    ) async throws -> SQLiteTestDatabase {
       let driver = try open(
         in: directory,
         configuration: probe?.configuration() ?? .default

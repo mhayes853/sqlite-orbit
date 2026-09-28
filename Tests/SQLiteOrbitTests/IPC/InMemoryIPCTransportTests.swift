@@ -206,20 +206,3 @@ struct InMemoryIPCTransportRegionTests {
     #expect(itemsRecorder.values.isEmpty)
   }
 }
-
-func commit(
-  _ database: OrbitDatabaseIdentifier,
-  region: OrbitDatabaseRegion = .fullDatabase
-) -> OrbitIPCMessage {
-  .transactionDidCommit(.init(databaseIdentifier: database, region: region))
-}
-
-final class IPCMessageRecorder: Sendable {
-  private let messages = Lock([OrbitIPCMessage]())
-  var values: [OrbitIPCMessage] { self.messages.withLock { $0 } }
-  func append(_ message: OrbitIPCMessage) { self.messages.withLock { $0.append(message) } }
-
-  func waitForCount(_ count: Int) async throws {
-    try await waitUntil(timeout: .seconds(5)) { self.messages.withLock { $0.count } >= count }
-  }
-}

@@ -436,21 +436,8 @@
     }
   }
 
-  /// A commit to a column no other index writes, so the order commits arrive in shows.
-  func columnCommit(_ database: OrbitDatabaseIdentifier, _ index: Int) -> OrbitIPCMessage {
-    commit(database, region: itemsColumn(index))
-  }
-
-  func itemsColumn(_ index: Int) -> OrbitDatabaseRegion {
-    OrbitDatabaseRegion(column: "c\(index)", in: "items")
-  }
-
   private func ipcTestDirectory() throws -> URL {
     try makeShortTemporaryDirectory("ipc")
-  }
-
-  func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
-    try .init(configuration: .init(directory: directory))
   }
 
   private func remove(_ url: URL) { try? FileManager.default.removeItem(at: url) }
