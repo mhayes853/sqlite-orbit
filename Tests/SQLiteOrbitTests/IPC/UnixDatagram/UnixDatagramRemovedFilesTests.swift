@@ -116,13 +116,8 @@
       let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
-      // Held in its handler before its queue fills, so its thread frees no room afterwards.
-      var queued = [columnCommit(self.database, 0)]
-      try await sender.send(queued[0])
-      try await receiver.recorder.waitForCount(1)
-      queued += try await sendColumnsUntilOwed(sender, self.database, from: 1)
-      var owed = itemsColumn(queued.count - 1)
-      queued.removeLast()
+      let (queued, first) = try await receiver.fill(from: sender)
+      var owed = first
       for index in 10_000..<10_003 {
         try await sender.send(columnCommit(self.database, index))
         owed.formUnion(itemsColumn(index))
@@ -167,14 +162,10 @@
       let sender = try ipcTransport(directory)
       let files = try UnixDatagramEndpointFiles(advertising: self.database, in: directory)
 
-      // Held in its handler before its queue fills, so its thread frees no room afterwards.
-      var queued = [columnCommit(self.database, 0)]
-      try await sender.send(queued[0])
-      try await receiver.recorder.waitForCount(1)
-      queued += try await sendColumnsUntilOwed(sender, self.database, from: 1)
       // The commit that found the queue full is owed, unless the sender's thread finds room for it
       // before the files go.
-      let owed = queued.removeLast()
+      let (queued, owedRegion) = try await receiver.fill(from: sender)
+      let owed = commit(self.database, region: owedRegion)
 
       files.removeAsTheCleanerWould()
       let unseen = columnCommit(self.database, 10_000)

@@ -232,13 +232,8 @@
     let receiver = try HeldReceiver(directory: directory, database: database)
     let sender = try ipcTransport(directory)
 
-    // Held in its handler before its queue fills, so its thread frees no room afterwards.
-    var queued = [columnCommit(database, 0)]
-    try await sender.send(queued[0])
-    try await receiver.recorder.waitForCount(1)
-    queued += try await sendColumnsUntilOwed(sender, database, from: 1)
-    var owed = itemsColumn(queued.count - 1)
-    queued.removeLast()
+    let (queued, first) = try await receiver.fill(from: sender)
+    var owed = first
     for index in 10_000..<10_003 {
       try await sender.send(columnCommit(database, index))
       owed.formUnion(itemsColumn(index))
@@ -388,6 +383,7 @@
   /// and it repairs nothing.
   final class HeldReceiver: Sendable {
     let recorder = IPCMessageRecorder()
+    private let database: OrbitDatabaseIdentifier
     private let gate = DispatchSemaphore(value: 0)
     private let transport: UnixDatagramIPCTransport
     private let subscription: OrbitRegionSubscription
@@ -400,6 +396,7 @@
       let recorder = self.recorder
       let gate = self.gate
       let isHeld = Lock(true)
+      self.database = database
       self.transport = try ipcTransport(directory)
       self.subscription = try self.transport.subscribe(to: database, region: region) { message in
         recorder.append(message)
@@ -417,25 +414,26 @@
     }
 
     func resume() { self.gate.signal() }
-  }
 
-  /// Sends commits to `database`, each to a column of its own from `first` on, until `sender` owes
-  /// a peer one.
-  ///
-  /// - Returns: The commits sent, the one `sender` owes last.
-  func sendColumnsUntilOwed(
-    _ sender: UnixDatagramIPCTransport,
-    _ database: OrbitDatabaseIdentifier,
-    from first: Int = 0
-  ) async throws -> [OrbitIPCMessage] {
-    var sent: [OrbitIPCMessage] = []
-    while sender.owedRegions.isEmpty {
-      guard sent.count < 10_000 else { throw TestTimeout() }
-      let message = columnCommit(database, first + sent.count)
-      try await sender.send(message)
-      sent.append(message)
+    /// Holds the receiver in its handler at a first commit from `sender`, before its queue fills,
+    /// so its thread frees no room afterwards, then sends it commits, each to a column of its own,
+    /// until `sender` owes it one.
+    ///
+    /// - Returns: The commits its queue holds, the first included, and the region of the one
+    ///   `sender` owes it.
+    func fill(
+      from sender: UnixDatagramIPCTransport
+    ) async throws -> (queued: [OrbitIPCMessage], owed: OrbitDatabaseRegion) {
+      var queued = [columnCommit(self.database, 0)]
+      try await sender.send(queued[0])
+      try await self.recorder.waitForCount(1)
+      while sender.owedRegions.isEmpty {
+        guard queued.count <= 10_000 else { throw TestTimeout() }
+        queued.append(columnCommit(self.database, queued.count))
+        try await sender.send(queued[queued.count - 1])
+      }
+      return (Array(queued.dropLast()), itemsColumn(queued.count - 1))
     }
-    return sent
   }
 
   /// A commit to a column no other index writes, so the order commits arrive in shows.
