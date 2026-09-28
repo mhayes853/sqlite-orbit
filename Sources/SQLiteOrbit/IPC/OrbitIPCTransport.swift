@@ -95,3 +95,24 @@ extension OrbitIPCMessage {
     }
   }
 }
+
+/// A transport's subscription: the handler, and the region whose commits it receives.
+struct OrbitIPCHandler: Sendable {
+  var region: OrbitDatabaseRegion
+  let onMessage: @Sendable (OrbitIPCMessage) -> Void
+}
+
+extension KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler> {
+  /// The union of the regions of a database's handlers, which is what a transport advertises.
+  func region(for databaseIdentifier: OrbitDatabaseIdentifier) -> OrbitDatabaseRegion {
+    self.handlers(for: databaseIdentifier)
+      .reduce(into: .empty) { $0.formUnion($1.region) }
+  }
+
+  /// The callbacks of the handlers `message` concerns, to call once the registry is unlocked.
+  func callbacks(for message: OrbitIPCMessage) -> [@Sendable (OrbitIPCMessage) -> Void] {
+    self.handlers(for: message.databaseIdentifier)
+      .filter { message.concerns($0.region) }
+      .map(\.onMessage)
+  }
+}

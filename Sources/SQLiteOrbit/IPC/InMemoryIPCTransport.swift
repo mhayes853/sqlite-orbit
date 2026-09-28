@@ -33,13 +33,10 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   /// let receiver = InMemoryIPCTransport(network: network)
   /// ```
   public final class Network: Sendable {
-    fileprivate let state = Lock(State())
-    fileprivate struct State {
-      var endpoints: [OrbitDatabaseIdentifier: [ObjectIdentifier: Advertisement]] = [:]
-    }
+    private let endpoints = Lock([OrbitDatabaseIdentifier: [ObjectIdentifier: Advertisement]]())
 
     /// An endpoint discoverable for a database, and the union of its handlers' regions there.
-    fileprivate struct Advertisement {
+    private struct Advertisement {
       let endpoint: Endpoint
       let region: OrbitDatabaseRegion
     }
@@ -47,27 +44,18 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
     /// Creates an empty network.
     public init() {}
 
-    /// Makes `endpoint` discoverable for a database with `region`, or replaces the region it
-    /// advertised before.
+    /// Makes `endpoint` discoverable for a database with `region`, replacing the region it
+    /// advertised before, or undiscoverable if `region` is `nil`.
     fileprivate func advertise(
       _ endpoint: Endpoint,
-      region: OrbitDatabaseRegion,
+      region: OrbitDatabaseRegion?,
       for databaseIdentifier: OrbitDatabaseIdentifier
     ) {
-      self.state.withLock {
-        $0.endpoints[databaseIdentifier, default: [:]][ObjectIdentifier(endpoint)] =
-          Advertisement(endpoint: endpoint, region: region)
-      }
-    }
-
-    fileprivate func unregister(
-      _ endpoint: Endpoint,
-      for databaseIdentifier: OrbitDatabaseIdentifier
-    ) {
-      self.state.withLock {
-        $0.endpoints[databaseIdentifier]?.removeValue(forKey: ObjectIdentifier(endpoint))
-        if $0.endpoints[databaseIdentifier]?.isEmpty == true {
-          $0.endpoints.removeValue(forKey: databaseIdentifier)
+      self.endpoints.withLock {
+        $0[databaseIdentifier, default: [:]][ObjectIdentifier(endpoint)] =
+          region.map { Advertisement(endpoint: endpoint, region: $0) }
+        if $0[databaseIdentifier]?.isEmpty == true {
+          $0[databaseIdentifier] = nil
         }
       }
     }
@@ -76,23 +64,17 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
       of endpoint: Endpoint,
       for databaseIdentifier: OrbitDatabaseIdentifier
     ) -> OrbitDatabaseRegion? {
-      self.state.withLock { $0.endpoints[databaseIdentifier]?[ObjectIdentifier(endpoint)]?.region }
+      self.endpoints.withLock { $0[databaseIdentifier]?[ObjectIdentifier(endpoint)]?.region }
     }
 
     fileprivate func peers(
       concernedWith message: OrbitIPCMessage,
       excluding endpoint: Endpoint
     ) -> [Endpoint] {
-      self.state.withLock {
-        guard let advertisements = $0.endpoints[message.databaseIdentifier]?.values else {
-          return []
-        }
-        return advertisements.compactMap { advertisement in
-          guard advertisement.endpoint !== endpoint, message.concerns(advertisement.region) else {
-            return nil
-          }
-          return advertisement.endpoint
-        }
+      self.endpoints.withLock {
+        ($0[message.databaseIdentifier] ?? [:]).values
+          .filter { $0.endpoint !== endpoint && message.concerns($0.region) }
+          .map(\.endpoint)
       }
     }
   }
@@ -142,7 +124,8 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   ) throws -> OrbitRegionSubscription {
     let endpoint = self.endpoint
     let identifier = endpoint.withHandlers(for: databaseIdentifier) {
-      $0.insert(Handler(region: region, onMessage: onMessage), for: databaseIdentifier).identifier
+      $0.insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
+        .identifier
     }
     return OrbitRegionSubscription(region: region) { region in
       endpoint.withHandlers(for: databaseIdentifier) {
@@ -182,14 +165,9 @@ public final class InMemoryIPCTransport: OrbitIPCTransport, Sendable {
   }
 }
 
-private struct Handler: Sendable {
-  var region: OrbitDatabaseRegion
-  let onMessage: @Sendable (OrbitIPCMessage) -> Void
-}
-
 private final class Endpoint: Sendable {
   private let network: InMemoryIPCTransport.Network
-  private let handlers = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>())
+  private let handlers = Lock(KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>())
   // Serializes handler invocation for this endpoint the way a dedicated receive queue would,
   // without holding the handler lock (and risking deadlock) while a handler runs.
   private let deliveryLock = Lock(())
@@ -206,27 +184,22 @@ private final class Endpoint: Sendable {
   /// removal that raced it, and so that concurrent region updates cannot leave a stale union.
   func withHandlers<Result>(
     for databaseIdentifier: OrbitDatabaseIdentifier,
-    _ body: (inout KeyedHandlerRegistry<OrbitDatabaseIdentifier, Handler>) -> Result
+    _ body: (inout KeyedHandlerRegistry<OrbitDatabaseIdentifier, OrbitIPCHandler>) -> Result
   ) -> Result {
     self.handlers.withLock { handlers in
       let result = body(&handlers)
-      if handlers.contains(databaseIdentifier) {
-        let region = handlers.handlers(for: databaseIdentifier)
-          .reduce(into: OrbitDatabaseRegion.empty) { $0.formUnion($1.region) }
-        self.network.advertise(self, region: region, for: databaseIdentifier)
-      } else {
-        self.network.unregister(self, for: databaseIdentifier)
-      }
+      self.network.advertise(
+        self,
+        region: handlers.contains(databaseIdentifier)
+          ? handlers.region(for: databaseIdentifier) : nil,
+        for: databaseIdentifier
+      )
       return result
     }
   }
 
   func deliver(_ message: OrbitIPCMessage) {
-    let callbacks = self.handlers.withLock { handlers in
-      handlers.handlers(for: message.databaseIdentifier)
-        .filter { message.concerns($0.region) }
-        .map(\.onMessage)
-    }
+    let callbacks = self.handlers.withLock { $0.callbacks(for: message) }
     guard !callbacks.isEmpty else { return }
     self.deliveryLock.withLock { _ in
       for callback in callbacks { callback(message) }
@@ -236,7 +209,7 @@ private final class Endpoint: Sendable {
   func shutdown() {
     self.handlers.withLock { handlers in
       for databaseIdentifier in handlers.removeAll() {
-        self.network.unregister(self, for: databaseIdentifier)
+        self.network.advertise(self, region: nil, for: databaseIdentifier)
       }
     }
   }
