@@ -127,7 +127,10 @@ enum UnixDatagramWireProtocol {
 
   /// The strings `region` refers to, each once, in the order its encoding first refers to them,
   /// after those in `preceding`.
-  static func strings(in region: OrbitDatabaseRegion, after preceding: [String] = []) -> [String] {
+  fileprivate static func strings(
+    in region: OrbitDatabaseRegion,
+    after preceding: [String] = []
+  ) -> [String] {
     var seen = Set(preceding)
     var strings = preceding
     for (table, tableRegion) in sortedTables(of: region) {
@@ -139,7 +142,7 @@ enum UnixDatagramWireProtocol {
     return strings
   }
 
-  static func appendStringTable(_ strings: [String], to bytes: inout [UInt8]) {
+  fileprivate static func appendStringTable(_ strings: [String], to bytes: inout [UInt8]) {
     appendCount(strings.count, to: &bytes)
     for string in strings {
       appendCount(string.utf8.count, to: &bytes)
@@ -177,7 +180,7 @@ enum UnixDatagramWireProtocol {
   ///
   /// - Throws: ``UnixDatagramWireError/regionTooLarge`` if a count or string does not fit in 16
   ///   bits.
-  static func byteCount(of region: OrbitDatabaseRegion) throws -> Int {
+  fileprivate static func byteCount(of region: OrbitDatabaseRegion) throws -> Int {
     guard region.tableRegions.count <= UInt16.max else {
       throw UnixDatagramWireError.regionTooLarge
     }
@@ -194,7 +197,7 @@ enum UnixDatagramWireProtocol {
   }
 
   /// Appends `region`, naming each string by its index in `indices`.
-  static func appendRegion(
+  fileprivate static func appendRegion(
     _ region: OrbitDatabaseRegion,
     to bytes: inout [UInt8],
     indices: [String: Int]
@@ -260,7 +263,7 @@ enum UnixDatagramWireProtocol {
 
   // MARK: - Primitives
 
-  static func appendCount(_ count: Int, to bytes: inout [UInt8]) {
+  fileprivate static func appendCount(_ count: Int, to bytes: inout [UInt8]) {
     let count = UInt16(count)
     bytes.append(UInt8(truncatingIfNeeded: count >> 8))
     bytes.append(UInt8(truncatingIfNeeded: count))
