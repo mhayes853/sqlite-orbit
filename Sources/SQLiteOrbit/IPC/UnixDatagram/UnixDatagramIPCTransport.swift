@@ -270,21 +270,15 @@
       region: OrbitDatabaseRegion,
       onMessage: @escaping @Sendable (OrbitIPCMessage) -> Void
     ) throws -> OrbitRegionSubscription {
-      let identifier = try self.handlers.withLock { handlers in
-        let identifier =
-          handlers
-          .insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
+      let identifier = try self.changeHandlers(advertising: databaseIdentifier) {
+        $0.insert(OrbitIPCHandler(region: region, onMessage: onMessage), for: databaseIdentifier)
           .identifier
-        do {
-          try self.advertise(databaseIdentifier.coordinationKey, for: handlers)
-        } catch {
-          handlers.remove(identifier, for: databaseIdentifier)
-          throw error
-        }
-        return identifier
       }
       return OrbitRegionSubscription(region: region) { [weak self] region in
-        try self?.update(identifier, for: databaseIdentifier, region: region)
+        try self?
+          .changeHandlers(advertising: databaseIdentifier) {
+            $0.update(identifier, for: databaseIdentifier) { $0.region = region }
+          }
       } onCancel: { [weak self] in
         self?.remove(identifier, for: databaseIdentifier)
       }
@@ -355,24 +349,23 @@
       self.registry.repairCount
     }
 
-    private func update(
-      _ identifier: UInt64,
-      for databaseIdentifier: OrbitDatabaseIdentifier,
-      region: OrbitDatabaseRegion
-    ) throws {
+    /// Changes the handlers, then brings the marker for `databaseIdentifier` in line with them,
+    /// putting the handlers back as they were if it cannot be written.
+    @discardableResult
+    private func changeHandlers<Result>(
+      advertising databaseIdentifier: OrbitDatabaseIdentifier,
+      _ change: (inout Handlers) -> Result
+    ) throws -> Result {
       try self.handlers.withLock { handlers in
-        var previous: OrbitDatabaseRegion?
-        handlers.update(identifier, for: databaseIdentifier) { handler in
-          previous = handler.region
-          handler.region = region
-        }
-        guard let previous else { return }
+        let previous = handlers
+        let result = change(&handlers)
         do {
           try self.advertise(databaseIdentifier.coordinationKey, for: handlers)
         } catch {
-          handlers.update(identifier, for: databaseIdentifier) { $0.region = previous }
+          handlers = previous
           throw error
         }
+        return result
       }
     }
 
