@@ -10,6 +10,12 @@
   /// is owed, in as few datagrams as fit them. What a peer is owed has no deadline. It goes when it
   /// is sent, when the peer turns out to be dead, or when the peer stops advertising the database.
   ///
+  /// A peer is dead once nothing is bound at its socket's path. A connected socket that reports its
+  /// peer gone only shows that the socket it was connected to closed, and the peer may have bound a
+  /// new one at the same path since, so the path is connected to again before the peer is taken
+  /// for dead. If that connects, the new socket replaces the old one, the peer keeps everything it
+  /// is owed, and what was being sent is sent on the new socket, once.
+  ///
   /// The endpoint knows nothing of the coordination directory: it is told which peers to send to,
   /// and reports the ones it finds dead rather than removing anything of theirs, those a send finds
   /// to the send's caller and those its thread finds to the callback it was started with.
@@ -160,8 +166,9 @@
       counting delivery: inout Delivery
     ) {
       let name = peer.endpointName
+      let existing = state.peers[name]
       let known: Peer
-      if let existing = state.peers[name] {
+      if let existing {
         known = existing
       } else {
         do {
@@ -181,7 +188,9 @@
       // A peer that is owed anything is not sent to until it has taken what it is owed, so the
       // message joins that rather than overtaking it.
       if known.owed.isEmpty {
-        switch known.socket.send(datagram) {
+        // A socket connected just now has already shown that something is bound at the path.
+        var mayReconnect = existing != nil
+        switch self.send(datagram, to: known, mayReconnect: &mayReconnect) {
         case .sent:
           delivery.delivered += 1
           return
@@ -225,6 +234,7 @@
             fittingIn: self.maximumDatagramByteCount
           )
         }[...]
+      var mayReconnect = true
       while !entries.isEmpty {
         // The longest run from the front that fits, which always holds at least the first.
         var batch = UnixDatagramWireBatch()
@@ -233,7 +243,7 @@
           batch.append(entry)
         }
 
-        switch peer.socket.send(batch.encoded()) {
+        switch self.send(batch.encoded(), to: peer, mayReconnect: &mayReconnect) {
         case .sent:
           peer.retryDelay = .milliseconds(1)
         case .full:
@@ -254,6 +264,46 @@
       peer.owed.removeAll()
       self.unwatch(peer)
       return nil
+    }
+
+    /// Sends `datagram` on the socket kept for `peer`, and if that socket reports the peer gone,
+    /// replaces it with a new one connected to the peer's path and sends `datagram` on that.
+    ///
+    /// - Parameters:
+    ///   - datagram: The datagram to send.
+    ///   - peer: The peer to send it to.
+    ///   - mayReconnect: Whether the peer's path may be connected to again, which this clears once
+    ///     it has been, so a send or a flush connects to it at most once.
+    /// - Returns: What became of `datagram`. A peer is only gone if nothing is bound at its path,
+    ///   or the new socket connected to what is reports it gone too.
+    private func send(
+      _ datagram: [UInt8],
+      to peer: Peer,
+      mayReconnect: inout Bool
+    ) -> UnixDatagramSocket.SendOutcome {
+      let outcome = peer.socket.send(datagram)
+      guard outcome == .peerGone, mayReconnect else { return outcome }
+      mayReconnect = false
+      do {
+        guard let socket = try UnixDatagramSocket.connect(to: peer.peer.socketPath) else {
+          return .peerGone
+        }
+        // The queue lets go of the old socket before it closes, and a peer waiting for room
+        // waits on the new one instead.
+        let isWatched = peer.isWatched
+        if isWatched {
+          self.queue.unwatchWritable(peer.socket.descriptor.rawValue)
+        }
+        peer.socket = socket
+        if isWatched {
+          peer.isWatched = self.queue.watchWritable(peer.socket.descriptor.rawValue)
+        }
+      } catch let error as UnixSystemError {
+        return .failed(error)
+      } catch {
+        return .failed(.last("connect"))
+      }
+      return peer.socket.send(datagram)
     }
 
     private func unwatch(_ peer: Peer) {
@@ -358,7 +408,9 @@
     /// send.
     private final class Peer: @unchecked Sendable {
       let peer: UnixDatagramPeer
-      let socket: UnixDatagramSocket
+      /// The socket connected to the peer's path, which a new one replaces when it reports the
+      /// peer gone and something is bound at the path all the same.
+      var socket: UnixDatagramSocket
       /// The databases this peer was last seen advertising, by coordination key.
       var coordinationKeys: Set<String> = []
       /// The union of the regions of every commit this peer has not taken yet, by database.

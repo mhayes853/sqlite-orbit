@@ -138,6 +138,40 @@
       }
       #expect(harness.sender.owedRegions.isEmpty)
     }
+
+    @Test
+    func aPeerWhoseSocketIsBoundAgainAtItsPathKeepsReceiving() throws {
+      let harness = try OwedPeerHarness(advertising: [self.database])
+      defer { harness.cleanup() }
+      #expect(try harness.send(self.database, column: 0).delivered == 1)
+      #expect(try harness.drain().count == 1)
+
+      // The socket the sender keeps for the peer reports it gone, but something is bound at its
+      // path, so the sender connects to that and sends the commit there.
+      try harness.rebindPeer()
+      let delivery = try harness.send(self.database, column: 1)
+
+      #expect(delivery.delivered == 1)
+      #expect(delivery.stale.isEmpty)
+      #expect(try harness.drain() == [[commit(self.database, region: column(1))]])
+      #expect(harness.hasSocketPath && harness.isAdvertising(self.database))
+    }
+
+    @Test
+    func aPeerWhoseSocketIsBoundAgainWhileOwedIsSentWhatItIsOwedThere() async throws {
+      let harness = try OwedPeerHarness(advertising: [self.database])
+      defer { harness.cleanup() }
+      let owed = try harness.fill(self.database)
+
+      // Whatever the old socket's queue held went with it, but what the peer is owed does not.
+      try harness.rebindPeer()
+      harness.sender.start { _ in }
+      try await waitUntil { harness.sender.owedRegions.isEmpty }
+
+      #expect(try harness.drain() == [[commit(self.database, region: owed)]])
+      #expect(harness.hasSocketPath && harness.isAdvertising(self.database))
+      #expect(try harness.send(self.database, column: 10_000).delivered == 1)
+    }
   }
 
   /// A sender whose one peer is a bare socket, bound where an endpoint named `peer` would be, with
@@ -221,6 +255,14 @@
     /// Closes the peer's socket, leaving its path and markers behind, as a process that dies does.
     func closePeer() {
       self.peer = nil
+    }
+
+    /// Closes the peer's socket and binds a new one at its path, leaving its markers as they are,
+    /// as an endpoint does that binds its socket again.
+    func rebindPeer() throws {
+      self.peer = nil
+      _ = UnixPlatform.removeFile(atPath: self.socketPath)
+      self.peer = try UnixDatagramSocket.bind(path: self.socketPath, receiveBufferByteCount: 4_096)
     }
 
     func withdraw(_ database: OrbitDatabaseIdentifier) throws {

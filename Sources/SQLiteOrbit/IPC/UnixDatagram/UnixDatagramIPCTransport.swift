@@ -250,10 +250,11 @@
     ///
     /// This never waits for a peer. A peer whose receive queue is full is owed the message's region,
     /// merged with whatever else it is owed for the database, and is sent it once it has room.
-    /// A peer that has died is pruned from the coordination directory, every database's markers
-    /// included, as soon as a send or the transport's thread finds it, so a crashed process does
-    /// not fail later broadcasts. If a commit's precise database region does not fit in one
-    /// datagram, it is safely broadened to ``OrbitDatabaseRegion/fullDatabase``.
+    /// A peer is dead once nothing is bound at its socket's path, and a dead peer is pruned from
+    /// the coordination directory, every database's markers included, as soon as a send or the
+    /// transport's thread finds it, so a crashed process does not fail later broadcasts. If a
+    /// commit's precise database region does not fit in one datagram, it is safely broadened to
+    /// ``OrbitDatabaseRegion/fullDatabase``.
     ///
     /// ```swift
     /// try await transport.send(
