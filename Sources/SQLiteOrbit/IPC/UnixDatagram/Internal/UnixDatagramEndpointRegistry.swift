@@ -76,8 +76,6 @@
       var repairCount = 0
       /// Whether a file was put back since the endpoint's thread last reported a repair.
       var hasRepaired = false
-      /// When a send or a receive next touches this endpoint's files.
-      var nextRefresh: ContinuousClock.Instant
     }
 
     /// How long after this endpoint last touched its files a send or a receive touches them again.
@@ -96,6 +94,8 @@
     private let databasesDirectory: URL
     private let watchesDirectories: Bool
     private let refreshInterval: Duration
+    /// When a send or a receive next touches this endpoint's files.
+    private let nextRefresh: Lock<ContinuousClock.Instant>
     private let state = Lock(State())
     private let own: Lock<OwnFiles>
 
@@ -141,7 +141,8 @@
       self.databasesDirectory = databasesDirectory
       self.watchesDirectories = watchesDirectories
       self.refreshInterval = refreshInterval
-      self.own = Lock(OwnFiles(nextRefresh: .now.advanced(by: refreshInterval)))
+      self.own = Lock(OwnFiles())
+      self.nextRefresh = Lock(.now.advanced(by: refreshInterval))
     }
 
     /// Starts the endpoint's thread, which runs until ``shutdown()``, and from then on keeps this
@@ -572,10 +573,16 @@
     /// is due. A file that is gone is not created again here, which is left to the repair its
     /// removal sets off.
     private func refreshIfDue() {
-      self.own.withLock { own in
+      // Apart from the lock on this endpoint's files, so a send that is not due never waits
+      // behind a repair's filesystem work.
+      let isDue = self.nextRefresh.withLock { next in
         let now = ContinuousClock.now
-        guard now >= own.nextRefresh else { return }
-        own.nextRefresh = now.advanced(by: self.refreshInterval)
+        guard now >= next else { return false }
+        next = now.advanced(by: self.refreshInterval)
+        return true
+      }
+      guard isDue else { return }
+      self.own.withLock { own in
         var paths = [self.socketPath, self.socketsDirectory.path]
         for coordinationKey in own.advertised.keys {
           paths.append(self.marker(coordinationKey).path)
