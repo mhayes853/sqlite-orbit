@@ -104,12 +104,10 @@
       open(path, O_RDONLY | O_CLOEXEC)
     }
 
-    /// Takes an exclusive `flock` on an open file, retrying a wait a signal interrupts.
-    ///
-    /// - Parameter waits: Whether to wait for somebody else to let go of it, rather than fail
-    ///   with `EWOULDBLOCK`.
-    static func lockExclusively(_ descriptor: Int32, waits: Bool) -> Bool {
-      Self.retryingInterruptions { flock(descriptor, waits ? LOCK_EX : LOCK_EX | LOCK_NB) } == 0
+    /// Takes an exclusive `flock` on an open file without waiting, failing with `EWOULDBLOCK` if
+    /// somebody else holds it.
+    static func tryLockExclusively(_ descriptor: Int32) -> Bool {
+      flock(descriptor, LOCK_EX | LOCK_NB) == 0
     }
 
     /// Which file the path `path` names now, following a symbolic link.

@@ -6,33 +6,20 @@
   /// everything ever locked. The only ones that remain are those of processes that died holding
   /// them, which ``removeIfUnlocked(atPath:)`` reclaims.
   ///
-  /// Unlinking a file others may be waiting on is what makes acquiring take more than one step.
-  /// A waiter can open the file just before its holder unlinks it, and then lock a file nobody
-  /// else will ever open again while a newcomer creates and locks another at the same path, and
-  /// both would hold "the" lock. So a lock only counts once the file it is on is still the one at
-  /// the path, and a waiter that finds otherwise starts over. The path cannot change behind a
-  /// holder who has checked: only a holder unlinks it, and nothing else can hold the file at the
-  /// path without holding this lock.
-  ///
   /// `flock` either waits for good or not at all, and a holder that is frozen rather than dead,
-  /// stopped by a signal or a debugger or suspended by its OS, never lets go. So whatever must not
-  /// wait on such a process takes the lock with ``withExclusiveLock(atPath:waitingWhile:_:)``,
-  /// which tries without waiting and asks between tries whether to go on, as SQLite does for its
-  /// own locks.
+  /// stopped by a signal or a debugger or suspended by its OS, never lets go. So nothing ever
+  /// waits in `flock`: every try takes the lock without waiting, and one that finds it held asks
+  /// whether to try again, as SQLite does for its own locks, so a frozen holder can hold up
+  /// others only for as long as they choose to wait.
+  ///
+  /// Unlinking a file others may be trying for is what makes acquiring take more than one step.
+  /// A try can open the file just before its holder unlinks it, and then lock a file nobody else
+  /// will ever open again while a newcomer creates and locks another at the same path, and both
+  /// would hold "the" lock. So a lock only counts once the file it is on is still the one at the
+  /// path, and a try that finds otherwise starts over. The path cannot change behind a holder who
+  /// has checked: only a holder unlinks it, and nothing else can hold the file at the path without
+  /// holding this lock.
   enum UnixFileLock {
-    /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed
-    /// and waiting for whoever holds it, however long that takes.
-    ///
-    /// - Throws: A ``UnixSystemError`` if the file cannot be opened or locked, or whatever `body`
-    ///   throws.
-    static func withExclusiveLock<Result>(
-      atPath path: String,
-      _ body: () throws -> Result
-    ) throws -> Result {
-      // A lock that waits is always taken, so there is always a result.
-      try Self.withLock(atPath: path, waits: true, keepsWaiting: { _ in true }, body)!
-    }
-
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
     /// and waiting for whoever holds it for as long as `keepsWaiting` says.
     ///
@@ -53,7 +40,7 @@
       waitingWhile keepsWaiting: (_ attempt: Int) -> Bool,
       _ body: () throws -> Result
     ) throws -> Result? {
-      try Self.withLock(atPath: path, waits: false, keepsWaiting: keepsWaiting, body)
+      try Self.withLock(atPath: path, keepsWaiting: keepsWaiting, body)
     }
 
     /// Runs `body` holding an exclusive lock on the file at `path`, creating the file if needed,
@@ -66,7 +53,7 @@
       atPath path: String,
       _ body: () throws -> Result
     ) throws -> Result? {
-      try Self.withLock(atPath: path, waits: false, keepsWaiting: { _ in false }, body)
+      try Self.withExclusiveLock(atPath: path, waitingWhile: { _ in false }, body)
     }
 
     /// Removes the lock file at `path` if nobody holds it, as when the process that held it died.
@@ -82,18 +69,15 @@
           UnixPlatform.openExistingFile(atPath: path),
           from: "open"
         ),
-        (try? Self.lock(descriptor.rawValue, waits: false)) == true,
+        (try? Self.lock(descriptor.rawValue)) == true,
         Self.isStillAtPath(descriptor.rawValue, path) == true
       else { return false }
       // Closing the descriptor, when it goes, lets go of the lock, after the file is gone.
       return withExtendedLifetime(descriptor) { UnixPlatform.removeFile(atPath: path) }
     }
 
-    /// Takes the lock, waiting in `flock` if `waits`, and otherwise asking `keepsWaiting` each
-    /// time a try finds it held.
     private static func withLock<Result>(
       atPath path: String,
-      waits: Bool,
       keepsWaiting: (_ attempt: Int) -> Bool,
       _ body: () throws -> Result
     ) throws -> Result? {
@@ -103,7 +87,7 @@
           UnixPlatform.openCreatingFile(atPath: path),
           from: "open"
         )
-        guard try Self.lock(descriptor.rawValue, waits: waits) else {
+        guard try Self.lock(descriptor.rawValue) else {
           attempt += 1
           // Each try opens the path afresh, so it never waits on a file its holder unlinked.
           guard keepsWaiting(attempt) else { return nil }
@@ -112,7 +96,8 @@
         guard let isStillAtPath = Self.isStillAtPath(descriptor.rawValue, path) else {
           throw UnixSystemError.last("stat")
         }
-        // Its holder unlinked the file while this waited for it, so the lock guards nothing.
+        // Its holder unlinked the file between this opening and locking it, so the lock guards
+        // nothing.
         guard isStillAtPath else { continue }
         // Closing the descriptor is what lets go of the lock, so it is held until `body` returns,
         // and the file is unlinked before it is let go of, while nobody else can hold it.
@@ -123,13 +108,13 @@
       }
     }
 
-    /// Takes the lock on an open file.
+    /// Takes the lock on an open file, without waiting.
     ///
-    /// - Returns: Whether the lock was taken, which is always the case if `waits` is `true`.
-    private static func lock(_ descriptor: Int32, waits: Bool) throws -> Bool {
-      if UnixPlatform.lockExclusively(descriptor, waits: waits) { return true }
+    /// - Returns: Whether the lock was taken, rather than found held.
+    private static func lock(_ descriptor: Int32) throws -> Bool {
+      if UnixPlatform.tryLockExclusively(descriptor) { return true }
       let code = UnixPlatform.lastErrorCode
-      if !waits, code == UnixPlatform.ErrorCode.wouldBlock { return false }
+      if code == UnixPlatform.ErrorCode.wouldBlock { return false }
       throw UnixSystemError(operation: "flock", code: code)
     }
 

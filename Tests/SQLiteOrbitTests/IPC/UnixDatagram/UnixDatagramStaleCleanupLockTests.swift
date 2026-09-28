@@ -193,7 +193,7 @@
 
     switch mode {
     case "hold":
-      try UnixFileLock.withExclusiveLock(atPath: coordination.sweepLock.path) {
+      _ = try UnixFileLock.withExclusiveLockIfAvailable(atPath: coordination.sweepLock.path) {
         try touch(ready)
         waitForGo()
       }

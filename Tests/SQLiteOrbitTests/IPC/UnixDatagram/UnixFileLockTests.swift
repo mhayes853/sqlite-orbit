@@ -13,14 +13,14 @@
       defer { try? FileManager.default.removeItem(at: directory) }
       let path = directory.appending(path: "a.lock").path
 
-      let existedWhileHeld = try UnixFileLock.withExclusiveLock(atPath: path) {
+      let existedWhileHeld = try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) {
         FileManager.default.fileExists(atPath: path)
       }
-      #expect(existedWhileHeld)
+      #expect(existedWhileHeld == true)
       #expect(!FileManager.default.fileExists(atPath: path))
 
       #expect(throws: CancellationError.self) {
-        try UnixFileLock.withExclusiveLock(atPath: path) { throw CancellationError() }
+        try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) { throw CancellationError() }
       }
       #expect(!FileManager.default.fileExists(atPath: path))
 
@@ -55,8 +55,8 @@
 
       DispatchQueue.concurrentPerform(iterations: threadCount) { index in
         for iteration in 0..<iterationCount {
-          // Some holders only try, and some try again until they have it, so the paths that do
-          // not wait in `flock` race the unlinking too.
+          // Some holders only try, some try again at once until they have it, and some pause
+          // between tries, so tries race the unlinking at every point.
           let body = { state.enter() }
           switch (index + iteration) % 3 {
           case 0:
@@ -64,7 +64,11 @@
           case 1:
             _ = try? UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: { _ in true }, body)
           default:
-            try? UnixFileLock.withExclusiveLock(atPath: path, body)
+            let pauses: (Int) -> Bool = { _ in
+              Thread.sleep(forTimeInterval: 0.0001)
+              return true
+            }
+            _ = try? UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: pauses, body)
           }
         }
       }
@@ -228,7 +232,7 @@
 
     init(_ path: String) {
       Thread.detachNewThread {
-        try? UnixFileLock.withExclusiveLock(atPath: path) {
+        _ = try? UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: { _ in true }) {
           self.acquired.signal()
           self.mayRelease.wait()
         }

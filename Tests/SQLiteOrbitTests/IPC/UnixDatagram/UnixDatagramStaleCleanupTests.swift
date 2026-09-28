@@ -123,9 +123,9 @@
       try coordination.writeMarker("dead", in: "k1")
       let lock = coordination.directory.appending(path: "v1/cleanup-stale.lock").path
 
-      let skipped = try UnixFileLock.withExclusiveLock(atPath: lock) {
-        coordination.sweep()
-      }
+      let skipped = try #require(
+        try UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) { coordination.sweep() }
+      )
 
       #expect(skipped == nil)
       #expect(try coordination.sockets() == ["dead.sock"])
