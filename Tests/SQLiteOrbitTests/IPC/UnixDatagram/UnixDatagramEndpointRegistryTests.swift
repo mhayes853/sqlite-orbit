@@ -81,6 +81,24 @@
         try sender.peerRegions(for: self.database) == corrupt.mapValues { _ in .fullDatabase }
       )
     }
+
+    @Test
+    func keepsTrackOfItsOwnMarkersAcrossChangesToOthers() throws {
+      let directory = try makeShortTemporaryDirectory("registry")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let endpoint = try unixDatagramRegistry(directory, endpointName: "endpoint")
+      let peer = try unixDatagramRegistry(directory, endpointName: "peer")
+      let key = self.database.coordinationKey
+      try endpoint.advertise(self.items, coordinationKey: key)
+      _ = try endpoint.peerRegions(for: self.database)
+
+      // Read after the watch reports the peer's marker, which forgets what was read before.
+      try peer.advertise(self.lists, coordinationKey: key)
+      #expect(try endpoint.peerRegions(for: self.database).keys.sorted() == ["endpoint", "peer"])
+      endpoint.shutdown()
+
+      #expect(try peer.peerRegions(for: self.database) == ["peer": self.lists])
+    }
   }
 
   /// A registry for an endpoint that is never started, which tests use to write markers and to

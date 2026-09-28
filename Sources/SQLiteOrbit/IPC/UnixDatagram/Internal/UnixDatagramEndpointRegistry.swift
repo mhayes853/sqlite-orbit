@@ -183,7 +183,9 @@
       let coordinationKey = databaseIdentifier.coordinationKey
       return try self.state.withLock { state in
         if state.watcher?.drainChanges() == true {
-          state = State()
+          // What this endpoint advertises is its own, and no change of anyone else's affects it.
+          state.watcher = nil
+          state.peerRegions.removeAll()
         }
         if let peerRegions = state.peerRegions[coordinationKey] {
           return peerRegions
