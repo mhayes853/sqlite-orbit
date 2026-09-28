@@ -189,13 +189,7 @@
     let result = try url(StaleCleanupLockEnvironment.result)
 
     /// Waits for the test to say go on, and fails if it never does.
-    func waitForGo() {
-      let deadline = ContinuousClock.now.advanced(by: .seconds(30))
-      while !FileManager.default.fileExists(atPath: go.path) {
-        guard ContinuousClock.now < deadline else { processTestExit(1) }
-        Thread.sleep(forTimeInterval: 0.002)
-      }
-    }
+    func waitForGo() { processTestWaitForFile(go) }
 
     switch mode {
     case "hold":
@@ -268,27 +262,5 @@
 
     /// Kills the helper, stopped or not, and removes the directory.
     func cleanup() { self.harness.cleanup() }
-  }
-
-  /// Runs `body` on a thread of its own, and waits at most `timeout` for it to return.
-  ///
-  /// Whatever might block runs this way, so a change that makes it wait on a stalled process fails
-  /// the test with a ``TestTimeout`` rather than hanging it. The thread is left behind if it never
-  /// returns.
-  private func withDeadline<Value: Sendable>(
-    _ timeout: Duration = .seconds(10),
-    _ body: @escaping @Sendable () throws -> Value
-  ) async throws -> Value {
-    let outcome = DeadlineOutcome<Value>()
-    Thread.detachNewThread {
-      let result = Result { try body() }
-      outcome.result.withLock { $0 = result }
-    }
-    try await waitUntil(timeout: timeout) { outcome.result.withLock { $0 != nil } }
-    return try outcome.result.withLock { $0! }.get()
-  }
-
-  private final class DeadlineOutcome<Value: Sendable>: Sendable {
-    let result = Lock<Result<Value, any Error>?>(nil)
   }
 #endif

@@ -55,11 +55,15 @@
 
       DispatchQueue.concurrentPerform(iterations: threadCount) { index in
         for iteration in 0..<iterationCount {
-          // Some holders only try, so the nonblocking path races the unlinking too.
+          // Some holders only try, and some try again until they have it, so the paths that do
+          // not wait in `flock` race the unlinking too.
           let body = { state.enter() }
-          if (index + iteration).isMultiple(of: 3) {
+          switch (index + iteration) % 3 {
+          case 0:
             while (try? UnixFileLock.withExclusiveLockIfAvailable(atPath: path, body)) == nil {}
-          } else {
+          case 1:
+            _ = try? UnixFileLock.withExclusiveLock(atPath: path, waitingWhile: { _ in true }, body)
+          default:
             try? UnixFileLock.withExclusiveLock(atPath: path, body)
           }
         }
@@ -84,6 +88,76 @@
 
       #expect(try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) { didRun = true } != nil)
       #expect(didRun)
+    }
+
+    @Test
+    func waitingWhileAsksOnEveryTryThatFindsTheLockHeldAndGivesUpWhenToldTo() async throws {
+      let directory = try makeShortTemporaryDirectory("flock")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let path = directory.appending(path: "a.lock").path
+      let holder = FileLockHolder(path)
+      defer { holder.release() }
+
+      let (result, attempts) = try await withDeadline {
+        var attempts: [Int] = []
+        let result = try UnixFileLock.withExclusiveLock(
+          atPath: path,
+          waitingWhile: { attempt in
+            attempts.append(attempt)
+            return attempt < 3
+          },
+          { true }
+        )
+        return (result, attempts)
+      }
+      #expect(result == nil)
+      #expect(attempts == [1, 2, 3])
+
+      let (gaveUpAtOnce, firstAttempts) = try await withDeadline {
+        var attempts: [Int] = []
+        let result = try UnixFileLock.withExclusiveLock(
+          atPath: path,
+          waitingWhile: { attempt in
+            attempts.append(attempt)
+            return false
+          },
+          { true }
+        )
+        return (result, attempts)
+      }
+      #expect(gaveUpAtOnce == nil)
+      #expect(firstAttempts == [1])
+      // Still the holder's, and still there.
+      #expect(FileManager.default.fileExists(atPath: path))
+    }
+
+    @Test
+    func waitingWhileTakesTheLockOnceItsHolderLetsGoMidWait() async throws {
+      let directory = try makeShortTemporaryDirectory("flock")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let path = directory.appending(path: "a.lock").path
+      let holder = FileLockHolder(path)
+
+      let (result, lastAttempt) = try await withDeadline {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        var lastAttempt = 0
+        let result = try UnixFileLock.withExclusiveLock(
+          atPath: path,
+          waitingWhile: { attempt in
+            lastAttempt = attempt
+            if attempt == 2 { holder.release() }
+            // A process another test is spawning can hold a copy of the holder's descriptor
+            // until it execs, so letting go is not always seen on the very next try.
+            Thread.sleep(forTimeInterval: 0.001)
+            return ContinuousClock.now < deadline
+          },
+          { FileManager.default.fileExists(atPath: path) }
+        )
+        return (result, lastAttempt)
+      }
+      #expect(result == true)
+      #expect(lastAttempt >= 2)
+      #expect(!FileManager.default.fileExists(atPath: path))
     }
 
     @Test

@@ -46,6 +46,8 @@ func waitUntil(
     import Android
   #endif
 
+  @testable import SQLiteOrbit
+
   func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
 
   func waitForFile(_ url: URL, timeout: Duration = .seconds(10)) async throws {
@@ -58,6 +60,38 @@ func waitUntil(
 
   func processTestExit(_ status: Int32) -> Never {
     exit(status)
+  }
+
+  /// Waits, in a helper process, for the test to create `url`, and exits with a failure if it
+  /// never does, so a helper the test forgot never outlives it for long.
+  func processTestWaitForFile(_ url: URL, timeout: Duration = .seconds(30)) {
+    let deadline = ContinuousClock.now.advanced(by: timeout)
+    while !FileManager.default.fileExists(atPath: url.path) {
+      guard ContinuousClock.now < deadline else { processTestExit(1) }
+      Thread.sleep(forTimeInterval: 0.002)
+    }
+  }
+
+  /// Runs `body` on a thread of its own, and waits at most `timeout` for it to return.
+  ///
+  /// Whatever might block runs this way, so a change that makes it wait on a stalled process fails
+  /// the test with a ``TestTimeout`` rather than hanging it. The thread is left behind if it never
+  /// returns.
+  func withDeadline<Value: Sendable>(
+    _ timeout: Duration = .seconds(10),
+    _ body: @escaping @Sendable () throws -> Value
+  ) async throws -> Value {
+    let outcome = DeadlineOutcome<Value>()
+    Thread.detachNewThread {
+      let result = Result { try body() }
+      outcome.result.withLock { $0 = result }
+    }
+    try await waitUntil(timeout: timeout) { outcome.result.withLock { $0 != nil } }
+    return try outcome.result.withLock { $0! }.get()
+  }
+
+  private final class DeadlineOutcome<Value: Sendable>: Sendable {
+    let result = Lock<Result<Value, any Error>?>(nil)
   }
 
   final class ProcessTestHarness {
