@@ -11,8 +11,8 @@
   /// is sent, when the peer turns out to be dead, or when the peer stops advertising the database.
   ///
   /// The endpoint knows nothing of the coordination directory: it is told which peers to send to,
-  /// and reports the ones a send finds dead rather than removing anything of theirs. One the thread
-  /// finds dead is only dropped, and the next send to it finds it dead in turn.
+  /// and reports the ones it finds dead rather than removing anything of theirs, those a send finds
+  /// to the send's caller and those its thread finds to the callback it was started with.
   ///
   /// The receive thread keeps the endpoint alive for as long as it runs, and ``stop()`` is what
   /// ends it. Whichever of its owner and the thread lets go of the endpoint last closes its
@@ -34,13 +34,7 @@
       var failed = 0
 
       /// The peers that turned out to be dead, which are counted in none of the above.
-      var stale: [StalePeer] = []
-    }
-
-    /// A peer that turned out to be dead, and the databases this endpoint had seen it advertise.
-    struct StalePeer: Sendable {
-      let peer: UnixDatagramPeer
-      let coordinationKeys: Set<String>
+      var stale: [UnixDatagramPeer] = []
     }
 
     /// The longest a peer the queue cannot say has room waits between attempts.
@@ -86,11 +80,17 @@
     /// Starts the thread that receives on this endpoint and sends peers what they are owed, which
     /// runs until ``stop()``.
     ///
-    /// - Parameter receive: Receives each datagram no longer than the maximum, on the endpoint's
-    ///   thread. The bytes are only valid for the duration of the call.
-    func start(receive: @escaping @Sendable (Span<UInt8>) -> Void) {
+    /// - Parameters:
+    ///   - receive: Receives each datagram no longer than the maximum, on the endpoint's thread.
+    ///     The bytes are only valid for the duration of the call.
+    ///   - onStalePeer: Receives each peer the thread finds dead while sending it what it is owed,
+    ///     once the endpoint has forgotten it, on the endpoint's thread and without its lock held.
+    func start(
+      receive: @escaping @Sendable (Span<UInt8>) -> Void,
+      onStalePeer: @escaping @Sendable (UnixDatagramPeer) -> Void
+    ) {
       DetachedThread.spawn(name: "Orbit IPC") {
-        self.run(receive: receive)
+        self.run(receive: receive, onStalePeer: onStalePeer)
       }
     }
 
@@ -166,7 +166,7 @@
       } else {
         do {
           guard let socket = try UnixDatagramSocket.connect(to: peer.socketPath) else {
-            delivery.stale.append(StalePeer(peer: peer, coordinationKeys: [coordinationKey]))
+            delivery.stale.append(peer)
             return
           }
           known = Peer(peer: peer, socket: socket)
@@ -208,9 +208,11 @@
     /// Sends a peer what it is owed, one commit per database in as few datagrams as fit them, until
     /// the peer has no room or is owed nothing.
     ///
-    /// A peer this finds dead is dropped, along with what it was owed.
-    private func flush(_ name: String, in state: inout State) {
-      guard let peer = state.peers[name], !peer.owed.isEmpty else { return }
+    /// A peer this finds dead is forgotten, along with what it was owed.
+    ///
+    /// - Returns: The peer, if this found it dead.
+    private func flush(_ name: String, in state: inout State) -> UnixDatagramPeer? {
+      guard let peer = state.peers[name], !peer.owed.isEmpty else { return nil }
       var entries =
         peer.owed
         .sorted { $0.key.rawValue < $1.key.rawValue }
@@ -236,10 +238,9 @@
           peer.retryDelay = .milliseconds(1)
         case .full:
           peer.backOff()
-          return
+          return nil
         case .peerGone:
-          _ = self.forget(name, in: &state)
-          return
+          return self.forget(name, in: &state)
         case .failed:
           // Nothing about a datagram that failed this way changes on another attempt, so what it
           // held is dropped rather than attempted forever.
@@ -252,6 +253,7 @@
       }
       peer.owed.removeAll()
       self.unwatch(peer)
+      return nil
     }
 
     private func unwatch(_ peer: Peer) {
@@ -265,12 +267,12 @@
 
     /// Closes the socket kept for a peer, and drops what it is owed.
     ///
-    /// - Returns: The peer, with the databases it was seen advertising.
-    private func forget(_ name: String, in state: inout State) -> StalePeer {
+    /// - Returns: The peer.
+    private func forget(_ name: String, in state: inout State) -> UnixDatagramPeer {
       // Its socket closes once nothing holds the peer any more, which is before the lock is let go.
       let peer = state.peers.removeValue(forKey: name)!
       self.unwatch(peer)
-      return StalePeer(peer: peer.peer, coordinationKeys: peer.coordinationKeys)
+      return peer.peer
     }
 
     /// Drops what the peers that stopped advertising `coordinationKey` are owed for it, and closes
@@ -296,7 +298,7 @@
 
     // MARK: - The Thread
 
-    private func run(receive: (Span<UInt8>) -> Void) {
+    private func run(receive: (Span<UInt8>) -> Void, onStalePeer: (UnixDatagramPeer) -> Void) {
       // Every datagram lands in this one buffer, which only this thread touches. It is a byte
       // longer than any datagram the transport accepts, so one that fills it was too long.
       let buffer = UnsafeMutableBufferPointer<UInt8>
@@ -321,14 +323,16 @@
         // Flushes the peers that have room or are due another attempt. An event for a socket
         // closed since can name a new one given the same number, which at worst attempts that
         // peer a little early.
-        self.state.withLock { state in
+        let stale = self.state.withLock { state in
           let now = ContinuousClock.now
-          for (name, peer) in state.peers
-          where writable.contains(peer.socket.descriptor.rawValue)
-            || peer.retryAt.map({ $0 <= now }) == true
-          {
-            self.flush(name, in: &state)
+          let due = state.peers.filter { _, peer in
+            writable.contains(peer.socket.descriptor.rawValue)
+              || peer.retryAt.map({ $0 <= now }) == true
           }
+          return due.keys.compactMap { self.flush($0, in: &state) }
+        }
+        for peer in stale {
+          onStalePeer(peer)
         }
       }
     }

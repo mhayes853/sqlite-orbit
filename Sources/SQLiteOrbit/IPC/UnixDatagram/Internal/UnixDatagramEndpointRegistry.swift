@@ -17,8 +17,10 @@
   ///
   /// What peers advertise for the databases this endpoint sends to is read from their markers and
   /// kept until a watch on the coordination directory reports a change. A send goes to the peers
-  /// whose markers the message concerns, and a peer the endpoint finds dead is pruned from the
-  /// directory.
+  /// whose markers the message concerns. A peer the endpoint finds dead, whether a send finds it or
+  /// the endpoint's thread does, is pruned from the directory: its socket's path, and its marker
+  /// and any temporary file it left in every database's directory, not only the ones it was found
+  /// in, so nothing of it is left for any endpoint to find.
   final class UnixDatagramEndpointRegistry: Sendable {
     private struct State {
       var watcher: UnixDirectoryWatcher?
@@ -78,7 +80,11 @@
     /// - Parameter receive: Receives each datagram no longer than the maximum, on the endpoint's
     ///   thread. The bytes are only valid for the duration of the call.
     func start(receive: @escaping @Sendable (Span<UInt8>) -> Void) {
-      self.endpoint.start(receive: receive)
+      // Weakly, so that the thread, which the endpoint keeps until it is stopped, keeps nothing
+      // else alive.
+      self.endpoint.start(receive: receive) { [weak self] peer in
+        self?.prune(peer)
+      }
     }
 
     /// Withdraws every marker this endpoint wrote and removes its socket's path, so a peer that
@@ -134,8 +140,8 @@
         to: self.peers(concernedWith: entry.message, in: advertisements),
         advertisedBy: advertisements.keys
       )
-      for stale in delivery.stale {
-        try? self.remove(stale.peer, coordinationKeys: stale.coordinationKeys)
+      for peer in delivery.stale {
+        self.prune(peer)
       }
       return delivery
     }
@@ -172,9 +178,9 @@
     /// already queued that rename, and the send that commit makes cannot miss it. A watch drained
     /// on some other thread could still be behind.
     ///
-    /// Any change forgets everything, watches included, so a database is read and watched again from
-    /// scratch by the next send to it. A database whose directory cannot be watched is read on every
-    /// send, which is slower and always correct.
+    /// Any change forgets everything read, watches included, so a database is read and watched
+    /// again from scratch by the next send to it. A database whose directory cannot be watched is
+    /// read on every send, which is slower and always correct.
     ///
     /// - Returns: The region each endpoint's subscriptions cover, by endpoint name.
     func peerRegions(
@@ -212,18 +218,26 @@
       )
     }
 
-    /// Removes a dead peer's socket path and its markers for the databases it was found under.
+    /// Removes everything of a dead peer's from the coordination directory: its socket's path, and
+    /// its marker and temporary file in every database's directory.
     ///
-    /// - Parameters:
-    ///   - peer: The peer that turned out to be dead.
-    ///   - coordinationKeys: The databases it was found advertising.
-    func remove(_ peer: UnixDatagramPeer, coordinationKeys: some Sequence<String>) throws {
-      try Self.remove(URL(fileURLWithPath: peer.socketPath))
+    /// Every database is looked in, not only the ones the peer was found advertising, because
+    /// nothing else would ever remove the markers for databases this endpoint does not send to.
+    /// The socket's path goes first, so if this is cut short, whatever marker is left still leads
+    /// the next endpoint to find the peer dead and prune it.
+    ///
+    /// - Parameter peer: The peer that turned out to be dead.
+    func prune(_ peer: UnixDatagramPeer) {
+      _ = UnixPlatform.removeFile(atPath: peer.socketPath)
+      let coordinationKeys =
+        (try? FileManager.default.contentsOfDirectory(atPath: self.databasesDirectory.path)) ?? []
       for coordinationKey in coordinationKeys {
         let directory = self.databaseDirectory(coordinationKey)
-        try Self.remove(directory.appending(path: peer.endpointName))
+        _ = UnixPlatform.removeFile(atPath: directory.appending(path: peer.endpointName).path)
         // Left behind if the peer died between writing a marker and renaming it into place.
-        try Self.remove(directory.appending(path: ".\(peer.endpointName).tmp"))
+        _ = UnixPlatform.removeFile(
+          atPath: directory.appending(path: ".\(peer.endpointName).tmp").path
+        )
       }
     }
 

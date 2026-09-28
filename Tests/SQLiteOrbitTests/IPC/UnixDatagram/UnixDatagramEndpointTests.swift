@@ -122,20 +122,21 @@
     }
 
     @Test
-    func aPeerFoundDeadWhileOwedIsDroppedAndPrunedByTheNextSend() async throws {
-      let harness = try OwedPeerHarness(advertising: [self.database])
+    func aPeerTheThreadFindsDeadIsPrunedFromEveryDatabaseWithoutAnotherSend() async throws {
+      let harness = try OwedPeerHarness(advertising: [self.database, self.other])
       defer { harness.cleanup() }
       _ = try harness.fill(self.database)
 
       harness.closePeer()
       harness.sender.start { _ in }
-      try await waitUntil { harness.sender.owedRegions.isEmpty }
 
-      // The thread only drops it. Its marker is left to the next send, which finds it dead too.
-      #expect(harness.isAdvertising(self.database))
-      let delivery = try harness.send(self.database, column: 10_000)
-      #expect(delivery.stale.map(\.peer.endpointName) == ["peer"])
-      #expect(!harness.isAdvertising(self.database))
+      // Nothing is bound at its path any more, so the thread takes it for dead as soon as it
+      // tries to send it what it is owed, and prunes it, even from the database it owed nothing.
+      try await waitUntil {
+        !harness.hasSocketPath && !harness.isAdvertising(self.database)
+          && !harness.isAdvertising(self.other)
+      }
+      #expect(harness.sender.owedRegions.isEmpty)
     }
   }
 
@@ -163,8 +164,9 @@
         receiveBufferByteCount: 4_096
       )
       for database in databases {
+        _ = try self.sender.createDatabaseDirectory(coordinationKey: database.coordinationKey)
         try Data(UnixDatagramWireProtocol.encodeMarker(.fullDatabase))
-          .write(to: try self.marker(database))
+          .write(to: self.marker(database))
       }
     }
 
@@ -222,16 +224,23 @@
     }
 
     func withdraw(_ database: OrbitDatabaseIdentifier) throws {
-      try FileManager.default.removeItem(at: try self.marker(database))
+      try FileManager.default.removeItem(at: self.marker(database))
     }
 
     func isAdvertising(_ database: OrbitDatabaseIdentifier) -> Bool {
-      (try? FileManager.default.fileExists(atPath: self.marker(database).path)) == true
+      FileManager.default.fileExists(atPath: self.marker(database).path)
     }
 
-    private func marker(_ database: OrbitDatabaseIdentifier) throws -> URL {
-      try self.sender.createDatabaseDirectory(coordinationKey: database.coordinationKey)
-        .appending(path: "peer")
+    var hasSocketPath: Bool {
+      FileManager.default.fileExists(atPath: self.socketPath)
+    }
+
+    private var socketPath: String {
+      self.sender.peer(named: "peer").socketPath
+    }
+
+    private func marker(_ database: OrbitDatabaseIdentifier) -> URL {
+      self.directory.appending(path: "v1/d/\(database.coordinationKey)/peer")
     }
   }
 

@@ -39,7 +39,7 @@
       try first.withdraw(coordinationKey: key)
       #expect(try sender.peerRegions(for: self.database) == ["second": self.lists])
 
-      try second.remove(second.peer(named: "second"), coordinationKeys: [key])
+      second.prune(second.peer(named: "second"))
       #expect(try sender.peerRegions(for: self.database).isEmpty)
     }
 
@@ -80,6 +80,38 @@
       #expect(
         try sender.peerRegions(for: self.database) == corrupt.mapValues { _ in .fullDatabase }
       )
+    }
+
+    @Test
+    func oneSendPrunesADeadPeerFromEveryDatabase() throws {
+      let directory = try makeShortTemporaryDirectory("registry")
+      defer { try? FileManager.default.removeItem(at: directory) }
+      let sender = try unixDatagramRegistry(directory, endpointName: "sender")
+      let unsent = OrbitDatabaseIdentifier(rawValue: "unsent")
+      var crashed: UnixDatagramEndpointRegistry? = try unixDatagramRegistry(
+        directory,
+        endpointName: "crashed"
+      )
+      try crashed?.advertise(self.items, coordinationKey: self.database.coordinationKey)
+      try crashed?.advertise(self.items, coordinationKey: unsent.coordinationKey)
+      let socketPath = try #require(crashed?.socketPath)
+      // What a peer leaves if it dies between writing a marker and renaming it into place.
+      let interrupted = try sender.createDatabaseDirectory(coordinationKey: "interrupted")
+      try Data().write(to: interrupted.appending(path: ".crashed.tmp"))
+
+      // Released without being shut down, which closes its socket and leaves everything else, as
+      // a process that dies does.
+      crashed = nil
+      #expect(FileManager.default.fileExists(atPath: socketPath))
+      let delivery = try sender.send(
+        UnixDatagramWireEntry(commit(self.database, region: self.items), fittingIn: 1_024)
+      )
+
+      #expect(delivery.stale.map(\.endpointName) == ["crashed"])
+      #expect(!FileManager.default.fileExists(atPath: socketPath))
+      #expect(try sender.peerRegions(for: self.database).isEmpty)
+      #expect(try sender.peerRegions(for: unsent).isEmpty)
+      #expect(try FileManager.default.contentsOfDirectory(atPath: interrupted.path).isEmpty)
     }
 
     @Test

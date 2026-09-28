@@ -156,7 +156,7 @@
     }
 
     @Test
-    func aProcessThatDiesWhileOwedIsDroppedThenPrunedByTheNextSend() async throws {
+    func aProcessThatDiesWhileOwedIsDroppedAndPrunedByTheTransportsThread() async throws {
       let harness = try IPCProcessHarness(database: "owed-dead")
       defer { harness.cleanup() }
       let listener = try harness.spawn("idle")
@@ -167,13 +167,13 @@
 
       harness.kill(listener)
       try await harness.waitForExit(listener)
-      // The transport's thread finds it dead when it next tries it, and drops what it was owed,
-      // but leaves its marker to the next send.
-      try await waitUntil { transport.owedRegions.isEmpty }
-      #expect(try harness.registrationCount() == 1)
-
-      try await transport.send(harness.message)
-      #expect(try harness.registrationCount() == 0)
+      // The transport's thread finds it dead when it next tries it, drops what it was owed, and
+      // prunes it without waiting for another send.
+      try await waitUntil {
+        transport.owedRegions.isEmpty && (try? harness.registrationCount()) == 0
+      }
+      // Only the transport's own socket is left.
+      #expect(try harness.socketCount() == 1)
     }
   }
 
