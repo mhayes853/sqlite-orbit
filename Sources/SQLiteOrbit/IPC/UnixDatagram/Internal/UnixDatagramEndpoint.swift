@@ -252,9 +252,10 @@
       counting delivery: inout Delivery
     ) {
       let name = peer.endpointName
-      let existing = state.peers[name]
+      // A socket connected just now has already shown that something is bound at the path.
+      var mayReconnect = true
       let known: Peer
-      if let existing {
+      if let existing = state.peers[name] {
         known = existing
       } else {
         do {
@@ -264,6 +265,7 @@
           }
           known = Peer(peer: peer, socket: socket)
           state.peers[name] = known
+          mayReconnect = false
         } catch {
           delivery.failed += 1
           return
@@ -274,8 +276,6 @@
       // A peer that is owed anything is not sent to until it has taken what it is owed, so the
       // message joins that rather than overtaking it.
       if known.owed.isEmpty {
-        // A socket connected just now has already shown that something is bound at the path.
-        var mayReconnect = existing != nil
         switch self.send(datagram, to: known, mayReconnect: &mayReconnect) {
         case .sent:
           delivery.delivered += 1
@@ -376,12 +376,11 @@
         }
         // The queue lets go of the old socket before it closes, and a peer waiting for room
         // waits on the new one instead.
-        let isWatched = peer.isWatched
-        if isWatched {
+        if peer.isWatched {
           self.queue.unwatchWritable(peer.socket.descriptor.rawValue)
         }
         peer.socket = socket
-        if isWatched {
+        if peer.isWatched {
           peer.isWatched = self.queue.watchWritable(peer.socket.descriptor.rawValue)
         }
       } catch let error as UnixSystemError {
