@@ -73,7 +73,8 @@
       let lock = versionDirectory.appending(path: "cleanup-stale.lock").path
       let summary = try? UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) {
         var sweep = Sweep(
-          versionDirectory: versionDirectory,
+          socketsDirectory: versionDirectory.appending(path: "s", directoryHint: .isDirectory),
+          databasesDirectory: versionDirectory.appending(path: "d", directoryHint: .isDirectory),
           endpointName: endpointName,
           temporarySocketGracePeriod: temporarySocketGracePeriod
         )
@@ -89,38 +90,26 @@
       let socketsDirectory: URL
       let databasesDirectory: URL
       let endpointName: String
-      let temporarySocketGracePeriod: TimeInterval
+      let temporarySocketGracePeriod: Duration
       var summary = Summary()
 
       /// Whether each endpoint looked at is dead, by name, so each is probed once however many
       /// files it left.
-      private var isDead: [String: Bool] = [:]
-
-      init(versionDirectory: URL, endpointName: String, temporarySocketGracePeriod: Duration) {
-        self.socketsDirectory = versionDirectory.appending(path: "s", directoryHint: .isDirectory)
-        self.databasesDirectory = versionDirectory.appending(path: "d", directoryHint: .isDirectory)
-        self.endpointName = endpointName
-        let (seconds, attoseconds) = temporarySocketGracePeriod.components
-        self.temporarySocketGracePeriod = Double(seconds) + Double(attoseconds) / 1e18
-      }
+      var isDead: [String: Bool] = [:]
 
       /// Removes the file of every socket in `v1/s/` nothing is bound to any more, and of every
       /// hidden one besides that is older than the grace period.
       mutating func removeDeadSockets() {
         for name in Self.contents(of: self.socketsDirectory) where name.hasSuffix(".sock") {
           let path = self.socketsDirectory.appending(path: name).path
-          if name.hasPrefix(".") {
-            let endpointName = String(name.dropFirst().dropLast(".sock".count))
-            guard endpointName != self.endpointName, self.isTemporarySocketAbandoned(path)
-            else { continue }
-            if UnixPlatform.removeFile(atPath: path) { self.summary.temporarySocketCount += 1 }
-          } else {
-            let endpointName = String(name.dropLast(".sock".count))
-            guard endpointName != self.endpointName, self.isEndpointDead(endpointName) else {
-              continue
-            }
-            if UnixPlatform.removeFile(atPath: path) { self.summary.socketCount += 1 }
-          }
+          let isTemporary = name.hasPrefix(".")
+          let endpointName = String(name.dropFirst(isTemporary ? 1 : 0).dropLast(".sock".count))
+          guard endpointName != self.endpointName,
+            isTemporary
+              ? self.isTemporarySocketAbandoned(path) : self.isEndpointDead(endpointName),
+            UnixPlatform.removeFile(atPath: path)
+          else { continue }
+          self.summary[keyPath: isTemporary ? \Summary.temporarySocketCount : \.socketCount] += 1
         }
       }
 
@@ -169,7 +158,7 @@
           let attributes = try? FileManager.default.attributesOfItem(atPath: path),
           let modified = attributes[.modificationDate] as? Date
         else { return false }
-        return Date.now.timeIntervalSince(modified) >= self.temporarySocketGracePeriod
+        return Date.now.timeIntervalSince(modified) >= self.temporarySocketGracePeriod / .seconds(1)
       }
 
       /// The endpoint a file in a database's directory belongs to: a marker is named after its

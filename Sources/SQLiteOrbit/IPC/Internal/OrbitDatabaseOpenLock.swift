@@ -22,7 +22,6 @@
     /// Removes every lock file in the coordination directory `directory` that nobody holds.
     ///
     /// - Returns: How many were removed.
-    @discardableResult
     static func removeUnheldLocks(directory: URL) -> Int {
       let locksDirectory = Self.locksDirectory(in: directory)
       guard let names = try? FileManager.default.contentsOfDirectory(atPath: locksDirectory.path)

@@ -21,10 +21,7 @@
       try coordination.writeMarker("live", in: "k1")
       try coordination.writeMarker("self", in: "k2")
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(summary?.socketCount == 1)
       #expect(summary?.markerCount == 3)
@@ -47,10 +44,7 @@
       // Nothing an endpoint writes, so nobody's to remove.
       try coordination.writeMarker(".stray", in: "k1")
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(summary?.markerCount == 3)
       #expect(try coordination.markers() == ["k1": [".live.tmp", ".stray"]])
@@ -68,20 +62,13 @@
       try coordination.age(".live.sock")
       try coordination.leaveDeadSocket(".young")
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(summary?.temporarySocketCount == 1)
       #expect(summary?.socketCount == 0)
       #expect(try coordination.sockets() == [".live.sock", ".young.sock"])
 
-      let immediate = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self",
-        temporarySocketGracePeriod: .zero
-      )
+      let immediate = coordination.sweep(temporarySocketGracePeriod: .zero)
 
       #expect(immediate?.temporarySocketCount == 1)
       #expect(try coordination.sockets() == [".live.sock"])
@@ -99,10 +86,7 @@
         withIntermediateDirectories: true
       )
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(summary?.databaseDirectoryCount == 1)
       #expect(try coordination.markers() == ["full": ["live"]])
@@ -122,10 +106,7 @@
         databaseIdentifier: held,
         directory: coordination.directory
       ) {
-        let summary = UnixDatagramStaleCleanup.sweep(
-          directory: coordination.directory,
-          keeping: "self"
-        )
+        let summary = coordination.sweep()
         return (summary, try FileManager.default.contentsOfDirectory(atPath: locks.path))
       }
 
@@ -142,17 +123,14 @@
       let lock = coordination.directory.appending(path: "v1/cleanup-stale.lock").path
 
       let skipped = try UnixFileLock.withExclusiveLock(atPath: lock) {
-        UnixDatagramStaleCleanup.sweep(directory: coordination.directory, keeping: "self")
+        coordination.sweep()
       }
 
       #expect(skipped == nil)
       #expect(try coordination.sockets() == ["dead.sock"])
       #expect(try coordination.markers() == ["k1": ["dead"]])
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(summary?.socketCount == 1)
       #expect(summary?.markerCount == 1)
@@ -181,10 +159,7 @@
       // first, markers after.
       DispatchQueue.concurrentPerform(iterations: 16) { index in
         if index.isMultiple(of: 2) {
-          let summary = UnixDatagramStaleCleanup.sweep(
-            directory: coordination.directory,
-            keeping: "self"
-          )
+          let summary = coordination.sweep()
           if let summary { summaries.withLock { $0.append(summary) } }
         } else {
           do {
@@ -236,10 +211,7 @@
       #expect(try coordination.markers().values.map(\.count) == [1])
       #expect(try FileManager.default.contentsOfDirectory(atPath: locks).count == 1)
 
-      let summary = UnixDatagramStaleCleanup.sweep(
-        directory: coordination.directory,
-        keeping: "self"
-      )
+      let summary = coordination.sweep()
 
       #expect(
         summary
@@ -313,6 +285,18 @@
     }
 
     func remove() { try? FileManager.default.removeItem(at: self.directory) }
+
+    /// Sweeps as an endpoint named `self` would.
+    func sweep(
+      temporarySocketGracePeriod: Duration = UnixDatagramStaleCleanup
+        .defaultTemporarySocketGracePeriod
+    ) -> UnixDatagramStaleCleanup.Summary? {
+      UnixDatagramStaleCleanup.sweep(
+        directory: self.directory,
+        keeping: "self",
+        temporarySocketGracePeriod: temporarySocketGracePeriod
+      )
+    }
 
     /// Binds a socket at `v1/s/<name>.sock`, which stays bound while the result is kept.
     func bindSocket(_ name: String) throws -> LiveSocket {
