@@ -18,6 +18,7 @@
 public final class OrbitIPCDatabase:
   Identifiable,
   OrbitDatabaseWriter,
+  OrbitSuspendable,
   Sendable
 {
   /// Receives important announcement events that the database cannot report through its
@@ -80,6 +81,15 @@ public final class OrbitIPCDatabase:
     get { delegateStorage.withLock { $0.value } }
     set { delegateStorage.withLock { $0.value = newValue } }
   }
+
+  /// Whether writes to this database are currently suspended.
+  public var isSuspended: Bool { writer.isSuspended }
+
+  /// Interrupts an active write and refuses further writes until ``resume()``.
+  public func suspend() { writer.suspend() }
+
+  /// Allows writes again after suspension.
+  public func resume() { writer.resume() }
 
   /// Creates a database that announces its committed writes through `transport`.
   ///

@@ -11,7 +11,7 @@ struct RemindersApp: App {
   @UIApplicationDelegateAdaptor(RemindersAppDelegate.self) private var appDelegate
   @Environment(\.scenePhase) private var scenePhase
 
-  private let database: RemindersDatabase
+  private let database: OrbitIPCDatabase
   private let navigation: RemindersNavigationModel
   private let notificationHandler: ReminderNotificationHandler
   private let notificationScheduler: ReminderNotificationScheduler
@@ -44,6 +44,7 @@ struct RemindersApp: App {
   var body: some Scene {
     WindowGroup {
       RemindersSceneContent(navigation: navigation)
+        .orbitDatabaseSuspension(database)
         .task(id: scenePhase) {
           guard scenePhase == .active else { return }
           await notificationScheduler.observe(in: database)

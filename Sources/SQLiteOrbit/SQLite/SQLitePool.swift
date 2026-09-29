@@ -43,6 +43,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
   private let scheduler: SQLitePoolScheduler
+  private let suspension: SQLiteWriteSuspension
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
@@ -72,6 +73,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       throw SQLitePoolUnavailableError(path: path)
     }
     let identifier = identifier ?? .forDatabase(path: path)
+    let suspension = SQLiteWriteSuspension(databaseIdentifier: identifier)
 
     // Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes
     // opening it at the same moment would otherwise contend for it.
@@ -80,16 +82,18 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       directory: coordinationDirectory,
       configuration: configuration
     ) {
-      try Self.openConnections(path: path, configuration: configuration)
+      try Self.openConnections(path: path, configuration: configuration, suspension: suspension)
     }
 
     self.defaultIdentifier = identifier
+    self.suspension = suspension
     self.scheduler = SQLitePoolScheduler(readers: readers, writers: [writer])
   }
 
   private static func openConnections(
     path: OrbitDatabasePath,
-    configuration: SQLiteConfiguration
+    configuration: SQLiteConfiguration,
+    suspension: SQLiteWriteSuspension
   ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
     // Each connection's role is set up apart from the caller's configuration, which is what its
     // transactions report having been opened with.
@@ -101,7 +105,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       path: path,
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration,
-      driverSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"]
+      driverSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
+      suspension: suspension
     )
 
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
@@ -287,6 +292,19 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ) throws -> Result {
     try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
   }
+
+  /// Whether this pool currently refuses statements that could retain its writer's lock.
+  public var isSuspended: Bool { suspension.isSuspended }
+
+  /// Interrupts an active writer and refuses statements that could acquire or retain its lock.
+  /// Reads on the pool's read-only connections continue to work. An interrupted write rolls back
+  /// and throws ``OrbitDatabaseSuspendedError``. A transactional write rolls back; earlier
+  /// statements in `writeWithoutTransaction` may already have committed. This method does not
+  /// wait for an active transaction to roll back.
+  public func suspend() { suspension.suspend() }
+
+  /// Allows writes to acquire the lock again. Calling this when active has no effect.
+  public func resume() { suspension.resume() }
 
   /// Registers an observer of the transactions this driver commits.
   ///
