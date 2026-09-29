@@ -197,7 +197,7 @@
 
         // Started first, so its sweep of the coordination directory runs before anything is missing.
         let sender = try ipcTransport(directory)
-        _ = UnixPlatform.removeFile(atPath: files.socketPath)
+        FileSystem.removeFile(atPath: files.socketPath)
         // It has never connected to the receiver, so it finds nothing at the path and prunes it.
         #expect(try sender.peers(concernedWith: first).count == 1)
         try await sender.send(columnCommit(self.database, 1))
@@ -351,10 +351,10 @@
     func removeAsTheCleanerWould() {
       let root = self.directory.standardizedFileURL.path
       for file in [self.socketPath, self.marker.path] {
-        _ = UnixPlatform.removeFile(atPath: file)
+        FileSystem.removeFile(atPath: file)
         var parent = URL(fileURLWithPath: file).deletingLastPathComponent().standardizedFileURL
         while parent.path.hasPrefix(root + "/"),
-          UnixPlatform.removeDirectory(atPath: parent.path)
+          FileSystem.removeDirectory(atPath: parent.path)
         {
           parent = parent.deletingLastPathComponent().standardizedFileURL
         }

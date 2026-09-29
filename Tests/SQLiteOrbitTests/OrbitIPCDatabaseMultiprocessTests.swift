@@ -51,7 +51,7 @@
         Thread.detachNewThread {
           try? OrbitDatabaseOpenLock.withLock(
             databaseIdentifier: identifier,
-            directoryPath: directory.path,
+            directory: OrbitCoordinationDirectory(path: directory.path),
             configuration: .default
           ) {
             isHeld.withLock { $0 = true }
@@ -373,7 +373,7 @@
         case "hold-open-lock":
           try OrbitDatabaseOpenLock.withLock(
             databaseIdentifier: .forDatabase(path: path),
-            directoryPath: coordination.directory.path,
+            directory: OrbitCoordinationDirectory(path: coordination.directory.path),
             configuration: .default
           ) {
             try peer.markReady()

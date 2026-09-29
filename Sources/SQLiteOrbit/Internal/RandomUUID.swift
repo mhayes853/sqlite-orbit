@@ -14,15 +14,13 @@ enum RandomUUID {
     bytes[6] = (bytes[6] & 0x0F) | 0x40
     bytes[8] = (bytes[8] & 0x3F) | 0x80
 
-    let digits = Array("0123456789abcdef".utf8)
     var utf8: [UInt8] = []
     utf8.reserveCapacity(36)
     for (index, byte) in bytes.enumerated() {
       if index == 4 || index == 6 || index == 8 || index == 10 {
         utf8.append(UInt8(ascii: "-"))
       }
-      utf8.append(digits[Int(byte >> 4)])
-      utf8.append(digits[Int(byte & 0x0F)])
+      LowercaseHexadecimal.append(byte, to: &utf8)
     }
     return String(decoding: utf8, as: UTF8.self)
   }

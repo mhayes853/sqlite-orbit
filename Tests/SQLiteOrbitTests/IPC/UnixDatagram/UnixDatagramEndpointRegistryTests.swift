@@ -213,7 +213,7 @@
     watchesDirectories: Bool = true
   ) throws -> UnixDatagramEndpointRegistry {
     try UnixDatagramEndpointRegistry(
-      directoryPath: directory.path,
+      directory: OrbitCoordinationDirectory(path: directory.path),
       endpointName: endpointName,
       maximumDatagramByteCount: 60 * 1024,
       receiveBufferByteCount: 256 * 1024,

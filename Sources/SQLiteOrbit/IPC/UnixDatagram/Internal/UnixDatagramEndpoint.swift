@@ -89,7 +89,7 @@
         queue = try UnixEventQueue()
         try queue.watchReadable(socket.descriptor.rawValue)
       } catch {
-        _ = UnixPlatform.removeFile(atPath: socketPath)
+        FileSystem.removeFile(atPath: socketPath)
         throw error
       }
       self.socketPath = socketPath

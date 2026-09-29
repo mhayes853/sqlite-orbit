@@ -72,14 +72,17 @@ extension OrbitDatabaseIdentifier {
       missingComponents.reversed().reduce(base) { FilePath.appending($1, to: $0) }
     }
     while true {
-      guard FileSystem.entryExists(atPath: existingPrefix) else {
+      guard let entry = FileSystem.entry(atPath: existingPrefix) else {
         let parent = FilePath.deletingLastComponent(of: existingPrefix)
         guard parent != existingPrefix else { return FilePath.standardized(path) }
         missingComponents.append(FilePath.lastComponent(of: existingPrefix))
         existingPrefix = parent
         continue
       }
-      if let destination = FileSystem.symbolicLinkDestination(atPath: existingPrefix) {
+      // A link replaced by something else since it was looked at is resolved as it is now.
+      if entry == .symbolicLink,
+        let destination = FileSystem.symbolicLinkDestination(atPath: existingPrefix)
+      {
         let parent = canonicalFilePath(
           FilePath.deletingLastComponent(of: existingPrefix),
           remainingSymbolicLinks: remainingSymbolicLinks - 1

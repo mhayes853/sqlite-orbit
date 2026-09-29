@@ -33,8 +33,14 @@ enum FileSystem {
       let length = confstr(_CS_DARWIN_USER_TEMP_DIR, nil, 0)
       if length > 0 {
         var buffer = [CChar](repeating: 0, count: length)
-        if confstr(_CS_DARWIN_USER_TEMP_DIR, &buffer, buffer.count) > 0 {
-          return string(fromCString: buffer)
+        let path = buffer.withUnsafeMutableBufferPointer { buffer -> String? in
+          guard confstr(_CS_DARWIN_USER_TEMP_DIR, buffer.baseAddress, buffer.count) > 0 else {
+            return nil
+          }
+          return String(cString: buffer.baseAddress!)
+        }
+        if let path {
+          return path
         }
       }
     #endif
@@ -68,8 +74,12 @@ enum FileSystem {
       var capacity = 1024
       while true {
         var buffer = [CChar](repeating: 0, count: capacity)
-        if getcwd(&buffer, buffer.count) != nil {
-          return string(fromCString: buffer)
+        let path = buffer.withUnsafeMutableBufferPointer { buffer -> String? in
+          guard getcwd(buffer.baseAddress, buffer.count) != nil else { return nil }
+          return String(cString: buffer.baseAddress!)
+        }
+        if let path {
+          return path
         }
         guard errno == ERANGE else { return nil }
         capacity *= 2
@@ -77,98 +87,106 @@ enum FileSystem {
     #endif
   }
 
-  /// The current user's home directory, which a path beginning `~/` starts from, found as
-  /// Foundation finds it: `CFFIXED_USER_HOME`, then the user database's entry for the user, then
-  /// `HOME`, then `/var/empty`. A simulator reads `CFFIXED_USER_HOME` or `HOME` first.
-  ///
-  /// A process whose effective user is root is taken to be its real user, as Foundation does.
-  static var homeDirectoryPath: String {
-    #if os(Windows)
-      return "/var/empty"
-    #else
-      #if targetEnvironment(simulator)
-        if let home = getenv("CFFIXED_USER_HOME") ?? getenv("HOME") {
-          return standardizedHome(String(cString: home))
-        }
-      #endif
-      if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
-        return standardizedHome(home)
-      }
-      #if !os(WASI)
-        var uid = geteuid()
-        if uid == 0 {
-          uid = getuid()
-        }
-        if let home = userEntryHome({ getpwuid_r(uid, $0, $1, $2, $3) }) {
+  // Darwin's Foundation takes a tilde at the start of a file path for an ordinary component,
+  // where the others expand it, so only they need to know where a home directory is.
+  #if !canImport(Darwin)
+    /// The current user's home directory, which a path beginning `~/` starts from, found as
+    /// Foundation finds it: `CFFIXED_USER_HOME`, then the user database's entry for the user, then
+    /// `HOME`, then `/var/empty`.
+    ///
+    /// A process whose effective user is root is taken to be its real user, as Foundation does.
+    static var homeDirectoryPath: String {
+      #if os(Windows)
+        return "/var/empty"
+      #else
+        if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
           return standardizedHome(home)
         }
+        #if !os(WASI)
+          var uid = geteuid()
+          if uid == 0 {
+            uid = getuid()
+          }
+          if let home = userEntryHome({ getpwuid_r(uid, $0, $1, $2, $3) }) {
+            return standardizedHome(home)
+          }
+        #endif
+        if let home = getenv("HOME") {
+          return standardizedHome(String(cString: home))
+        }
+        return "/var/empty"
       #endif
-      if let home = getenv("HOME") {
-        return standardizedHome(String(cString: home))
-      }
-      return "/var/empty"
-    #endif
-  }
+    }
 
-  /// The home directory of the user named `user`, which a path beginning `~user/` starts from, or
-  /// `nil` if there is no such user.
-  static func homeDirectoryPath(forUser user: String) -> String? {
-    #if os(Windows) || os(WASI)
-      return nil
-    #else
-      if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
-        return standardizedHome(home)
-      }
-      return userEntryHome { getpwnam_r(user, $0, $1, $2, $3) }.map(standardizedHome)
-    #endif
-  }
+    /// The home directory of the user named `user`, which a path beginning `~user/` starts from, or
+    /// `nil` if there is no such user.
+    static func homeDirectoryPath(forUser user: String) -> String? {
+      #if os(Windows) || os(WASI)
+        return nil
+      #else
+        if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
+          return standardizedHome(home)
+        }
+        return userEntryHome { getpwnam_r(user, $0, $1, $2, $3) }.map(standardizedHome)
+      #endif
+    }
 
-  #if !os(Windows) && !os(WASI)
-    /// The home directory in the user database entry `lookUp` finds, as `getpwuid_r` or
-    /// `getpwnam_r` finds one.
-    private static func userEntryHome(
-      _ lookUp: (
-        UnsafeMutablePointer<passwd>,
-        UnsafeMutablePointer<CChar>,
-        Int,
-        UnsafeMutablePointer<UnsafeMutablePointer<passwd>?>
-      ) -> Int32
-    ) -> String? {
-      var entry = passwd()
-      var result: UnsafeMutablePointer<passwd>?
-      var buffer = [CChar](repeating: 0, count: 16 * 1024)
-      let status = buffer.withUnsafeMutableBufferPointer { buffer in
-        lookUp(&entry, buffer.baseAddress!, buffer.count, &result)
+    #if !os(Windows) && !os(WASI)
+      /// The home directory in the user database entry `lookUp` finds, as `getpwuid_r` or
+      /// `getpwnam_r` finds one.
+      private static func userEntryHome(
+        _ lookUp: (
+          UnsafeMutablePointer<passwd>,
+          UnsafeMutablePointer<CChar>,
+          Int,
+          UnsafeMutablePointer<UnsafeMutablePointer<passwd>?>
+        ) -> Int32
+      ) -> String? {
+        var entry = passwd()
+        var result: UnsafeMutablePointer<passwd>?
+        var buffer = [CChar](repeating: 0, count: 16 * 1024)
+        let status = buffer.withUnsafeMutableBufferPointer { buffer in
+          lookUp(&entry, buffer.baseAddress!, buffer.count, &result)
+        }
+        guard status == 0, result != nil else { return nil }
+        // Bionic declares `pw_dir` as possibly null.
+        let directory: UnsafeMutablePointer<CChar>? = entry.pw_dir
+        return directory.map { String(cString: $0) }
       }
-      guard status == 0, result != nil else { return nil }
-      // Bionic declares `pw_dir` as possibly null.
-      let directory: UnsafeMutablePointer<CChar>? = entry.pw_dir
-      return directory.map { String(cString: $0) }
+    #endif
+
+    private static func standardizedHome(_ path: String) -> String {
+      let path = FilePath.expandingTilde(path)
+      return path.utf8.first == UInt8(ascii: "/") ? FilePath.standardizingAbsolutePath(path) : path
     }
   #endif
-
-  private static func standardizedHome(_ path: String) -> String {
-    let path = FilePath.expandingTilde(path)
-    return path.utf8.first == UInt8(ascii: "/") ? FilePath.standardizingAbsolutePath(path) : path
-  }
 
   /// Whether a file is at `path`, following a symbolic link to what it names.
   static func fileExists(atPath path: String) -> Bool {
     #if os(Windows)
       return false
     #else
-      var status = stat()
-      return stat(path, &status) == 0
+      return status(atPath: path, followingSymbolicLink: true) != nil
     #endif
   }
 
-  /// Whether anything is at `path` itself, a symbolic link included whatever it names.
-  static func entryExists(atPath path: String) -> Bool {
+  /// What is at a path itself, rather than what a symbolic link there names.
+  enum Entry {
+    /// A symbolic link.
+    case symbolicLink
+
+    /// Anything else: a file, a directory, a socket.
+    case other
+  }
+
+  /// What is at `path` itself, a symbolic link included whatever it names, or `nil` if nothing
+  /// is there.
+  static func entry(atPath path: String) -> Entry? {
     #if os(Windows)
-      return false
+      return nil
     #else
-      var status = stat()
-      return lstat(path, &status) == 0
+      guard let status = status(atPath: path, followingSymbolicLink: false) else { return nil }
+      return mode_t(status.st_mode) & S_IFMT == S_IFLNK ? .symbolicLink : .other
     #endif
   }
 
@@ -179,20 +197,35 @@ enum FileSystem {
     #else
       var capacity = 1024
       while true {
-        var buffer = [CChar](repeating: 0, count: capacity)
-        let count = readlink(path, &buffer, buffer.count)
+        // What `readlink` returned, which is negative if it failed, and whether that all fit.
+        var count = -1
+        var didFit = false
+        let destination = String(unsafeUninitializedCapacity: capacity) { buffer in
+          count = buffer.withMemoryRebound(to: CChar.self) {
+            readlink(path, $0.baseAddress!, $0.count)
+          }
+          didFit = count >= 0 && count < buffer.count
+          return didFit ? count : 0
+        }
         guard count >= 0 else { return nil }
-        if count < buffer.count {
-          return String(
-            decoding: buffer[..<count].map { UInt8(bitPattern: $0) },
-            as: UTF8.self
-          )
+        if didFit {
+          return destination
         }
         // It may not all have fit.
         capacity *= 2
       }
     #endif
   }
+
+  #if !os(Windows)
+    /// The status of what is at `path`, or of what a symbolic link there names if
+    /// `followingSymbolicLink`, or `nil` if it cannot be looked up, as when nothing is there.
+    private static func status(atPath path: String, followingSymbolicLink: Bool) -> stat? {
+      var status = stat()
+      let result = followingSymbolicLink ? stat(path, &status) : lstat(path, &status)
+      return result == 0 ? status : nil
+    }
+  #endif
 
   /// The absolute path with every symbolic link in it resolved, or `nil` if any of its
   /// components does not exist.
@@ -235,6 +268,8 @@ enum FileSystem {
   #endif
 
   /// Removes the file at `path`, returning whether there was one to remove.
+  ///
+  /// A failure leaves `errno` as `unlink` left it, as `ENOENT` when nothing is there.
   @discardableResult
   static func removeFile(atPath path: String) -> Bool {
     #if os(Windows)
@@ -258,8 +293,152 @@ enum FileSystem {
       return getenv(name).map { String(cString: $0) }
     }
   #endif
-
-  private static func string(fromCString buffer: [CChar]) -> String {
-    String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-  }
 }
+
+#if canImport(Darwin) || os(Linux) || os(Android)
+  // What the coordination directory is kept with, where there are processes to coordinate. Each
+  // call returns what the C call returned and leaves `errno` as the C call left it, or throws a
+  // ``UnixSystemError`` carrying it.
+  extension FileSystem {
+    /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
+    /// one file or the other and never neither.
+    static func renameFile(atPath source: String, toPath destination: String) -> Bool {
+      rename(source, destination) == 0
+    }
+
+    /// Sets the access and modification times of the file at `path`, whatever kind it is, to
+    /// now, which needs the caller to own it or be able to write to it.
+    static func touchFile(atPath path: String) -> Bool {
+      utimes(path, nil) == 0
+    }
+
+    /// Removes the directory at `path` if it is empty.
+    ///
+    /// A directory that is not empty fails with `ENOTEMPTY`, or on some systems `EEXIST`, and one
+    /// that is not there with `ENOENT`.
+    static func removeDirectory(atPath path: String) -> Bool {
+      rmdir(path) == 0
+    }
+
+    /// Creates the directory at `path`, and each missing directory above it, as
+    /// `FileManager.createDirectory(atPath:withIntermediateDirectories:)` does. A directory
+    /// already there, including one another process creates meanwhile, is left as it is.
+    ///
+    /// - Throws: A ``UnixSystemError`` if a directory cannot be created, or if something other
+    ///   than a directory is in the way, with `EEXIST`.
+    static func createDirectory(atPath path: String) throws {
+      if mkdir(path, 0o777) == 0 { return }
+      switch errno {
+      case EEXIST:
+        break
+      case ENOENT:
+        let parent = FilePath.deletingLastComponent(of: path)
+        guard parent != FilePath.droppingTrailingSlashes(path), !parent.isEmpty else {
+          throw UnixSystemError.last("mkdir")
+        }
+        try Self.createDirectory(atPath: parent)
+        if mkdir(path, 0o777) == 0 { return }
+        guard errno == EEXIST else { throw UnixSystemError.last("mkdir") }
+      default:
+        throw UnixSystemError.last("mkdir")
+      }
+      guard let status = status(atPath: path, followingSymbolicLink: true) else {
+        throw UnixSystemError.last("stat")
+      }
+      guard mode_t(status.st_mode) & S_IFMT == S_IFDIR else {
+        throw UnixSystemError(operation: "mkdir", code: EEXIST)
+      }
+    }
+
+    /// The names of what is in the directory at `path`, in no particular order, leaving out `.`
+    /// and `..`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if the directory cannot be read, with `ENOENT` if it is
+    ///   not there.
+    static func contentsOfDirectory(atPath path: String) throws -> [String] {
+      guard let directory = opendir(path) else { throw UnixSystemError.last("opendir") }
+      defer { closedir(directory) }
+      var names: [String] = []
+      while true {
+        errno = 0
+        guard let entry = readdir(directory) else {
+          guard errno == 0 else { throw UnixSystemError.last("readdir") }
+          return names
+        }
+        let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+          String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        if name != "." && name != ".." {
+          names.append(name)
+        }
+      }
+    }
+
+    /// The names of what is in the directory at `path`, as ``contentsOfDirectory(atPath:)`` has
+    /// them, or none if it cannot be read, as when it is gone.
+    static func contentsOfDirectoryIfReadable(atPath path: String) -> [String] {
+      (try? contentsOfDirectory(atPath: path)) ?? []
+    }
+
+    /// Everything in the file at `path`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if it cannot be read, with `ENOENT` if nothing is there.
+    static func contentsOfFile(atPath path: String) throws -> [UInt8] {
+      let descriptor = try UnixDescriptor(UnixPlatform.openExistingFile(atPath: path), from: "open")
+      var contents: [UInt8] = []
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = buffer.withUnsafeMutableBytes {
+          UnixPlatform.readBytes(from: descriptor.rawValue, into: $0)
+        }
+        guard count >= 0 else { throw UnixSystemError.last("read") }
+        guard count > 0 else { return contents }
+        contents.append(contentsOf: buffer[..<count])
+      }
+    }
+
+    /// Writes `bytes` to the file at `path`, creating it if it is not there and replacing what it
+    /// held if it is, in place, as `Data.write(to:)` does without `.atomic`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if it cannot be written, with `ENOENT` if its directory is
+    ///   not there.
+    static func writeFile(_ bytes: [UInt8], atPath path: String) throws {
+      let descriptor = try UnixDescriptor(
+        open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666),
+        from: "open"
+      )
+      var written = 0
+      while written < bytes.count {
+        let count = bytes.withUnsafeBytes {
+          UnixPlatform.writeBytes(
+            UnsafeRawBufferPointer(rebasing: $0[written...]),
+            to: descriptor.rawValue
+          )
+        }
+        if count < 0 {
+          guard errno == EINTR else { throw UnixSystemError.last("write") }
+          continue
+        }
+        written += count
+      }
+    }
+
+    /// How long before now the file at `path` itself, not what a symbolic link there names, was
+    /// last modified, by the system's clock, or `nil` if it cannot be looked up.
+    ///
+    /// A file modified after now, by a clock set back, has a negative age.
+    static func ageOfFile(atPath path: String) -> Duration? {
+      var now = timespec()
+      guard let status = status(atPath: path, followingSymbolicLink: false),
+        clock_gettime(CLOCK_REALTIME, &now) == 0
+      else { return nil }
+      #if canImport(Darwin)
+        let modified = status.st_mtimespec
+      #else
+        let modified = status.st_mtim
+      #endif
+      return .seconds(Int64(now.tv_sec) - Int64(modified.tv_sec))
+        + .nanoseconds(Int64(now.tv_nsec) - Int64(modified.tv_nsec))
+    }
+  }
+#endif

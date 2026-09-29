@@ -2,7 +2,8 @@
 ///
 /// These spell out what the package used to ask of Foundation's file `URL`, so that a path is
 /// standardized, split and joined exactly as it was, and every process agrees on it however it
-/// was built.
+/// was built. Where Darwin's Foundation and the others' differ, each platform keeps its own
+/// Foundation's answer, which is what identities computed before were made from.
 enum FilePath {
   /// `component` appended to `base` with one slash between them, as a file `URL` appends a path
   /// component to a directory.
@@ -97,36 +98,47 @@ enum FilePath {
   private static let dot = [UInt8(ascii: ".")]
   private static let dotDot = [UInt8(ascii: "."), UInt8(ascii: ".")]
 
-  /// A file path made absolute and standardized, exactly as Foundation spells
+  /// A file path made absolute and standardized, exactly as the platform's Foundation spells
   /// `URL(fileURLWithPath: path).standardizedFileURL.path`:
   ///
-  /// - A path beginning with a tilde starts from a home directory, as ``expandingTilde(_:)`` has
-  ///   it.
-  /// - A relative path is resolved against the current directory, and its `.` and `..` segments
-  ///   are removed as it is.
+  /// - The path is made absolute as ``absolute(_:)`` makes it, so a tilde at its start is expanded
+  ///   outside Darwin and is an ordinary component on Darwin.
   /// - Runs of slashes become one, and trailing slashes go.
-  /// - A path that still has a `..` component has its symbolic links resolved, if every component
-  ///   of it exists, so each `..` names the parent it does on disk. Then its `.` and `..` segments
-  ///   are removed.
-  /// - A path beginning `/private/`, `/private/var/automount/` or `/var/automount/` loses that
-  ///   prefix if what is left exists and is not in one of the system's top-level directories, as
-  ///   `/private/tmp/db.sqlite` becomes `/tmp/db.sqlite` on Darwin.
+  /// - On Darwin, `.` and `..` segments are then removed by the rules of RFC 3986, without
+  ///   looking at the file system, so a `..` after a symbolic link names the directory the link
+  ///   is in.
+  /// - Elsewhere, a path that still has a `..` component has its symbolic links resolved, if
+  ///   every component of it exists, so each `..` names the parent it does on disk. Then its `.`
+  ///   and `..` segments are removed, and a path beginning `/private/`, `/private/var/automount/`
+  ///   or `/var/automount/` loses that prefix if what is left exists and is not in one of the
+  ///   system's top-level directories.
   ///
   /// A relative path is returned unchanged where the current directory cannot be read.
   static func standardized(_ path: String) -> String {
     let path = absolute(path)
     guard path.utf8.first == slash else { return path }
-    return droppingTrailingSlashes(standardizingAbsolutePath(path))
+    #if canImport(Darwin)
+      return droppingTrailingSlashes(removingDotSegments(compressingSlashes(path)))
+    #else
+      return droppingTrailingSlashes(standardizingAbsolutePath(path))
+    #endif
   }
 
-  /// A file path made absolute as Foundation spells `URL(fileURLWithPath: path).path`: a path
-  /// beginning with a tilde starts from a home directory, as ``expandingTilde(_:)`` has it, a
-  /// relative one is resolved against the current directory, its `.` and `..` segments removed as
-  /// it is, and trailing slashes go.
+  /// A file path made absolute as the platform's Foundation spells
+  /// `URL(fileURLWithPath: path).path`: a relative one is resolved against the current
+  /// directory, its `.` and `..` segments removed as it is, and trailing slashes go.
+  ///
+  /// Outside Darwin, a path beginning with a tilde starts from a home directory, as
+  /// `expandingTilde(_:)` has it. Darwin takes the tilde for an ordinary component, so `~/db` is
+  /// `db` in a directory named `~` in the current directory.
   ///
   /// A relative path is returned unchanged where the current directory cannot be read.
   static func absolute(_ path: String) -> String {
-    var path = path.isEmpty ? "." : expandingTilde(path)
+    #if canImport(Darwin)
+      var path = path.isEmpty ? "." : path
+    #else
+      var path = path.isEmpty ? "." : expandingTilde(path)
+    #endif
     if path.utf8.first != slash {
       guard let currentDirectory = FileSystem.currentDirectoryPath else { return path }
       path = removingDotSegments(appending(path, to: currentDirectory))
@@ -134,25 +146,32 @@ enum FilePath {
     return droppingTrailingSlashes(path)
   }
 
-  /// The path with a leading `~` replaced by the current user's home directory, and a leading
-  /// `~user` by that user's, as Foundation's `expandingTildeInPath` has it. A path naming a user
-  /// there is no such user for is returned unchanged.
-  static func expandingTilde(_ path: String) -> String {
-    guard path.utf8.first == UInt8(ascii: "~") else { return path }
-    let firstSlash = path.utf8.firstIndex(of: slash) ?? path.utf8.endIndex
-    let afterTilde = path.utf8.index(after: path.utf8.startIndex)
-    let home: String
-    if firstSlash == afterTilde {
-      home = FileSystem.homeDirectoryPath
-    } else {
-      let user = String(decoding: path.utf8[afterTilde..<firstSlash], as: UTF8.self)
-      guard let userHome = FileSystem.homeDirectoryPath(forUser: user) else { return path }
-      home = userHome
+  #if !canImport(Darwin)
+    /// The path with a leading `~` replaced by the current user's home directory, and a leading
+    /// `~user` by that user's, as Foundation's `expandingTildeInPath` has it. A path naming a user
+    /// there is no such user for is returned unchanged.
+    static func expandingTilde(_ path: String) -> String {
+      guard path.utf8.first == UInt8(ascii: "~") else { return path }
+      let firstSlash = path.utf8.firstIndex(of: slash) ?? path.utf8.endIndex
+      let afterTilde = path.utf8.index(after: path.utf8.startIndex)
+      let home: String
+      if firstSlash == afterTilde {
+        home = FileSystem.homeDirectoryPath
+      } else {
+        let user = String(decoding: path.utf8[afterTilde..<firstSlash], as: UTF8.self)
+        guard let userHome = FileSystem.homeDirectoryPath(forUser: user) else { return path }
+        home = userHome
+      }
+      return home + String(decoding: path.utf8[firstSlash...], as: UTF8.self)
     }
-    return home + String(decoding: path.utf8[firstSlash...], as: UTF8.self)
-  }
+  #endif
 
-  /// Standardizes an absolute path as Foundation's `standardizingPath` does.
+  /// Standardizes an absolute path as Foundation's `standardizingPath` does outside Darwin, and
+  /// as its `resolvingSymlinksInPath()` does on every platform once the links are resolved:
+  /// runs of slashes become one, trailing slashes go, a `..` is resolved through symbolic links
+  /// where every component exists, `.` and `..` segments are removed, and a `/private/`,
+  /// `/private/var/automount/` or `/var/automount/` prefix goes if what is left exists and is not
+  /// in one of the system's top-level directories.
   static func standardizingAbsolutePath(_ path: String) -> String {
     var result = droppingTrailingSlashes(compressingSlashes(path))
     if hasDotDotComponent(result), let resolved = FileSystem.resolvingSymbolicLinks(result) {
@@ -163,8 +182,10 @@ enum FilePath {
   }
 
   /// Resolves every symbolic link in a path whose components all exist, then standardizes it,
-  /// as Foundation's `resolvingSymlinksInPath()` does. A path that cannot be resolved is
-  /// standardized as it is.
+  /// as Foundation's `resolvingSymlinksInPath()` does on every platform: with
+  /// ``standardizingAbsolutePath(_:)``, which strips a `/private/` prefix there is a file without,
+  /// as `/private/var/folders/...` becomes `/var/folders/...` on Darwin. A path that cannot be
+  /// resolved is standardized as it is.
   static func resolvingSymbolicLinks(_ path: String) -> String {
     standardizingAbsolutePath(FileSystem.resolvingSymbolicLinks(path) ?? path)
   }
