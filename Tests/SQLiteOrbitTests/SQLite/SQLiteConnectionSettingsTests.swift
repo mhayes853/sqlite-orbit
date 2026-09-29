@@ -154,7 +154,8 @@
         driver in
         probe.isFailing = true
 
-        let (isEnabledAfterFailure, during) = try await driver.writeWithoutTransaction { connection in
+        let (isEnabledAfterFailure, during) = try await driver.writeWithoutTransaction {
+          connection in
           connection.isForeignKeysEnabled = false
           let error = #expect(throws: SQLiteError.self) { try connection.fetchOne(foreignKeys) }
           #expect(error?.sql == "PRAGMA foreign_keys = 0")

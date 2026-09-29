@@ -14,7 +14,9 @@
       var configuration = SQLiteConfiguration.default
       if let readerCount { configuration.readerCount = readerCount }
       let pool = try file.pool(configuration: configuration)
-      try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+      try await pool.execute(
+        sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+      )
       try await body(pool)
     }
   }
@@ -146,7 +148,8 @@
     try await withPool(readerCount: 2) { pool in
       let gate = TestGate()
 
-      let blockingReads = (0..<2).map { _ in Task { try await pool.read { _ in try gate.enter() } } }
+      let blockingReads = (0..<2)
+        .map { _ in Task { try await pool.read { _ in try gate.enter() } } }
       try await gate.waitUntilEntered(2)
 
       let writerRequested = TestCounter()

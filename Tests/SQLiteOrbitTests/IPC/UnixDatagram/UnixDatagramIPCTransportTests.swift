@@ -270,7 +270,9 @@
         let table = OrbitDatabaseRegion(table: "t\(index)")
         region.formUnion(table)
         try subscription.updateRegion(region)
-        #expect(try sender.peers(concernedWith: commit(database, region: .init(table: "t0"))).isEmpty)
+        #expect(
+          try sender.peers(concernedWith: commit(database, region: .init(table: "t0"))).isEmpty
+        )
         let message = commit(database, region: table)
         expected.append(message)
         try await sender.send(message)

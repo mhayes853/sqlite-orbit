@@ -26,7 +26,9 @@
         try await database.write { transaction in
           try transaction.execute(Item.insert { Item(id: 2, title: "after") })
         }
-        #expect(try await database.read { try $0.fetchAll(Item.all) } == [Item(id: 2, title: "after")])
+        #expect(
+          try await database.read { try $0.fetchAll(Item.all) } == [Item(id: 2, title: "after")]
+        )
       }
     }
 

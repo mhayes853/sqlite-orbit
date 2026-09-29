@@ -257,7 +257,9 @@
       var configuration = SQLiteConfiguration.default
       configuration.library = base
       configuration.library.statements.execution.step = { statement in
-        if let sql = base.statements.inspection.sql(statement), String(cString: sql).contains("RECURSIVE counter") {
+        if let sql = base.statements.inspection.sql(statement),
+          String(cString: sql).contains("RECURSIVE counter")
+        {
           steps.increment()
         }
         return base.statements.execution.step(statement)

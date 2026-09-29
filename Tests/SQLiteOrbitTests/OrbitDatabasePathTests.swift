@@ -67,7 +67,10 @@ struct OrbitDatabasePathTests {
         let linkDirectory = directory.appending(path: "link", directoryHint: .isDirectory)
         let real = realDirectory.appending(path: "db.sqlite")
         let link = linkDirectory.appending(path: "db.sqlite")
-        try FileManager.default.createDirectory(at: realDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+          at: realDirectory,
+          withIntermediateDirectories: true
+        )
         try FileManager.default.createSymbolicLink(
           at: linkDirectory,
           withDestinationURL: realDirectory
@@ -103,7 +106,10 @@ struct OrbitDatabasePathTests {
         let linkedDirectory = directory.appending(path: "linked", directoryHint: .isDirectory)
         let real = directory.appending(path: "real/db.sqlite")
         let link = linkedDirectory.appending(path: "link.sqlite")
-        try FileManager.default.createDirectory(at: realDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+          at: realDirectory,
+          withIntermediateDirectories: true
+        )
         try FileManager.default.createSymbolicLink(
           at: linkedDirectory,
           withDestinationURL: realDirectory
@@ -123,8 +129,14 @@ struct OrbitDatabasePathTests {
     @Test
     func dotDotAfterASymlinkIsResolvedInFilesystemOrder() throws {
       try withTemporaryDirectory("path-identity") { directory in
-        let targetDirectory = directory.appending(path: "target/nested", directoryHint: .isDirectory)
-        let intermediateLink = directory.appending(path: "intermediate", directoryHint: .isDirectory)
+        let targetDirectory = directory.appending(
+          path: "target/nested",
+          directoryHint: .isDirectory
+        )
+        let intermediateLink = directory.appending(
+          path: "intermediate",
+          directoryHint: .isDirectory
+        )
         let database = directory.appending(path: "target/db.sqlite")
         let databaseLink = directory.appending(path: "link.sqlite")
         try FileManager.default.createDirectory(

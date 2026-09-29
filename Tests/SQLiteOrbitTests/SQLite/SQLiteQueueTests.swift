@@ -25,7 +25,9 @@
   @Test
   func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
     let driver = try SQLiteQueue(path: .temporary)
-    try await driver.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    try await driver.execute(
+      sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+    )
     try await driver.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
     }

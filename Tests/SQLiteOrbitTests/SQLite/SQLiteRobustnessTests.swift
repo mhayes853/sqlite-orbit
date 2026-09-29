@@ -252,7 +252,6 @@
     configuration.readerCount = 3
 
     try await withTestDatabaseFile { file in
-
       do {
         let driver = try SQLitePool(path: file.path, configuration: configuration)
         try await driver.write { transaction in
@@ -355,7 +354,6 @@
   @Test
   func aReaderSeesWhatAnotherConnectionCommitted() async throws {
     try await withTestDatabaseFile { file in
-
       // Two drivers on one file stand in for two processes sharing a database.
       let writer = try SQLitePool(path: file.path)
       let reader = try SQLitePool(path: file.path)
@@ -379,7 +377,6 @@
   @Test
   func writesFromTwoConnectionsQueueRatherThanFail() async throws {
     try await withTestDatabaseFile { file in
-
       let first = try SQLitePool(path: file.path)
       let second = try SQLitePool(path: file.path)
       try await first.write { transaction in

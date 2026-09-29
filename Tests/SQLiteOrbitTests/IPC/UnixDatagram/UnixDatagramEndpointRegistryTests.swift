@@ -54,7 +54,8 @@
 
         // Written in place, which no endpoint does, so no entry of the directory changes and the
         // registry has no reason to read it again.
-        let marker = try sender.createDatabaseDirectory(coordinationKey: key).appending(path: "peer")
+        let marker = try sender.createDatabaseDirectory(coordinationKey: key)
+          .appending(path: "peer")
 
         try Data(UnixDatagramWireProtocol.encodeMarker(self.lists)).write(to: marker)
 
@@ -166,7 +167,9 @@
 
         // Kept while it holds another endpoint's marker.
         try first.withdraw(coordinationKey: key)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: databaseDirectory) == ["second"])
+        #expect(
+          try FileManager.default.contentsOfDirectory(atPath: databaseDirectory) == ["second"]
+        )
 
         try second.withdraw(coordinationKey: key)
         #expect(!FileManager.default.fileExists(atPath: databaseDirectory))

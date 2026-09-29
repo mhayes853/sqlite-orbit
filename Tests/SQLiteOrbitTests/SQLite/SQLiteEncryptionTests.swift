@@ -164,7 +164,6 @@
     @Test
     func aDatabaseWrittenUnderAKeyIsUnreadableWithoutIt() async throws {
       try await withTestDatabaseFile("cipher") { file in
-
         let writer = try SQLiteQueue(
           path: file.path,
           configuration: .sqlCipher(key: .passphrase("open sesame"))
@@ -198,7 +197,6 @@
       // The point of removing `supportsTypedCallbacks`: a build that is not the platform SQLite
       // drives Swift callbacks exactly as the linked one does.
       try await withTestDatabaseFile("cipher") { file in
-
         var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
         configuration.register(function: $repeated)
 
