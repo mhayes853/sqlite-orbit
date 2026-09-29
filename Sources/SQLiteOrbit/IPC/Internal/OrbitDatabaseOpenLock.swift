@@ -22,12 +22,12 @@
     ///   ends, a ``UnixSystemError`` if the lock cannot be taken, or whatever `body` throws.
     static func withLock<Result>(
       databaseIdentifier: OrbitDatabaseIdentifier,
-      directoryPath: String,
+      directory: OrbitCoordinationDirectory,
       configuration: SQLiteConfiguration,
       _ body: () throws -> Result
     ) throws -> Result {
-      let locksDirectory = Self.locksDirectory(in: directoryPath)
-      try UnixPlatform.createDirectory(atPath: locksDirectory)
+      let locksDirectory = directory.openLocksDirectory
+      try FileSystem.createDirectory(atPath: locksDirectory)
       let path = FilePath.appending(
         "\(databaseIdentifier.coordinationKey).lock",
         to: locksDirectory
@@ -52,22 +52,16 @@
       )
     }
 
-    /// Removes every lock file in the coordination directory at `directoryPath` that nobody holds.
+    /// Removes every lock file in the coordination directory `directory` that nobody holds.
     ///
     /// - Returns: How many were removed.
-    static func removeUnheldLocks(directoryPath: String) -> Int {
-      let locksDirectory = Self.locksDirectory(in: directoryPath)
-      guard let names = try? UnixPlatform.contentsOfDirectory(atPath: locksDirectory) else {
-        return 0
-      }
-      return names.count { name in
-        name.hasSuffix(".lock")
-          && UnixFileLock.removeIfUnlocked(atPath: FilePath.appending(name, to: locksDirectory))
-      }
-    }
-
-    private static func locksDirectory(in directoryPath: String) -> String {
-      FilePath.appending("open-locks", to: FilePath.absolute(directoryPath))
+    static func removeUnheldLocks(in directory: OrbitCoordinationDirectory) -> Int {
+      let locksDirectory = directory.openLocksDirectory
+      return FileSystem.contentsOfDirectoryIfReadable(atPath: locksDirectory)
+        .count { name in
+          name.hasSuffix(".lock")
+            && UnixFileLock.removeIfUnlocked(atPath: FilePath.appending(name, to: locksDirectory))
+        }
     }
 
     /// Waits before each try again as SQLite's own busy timeout waits between tries at its locks:

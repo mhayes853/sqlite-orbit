@@ -1,7 +1,7 @@
-// The Unix datagram transport's I/O layer reaches the platform's C library through this file, and
-// through the backend files for each readiness mechanism, which import the module that mechanism
-// lives in: Darwin for kqueue, and CLinuxEvents for epoll and inotify. Nothing else imports a C
-// library. How a constant is spelled, which flags a call can take and how `errno` is read are
+// The Unix datagram transport's I/O layer reaches the platform's C library through this file,
+// through `FileSystem` for what it does with paths, and through the backend files for each
+// readiness mechanism, which import the module that mechanism lives in: Darwin for kqueue, and
+// CLinuxEvents for epoll and inotify. Nothing else imports a C library. How a constant is spelled, which flags a call can take and how `errno` is read are
 // settled here, so the rest of the layer needs no guard beyond the one that says it exists at all.
 #if canImport(Darwin) || os(Linux) || os(Android)
   #if canImport(Darwin)
@@ -21,8 +21,9 @@
     let systemKevent = kevent
   #endif
 
-  /// The C library calls the layer makes outside its readiness backends, each spelled once, with
-  /// the same Swift types on every platform.
+  /// The C library calls the layer makes on descriptors and sockets outside its readiness
+  /// backends, each spelled once, with the same Swift types on every platform. What it does with
+  /// paths is ``FileSystem``'s.
   ///
   /// Each call returns what the C call returned and leaves `errno` as the C call left it, so a
   /// failure is read, through ``lastErrorCode``, by the caller that knows what it means. Where
@@ -73,30 +74,6 @@
 
     // MARK: - Files
 
-    static func removeFile(atPath path: String) -> Bool {
-      unlink(path) == 0
-    }
-
-    /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
-    /// one file or the other and never neither.
-    static func renameFile(atPath source: String, toPath destination: String) -> Bool {
-      rename(source, destination) == 0
-    }
-
-    /// Sets the access and modification times of the file at `path`, whatever kind it is, to
-    /// now, which needs the caller to own it or be able to write to it.
-    static func touchFile(atPath path: String) -> Bool {
-      utimes(path, nil) == 0
-    }
-
-    /// Removes the directory at `path` if it is empty.
-    ///
-    /// A directory that is not empty fails with `ENOTEMPTY`, or on some systems `EEXIST`, and one
-    /// that is not there with `ENOENT`.
-    static func removeDirectory(atPath path: String) -> Bool {
-      rmdir(path) == 0
-    }
-
     /// Opens the file at `path` for reading and writing, creating it if needed.
     static func openCreatingFile(atPath path: String) -> Int32 {
       open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0o666)
@@ -111,118 +88,6 @@
     /// somebody else holds it.
     static func tryLockExclusively(_ descriptor: Int32) -> Bool {
       flock(descriptor, LOCK_EX | LOCK_NB) == 0
-    }
-
-    /// Creates the directory at `path`, and each missing directory above it, as
-    /// `FileManager.createDirectory(atPath:withIntermediateDirectories:)` does. A directory
-    /// already there, including one another process creates meanwhile, is left as it is.
-    ///
-    /// - Throws: A ``UnixSystemError`` if a directory cannot be created, or if something other
-    ///   than a directory is in the way, with `EEXIST`.
-    static func createDirectory(atPath path: String) throws {
-      if mkdir(path, 0o777) == 0 { return }
-      switch errno {
-      case EEXIST:
-        break
-      case ENOENT:
-        let parent = FilePath.deletingLastComponent(of: path)
-        guard parent != FilePath.droppingTrailingSlashes(path), !parent.isEmpty else {
-          throw UnixSystemError.last("mkdir")
-        }
-        try Self.createDirectory(atPath: parent)
-        if mkdir(path, 0o777) == 0 { return }
-        guard errno == EEXIST else { throw UnixSystemError.last("mkdir") }
-      default:
-        throw UnixSystemError.last("mkdir")
-      }
-      var status = stat()
-      guard stat(path, &status) == 0 else { throw UnixSystemError.last("stat") }
-      guard mode_t(status.st_mode) & S_IFMT == S_IFDIR else {
-        throw UnixSystemError(operation: "mkdir", code: EEXIST)
-      }
-    }
-
-    /// The names of what is in the directory at `path`, in no particular order, leaving out `.`
-    /// and `..`.
-    ///
-    /// - Throws: A ``UnixSystemError`` if the directory cannot be read, with `ENOENT` if it is
-    ///   not there.
-    static func contentsOfDirectory(atPath path: String) throws -> [String] {
-      guard let directory = opendir(path) else { throw UnixSystemError.last("opendir") }
-      defer { closedir(directory) }
-      var names: [String] = []
-      while true {
-        errno = 0
-        guard let entry = readdir(directory) else {
-          guard errno == 0 else { throw UnixSystemError.last("readdir") }
-          return names
-        }
-        let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
-          String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
-        }
-        if name != "." && name != ".." {
-          names.append(name)
-        }
-      }
-    }
-
-    /// Everything in the file at `path`.
-    ///
-    /// - Throws: A ``UnixSystemError`` if it cannot be read, with `ENOENT` if nothing is there.
-    static func contentsOfFile(atPath path: String) throws -> [UInt8] {
-      let descriptor = try UnixDescriptor(Self.openExistingFile(atPath: path), from: "open")
-      var contents: [UInt8] = []
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while true {
-        let count = buffer.withUnsafeMutableBytes {
-          Self.readBytes(from: descriptor.rawValue, into: $0)
-        }
-        guard count >= 0 else { throw UnixSystemError.last("read") }
-        guard count > 0 else { return contents }
-        contents.append(contentsOf: buffer[..<count])
-      }
-    }
-
-    /// Writes `bytes` to the file at `path`, creating it if it is not there and replacing what it
-    /// held if it is, in place, as `Data.write(to:)` does without `.atomic`.
-    ///
-    /// - Throws: A ``UnixSystemError`` if it cannot be written, with `ENOENT` if its directory is
-    ///   not there.
-    static func writeFile(_ bytes: [UInt8], atPath path: String) throws {
-      let descriptor = try UnixDescriptor(
-        open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666),
-        from: "open"
-      )
-      var written = 0
-      while written < bytes.count {
-        let count = bytes.withUnsafeBytes {
-          Self.writeBytes(UnsafeRawBufferPointer(rebasing: $0[written...]), to: descriptor.rawValue)
-        }
-        if count < 0 {
-          guard errno == EINTR else { throw UnixSystemError.last("write") }
-          continue
-        }
-        written += count
-      }
-    }
-
-    /// How long before now the file at `path` itself, not what a symbolic link there names, was
-    /// last modified, by the system's clock, or `nil` if it cannot be looked up.
-    ///
-    /// A file modified after now, by a clock set back, has a negative age.
-    static func ageOfFile(atPath path: String) -> Duration? {
-      var status = stat()
-      var now = timespec()
-      guard lstat(path, &status) == 0, clock_gettime(CLOCK_REALTIME, &now) == 0 else {
-        return nil
-      }
-      #if canImport(Darwin)
-        let modified = status.st_mtimespec
-      #else
-        let modified = status.st_mtim
-      #endif
-      return .seconds(Int64(now.tv_sec) - Int64(modified.tv_sec))
-        + .nanoseconds(Int64(now.tv_nsec) - Int64(modified.tv_nsec))
     }
 
     /// Which file the path `path` names now, following a symbolic link.

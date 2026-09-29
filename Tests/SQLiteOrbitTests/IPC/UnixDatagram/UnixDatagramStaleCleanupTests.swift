@@ -104,7 +104,7 @@
 
       let (summary, remaining) = try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: held,
-        directoryPath: coordination.directory.path,
+        directory: OrbitCoordinationDirectory(path: coordination.directory.path),
         configuration: .default
       ) {
         let summary = coordination.sweep()
@@ -285,7 +285,7 @@
       didRemove: (_ path: String) -> Void = { _ in }
     ) -> UnixDatagramStaleCleanup.Summary? {
       UnixDatagramStaleCleanup.sweep(
-        directoryPath: self.directory.path,
+        directory: OrbitCoordinationDirectory(path: self.directory.path),
         keeping: "self",
         temporarySocketGracePeriod: temporarySocketGracePeriod,
         didRemove: didRemove

@@ -142,13 +142,7 @@ extension OrbitDatabaseValue: CustomDebugStringConvertible {
     case .text(let value):
       return orbitQuoted(value, delimiter: "'")
     case .blob(let bytes):
-      var hex = "X'"
-      for byte in bytes {
-        if byte < 0x10 { hex.append("0") }
-        hex.append(String(byte, radix: 16))
-      }
-      hex.append("'")
-      return hex
+      return "X'" + LowercaseHexadecimal.string(bytes) + "'"
     }
   }
 }

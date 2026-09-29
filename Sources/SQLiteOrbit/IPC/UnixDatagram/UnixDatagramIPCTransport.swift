@@ -75,9 +75,12 @@
 
       /// The path of the coordination directory this process shares with its peers.
       ///
-      /// A relative path is resolved against the current directory each time a transport or a
-      /// pool uses it, so prefer an absolute one.
-      public var directoryPath: String
+      /// A relative path is resolved against the current directory when it is set, as a file URL
+      /// is when it is created, so it names the same directory however the current directory
+      /// changes after.
+      public var directoryPath: String {
+        didSet { self.directoryPath = FilePath.absolute(self.directoryPath) }
+      }
 
       /// The largest datagram this endpoint sends or accepts, in bytes.
       ///
@@ -101,7 +104,7 @@
       ///
       /// - Parameters:
       ///   - directoryPath: The path of the coordination directory this process shares with its
-      ///     peers.
+      ///     peers. A relative path is resolved against the current directory now.
       ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
       ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
       ///     be at least `maximumDatagramByteCount`.
@@ -110,7 +113,7 @@
         maximumDatagramByteCount: Int = 60 * 1024,
         receiveBufferByteCount: Int = 256 * 1024
       ) {
-        self.directoryPath = directoryPath
+        self.directoryPath = FilePath.absolute(directoryPath)
         self.maximumDatagramByteCount = maximumDatagramByteCount
         self.receiveBufferByteCount = receiveBufferByteCount
       }
@@ -207,9 +210,10 @@
       }
 
       let endpointName = RandomUUID.lowercasedString().filter { $0 != "-" }.prefix(16)
+      let directory = OrbitCoordinationDirectory(path: configuration.directoryPath)
       self.configuration = configuration
       self.registry = try UnixDatagramEndpointRegistry(
-        directoryPath: configuration.directoryPath,
+        directory: directory,
         endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount,
@@ -217,7 +221,7 @@
       )
       // After binding, so the sweep can never take this endpoint for one of the dead it removes.
       UnixDatagramStaleCleanup.sweep(
-        directoryPath: configuration.directoryPath,
+        directory: directory,
         keeping: self.registry.endpointName
       )
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends

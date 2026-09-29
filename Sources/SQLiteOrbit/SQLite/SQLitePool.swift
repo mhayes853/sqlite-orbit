@@ -131,7 +131,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     #if canImport(Darwin) || os(Linux) || os(Android)
       return try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
-        directoryPath: directoryPath ?? UnixDatagramIPCTransport.Configuration.defaultDirectoryPath,
+        directory: OrbitCoordinationDirectory(
+          path: directoryPath ?? UnixDatagramIPCTransport.Configuration.defaultDirectoryPath
+        ),
         configuration: configuration,
         body
       )

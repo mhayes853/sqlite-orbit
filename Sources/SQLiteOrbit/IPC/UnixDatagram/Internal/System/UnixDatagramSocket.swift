@@ -59,7 +59,7 @@
       else { throw UnixSystemError.last("setsockopt") }
       // Left behind if a bind by this endpoint, the only one that binds under this name, died
       // before renaming its socket into place. Binding fails while anything is at the path.
-      _ = UnixPlatform.removeFile(atPath: temporaryPath)
+      FileSystem.removeFile(atPath: temporaryPath)
       guard UnixPlatform.bindSocket(descriptor.rawValue, to: address) else {
         throw UnixSystemError.last("bind")
       }
@@ -67,12 +67,12 @@
         guard let boundFile = UnixPlatform.fileIdentity(atPath: temporaryPath) else {
           throw UnixSystemError.last("stat")
         }
-        guard UnixPlatform.renameFile(atPath: temporaryPath, toPath: path) else {
+        guard FileSystem.renameFile(atPath: temporaryPath, toPath: path) else {
           throw UnixSystemError.last("rename")
         }
         return Self(descriptor: descriptor, boundFile: boundFile)
       } catch {
-        _ = UnixPlatform.removeFile(atPath: temporaryPath)
+        FileSystem.removeFile(atPath: temporaryPath)
         throw error
       }
     }
