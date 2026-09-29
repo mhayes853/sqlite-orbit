@@ -17,7 +17,8 @@ struct FileSystemTests {
       "~/db.sqlite", "~/a/../db.sqlite",
       "file::memory:", "é/./x", "...", ".hidden/..", "/", "/tmp/", "//tmp///x//",
       "/a/./b/../c", "/../a", "/a/b/../../..", "/tmp/../tmp/x", "/private/tmp/x", "/private",
-      "/var/automount/x", "/a/b/.", "/a/%20b"
+      // On Darwin these exist both with and without the automount prefix.
+      "/private/tmp", "/private/etc/hosts", "/var/automount/x", "/a/b/.", "/a/%20b"
     ]
   )
   func aPathIsStandardizedAsFoundationStandardizesIt(path: String) {
