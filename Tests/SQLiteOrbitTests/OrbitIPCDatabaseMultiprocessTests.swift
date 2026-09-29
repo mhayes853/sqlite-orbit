@@ -141,8 +141,7 @@
 
     @Test(arguments: [false, true])
     func writeIsDeliveredToARealSubscriberInAnotherProcess(throughSymlink: Bool) async throws {
-      // Nothing subscribes through OrbitIPCDatabase itself yet, but the transport it announces
-      // through is real, so a peer that subscribes to it directly must still see the commit.
+      // Check transport delivery independently of the value-observation integration below.
       let harness = try OrbitDatabaseProcessHarness(name: "deliver")
       defer { harness.cleanup() }
       let listener = try harness.spawn(
@@ -158,6 +157,26 @@
 
       try await harness.waitForSuccessfulExit(listener)
       #expect(harness.isMarked("received"))
+    }
+
+    @Test
+    func aValueObservationRefetchesAfterAWriteInAnotherProcess() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "observe-value")
+      defer { harness.cleanup() }
+      let database = try harness.database()
+      try await database.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = try harness.spawn("observe-value")
+      // The child signals readiness only after receiving its initial observed value.
+      try await harness.waitUntilReady()
+
+      try await database.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (42)")
+      }
+
+      try await harness.waitForSuccessfulExit(observer)
+      #expect(harness.isMarked("observed-updated-value"))
     }
 
     @Test
@@ -299,6 +318,28 @@
         try await received.waitForCount(1, timeout: .seconds(10))
         try peer.mark("received")
         _ = subscription
+
+      case "observe-value":
+        let database = try OrbitIPCDatabase(path: path, coordination: coordination)
+        let values = TestRecorder<[Int]>()
+        let errors = TestRecorder<String>()
+        let observation = OrbitValueObservation<[Int]>
+          .tracking { transaction in
+            try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
+          }
+        let subscription = try observation.subscribe(
+          to: database,
+          onError: { errors.append(String(describing: $0)) },
+          onChange: { values.append($0.value) }
+        )
+        defer { subscription.cancel() }
+        try await values.waitForCount(1)
+        try #require(values.values == [[]])
+        try peer.markReady()
+        try await waitUntil(timeout: .seconds(10)) { values.last == [42] }
+        try #require(errors.values.isEmpty)
+        try #require(values.values == [[], [42]])
+        try peer.mark("observed-updated-value")
 
       case "reuse-update":
         let driver = try SQLiteQueue(path: path)
