@@ -18,23 +18,6 @@
   }
 
   @Test
-  func textBindingsKeepEverythingAfterAnEmbeddedNul() throws {
-    let handle = try openConnection()
-    let awkward = "before\u{0}after"
-
-    try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: awkward) })
-    }
-
-    let titles = try handle.read { transaction in
-      try transaction.fetchAll(Item.select(\.title))
-    }
-    // Binding with a byte count of -1 asks SQLite to stop at the first NUL, which would silently
-    // truncate this to "before".
-    #expect(titles == [awkward])
-  }
-
-  @Test
   func rawSQLStopsAtAnEmbeddedNulTheWaySQLiteDoes() throws {
     let handle = try openConnection()
     try handle.execute(
@@ -45,12 +28,12 @@
     }
     // SQLite reads SQL text up to the first NUL whatever length it is given, so the second
     // statement here is not run. Values are a different matter: those keep their NULs, which is
-    // what `textBindingsKeepEverythingAfterAnEmbeddedNul` pins down.
+    // what `textRoundTripsWhateverCharactersItHolds` pins down.
     #expect(count == [1])
   }
 
   @Test
-  func aReadOnAWritableConnectionRefusesToMutate() throws {
+  func aReadOnAWritableConnectionRefusesToMutateAndLeavesItWritable() throws {
     let handle = try openConnection()
 
     // The connection can write, but not while lending a read transaction: a mutation that was
@@ -66,6 +49,11 @@
       }
     }
 
+    // A read that threw turns `query_only` back off on its way out too.
+    #expect(throws: TestError()) {
+      try handle.read { _ in throw TestError() }
+    }
+
     // And the connection is writable again afterwards.
     try handle.write { transaction in
       try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
@@ -74,25 +62,6 @@
       try transaction.fetchAll(Item.select(\.title))
     }
     #expect(titles == ["yes"])
-  }
-
-  @Test
-  func aFailedReadRestoresTheConnectionToWritable() throws {
-    let handle = try openConnection()
-
-    struct Abort: Error {}
-    #expect(throws: Abort.self) {
-      try handle.read { _ in throw Abort() }
-    }
-
-    // A read that threw still turned `query_only` back off on its way out.
-    try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "after failure") })
-    }
-    let titles = try handle.read { transaction in
-      try transaction.fetchAll(Item.select(\.title))
-    }
-    #expect(titles == ["after failure"])
   }
 
   @Test
@@ -202,30 +171,14 @@
   }
 
   @Test
-  func anUnsignedValueTooLargeForSQLiteIsReportedRatherThanWrapped() throws {
+  func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
     let handle = try openConnection()
     try handle.execute("CREATE TABLE numbers (value INTEGER)")
 
-    // SQLite stores signed 64-bit integers, so this cannot be represented.
-    #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
-      try handle.write { transaction in
-        try transaction.execute(
-          #sql(
-            "INSERT INTO numbers (value) VALUES (\(UInt64.max))",
-            as: Void.self
-          )
-        )
-      }
-    }
-  }
-
-  @Test
-  func aFailedBindingLeavesTheCacheUsable() throws {
-    let handle = try openConnection()
-    try handle.execute("CREATE TABLE numbers (value INTEGER)")
-
+    // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
+    // rather than wrapped.
     for _ in 0..<3 {
-      #expect(throws: (any Error).self) {
+      #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
         try handle.write { transaction in
           try transaction.execute(
             #sql(
@@ -250,9 +203,11 @@
   }
 
   @Test
-  func textWithMultiByteCharactersRoundTrips() throws {
+  func textRoundTripsWhateverCharactersItHolds() throws {
     let handle = try openConnection()
-    let titles = ["Blob’s reminder", "日本語", "🧑‍🚀 emoji", ""]
+    // Binding with a byte count of -1 would ask SQLite to stop at the first NUL, which would
+    // silently truncate the last of these to "before".
+    let titles = ["Blob’s reminder", "日本語", "🧑‍🚀 emoji", "", "before\u{0}after"]
 
     try handle.write { transaction in
       for (id, title) in titles.enumerated() {
@@ -296,182 +251,160 @@
     configuration.library = counter.library
     configuration.readerCount = 3
 
-    let path = temporaryDatabasePath("close")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
-      }
-    }
+    try await withTestDatabaseFile { file in
 
-    do {
-      let driver = try SQLitePool(path: OrbitDatabasePath(path), configuration: configuration)
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      do {
+        let driver = try SQLitePool(path: file.path, configuration: configuration)
+        try await driver.write { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        #expect(counter.opened == 4)
+        #expect(counter.closed == 0)
       }
-      #expect(counter.opened == 4)
-      #expect(counter.closed == 0)
-    }
 
-    // Nothing else holds these connections, so every one of them must have been closed. A driver
-    // that leaked them would exhaust file descriptors in any process that opens databases often.
-    while counter.closed < counter.opened {
-      await Task.yield()
+      // Nothing else holds these connections, so every one of them must have been closed. A driver
+      // that leaked them would exhaust file descriptors in any process that opens databases often.
+      try await waitUntil { counter.closed >= counter.opened }
+      #expect(counter.closed == counter.opened)
     }
-    #expect(counter.closed == counter.opened)
   }
 
   @Test
   func aPoolSurvivesAStormOfCancellations() async throws {
-    let path = temporaryDatabasePath("storm")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
+    try await withTestDatabaseFile { file in
+      var configuration = SQLiteConfiguration.default
+      configuration.readerCount = 2
+      let driver = try SQLitePool(path: file.path, configuration: configuration)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
-    var configuration = SQLiteConfiguration.default
-    configuration.readerCount = 2
-    let driver = try SQLitePool(path: OrbitDatabasePath(path), configuration: configuration)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
 
-    // Half of these are cancelled almost immediately, most while still queued for a reader or the
-    // writer. Whatever they were holding has to come back either way.
-    await withTaskGroup(of: Void.self) { group in
-      for index in 0..<200 {
-        group.addTask {
-          let task = Task {
-            if index.isMultiple(of: 2) {
-              _ = try await driver.read { transaction in
-                try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
-              }
-            } else {
-              try await driver.write { transaction in
-                try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+      // Half of these are cancelled almost immediately, most while still queued for a reader or the
+      // writer. Whatever they were holding has to come back either way.
+      await withTaskGroup(of: Void.self) { group in
+        for index in 0..<200 {
+          group.addTask {
+            let task = Task {
+              if index.isMultiple(of: 2) {
+                _ = try await driver.read { transaction in
+                  try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+                }
+              } else {
+                try await driver.write { transaction in
+                  try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+                }
               }
             }
+            if index.isMultiple(of: 3) {
+              task.cancel()
+            }
+            _ = try? await task.value
           }
-          if index.isMultiple(of: 3) {
-            task.cancel()
-          }
-          _ = try? await task.value
         }
+        await group.waitForAll()
       }
-      await group.waitForAll()
-    }
 
-    // Every reader and the writer came back, so the pool still works.
-    let count = try await driver.read { transaction in
-      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
-    }
-    #expect(count.count == 1)
-    try await driver.write { transaction in
-      try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+      // Every reader and the writer came back, so the pool still works.
+      let count = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
+      #expect(count.count == 1)
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+      }
     }
   }
 
   @Test
   func cancelledWritesNeverCommitWithoutReturningSuccess() async throws {
-    let path = temporaryDatabasePath("cancelled-commits")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
+    try await withTestDatabaseFile { file in
+      let driver = try SQLitePool(path: file.path)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
-    let driver = try SQLitePool(path: OrbitDatabasePath(path))
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
 
-    let writes = (1...300)
-      .map { id in
-        Task {
-          try await driver.write { transaction in
-            try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
-            return id
+      let writes = (1...300)
+        .map { id in
+          Task {
+            try await driver.write { transaction in
+              try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+              return id
+            }
           }
         }
+      for (offset, write) in writes.enumerated() where offset.isMultiple(of: 2) {
+        write.cancel()
       }
-    for (offset, write) in writes.enumerated() where offset.isMultiple(of: 2) {
-      write.cancel()
-    }
 
-    var successfulIDs: [Int] = []
-    for write in writes {
-      if let id = try? await write.value {
-        successfulIDs.append(id)
+      var successfulIDs: [Int] = []
+      for write in writes {
+        if let id = try? await write.value {
+          successfulIDs.append(id)
+        }
       }
-    }
-    let storedIDs = try await driver.read { transaction in
-      try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
-    }
+      let storedIDs = try await driver.read { transaction in
+        try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
+      }
 
-    // Cancellation may win or lose a race with a fast write, but a committed transaction must
-    // always be reported as successful and a failed one must leave no row behind.
-    #expect(storedIDs == successfulIDs.sorted())
+      // Cancellation may win or lose a race with a fast write, but a committed transaction must
+      // always be reported as successful and a failed one must leave no row behind.
+      #expect(storedIDs == successfulIDs.sorted())
+    }
   }
 
   @Test
   func aReaderSeesWhatAnotherConnectionCommitted() async throws {
-    let path = temporaryDatabasePath("shared")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
-      }
-    }
+    try await withTestDatabaseFile { file in
 
-    // Two drivers on one file stand in for two processes sharing a database.
-    let writer = try SQLitePool(path: OrbitDatabasePath(path))
-    let reader = try SQLitePool(path: OrbitDatabasePath(path))
-    try await writer.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-
-    for id in 1...5 {
+      // Two drivers on one file stand in for two processes sharing a database.
+      let writer = try SQLitePool(path: file.path)
+      let reader = try SQLitePool(path: file.path)
       try await writer.write { transaction in
-        try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      // Each read takes a fresh snapshot, so it must see everything committed before it.
-      let count = try await reader.read { transaction in
-        try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+
+      for id in 1...5 {
+        try await writer.write { transaction in
+          try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+        }
+        // Each read takes a fresh snapshot, so it must see everything committed before it.
+        let count = try await reader.read { transaction in
+          try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+        }
+        #expect(count == [id])
       }
-      #expect(count == [id])
     }
   }
 
   @Test
   func writesFromTwoConnectionsQueueRatherThanFail() async throws {
-    let path = temporaryDatabasePath("contended")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
+    try await withTestDatabaseFile { file in
+
+      let first = try SQLitePool(path: file.path)
+      let second = try SQLitePool(path: file.path)
+      try await first.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
 
-    let first = try SQLitePool(path: OrbitDatabasePath(path))
-    let second = try SQLitePool(path: OrbitDatabasePath(path))
-    try await first.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-
-    // Each driver serializes its own writes, but nothing coordinates the two: they overlap in
-    // SQLite itself, and only the busy timeout keeps one from failing outright.
-    try await withThrowingTaskGroup(of: Void.self) { group in
-      for index in 0..<60 {
-        let driver = index.isMultiple(of: 2) ? first : second
-        group.addTask {
-          try await driver.write { transaction in
-            try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+      // Each driver serializes its own writes, but nothing coordinates the two: they overlap in
+      // SQLite itself, and only the busy timeout keeps one from failing outright.
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in 0..<60 {
+          let driver = index.isMultiple(of: 2) ? first : second
+          group.addTask {
+            try await driver.write { transaction in
+              try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+            }
           }
         }
+        try await group.waitForAll()
       }
-      try await group.waitForAll()
-    }
 
-    let count = try await first.read { transaction in
-      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      let count = try await first.read { transaction in
+        try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
+      #expect(count == [60])
     }
-    #expect(count == [60])
   }
 
   @Test

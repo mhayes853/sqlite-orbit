@@ -5,37 +5,21 @@
 
   @testable import SQLiteOrbit
 
-  private final class CallCounter: Sendable {
-    private let count = Lock(0)
-
-    var value: Int { count.withLock { $0 } }
-
-    func record() {
-      count.withLock { $0 += 1 }
-    }
-
-    func wait(untilAtLeast target: Int) async {
-      while value < target {
-        await Task.yield()
-      }
-    }
-  }
-
   private let endlessMarker = "RECURSIVE counter"
 
-  private func observedLibrary(steps: CallCounter, interrupts: CallCounter) -> SQLiteLibrary {
+  private func observedLibrary(steps: TestCounter, interrupts: TestCounter) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
     library.statements.execution.step = { statement in
       if let sql = base.statements.inspection.sql(statement),
         String(cString: sql).contains(endlessMarker)
       {
-        steps.record()
+        steps.increment()
       }
       return base.statements.execution.step(statement)
     }
     library.connections.interrupt = { connection in
-      interrupts.record()
+      interrupts.increment()
       base.connections.interrupt(connection)
     }
     return library
@@ -61,8 +45,8 @@
 
   @Test
   func cancellingAQueuedAccessLeavesTheRunningOneAlone() async throws {
-    let steps = CallCounter()
-    let interrupts = CallCounter()
+    let steps = TestCounter()
+    let interrupts = TestCounter()
     var configuration = SQLiteConfiguration.default
     configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
     let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
@@ -70,7 +54,7 @@
     // This access is inside `sqlite3_step` and is never cancelled.
     let running = endlessRead(on: driver)
     // Only the endless query is counted, so this is the moment it starts running.
-    await steps.wait(untilAtLeast: 1)
+    try await steps.waitForCount(1)
 
     // This one is stuck behind it on the connection's queue, and is cancelled while waiting.
     let queued = Task {
@@ -107,14 +91,14 @@
 
   @Test
   func cancellingTheRunningAccessStopsItsQuery() async throws {
-    let steps = CallCounter()
-    let interrupts = CallCounter()
+    let steps = TestCounter()
+    let interrupts = TestCounter()
     var configuration = SQLiteConfiguration.default
     configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
     let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
     let running = endlessRead(on: driver)
-    await steps.wait(untilAtLeast: 1)
+    try await steps.waitForCount(1)
     running.cancel()
 
     // A query aborted by SQLite reports `SQLITE_INTERRUPT`, which is a cancellation and not a
@@ -139,15 +123,9 @@
     try await driver.write { transaction in
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
-    let blockerEntered = Lock(false)
-    let releaseBlocker = Lock(false)
-    let blocker = Task {
-      try await driver.read { _ in
-        blockerEntered.withLock { $0 = true }
-        while !releaseBlocker.withLock({ $0 }) {}
-      }
-    }
-    try await waitUntil { blockerEntered.withLock { $0 } }
+    let gate = TestGate()
+    let blocker = Task { try await driver.read { _ in try gate.enter() } }
+    try await gate.waitUntilEntered()
 
     let task = Task {
       try await driver.write { transaction in
@@ -155,7 +133,7 @@
       }
     }
     task.cancel()
-    releaseBlocker.withLock { $0 = true }
+    gate.open()
     try await blocker.value
     await #expect(throws: CancellationError.self) {
       try await task.value
@@ -274,17 +252,10 @@
     let driver = try SQLiteQueue(path: ":memory:")
     let overlap = OverlapTracker()
 
-    try await withThrowingTaskGroup(of: Void.self) { group in
-      for _ in 0..<50 {
-        group.addTask {
-          try await driver.read { transaction in
-            overlap.enter()
-            defer { overlap.leave() }
-            _ = try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
-          }
-        }
+    _ = try await concurrently(50) { _ in
+      try await driver.read { transaction in
+        try overlap.track { _ = try transaction.fetchAll(#sql("SELECT 1", as: Int.self)) }
       }
-      try await group.waitForAll()
     }
 
     // One connection, one access at a time.
