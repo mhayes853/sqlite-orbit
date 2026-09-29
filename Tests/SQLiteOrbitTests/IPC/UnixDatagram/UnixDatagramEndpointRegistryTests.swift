@@ -55,7 +55,7 @@
         // Written in place, which no endpoint does, so no entry of the directory changes and the
         // registry has no reason to read it again.
         let marker = URL(
-          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: key)
+          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: key).string
         )
         .appending(path: "peer")
 
@@ -70,9 +70,11 @@
       try withTemporaryDirectory("registry") { directory in
         let sender = try unixDatagramRegistry(directory, endpointName: "sender")
         let markers = URL(
-          fileURLWithPath: try sender.createDatabaseDirectory(
-            coordinationKey: self.database.coordinationKey
-          )
+          fileURLWithPath:
+            try sender.createDatabaseDirectory(
+              coordinationKey: self.database.coordinationKey
+            )
+            .string
         )
 
         let corrupt: [String: [UInt8]] = ["empty": [], "short": [0xff], "truncated": [0, 1, 0]]
@@ -101,7 +103,7 @@
         let socketPath = try #require(crashed?.socketPath)
         // What a peer leaves if it dies between writing a marker and renaming it into place.
         let interrupted = URL(
-          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: "interrupted")
+          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: "interrupted").string
         )
         try Data().write(to: interrupted.appending(path: ".crashed.tmp"))
 

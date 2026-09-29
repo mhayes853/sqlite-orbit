@@ -84,13 +84,13 @@
         try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: path)
         #expect(try Self.modificationDate(path) < Date(timeIntervalSinceNow: -60))
 
-        #expect(FileSystem.touchFile(atPath: path))
+        #expect(FileSystem.touchFile(atPath: FilePath(path)))
         #expect(try Self.modificationDate(path) > Date(timeIntervalSinceNow: -60))
       }
       #expect(UnixDatagramSocket.probe(socketPath) == .alive)
       _ = socket.boundFile
 
-      #expect(!FileSystem.touchFile(atPath: directory.appending(path: "missing").path))
+      #expect(!FileSystem.touchFile(atPath: FilePath(directory.appending(path: "missing").path)))
     }
 
     @Test
@@ -100,40 +100,40 @@
       let file = child.appending(path: "f")
       #expect(FileManager.default.createFile(atPath: file.path, contents: nil))
 
-      #expect(!FileSystem.removeDirectory(atPath: child.path))
+      #expect(!FileSystem.removeDirectory(atPath: FilePath(child.path)))
       #expect(
         [UnixPlatform.ErrorCode.notEmpty, UnixPlatform.ErrorCode.fileExists]
           .contains(UnixPlatform.lastErrorCode)
       )
 
       try FileManager.default.removeItem(at: file)
-      #expect(FileSystem.removeDirectory(atPath: child.path))
+      #expect(FileSystem.removeDirectory(atPath: FilePath(child.path)))
       #expect(!FileManager.default.fileExists(atPath: child.path))
 
-      #expect(!FileSystem.removeDirectory(atPath: child.path))
+      #expect(!FileSystem.removeDirectory(atPath: FilePath(child.path)))
       #expect(UnixPlatform.lastErrorCode == UnixPlatform.ErrorCode.noSuchFile)
     }
 
     @Test
     func createsADirectoryAndEveryMissingOneAboveIt() throws {
       let nested = directory.appending(path: "a/b/c").path
-      try FileSystem.createDirectory(atPath: nested)
+      try FileSystem.createDirectory(atPath: FilePath(nested))
       var isDirectory: ObjCBool = false
       #expect(FileManager.default.fileExists(atPath: nested, isDirectory: &isDirectory))
       #expect(isDirectory.boolValue)
 
       // Already there, with a trailing slash or without.
-      try FileSystem.createDirectory(atPath: nested)
-      try FileSystem.createDirectory(atPath: nested + "/")
+      try FileSystem.createDirectory(atPath: FilePath(nested))
+      try FileSystem.createDirectory(atPath: FilePath(nested + "/"))
 
       let file = directory.appending(path: "file").path
       #expect(FileManager.default.createFile(atPath: file, contents: nil))
       #expect(throws: UnixSystemError(operation: "mkdir", code: UnixPlatform.ErrorCode.fileExists))
       {
-        try FileSystem.createDirectory(atPath: file)
+        try FileSystem.createDirectory(atPath: FilePath(file))
       }
       #expect(throws: UnixSystemError.self) {
-        try FileSystem.createDirectory(atPath: file + "/below")
+        try FileSystem.createDirectory(atPath: FilePath(file + "/below"))
       }
     }
 
@@ -152,7 +152,7 @@
         withIntermediateDirectories: false
       )
 
-      let names = try FileSystem.contentsOfDirectory(atPath: directory.path)
+      let names = try FileSystem.contentsOfDirectory(atPath: FilePath(directory.path))
       #expect(names.sorted() == ["a", ".hidden", "é", "child"].sorted())
       #expect(
         names.sorted()
@@ -161,7 +161,9 @@
       #expect(
         throws: UnixSystemError(operation: "opendir", code: UnixPlatform.ErrorCode.noSuchFile)
       ) {
-        try FileSystem.contentsOfDirectory(atPath: directory.appending(path: "missing").path)
+        try FileSystem.contentsOfDirectory(
+          atPath: FilePath(directory.appending(path: "missing").path)
+        )
       }
     }
 
@@ -171,41 +173,44 @@
       #expect(
         throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
       ) {
-        try FileSystem.contentsOfFile(atPath: path)
+        try FileSystem.contentsOfFile(atPath: FilePath(path))
       }
 
       let large = (0..<10_000).map { UInt8(truncatingIfNeeded: $0) }
-      try FileSystem.writeFile(large, atPath: path)
-      #expect(try FileSystem.contentsOfFile(atPath: path) == large)
+      try FileSystem.writeFile(large, atPath: FilePath(path))
+      #expect(try FileSystem.contentsOfFile(atPath: FilePath(path)) == large)
       #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data(large))
 
       // Replaced in place, and cut short rather than overwritten.
-      try FileSystem.writeFile([1, 2, 3], atPath: path)
-      #expect(try FileSystem.contentsOfFile(atPath: path) == [1, 2, 3])
-      try FileSystem.writeFile([], atPath: path)
-      #expect(try FileSystem.contentsOfFile(atPath: path) == [])
+      try FileSystem.writeFile([1, 2, 3], atPath: FilePath(path))
+      #expect(try FileSystem.contentsOfFile(atPath: FilePath(path)) == [1, 2, 3])
+      try FileSystem.writeFile([], atPath: FilePath(path))
+      #expect(try FileSystem.contentsOfFile(atPath: FilePath(path)) == [])
 
       #expect(
         throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
       ) {
-        try FileSystem.writeFile([1], atPath: directory.appending(path: "missing/file").path)
+        try FileSystem.writeFile(
+          [1],
+          atPath: FilePath(directory.appending(path: "missing/file").path)
+        )
       }
     }
 
     @Test
     func agesAFileByItsModificationTime() throws {
       let path = directory.appending(path: "file").path
-      #expect(FileSystem.ageOfFile(atPath: path) == nil)
+      #expect(FileSystem.ageOfFile(atPath: FilePath(path)) == nil)
 
       #expect(FileManager.default.createFile(atPath: path, contents: nil))
-      let age = try #require(FileSystem.ageOfFile(atPath: path))
+      let age = try #require(FileSystem.ageOfFile(atPath: FilePath(path)))
       #expect(age >= .seconds(-1) && age < .seconds(60))
 
       try FileManager.default.setAttributes(
         [.modificationDate: Date.now.addingTimeInterval(-3_600)],
         ofItemAtPath: path
       )
-      let older = try #require(FileSystem.ageOfFile(atPath: path))
+      let older = try #require(FileSystem.ageOfFile(atPath: FilePath(path)))
       #expect(older >= .seconds(3_599) && older < .seconds(3_660))
     }
 
@@ -221,7 +226,7 @@
       // Another file is created before the first is removed, so the two cannot share an inode.
       let other = directory.appending(path: "other").path
       #expect(FileManager.default.createFile(atPath: other, contents: nil))
-      #expect(FileSystem.renameFile(atPath: other, toPath: path))
+      #expect(FileSystem.renameFile(atPath: FilePath(other), toPath: FilePath(path)))
       #expect(UnixPlatform.fileIdentity(atPath: path) != first)
     }
 
@@ -243,7 +248,7 @@
       #expect(watcher.drainChanges())
       #expect(Self.readableDescriptors(queue, within: .milliseconds(20)).isEmpty)
 
-      #expect(FileSystem.removeDirectory(atPath: watched.path))
+      #expect(FileSystem.removeDirectory(atPath: FilePath(watched.path)))
       #expect(Self.readableDescriptors(queue, within: .seconds(5)) == [watcher.descriptor])
       #expect(watcher.drainChanges())
     }
