@@ -13,9 +13,9 @@
       @Test
       func theHandlerIsAskedAgainWithARisingAttemptUntilItGivesUp() async throws {
         try await withContendedDatabases { holder, open in
-          let attempts = Lock([Int]())
+          let attempts = TestRecorder<Int>()
           let waiter = try open(.limit(.seconds(30))) { attempt in
-            attempts.withLock { $0.append(attempt) }
+            attempts.append(attempt)
             // Giving up is what turns the wait into the `SQLITE_BUSY` the caller sees.
             return attempt < 3
           }
@@ -29,17 +29,17 @@
           }
 
           #expect(error?.isBusy == true)
-          #expect(attempts.withLock { $0 } == [1, 2, 3])
+          #expect(attempts.values == [1, 2, 3])
         }
       }
 
       @Test
       func theHandlerIsConsultedInsteadOfTheConfiguredBusyTimeout() async throws {
         try await withContendedDatabases { holder, open in
-          let attempts = Lock(0)
+          let attempts = TestCounter()
           // A timeout long enough that waiting by it rather than the handler would hang the test.
           let waiter = try open(.limit(.seconds(30))) { _ in
-            attempts.withLock { $0 += 1 }
+            attempts.increment()
             return false
           }
 
@@ -54,7 +54,7 @@
           }
 
           #expect(error?.isBusy == true)
-          #expect(attempts.withLock { $0 } == 1)
+          #expect(attempts.value == 1)
           #expect(clock.now - started < .seconds(5))
         }
       }
@@ -62,9 +62,9 @@
       @Test
       func theHandlerIsBackAfterAnAccessThatChangedTheBusyTimeout() async throws {
         try await withContendedDatabases { holder, open in
-          let attempts = Lock(0)
+          let attempts = TestCounter()
           let waiter = try open(.limit(.seconds(30))) { _ in
-            attempts.withLock { $0 += 1 }
+            attempts.increment()
             return false
           }
 
@@ -87,7 +87,7 @@
 
           // Had the handler not come back, the restored 30 second timeout would have waited.
           #expect(error?.isBusy == true)
-          #expect(attempts.withLock { $0 } == 1)
+          #expect(attempts.value == 1)
           #expect(clock.now - started < .seconds(5))
         }
       }
@@ -113,20 +113,16 @@
       _ open: (SQLiteBusyTimeout, @escaping @Sendable (Int) -> Bool) throws -> SQLiteQueue
     ) async throws -> Void
   ) async throws {
-    let directory = try makeShortTemporaryDirectory("busy")
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+    try await withTestDatabaseFile("busy") { file in
+      let holder = try file.queue()
+      try await holder.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
 
-    let holder = try SQLiteQueue(path: path)
-    try await holder.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-
-    try await body(WriteLockHolder(database: holder)) { busyTimeout, handler in
-      var configuration = SQLiteConfiguration.default
-      configuration.busyTimeout = busyTimeout
-      configuration.busyHandler = handler
-      return try SQLiteQueue(path: path, configuration: configuration)
+      try await body(WriteLockHolder(database: holder)) { busyTimeout, handler in
+        var configuration = SQLiteConfiguration.default
+        configuration.busyTimeout = busyTimeout
+        configuration.busyHandler = handler
+        return try file.queue(configuration: configuration)
+      }
     }
   }
 
@@ -141,21 +137,17 @@
     func holdingTheWriteLock<Result: Sendable>(
       _ body: () async throws -> Result
     ) async throws -> Result {
-      let isHeld = Lock(false)
-      let isReleased = Lock(false)
+      let gate = TestGate()
       let held = Task {
         try await database.write { transaction in
           try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-          isHeld.withLock { $0 = true }
-          while !isReleased.withLock({ $0 }) {}
+          try gate.enter()
         }
       }
-      defer {
-        isReleased.withLock { $0 = true }
-      }
-      try await waitUntil { isHeld.withLock { $0 } }
+      defer { gate.open() }
+      try await gate.waitUntilEntered()
       let value = try await body()
-      isReleased.withLock { $0 = true }
+      gate.open()
       try await held.value
       return value
     }

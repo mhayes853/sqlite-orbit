@@ -153,10 +153,6 @@
 
   @Suite(.serialized)
   struct SQLCipherEndToEndTests {
-    private func path() -> String {
-      temporaryDatabasePath("cipher")
-    }
-
     @Test
     func macroBuildsAnEncryptedTableFromAQualifiedModule() {
       let library = #sqliteLibrary(module: "SQLCipher", apis: [.standard, .encryption])
@@ -167,54 +163,54 @@
 
     @Test
     func aDatabaseWrittenUnderAKeyIsUnreadableWithoutIt() async throws {
-      let path = path()
-      defer { try? FileManager.default.removeItem(atPath: path) }
+      try await withTestDatabaseFile("cipher") { file in
 
-      let writer = try SQLiteQueue(
-        path: .file(URL(fileURLWithPath: path)),
-        configuration: .sqlCipher(key: .passphrase("open sesame"))
-      )
-      try await writer.write { transaction in
-        try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
-        try transaction.execute(#sql("INSERT INTO notes VALUES (\'hello\')", as: Void.self))
-      }
-      _ = consume writer
-
-      #expect(throws: SQLiteError.self) {
-        _ = try SQLiteQueue(
-          path: .file(URL(fileURLWithPath: path)),
-          configuration: .sqlCipher(key: .passphrase("wrong"))
+        let writer = try SQLiteQueue(
+          path: file.path,
+          configuration: .sqlCipher(key: .passphrase("open sesame"))
         )
-      }
+        try await writer.write { transaction in
+          try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO notes VALUES (\'hello\')", as: Void.self))
+        }
+        _ = consume writer
 
-      let reader = try SQLiteQueue(
-        path: .file(URL(fileURLWithPath: path)),
-        configuration: .sqlCipher(key: .passphrase("open sesame"))
-      )
-      let titles = try await reader.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+        #expect(throws: SQLiteError.self) {
+          _ = try SQLiteQueue(
+            path: file.path,
+            configuration: .sqlCipher(key: .passphrase("wrong"))
+          )
+        }
+
+        let reader = try SQLiteQueue(
+          path: file.path,
+          configuration: .sqlCipher(key: .passphrase("open sesame"))
+        )
+        let titles = try await reader.read { transaction in
+          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+        }
+        #expect(titles == ["hello"])
       }
-      #expect(titles == ["hello"])
     }
 
     @Test
     func anEncryptedDatabaseStillRunsCollationsAndFunctions() async throws {
       // The point of removing `supportsTypedCallbacks`: a build that is not the platform SQLite
       // drives Swift callbacks exactly as the linked one does.
-      let path = path()
-      defer { try? FileManager.default.removeItem(atPath: path) }
+      try await withTestDatabaseFile("cipher") { file in
 
-      var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
-      configuration.register(function: $repeated)
+        var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
+        configuration.register(function: $repeated)
 
-      let driver = try SQLiteQueue(
-        path: .file(URL(fileURLWithPath: path)),
-        configuration: configuration
-      )
-      let value = try await driver.read { transaction in
-        try transaction.fetchOne(#sql("SELECT repeated(\'ab\', 2)", as: String.self))
+        let driver = try SQLiteQueue(
+          path: file.path,
+          configuration: configuration
+        )
+        let value = try await driver.read { transaction in
+          try transaction.fetchOne(#sql("SELECT repeated(\'ab\', 2)", as: String.self))
+        }
+        #expect(value == "abab")
       }
-      #expect(value == "abab")
     }
   }
 #endif

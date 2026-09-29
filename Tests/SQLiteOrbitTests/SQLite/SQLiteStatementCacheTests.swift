@@ -8,7 +8,9 @@
   @Suite
   struct SQLiteStatementCacheTests {
     @Test
-    func readerRefreshesACachedStatementAfterAnotherConnectionChangesTheSchema() async throws {
+    func readerAndWriterRefreshCachedStatementsAfterAnotherConnectionChangesTheSchema()
+      async throws
+    {
       try await withViewRedefinedByAnotherConnection { pool in
         let region = try await pool.read { transaction in
           // The regions are checked before the first step, which would otherwise have SQLite
@@ -20,17 +22,13 @@
 
         let titles = try await pool.read { try $0.fetchAll(currentTitles) }
         #expect(titles == ["Alternate"])
-      }
-    }
 
-    @Test
-    func writerRefreshesACachedStatementAfterAnotherConnectionChangesTheSchema() async throws {
-      try await withViewRedefinedByAnotherConnection { pool in
-        let region = try await pool.write { transaction in
+        // The writer is a connection of its own, whose cached statement was just as stale.
+        let writerRegion = try await pool.write { transaction in
           let cursor = try transaction.base.cursor(for: currentTitles.query, cached: true)
           return cursor.preparedStatement.readRegion
         }
-        #expect(region == currentTitlesRegion(over: "alternate_items"))
+        #expect(writerRegion == currentTitlesRegion(over: "alternate_items"))
       }
     }
 
@@ -90,33 +88,31 @@
     private func withViewRedefinedByAnotherConnection(
       _ body: (SQLitePool) async throws -> Void
     ) async throws {
-      let directory = try makeShortTemporaryDirectory("cache")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+      try await withTestDatabaseFile("cache") { file in
+        var configuration = SQLiteConfiguration.default
+        configuration.readerCount = 1
+        let pool = try file.pool(configuration: configuration)
+        try await pool.write { transaction in
+          try transaction.execute(itemsSchema)
+        }
+        // Both of the pool's connections compile the query against the original view, so each has
+        // a cached statement and a copy of the schema that the other connection makes stale.
+        let titles = try await pool.read { try $0.fetchAll(currentTitles) }
+        #expect(titles == ["Original"])
+        _ = try await pool.write { try $0.fetchAll(currentTitles) }
 
-      var configuration = SQLiteConfiguration.default
-      configuration.readerCount = 1
-      let pool = try SQLitePool(path: path, configuration: configuration)
-      try await pool.write { transaction in
-        try transaction.execute(itemsSchema)
+        // A second connection stands in for another process, which the pool hears nothing from.
+        let peer = try file.queue()
+        try await peer.write { transaction in
+          try transaction.execute(
+            """
+            DROP VIEW current_items;
+            CREATE VIEW current_items AS SELECT title FROM alternate_items;
+            """
+          )
+        }
+        try await body(pool)
       }
-      // Both of the pool's connections compile the query against the original view, so each has
-      // a cached statement and a copy of the schema that the other connection makes stale.
-      let titles = try await pool.read { try $0.fetchAll(currentTitles) }
-      #expect(titles == ["Original"])
-      _ = try await pool.write { try $0.fetchAll(currentTitles) }
-
-      // A second connection stands in for another process, which the pool hears nothing from.
-      let peer = try SQLiteQueue(path: path)
-      try await peer.write { transaction in
-        try transaction.execute(
-          """
-          DROP VIEW current_items;
-          CREATE VIEW current_items AS SELECT title FROM alternate_items;
-          """
-        )
-      }
-      try await body(pool)
     }
   }
 
