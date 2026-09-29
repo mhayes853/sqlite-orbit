@@ -246,39 +246,39 @@
       _ transport: PeerTransport,
       _ body: (Peers) async throws -> Void
     ) async throws {
-      let directory = try makeShortTemporaryDirectory("regions")
-      defer { try? FileManager.default.removeItem(at: directory) }
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
-      let identifier = OrbitDatabaseIdentifier.unique()
-      let (observingTransport, writingTransport) = try transport.makePair(directory: directory)
-      let observing = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: observingTransport
-      )
-      try await observing.write { transaction in
-        try transaction.execute(
-          """
-          CREATE TABLE a (flag INTEGER NOT NULL);
-          CREATE TABLE b (id INTEGER PRIMARY KEY);
-          INSERT INTO a (flag) VALUES (0);
-          """
+      try await withTemporaryDirectory("regions") { directory in
+        let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
+        let identifier = OrbitDatabaseIdentifier.unique()
+        let (observingTransport, writingTransport) = try transport.makePair(directory: directory)
+        let observing = OrbitIPCDatabase(
+          writer: try SQLiteQueue(path: path),
+          id: identifier,
+          transport: observingTransport
+        )
+        try await observing.write { transaction in
+          try transaction.execute(
+            """
+            CREATE TABLE a (flag INTEGER NOT NULL);
+            CREATE TABLE b (id INTEGER PRIMARY KEY);
+            INSERT INTO a (flag) VALUES (0);
+            """
+          )
+        }
+        let writing = OrbitIPCDatabase(
+          writer: try SQLiteQueue(path: path),
+          id: identifier,
+          transport: writingTransport
+        )
+        try await body(
+          Peers(
+            identifier: identifier,
+            observing: observing,
+            observingTransport: observingTransport,
+            writing: writing,
+            unannounced: try SQLiteQueue(path: path)
+          )
         )
       }
-      let writing = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: writingTransport
-      )
-      try await body(
-        Peers(
-          identifier: identifier,
-          observing: observing,
-          observingTransport: observingTransport,
-          writing: writing,
-          unannounced: try SQLiteQueue(path: path)
-        )
-      )
     }
   }
 

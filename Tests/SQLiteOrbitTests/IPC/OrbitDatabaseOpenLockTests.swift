@@ -6,45 +6,45 @@
 
   @Test
   func openLockMakesASecondAcquisitionWaitForTheFirst() async throws {
-    let directory = try makeShortTemporaryDirectory("lock")
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
-    let order = Lock([String]())
+    try await withTemporaryDirectory("lock") { directory in
+      let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
+      let order = Lock([String]())
 
-    let holder = LockHolder { whileHeld in
-      try OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: databaseIdentifier,
-        directory: directory,
-        configuration: .default
-      ) {
-        whileHeld()
-        order.withLock { $0.append("first") }
+      let holder = LockHolder { whileHeld in
+        try OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: databaseIdentifier,
+          directory: directory,
+          configuration: .default
+        ) {
+          whileHeld()
+          order.withLock { $0.append("first") }
+        }
       }
-    }
 
-    let didAcquireSecond = Lock(false)
-    // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
-    // before the holder lets go.
-    var patient = SQLiteConfiguration.default
-    patient.busyTimeout = .maximum
-    Thread.detachNewThread { [patient] in
-      try? OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: databaseIdentifier,
-        directory: directory,
-        configuration: patient
-      ) {
-        order.withLock { $0.append("second") }
-        didAcquireSecond.withLock { $0 = true }
+      let didAcquireSecond = Lock(false)
+      // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
+      // before the holder lets go.
+      var patient = SQLiteConfiguration.default
+      patient.busyTimeout = .maximum
+      Thread.detachNewThread { [patient] in
+        try? OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: databaseIdentifier,
+          directory: directory,
+          configuration: patient
+        ) {
+          order.withLock { $0.append("second") }
+          didAcquireSecond.withLock { $0 = true }
+        }
       }
+
+      // The second acquisition cannot be observed to *not* happen without giving it a chance to.
+      try await Task.sleep(for: .milliseconds(50))
+      #expect(order.withLock { $0 }.isEmpty)
+
+      holder.release()
+      try await waitUntil { didAcquireSecond.withLock { $0 } }
+      #expect(order.withLock { $0 } == ["first", "second"])
     }
-
-    // The second acquisition cannot be observed to *not* happen without giving it a chance to.
-    try await Task.sleep(for: .milliseconds(50))
-    #expect(order.withLock { $0 }.isEmpty)
-
-    holder.release()
-    try await waitUntil { didAcquireSecond.withLock { $0 } }
-    #expect(order.withLock { $0 } == ["first", "second"])
   }
 
   @Test

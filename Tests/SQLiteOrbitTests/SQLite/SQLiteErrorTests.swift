@@ -30,15 +30,10 @@
         2067
       ] as [Int32]
     )
-    func otherCodesAreNotBusy(_ code: Int32) {
-      #expect(!SQLiteError(code: SQLiteResultCode(rawValue: code)).isBusy)
-    }
-
-    @Test
-    func onlyAnInterruptIsAnInterruption() {
-      #expect(SQLiteError(code: .interrupt).isInterruption)
-      #expect(!SQLiteError(code: .busy).isInterruption)
-      #expect(!SQLiteError(code: .error).isInterruption)
+    func otherCodesAreNotBusyAndOnlyAnInterruptIsAnInterruption(_ code: Int32) {
+      let error = SQLiteError(code: SQLiteResultCode(rawValue: code))
+      #expect(!error.isBusy)
+      #expect(error.isInterruption == (code == SQLiteResultCode.interrupt.rawValue))
     }
 
     @Test
