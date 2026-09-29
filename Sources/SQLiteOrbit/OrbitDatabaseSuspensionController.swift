@@ -51,7 +51,9 @@ public struct OrbitDatabaseSuspensionScope {
 public final class OrbitDatabaseSuspensionController {
   private let database: any OrbitSuspendable
   private let notificationCenter: NotificationCenter
-  private var observers: [any NSObjectProtocol] = []
+  #if (canImport(UIKit) && !os(watchOS)) || canImport(AppKit)
+    private var observers: [any NSObjectProtocol] = []
+  #endif
   private var isInvalidated = false
 
   /// Starts observing `scope` and applies its current state to `database`.
@@ -104,8 +106,10 @@ public final class OrbitDatabaseSuspensionController {
   public func invalidate() {
     guard !isInvalidated else { return }
     isInvalidated = true
-    for observer in observers { notificationCenter.removeObserver(observer) }
-    observers.removeAll()
+    #if (canImport(UIKit) && !os(watchOS)) || canImport(AppKit)
+      for observer in observers { notificationCenter.removeObserver(observer) }
+      observers.removeAll()
+    #endif
   }
 
   isolated deinit {
