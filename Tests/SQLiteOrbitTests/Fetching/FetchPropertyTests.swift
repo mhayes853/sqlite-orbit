@@ -265,9 +265,10 @@
       #expect(storage.value == ["Milk"])
       #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
 
-      // Immediate execution reaches the suspension in `.task` before this task is returned.
       let completion = Lock<Result<Void, any Error>?>(nil)
-      let task = Task.immediate {
+      let started = Lock(false)
+      let task = Task {
+        started.withLock { $0 = true }
         if alreadyCancelled {
           withUnsafeCurrentTask { $0?.cancel() }
         }
@@ -279,6 +280,7 @@
         }
       }
       defer { task.cancel() }
+      try await waitUntil { started.withLock { $0 } }
       if !alreadyCancelled {
         #expect(completion.withLock { $0 == nil })
         task.cancel()

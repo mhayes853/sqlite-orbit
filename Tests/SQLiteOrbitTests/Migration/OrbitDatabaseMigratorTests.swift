@@ -1401,12 +1401,14 @@
 
           let changed = itemsMigrator(hasNote: true, eraseDatabaseOnSchemaChange: true)
           let migrationFinished = Lock(false)
-          let migration = Task.immediate {
+          let migrationStarted = Lock(false)
+          let migration = Task {
             defer { migrationFinished.withLock { $0 = true } }
+            migrationStarted.withLock { $0 = true }
             try await changed.migrate(pool)
           }
           defer { migration.cancel() }
-          // The immediate task entered migrate before this point and suspended on the pool.
+          try await waitUntil { migrationStarted.withLock { $0 } }
           #expect(!migrationFinished.withLock { $0 })
 
           readerGate.open()
@@ -1449,7 +1451,7 @@
             try transaction.execute("ALTER TABLE items ADD COLUMN note TEXT")
           }
           let migrator = changed
-          let migration = Task.immediate { try await migrator.migrate(pool) }
+          let migration = Task { try await migrator.migrate(pool) }
           defer { migration.cancel() }
           writerGate.open()
           try await activeWrite.value
