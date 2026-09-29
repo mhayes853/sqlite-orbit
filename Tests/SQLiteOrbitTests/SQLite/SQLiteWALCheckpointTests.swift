@@ -43,7 +43,14 @@
     @Test
     func aPassiveCheckpointIsTheDefault() async throws {
       try await withTestDatabaseFile("ckpt") { file in
-        let pool = try file.pool()
+        let calls = TestRecorder<(String?, Int32)>()
+        let base = builtInTestLibrary
+        var configuration = SQLiteConfiguration.default
+        configuration.library.connections.walCheckpoint = { connection, schema, mode, log, moved in
+          calls.append((schema.map { String(cString: $0) }, mode))
+          return base.connections.walCheckpoint(connection, schema, mode, log, moved)
+        }
+        let pool = try file.pool(configuration: configuration)
         try await pool.write { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         }
@@ -52,8 +59,64 @@
           try connection.checkpoint()
         }
 
+        let call = try #require(calls.values.first)
+        #expect(calls.count == 1)
+        #expect(call.0 == nil)
+        #expect(call.1 == 0)  // SQLITE_CHECKPOINT_PASSIVE
         #expect(result.logFrameCount > 0)
         #expect(result.checkpointedFrameCount == result.logFrameCount)
+        for (mode, rawValue) in [
+          (SQLiteWALCheckpointMode.passive, Int32(0)), (.full, 1), (.restart, 2), (.truncate, 3)
+        ] {
+          calls.removeAll()
+          _ = try await pool.writeWithoutTransaction { try $0.checkpoint(mode, schema: .main) }
+          let forwarded = try #require(calls.values.first)
+          #expect(calls.count == 1)
+          #expect(forwarded.0 == "main")
+          #expect(forwarded.1 == rawValue)
+        }
+      }
+    }
+
+    @Test(arguments: [SQLiteWALCheckpointMode.full, .restart, .truncate])
+    func aHeldSnapshotAllowsPartialPassiveProgressButMakesBlockingCheckpointsBusy(
+      mode: SQLiteWALCheckpointMode
+    ) async throws {
+      try await withTestDatabaseFile("checkpoint-reader") { file in
+        var configuration = SQLiteConfiguration.default
+        configuration.busyTimeout = .limit(.zero)
+        let writer = try file.pool(configuration: configuration)
+        let reader = try file.queue(configuration: configuration)
+        try await writer.write {
+          try $0.execute(
+            "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1)"
+          )
+        }
+        let gate = TestGate()
+        defer { gate.open() }
+        let snapshot = Task {
+          try await reader.read { transaction in
+            #expect(try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) == 1)
+            try gate.enter()
+            #expect(try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) == 1)
+          }
+        }
+        defer { snapshot.cancel() }
+        try await gate.waitUntilEntered()
+        try await writer.write { try $0.execute("INSERT INTO items VALUES (2)") }
+        let passive = try await writer.writeWithoutTransaction { try $0.checkpoint() }
+        #expect(passive.logFrameCount > passive.checkpointedFrameCount)
+        #expect(passive.checkpointedFrameCount >= 0)
+        let error = await #expect(throws: SQLiteError.self) {
+          try await writer.writeWithoutTransaction { try $0.checkpoint(mode, schema: .main) }
+        }
+        #expect(error?.isBusy == true)
+        gate.open()
+        try await snapshot.value
+        let completed = try await writer.writeWithoutTransaction {
+          try $0.checkpoint(mode, schema: .main)
+        }
+        #expect(completed.logFrameCount == completed.checkpointedFrameCount)
       }
     }
 
