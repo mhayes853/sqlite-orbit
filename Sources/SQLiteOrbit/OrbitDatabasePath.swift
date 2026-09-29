@@ -15,7 +15,7 @@ public struct OrbitDatabasePath: Hashable, Sendable {
   private enum Storage: Hashable, Sendable {
     case memory
     case temporary
-    case file(String)
+    case file(FilePath)
   }
 
   private let storage: Storage
@@ -42,7 +42,7 @@ public struct OrbitDatabasePath: Hashable, Sendable {
     switch path {
     case ":memory:": self = .memory
     case "": self = .temporary
-    default: self.init(storage: .file(FilePath.standardized(path)))
+    default: self.init(storage: .file(FilePath(path).standardized()))
     }
   }
 
@@ -54,13 +54,13 @@ public struct OrbitDatabasePath: Hashable, Sendable {
     switch storage {
     case .memory: ":memory:"
     case .temporary: ""
-    case .file(let path): path
+    case .file(let path): path.string
     }
   }
 
   /// The absolute, standardized path of the file this database lives in, or `nil` when it has
   /// none.
-  var filePath: String? {
+  var filePath: FilePath? {
     guard case .file(let path) = storage else { return nil }
     return path
   }
@@ -109,7 +109,7 @@ extension OrbitDatabasePath: CustomStringConvertible {
     /// - Parameter url: A file URL. It is standardized, so two spellings of one file compare equal.
     /// - Returns: The path naming that file.
     public static func file(_ url: URL) -> Self {
-      Self(storage: .file(url.standardizedFileURL.path))
+      Self(storage: .file(FilePath(url.standardizedFileURL.path)))
     }
 
     /// The file this database lives in, or `nil` when it has none.
@@ -119,7 +119,7 @@ extension OrbitDatabasePath: CustomStringConvertible {
     /// let url = path.fileURL  // file:///current/directory/reminders.sqlite
     /// ```
     public var fileURL: URL? {
-      self.filePath.map { URL(fileURLWithPath: $0) }
+      self.filePath.map { URL(fileURLWithPath: $0.string) }
     }
   }
 #endif

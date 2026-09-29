@@ -43,7 +43,7 @@ extension OrbitDatabaseIdentifier {
   /// - Returns: The canonical file path, or a unique identity for a private database.
   public static func forDatabase(path: OrbitDatabasePath) -> Self {
     guard let filePath = path.filePath else { return .unique() }
-    return Self(rawValue: canonicalFilePath(filePath))
+    return Self(rawValue: canonicalFilePath(filePath).string)
   }
 
   /// The path of the file `path` names once every symbolic link is resolved, including one at
@@ -60,22 +60,22 @@ extension OrbitDatabaseIdentifier {
   ///   - path: An absolute path.
   ///   - remainingSymbolicLinks: How many more links may be followed.
   private static func canonicalFilePath(
-    _ path: String,
+    _ path: FilePath,
     remainingSymbolicLinks: Int = 40
-  ) -> String {
-    guard remainingSymbolicLinks > 0 else { return FilePath.standardized(path) }
+  ) -> FilePath {
+    guard remainingSymbolicLinks > 0 else { return path.standardized() }
 
     var existingPrefix = path
     // Collected from the leaf up, so they go back on in reverse.
     var missingComponents: [String] = []
-    func reattachingMissingComponents(to base: String) -> String {
-      missingComponents.reversed().reduce(base) { FilePath.appending($1, to: $0) }
+    func reattachingMissingComponents(to base: FilePath) -> FilePath {
+      missingComponents.reversed().reduce(base) { $0.appending($1) }
     }
     while true {
       guard let entry = FileSystem.entry(atPath: existingPrefix) else {
-        let parent = FilePath.deletingLastComponent(of: existingPrefix)
-        guard parent != existingPrefix else { return FilePath.standardized(path) }
-        missingComponents.append(FilePath.lastComponent(of: existingPrefix))
+        let parent = existingPrefix.removingLastComponent()
+        guard parent != existingPrefix else { return path.standardized() }
+        missingComponents.append(existingPrefix.lastComponent)
         existingPrefix = parent
         continue
       }
@@ -84,21 +84,20 @@ extension OrbitDatabaseIdentifier {
         let destination = FileSystem.symbolicLinkDestination(atPath: existingPrefix)
       {
         let parent = canonicalFilePath(
-          FilePath.deletingLastComponent(of: existingPrefix),
+          existingPrefix.removingLastComponent(),
           remainingSymbolicLinks: remainingSymbolicLinks - 1
         )
-        let targetPath =
-          destination.utf8.first == UInt8(ascii: "/")
+        let target =
+          destination.isAbsolute
           ? destination
-          : parent + "/" + destination
+          : FilePath(parent.string + "/" + destination.string)
         return canonicalFilePath(
-          reattachingMissingComponents(to: FilePath.droppingTrailingSlashes(targetPath)),
+          reattachingMissingComponents(to: target.removingTrailingSlashes()),
           remainingSymbolicLinks: remainingSymbolicLinks - 1
         )
       }
-      return FilePath.standardized(
-        reattachingMissingComponents(to: FilePath.resolvingSymbolicLinks(existingPrefix))
-      )
+      return reattachingMissingComponents(to: existingPrefix.resolvingSymbolicLinks())
+        .standardized()
     }
   }
 }

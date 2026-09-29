@@ -28,14 +28,11 @@
     ) throws -> Result {
       let locksDirectory = directory.openLocksDirectory
       try FileSystem.createDirectory(atPath: locksDirectory)
-      let path = FilePath.appending(
-        "\(databaseIdentifier.coordinationKey).lock",
-        to: locksDirectory
-      )
+      let path = locksDirectory.appending("\(databaseIdentifier.coordinationKey).lock")
       let keepsWaiting =
         configuration.busyHandler ?? Self.waiting(within: configuration.busyTimeout)
       if let result = try UnixFileLock.withExclusiveLock(
-        atPath: path,
+        atPath: path.string,
         waitingWhile: keepsWaiting,
         body
       ) {
@@ -60,7 +57,7 @@
       return FileSystem.contentsOfDirectoryIfReadable(atPath: locksDirectory)
         .count { name in
           name.hasSuffix(".lock")
-            && UnixFileLock.removeIfUnlocked(atPath: FilePath.appending(name, to: locksDirectory))
+            && UnixFileLock.removeIfUnlocked(atPath: locksDirectory.appending(name).string)
         }
     }
 

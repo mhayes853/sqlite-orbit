@@ -69,7 +69,7 @@
       var watcher: UnixDirectoryWatcher?
       /// The directory at each path the watch was started on, when it was, by path. A directory
       /// removed or replaced since is no longer watched.
-      var watched: [String: UnixFileIdentity] = [:]
+      var watched: [FilePath: UnixFileIdentity] = [:]
       /// How many files a repair has put back.
       var repairCount = 0
       /// Whether a file was put back since the endpoint's thread last reported a repair.
@@ -86,10 +86,10 @@
     let endpointName: String
     let socketPath: String
     private let endpoint: UnixDatagramEndpoint
-    private let coordinationDirectory: String
-    private let versionDirectory: String
-    private let socketsDirectory: String
-    private let databasesDirectory: String
+    private let coordinationDirectory: FilePath
+    private let versionDirectory: FilePath
+    private let socketsDirectory: FilePath
+    private let databasesDirectory: FilePath
     private let watchesDirectories: Bool
     private let refreshInterval: Duration
     /// When a send or a receive next touches this endpoint's files.
@@ -124,7 +124,7 @@
       for directory in [socketsDirectory, databasesDirectory] {
         try FileSystem.createDirectory(atPath: directory)
       }
-      let socketPath = FilePath.appending("\(endpointName).sock", to: socketsDirectory)
+      let socketPath = socketsDirectory.appending("\(endpointName).sock").string
       self.endpoint = try UnixDatagramEndpoint(
         socketPath: socketPath,
         maximumDatagramByteCount: maximumDatagramByteCount,
@@ -190,7 +190,7 @@
           try? self.removeMarker(coordinationKey)
         }
         own.advertised.removeAll()
-        FileSystem.removeFile(atPath: self.socketPath)
+        FileSystem.removeFile(atPath: FilePath(self.socketPath))
         return own.watcher.take()
       }
       // The thread stops waiting on the watch before it closes.
@@ -230,7 +230,7 @@
         do {
           // Renamed over the marker, so a peer never reads one half written.
           let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
-          let temporary = FilePath.appending(".\(self.endpointName).tmp", to: directory)
+          let temporary = directory.appending(".\(self.endpointName).tmp")
           try FileSystem.writeFile(marker, atPath: temporary)
           guard
             FileSystem.renameFile(
@@ -310,7 +310,7 @@
     /// Creates the directory a database's markers go in, if it is not there yet.
     ///
     /// - Returns: The directory.
-    func createDatabaseDirectory(coordinationKey: String) throws -> String {
+    func createDatabaseDirectory(coordinationKey: String) throws -> FilePath {
       let directory = self.databaseDirectory(coordinationKey)
       try FileSystem.createDirectory(atPath: directory)
       return directory
@@ -349,7 +349,7 @@
         // Created up front so there is a directory to watch, and watched before it is read, so a
         // change made while reading it is reported.
         let directory = try self.createDatabaseDirectory(coordinationKey: coordinationKey)
-        let isWatched = (try? state.watcher?.watch(directory)) != nil
+        let isWatched = (try? state.watcher?.watch(directory.string)) != nil
         let peerRegions = try self.advertisements(coordinationKey: coordinationKey)
         if isWatched {
           state.peerRegions[coordinationKey] = peerRegions
@@ -361,7 +361,7 @@
     func peer(named endpointName: String) -> UnixDatagramPeer {
       UnixDatagramPeer(
         endpointName: endpointName,
-        socketPath: FilePath.appending("\(endpointName).sock", to: self.socketsDirectory)
+        socketPath: self.socketsDirectory.appending("\(endpointName).sock").string
       )
     }
 
@@ -375,17 +375,17 @@
     ///
     /// - Parameter peer: The peer that turned out to be dead.
     func prune(_ peer: UnixDatagramPeer) {
-      FileSystem.removeFile(atPath: peer.socketPath)
+      FileSystem.removeFile(atPath: FilePath(peer.socketPath))
       let coordinationKeys =
         FileSystem.contentsOfDirectoryIfReadable(atPath: self.databasesDirectory)
       for coordinationKey in coordinationKeys {
         let directory = self.databaseDirectory(coordinationKey)
         let removedMarker = FileSystem.removeFile(
-          atPath: FilePath.appending(peer.endpointName, to: directory)
+          atPath: directory.appending(peer.endpointName)
         )
         // Left behind if the peer died between writing a marker and renaming it into place.
         let removedTemporary = FileSystem.removeFile(
-          atPath: FilePath.appending(".\(peer.endpointName).tmp", to: directory)
+          atPath: directory.appending(".\(peer.endpointName).tmp")
         )
         if removedMarker || removedTemporary {
           self.reclaimDatabaseDirectory(coordinationKey)
@@ -411,7 +411,7 @@
       for name in names where !name.hasPrefix(".") {
         let marker: [UInt8]
         do {
-          marker = try FileSystem.contentsOfFile(atPath: FilePath.appending(name, to: directory))
+          marker = try FileSystem.contentsOfFile(atPath: directory.appending(name))
         } catch let error where Self.isMissingFile(error) {
           // Removed since the listing, by an endpoint that stopped advertising.
           continue
@@ -438,8 +438,8 @@
       }
     }
 
-    private func marker(_ coordinationKey: String) -> String {
-      FilePath.appending(self.endpointName, to: self.databaseDirectory(coordinationKey))
+    private func marker(_ coordinationKey: String) -> FilePath {
+      self.databaseDirectory(coordinationKey).appending(self.endpointName)
     }
 
     /// Removes a database's directory if nothing is left in it, now that this endpoint has removed
@@ -488,7 +488,7 @@
     /// started on.
     private func isIntact(_ own: OwnFiles) -> Bool {
       self.isSocketInPlace && own.advertised.keys.allSatisfy(self.hasMarker)
-        && own.watched.allSatisfy { UnixPlatform.fileIdentity(atPath: $0.key) == $0.value }
+        && own.watched.allSatisfy { UnixPlatform.fileIdentity(atPath: $0.key.string) == $0.value }
     }
 
     /// Whether this endpoint's socket's path still names the socket it bound.
@@ -497,7 +497,7 @@
     }
 
     private func hasMarker(_ coordinationKey: String) -> Bool {
-      UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey)) != nil
+      UnixPlatform.fileIdentity(atPath: self.marker(coordinationKey).string) != nil
     }
 
     /// Starts a new watch on the directories this endpoint's files are in, creating whichever are
@@ -512,7 +512,7 @@
       guard own.isStarted, !own.isShutDown else { return }
       for _ in 0..<Self.maximumRepairAttemptCount {
         let watcher = try? UnixDirectoryWatcher()
-        var watched: [String: UnixFileIdentity] = [:]
+        var watched: [FilePath: UnixFileIdentity] = [:]
         let directories =
           [self.coordinationDirectory, self.versionDirectory, self.socketsDirectory]
           + own.advertised.keys.sorted().map(self.databaseDirectory)
@@ -520,8 +520,8 @@
           try? FileSystem.createDirectory(atPath: directory)
           // Looked up before the watch starts, so a directory replaced in between is found
           // replaced by the next check, rather than taken for the one watched.
-          guard let watcher, let identity = UnixPlatform.fileIdentity(atPath: directory),
-            (try? watcher.watch(directory)) != nil
+          guard let watcher, let identity = UnixPlatform.fileIdentity(atPath: directory.string),
+            (try? watcher.watch(directory.string)) != nil
           else { continue }
           watched[directory] = identity
         }
@@ -567,7 +567,7 @@
       }
       guard isDue else { return }
       self.own.withLock { own in
-        var paths = [self.socketPath, self.socketsDirectory]
+        var paths = [FilePath(self.socketPath), self.socketsDirectory]
         for coordinationKey in own.advertised.keys {
           paths.append(self.marker(coordinationKey))
           paths.append(self.databaseDirectory(coordinationKey))
@@ -588,8 +588,8 @@
       self.reclaimDatabaseDirectory(coordinationKey)
     }
 
-    private func databaseDirectory(_ coordinationKey: String) -> String {
-      FilePath.appending(coordinationKey, to: self.databasesDirectory)
+    private func databaseDirectory(_ coordinationKey: String) -> FilePath {
+      self.databasesDirectory.appending(coordinationKey)
     }
   }
 #endif

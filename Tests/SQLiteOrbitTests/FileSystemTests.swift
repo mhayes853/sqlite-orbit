@@ -22,7 +22,10 @@ struct FileSystemTests {
     ]
   )
   func aPathIsStandardizedAsFoundationStandardizesIt(path: String) {
-    #expect(FilePath.standardized(path) == URL(fileURLWithPath: path).standardizedFileURL.path)
+    #expect(
+      FilePath(path).standardized().string
+        == URL(fileURLWithPath: path).standardizedFileURL.path
+    )
   }
 
   #if canImport(Darwin) || canImport(Glibc)
@@ -35,7 +38,7 @@ struct FileSystemTests {
         ] {
           let absolute = directory.path + "/" + path
           #expect(
-            FilePath.standardized(absolute)
+            FilePath(absolute).standardized().string
               == URL(fileURLWithPath: absolute).standardizedFileURL.path,
             "\(path)"
           )
@@ -49,7 +52,7 @@ struct FileSystemTests {
         for path in ["linked", "linked/db.sqlite", "real/db.sqlite", "chain1", "rellink/nested"] {
           let absolute = directory.path + "/" + path
           #expect(
-            FilePath.resolvingSymbolicLinks(absolute)
+            FilePath(absolute).resolvingSymbolicLinks().string
               == URL(fileURLWithPath: absolute).resolvingSymlinksInPath().path,
             "\(path)"
           )
@@ -95,7 +98,7 @@ struct FileSystemTests {
 
   @Test
   func theTemporaryDirectoryIsFoundations() {
-    let path = FileSystem.temporaryDirectoryPath
+    let path = FileSystem.temporaryDirectory.string
     #expect(path.hasSuffix("/"))
     #expect(URL(fileURLWithPath: path).path == FileManager.default.temporaryDirectory.path)
   }
@@ -103,18 +106,18 @@ struct FileSystemTests {
   #if !canImport(Darwin)
     @Test
     func tmpdirNamesTheTemporaryDirectoryWithASlashAtItsEnd() {
-      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp") == "/var/tmp/")
-      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp/") == "/var/tmp/")
-      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var//tmp//") == "/var//tmp//")
-      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "") == "/")
+      #expect(FileSystem.temporaryDirectory(environmentValue: "/var/tmp") == "/var/tmp/")
+      #expect(FileSystem.temporaryDirectory(environmentValue: "/var/tmp/") == "/var/tmp/")
+      #expect(FileSystem.temporaryDirectory(environmentValue: "/var//tmp//") == "/var//tmp//")
+      #expect(FileSystem.temporaryDirectory(environmentValue: "") == "/")
       #if os(Android)
-        #expect(FileSystem.temporaryDirectoryPath(environmentValue: nil) == "/data/local/tmp/")
+        #expect(FileSystem.temporaryDirectory(environmentValue: nil) == "/data/local/tmp/")
       #else
-        #expect(FileSystem.temporaryDirectoryPath(environmentValue: nil) == "/tmp/")
+        #expect(FileSystem.temporaryDirectory(environmentValue: nil) == "/tmp/")
       #endif
       // Where the default coordination directory ends up, whatever the slashes.
       #expect(
-        FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp") + "sqlite-orbit"
+        FileSystem.temporaryDirectory(environmentValue: "/var/tmp").appending("sqlite-orbit").string
           == URL(fileURLWithPath: "/var/tmp", isDirectory: true)
           .appending(path: "sqlite-orbit", directoryHint: .isDirectory).path
       )

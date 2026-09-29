@@ -67,7 +67,8 @@
       /// print(UnixDatagramIPCTransport.Configuration.defaultDirectoryPath)
       /// // "/tmp/sqlite-orbit" on Linux
       /// ```
-      public static let defaultDirectoryPath = FileSystem.temporaryDirectoryPath + "sqlite-orbit"
+      public static let defaultDirectoryPath = FileSystem.temporaryDirectory
+        .appending("sqlite-orbit").string
 
       /// The configuration used by a database that does not supply one, which uses
       /// ``defaultDirectoryPath``.
@@ -79,7 +80,7 @@
       /// is when it is created, so it names the same directory however the current directory
       /// changes after.
       public var directoryPath: String {
-        didSet { self.directoryPath = FilePath.absolute(self.directoryPath) }
+        didSet { self.directoryPath = FilePath(self.directoryPath).absolute().string }
       }
 
       /// The largest datagram this endpoint sends or accepts, in bytes.
@@ -113,7 +114,7 @@
         maximumDatagramByteCount: Int = 60 * 1024,
         receiveBufferByteCount: Int = 256 * 1024
       ) {
-        self.directoryPath = FilePath.absolute(directoryPath)
+        self.directoryPath = FilePath(directoryPath).absolute().string
         self.maximumDatagramByteCount = maximumDatagramByteCount
         self.receiveBufferByteCount = receiveBufferByteCount
       }
