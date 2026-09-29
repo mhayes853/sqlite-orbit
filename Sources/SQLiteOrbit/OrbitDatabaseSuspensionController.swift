@@ -1,9 +1,12 @@
-import Foundation
-
+// Foundation's `NotificationCenter` is how UIKit and AppKit announce their lifecycle, and
+// FoundationEssentials does not have it. It is imported only where those frameworks are, which
+// are Apple's, and where Foundation is part of the system.
 #if canImport(UIKit) && !os(watchOS)
+  import Foundation
   import UIKit
 #elseif canImport(AppKit)
   import AppKit
+  import Foundation
 #endif
 
 /// Selects the lifecycle observed by an ``OrbitDatabaseSuspensionController``.
@@ -50,26 +53,55 @@ public struct OrbitDatabaseSuspensionScope {
 @MainActor
 public final class OrbitDatabaseSuspensionController {
   private let database: any OrbitSuspendable
-  private let notificationCenter: NotificationCenter
   #if (canImport(UIKit) && !os(watchOS)) || canImport(AppKit)
+    private let notificationCenter: NotificationCenter
     private var observers: [any NSObjectProtocol] = []
   #endif
   private var isInvalidated = false
 
-  /// Starts observing `scope` and applies its current state to `database`.
-  ///
-  /// A manual controller leaves the database's current state alone until ``setActive(_:)`` is
-  /// called. An automatic controller applies the current application or scene activation state now.
-  /// Pass a separate `notificationCenter` when testing lifecycle notifications in isolation;
-  /// post those notifications on the main thread.
-  public init(
-    database: any OrbitSuspendable,
-    observing scope: OrbitDatabaseSuspensionScope = .manual,
-    notificationCenter: NotificationCenter = .default
-  ) {
-    self.database = database
-    self.notificationCenter = notificationCenter
+  #if (canImport(UIKit) && !os(watchOS)) || canImport(AppKit)
+    /// Starts observing `scope` and applies its current state to `database`.
+    ///
+    /// A manual controller leaves the database's current state alone until ``setActive(_:)`` is
+    /// called. An automatic controller applies the current application or scene activation state
+    /// now. Pass a separate `notificationCenter` when testing lifecycle notifications in
+    /// isolation; post those notifications on the main thread.
+    ///
+    /// ```swift
+    /// let controller = OrbitDatabaseSuspensionController(
+    ///   database: database,
+    ///   observing: .application
+    /// )
+    /// ```
+    public init(
+      database: any OrbitSuspendable,
+      observing scope: OrbitDatabaseSuspensionScope = .manual,
+      notificationCenter: NotificationCenter = .default
+    ) {
+      self.database = database
+      self.notificationCenter = notificationCenter
+      self.start(observing: scope)
+    }
+  #else
+    /// Starts a controller for `database` whose owner calls ``setActive(_:)`` as its lifecycle
+    /// changes, leaving the database's current state alone until then.
+    ///
+    /// There is no UI lifecycle to observe on this platform, so `scope` can only be ``manual``.
+    ///
+    /// ```swift
+    /// let controller = OrbitDatabaseSuspensionController(database: database)
+    /// controller.setActive(false)
+    /// ```
+    public init(
+      database: any OrbitSuspendable,
+      observing scope: OrbitDatabaseSuspensionScope = .manual
+    ) {
+      self.database = database
+      self.start(observing: scope)
+    }
+  #endif
 
+  private func start(observing scope: OrbitDatabaseSuspensionScope) {
     switch scope.kind {
     case .manual:
       break

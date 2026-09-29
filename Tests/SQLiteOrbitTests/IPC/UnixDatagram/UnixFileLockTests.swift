@@ -41,7 +41,7 @@
       for name in ["one", "two"] {
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: name),
-          directory: directory,
+          directoryPath: directory.path,
           configuration: .default
         ) {}
       }
@@ -180,7 +180,7 @@
       let holder = holdLock(locks.appending(path: "held.lock").path)
       defer { holder.release() }
 
-      #expect(OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory) == 2)
+      #expect(OrbitDatabaseOpenLock.removeUnheldLocks(directoryPath: directory.path) == 2)
       #expect(try FileManager.default.contentsOfDirectory(atPath: locks.path) == ["held.lock"])
     }
   }

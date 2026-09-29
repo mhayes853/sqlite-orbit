@@ -1,5 +1,3 @@
-import Foundation
-
 /// An identity shared by every process that opens the same SQLite database.
 ///
 /// Processes recognize each other's writes by comparing identifiers, so peers that should see one
@@ -24,7 +22,7 @@ public struct OrbitDatabaseIdentifier: RawRepresentable, Codable, Hashable, Send
   ///
   /// - Returns: An identifier no other process will compute.
   public static func unique() -> Self {
-    Self(rawValue: UUID().uuidString.lowercased())
+    Self(rawValue: RandomUUID.lowercasedString())
   }
 }
 
@@ -38,58 +36,66 @@ extension OrbitDatabaseIdentifier {
   /// each one gets a unique identity instead.
   ///
   /// ```swift
-  /// let id = OrbitDatabaseIdentifier.forDatabase(path: .file(url))
+  /// let id = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath("reminders.sqlite"))
   /// ```
   ///
   /// - Parameter path: Where the database lives.
   /// - Returns: The canonical file path, or a unique identity for a private database.
   public static func forDatabase(path: OrbitDatabasePath) -> Self {
-    guard let url = path.fileURL else { return .unique() }
-    return Self(rawValue: canonicalFileURL(url).path)
+    guard let filePath = path.filePath else { return .unique() }
+    return Self(rawValue: canonicalFilePath(filePath))
   }
 
-  private static func canonicalFileURL(
-    _ url: URL,
+  /// The path of the file `path` names once every symbolic link is resolved, including one at
+  /// its end whose target does not exist yet.
+  ///
+  /// The longest prefix of `path` that exists is resolved, and the components past it that do
+  /// not exist yet are put back on the end, so a database has the same identity before and after
+  /// its file is created. A symbolic link is followed whether its target exists or not, a
+  /// relative one from the canonical path of the directory it is in, and the `..` in a target is
+  /// taken in the order the file system takes it. Past 40 links, as in a loop, the path is only
+  /// standardized.
+  ///
+  /// - Parameters:
+  ///   - path: An absolute path.
+  ///   - remainingSymbolicLinks: How many more links may be followed.
+  private static func canonicalFilePath(
+    _ path: String,
     remainingSymbolicLinks: Int = 40
-  ) -> URL {
-    guard remainingSymbolicLinks > 0 else { return url.standardizedFileURL }
+  ) -> String {
+    guard remainingSymbolicLinks > 0 else { return FilePath.standardized(path) }
 
-    var existingPrefix = url
+    var existingPrefix = path
     // Collected from the leaf up, so they go back on in reverse.
     var missingComponents: [String] = []
-    func reattachingMissingComponents(to base: URL) -> URL {
-      missingComponents.reversed().reduce(base) { $0.appending(path: $1) }
+    func reattachingMissingComponents(to base: String) -> String {
+      missingComponents.reversed().reduce(base) { FilePath.appending($1, to: $0) }
     }
     while true {
-      do {
-        let values = try existingPrefix.resourceValues(forKeys: [.isSymbolicLinkKey])
-        if values.isSymbolicLink == true,
-          let destination = try? FileManager.default.destinationOfSymbolicLink(
-            atPath: existingPrefix.path
-          )
-        {
-          let parent = canonicalFileURL(
-            existingPrefix.deletingLastPathComponent(),
-            remainingSymbolicLinks: remainingSymbolicLinks - 1
-          )
-          let targetPath =
-            (destination as NSString).isAbsolutePath
-            ? destination
-            : parent.path + "/" + destination
-          return canonicalFileURL(
-            reattachingMissingComponents(to: URL(fileURLWithPath: targetPath)),
-            remainingSymbolicLinks: remainingSymbolicLinks - 1
-          )
-        }
-
-        return reattachingMissingComponents(to: existingPrefix.resolvingSymlinksInPath())
-          .standardizedFileURL
-      } catch {
-        let parent = existingPrefix.deletingLastPathComponent()
-        guard parent != existingPrefix else { return url.standardizedFileURL }
-        missingComponents.append(existingPrefix.lastPathComponent)
+      guard FileSystem.entryExists(atPath: existingPrefix) else {
+        let parent = FilePath.deletingLastComponent(of: existingPrefix)
+        guard parent != existingPrefix else { return FilePath.standardized(path) }
+        missingComponents.append(FilePath.lastComponent(of: existingPrefix))
         existingPrefix = parent
+        continue
       }
+      if let destination = FileSystem.symbolicLinkDestination(atPath: existingPrefix) {
+        let parent = canonicalFilePath(
+          FilePath.deletingLastComponent(of: existingPrefix),
+          remainingSymbolicLinks: remainingSymbolicLinks - 1
+        )
+        let targetPath =
+          destination.utf8.first == UInt8(ascii: "/")
+          ? destination
+          : parent + "/" + destination
+        return canonicalFilePath(
+          reattachingMissingComponents(to: FilePath.droppingTrailingSlashes(targetPath)),
+          remainingSymbolicLinks: remainingSymbolicLinks - 1
+        )
+      }
+      return FilePath.standardized(
+        reattachingMissingComponents(to: FilePath.resolvingSymbolicLinks(existingPrefix))
+      )
     }
   }
 }

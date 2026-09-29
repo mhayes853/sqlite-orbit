@@ -1,6 +1,4 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  import Foundation
-
   /// Removes what endpoints that died without shutting down left in the coordination directory.
   ///
   /// An endpoint that is killed leaves its socket's file in `v1/s/`, its markers in
@@ -66,7 +64,7 @@
     /// This never fails: whatever cannot be removed, or looked at, is left for the next sweep.
     ///
     /// - Parameters:
-    ///   - directory: The coordination directory.
+    ///   - directoryPath: The coordination directory.
     ///   - endpointName: The name of the endpoint sweeping, whose own files are never touched.
     ///   - temporarySocketGracePeriod: How old a hidden socket found dead must be to be removed.
     ///   - didRemove: Called with the path of each socket's file and marker removed, right after
@@ -76,30 +74,32 @@
     ///   could not be taken, and nothing was removed.
     @discardableResult
     static func sweep(
-      directory: URL,
+      directoryPath: String,
       keeping endpointName: String,
       temporarySocketGracePeriod: Duration = Self.defaultTemporarySocketGracePeriod,
       didRemove: (_ path: String) -> Void = { _ in }
     ) -> Summary? {
-      let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
-      let lock = versionDirectory.appending(path: "cleanup-stale.lock").path
+      let versionDirectory = FilePath.appending("v1", to: FilePath.absolute(directoryPath))
+      let lock = FilePath.appending("cleanup-stale.lock", to: versionDirectory)
       return try? UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) {
         var sweep = Sweep(
-          socketsDirectory: versionDirectory.appending(path: "s", directoryHint: .isDirectory),
-          databasesDirectory: versionDirectory.appending(path: "d", directoryHint: .isDirectory),
+          socketsDirectory: FilePath.appending("s", to: versionDirectory),
+          databasesDirectory: FilePath.appending("d", to: versionDirectory),
           endpointName: endpointName,
           temporarySocketGracePeriod: temporarySocketGracePeriod
         )
         sweep.removeDeadSockets(didRemove: didRemove)
         sweep.removeDeadMarkers(didRemove: didRemove)
-        sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory)
+        sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(
+          directoryPath: directoryPath
+        )
         return sweep.summary
       }
     }
 
     private struct Sweep {
-      let socketsDirectory: URL
-      let databasesDirectory: URL
+      let socketsDirectory: String
+      let databasesDirectory: String
       let endpointName: String
       let temporarySocketGracePeriod: Duration
       var summary = Summary()
@@ -108,7 +108,7 @@
       /// hidden one besides that is older than the grace period.
       mutating func removeDeadSockets(didRemove: (_ path: String) -> Void) {
         for name in Self.contents(of: self.socketsDirectory) where name.hasSuffix(".sock") {
-          let path = self.socketsDirectory.appending(path: name).path
+          let path = FilePath.appending(name, to: self.socketsDirectory)
           let isTemporary = name.hasPrefix(".")
           let endpointName = String(name.dropFirst(isTemporary ? 1 : 0).dropLast(".sock".count))
           guard endpointName != self.endpointName,
@@ -131,16 +131,13 @@
       /// endpoint that died after withdrawing its last marker would otherwise stay forever.
       mutating func removeDeadMarkers(didRemove: (_ path: String) -> Void) {
         for coordinationKey in Self.contents(of: self.databasesDirectory) {
-          let directory = self.databasesDirectory.appending(
-            path: coordinationKey,
-            directoryHint: .isDirectory
-          )
+          let directory = FilePath.appending(coordinationKey, to: self.databasesDirectory)
           for name in Self.contents(of: directory) {
             guard let endpointName = Self.endpointName(ofMarker: name),
               endpointName != self.endpointName,
               self.isEndpointDead(endpointName)
             else { continue }
-            let path = directory.appending(path: name).path
+            let path = FilePath.appending(name, to: directory)
             // Fails, harmlessly, on a file something else removed first.
             if UnixPlatform.removeFile(atPath: path) {
               self.summary.markerCount += 1
@@ -148,7 +145,7 @@
             }
           }
           // Fails, harmlessly, on a directory that is not empty, or no longer there.
-          if UnixPlatform.removeDirectory(atPath: directory.path) {
+          if UnixPlatform.removeDirectory(atPath: directory) {
             self.summary.databaseDirectoryCount += 1
           }
         }
@@ -161,7 +158,7 @@
       /// its socket again an instant later, and a sweep can be stalled for any length of time
       /// between one removal and the next.
       private func isEndpointDead(_ endpointName: String) -> Bool {
-        let path = self.socketsDirectory.appending(path: "\(endpointName).sock").path
+        let path = FilePath.appending("\(endpointName).sock", to: self.socketsDirectory)
         return UnixDatagramSocket.probe(path) == .dead
       }
 
@@ -169,10 +166,9 @@
       /// is bound to it, and it has been there longer than any bind takes.
       private func isTemporarySocketAbandoned(_ path: String) -> Bool {
         guard UnixDatagramSocket.probe(path) == .dead,
-          let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-          let modified = attributes[.modificationDate] as? Date
+          let age = UnixPlatform.ageOfFile(atPath: path)
         else { return false }
-        return Date.now.timeIntervalSince(modified) >= self.temporarySocketGracePeriod / .seconds(1)
+        return age >= self.temporarySocketGracePeriod
       }
 
       /// The endpoint a file in a database's directory belongs to: a marker is named after its
@@ -187,8 +183,8 @@
       }
 
       /// The names of what is in `directory`, or none if it cannot be listed, as when it is gone.
-      private static func contents(of directory: URL) -> [String] {
-        (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+      private static func contents(of directory: String) -> [String] {
+        (try? UnixPlatform.contentsOfDirectory(atPath: directory)) ?? []
       }
     }
   }

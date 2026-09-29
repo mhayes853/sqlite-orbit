@@ -190,7 +190,7 @@
       self.directory = try makeShortTemporaryDirectory("owed")
       self.maximumDatagramByteCount = maximumDatagramByteCount
       self.sender = try UnixDatagramEndpointRegistry(
-        directory: self.directory,
+        directoryPath: self.directory.path,
         endpointName: "sender",
         maximumDatagramByteCount: maximumDatagramByteCount,
         receiveBufferByteCount: 4_096

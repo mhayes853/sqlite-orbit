@@ -215,7 +215,7 @@
       // predictable number of commits. Darwin bounds the queue by bytes, and a default buffer
       // holds thousands of these small datagrams.
       let transport = try UnixDatagramIPCTransport(
-        configuration: .init(directory: peer.directory, receiveBufferByteCount: 60 * 1024)
+        configuration: .init(directoryPath: peer.directory.path, receiveBufferByteCount: 60 * 1024)
       )
       let received = TestCounter()
       let covered = Lock(OrbitDatabaseRegion.empty)

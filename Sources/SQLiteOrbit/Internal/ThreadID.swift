@@ -1,7 +1,9 @@
-#if canImport(Darwin) || os(Windows)
-  import Foundation
+#if os(Windows)
+  import WinSDK
 #elseif _runtime(_multithreaded)
-  #if canImport(Glibc)
+  #if canImport(Darwin)
+    import Darwin
+  #elseif canImport(Glibc)
     import Glibc
   #elseif canImport(Musl)
     import Musl
@@ -14,10 +16,10 @@
 
 /// The identity of the thread currently running a blocking database access.
 struct ThreadID: Equatable {
-  #if canImport(Darwin) || os(Windows)
-    private let thread: ObjectIdentifier
+  #if os(Windows)
+    private let thread: DWORD
 
-    static var current: Self { Self(thread: ObjectIdentifier(Thread.current)) }
+    static var current: Self { Self(thread: GetCurrentThreadId()) }
   #elseif _runtime(_multithreaded)
     private let thread: pthread_t
 

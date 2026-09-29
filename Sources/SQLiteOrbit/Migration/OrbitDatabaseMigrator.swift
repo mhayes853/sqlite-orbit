@@ -1,5 +1,3 @@
-import Foundation
-
 /// Applies a database's schema migrations in order, each exactly once.
 ///
 /// Register every migration the application has shipped, oldest first, and call
@@ -560,22 +558,22 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws -> Set<SchemaObject> {
     // A named file rather than a temporary database SQLite names itself: GRDB found those do not
     // accept every setup a named file does, in its issue #931, and not every build supports them.
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "SQLiteOrbit-migrator-\(UUID().uuidString).sqlite"
-    )
+    let path =
+      FileSystem.temporaryDirectoryPath
+      + "SQLiteOrbit-migrator-\(RandomUUID.lowercasedString()).sqlite"
     defer {
       // The answer is known by now, and a temporary file left behind is no reason to fail a
       // migration over.
       for suffix in ["", "-wal", "-shm", "-journal"] {
-        try? FileManager.default.removeItem(atPath: url.path + suffix)
+        FileSystem.removeFile(atPath: path + suffix)
       }
     }
     // The connection has closed by the time this returns, before its files are deleted.
-    return try migratedSchema(at: url, upTo: target, configuration: configuration)
+    return try migratedSchema(at: path, upTo: target, configuration: configuration)
   }
 
   private func migratedSchema(
-    at url: URL,
+    at path: String,
     upTo target: String,
     configuration: SQLiteConfiguration
   ) throws -> Set<SchemaObject> {
@@ -584,7 +582,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     // observes it, and it runs on the calling thread: each of its accesses binds its library to
     // the thread and puts back the binding of the access this runs inside once it ends.
     let handle = try SQLiteHandle.open(
-      path: .file(url),
+      path: OrbitDatabasePath(path),
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration
     )

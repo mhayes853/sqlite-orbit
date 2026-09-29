@@ -211,7 +211,7 @@
         let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: database,
-          directory: directory,
+          directoryPath: directory.path,
           configuration: .default
         ) {
           try peer.markReady()

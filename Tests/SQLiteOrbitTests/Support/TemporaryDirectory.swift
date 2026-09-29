@@ -26,7 +26,7 @@ func makeShortTemporaryDirectory(_ label: String) throws -> URL {
 ///
 /// ```swift
 /// try withTemporaryDirectory("lock") { directory in
-///   try OrbitDatabaseOpenLock.withLock(databaseIdentifier: id, directory: directory, ...) {}
+///   try OrbitDatabaseOpenLock.withLock(databaseIdentifier: id, directoryPath: directory.path) {}
 /// }
 /// ```
 ///

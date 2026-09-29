@@ -267,7 +267,7 @@
     func anEndpointInUseTouchesItsFilesSoTheCleanerLeavesThemAlone() async throws {
       try await withTemporaryDirectory("cleaner") { directory in
         let receiver = try UnixDatagramIPCTransport(
-          configuration: .init(directory: directory),
+          configuration: .init(directoryPath: directory.path),
           refreshInterval: .zero
         )
         let recorder = IPCMessageRecorder()

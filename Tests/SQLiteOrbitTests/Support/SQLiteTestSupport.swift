@@ -92,7 +92,7 @@
     var url: URL { self.directory.appending(component: "database.sqlite") }
 
     /// The database file, as the drivers take it.
-    var path: OrbitDatabasePath { .file(self.url) }
+    var path: OrbitDatabasePath { OrbitDatabasePath(self.url.path) }
 
     /// Opens the database with a ``SQLiteQueue``.
     func queue(configuration: SQLiteConfiguration = .default) throws -> SQLiteQueue {
@@ -129,7 +129,7 @@
       /// The coordination directory ``ipcDatabase(configuration:)`` opens the database through,
       /// beside the database file.
       var coordination: UnixDatagramIPCTransport.Configuration {
-        UnixDatagramIPCTransport.Configuration(directory: self.directory.appending(path: "c"))
+        UnixDatagramIPCTransport.Configuration(directoryPath: self.directory.appending(path: "c").path)
       }
 
       /// Opens the database with an ``OrbitIPCDatabase``, coordinating through ``coordination``.
