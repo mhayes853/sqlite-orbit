@@ -13,12 +13,12 @@
     public mutating func register(
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
-      register(.collations, providedBy: \.collations) { connection in
-        orbitInstall(
-          collation: collation,
-          on: connection.sqliteConnection,
-          library: connection.sqlite
-        )
+      registerCollation(collation.name) { lhs, rhs in
+        switch collation.compare(lhs, rhs) {
+        case .ascending: .ascending
+        case .same: .same
+        case .descending: .descending
+        }
       }
     }
 
@@ -81,42 +81,5 @@
     func finish() throws -> OrbitDatabaseValue {
       try OrbitDatabaseValue(lowering: function.invoke(rows))
     }
-  }
-
-  func orbitInstall(
-    collation: some StructuredQueriesSQLiteCore.DatabaseCollation,
-    on connection: OpaquePointer?,
-    library: SQLiteLibrary
-  ) -> Int32 {
-    let box = Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation)
-    let code = collation.name.withCString { name in
-      library.collations!
-        .create(
-          connection,
-          name,
-          SQLiteFunctionFlags.utf8.rawValue,
-          box,
-          { box, lhsCount, lhs, rhsCount, rhs in
-            // A comparator is handed its user data directly, so it is the one callback that needs
-            // nothing from the build that called it.
-            let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
-            switch collation.compare(
-              UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
-              UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
-            ) {
-            case .ascending: return -1
-            case .same: return 0
-            case .descending: return 1
-            }
-          },
-          { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
-        )
-    }
-    // A registration that fails takes the collation with it, and SQLite only calls the destructor
-    // of one that succeeded — unlike `sqlite3_create_function_v2`, which calls it either way.
-    if code != SQLiteResultCode.ok.rawValue {
-      Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release(box)
-    }
-    return code
   }
 #endif

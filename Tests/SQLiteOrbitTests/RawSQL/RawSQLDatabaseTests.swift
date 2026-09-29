@@ -396,6 +396,35 @@
       }
       #expect(error?.message?.contains("NativeFunctionFailure") == true)
     }
+
+    // MARK: - Collations
+
+    @Test
+    func nativeCollationsOrderByTheirComparator() async throws {
+      var configuration = SQLiteConfiguration.default
+      configuration.registerCollation("length") { lhs, rhs in
+        lhs.count < rhs.count ? .ascending : lhs.count > rhs.count ? .descending : .same
+      }
+      let database = try inMemoryDatabase(configuration: configuration)
+      try await database.execute(
+        sql: """
+          CREATE TABLE words (word TEXT);
+          INSERT INTO words VALUES ('abc'), ('a'), ('🥛'), ('ab');
+          """
+      )
+
+      let (ordered, equalLengths) = try await database.read { transaction in
+        (
+          // The comparator sees UTF-8 bytes, so the four-byte emoji sorts last.
+          try transaction.fetchAll("SELECT word FROM words ORDER BY word COLLATE length") {
+            $0[0].textValue
+          },
+          try transaction.fetchOne("SELECT 'xy' = 'ab' COLLATE length") { $0[0] }
+        )
+      }
+      #expect(ordered == ["a", "ab", "abc", "🥛"])
+      #expect(equalLengths == 1)
+    }
   }
 
   private struct NativeFunctionFailure: Error {}
