@@ -53,11 +53,22 @@
   }
 
   #if os(macOS) || os(Linux) || os(Windows) || os(FreeBSD) || os(OpenBSD)
-    @Test(arguments: [0, -1])
-    func aNonpositiveReaderCountFailsAPrecondition(readerCount: Int) async {
-      await #expect(processExitsWith: .failure) { [readerCount] in
+    @Test
+    func aZeroReaderCountFailsAPrecondition() async {
+      await #expect(processExitsWith: .failure) {
         var configuration = SQLiteConfiguration.default
-        configuration.readerCount = readerCount
+        configuration.readerCount = 0
+        // The precondition runs before opening any connections. Swallow ordinary opening
+        // errors so they cannot make this exit test pass in place of the precondition.
+        _ = try? SQLitePool(path: .memory, configuration: configuration)
+      }
+    }
+
+    @Test
+    func aNegativeReaderCountFailsAPrecondition() async {
+      await #expect(processExitsWith: .failure) {
+        var configuration = SQLiteConfiguration.default
+        configuration.readerCount = -1
         // The precondition runs before opening any connections. Swallow ordinary opening
         // errors so they cannot make this exit test pass in place of the precondition.
         _ = try? SQLitePool(path: .memory, configuration: configuration)
