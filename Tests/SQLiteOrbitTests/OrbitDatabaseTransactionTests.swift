@@ -380,21 +380,17 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(reverseMinimumAndMaximum?.max == 1)
 
   state.visitedRowCount = 0
-  var didThrow = false
-  do {
+  #expect(throws: TestError.self) {
     _ = try withTestRead(state) { transaction in
       try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
         .count { value in
           if value == 4 {
-            throw TerminalAlgorithmError.stop
+            throw TestError()
           }
           return true
         }
     }
-  } catch is TerminalAlgorithmError {
-    didThrow = true
   }
-  #expect(didThrow)
   #expect(state.visitedRowCount == 3)
 
   let emptyState = TestDatabaseState()
@@ -476,21 +472,17 @@ func databaseCursorsSelectTopKValues() async throws {
     }
   }
 
-  var didThrow = false
-  do {
+  #expect(throws: TestError.self) {
     _ = try withTestRead(state) { transaction in
       try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
         .topK(2) { lhs, rhs in
           if lhs == 5 || rhs == 5 {
-            throw TerminalAlgorithmError.stop
+            throw TestError()
           }
           return lhs < rhs
         }
     }
-  } catch is TerminalAlgorithmError {
-    didThrow = true
   }
-  #expect(didThrow)
 }
 
 @Test
@@ -639,10 +631,6 @@ private struct TestReturningWriteStatement: Statement {
   typealias From = Never
 
   let query: QueryFragment = "UPDATE testRecords SET title = title RETURNING id"
-}
-
-private enum TerminalAlgorithmError: Error {
-  case stop
 }
 
 private struct TestDatabaseRow: OrbitDatabaseRow {
