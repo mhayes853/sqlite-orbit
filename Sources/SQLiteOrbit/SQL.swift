@@ -24,8 +24,9 @@
 /// let query: SQL = "SELECT title FROM \(quote: table) ORDER BY title \(order)"
 /// ```
 ///
-/// There is deliberately no initializer from a `String` value: SQL built at runtime has to say how
-/// its text is to be treated, by interpolating it with `\(raw:)` or `\(quote:)`.
+/// There is deliberately no unlabeled initializer from a `String` value: SQL built at runtime has
+/// to say how its text is to be treated, by interpolating it with `\(raw:)` or `\(quote:)`, or by
+/// handing it over as already-written SQL through ``init(text:bindings:)``.
 public struct SQL: Hashable, Sendable {
   /// The SQL text, with a `?` standing in for each bound parameter.
   public private(set) var text: String
@@ -38,7 +39,31 @@ public struct SQL: Hashable, Sendable {
   // the same value always failed before it could be represented here.
   var bindingFailure: SQLBindingFailure?
 
-  init(text: String, bindings: [OrbitDatabaseValue], bindingFailure: SQLBindingFailure? = nil) {
+  /// Creates SQL from text that is already written, with values for its parameters.
+  ///
+  /// The text is used as it is, so it must come from the program itself rather than from input:
+  /// nothing in it is escaped or quoted. Each parameter in it, such as a `?`, is bound to the next
+  /// value in `bindings`, in order.
+  ///
+  /// ```swift
+  /// let query = SQL(
+  ///   text: "SELECT title FROM reminders WHERE list_id = ? AND is_completed = ?",
+  ///   bindings: [.integer(listID), .integer(0)]
+  /// )
+  /// ```
+  ///
+  /// The counts are not checked here, but SQLite holds a statement to them when it runs: a
+  /// parameter left without a value is bound to `NULL`, and a value left without a parameter fails
+  /// the statement before it runs with a ``SQLiteError`` whose code is `SQLITE_RANGE`.
+  ///
+  /// - Parameters:
+  ///   - text: The SQL text, with a parameter standing in for each value.
+  ///   - bindings: The values bound to the text's parameters, in order.
+  public init(text: String, bindings: [OrbitDatabaseValue] = []) {
+    self.init(text: text, bindings: bindings, bindingFailure: nil)
+  }
+
+  init(text: String, bindings: [OrbitDatabaseValue], bindingFailure: SQLBindingFailure?) {
     self.text = text
     self.bindings = bindings
     self.bindingFailure = bindingFailure

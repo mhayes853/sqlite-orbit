@@ -13,6 +13,15 @@ struct SQLTests {
   }
 
   @Test
+  func writtenTextIsUsedAsItIsWithItsBindings() {
+    let sql = SQL(text: "SELECT 'it''s' WHERE id = ?", bindings: [.integer(1)])
+    #expect(sql.text == "SELECT 'it''s' WHERE id = ?")
+    #expect(sql.bindings == [.integer(1)])
+    #expect(sql == "SELECT 'it''s' WHERE id = \(1)")
+    #expect(SQL(text: "SELECT 1") == "SELECT 1")
+  }
+
+  @Test
   func interpolatedValuesAreBoundAsParameters() {
     let id = 42
     let rowID: Int64 = 7

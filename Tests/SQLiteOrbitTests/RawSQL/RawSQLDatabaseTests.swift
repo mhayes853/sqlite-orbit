@@ -131,6 +131,31 @@
     }
 
     @Test
+    func writtenSQLBindsItsValuesInOrder() async throws {
+      let database = try inMemoryDatabase()
+      let rows = try await database.read { transaction in
+        try transaction.fetchAll(
+          SQL(text: "SELECT ?, ?, ?", bindings: [.integer(1), .text("two"), .null])
+        ) { [$0[0], $0[1], $0[2]] }
+      }
+      #expect(rows == [[.integer(1), .text("two"), .null]])
+
+      // A parameter without a value is NULL, and a value without a parameter is refused.
+      let unbound = try await database.read { transaction in
+        try transaction.fetchOne(SQL(text: "SELECT ?, ?", bindings: [.integer(1)])) { $0[1] }
+      }
+      #expect(unbound == .null)
+      let error = await #expect(throws: SQLiteError.self) {
+        try await database.read { transaction in
+          try transaction.fetchOne(SQL(text: "SELECT ?", bindings: [.integer(1), .integer(2)])) {
+            $0[0]
+          }
+        }
+      }
+      #expect(error?.code.rawValue == 25)
+    }
+
+    @Test
     func writeTransactionsFetchWhatReturningReports() async throws {
       let database = try inMemoryDatabase()
       let (inserted, deleted, stopped) = try await database.write { transaction in
