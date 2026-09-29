@@ -4,31 +4,27 @@ import Testing
 
 @Test
 func orbitSubscriptionCancelsWhenItsStorageIsReleased() {
-  let cancellationCount = Lock(0)
+  let cancellationCount = TestCounter()
 
   do {
     _ = OrbitSubscription {
-      cancellationCount.withLock { $0 += 1 }
+      cancellationCount.increment()
     }
   }
 
-  #expect(cancellationCount.withLock { $0 } == 1)
+  #expect(cancellationCount.value == 1)
 }
 
 @Test
-func orbitSubscriptionCancelsAtMostOnceUnderConcurrentCancellation() async {
-  let cancellationCount = Lock(0)
+func orbitSubscriptionCancelsAtMostOnceUnderConcurrentCancellation() async throws {
+  let cancellationCount = TestCounter()
   let subscription = OrbitSubscription {
-    cancellationCount.withLock { $0 += 1 }
+    cancellationCount.increment()
   }
 
-  await withTaskGroup(of: Void.self) { group in
-    for _ in 0..<100 {
-      group.addTask { subscription.cancel() }
-    }
-  }
+  _ = try await concurrently(100) { _ in subscription.cancel() }
 
-  #expect(cancellationCount.withLock { $0 } == 1)
+  #expect(cancellationCount.value == 1)
 }
 
 @Suite

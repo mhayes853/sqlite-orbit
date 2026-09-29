@@ -302,36 +302,35 @@
 
   @Test
   func extensionsComposeWithTheCrossProcessConfiguration() async throws {
-    let directory = try makeShortTemporaryDirectory("fn")
-    defer { try? FileManager.default.removeItem(at: directory) }
+    try await withTemporaryDirectory("fn") { directory in
+      // Function registration composes with the native cross-process defaults.
+      var configuration = SQLiteConfiguration.default
+      configuration.register(function: $repeated)
 
-    // Function registration composes with the native cross-process defaults.
-    var configuration = SQLiteConfiguration.default
-    configuration.register(function: $repeated)
-
-    let database = try OrbitIPCDatabase(
-      path: .file(directory.appendingPathComponent("db.sqlite")),
-      configuration: configuration,
-      coordination: .init(directory: directory)
-    )
-
-    try await database.write { transaction in
-      try transaction.execute(
-        #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+      let database = try OrbitIPCDatabase(
+        path: .file(directory.appendingPathComponent("db.sqlite")),
+        configuration: configuration,
+        coordination: .init(directory: directory)
       )
-      try transaction.execute(Note.insert { Note(id: 1, title: "ab") })
-    }
 
-    let repeatedTitle = try await database.read { transaction in
-      try transaction.fetchOne(Note.select { $repeated($0.title, 2) })
-    }
-    #expect(repeatedTitle == "abab")
+      try await database.write { transaction in
+        try transaction.execute(
+          #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+        )
+        try transaction.execute(Note.insert { Note(id: 1, title: "ab") })
+      }
 
-    // The native defaults must have survived registration.
-    let trustedSchema = try await database.read { transaction in
-      try transaction.fetchOne(#sql("PRAGMA trusted_schema", as: Int.self))
+      let repeatedTitle = try await database.read { transaction in
+        try transaction.fetchOne(Note.select { $repeated($0.title, 2) })
+      }
+      #expect(repeatedTitle == "abab")
+
+      // The native defaults must have survived registration.
+      let trustedSchema = try await database.read { transaction in
+        try transaction.fetchOne(#sql("PRAGMA trusted_schema", as: Int.self))
+      }
+      #expect(trustedSchema == 0)
     }
-    #expect(trustedSchema == 0)
   }
 
   @Test

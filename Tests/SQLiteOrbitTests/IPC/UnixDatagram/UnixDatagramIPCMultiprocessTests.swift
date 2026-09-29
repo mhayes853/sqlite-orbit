@@ -204,121 +204,100 @@
   }
 
   @Test
-  func ipcProcessPeer() async throws {
-    let environment = ProcessInfo.processInfo.environment
-    guard let mode = environment[IPCProcessEnvironment.mode] else { return }
-    func value(_ key: String) throws -> String { try #require(environment[key]) }
-    let directory = URL(fileURLWithPath: try value(IPCProcessEnvironment.directory))
-    let database = OrbitDatabaseIdentifier(rawValue: try value(IPCProcessEnvironment.database))
-    let ready = URL(fileURLWithPath: try value(IPCProcessEnvironment.ready))
-    let result = URL(fileURLWithPath: try value(IPCProcessEnvironment.result))
-    let expected = try #require(Int(try value(IPCProcessEnvironment.expected)))
-    // The smallest receive buffer a transport allows, so a stopped peer fills up after a
-    // predictable number of commits. Darwin bounds the queue by bytes, and a default buffer holds
-    // thousands of these small datagrams.
-    let transport = try UnixDatagramIPCTransport(
-      configuration: .init(directory: directory, receiveBufferByteCount: 60 * 1024)
-    )
-    let received = Lock(0)
-    let covered = Lock(OrbitDatabaseRegion.empty)
-    let isNotified = Lock(false)
-    let region: OrbitDatabaseRegion =
-      mode == "listen-table-a" ? OrbitDatabaseRegion(table: "a") : .fullDatabase
-    let subscription = try transport.subscribe(to: database, region: region) { message in
-      if case .transactionDidCommit(let commit) = message {
-        covered.withLock { $0.formUnion(commit.region) }
-      }
-      if mode == "listen-repaired",
-        message == .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
-      {
-        // What a repair tells subscribers, which no peer sends in this mode.
-        isNotified.withLock { $0 = true }
-        return
-      }
-      if mode == "listen-region" {
-        let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
-          OrbitDatabaseRegion(column: "title", in: "items")
-        )
-        guard
-          message
-            == .transactionDidCommit(
-              .init(databaseIdentifier: database, region: expectedRegion)
-            )
-        else { return }
-      }
-      received.withLock { $0 += 1 }
-    }
-    try touch(ready)
-
-    if mode == "subscribe-and-send" {
-      try await waitForFile(directory.appending(path: "start"))
-      try await transport.send(
-        .transactionDidCommit(.init(databaseIdentifier: database, region: .fullDatabase))
+  func ipcProcessPeer() async {
+    await runProcessTestPeer(IPCProcessHarness.helper) { peer in
+      let mode = peer.mode
+      let database = OrbitDatabaseIdentifier(
+        rawValue: try peer.string(IPCProcessHarness.databaseVariable)
       )
-    }
-    if mode == "idle" {
-      try await waitForFile(directory.appending(path: "stop"), timeout: .seconds(30))
-    } else if mode == "listen-columns" {
-      let columns = OrbitDatabaseRegion(columns: (0..<expected).map { "c\($0)" }, in: "items")
-      try await waitUntil(timeout: .seconds(30)) { covered.withLock { $0.contains(columns) } }
-    } else if mode == "listen-repaired" {
-      try await waitUntil { received.withLock { $0 } >= expected && isNotified.withLock { $0 } }
-    } else {
-      try await waitUntil { received.withLock { $0 } >= expected }
-    }
+      let expected = try peer.int(IPCProcessHarness.expectedVariable)
+      // The smallest receive buffer a transport allows, so a stopped peer fills up after a
+      // predictable number of commits. Darwin bounds the queue by bytes, and a default buffer
+      // holds thousands of these small datagrams.
+      let transport = try UnixDatagramIPCTransport(
+        configuration: .init(directory: peer.directory, receiveBufferByteCount: 60 * 1024)
+      )
+      let received = TestCounter()
+      let covered = Lock(OrbitDatabaseRegion.empty)
+      let isNotified = Lock(false)
+      let region: OrbitDatabaseRegion =
+        mode == "listen-table-a" ? OrbitDatabaseRegion(table: "a") : .fullDatabase
+      let subscription = try transport.subscribe(to: database, region: region) { message in
+        if case .transactionDidCommit(let commit) = message {
+          covered.withLock { $0.formUnion(commit.region) }
+        }
+        if mode == "listen-repaired", message == commit(database) {
+          // What a repair tells subscribers, which no peer sends in this mode.
+          isNotified.withLock { $0 = true }
+          return
+        }
+        if mode == "listen-region" {
+          let expectedRegion = OrbitDatabaseRegion.fullDatabase.subtracting(
+            OrbitDatabaseRegion(column: "title", in: "items")
+          )
+          guard message == commit(database, region: expectedRegion) else { return }
+        }
+        received.increment()
+      }
+      try peer.markReady()
 
-    try Data(String(received.withLock { $0 }).utf8).write(to: result, options: .atomic)
-    _ = subscription
-    processTestExit(0)
+      switch mode {
+      case "subscribe-and-send":
+        try await peer.waitForStart()
+        try await transport.send(commit(database))
+        try await received.waitForCount(expected, timeout: .seconds(10))
+      case "idle":
+        try await peer.waitForStop()
+      case "listen-columns":
+        let columns = OrbitDatabaseRegion(columns: (0..<expected).map { "c\($0)" }, in: "items")
+        try await waitUntil(timeout: .seconds(30)) { covered.withLock { $0.contains(columns) } }
+      case "listen-repaired":
+        try await waitUntil { received.value >= expected && isNotified.withLock { $0 } }
+      case "listen", "listen-region", "listen-table-a":
+        try await received.waitForCount(expected, timeout: .seconds(10))
+      default:
+        throw peer.unknownMode
+      }
+
+      try peer.writeResult(received.value)
+      _ = subscription
+    }
   }
 
-  private final class IPCProcessHarness {
-    private let harness: ProcessTestHarness
+  /// A coordination directory, which is the harness's own, and the database its helpers subscribe
+  /// to.
+  private final class IPCProcessHarness: ProcessTestHarness {
+    static let helper = "ipcProcessPeer"
+    static let databaseVariable = "DATABASE"
+    static let expectedVariable = "EXPECTED_COUNT"
+
     let database: OrbitDatabaseIdentifier
 
-    var directory: URL { self.harness.directory }
-
-    var message: OrbitIPCMessage {
-      .transactionDidCommit(.init(databaseIdentifier: self.database, region: .fullDatabase))
-    }
+    var message: OrbitIPCMessage { commit(self.database) }
 
     init(database: String) throws {
-      self.harness = try ProcessTestHarness(
-        helper: "ipcProcessPeer",
-        environmentPrefix: IPCProcessEnvironment.prefix,
-        name: database
-      )
       self.database = OrbitDatabaseIdentifier(rawValue: database)
+      try super.init(helper: Self.helper, name: database)
     }
 
     func transport() throws -> UnixDatagramIPCTransport {
-      try UnixDatagramIPCTransport(configuration: .init(directory: self.directory))
+      try ipcTransport(self.directory)
     }
 
+    /// Spawns the helper in `mode`, to wait for `expected` commits where its mode waits for any.
     func spawn(_ mode: String, index: Int = 0, expected: Int = 0) throws -> Process {
-      try self.harness.spawn([
-        "MODE": mode,
-        "DIRECTORY": self.directory.path,
-        "DATABASE": self.database.rawValue,
-        "READY": self.harness.file("ready-\(index)").path,
-        "RESULT": self.harness.file("result-\(index)").path,
-        "EXPECTED_COUNT": String(expected)
-      ])
-    }
-
-    func waitUntilReady(_ count: Int) async throws {
-      for index in 0..<count { try await waitForFile(self.harness.file("ready-\(index)")) }
-    }
-
-    func start() throws { try touch(self.harness.file("start")) }
-    func stop() throws { try touch(self.harness.file("stop")) }
-
-    func result(_ index: Int) throws -> Int {
-      try #require(Int(String(contentsOf: self.harness.file("result-\(index)"), encoding: .utf8)))
+      try self.spawn(
+        mode: mode,
+        index: index,
+        [
+          Self.databaseVariable: self.database.rawValue,
+          Self.expectedVariable: String(expected)
+        ]
+      )
     }
 
     func registrationCount() throws -> Int {
-      let root = self.harness.file("v1/d")
+      let root = self.file("v1/d")
       guard FileManager.default.fileExists(atPath: root.path) else { return 0 }
       return try FileManager.default
         .contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
@@ -326,33 +305,10 @@
     }
 
     func socketCount() throws -> Int {
-      let directory = self.harness.file("v1/s")
+      let directory = self.file("v1/s")
       guard FileManager.default.fileExists(atPath: directory.path) else { return 0 }
       return try FileManager.default.contentsOfDirectory(atPath: directory.path).count
     }
-
-    func waitForSuccessfulExit(_ process: Process) async throws {
-      try await self.harness.waitForSuccessfulExit(process)
-    }
-
-    func waitForExit(_ process: Process) async throws {
-      try await self.harness.waitForExit(process)
-    }
-
-    func suspend(_ process: Process) { self.harness.suspend(process) }
-    func resume(_ process: Process) { self.harness.resume(process) }
-    func kill(_ process: Process) { self.harness.kill(process) }
-    func cleanup() { self.harness.cleanup() }
-  }
-
-  private enum IPCProcessEnvironment {
-    static let prefix = "SQLITE_ORBIT_IPC_HELPER_"
-    static let mode = prefix + "MODE"
-    static let directory = prefix + "DIRECTORY"
-    static let database = prefix + "DATABASE"
-    static let ready = prefix + "READY"
-    static let result = prefix + "RESULT"
-    static let expected = prefix + "EXPECTED_COUNT"
   }
 
   /// Sends `message` until a peer has no room for it, and is owed its region instead.

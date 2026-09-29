@@ -245,9 +245,7 @@ func concurrently<Result: Sendable>(
         return true
       }
       guard mustWait else { return }
-      let nanoseconds = UInt64(timeout.components.seconds) * 1_000_000_000
-        + UInt64(timeout.components.attoseconds / 1_000_000_000)
-      if self.opened.blockingWait(timeout: .now() + .nanoseconds(Int(nanoseconds))) == .timedOut {
+      if self.opened.blockingWait(timeout: .now(advancedBy: timeout)) == .timedOut {
         throw TestTimeout()
       }
     }
@@ -279,6 +277,14 @@ func concurrently<Result: Sendable>(
         guard ContinuousClock.now < deadline else { throw TestTimeout() }
         Thread.sleep(forTimeInterval: 0.001)
       }
+    }
+  }
+
+  extension DispatchTime {
+    /// The time `duration` from now.
+    static func now(advancedBy duration: Duration) -> DispatchTime {
+      let (seconds, attoseconds) = duration.components
+      return .now() + .nanoseconds(Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000))
     }
   }
 

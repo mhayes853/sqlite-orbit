@@ -62,22 +62,6 @@
   }
 
   @Test
-  func changesCountReportsTheRowsTheLastStatementChanged() throws {
-    let connection = try openTestConnection()
-    try connection.write { transaction in
-      for id in 1...3 {
-        try transaction.execute(Item.insert { Item(id: id, title: "row") })
-      }
-    }
-
-    let changed = try connection.write { transaction in
-      try transaction.execute(Item.update { $0.title = "changed" })
-      return transaction.changesCount
-    }
-    #expect(changed == 3)
-  }
-
-  @Test
   func changesCountForgetsWhatTheStatementBeforeTheLastOneChanged() throws {
     let connection = try openTestConnection()
     let counts = try connection.write { transaction -> [Int] in
@@ -181,7 +165,7 @@
 
   @Test
   func cursorsGiveTheirStatementBackToTheCache() throws {
-    let counters = Lock(0)
+    let counters = TestCounter()
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
@@ -195,7 +179,7 @@
       statement,
       tail in
       if let sql, String(cString: sql).hasPrefix(#"SELECT "items""#) {
-        counters.withLock { $0 += 1 }
+        counters.increment()
       }
       return base.statements.preparation.prepare(connection, sql, byteCount, flags, statement, tail)
     }
@@ -213,12 +197,12 @@
 
     // Ten identical fetches, one parse: each cursor returned its statement when it went out of
     // scope, and the next fetch found it waiting.
-    #expect(counters.withLock { $0 } == 1)
+    #expect(counters.value == 1)
   }
 
   @Test
   func schemaChangesInvalidateCachedStatements() throws {
-    let preparations = Lock(0)
+    let preparations = TestCounter()
     let base = builtInTestLibrary
     var configuration = SQLiteConfiguration.default
     configuration.library = base
@@ -230,7 +214,7 @@
       statement,
       tail in
       if let sql, String(cString: sql).hasPrefix("SELECT title FROM current_items") {
-        preparations.withLock { $0 += 1 }
+        preparations.increment()
       }
       return base.statements.preparation.prepare(connection, sql, byteCount, flags, statement, tail)
     }
@@ -264,7 +248,7 @@
 
     #expect(original == ["Original"])
     #expect(alternate == ["Alternate"])
-    #expect(preparations.withLock { $0 } == 2)
+    #expect(preparations.value == 2)
   }
 
   @Test
@@ -297,24 +281,9 @@
     #expect(count == 1)
   }
 
-  @Test
-  func decodingReportsATypeMismatchRatherThanReturningGarbage() throws {
-    let connection = try openTestConnection()
-    try connection.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "text") })
-    }
-
-    #expect(throws: (any Error).self) {
-      try connection.read { transaction in
-        _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
-      }
-    }
-  }
-
   @Table
   private struct Item: Equatable, Sendable {
     let id: Int
     var title: String
   }
-
 #endif

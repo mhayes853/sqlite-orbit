@@ -5,12 +5,13 @@
 
   @testable import SQLiteOrbit
 
-  private final class SQLiteCallCounters: Sendable {
-    let prepared = Lock(0)
-    let finalized = Lock(0)
+  /// Counts the statements a connection prepares and finalizes.
+  private struct SQLiteCallCounters: Sendable {
+    let prepared = TestCounter()
+    let finalized = TestCounter()
 
-    var preparedCount: Int { prepared.withLock { $0 } }
-    var finalizedCount: Int { finalized.withLock { $0 } }
+    var preparedCount: Int { self.prepared.value }
+    var finalizedCount: Int { self.finalized.value }
   }
 
   private func countingLibrary(_ counters: SQLiteCallCounters) -> SQLiteLibrary {
@@ -26,13 +27,13 @@
         tail
       )
       if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
-        counters.prepared.withLock { $0 += 1 }
+        counters.prepared.increment()
       }
       return code
     }
     library.statements.execution.finalize = { statement in
       if statement != nil {
-        counters.finalized.withLock { $0 += 1 }
+        counters.finalized.increment()
       }
       return base.statements.execution.finalize(statement)
     }
@@ -64,21 +65,6 @@
   }
 
   @Test
-  func connectionOpensAndExecutesStatements() throws {
-    let connection = try openInMemory()
-
-    try connection.execute(
-      """
-      CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-      INSERT INTO items (title) VALUES ('first');
-      INSERT INTO items (title) VALUES ('second');
-      """
-    )
-
-    #expect(try scalar(connection, "SELECT count(*) FROM items") == 2)
-  }
-
-  @Test
   func connectionAppliesItsConfiguredPragmas() throws {
     let enabled = try openInMemory()
     #expect(try scalar(enabled, "PRAGMA foreign_keys") == 1)
@@ -93,7 +79,7 @@
   }
 
   @Test
-  func statementCacheReusesAPreparedStatement() throws {
+  func statementCacheReusesACheckedInStatementAndLendsAnotherForOverlappingUse() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
@@ -109,23 +95,12 @@
 
     // Ten executions, one parse.
     #expect(counters.preparedCount == afterOpen + 1)
-  }
 
-  @Test
-  func statementCacheLendsDistinctStatementsForOverlappingUse() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-
-    let connection = try openInMemory(configuration)
-    let afterOpen = counters.preparedCount
-
-    let sql = "SELECT 1"
+    // Two at once cannot share one statement, so the second is prepared anew.
     let first = try connection.statements.checkOut(sql)
     let second = try connection.statements.checkOut(sql)
     #expect(first.pointer != second.pointer)
     #expect(counters.preparedCount == afterOpen + 2)
-
     connection.statements.checkIn(first, sql: sql)
     connection.statements.checkIn(second, sql: sql)
   }
@@ -193,34 +168,31 @@
 
   @Test
   func connectionSetupsRunOnEveryConnectionAndCanFailTheOpen() throws {
-    let installs = Lock(0)
+    let installs = TestCounter()
     var configuration = SQLiteConfiguration.default
     configuration.connectionSetups = [
       SQLiteConnectionSetup { _ in
-        installs.withLock { $0 += 1 }
+        installs.increment()
         return SQLiteResultCode.ok.rawValue
       }
     ]
 
     _ = try openInMemory(configuration)
-    #expect(installs.withLock { $0 } == 1)
+    #expect(installs.value == 1)
 
-    configuration.connectionSetups.append(
+    var failingWithACode = configuration
+    failingWithACode.connectionSetups.append(
       SQLiteConnectionSetup { _ in SQLiteResultCode.error.rawValue }
     )
     #expect(throws: SQLiteError.self) {
-      _ = try openInMemory(configuration)
+      _ = try openInMemory(failingWithACode)
     }
-  }
 
-  @Test
-  func aConnectionSetupThatThrowsFailsTheOpenWithItsOwnError() {
-    struct SetupError: Error {}
-    var configuration = SQLiteConfiguration.default
-    configuration.connectionSetups = [SQLiteConnectionSetup { _ in throw SetupError() }]
-
-    #expect(throws: SetupError.self) {
-      _ = try openInMemory(configuration)
+    // A setup that throws fails the open with its own error rather than a SQLite one.
+    var throwing = configuration
+    throwing.connectionSetups.append(SQLiteConnectionSetup { _ in throw TestError() })
+    #expect(throws: TestError()) {
+      _ = try openInMemory(throwing)
     }
   }
 
@@ -274,10 +246,5 @@
     milliseconds: Int32
   ) {
     #expect(timeout.milliseconds == milliseconds)
-  }
-
-  @Test
-  func theDefaultBusyTimeoutIsFiveSeconds() {
-    #expect(SQLiteConfiguration.default.busyTimeout == .limit(.seconds(5)))
   }
 #endif

@@ -30,6 +30,10 @@ func makeShortTemporaryDirectory(_ label: String) throws -> URL {
 /// }
 /// ```
 ///
+/// Swift decides whether a closure throws from the `try`s in its body, without looking inside
+/// macros, so a body whose only `try` is inside an `#expect` has to say so: `{ directory throws
+/// in`. The same goes for every scoped helper here.
+///
 /// - Parameters:
 ///   - label: A name for what the directory is for, as ``makeShortTemporaryDirectory(_:)`` takes.
 ///   - body: Receives the directory, which exists and is empty.
