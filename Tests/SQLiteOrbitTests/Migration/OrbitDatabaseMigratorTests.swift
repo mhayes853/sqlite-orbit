@@ -113,6 +113,39 @@
       }
     }
 
+    @Test(arguments: SQLiteTestDriver.allCases)
+    func blockingMigrationUpToATargetStopsAfterIt(_ kind: SQLiteTestDriver) throws {
+      try withTestDatabaseFile { file in
+        let driver = try file.open(kind)
+        let migrator = loggingMigrator(["one", "two", "three"])
+
+        try migrator.migrateBlocking(driver, upTo: "two")
+        let first = try driver.readBlocking { transaction in
+          try migrator.appliedMigrations(transaction)
+        }
+        #expect(first == ["one", "two"])
+
+        try migrator.migrateBlocking(driver, upTo: "two")
+        let repeated = try driver.readBlocking { transaction in
+          try migrator.appliedMigrations(transaction)
+        }
+        #expect(repeated == first)
+
+        let error = #expect(throws: OrbitDatabaseMigrationTargetError.self) {
+          try migrator.migrateBlocking(driver, upTo: "one")
+        }
+        #expect(
+          error == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
+        )
+
+        try migrator.migrateBlocking(driver)
+        let completed = try driver.readBlocking { transaction in
+          try migrator.appliedMigrations(transaction)
+        }
+        #expect(completed == ["one", "two", "three"])
+      }
+    }
+
     @Test
     func unregisteredTargetThrowsBeforeWritingAnything() async throws {
       let driver = try SQLiteQueue(path: .memory)
@@ -1345,7 +1378,91 @@
       }
     }
 
+    #if !Turso
+      @Test
+      func erasingAChangedSchemaWaitsForAnOpenPoolReaderSnapshot() async throws {
+        try await withTestDatabaseFile { file in
+          let pool = try file.pool()
+          let original = itemsMigrator(seedID: 1)
+          try await original.migrate(pool)
+
+          let readerGate = TestGate()
+          defer { readerGate.open() }
+          let reader = Task {
+            try await pool.read { transaction in
+              let before = try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+              try readerGate.enter()
+              let after = try transaction.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+              return (before, after)
+            }
+          }
+          defer { reader.cancel() }
+          try await readerGate.waitUntilEntered()
+
+          let changed = itemsMigrator(hasNote: true, eraseDatabaseOnSchemaChange: true)
+          let migrationFinished = Lock(false)
+          let migration = Task.immediate {
+            defer { migrationFinished.withLock { $0 = true } }
+            try await changed.migrate(pool)
+          }
+          defer { migration.cancel() }
+          // The immediate task entered migrate before this point and suspended on the pool.
+          #expect(!migrationFinished.withLock { $0 })
+
+          readerGate.open()
+          let (before, after) = try await reader.value
+          #expect(before == [1])
+          #expect(after == [1])
+          try await migration.value
+          #expect(try await itemsSnapshot(in: pool) == .init(columns: ["id", "note"], ids: []))
+        }
+      }
+    #endif
+
     #if Turso
+      @Test
+      func aQueuedSchemaMigrationPreservesAConcurrentTursoWrite() async throws {
+        try await withTestDatabaseFile { file in
+          let pool = try file.tursoPool(writerCount: 2)
+          var original = makeMigrator()
+          original.registerMigration("Create items") { transaction in
+            try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+          }
+          try await original.migrate(pool)
+
+          let writerGate = TestGate()
+          defer { writerGate.open() }
+          let activeWrite = Task {
+            try await pool.concurrentWrite { transaction in
+              try transaction.execute("INSERT INTO items (id) VALUES (1)")
+              try writerGate.enter()
+            }
+          }
+          defer { activeWrite.cancel() }
+          try await writerGate.waitUntilEntered()
+
+          var changed = makeMigrator()
+          changed.registerMigration("Create items") { transaction in
+            try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+          }
+          changed.registerMigration("Add note") { transaction in
+            try transaction.execute("ALTER TABLE items ADD COLUMN note TEXT")
+          }
+          let migrator = changed
+          let migration = Task.immediate { try await migrator.migrate(pool) }
+          defer { migration.cancel() }
+          writerGate.open()
+          try await activeWrite.value
+          try await migration.value
+
+          #expect(try await itemsSnapshot(in: pool) == .init(columns: ["id", "note"], ids: [1]))
+          #expect(
+            try await pool.read { try migrator.appliedMigrations($0) }
+              == ["Create items", "Add note"]
+          )
+        }
+      }
+
       @Test
       func autoincrementTablesEraseAndRecreateCleanlyOnTurso() async throws {
         try await withTestDatabaseFile { file in
