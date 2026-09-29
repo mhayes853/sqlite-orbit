@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 @MainActor
 @Observable

@@ -1,5 +1,4 @@
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import SwiftUI
 #if canImport(AppKit)
   import AppKit

@@ -113,7 +113,7 @@ transaction.
 | Trait | Default | Adds |
 | --- | --- | --- |
 | `SystemSQLite` | Yes | Links the platform SQLite and vends `SQLiteLibrary.system`. |
-| `StructuredQueries` | Yes | The swift-structured-queries query builder, `@FetchAll`, `@FetchOne`, `@Row`, `@SingleRow`, and typed regions and observations. Enables `Foundation`. |
+| `StructuredQueries` | Yes | The swift-structured-queries query builder, `@FetchAll`, `@FetchOne`, `@Row`, `@SingleRow`, and typed regions and observations. Re-exports `StructuredQueriesSQLite` and enables `Foundation`. |
 | `Foundation` | Yes | `Date`, `UUID`, and `Data` interpolations and `OrbitDatabaseValue` conversions, using FoundationEssentials where the toolchain has it. |
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
@@ -131,12 +131,11 @@ needs:
 )
 ```
 
-`import SQLiteOrbit` does not re-export swift-structured-queries. Code that builds statements
-imports it as well:
+With the trait on, `import SQLiteOrbit` re-exports `StructuredQueriesSQLite`, so code that builds
+statements needs no import of its own:
 
 ```swift
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 @Table struct Reminder {
   let id: Int

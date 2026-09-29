@@ -1,6 +1,5 @@
 import Foundation
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import SwiftUI
 
 @Table

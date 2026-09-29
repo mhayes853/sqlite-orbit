@@ -1,5 +1,4 @@
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 public enum RemindersWidgetConfiguration {
   public static let kind = "RecentRemindersWidget"

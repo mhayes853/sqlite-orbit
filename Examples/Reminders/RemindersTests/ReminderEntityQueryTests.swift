@@ -2,7 +2,6 @@ import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import Testing
 
 struct ReminderEntityQueryTests {

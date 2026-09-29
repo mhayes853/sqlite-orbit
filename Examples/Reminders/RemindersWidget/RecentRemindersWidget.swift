@@ -2,7 +2,6 @@ import AppIntents
 import RemindersData
 import RemindersUI
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import SwiftUI
 import WidgetKit
 

@@ -3,7 +3,6 @@ import Foundation
 import RemindersData
 import RemindersNotifications
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import Testing
 import UserNotifications
 

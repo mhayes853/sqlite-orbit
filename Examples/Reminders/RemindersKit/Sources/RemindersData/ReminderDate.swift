@@ -1,6 +1,5 @@
 import Foundation
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 public nonisolated struct ReminderDate:
   Hashable,

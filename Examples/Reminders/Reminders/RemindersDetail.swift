@@ -1,7 +1,6 @@
 import Observation
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import SwiftUI
 
 enum RemindersDetailType: Hashable, Sendable {

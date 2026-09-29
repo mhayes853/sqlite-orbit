@@ -1,6 +1,5 @@
 import Foundation
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 public typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
 

@@ -1,7 +1,6 @@
 import Foundation
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 
 func makeTestDatabase() throws -> SQLiteQueue {
   try SQLiteQueue.reminders()

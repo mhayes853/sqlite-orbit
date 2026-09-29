@@ -1,7 +1,6 @@
 import Foundation
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import SQLiteOrbitTestSupport
 import Synchronization
 import Testing

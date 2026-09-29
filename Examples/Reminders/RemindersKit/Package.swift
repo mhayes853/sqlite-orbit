@@ -15,23 +15,18 @@ let package = Package(
     ),
   ],
   dependencies: [
-    .package(name: "sqlite-orbit", path: "../../.."),
-    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
+    .package(name: "sqlite-orbit", path: "../../..")
   ],
   targets: [
     .target(
       name: "RemindersData",
       dependencies: [
-        .product(name: "SQLiteOrbit", package: "sqlite-orbit"),
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+        .product(name: "SQLiteOrbit", package: "sqlite-orbit")
       ]
     ),
     .target(
       name: "RemindersNotifications",
-      dependencies: [
-        "RemindersData",
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
-      ]
+      dependencies: ["RemindersData"]
     ),
     .target(
       name: "RemindersUI",
@@ -39,18 +34,11 @@ let package = Package(
     ),
     .testTarget(
       name: "RemindersDataTests",
-      dependencies: [
-        "RemindersData",
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
-      ]
+      dependencies: ["RemindersData"]
     ),
     .testTarget(
       name: "RemindersNotificationsTests",
-      dependencies: [
-        "RemindersData",
-        "RemindersNotifications",
-        .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
-      ]
+      dependencies: ["RemindersData", "RemindersNotifications"]
     ),
     .testTarget(
       name: "RemindersUITests",

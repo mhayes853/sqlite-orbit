@@ -1,6 +1,5 @@
 import RemindersData
 import SQLiteOrbit
-import StructuredQueriesSQLite
 import WidgetKit
 
 final class RemindersWidgetReloader: OrbitIPCDatabase.Delegate, Sendable {
