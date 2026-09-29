@@ -68,13 +68,13 @@ struct ReminderDateTests {
     let allDayID = UUID()
     let timedID = UUID()
     try await database.write { transaction in
-      try transaction.execute(
+      try transaction.executeScript(
         """
         INSERT INTO "remindersLists" ("id", "title")
         VALUES ('\(listID)', 'Personal')
         """
       )
-      try transaction.execute(
+      try transaction.executeScript(
         """
         INSERT INTO "reminders" (
           "id", "dueDate", "includesTime", "remindersListID", "title"

@@ -1,5 +1,3 @@
-import Foundation
-
 /// Reported when a database cannot be pooled.
 ///
 /// Thrown by a connection pool for a database that is private to the connection that opens it.
@@ -52,11 +50,12 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///   - path: The database file. A database private to its connection cannot be pooled.
   ///   - configuration: The settings applied to every connection.
   ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
-  ///   - coordinationDirectory: Where the advisory lock that serializes opening lives. Processes
-  ///     coordinate only when they share it. Another process opening the same database holds
-  ///     this one up for as long as `configuration`'s busy timeout or busy handler lets SQLite
-  ///     wait for a lock, and no longer, so one frozen partway through its open cannot hold it up
-  ///     for good.
+  ///   - coordinationDirectoryPath: The path of the directory the advisory lock that serializes
+  ///     opening lives in, or `nil` for
+  ///     ``UnixDatagramIPCTransport/Configuration/defaultDirectoryPath``. Processes coordinate
+  ///     only when they share it. Another process opening the same database holds this one up for
+  ///     as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a lock,
+  ///     and no longer, so one frozen partway through its open cannot hold it up for good.
   /// - Precondition: `configuration.readerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
   ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
@@ -66,7 +65,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
     identifier: OrbitDatabaseIdentifier? = nil,
-    coordinationDirectory: URL? = nil
+    coordinationDirectoryPath: String? = nil
   ) throws {
     precondition(configuration.readerCount > 0, "SQLitePool requires at least one reader")
     guard !path.isPrivateToConnection else {
@@ -79,7 +78,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     // opening it at the same moment would otherwise contend for it.
     let (writer, readers) = try Self.withOpenLock(
       identifier: identifier,
-      directory: coordinationDirectory,
+      directoryPath: coordinationDirectoryPath,
       configuration: configuration
     ) {
       try Self.openConnections(path: path, configuration: configuration, suspension: suspension)
@@ -125,14 +124,16 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
 
   private static func withOpenLock<Result>(
     identifier: OrbitDatabaseIdentifier,
-    directory: URL?,
+    directoryPath: String?,
     configuration: SQLiteConfiguration,
     _ body: () throws -> Result
   ) throws -> Result {
     #if canImport(Darwin) || os(Linux) || os(Android)
       return try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: identifier,
-        directory: directory ?? UnixDatagramIPCTransport.Configuration.defaultDirectory,
+        directory: OrbitCoordinationDirectory(
+          path: directoryPath ?? UnixDatagramIPCTransport.Configuration.defaultDirectoryPath
+        ),
         configuration: configuration,
         body
       )
@@ -334,20 +335,102 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
     ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
-    ///   - coordinationDirectory: Where the advisory lock that serializes opening lives.
+    ///   - coordinationDirectoryPath: The path of the directory the advisory lock that
+    ///     serializes opening lives in, or `nil` for
+    ///     ``UnixDatagramIPCTransport/Configuration/defaultDirectoryPath``.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened.
     public convenience init(
       path: OrbitDatabasePath,
       identifier: OrbitDatabaseIdentifier? = nil,
-      coordinationDirectory: URL? = nil
+      coordinationDirectoryPath: String? = nil
     ) throws {
       try self.init(
         path: path,
         configuration: .default,
         identifier: identifier,
-        coordinationDirectory: coordinationDirectory
+        coordinationDirectoryPath: coordinationDirectoryPath
       )
     }
   }
+#endif
+
+#if Foundation
+  import _SQLiteOrbitFoundation
+
+  extension SQLitePool {
+    /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers,
+    /// coordinating its open with other processes in a directory at a file URL.
+    ///
+    /// ```swift
+    /// let driver = try SQLitePool(
+    ///   path: .file(url),
+    ///   configuration: configuration,
+    ///   coordinationDirectory: appGroupDirectory.appending(path: "coordination")
+    /// )
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - path: The database file. A database private to its connection cannot be pooled.
+    ///   - configuration: The settings applied to every connection.
+    ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
+    ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or `nil`
+    ///     for ``UnixDatagramIPCTransport/Configuration/defaultDirectory``. Processes coordinate
+    ///     only when they share it. Another process opening the same database holds this one up
+    ///     for as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a
+    ///     lock, and no longer, so one frozen partway through its open cannot hold it up for good.
+    /// - Precondition: `configuration.readerCount` must be greater than zero.
+    /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
+    ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
+    ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy
+    ///   timeout or busy handler waits.
+    public convenience init(
+      path: OrbitDatabasePath,
+      configuration: SQLiteConfiguration,
+      identifier: OrbitDatabaseIdentifier? = nil,
+      coordinationDirectory: URL?
+    ) throws {
+      try self.init(
+        path: path,
+        configuration: configuration,
+        identifier: identifier,
+        coordinationDirectoryPath: coordinationDirectory?.path
+      )
+    }
+  }
+
+  #if BuiltInSQLite
+    extension SQLitePool {
+      /// Opens a pooled database using the SQLite this package was linked against, coordinating
+      /// its open with other processes in a directory at a file URL.
+      ///
+      /// ```swift
+      /// let driver = try SQLitePool(
+      ///   path: .file(url),
+      ///   coordinationDirectory: appGroupDirectory.appending(path: "coordination")
+      /// )
+      /// ```
+      ///
+      /// - Parameters:
+      ///   - path: The database file. A database private to its connection cannot be pooled.
+      ///   - identifier: The identity shared with other processes. Defaults to the standardized
+      ///     path.
+      ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or
+      ///     `nil` for ``UnixDatagramIPCTransport/Configuration/defaultDirectory``.
+      /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
+      ///   ``SQLiteError`` when a connection cannot be opened.
+      public convenience init(
+        path: OrbitDatabasePath,
+        identifier: OrbitDatabaseIdentifier? = nil,
+        coordinationDirectory: URL?
+      ) throws {
+        try self.init(
+          path: path,
+          configuration: .default,
+          identifier: identifier,
+          coordinationDirectoryPath: coordinationDirectory?.path
+        )
+      }
+    }
+  #endif
 #endif

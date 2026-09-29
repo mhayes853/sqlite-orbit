@@ -1,6 +1,5 @@
 #if BuiltInSQLite && !Turso
   import Foundation
-  import StructuredQueriesSQLite
   import Testing
 
   @testable import SQLiteOrbit
@@ -15,7 +14,7 @@
 
         try await pool.write { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1), (2)", as: Void.self))
+          try transaction.execute("INSERT INTO items (id) VALUES (1), (2)")
         }
         #expect(try fileSize(walURL) > 0)
 
@@ -27,14 +26,14 @@
         #expect(full.checkpointedFrameCount == full.logFrameCount)
 
         let truncate = try await pool.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (3)", as: Void.self))
+          try connection.execute("INSERT INTO items (id) VALUES (3)")
           return try connection.checkpoint(.truncate)
         }
         // The log is emptied, so what it held is counted as it stands afterwards: nothing.
         #expect(truncate == SQLiteWALCheckpointResult(logFrameCount: 0, checkpointedFrameCount: 0))
         #expect(try fileSize(walURL) == 0)
         let count = try await pool.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
         }
         #expect(count == 3)
       }
@@ -88,7 +87,7 @@
         let writer = try file.pool(configuration: configuration)
         let reader = try file.queue(configuration: configuration)
         try await writer.write {
-          try $0.execute(
+          try $0.executeScript(
             "CREATE TABLE items (id INTEGER PRIMARY KEY); INSERT INTO items VALUES (1)"
           )
         }
@@ -96,9 +95,9 @@
         defer { gate.open() }
         let snapshot = Task {
           try await reader.read { transaction in
-            #expect(try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) == 1)
+            #expect(try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self) == 1)
             try gate.enter()
-            #expect(try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) == 1)
+            #expect(try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self) == 1)
           }
         }
         defer { snapshot.cancel() }

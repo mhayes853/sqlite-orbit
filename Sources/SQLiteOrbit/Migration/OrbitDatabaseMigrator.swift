@@ -1,6 +1,3 @@
-import Foundation
-import StructuredQueries
-
 /// Applies a database's schema migrations in order, each exactly once.
 ///
 /// Register every migration the application has shipped, oldest first, and call
@@ -416,9 +413,7 @@ public struct OrbitDatabaseMigrator: Sendable {
         // Avoid the schema authorizations `IF NOT EXISTS` emits for an existing table: they would
         // invalidate cached statements and report a full-database change for every migration.
         try transaction.execute(
-          SQLQueryExpression(
-            "CREATE TABLE \(quote: tableName) (identifier TEXT NOT NULL PRIMARY KEY)"
-          )
+          "CREATE TABLE \(quote: tableName) (identifier TEXT NOT NULL PRIMARY KEY)"
         )
       }
       try migration.migrate(transaction)
@@ -432,9 +427,7 @@ public struct OrbitDatabaseMigrator: Sendable {
         }
       }
       try transaction.execute(
-        SQLQueryExpression(
-          "INSERT INTO \(quote: tableName) (identifier) VALUES (\(bind: migration.identifier))"
-        )
+        "INSERT INTO \(quote: tableName) (identifier) VALUES (\(migration.identifier))"
       )
     }
   }
@@ -470,9 +463,7 @@ public struct OrbitDatabaseMigrator: Sendable {
           )
         }
         dropped = object
-        try transaction.execute(
-          SQLQueryExpression("DROP \(raw: object.type) \(quote: object.name)")
-        )
+        try transaction.execute("DROP \(raw: object.type) \(quote: object.name)")
       }
       try transaction.execute("PRAGMA user_version = 0")
     }
@@ -483,13 +474,11 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws -> (type: String, name: String)? {
     // The table of applied migrations is dropped with the rest, and the migrations create it
     // again.
-    var cursor = try transaction.rowCursor(
-      SQLQueryExpression(
-        "SELECT type, name FROM sqlite_schema WHERE \(Self.userObjects) LIMIT 1"
-      )
-    )
-    guard var row = try cursor.next() else { return nil }
-    return (try row.decode(String.self), try row.decode(String.self))
+    try transaction.fetchOne(
+      "SELECT type, name FROM sqlite_schema WHERE \(Self.userObjects) LIMIT 1"
+    ) { row in
+      (row[0].textValue ?? "", row[1].textValue ?? "")
+    }
   }
 
   // MARK: - Detecting schema changes
@@ -569,22 +558,22 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws -> Set<SchemaObject> {
     // A named file rather than a temporary database SQLite names itself: GRDB found those do not
     // accept every setup a named file does, in its issue #931, and not every build supports them.
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "SQLiteOrbit-migrator-\(UUID().uuidString).sqlite"
+    let path = FileSystem.temporaryDirectory.appending(
+      "SQLiteOrbit-migrator-\(RandomUUID.lowercasedString()).sqlite"
     )
     defer {
       // The answer is known by now, and a temporary file left behind is no reason to fail a
       // migration over.
       for suffix in ["", "-wal", "-shm", "-journal"] {
-        try? FileManager.default.removeItem(atPath: url.path + suffix)
+        FileSystem.removeFile(atPath: FilePath(path.string + suffix))
       }
     }
     // The connection has closed by the time this returns, before its files are deleted.
-    return try migratedSchema(at: url, upTo: target, configuration: configuration)
+    return try migratedSchema(at: path, upTo: target, configuration: configuration)
   }
 
   private func migratedSchema(
-    at url: URL,
+    at path: FilePath,
     upTo target: String,
     configuration: SQLiteConfiguration
   ) throws -> Set<SchemaObject> {
@@ -593,7 +582,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     // observes it, and it runs on the calling thread: each of its accesses binds its library to
     // the thread and puts back the binding of the access this runs inside once it ends.
     let handle = try SQLiteHandle.open(
-      path: .file(url),
+      path: OrbitDatabasePath(path.string),
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration
     )
@@ -610,34 +599,28 @@ public struct OrbitDatabaseMigrator: Sendable {
     // GRDB leaves out `pragma_` names as well, which SQLite's table-valued pragmas are called by.
     // The table of applied migrations is the migrator's own, compared through its identifiers
     // instead, and one GRDB created is spelled differently from one this migrator creates.
-    var objects: Set<SchemaObject> = []
-    var cursor = try transaction.rowCursor(
-      SQLQueryExpression(
-        """
-        SELECT type, name, tbl_name, sql FROM sqlite_schema
-        WHERE \(Self.userObjects) AND name NOT LIKE 'pragma\\_%' ESCAPE '\\'
-          AND name <> \(bind: tableName) COLLATE NOCASE
-        """
-      )
-    )
-    while var row = try cursor.next() {
-      objects.insert(
-        SchemaObject(
-          type: try row.decode(String.self),
-          name: try row.decode(String.self),
-          tableName: try row.decode(String.self),
-          sql: try row.decode(String?.self)
-        )
+    let objects = try transaction.fetchAll(
+      """
+      SELECT type, name, tbl_name, sql FROM sqlite_schema
+      WHERE \(Self.userObjects) AND name NOT LIKE 'pragma\\_%' ESCAPE '\\'
+        AND name <> \(tableName) COLLATE NOCASE
+      """
+    ) { row in
+      SchemaObject(
+        type: row[0].textValue ?? "",
+        name: row[1].textValue ?? "",
+        tableName: row[2].textValue ?? "",
+        sql: row[3].textValue
       )
     }
-    return objects
+    return Set(objects)
   }
 
   // Everything but what SQLite and Turso keep for themselves, which neither lets be dropped:
   // `sqlite_sequence` and automatic indexes, say, or Turso's sequences for `AUTOINCREMENT` and its
   // MVCC metadata. `_` matches any character in a `LIKE` pattern, so it is escaped to match only
   // itself.
-  private static let userObjects: QueryFragment = """
+  private static let userObjects: SQL = """
     name NOT LIKE 'sqlite\\_%' ESCAPE '\\' \
     AND name NOT LIKE '\\_\\_turso\\_internal\\_%' ESCAPE '\\'
     """
@@ -662,10 +645,10 @@ public struct OrbitDatabaseMigrator: Sendable {
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
     // A read cannot create the table, so a missing one is read as nothing applied yet.
     guard try hasMigrationsTable(in: transaction) else { return [] }
-    let identifiers = try transaction.fetchAll(
-      SQLQueryExpression("SELECT identifier FROM \(quote: tableName)", as: String.self)
-    )
-    return Set(identifiers)
+    let identifiers = try transaction.fetchAll("SELECT identifier FROM \(quote: tableName)") {
+      $0[0].textValue
+    }
+    return Set(identifiers.compactMap { $0 })
   }
 
   /// Returns the registered migrations the database has applied, in registration order.
@@ -750,16 +733,13 @@ public struct OrbitDatabaseMigrator: Sendable {
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
     // SQLite resolves table names without regard to case, so the lookup does too.
     return try transaction.fetchOne(
-      SQLQueryExpression(
-        """
-        SELECT EXISTS (
-          SELECT 1 FROM sqlite_schema
-          WHERE type = 'table' AND name = \(bind: tableName) COLLATE NOCASE
-        )
-        """,
-        as: Bool.self
+      """
+      SELECT EXISTS (
+        SELECT 1 FROM sqlite_schema
+        WHERE type = 'table' AND name = \(tableName) COLLATE NOCASE
       )
-    ) ?? false
+      """
+    ) { $0[0].integerValue != 0 } ?? false
   }
 
   private func isApplied(
@@ -767,15 +747,12 @@ public struct OrbitDatabaseMigrator: Sendable {
     in transaction: borrowing SQLiteWriteTransaction
   ) throws -> Bool {
     return try transaction.fetchOne(
-      SQLQueryExpression(
-        """
-        SELECT EXISTS (
-          SELECT 1 FROM \(quote: tableName) WHERE identifier = \(bind: identifier)
-        )
-        """,
-        as: Bool.self
+      """
+      SELECT EXISTS (
+        SELECT 1 FROM \(quote: tableName) WHERE identifier = \(identifier)
       )
-    ) ?? false
+      """
+    ) { $0[0].integerValue != 0 } ?? false
   }
 }
 

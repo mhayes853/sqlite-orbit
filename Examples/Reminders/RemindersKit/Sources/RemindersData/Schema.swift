@@ -254,7 +254,7 @@ public func remindersMigrator(
   migrator.eraseDatabaseOnSchemaChange = erasesDatabaseOnSchemaChange
   migrator.registerMigration("Create reminders schema") { transaction in
     let defaultColor = Color.HexRepresentation(queryOutput: RemindersList.defaultColor).hexValue!
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TABLE "remindersLists" (
         "id" TEXT PRIMARY KEY NOT NULL,
@@ -343,7 +343,7 @@ public func remindersMigrator(
       ON "remindersTags"("tagID")
       """
     )
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TRIGGER "reminders_insert_text"
       AFTER INSERT ON "reminders"
@@ -353,7 +353,7 @@ public func remindersMigrator(
       END
       """
     )
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TRIGGER "reminders_update_text"
       AFTER UPDATE OF "title", "notes" ON "reminders"
@@ -364,7 +364,7 @@ public func remindersMigrator(
       END
       """
     )
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TRIGGER "reminders_delete_text"
       AFTER DELETE ON "reminders"
@@ -373,7 +373,7 @@ public func remindersMigrator(
       END
       """
     )
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TRIGGER "remindersTags_insert_text"
       AFTER INSERT ON "remindersTags"
@@ -389,7 +389,7 @@ public func remindersMigrator(
       END
       """
     )
-    try transaction.execute(
+    try transaction.executeScript(
       """
       CREATE TRIGGER "remindersTags_delete_text"
       AFTER DELETE ON "remindersTags"

@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueries
   import Testing
 
   @testable import SQLiteOrbit
@@ -48,7 +47,7 @@
         let copied: Int? = try a.writeBlocking { transaction in
           try transaction.execute("INSERT INTO t (n) VALUES (5)")
           return try b.readBlocking {
-            try $0.fetchOne(#sql("SELECT count(*) FROM t", as: Int.self))
+            try $0.fetchOne("SELECT count(*) FROM t", as: Int.self)
           }
         }
         #expect(copied == 0)

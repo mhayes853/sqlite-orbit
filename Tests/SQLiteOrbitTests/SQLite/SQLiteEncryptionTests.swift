@@ -169,8 +169,8 @@
           configuration: .sqlCipher(key: .passphrase("open sesame"))
         )
         try await writer.write { transaction in
-          try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
-          try transaction.execute(#sql("INSERT INTO notes VALUES (\'hello\')", as: Void.self))
+          try transaction.execute("CREATE TABLE notes (title TEXT NOT NULL)")
+          try transaction.execute("INSERT INTO notes VALUES (\'hello\')")
         }
         _ = consume writer
 
@@ -186,7 +186,7 @@
           configuration: .sqlCipher(key: .passphrase("open sesame"))
         )
         let titles = try await reader.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+          try transaction.fetchAll("SELECT title FROM notes", as: String.self)
         }
         #expect(titles == ["hello"])
       }
@@ -202,8 +202,8 @@
           configuration: .sqlCipher(key: oldKey)
         )
         try await database.write { transaction in
-          try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
-          try transaction.execute(#sql("INSERT INTO notes VALUES ('survives')", as: Void.self))
+          try transaction.execute("CREATE TABLE notes (title TEXT NOT NULL)")
+          try transaction.execute("INSERT INTO notes VALUES ('survives')")
         }
 
         try await database.writeWithoutTransaction { connection in
@@ -229,7 +229,7 @@
           configuration: .sqlCipher(key: newKey)
         )
         let titles = try await reopened.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+          try transaction.fetchAll("SELECT title FROM notes", as: String.self)
         }
         #expect(titles == ["survives"])
       }
@@ -241,14 +241,20 @@
       // drives Swift callbacks exactly as the linked one does.
       try await withTestDatabaseFile("cipher") { file in
         var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
-        configuration.register(function: $repeated)
+        configuration.registerFunction("repeated", argumentCount: 2, isDeterministic: true) {
+          arguments in
+          guard let text = arguments[0].textValue, let count = arguments[1].integerValue else {
+            return nil
+          }
+          return .text(String(repeating: text, count: Int(count)))
+        }
 
         let driver = try SQLiteQueue(
           path: file.path,
           configuration: configuration
         )
         let value = try await driver.read { transaction in
-          try transaction.fetchOne(#sql("SELECT repeated(\'ab\', 2)", as: String.self))
+          try transaction.fetchOne("SELECT repeated(\'ab\', 2)", as: String.self)
         }
         #expect(value == "abab")
       }

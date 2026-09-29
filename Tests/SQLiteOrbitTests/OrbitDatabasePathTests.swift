@@ -15,7 +15,9 @@ struct OrbitDatabasePathTests {
       #expect(path == expected)
       #expect(path.sqlitePath == sqlitePath)
       #expect(path.isPrivateToConnection)
-      #expect(path.fileURL == nil)
+      #if Foundation
+        #expect(path.fileURL == nil)
+      #endif
     }
   }
 
@@ -25,13 +27,15 @@ struct OrbitDatabasePathTests {
     let path = OrbitDatabasePath("db.sqlite")
     #expect(path.sqlitePath == directory + "/db.sqlite")
     #expect(!path.isPrivateToConnection)
-    #expect(path.fileURL?.path == directory + "/db.sqlite")
     #expect(
       path == OrbitDatabasePath(directory + "/./db.sqlite")
     )
-    #expect(
-      path == .file(URL(fileURLWithPath: directory + "/db.sqlite"))
-    )
+    #if Foundation
+      #expect(path.fileURL?.path == directory + "/db.sqlite")
+      #expect(
+        path == .file(URL(fileURLWithPath: directory + "/db.sqlite"))
+      )
+    #endif
   }
 
   @Test
@@ -76,11 +80,11 @@ struct OrbitDatabasePathTests {
           withDestinationURL: realDirectory
         )
 
-        let beforeCreation = OrbitDatabaseIdentifier.forDatabase(path: .file(link))
+        let beforeCreation = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link.path))
         try Data().write(to: real)
 
-        #expect(beforeCreation == .forDatabase(path: .file(link)))
-        #expect(beforeCreation == .forDatabase(path: .file(real)))
+        #expect(beforeCreation == .forDatabase(path: OrbitDatabasePath(link.path)))
+        #expect(beforeCreation == .forDatabase(path: OrbitDatabasePath(real.path)))
       }
     }
 
@@ -91,11 +95,11 @@ struct OrbitDatabasePathTests {
         let link = directory.appending(path: "link.sqlite")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
-        let beforeCreation = OrbitDatabaseIdentifier.forDatabase(path: .file(link))
+        let beforeCreation = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link.path))
         try Data().write(to: real)
 
-        #expect(beforeCreation == .forDatabase(path: .file(link)))
-        #expect(beforeCreation == .forDatabase(path: .file(real)))
+        #expect(beforeCreation == .forDatabase(path: OrbitDatabasePath(link.path)))
+        #expect(beforeCreation == .forDatabase(path: OrbitDatabasePath(real.path)))
       }
     }
 
@@ -120,8 +124,8 @@ struct OrbitDatabasePathTests {
         )
 
         #expect(
-          OrbitDatabaseIdentifier.forDatabase(path: .file(link))
-            == .forDatabase(path: .file(real))
+          OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link.path))
+            == .forDatabase(path: OrbitDatabasePath(real.path))
         )
       }
     }
@@ -153,8 +157,8 @@ struct OrbitDatabasePathTests {
         )
 
         #expect(
-          OrbitDatabaseIdentifier.forDatabase(path: .file(databaseLink))
-            == .forDatabase(path: .file(database))
+          OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(databaseLink.path))
+            == .forDatabase(path: OrbitDatabasePath(database.path))
         )
       }
     }

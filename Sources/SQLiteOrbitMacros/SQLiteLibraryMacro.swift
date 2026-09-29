@@ -65,7 +65,9 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       .trustedSchema,
       """
       { connection, enabled in
-        try connection.execute("PRAGMA trusted_schema = \\(raw: enabled ? 1 : 0)")
+        try connection.execute(
+          enabled ? "PRAGMA trusted_schema = 1" : "PRAGMA trusted_schema = 0"
+        )
       }
       """
     )

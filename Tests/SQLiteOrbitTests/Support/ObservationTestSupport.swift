@@ -1,5 +1,7 @@
 #if BuiltInSQLite
-  import StructuredQueriesSQLite
+  #if StructuredQueries
+    import StructuredQueriesSQLite
+  #endif
 
   @testable import SQLiteOrbit
 
@@ -27,7 +29,7 @@
   func insertItems(_ ids: Int..., into database: some OrbitDatabaseWriter) async throws {
     try await database.write { transaction in
       for id in ids {
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self))
+        try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
       }
     }
   }
@@ -37,13 +39,18 @@
   func insertItemsBlocking(_ ids: Int..., into database: some OrbitDatabaseWriter) throws {
     try database.writeBlocking { transaction in
       for id in ids {
-        try transaction.execute(#sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self))
+        try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
       }
     }
   }
 
-  /// The number of rows in `items`, as a fetch reads it.
-  let itemCountQuery = #sql("SELECT count(*) FROM items", as: Int.self)
+  /// The number of rows in `items`, as raw SQL.
+  let itemCountSQL: SQL = "SELECT count(*) FROM items"
+
+  #if StructuredQueries
+    /// The number of rows in `items`, as a fetch reads it.
+    let itemCountQuery = #sql("SELECT count(*) FROM items", as: Int.self)
+  #endif
 
   // MARK: - A view redefined under a cached statement
 

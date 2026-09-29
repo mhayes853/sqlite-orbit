@@ -21,11 +21,9 @@
     ///     database holds it weakly.
     ///
     /// ```swift
-    /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
-    ///
     /// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
     /// try await database.write { transaction in
-    ///   try #sql("CREATE TABLE IF NOT EXISTS reminders (...)", as: Void.self).execute(transaction)
+    ///   try transaction.execute("CREATE TABLE IF NOT EXISTS reminders (...)")
     /// }
     /// ```
     ///
@@ -50,7 +48,7 @@
           path: path,
           configuration: configuration,
           identifier: identifier,
-          coordinationDirectory: coordination.directory
+          coordinationDirectoryPath: coordination.directoryPath
         ),
         id: identifier,
         transport: try UnixDatagramIPCTransport.shared(configuration: coordination),

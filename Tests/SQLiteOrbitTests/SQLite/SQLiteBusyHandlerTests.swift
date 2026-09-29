@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueriesSQLite
   import Testing
 
   @testable import SQLiteOrbit
@@ -23,7 +22,7 @@
           let error = try await holder.holdingTheWriteLock {
             await #expect(throws: SQLiteError.self) {
               try await waiter.write { transaction in
-                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+                try transaction.execute("INSERT INTO items (id) VALUES (2)")
               }
             }
           }
@@ -48,7 +47,7 @@
           let error = try await holder.holdingTheWriteLock {
             await #expect(throws: SQLiteError.self) {
               try await waiter.write { transaction in
-                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+                try transaction.execute("INSERT INTO items (id) VALUES (2)")
               }
             }
           }
@@ -71,7 +70,7 @@
           // Setting the timeout is how SQLite replaces the handler, since it keeps only one.
           try await waiter.writeWithoutTransaction { connection in
             connection.busyTimeout = .limit(.seconds(42))
-            let inEffect = try connection.fetchOne(busyTimeoutPragma)
+            let inEffect = try connection.fetchOne(busyTimeoutPragma, as: Int.self)
             #expect(inEffect == 42_000)
           }
 
@@ -80,7 +79,7 @@
           let error = try await holder.holdingTheWriteLock {
             await #expect(throws: SQLiteError.self) {
               try await waiter.write { transaction in
-                try transaction.execute(#sql("INSERT INTO items (id) VALUES (2)", as: Void.self))
+                try transaction.execute("INSERT INTO items (id) VALUES (2)")
               }
             }
           }
@@ -140,7 +139,7 @@
       let gate = TestGate()
       let held = Task {
         try await database.write { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try transaction.execute("INSERT INTO items (id) VALUES (1)")
           try gate.enter()
         }
       }
@@ -153,5 +152,5 @@
     }
   }
 
-  private let busyTimeoutPragma = #sql("PRAGMA busy_timeout", as: Int.self)
+  private let busyTimeoutPragma: SQL = "PRAGMA busy_timeout"
 #endif

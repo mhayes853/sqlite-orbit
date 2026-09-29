@@ -15,9 +15,11 @@
 ///     )
 ///     """
 ///   )
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///   try transaction.execute("INSERT INTO reminders (id, title) VALUES (1, \("Get milk"))")
 /// }
-/// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
+/// let titles = try await driver.read { transaction in
+///   try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue ?? "" }
+/// }
 /// ```
 public final class SQLiteQueue: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
@@ -104,7 +106,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   ///
   /// ```swift
   /// let mode = try await driver.readWithoutTransaction { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try connection.fetchOne("PRAGMA user_version") { $0[0].integerValue }
   /// }
   /// ```
   ///
@@ -148,7 +150,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   ///
   /// ```swift
   /// let mode = try driver.readWithoutTransactionBlocking { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try connection.fetchOne("PRAGMA user_version") { $0[0].integerValue }
   /// }
   /// ```
   ///

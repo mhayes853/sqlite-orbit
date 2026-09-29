@@ -7,7 +7,7 @@
 ///
 /// ```swift
 /// let subscription = try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try $0.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue } }
 ///   .subscribe(to: database, onError: log) { change in counts.append(change.value) }
 /// // ...
 /// subscription.cancel()

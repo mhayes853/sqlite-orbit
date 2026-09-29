@@ -13,7 +13,7 @@
       let holder = LockHolder { whileHeld in
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: databaseIdentifier,
-          directory: directory,
+          directory: OrbitCoordinationDirectory(path: directory.path),
           configuration: .default
         ) {
           whileHeld()
@@ -29,7 +29,7 @@
       Thread.detachNewThread { [patient] in
         try? OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: databaseIdentifier,
-          directory: directory,
+          directory: OrbitCoordinationDirectory(path: directory.path),
           configuration: patient
         ) {
           order.withLock { $0.append("second") }
@@ -54,7 +54,7 @@
 
     let didAcquire = try OrbitDatabaseOpenLock.withLock(
       databaseIdentifier: OrbitDatabaseIdentifier(rawValue: "two"),
-      directory: held.directory,
+      directory: OrbitCoordinationDirectory(path: held.directory.path),
       configuration: .default
     ) { true }
     #expect(didAcquire)
@@ -104,7 +104,7 @@
       self.holder = LockHolder { whileHeld in
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: "one"),
-          directory: directory,
+          directory: OrbitCoordinationDirectory(path: directory.path),
           configuration: .default,
           whileHeld
         )
@@ -119,7 +119,7 @@
       return try await timeSQLiteError {
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: "one"),
-          directory: directory,
+          directory: OrbitCoordinationDirectory(path: directory.path),
           configuration: configuration
         ) {}
       }
@@ -275,7 +275,7 @@
       let database = OpenLockPeer.database(in: peer.directory)
       try OrbitDatabaseOpenLock.withLock(
         databaseIdentifier: .forDatabase(path: OrbitDatabasePath(database.path)),
-        directory: database.directory,
+        directory: OrbitCoordinationDirectory(path: database.directory.path),
         configuration: .default
       ) {
         try peer.markReady()
@@ -341,7 +341,7 @@
         _ = try SQLitePool(
           path: OrbitDatabasePath(self.path),
           configuration: configuration,
-          coordinationDirectory: self.directory
+          coordinationDirectoryPath: self.directory.path
         )
       }
     }

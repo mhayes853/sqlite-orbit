@@ -190,7 +190,7 @@
       self.directory = try makeShortTemporaryDirectory("owed")
       self.maximumDatagramByteCount = maximumDatagramByteCount
       self.sender = try UnixDatagramEndpointRegistry(
-        directory: self.directory,
+        directory: OrbitCoordinationDirectory(path: self.directory.path),
         endpointName: "sender",
         maximumDatagramByteCount: maximumDatagramByteCount,
         receiveBufferByteCount: 4_096
@@ -264,7 +264,7 @@
     /// as an endpoint does that binds its socket again.
     func rebindPeer() throws {
       self.closePeer()
-      _ = UnixPlatform.removeFile(atPath: self.socketPath)
+      FileSystem.removeFile(atPath: FilePath(self.socketPath))
       self.peer = try UnixDatagramSocket.bind(path: self.socketPath, receiveBufferByteCount: 4_096)
     }
 

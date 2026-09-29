@@ -26,6 +26,6 @@ func itemsColumn(_ index: Int) -> OrbitDatabaseRegion {
 #if canImport(Darwin) || os(Linux) || os(Android)
   /// A transport of this process, coordinating through `directory`.
   func ipcTransport(_ directory: URL) throws -> UnixDatagramIPCTransport {
-    try .init(configuration: .init(directory: directory))
+    try .init(configuration: .init(directoryPath: directory.path))
   }
 #endif

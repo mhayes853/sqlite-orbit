@@ -1,114 +1,91 @@
-import StructuredQueriesSQLite
+typealias SQLiteScalarFunctionBody =
+  @Sendable (borrowing SQLiteFunctionArguments) throws -> OrbitDatabaseValue
 
-func orbitInstall(
-  collation: some StructuredQueriesSQLiteCore.DatabaseCollation,
+typealias SQLiteAggregateAccumulatorFactory = @Sendable () -> any SQLiteAggregateAccumulator
+
+func orbitInstallFunction(
+  _ name: String,
+  argumentCount: Int?,
+  isDeterministic: Bool,
+  body: @escaping SQLiteScalarFunctionBody,
   on connection: OpaquePointer?,
   library: SQLiteLibrary
 ) -> Int32 {
-  let box = Box.retain(collation as any StructuredQueriesSQLiteCore.DatabaseCollation)
-  let code = collation.name.withCString { name in
-    library.collations!
-      .create(
-        connection,
-        name,
-        SQLiteFunctionFlags.utf8.rawValue,
-        box,
-        { box, lhsCount, lhs, rhsCount, rhs in
-          // A comparator is handed its user data directly, so it is the one callback that needs
-          // nothing from the build that called it.
-          let collation = Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.value(in: box)
-          switch collation.compare(
-            UnsafeRawBufferPointer(start: lhs, count: Int(lhsCount)),
-            UnsafeRawBufferPointer(start: rhs, count: Int(rhsCount))
-          ) {
-          case .ascending: return -1
-          case .same: return 0
-          case .descending: return 1
-          }
-        },
-        { Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release($0) }
-      )
-  }
-  // A registration that fails takes the collation with it, and SQLite only calls the destructor
-  // of one that succeeded — unlike `sqlite3_create_function_v2`, which calls it either way.
-  if code != SQLiteResultCode.ok.rawValue {
-    Box<any StructuredQueriesSQLiteCore.DatabaseCollation>.release(box)
-  }
-  return code
-}
-
-func orbitInstall(
-  function: some ScalarDatabaseFunction,
-  on connection: OpaquePointer?,
-  library: SQLiteLibrary
-) -> Int32 {
-  function.name.withCString { name in
+  name.withCString { name in
     library.scalarFunctions!
       .register(
         connection,
         name,
-        Int32(function.argumentCount ?? -1),
-        orbitFunctionFlags(isDeterministic: function.isDeterministic),
-        Box.retain(function as any ScalarDatabaseFunction),
+        Int32(argumentCount ?? -1),
+        orbitFunctionFlags(isDeterministic: isDeterministic),
+        Box.retain(body),
         { context, argumentCount, arguments in
           let library = SQLiteCurrentLibrary.current
           let functions = library.pointee.scalarFunctions!
-          let function = Box<any ScalarDatabaseFunction>
+          let body = Box<SQLiteScalarFunctionBody>
             .value(in: functions.callbacks.context.userData(context))
-          var decoder = SQLiteFunctionDecoder(
-            argumentCount: argumentCount,
-            arguments: arguments,
+          let arguments = SQLiteFunctionArguments(
+            count: argumentCount,
+            values: arguments,
             api: functions.callbacks.argument
           )
           do {
-            try function.invoke(&decoder).result(context, using: functions.callbacks.result)
+            try body(arguments).result(context, using: functions.callbacks.result)
           } catch {
-            QueryBinding.invalid(error).result(context, using: functions.callbacks.result)
+            orbitResultError(error, context, using: functions.callbacks.result)
           }
         },
         nil,
         nil,
-        { Box<any ScalarDatabaseFunction>.release($0) }
+        { Box<SQLiteScalarFunctionBody>.release($0) }
       )
   }
 }
 
-func orbitInstall(
-  function: some AggregateDatabaseFunction,
+func orbitInstallAggregateFunction(
+  _ name: String,
+  argumentCount: Int?,
+  isDeterministic: Bool,
+  makeAccumulator: @escaping SQLiteAggregateAccumulatorFactory,
   on connection: OpaquePointer?,
   library: SQLiteLibrary
 ) -> Int32 {
-  function.name.withCString { name in
+  name.withCString { name in
     library.aggregateFunctions!
       .register(
         connection,
         name,
-        Int32(function.argumentCount ?? -1),
-        orbitFunctionFlags(isDeterministic: function.isDeterministic),
-        Box.retain(function as any AggregateDatabaseFunction),
+        Int32(argumentCount ?? -1),
+        orbitFunctionFlags(isDeterministic: isDeterministic),
+        Box.retain(makeAccumulator),
         nil,
         { context, argumentCount, arguments in
           let library = SQLiteCurrentLibrary.current
           let functions = library.pointee.aggregateFunctions!
-          var decoder = SQLiteFunctionDecoder(
-            argumentCount: argumentCount,
-            arguments: arguments,
+          let arguments = SQLiteFunctionArguments(
+            count: argumentCount,
+            values: arguments,
             api: functions.callbacks.argument
           )
           do {
-            try AggregateFunctionInvocation.current(in: context, library: library).step(&decoder)
+            try AggregateFunctionInvocation.current(in: context, library: library)
+              .accumulator.step(arguments)
           } catch {
-            QueryBinding.invalid(error).result(context, using: functions.callbacks.result)
+            orbitResultError(error, context, using: functions.callbacks.result)
           }
         },
         { context in
           let library = SQLiteCurrentLibrary.current
           let functions = library.pointee.aggregateFunctions!
           let invocation = AggregateFunctionInvocation.current(in: context, library: library)
-          invocation.result().result(context, using: functions.callbacks.result)
+          do {
+            try invocation.accumulator.finish().result(context, using: functions.callbacks.result)
+          } catch {
+            orbitResultError(error, context, using: functions.callbacks.result)
+          }
           Unmanaged.passUnretained(invocation).release()
         },
-        { Box<any AggregateDatabaseFunction>.release($0) }
+        { Box<SQLiteAggregateAccumulatorFactory>.release($0) }
       )
   }
 }
@@ -121,7 +98,41 @@ private func orbitFunctionFlags(isDeterministic: Bool) -> Int32 {
   return flags.rawValue
 }
 
-private final class Box<Value> {
+private func orbitResultError(
+  _ error: any Error,
+  _ context: OpaquePointer?,
+  using result: SQLiteLibrary.FunctionCallbacks.Result
+) {
+  "\(error)".withCString { result.error(context, $0, -1) }
+}
+
+extension OrbitDatabaseValue {
+  // The table's result entry points copy what they are handed, so nothing here has to outlive the
+  // call the way `SQLITE_TRANSIENT` would otherwise demand.
+  func result(_ context: OpaquePointer?, using result: SQLiteLibrary.FunctionCallbacks.Result) {
+    switch self {
+    case .blob(let bytes):
+      bytes.withUnsafeBytes { buffer in
+        // SQLite interprets a null pointer as SQL NULL even when its byte count is zero.
+        guard let baseAddress = buffer.baseAddress else {
+          var empty: UInt8 = 0
+          return withUnsafeBytes(of: &empty) { result.blob(context, $0.baseAddress, 0) }
+        }
+        result.blob(context, baseAddress, Int32(buffer.count))
+      }
+    case .real(let double):
+      result.double(context, double)
+    case .integer(let integer):
+      result.int64(context, integer)
+    case .null:
+      result.null(context)
+    case .text(let text):
+      text.withCString { result.text(context, $0, Int32(text.utf8.count)) }
+    }
+  }
+}
+
+final class Box<Value> {
   let value: Value
 
   private init(_ value: Value) {
@@ -143,22 +154,11 @@ private final class Box<Value> {
 }
 
 private final class AggregateFunctionInvocation {
-  let step: (inout SQLiteFunctionDecoder) throws -> Void
+  // SQLite's callbacks are not generic, so the accumulator's type is erased.
+  var accumulator: any SQLiteAggregateAccumulator
 
-  let result: () -> QueryBinding
-
-  // SQLite's callbacks are not generic, so the function's element type is erased behind the two
-  // closures, which share the rows collected so far.
-  init<Function: AggregateDatabaseFunction>(_ function: Function) {
-    var rows: [Function.Element] = []
-    step = { decoder in rows.append(try function.step(&decoder)) }
-    result = {
-      do {
-        return try function.invoke(rows)
-      } catch {
-        return .invalid(error)
-      }
-    }
+  init(_ accumulator: any SQLiteAggregateAccumulator) {
+    self.accumulator = accumulator
   }
 
   static func current(
@@ -175,8 +175,8 @@ private final class AggregateFunctionInvocation {
       return invocation.takeUnretainedValue()
     }
     let userData = functions.callbacks.context.userData(context)
-    let function = Box<any AggregateDatabaseFunction>.value(in: userData)
-    let invocation = Unmanaged.passRetained(AggregateFunctionInvocation(function))
+    let makeAccumulator = Box<SQLiteAggregateAccumulatorFactory>.value(in: userData)
+    let invocation = Unmanaged.passRetained(AggregateFunctionInvocation(makeAccumulator()))
     slot.pointee = invocation
     return invocation.takeUnretainedValue()
   }

@@ -1,4 +1,6 @@
-import StructuredQueriesSQLite
+#if StructuredQueries
+  public import StructuredQueriesSQLite
+#endif
 
 /// The settings a native SQLite driver applies to every connection it opens.
 ///
@@ -9,7 +11,10 @@ import StructuredQueriesSQLite
 /// var configuration = SQLiteConfiguration.default
 /// configuration.readerCount = 8
 /// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
-/// configuration.register(function: $repeated)
+/// configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+///   arguments in
+///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
+/// }
 /// let driver = try SQLitePool(path: .file(url), configuration: configuration)
 /// ```
 public struct SQLiteConfiguration: Sendable {
@@ -142,7 +147,7 @@ public struct SQLiteConfiguration: Sendable {
 /// This is the escape hatch for registering what the package does not model — an update hook or a
 /// virtual table module. The closure receives primitive ``SQLiteConnectionAccess`` once the
 /// connection has been configured. It exposes the raw connection and its library, and can execute
-/// a `QueryFragment` with bindings.
+/// ``SQL`` with bindings.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
 ///
@@ -186,67 +191,6 @@ public struct SQLiteConnectionSetup: Sendable {
 }
 
 extension SQLiteConfiguration {
-  /// Registers a collating sequence on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(collation: CaseInsensitiveCollation())
-  /// ```
-  ///
-  /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
-  public mutating func register(
-    collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
-  ) {
-    register(.collations, providedBy: \.collations) { connection in
-      orbitInstall(
-        collation: collation,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
-  /// Registers a scalar function on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// @DatabaseFunction(isDeterministic: true)
-  /// func repeated(_ text: String, _ count: Int) -> String {
-  ///   String(repeating: text, count: count)
-  /// }
-  ///
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(function: $repeated)
-  /// ```
-  ///
-  /// - Parameter function: The function to install. Its name is what SQL calls it by.
-  public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-    register(.scalarFunctions, providedBy: \.scalarFunctions) { connection in
-      orbitInstall(
-        function: function,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
-  /// Registers an aggregate function on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(function: $longestTitle)
-  /// ```
-  ///
-  /// - Parameter function: The function to install. Its name is what SQL calls it by.
-  public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-    register(.aggregateFunctions, providedBy: \.aggregateFunctions) { connection in
-      orbitInstall(
-        function: function,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
   /// Adds a setup that installs something on every connection, on a build that has the entry
   /// points to install it with.
   ///
@@ -254,7 +198,7 @@ extension SQLiteConfiguration {
   ///   - feature: The operation the build has to provide, named by the error it is refused with.
   ///   - group: The entry points it installs with, which a build without them leaves `nil`.
   ///   - install: Installs on the connection and returns the build's result code.
-  private mutating func register<Group>(
+  mutating func register<Group>(
     _ feature: SQLiteLibraryFeature,
     providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
     install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
@@ -322,6 +266,92 @@ extension SQLiteConfiguration {
     /// - Returns: A configuration running against ``SQLiteLibrary/sqlCipher``.
     public static func sqlCipher(key: SQLiteKey) -> Self {
       Self(library: .sqlCipher, key: key)
+    }
+  }
+#endif
+
+// MARK: - Structured Queries
+
+#if StructuredQueries
+  extension SQLiteConfiguration {
+    /// Registers a collating sequence on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(collation: CaseInsensitiveCollation())
+    /// ```
+    ///
+    /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
+    public mutating func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) {
+      registerCollation(collation.name) { lhs, rhs in
+        switch collation.compare(lhs, rhs) {
+        case .ascending: .ascending
+        case .same: .same
+        case .descending: .descending
+        }
+      }
+    }
+
+    /// Registers a scalar function on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// @DatabaseFunction(isDeterministic: true)
+    /// func repeated(_ text: String, _ count: Int) -> String {
+    ///   String(repeating: text, count: count)
+    /// }
+    ///
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(function: $repeated)
+    /// ```
+    ///
+    /// - Parameter function: The function to install. Its name is what SQL calls it by.
+    public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
+      registerFunction(
+        function.name,
+        argumentCount: function.argumentCount,
+        isDeterministic: function.isDeterministic
+      ) { arguments in
+        var decoder = SQLiteFunctionDecoder(arguments)
+        return try OrbitDatabaseValue(lowering: function.invoke(&decoder))
+      }
+    }
+
+    /// Registers an aggregate function on every connection opened with this configuration.
+    ///
+    /// ```swift
+    /// var configuration = SQLiteConfiguration.default
+    /// configuration.register(function: $longestTitle)
+    /// ```
+    ///
+    /// - Parameter function: The function to install. Its name is what SQL calls it by.
+    public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
+      registerAggregateFunction(
+        function.name,
+        argumentCount: function.argumentCount,
+        isDeterministic: function.isDeterministic
+      ) {
+        StructuredQueriesAggregateAccumulator(function: function)
+      }
+    }
+  }
+
+  // Collects each row's decoded element and hands them all to the function at the end, which is the
+  // shape Structured Queries gives an aggregate.
+  private struct StructuredQueriesAggregateAccumulator<Function: AggregateDatabaseFunction>:
+    SQLiteAggregateAccumulator
+  {
+    let function: Function
+    var rows: [Function.Element] = []
+
+    mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
+      var decoder = SQLiteFunctionDecoder(arguments)
+      rows.append(try function.step(&decoder))
+    }
+
+    func finish() throws -> OrbitDatabaseValue {
+      try OrbitDatabaseValue(lowering: function.invoke(rows))
     }
   }
 #endif

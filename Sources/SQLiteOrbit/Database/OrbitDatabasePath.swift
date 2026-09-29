@@ -1,5 +1,3 @@
-import Foundation
-
 /// Where a SQLite database lives.
 ///
 /// SQLite reads a path string for more than a file name: `":memory:"` and the empty string name
@@ -9,7 +7,7 @@ import Foundation
 /// without either of them testing a string for the same special values.
 ///
 /// ```swift
-/// let onDisk = OrbitDatabasePath.file(URL.documentsDirectory.appending(path: "reminders.sqlite"))
+/// let onDisk = OrbitDatabasePath("/var/mobile/reminders.sqlite")
 /// let driver = try SQLiteQueue(path: onDisk)
 /// let scratch = try SQLiteQueue(path: .memory)
 /// ```
@@ -17,7 +15,7 @@ public struct OrbitDatabasePath: Hashable, Sendable {
   private enum Storage: Hashable, Sendable {
     case memory
     case temporary
-    case file(String)
+    case file(FilePath)
   }
 
   private let storage: Storage
@@ -33,14 +31,6 @@ public struct OrbitDatabasePath: Hashable, Sendable {
   /// closes.
   public static let temporary = Self(storage: .temporary)
 
-  /// The database file at `url`.
-  ///
-  /// - Parameter url: A file URL. It is standardized, so two spellings of one file compare equal.
-  /// - Returns: The path naming that file.
-  public static func file(_ url: URL) -> Self {
-    Self(storage: .file(url.standardizedFileURL.path))
-  }
-
   /// Reads `path` the way SQLite does: `":memory:"` is an in-memory database, the empty string is
   /// a temporary file, and anything else is a file path.
   ///
@@ -52,7 +42,7 @@ public struct OrbitDatabasePath: Hashable, Sendable {
     switch path {
     case ":memory:": self = .memory
     case "": self = .temporary
-    default: self = .file(URL(fileURLWithPath: path))
+    default: self.init(storage: .file(FilePath(path).standardized()))
     }
   }
 
@@ -64,14 +54,15 @@ public struct OrbitDatabasePath: Hashable, Sendable {
     switch storage {
     case .memory: ":memory:"
     case .temporary: ""
-    case .file(let path): path
+    case .file(let path): path.string
     }
   }
 
-  /// The file this database lives in, or `nil` when it has none.
-  public var fileURL: URL? {
+  /// The absolute, standardized path of the file this database lives in, or `nil` when it has
+  /// none.
+  var filePath: FilePath? {
     guard case .file(let path) = storage else { return nil }
-    return URL(fileURLWithPath: path)
+    return path
   }
 
   /// Whether the database is private to the connection that opens it.
@@ -102,3 +93,33 @@ extension OrbitDatabasePath: CustomStringConvertible {
     sqlitePath
   }
 }
+
+#if Foundation
+  import _SQLiteOrbitFoundation
+
+  extension OrbitDatabasePath {
+    /// The database file at `url`.
+    ///
+    /// ```swift
+    /// let path = OrbitDatabasePath.file(
+    ///   URL.documentsDirectory.appending(path: "reminders.sqlite")
+    /// )
+    /// ```
+    ///
+    /// - Parameter url: A file URL. It is standardized, so two spellings of one file compare equal.
+    /// - Returns: The path naming that file.
+    public static func file(_ url: URL) -> Self {
+      Self(storage: .file(FilePath(url.standardizedFileURL.path)))
+    }
+
+    /// The file this database lives in, or `nil` when it has none.
+    ///
+    /// ```swift
+    /// let path = OrbitDatabasePath("reminders.sqlite")
+    /// let url = path.fileURL  // file:///current/directory/reminders.sqlite
+    /// ```
+    public var fileURL: URL? {
+      self.filePath.map { URL(fileURLWithPath: $0.string) }
+    }
+  }
+#endif

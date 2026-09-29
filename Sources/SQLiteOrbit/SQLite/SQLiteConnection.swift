@@ -1,4 +1,6 @@
-public import StructuredQueries
+#if StructuredQueries
+  public import StructuredQueriesSQLite
+#endif
 
 /// A connection lent by a native SQLite driver for reading outside a transaction.
 ///
@@ -12,8 +14,10 @@ public import StructuredQueries
 ///
 /// ```swift
 /// let (mode, count) = try await database.readWithoutTransaction { connection in
-///   let mode = try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
-///   let count = try connection.transaction { try $0.fetchCount(Reminder.all) }
+///   let mode = try connection.fetchOne("PRAGMA journal_mode") { $0[0].textValue }
+///   let count = try connection.transaction { transaction in
+///     try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+///   }
 ///   return (mode, count)
 /// }
 /// ```
@@ -73,7 +77,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// ```swift
   /// try await database.readWithoutTransaction { connection in
   ///   connection.busyTimeout = .limit(.seconds(30))
-  ///   return try connection.fetchAll(Reminder.all)
+  ///   return try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
   /// }
   /// ```
   ///
@@ -95,13 +99,35 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///   - query: The query to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this connection's access ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
+  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.fragment, cached: cached)
+    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: true)
+  }
+
+  /// Creates a cursor over the rows raw SQL returns.
+  ///
+  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Returns: A cursor valid until this connection's access ends.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  @_lifetime(borrow self)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+    // Spelled out on the concrete type, rather than left to the protocol extension, because
+    // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
+    // returned.
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
   }
 
   /// Notifies transaction observers that this connection may have read a database region.
@@ -117,8 +143,11 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// Runs `body` in a read transaction, so that everything it reads comes from one snapshot.
   ///
   /// ```swift
-  /// let (reminders, count) = try connection.transaction { transaction in
-  ///   (try transaction.fetchAll(Reminder.all), try transaction.fetchCount(Reminder.all))
+  /// let (titles, count) = try connection.transaction { transaction in
+  ///   (
+  ///     try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue },
+  ///     try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+  ///   )
   /// }
   /// ```
   ///
@@ -154,7 +183,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 /// try await database.writeWithoutTransaction { connection in
 ///   connection.isForeignKeysEnabled = false
 ///   try connection.transaction { transaction in
-///     try transaction.execute("ALTER TABLE reminders RENAME TO old_reminders")
+///     try transaction.executeScript("ALTER TABLE reminders RENAME TO old_reminders")
 ///     // ...
 ///   }
 /// }
@@ -220,7 +249,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
   ///   connection.busyTimeout = .limit(.seconds(30))
-  ///   try connection.execute("VACUUM")
+  ///   try connection.executeScript("VACUUM")
   /// }
   /// ```
   ///
@@ -244,7 +273,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// try await database.writeWithoutTransaction { connection in
   ///   connection.isForeignKeysEnabled = false
   ///   try connection.transaction { transaction in
-  ///     try transaction.execute("DROP TABLE reminders")
+  ///     try transaction.executeScript("DROP TABLE reminders")
   ///   }
   /// }
   /// ```
@@ -280,13 +309,13 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
   ///
   /// This is `sqlite3_changes64`, which counts the last statement rather than everything the
-  /// access has run, so reading it after a second ``execute(_:)-(some Statement)`` reports only
-  /// what that second statement changed. A statement that changes nothing, such as a `SELECT` or a
+  /// access has run, so reading it after a second ``execute(_:)`` reports only what that second
+  /// statement changed. A statement that changes nothing, such as a `SELECT` or a
   /// `CREATE TABLE`, leaves the previous count in place rather than resetting it to zero.
   ///
   /// ```swift
   /// let deleted = try await database.writeWithoutTransaction { connection in
-  ///   try connection.execute(Reminder.where(\.isCompleted).delete())
+  ///   try connection.execute("DELETE FROM reminders WHERE is_completed")
   ///   return connection.changesCount
   /// }
   /// ```
@@ -305,7 +334,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// ```swift
   /// let id = try await database.writeWithoutTransaction { connection in
-  ///   try connection.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
+  ///   try connection.execute("INSERT INTO reminders (title) VALUES (\("Get milk"))")
   ///   return connection.lastInsertedRowID
   /// }
   /// ```
@@ -386,39 +415,60 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     return try base.rowCursor(query, cached: cached)
   }
 
+  /// Creates a cursor over the rows raw SQL returns.
+  ///
+  /// A write connection may write, so the SQL is not held to reading.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Returns: A cursor valid until this connection's access ends.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  @_lifetime(borrow self)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+    // Spelled out on the concrete type, rather than left to the protocol extension, because
+    // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
+    // returned.
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
+  }
+
   /// Runs a statement to completion, committing it and discarding any rows it returns.
   ///
   /// ```swift
-  /// try connection.execute(Reminder.where(\.isCompleted).delete())
+  /// try connection.execute("DELETE FROM reminders WHERE is_completed")
   /// let deleted = connection.changesCount
   /// ```
   ///
-  /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
-  ///   discarded.
+  /// - Parameter sql: The statement to run. Any rows it returns are stepped past and discarded.
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
-  public borrowing func execute(_ statement: some Statement) throws {
+  public borrowing func execute(_ sql: SQL) throws {
     try applyPendingSettings()
     defer { commitPendingChanges() }
-    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
+    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql))
   }
 
-  /// Runs SQL that the query builder does not model, such as schema changes and pragmas.
+  /// Runs a script of one or more statements, such as a schema change or a pragma.
   ///
-  /// Several statements may be given at once, separated by semicolons. Each commits on its own as
-  /// it finishes, so a failing statement leaves the ones before it committed. Any rows they produce
-  /// are discarded.
+  /// Statements are separated by semicolons. Each commits on its own as it finishes, so a failing
+  /// statement leaves the ones before it committed. Any rows they produce are discarded. A script
+  /// takes no parameters: its text is run as it is, so build it only from text the program itself
+  /// controls.
   ///
   /// ```swift
-  /// try connection.execute("VACUUM")
+  /// try connection.executeScript("VACUUM")
   /// ```
   ///
-  /// - Parameter sql: One or more statements.
+  /// - Parameter script: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
-  public borrowing func execute(_ sql: String) throws {
+  public borrowing func executeScript(_ script: String) throws {
     try applyPendingSettings()
     defer { commitPendingChanges() }
-    try base.execute(sql)
+    try base.executeScript(script)
   }
 
   /// Notifies transaction observers that this connection changed a database region.
@@ -451,8 +501,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// ```swift
   /// try connection.transaction { transaction in
-  ///   try transaction.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
-  ///   try transaction.execute(Reminder.insert { Reminder.Draft(title: "Walk the dog") })
+  ///   try transaction.execute("INSERT INTO reminders (title) VALUES (\("Get milk"))")
+  ///   try transaction.execute("INSERT INTO reminders (title) VALUES (\("Walk the dog"))")
   /// }
   /// ```
   ///
@@ -507,3 +557,22 @@ final class SQLiteConnectionState {
     return try body()
   }
 }
+
+#if StructuredQueries
+  extension SQLiteWriteConnection {
+    /// Runs a statement to completion, committing it and discarding any rows it returns.
+    ///
+    /// ```swift
+    /// try connection.execute(Reminder.where(\.isCompleted).delete())
+    /// let deleted = connection.changesCount
+    /// ```
+    ///
+    /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
+    ///   discarded.
+    /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever
+    ///   it had changed.
+    public borrowing func execute(_ statement: some Statement) throws {
+      try execute(SQL(fragment: statement.query))
+    }
+  }
+#endif

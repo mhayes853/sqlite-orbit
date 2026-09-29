@@ -1,6 +1,4 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  import Foundation
-
   /// A database IPC transport backed by Unix-domain datagram sockets.
   ///
   /// Each transport binds a socket in a shared coordination directory and drops a marker file for
@@ -41,33 +39,56 @@
   public final class UnixDatagramIPCTransport: OrbitIPCTransport, Sendable {
     /// Configuration for a Unix-domain datagram transport endpoint.
     ///
-    /// Two transports coordinate only when they share a ``directory``, and
+    /// Two transports coordinate only when they share a ``directoryPath``, and
     /// ``UnixDatagramIPCTransport/shared(configuration:)`` reuses one endpoint per
     /// distinct configuration, so keep this value identical across the databases in a process that
     /// should share a transport.
     ///
     /// ```swift
     /// let coordination = UnixDatagramIPCTransport.Configuration(
-    ///   directory: appGroupDirectory.appending(path: "coordination")
+    ///   directoryPath: appGroupDirectoryPath + "/coordination"
     /// )
     /// let database = try OrbitIPCDatabase(
     ///   path: OrbitDatabasePath("reminders.sqlite"), coordination: coordination
     /// )
     /// ```
     public struct Configuration: Hashable, Sendable {
-      /// The coordination directory used when a caller does not supply one.
+      /// The path of the coordination directory used when a caller does not supply one: a
+      /// directory named `sqlite-orbit` in the system's temporary directory.
+      ///
+      /// The temporary directory is the one `FileManager.default.temporaryDirectory` names, so
+      /// every process computes the same path whether or not it was built with Foundation: the
+      /// per-user temporary directory on Darwin, and `TMPDIR` or `/tmp` on Linux.
       ///
       /// Processes coordinate only when they share this directory. Sandboxed applications must
       /// supply a directory inside a container both processes can reach, such as an App Group.
-      public static let defaultDirectory = FileManager.default.temporaryDirectory
-        .appending(path: "sqlite-orbit", directoryHint: .isDirectory)
+      ///
+      /// ```swift
+      /// print(UnixDatagramIPCTransport.Configuration.defaultDirectoryPath)
+      /// // "/tmp/sqlite-orbit" on Linux
+      /// ```
+      public static let defaultDirectoryPath = FileSystem.temporaryDirectory
+        .appending("sqlite-orbit").string
+
+      /// How long an endpoint waits, by default, before touching its files in the coordination
+      /// directory again: an hour.
+      ///
+      /// It is well within the days most systems let temporary files sit unused before removing
+      /// them.
+      public static let defaultRefreshInterval = Duration.seconds(60 * 60)
 
       /// The configuration used by a database that does not supply one, which uses
-      /// ``defaultDirectory``.
+      /// ``defaultDirectoryPath`` and ``defaultRefreshInterval``.
       public static let `default` = Self()
 
-      /// The coordination directory this process shares with its peers.
-      public var directory: URL
+      /// The path of the coordination directory this process shares with its peers.
+      ///
+      /// A relative path is resolved against the current directory when it is set, as a file URL
+      /// is when it is created, so it names the same directory however the current directory
+      /// changes after.
+      public var directoryPath: String {
+        didSet { self.directoryPath = FilePath(self.directoryPath).absolute().string }
+      }
 
       /// The largest datagram this endpoint sends or accepts, in bytes.
       ///
@@ -80,21 +101,43 @@
       /// memory. It must be at least ``maximumDatagramByteCount``.
       public var receiveBufferByteCount: Int
 
+      /// How long after this endpoint last touched its socket, its markers and the directories
+      /// they are in, a send or a receive touches them again.
+      ///
+      /// Systems that clean their temporary directories remove files nobody has used for a
+      /// while, and an endpoint whose files are removed must repair them before peers can reach
+      /// it again. Touching them while the endpoint is in use keeps them from looking abandoned.
+      /// Keep it well below the age at which the system removes files. It must not be negative,
+      /// and `.zero` touches them on every send and receive.
+      public var refreshInterval: Duration
+
       /// Creates a configuration.
       ///
+      /// ```swift
+      /// let configuration = UnixDatagramIPCTransport.Configuration(
+      ///   directoryPath: "/var/run/reminders/coordination",
+      ///   maximumDatagramByteCount: 32 * 1024
+      /// )
+      /// ```
+      ///
       /// - Parameters:
-      ///   - directory: The coordination directory this process shares with its peers.
+      ///   - directoryPath: The path of the coordination directory this process shares with its
+      ///     peers. A relative path is resolved against the current directory now.
       ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
       ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
       ///     be at least `maximumDatagramByteCount`.
+      ///   - refreshInterval: How long after this endpoint last touched its files in the
+      ///     coordination directory a send or a receive touches them again.
       public init(
-        directory: URL = Self.defaultDirectory,
+        directoryPath: String = Self.defaultDirectoryPath,
         maximumDatagramByteCount: Int = 60 * 1024,
-        receiveBufferByteCount: Int = 256 * 1024
+        receiveBufferByteCount: Int = 256 * 1024,
+        refreshInterval: Duration = Self.defaultRefreshInterval
       ) {
-        self.directory = directory
+        self.directoryPath = FilePath(directoryPath).absolute().string
         self.maximumDatagramByteCount = maximumDatagramByteCount
         self.receiveBufferByteCount = receiveBufferByteCount
+        self.refreshInterval = refreshInterval
       }
     }
 
@@ -162,45 +205,37 @@
     /// Prefer ``shared(configuration:)``, which gives every database in a process one endpoint.
     ///
     /// ```swift
-    /// let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
+    /// let transport = try UnixDatagramIPCTransport(
+    ///   configuration: .init(directoryPath: "/var/run/reminders/coordination")
+    /// )
     /// ```
     ///
     /// - Parameter configuration: Describes the coordination directory and buffer sizes for this
     ///   endpoint.
-    /// - Throws: A ``UnixSystemError`` if the configuration is invalid or the socket cannot
-    ///   be created and bound.
-    public convenience init(configuration: Configuration) throws {
-      try self.init(
-        configuration: configuration,
-        refreshInterval: UnixDatagramEndpointRegistry.defaultRefreshInterval
-      )
-    }
-
-    /// Creates a transport endpoint that touches its files in the coordination directory on a
-    /// send or a receive `refreshInterval` after it last did.
-    init(configuration: Configuration, refreshInterval: Duration) throws {
+    /// - Throws: A ``UnixSystemError`` if the configuration is invalid, the coordination directory
+    ///   cannot be created, or the socket cannot be created and bound.
+    public init(configuration: Configuration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
-        configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
+        configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount,
+        configuration.refreshInterval >= .zero
       else {
         throw UnixSystemError.invalidArgument("invalid transport configuration")
       }
 
-      let endpointName = UUID().uuidString
-        .lowercased()
-        .replacingOccurrences(of: "-", with: "")
-        .prefix(16)
+      let endpointName = RandomUUID.lowercasedString().filter { $0 != "-" }.prefix(16)
+      let directory = OrbitCoordinationDirectory(path: configuration.directoryPath)
       self.configuration = configuration
       self.registry = try UnixDatagramEndpointRegistry(
-        directory: configuration.directory,
+        directory: directory,
         endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount,
-        refreshInterval: refreshInterval
+        refreshInterval: configuration.refreshInterval
       )
       // After binding, so the sweep can never take this endpoint for one of the dead it removes.
       UnixDatagramStaleCleanup.sweep(
-        directory: configuration.directory,
+        directory: directory,
         keeping: self.registry.endpointName
       )
       // Weakly, so that the receive thread does not keep this transport alive. If the thread ends
@@ -429,5 +464,64 @@
 
   private let sharedTransports =
     Lock<[UnixDatagramIPCTransport.Configuration: WeakTransport]>([:])
+
+  #if Foundation
+    import _SQLiteOrbitFoundation
+
+    extension UnixDatagramIPCTransport.Configuration {
+      /// The coordination directory used when a caller does not supply one, which is the
+      /// directory at ``defaultDirectoryPath``.
+      ///
+      /// ```swift
+      /// let directory = UnixDatagramIPCTransport.Configuration.defaultDirectory
+      /// ```
+      public static var defaultDirectory: URL {
+        URL(fileURLWithPath: Self.defaultDirectoryPath, isDirectory: true)
+      }
+
+      /// The coordination directory this process shares with its peers, as a file URL.
+      ///
+      /// It is ``directoryPath`` spelled as a URL, and setting it sets ``directoryPath`` to the
+      /// URL's path.
+      ///
+      /// ```swift
+      /// var configuration = UnixDatagramIPCTransport.Configuration.default
+      /// configuration.directory = appGroupDirectory.appending(path: "coordination")
+      /// ```
+      public var directory: URL {
+        get { URL(fileURLWithPath: self.directoryPath, isDirectory: true) }
+        set { self.directoryPath = newValue.path }
+      }
+
+      /// Creates a configuration whose coordination directory is at a file URL.
+      ///
+      /// ```swift
+      /// let coordination = UnixDatagramIPCTransport.Configuration(
+      ///   directory: appGroupDirectory.appending(path: "coordination")
+      /// )
+      /// ```
+      ///
+      /// - Parameters:
+      ///   - directory: The coordination directory this process shares with its peers.
+      ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
+      ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
+      ///     be at least `maximumDatagramByteCount`.
+      ///   - refreshInterval: How long after this endpoint last touched its files in the
+      ///     coordination directory a send or a receive touches them again.
+      public init(
+        directory: URL,
+        maximumDatagramByteCount: Int = 60 * 1024,
+        receiveBufferByteCount: Int = 256 * 1024,
+        refreshInterval: Duration = Self.defaultRefreshInterval
+      ) {
+        self.init(
+          directoryPath: directory.path,
+          maximumDatagramByteCount: maximumDatagramByteCount,
+          receiveBufferByteCount: receiveBufferByteCount,
+          refreshInterval: refreshInterval
+        )
+      }
+    }
+  #endif
 
 #endif

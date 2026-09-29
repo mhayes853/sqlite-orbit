@@ -1,6 +1,4 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  import Foundation
-
   /// Removes what endpoints that died without shutting down left in the coordination directory.
   ///
   /// An endpoint that is killed leaves its socket's file in `v1/s/`, its markers in
@@ -76,30 +74,28 @@
     ///   could not be taken, and nothing was removed.
     @discardableResult
     static func sweep(
-      directory: URL,
+      directory: OrbitCoordinationDirectory,
       keeping endpointName: String,
       temporarySocketGracePeriod: Duration = Self.defaultTemporarySocketGracePeriod,
       didRemove: (_ path: String) -> Void = { _ in }
     ) -> Summary? {
-      let versionDirectory = directory.appending(path: "v1", directoryHint: .isDirectory)
-      let lock = versionDirectory.appending(path: "cleanup-stale.lock").path
-      return try? UnixFileLock.withExclusiveLockIfAvailable(atPath: lock) {
+      try? UnixFileLock.withExclusiveLockIfAvailable(atPath: directory.staleCleanupLock.string) {
         var sweep = Sweep(
-          socketsDirectory: versionDirectory.appending(path: "s", directoryHint: .isDirectory),
-          databasesDirectory: versionDirectory.appending(path: "d", directoryHint: .isDirectory),
+          socketsDirectory: directory.socketsDirectory,
+          databasesDirectory: directory.databasesDirectory,
           endpointName: endpointName,
           temporarySocketGracePeriod: temporarySocketGracePeriod
         )
         sweep.removeDeadSockets(didRemove: didRemove)
         sweep.removeDeadMarkers(didRemove: didRemove)
-        sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(directory: directory)
+        sweep.summary.lockCount = OrbitDatabaseOpenLock.removeUnheldLocks(in: directory)
         return sweep.summary
       }
     }
 
     private struct Sweep {
-      let socketsDirectory: URL
-      let databasesDirectory: URL
+      let socketsDirectory: FilePath
+      let databasesDirectory: FilePath
       let endpointName: String
       let temporarySocketGracePeriod: Duration
       var summary = Summary()
@@ -107,17 +103,18 @@
       /// Removes the file of every socket in `v1/s/` nothing is bound to any more, and of every
       /// hidden one besides that is older than the grace period.
       mutating func removeDeadSockets(didRemove: (_ path: String) -> Void) {
-        for name in Self.contents(of: self.socketsDirectory) where name.hasSuffix(".sock") {
-          let path = self.socketsDirectory.appending(path: name).path
+        for name in FileSystem.contentsOfDirectoryIfReadable(atPath: self.socketsDirectory)
+        where name.hasSuffix(".sock") {
+          let path = self.socketsDirectory.appending(name)
           let isTemporary = name.hasPrefix(".")
           let endpointName = String(name.dropFirst(isTemporary ? 1 : 0).dropLast(".sock".count))
           guard endpointName != self.endpointName,
             isTemporary
               ? self.isTemporarySocketAbandoned(path) : self.isEndpointDead(endpointName),
-            UnixPlatform.removeFile(atPath: path)
+            FileSystem.removeFile(atPath: path)
           else { continue }
           self.summary[keyPath: isTemporary ? \Summary.temporarySocketCount : \.socketCount] += 1
-          didRemove(path)
+          didRemove(path.string)
         }
       }
 
@@ -130,25 +127,24 @@
       /// Every directory found empty goes, not only those this emptied, since one left by an
       /// endpoint that died after withdrawing its last marker would otherwise stay forever.
       mutating func removeDeadMarkers(didRemove: (_ path: String) -> Void) {
-        for coordinationKey in Self.contents(of: self.databasesDirectory) {
-          let directory = self.databasesDirectory.appending(
-            path: coordinationKey,
-            directoryHint: .isDirectory
-          )
-          for name in Self.contents(of: directory) {
+        for coordinationKey in FileSystem.contentsOfDirectoryIfReadable(
+          atPath: self.databasesDirectory
+        ) {
+          let directory = self.databasesDirectory.appending(coordinationKey)
+          for name in FileSystem.contentsOfDirectoryIfReadable(atPath: directory) {
             guard let endpointName = Self.endpointName(ofMarker: name),
               endpointName != self.endpointName,
               self.isEndpointDead(endpointName)
             else { continue }
-            let path = directory.appending(path: name).path
+            let path = directory.appending(name)
             // Fails, harmlessly, on a file something else removed first.
-            if UnixPlatform.removeFile(atPath: path) {
+            if FileSystem.removeFile(atPath: path) {
               self.summary.markerCount += 1
-              didRemove(path)
+              didRemove(path.string)
             }
           }
           // Fails, harmlessly, on a directory that is not empty, or no longer there.
-          if UnixPlatform.removeDirectory(atPath: directory.path) {
+          if FileSystem.removeDirectory(atPath: directory) {
             self.summary.databaseDirectoryCount += 1
           }
         }
@@ -161,18 +157,17 @@
       /// its socket again an instant later, and a sweep can be stalled for any length of time
       /// between one removal and the next.
       private func isEndpointDead(_ endpointName: String) -> Bool {
-        let path = self.socketsDirectory.appending(path: "\(endpointName).sock").path
-        return UnixDatagramSocket.probe(path) == .dead
+        let path = self.socketsDirectory.appending("\(endpointName).sock")
+        return UnixDatagramSocket.probe(path.string) == .dead
       }
 
       /// Whether the hidden socket at `path` was left by a bind that will never finish: nothing
       /// is bound to it, and it has been there longer than any bind takes.
-      private func isTemporarySocketAbandoned(_ path: String) -> Bool {
-        guard UnixDatagramSocket.probe(path) == .dead,
-          let attributes = try? FileManager.default.attributesOfItem(atPath: path),
-          let modified = attributes[.modificationDate] as? Date
+      private func isTemporarySocketAbandoned(_ path: FilePath) -> Bool {
+        guard UnixDatagramSocket.probe(path.string) == .dead,
+          let age = FileSystem.ageOfFile(atPath: path)
         else { return false }
-        return Date.now.timeIntervalSince(modified) >= self.temporarySocketGracePeriod / .seconds(1)
+        return age >= self.temporarySocketGracePeriod
       }
 
       /// The endpoint a file in a database's directory belongs to: a marker is named after its
@@ -184,11 +179,6 @@
         guard name.hasSuffix(".tmp") else { return nil }
         let endpointName = name.dropFirst().dropLast(".tmp".count)
         return endpointName.isEmpty ? nil : String(endpointName)
-      }
-
-      /// The names of what is in `directory`, or none if it cannot be listed, as when it is gone.
-      private static func contents(of directory: URL) -> [String] {
-        (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
       }
     }
   }

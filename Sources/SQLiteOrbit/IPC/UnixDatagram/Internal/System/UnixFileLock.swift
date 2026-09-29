@@ -58,7 +58,7 @@
           // returns, and the file is unlinked before it is let go of, while nobody else can hold
           // it.
           return try withExtendedLifetime(descriptor) {
-            defer { _ = UnixPlatform.removeFile(atPath: path) }
+            defer { FileSystem.removeFile(atPath: FilePath(path)) }
             return try body()
           }
         }
@@ -94,7 +94,7 @@
         (try? Self.lock(descriptor.rawValue, openedFrom: path)) == .taken
       else { return false }
       // Closing the descriptor, when it goes, lets go of the lock, after the file is gone.
-      return withExtendedLifetime(descriptor) { UnixPlatform.removeFile(atPath: path) }
+      return withExtendedLifetime(descriptor) { FileSystem.removeFile(atPath: FilePath(path)) }
     }
 
     /// What one try found: the lock taken on the file at the path, held by somebody else, or

@@ -16,7 +16,7 @@
 /// ```swift
 /// let subscription = try database.subscribe(
 ///   transactionObserver: CommitLogger(),
-///   region: Reminder.databaseRegion
+///   region: OrbitDatabaseRegion(table: "reminders")
 /// )
 /// // Also start logging commits that touch tags.
 /// try subscription.updateRegion(subscription.region.union(Tag.databaseRegion))
@@ -75,7 +75,7 @@ public struct OrbitRegionSubscription: Sendable {
   /// to the current region, or updating a cancelled subscription, does nothing.
   ///
   /// ```swift
-  /// try subscription.updateRegion(Reminder.databaseRegion)
+  /// try subscription.updateRegion(OrbitDatabaseRegion(table: "reminders"))
   /// ```
   ///
   /// - Parameter region: The new region.

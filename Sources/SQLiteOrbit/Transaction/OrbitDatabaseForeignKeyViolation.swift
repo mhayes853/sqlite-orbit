@@ -1,5 +1,3 @@
-import StructuredQueries
-
 /// One row whose foreign key refers to a row that does not exist, as `PRAGMA foreign_key_check`
 /// reports it.
 ///
@@ -78,18 +76,13 @@ extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
     guard sqlite.isForeignKeyCheckAvailable else {
       throw SQLiteFeatureUnavailableError(libraryName: sqlite.name, feature: .foreignKeyCheck)
     }
-    var violations: [OrbitDatabaseForeignKeyViolation] = []
-    var cursor = try rowCursor(SQLQueryExpression("PRAGMA foreign_key_check"))
-    while var row = try cursor.next() {
-      violations.append(
-        OrbitDatabaseForeignKeyViolation(
-          table: try row.decode(String.self),
-          rowID: try row.decode(Int64?.self),
-          parentTable: try row.decode(String.self),
-          foreignKeyIndex: try row.decode(Int.self)
-        )
+    return try fetchAll("PRAGMA foreign_key_check") { row in
+      OrbitDatabaseForeignKeyViolation(
+        table: row[0].textValue ?? "",
+        rowID: row[1].integerValue,
+        parentTable: row[2].textValue ?? "",
+        foreignKeyIndex: Int(row[3].integerValue ?? 0)
       )
     }
-    return violations
   }
 }

@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueries
 
   @testable import SQLiteOrbit
 
@@ -93,7 +92,7 @@
     var url: URL { self.directory.appending(component: "database.sqlite") }
 
     /// The database file, as the drivers take it.
-    var path: OrbitDatabasePath { .file(self.url) }
+    var path: OrbitDatabasePath { OrbitDatabasePath(self.url.path) }
 
     /// Opens the database with a ``SQLiteQueue``.
     func queue(configuration: SQLiteConfiguration = .default) throws -> SQLiteQueue {
@@ -130,7 +129,9 @@
       /// The coordination directory ``ipcDatabase(configuration:)`` opens the database through,
       /// beside the database file.
       var coordination: UnixDatagramIPCTransport.Configuration {
-        UnixDatagramIPCTransport.Configuration(directory: self.directory.appending(path: "c"))
+        UnixDatagramIPCTransport.Configuration(
+          directoryPath: self.directory.appending(path: "c").path
+        )
       }
 
       /// Opens the database with an ``OrbitIPCDatabase``, coordinating through ``coordination``.
@@ -183,43 +184,131 @@
   extension OrbitDatabaseWriter {
     /// Runs `sql`, which may hold several statements, in a write transaction of its own.
     func execute(sql: String) async throws {
-      try await self.write { try $0.execute(sql) }
+      try await self.write { try $0.executeScript(sql) }
     }
 
     /// Runs `sql`, which may hold several statements, in a write transaction of its own,
     /// blocking the calling thread.
     func executeBlocking(sql: String) throws {
-      try self.writeBlocking { try $0.execute(sql) }
+      try self.writeBlocking { try $0.executeScript(sql) }
+    }
+  }
+
+  /// A value a test reads out of a column with the plain-SQL helpers below.
+  protocol TestColumnValue: Sendable {
+    init?(testColumn value: OrbitDatabaseValue)
+  }
+
+  extension Int: TestColumnValue {
+    init?(testColumn value: OrbitDatabaseValue) {
+      guard let integer = value.integerValue else { return nil }
+      self.init(integer)
+    }
+  }
+
+  extension Int64: TestColumnValue {
+    init?(testColumn value: OrbitDatabaseValue) {
+      guard let integer = value.integerValue else { return nil }
+      self = integer
+    }
+  }
+
+  extension Double: TestColumnValue {
+    init?(testColumn value: OrbitDatabaseValue) {
+      guard let real = value.realValue else { return nil }
+      self = real
+    }
+  }
+
+  extension Bool: TestColumnValue {
+    init?(testColumn value: OrbitDatabaseValue) {
+      guard let integer = value.integerValue else { return nil }
+      self = integer != 0
+    }
+  }
+
+  extension String: TestColumnValue {
+    init?(testColumn value: OrbitDatabaseValue) {
+      guard let text = value.textValue else { return nil }
+      self = text
+    }
+  }
+
+  extension SQLiteStatementCache {
+    /// Checks out the statement `sql` compiles to, which must hold one, without holding it to
+    /// reading.
+    func checkOut(_ sql: String) throws -> SQLitePreparedStatement {
+      try Self.requireStatement(checkOut(sql, requiresReadOnly: false), sql: sql)
+    }
+
+    /// Compiles the statement `sql` holds, which must hold one, without holding it to reading.
+    func prepare(_ sql: String) throws -> SQLitePreparedStatement {
+      try Self.requireStatement(prepare(sql, requiresReadOnly: false), sql: sql)
+    }
+
+    private static func requireStatement(
+      _ statement: SQLitePreparedStatement?,
+      sql: String
+    ) throws -> SQLitePreparedStatement {
+      guard let statement else {
+        throw SQLiteError(code: .error, message: "SQL holds no statement", sql: sql)
+      }
+      return statement
+    }
+  }
+
+  extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
+    /// The first column, read as `Value`, or `nil` when it is `NULL` or of another type.
+    func first<Value: TestColumnValue>(as type: Value.Type) -> Value? {
+      Value(testColumn: self[0])
+    }
+  }
+
+  extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
+    /// Fetches the first column of every row `sql` produces. A row whose column is not a `Value`
+    /// is left out.
+    func fetchAll<Value: TestColumnValue>(_ sql: SQL, as type: Value.Type) throws -> [Value] {
+      try fetchAll(sql) { $0.first(as: Value.self) }.compactMap { $0 }
+    }
+
+    /// Fetches the first column of the first row `sql` produces.
+    func fetchOne<Value: TestColumnValue>(_ sql: SQL, as type: Value.Type) throws -> Value? {
+      try fetchOne(sql) { $0.first(as: Value.self) } ?? nil
     }
   }
 
   extension OrbitDatabaseReader {
-    /// Fetches every value the query `sql` produces, in a read transaction of its own.
-    func fetchAll<Value: QueryRepresentable>(
+    /// Fetches the first column of every row the query `sql` produces, in a read transaction of
+    /// its own. A row whose column is not a `Value` is left out.
+    func fetchAll<Value: TestColumnValue>(
       sql: String,
       as type: Value.Type
-    ) async throws -> [Value.QueryOutput] where Value.QueryOutput: Sendable {
-      let query = SQLQueryExpression(QueryFragment(stringLiteral: sql), as: Value.self)
-      return try await self.read { try $0.fetchAll(query) }
+    ) async throws -> [Value] {
+      try await self.read { transaction in
+        try transaction.fetchAll("\(raw: sql)", as: Value.self)
+      }
     }
 
-    /// Fetches the first value the query `sql` produces, in a read transaction of its own.
-    func fetchOne<Value: QueryRepresentable>(
+    /// Fetches the first column of the first row the query `sql` produces, in a read transaction
+    /// of its own.
+    func fetchOne<Value: TestColumnValue>(
       sql: String,
       as type: Value.Type
-    ) async throws -> Value.QueryOutput? where Value.QueryOutput: Sendable {
-      let query = SQLQueryExpression(QueryFragment(stringLiteral: sql), as: Value.self)
-      return try await self.read { try $0.fetchOne(query) }
+    ) async throws -> Value? {
+      try await self.read { transaction in
+        try transaction.fetchOne("\(raw: sql)", as: Value.self)
+      }
     }
 
-    /// Fetches the first value the query `sql` produces, in a read transaction of its own,
-    /// blocking the calling thread.
-    func fetchOneBlocking<Value: QueryRepresentable>(
+    /// Fetches the first column of the first row the query `sql` produces, in a read transaction
+    /// of its own, blocking the calling thread.
+    func fetchOneBlocking<Value: TestColumnValue>(
       sql: String,
       as type: Value.Type
-    ) throws -> Value.QueryOutput? where Value.QueryOutput: Sendable {
-      let query = SQLQueryExpression(QueryFragment(stringLiteral: sql), as: Value.self)
-      return try self.readBlocking { try $0.fetchOne(query) }
+    ) throws -> Value? {
+      try self.readBlocking { transaction in
+        try transaction.fetchOne("\(raw: sql)", as: Value.self)
+      }
     }
 
     /// Counts the rows of `table`.
@@ -240,11 +329,14 @@
     }
 
     /// The value of the pragma `name`, as a reading connection sees it.
-    func pragma<Value: QueryRepresentable>(
+    ///
+    /// The pragma is read through its table-valued function, since SQLite reports a pragma such
+    /// as `journal_mode`, which can also set the mode, as one that may write.
+    func pragma<Value: TestColumnValue>(
       _ name: String,
       as type: Value.Type
-    ) async throws -> Value.QueryOutput? where Value.QueryOutput: Sendable {
-      try await self.fetchOne(sql: "PRAGMA \(name)", as: Value.self)
+    ) async throws -> Value? {
+      try await self.fetchOne(sql: "SELECT * FROM pragma_\(name)", as: Value.self)
     }
   }
 #endif

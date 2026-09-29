@@ -1,5 +1,3 @@
-import StructuredQueries
-
 final class SQLiteStatementCache {
   private struct Table: Hashable {
     let schema: SQLiteSchemaName
@@ -37,32 +35,47 @@ final class SQLiteStatementCache {
     self.capacity = max(0, capacity)
   }
 
-  func prepare(_ sql: String) throws -> SQLitePreparedStatement {
-    try prepare(sql, flags: 0)
+  // Each of these compiles a caller's SQL, and returns `nil` for SQL that holds no statement, such
+  // as an empty query. A statement that may write is refused when `requiresReadOnly` is set, before
+  // anything is derived from it.
+
+  func prepare(_ sql: String, requiresReadOnly: Bool) throws -> SQLitePreparedStatement? {
+    try prepare(sql, flags: 0, requiresReadOnly: requiresReadOnly)
   }
 
-  func checkOut(_ sql: String) throws -> SQLitePreparedStatement {
+  func checkOut(_ sql: String, requiresReadOnly: Bool) throws -> SQLitePreparedStatement? {
     if let statement = idle.removeValue(forKey: sql) {
+      guard !requiresReadOnly || statement.isReadOnly else {
+        checkIn(statement, sql: sql)
+        throw Self.mayWriteError(sql: sql)
+      }
       return statement
     }
     // A cache that keeps nothing gains nothing from hinting that the statement will be reused.
-    return try prepare(sql, flags: capacity > 0 ? SQLitePrepareFlags.persistent.rawValue : 0)
+    return try prepare(
+      sql,
+      flags: capacity > 0 ? SQLitePrepareFlags.persistent.rawValue : 0,
+      requiresReadOnly: requiresReadOnly
+    )
   }
 
-  private func prepare(_ sql: String, flags: UInt32) throws -> SQLitePreparedStatement {
+  private func prepare(
+    _ sql: String,
+    flags: UInt32,
+    requiresReadOnly: Bool
+  ) throws -> SQLitePreparedStatement? {
     let (statement, authorizations) = try authorizer.recordingAuthorizations {
-      try library.pointee.prepare(sql, on: connection, flags: flags)
+      try library.pointee.prepareStatement(sql, on: connection, flags: flags)
     }
-    guard let statement else {
-      throw SQLiteError.reported(
-        by: library.pointee,
-        on: connection,
-        code: SQLiteResultCode.ok.rawValue,
-        sql: sql
-      )
+    guard let statement else { return nil }
+    let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
+    guard !requiresReadOnly || isReadOnly else {
+      _ = library.pointee.statements.execution.finalize(statement)
+      throw Self.mayWriteError(sql: sql)
     }
     return SQLitePreparedStatement(
       pointer: statement,
+      isReadOnly: isReadOnly,
       authorizations: authorizations,
       cacheGeneration: generation,
       statements: self,
@@ -72,8 +85,18 @@ final class SQLiteStatementCache {
     )
   }
 
+  // Raw SQL cannot show through its type that it only reads, so a read-only access holds each
+  // statement to it when it is compiled, before anything has run.
+  private static func mayWriteError(sql: String) -> SQLiteError {
+    SQLiteError(
+      code: .readOnly,
+      message: "a read-only query may write; run it in a write transaction instead",
+      sql: sql
+    )
+  }
+
   func refreshedMetadata(for statement: OpaquePointer, sql: String) -> SQLitePreparedStatement? {
-    guard let probe = try? prepare(sql, flags: 0) else { return nil }
+    guard let probe = try? prepare(sql, flags: 0, requiresReadOnly: false) else { return nil }
     defer { _ = library.pointee.statements.execution.finalize(probe.pointer) }
     return SQLitePreparedStatement(pointer: statement, metadata: probe)
   }
@@ -192,21 +215,21 @@ final class SQLiteStatementCache {
     in table: String,
     schema: SQLiteSchemaName
   ) -> TableUpdateScope? {
-    let query: QueryFragment =
-      """
+    let query: SQL = """
       SELECT
         info.name,
         info.hidden,
         coalesce(upper(ltrim(tables.sql)) GLOB 'CREATE VIRTUAL TABLE *', 0)
-      FROM pragma_table_xinfo(\(bind: table), \(bind: schema.rawValue)) AS info
+      FROM pragma_table_xinfo(\(table), \(schema.rawValue)) AS info
       LEFT JOIN \(quote: schema.rawValue).sqlite_schema AS tables
-        ON tables.type = 'table' AND tables.name = \(bind: table) COLLATE NOCASE
+        ON tables.type = 'table' AND tables.name = \(table) COLLATE NOCASE
       """
-    let (sql, bindings) = prepareQuery(query)
-    guard let statement = try? library.pointee.prepare(sql, on: connection) else { return nil }
+    guard let statement = try? library.pointee.prepare(query.text, on: connection) else {
+      return nil
+    }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
     do {
-      try bind(bindings, to: statement, library: library)
+      try bind(query, to: statement, library: library)
     } catch {
       return nil
     }
@@ -255,8 +278,12 @@ struct SQLitePreparedStatement {
   let invalidatesStatementCache: Bool
   let cacheGeneration: UInt64
 
+  // `sqlite3_stmt_readonly`, which is what a read transaction is refused a statement by.
+  let isReadOnly: Bool
+
   init(pointer: OpaquePointer, metadata: Self) {
     self.pointer = pointer
+    self.isReadOnly = metadata.isReadOnly
     self.readRegion = metadata.readRegion
     self.changedRegion = metadata.changedRegion
     self.invalidatesStatementCache = metadata.invalidatesStatementCache
@@ -265,6 +292,7 @@ struct SQLitePreparedStatement {
 
   init(
     pointer: OpaquePointer,
+    isReadOnly: Bool,
     authorizations: [SQLiteAuthorization],
     cacheGeneration: UInt64 = 0,
     statements: SQLiteStatementCache?,
@@ -274,6 +302,7 @@ struct SQLitePreparedStatement {
   ) {
     self.pointer = pointer
     self.cacheGeneration = cacheGeneration
+    self.isReadOnly = isReadOnly
     self.readRegion = sqliteDatabaseRegion(readBy: authorizations) { table in
       guard let authorizer else { return nil }
       return sqliteResolvedSchema(
@@ -288,31 +317,29 @@ struct SQLitePreparedStatement {
       ?? authorizations.reduce(into: OrbitDatabaseRegion.empty) { region, authorization in
         region.formUnion(authorization.changedRegion { _, _ in nil })
       }
-    if changedRegion.isEmpty && library.pointee.statements.inspection.isReadOnly(pointer) == 0 {
+    if changedRegion.isEmpty && !isReadOnly {
       changedRegion = .fullDatabase
     }
     self.changedRegion = changedRegion
     self.invalidatesStatementCache = sqliteInvalidatesStatementCache(
       after: authorizations,
-      statement: pointer,
-      library: library
+      isReadOnly: isReadOnly
     )
   }
 }
 
+// `isReadOnly` is what `sqlite3_stmt_readonly` reports for the statement.
 func sqliteInvalidatesStatementCache(
   after authorizations: [SQLiteAuthorization],
-  statement: OpaquePointer,
-  library: UnsafePointer<SQLiteLibrary>
+  isReadOnly: Bool
 ) -> Bool {
   // Without an authorizer there is no safe way to distinguish DDL and connection-changing
   // pragmas from ordinary mutations. Invalidating after every write is broader but correct.
   if authorizations.isEmpty {
-    return library.pointee.statements.inspection.isReadOnly(statement) == 0
+    return !isReadOnly
   }
   return authorizations.contains(where: \.invalidatesStatementCache)
-    || (library.pointee.statements.inspection.isReadOnly(statement) == 0
-      && authorizations.contains { $0.action == .pragma })
+    || (!isReadOnly && authorizations.contains { $0.action == .pragma })
 }
 
 extension SQLiteAuthorization {

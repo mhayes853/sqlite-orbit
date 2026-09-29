@@ -1,45 +1,6 @@
-public import StructuredQueriesSQLite
-
-/// A single database result row whose lifetime is limited to the current cursor access.
-///
-/// A row is a view onto the statement's current position, so each `decode` reads the next column
-/// along rather than re-reading the first. Advancing the cursor invalidates the row it lent, which
-/// is why a row is noncopyable and nonescapable.
-///
-/// ```swift
-/// try await database.read { transaction in
-///   var cursor = try transaction.rowCursor(#sql("SELECT id, title FROM reminders", as: Void.self))
-///   while var row = try cursor.next() {
-///     let id = try row.decode(Int.self)
-///     let title = try row.decode(String.self)
-///     print(id, title)
-///   }
-/// }
-/// ```
-public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
-  /// Decodes the next column of this row as a Structured Queries value.
-  ///
-  /// - Parameter type: The value to decode.
-  /// - Returns: The decoded value.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the column's storage class or contents
-  ///   cannot produce `type`.
-  @_lifetime(self: copy self)
-  mutating func decode<Value: QueryRepresentable>(
-    _ type: Value.Type
-  ) throws -> Value.QueryOutput
-
-  /// Decodes the next columns of this row as a tuple of Structured Queries values.
-  ///
-  /// - Parameter type: The tuple of values to decode, one column each.
-  /// - Returns: The decoded values.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a column's storage class or contents
-  ///   cannot produce its value.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_lifetime(self: copy self)
-  mutating func decode<each Value: QueryRepresentable>(
-    _ type: (repeat each Value).Type
-  ) throws -> (repeat (each Value).QueryOutput)
-}
+#if StructuredQueries
+  public import StructuredQueriesSQLite
+#endif
 
 /// A cursor over raw rows returned by a database statement.
 ///
@@ -49,9 +10,9 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
 ///
 /// ```swift
 /// try await database.read { transaction in
-///   var cursor = try transaction.rowCursor(#sql("SELECT title FROM reminders", as: Void.self))
+///   var cursor = try transaction.rowCursor("SELECT title FROM reminders")
 ///   try cursor.forEach { row in
-///     print(try row.decode(String.self))
+///     print(row[0].textValue ?? "")
 ///   }
 /// }
 /// ```
@@ -86,6 +47,19 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
       try body(&row)
     }
   }
+}
+
+// Swift 6.3 deinitializes the uninitialized result of a throwing call when the caller binds a
+// nonescapable value returned indirectly, as a generic one is, to a local, so a cursor whose
+// statement failed to prepare would be torn down as garbage. Handing the result straight to this
+// function as an argument never binds it, and the function binds the cursor only once it exists.
+@usableFromInline
+func withOrbitCursor<Cursor: OrbitDatabaseRowCursor & ~Copyable & ~Escapable, Result>(
+  _ cursor: consuming Cursor,
+  _ body: (inout Cursor) throws -> Result
+) rethrows -> Result {
+  var cursor = cursor
+  return try body(&cursor)
 }
 
 /// A cursor over decoded values returned by a database statement.
@@ -133,82 +107,6 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
     while var value = try next() {
       try body(&value)
     }
-  }
-}
-
-/// A cursor that decodes each raw row into one Structured Queries value.
-///
-/// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-/// that projects a single value, so it is rarely named directly.
-///
-/// ```swift
-/// try await database.read { transaction in
-///   var cursor: OrbitDatabaseQueryCursor = try transaction.fetchCursor(Reminder.all)
-///   while let reminder = try cursor.next() {
-///     print(reminder.title)
-///   }
-/// }
-/// ```
-public struct OrbitDatabaseQueryCursor<Base: OrbitDatabaseRowCursor, Value: QueryRepresentable>:
-  OrbitDatabaseCursor, ~Copyable, ~Escapable
-where Base: ~Copyable, Base: ~Escapable {
-  /// The value this cursor produces for each row.
-  public typealias Element = Value.QueryOutput
-
-  @usableFromInline
-  internal var base: Base
-
-  @_lifetime(copy base)
-  @usableFromInline
-  internal init(base: consuming Base) {
-    self.base = base
-  }
-
-  /// Advances the cursor and returns the next value, or `nil` when exhausted.
-  @inlinable
-  public mutating func next() throws -> Value.QueryOutput? {
-    guard var row = try base.next() else { return nil }
-    return try row.decode(Value.self)
-  }
-}
-
-/// A cursor that decodes each raw row into a tuple of Structured Queries values.
-///
-/// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-/// that projects several values, so it is rarely named directly.
-///
-/// ```swift
-/// try await database.read { transaction in
-///   var cursor = try transaction.fetchCursor(Reminder.select { ($0.id, $0.title) })
-///   while let (id, title) = try cursor.next() {
-///     print(id, title)
-///   }
-/// }
-/// ```
-@available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-public struct OrbitDatabaseTupleQueryCursor<
-  Base: OrbitDatabaseRowCursor,
-  each Value: QueryRepresentable
->:
-  OrbitDatabaseCursor, ~Copyable, ~Escapable
-where Base: ~Copyable, Base: ~Escapable {
-  /// The value this cursor produces for each row.
-  public typealias Element = (repeat (each Value).QueryOutput)
-
-  @usableFromInline
-  internal var base: Base
-
-  @_lifetime(copy base)
-  @usableFromInline
-  internal init(base: consuming Base) {
-    self.base = base
-  }
-
-  /// Advances the cursor and returns the next value, or `nil` when exhausted.
-  @inlinable
-  public mutating func next() throws -> (repeat (each Value).QueryOutput)? {
-    guard var row = try base.next() else { return nil }
-    return try row.decode((repeat each Value).self)
   }
 }
 
@@ -1055,3 +953,83 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
     )
   }
 }
+
+// MARK: - Structured Queries
+
+#if StructuredQueries
+  /// A cursor that decodes each raw row into one Structured Queries value.
+  ///
+  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
+  /// that projects a single value, so it is rarely named directly.
+  ///
+  /// ```swift
+  /// try await database.read { transaction in
+  ///   var cursor: OrbitDatabaseQueryCursor = try transaction.fetchCursor(Reminder.all)
+  ///   while let reminder = try cursor.next() {
+  ///     print(reminder.title)
+  ///   }
+  /// }
+  /// ```
+  public struct OrbitDatabaseQueryCursor<Base: OrbitDatabaseRowCursor, Value: QueryRepresentable>:
+    OrbitDatabaseCursor, ~Copyable, ~Escapable
+  where Base: ~Copyable, Base: ~Escapable, Base.Row: OrbitDatabaseStructuredRow {
+    /// The value this cursor produces for each row.
+    public typealias Element = Value.QueryOutput
+
+    @usableFromInline
+    internal var base: Base
+
+    @_lifetime(copy base)
+    @usableFromInline
+    internal init(base: consuming Base) {
+      self.base = base
+    }
+
+    /// Advances the cursor and returns the next value, or `nil` when exhausted.
+    @inlinable
+    public mutating func next() throws -> Value.QueryOutput? {
+      guard var row = try base.next() else { return nil }
+      return try row.decode(Value.self)
+    }
+  }
+
+  /// A cursor that decodes each raw row into a tuple of Structured Queries values.
+  ///
+  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
+  /// that projects several values, so it is rarely named directly.
+  ///
+  /// ```swift
+  /// try await database.read { transaction in
+  ///   var cursor = try transaction.fetchCursor(Reminder.select { ($0.id, $0.title) })
+  ///   while let (id, title) = try cursor.next() {
+  ///     print(id, title)
+  ///   }
+  /// }
+  /// ```
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  public struct OrbitDatabaseTupleQueryCursor<
+    Base: OrbitDatabaseRowCursor,
+    each Value: QueryRepresentable
+  >:
+    OrbitDatabaseCursor, ~Copyable, ~Escapable
+  where Base: ~Copyable, Base: ~Escapable, Base.Row: OrbitDatabaseStructuredRow {
+    /// The value this cursor produces for each row.
+    public typealias Element = (repeat (each Value).QueryOutput)
+
+    @usableFromInline
+    internal var base: Base
+
+    @_lifetime(copy base)
+    @usableFromInline
+    internal init(base: consuming Base) {
+      self.base = base
+    }
+
+    /// Advances the cursor and returns the next value, or `nil` when exhausted.
+    @inlinable
+    public mutating func next() throws -> (repeat (each Value).QueryOutput)? {
+      guard var row = try base.next() else { return nil }
+      return try row.decode((repeat each Value).self)
+    }
+  }
+#endif

@@ -1,5 +1,3 @@
-import Foundation
-
 #if canImport(Dispatch)
   import Dispatch
   private typealias PoolSemaphore = DispatchSemaphore

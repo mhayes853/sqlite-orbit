@@ -1,7 +1,7 @@
-// The Unix datagram transport's I/O layer reaches the platform's C library through this file, and
-// through the backend files for each readiness mechanism, which import the module that mechanism
-// lives in: Darwin for kqueue, and CLinuxEvents for epoll and inotify. Nothing else imports a C
-// library. How a constant is spelled, which flags a call can take and how `errno` is read are
+// The Unix datagram transport's I/O layer reaches the platform's C library through this file,
+// through `FileSystem` for what it does with paths, and through the backend files for each
+// readiness mechanism, which import the module that mechanism lives in: Darwin for kqueue, and
+// CLinuxEvents for epoll and inotify. Nothing else imports a C library. How a constant is spelled, which flags a call can take and how `errno` is read are
 // settled here, so the rest of the layer needs no guard beyond the one that says it exists at all.
 #if canImport(Darwin) || os(Linux) || os(Android)
   #if canImport(Darwin)
@@ -21,8 +21,9 @@
     let systemKevent = kevent
   #endif
 
-  /// The C library calls the layer makes outside its readiness backends, each spelled once, with
-  /// the same Swift types on every platform.
+  /// The C library calls the layer makes on descriptors and sockets outside its readiness
+  /// backends, each spelled once, with the same Swift types on every platform. What it does with
+  /// paths is ``FileSystem``'s.
   ///
   /// Each call returns what the C call returned and leaves `errno` as the C call left it, so a
   /// failure is read, through ``lastErrorCode``, by the caller that knows what it means. Where
@@ -72,30 +73,6 @@
     }
 
     // MARK: - Files
-
-    static func removeFile(atPath path: String) -> Bool {
-      unlink(path) == 0
-    }
-
-    /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
-    /// one file or the other and never neither.
-    static func renameFile(atPath source: String, toPath destination: String) -> Bool {
-      rename(source, destination) == 0
-    }
-
-    /// Sets the access and modification times of the file at `path`, whatever kind it is, to
-    /// now, which needs the caller to own it or be able to write to it.
-    static func touchFile(atPath path: String) -> Bool {
-      utimes(path, nil) == 0
-    }
-
-    /// Removes the directory at `path` if it is empty.
-    ///
-    /// A directory that is not empty fails with `ENOTEMPTY`, or on some systems `EEXIST`, and one
-    /// that is not there with `ENOENT`.
-    static func removeDirectory(atPath path: String) -> Bool {
-      rmdir(path) == 0
-    }
 
     /// Opens the file at `path` for reading and writing, creating it if needed.
     static func openCreatingFile(atPath path: String) -> Int32 {

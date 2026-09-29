@@ -16,9 +16,11 @@ final class RemindersWidgetReloader: OrbitIPCDatabase.Delegate, Sendable {
   ) throws {
     let region = try database.readBlocking { transaction in
       try OrbitDatabaseRegion(
-        WidgetReminder.recent(
-          limit: RemindersWidgetConfiguration.maximumReminderCount
-        ).query,
+        SQL(
+          fragment: WidgetReminder.recent(
+            limit: RemindersWidgetConfiguration.maximumReminderCount
+          ).query
+        ),
         in: transaction
       )
     }

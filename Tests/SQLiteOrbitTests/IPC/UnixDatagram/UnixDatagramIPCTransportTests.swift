@@ -43,7 +43,7 @@
   func unixDatagramTransportBroadensARegionThatDoesNotFit() async throws {
     try await withTemporaryDirectory("ipc") { directory in
       let configuration = UnixDatagramIPCTransport.Configuration(
-        directory: directory,
+        directoryPath: directory.path,
         // Room for the full database's 21 bytes, and not for the column's 50.
         maximumDatagramByteCount: 40,
         receiveBufferByteCount: 4_096
@@ -126,9 +126,9 @@
   @Test
   func sharedReusesOnlyTransportsWithTheSameConfiguration() throws {
     try withTemporaryDirectory("ipc") { directory in
-      let configuration = UnixDatagramIPCTransport.Configuration(directory: directory)
+      let configuration = UnixDatagramIPCTransport.Configuration(directoryPath: directory.path)
       let otherConfiguration = UnixDatagramIPCTransport.Configuration(
-        directory: directory,
+        directoryPath: directory.path,
         receiveBufferByteCount: 128 * 1024
       )
 
@@ -151,7 +151,7 @@
     // genuinely new transport produces is a new socket endpoint, generated once at construction, so
     // this compares the endpoint a fresh subscription registers under before and after release.
     try withTemporaryDirectory("ipc") { directory in
-      let configuration = UnixDatagramIPCTransport.Configuration(directory: directory)
+      let configuration = UnixDatagramIPCTransport.Configuration(directoryPath: directory.path)
       let registry = try unixDatagramRegistry(directory, endpointName: "observer")
       let database = OrbitDatabaseIdentifier(rawValue: "shared-lifetime")
 
@@ -370,14 +370,28 @@
         #expect(throws: (any Error).self) {
           try UnixDatagramIPCTransport(
             configuration: .init(
-              directory: directory,
+              directoryPath: directory.path,
               maximumDatagramByteCount: maximum,
               receiveBufferByteCount: receiveBuffer
             )
           )
         }
       }
+      #expect(throws: (any Error).self) {
+        try UnixDatagramIPCTransport(
+          configuration: .init(directoryPath: directory.path, refreshInterval: .seconds(-1))
+        )
+      }
     }
+  }
+
+  @Test
+  func unixDatagramConfigurationRefreshesHourlyByDefault() {
+    #expect(UnixDatagramIPCTransport.Configuration.default.refreshInterval == .seconds(60 * 60))
+    #expect(
+      UnixDatagramIPCTransport.Configuration.default.refreshInterval
+        == UnixDatagramIPCTransport.Configuration.defaultRefreshInterval
+    )
   }
 
   /// A receiver whose handler holds the transport's thread at the first message until

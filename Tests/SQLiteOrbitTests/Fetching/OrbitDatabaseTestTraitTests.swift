@@ -33,7 +33,7 @@
     func databaseExpressionIsEvaluatedForEveryTestCase(_ argument: Int) async throws {
       let database = OrbitDefaultDatabase.current
       try await database.write { transaction in
-        try transaction.execute("CREATE TABLE marker_\(argument) (value)")
+        try transaction.executeScript("CREATE TABLE marker_\(argument) (value)")
         // Every case also creates this table. It would fail if the suite shared one database.
         try transaction.execute("CREATE TABLE case_local_marker (value)")
       }

@@ -1,5 +1,4 @@
 #if BuiltInSQLite
-  import StructuredQueriesSQLite
   import Testing
 
   @testable import SQLiteOrbit
@@ -67,15 +66,13 @@
       let error = #expect(throws: SQLiteError.self) {
         try handle.read { transaction in
           try transaction.fetchAll(
-            #sql(
-              """
-              WITH RECURSIVE counter(x) AS (
-                SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 1000
-              )
-              SELECT x FROM counter
-              """,
-              as: Int.self
+            """
+            WITH RECURSIVE counter(x) AS (
+              SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 1000
             )
+            SELECT x FROM counter
+            """,
+            as: Int.self
           )
         }
       }

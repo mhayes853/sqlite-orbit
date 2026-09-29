@@ -6,7 +6,7 @@
 /// ```swift
 /// do {
 ///   try await database.write { transaction in
-///     try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///     try transaction.execute("INSERT INTO reminders (id, title) VALUES (1, \("Get milk"))")
 ///   }
 /// } catch let error as SQLiteError where error.primaryCode == .constraint {
 ///   print(error.message ?? "")
@@ -50,7 +50,7 @@ public struct SQLiteError: Error, Hashable, Sendable {
   ///
   /// ```swift
   /// do {
-  ///   try await database.write { try $0.execute(Reminder.delete()) }
+  ///   try await database.write { try $0.execute("DELETE FROM reminders") }
   /// } catch let error as SQLiteError where error.isBusy {
   ///   // Try again later.
   /// }

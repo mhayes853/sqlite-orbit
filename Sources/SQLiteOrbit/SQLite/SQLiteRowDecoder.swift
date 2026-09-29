@@ -1,220 +1,252 @@
-import Foundation
-import StructuredQueries
+#if StructuredQueries
+  import StructuredQueriesSQLite
+  import _SQLiteOrbitFoundation
 
-@usableFromInline
-struct SQLiteRowDecoder: QueryDecoder {
+  extension SQLiteRow: OrbitDatabaseStructuredRow {
+    /// Decodes the next column of this row.
+    ///
+    /// - Parameter type: The value to decode.
+    /// - Returns: The decoded value.
+    /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its storage class or
+    ///   contents cannot produce `type`.
+    @inlinable
+    @_lifetime(self: copy self)
+    public mutating func decode<Value: QueryRepresentable>(
+      _ type: Value.Type
+    ) throws -> Value.QueryOutput {
+      do {
+        return try Value(decoder: &decoder).queryOutput
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
+    }
+
+    /// Decodes the next columns of this row as a tuple, one column per value.
+    ///
+    /// - Parameter type: The tuple of values to decode.
+    /// - Returns: The decoded values.
+    /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column that could not be decoded.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @inlinable
+    @_lifetime(self: copy self)
+    public mutating func decode<each Value: QueryRepresentable>(
+      _ type: (repeat each Value).Type
+    ) throws -> (repeat (each Value).QueryOutput) {
+      do {
+        return try decoder.decodeColumns((repeat each Value).self)
+      } catch let error as QueryDecodingError {
+        throw decoder.describe(error)
+      }
+    }
+  }
+
   @usableFromInline
-  let library: UnsafePointer<SQLiteLibrary>
+  struct SQLiteRowDecoder: QueryDecoder {
+    @usableFromInline
+    let library: UnsafePointer<SQLiteLibrary>
 
-  @usableFromInline
-  let statement: OpaquePointer
+    @usableFromInline
+    let statement: OpaquePointer
 
-  @usableFromInline
-  var currentIndex: Int32 = 0
+    @usableFromInline
+    var currentIndex: Int32 = 0
 
-  @usableFromInline
-  init(library: UnsafePointer<SQLiteLibrary>, statement: OpaquePointer) {
-    self.library = library
-    self.statement = statement
-  }
-
-  /// Checks the storage class of the column the decoder is standing on and steps past it.
-  ///
-  /// - Parameters:
-  ///   - expected: The storage class the value has to be in.
-  ///   - columnType: The type being decoded, which names the type mismatch.
-  /// - Returns: The column the value is in, or `nil` when the value is SQL NULL.
-  /// - Throws: ``QueryDecodingError/typeMismatch(_:)`` for any other storage class, without
-  ///   stepping past the column, so the error can name the one that did not decode.
-  @inlinable
-  mutating func column(
-    _ expected: SQLiteColumnType,
-    _ columnType: Any.Type
-  ) throws(QueryDecodingError) -> Int32? {
-    let column = currentIndex
-    switch library.pointee.columns.type(statement, column) {
-    case SQLiteColumnType.null.rawValue:
-      currentIndex += 1
-      return nil
-    case expected.rawValue:
-      currentIndex += 1
-      return column
-    default:
-      throw QueryDecodingError.typeMismatch(columnType)
+    @usableFromInline
+    init(library: UnsafePointer<SQLiteLibrary>, statement: OpaquePointer) {
+      self.library = library
+      self.statement = statement
     }
-  }
 
-  @inlinable
-  mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
-    guard let column = try column(.blob, columnType) else { return nil }
-    // SQLite asks for the value before its size: reading the size can convert the value, and a
-    // pointer taken before that conversion is the one it invalidates.
-    guard let bytes = library.pointee.columns.blob(statement, column) else { return [] }
-    let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-    guard byteCount > 0 else { return [] }
-    return [UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount))
-  }
-
-  @inlinable
-  mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-    guard let column = try column(.float, columnType) else { return nil }
-    return library.pointee.columns.double(statement, column)
-  }
-
-  @inlinable
-  mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-    guard let column = try column(.integer, columnType) else { return nil }
-    return library.pointee.columns.int64(statement, column)
-  }
-
-  @inlinable
-  mutating func decode(_ columnType: UInt64.Type) throws(QueryDecodingError) -> UInt64? {
-    guard let value = try decode(Int64.self) else { return nil }
-    guard value >= 0 else {
-      throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
+    /// Checks the storage class of the column the decoder is standing on and steps past it.
+    ///
+    /// - Parameters:
+    ///   - expected: The storage class the value has to be in.
+    ///   - columnType: The type being decoded, which names the type mismatch.
+    /// - Returns: The column the value is in, or `nil` when the value is SQL NULL.
+    /// - Throws: ``QueryDecodingError/typeMismatch(_:)`` for any other storage class, without
+    ///   stepping past the column, so the error can name the one that did not decode.
+    @inlinable
+    mutating func column(
+      _ expected: SQLiteColumnType,
+      _ columnType: Any.Type
+    ) throws(QueryDecodingError) -> Int32? {
+      let column = currentIndex
+      switch library.pointee.columns.type(statement, column) {
+      case SQLiteColumnType.null.rawValue:
+        currentIndex += 1
+        return nil
+      case expected.rawValue:
+        currentIndex += 1
+        return column
+      default:
+        throw QueryDecodingError.typeMismatch(columnType)
+      }
     }
-    return UInt64(value)
-  }
 
-  @inlinable
-  mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-    guard let column = try column(.text, columnType) else { return nil }
-    // The value is read before its size, which is the order SQLite documents as safe.
-    guard let text = library.pointee.columns.text(statement, column) else { return "" }
-    let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-    guard byteCount > 0 else { return "" }
-    return String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
-  }
-
-  @inlinable
-  mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
-    try decode(Int64.self).map { $0 != 0 }
-  }
-
-  @inlinable
-  mutating func decode(_ columnType: Int.Type) throws(QueryDecodingError) -> Int? {
-    guard let value = try decode(Int64.self) else { return nil }
-    // `Int` is 32 bits wide on arm64_32, which is every Apple Watch this package supports, so a
-    // rowid past two billion would trap rather than be reported.
-    guard let value = Int(exactly: value) else {
-      throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
+    @inlinable
+    mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
+      guard let column = try column(.blob, columnType) else { return nil }
+      return library.pointee.columns.blobValue(statement, at: column)
     }
-    return value
-  }
 
-  @inlinable
-  mutating func decode(_ columnType: Date.Type) throws(QueryDecodingError) -> Date? {
-    guard let value = try decode(String.self) else { return nil }
-    do {
-      return try Date(orbitISO8601String: value)
-    } catch {
-      throw QueryDecodingError.other(error)
+    @inlinable
+    mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
+      guard let column = try column(.float, columnType) else { return nil }
+      return library.pointee.columns.double(statement, column)
     }
-  }
 
-  @inlinable
-  mutating func decode(_ columnType: UUID.Type) throws(QueryDecodingError) -> UUID? {
-    guard let column = try column(.text, columnType) else { return nil }
-    guard let text = library.pointee.columns.text(statement, column) else {
-      throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
+    @inlinable
+    mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
+      guard let column = try column(.integer, columnType) else { return nil }
+      return library.pointee.columns.int64(statement, column)
     }
-    let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-    let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
-    if let uuid = UUID(orbitUTF8: utf8) {
+
+    @inlinable
+    mutating func decode(_ columnType: UInt64.Type) throws(QueryDecodingError) -> UInt64? {
+      guard let value = try decode(Int64.self) else { return nil }
+      guard value >= 0 else {
+        throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
+      }
+      return UInt64(value)
+    }
+
+    @inlinable
+    mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
+      guard let column = try column(.text, columnType) else { return nil }
+      return library.pointee.columns.textValue(statement, at: column)
+    }
+
+    @inlinable
+    mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {
+      try decode(Int64.self).map { $0 != 0 }
+    }
+
+    @inlinable
+    mutating func decode(_ columnType: Int.Type) throws(QueryDecodingError) -> Int? {
+      guard let value = try decode(Int64.self) else { return nil }
+      // `Int` is 32 bits wide on arm64_32, which is every Apple Watch this package supports, so a
+      // rowid past two billion would trap rather than be reported.
+      guard let value = Int(exactly: value) else {
+        throw QueryDecodingError.other(OrbitDatabaseIntegerOverflowError(value: value))
+      }
+      return value
+    }
+
+    @inlinable
+    mutating func decode(_ columnType: Date.Type) throws(QueryDecodingError) -> Date? {
+      guard let value = try decode(String.self) else { return nil }
+      do {
+        return try Date(orbitISO8601String: value)
+      } catch {
+        throw QueryDecodingError.other(error)
+      }
+    }
+
+    @inlinable
+    mutating func decode(_ columnType: UUID.Type) throws(QueryDecodingError) -> UUID? {
+      guard let column = try column(.text, columnType) else { return nil }
+      guard let text = library.pointee.columns.text(statement, column) else {
+        throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
+      }
+      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
+      let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
+      if let uuid = UUID(orbitUTF8: utf8) {
+        return uuid
+      }
+      guard let uuid = UUID(uuidString: String(decoding: utf8, as: UTF8.self)) else {
+        throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
+      }
       return uuid
     }
-    guard let uuid = UUID(uuidString: String(decoding: utf8, as: UTF8.self)) else {
-      throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
-    }
-    return uuid
   }
-}
 
-extension SQLiteRowDecoder {
-  @usableFromInline
-  func describe(_ error: QueryDecodingError) -> any Error {
-    switch error {
-    case .missingRequiredColumn:
-      return OrbitDatabaseColumnDecodingError(
-        library: library,
-        statement: statement,
-        columnIndex: currentIndex - 1,
-        reason: "to not be NULL"
-      )
-    case .typeMismatch(let columnType):
-      return OrbitDatabaseColumnDecodingError(
-        library: library,
-        statement: statement,
-        columnIndex: currentIndex,
-        reason:
-          "to decode \(columnType), but found "
-          + orbitStorageClassName(library.pointee.columns.type(statement, currentIndex))
-      )
-    case .other(let error):
-      return error
+  extension SQLiteRowDecoder {
+    @usableFromInline
+    func describe(_ error: QueryDecodingError) -> any Error {
+      switch error {
+      case .missingRequiredColumn:
+        return OrbitDatabaseColumnDecodingError(
+          library: library,
+          statement: statement,
+          columnIndex: currentIndex - 1,
+          reason: "to not be NULL"
+        )
+      case .typeMismatch(let columnType):
+        return OrbitDatabaseColumnDecodingError(
+          library: library,
+          statement: statement,
+          columnIndex: currentIndex,
+          reason:
+            "to decode \(columnType), but found "
+            + orbitStorageClassName(library.pointee.columns.type(statement, currentIndex))
+        )
+      case .other(let error):
+        return error
+      }
     }
   }
-}
 
-/// A decoding failure, reported against the column it happened on.
-///
-/// SQLite is untyped enough that a schema change or a hand-written `SELECT` can quietly hand a
-/// column back in the wrong storage class. This names which column it was.
-///
-/// ```swift
-/// do {
-///   _ = try await database.read { transaction in
-///     try transaction.fetchAll(#sql("SELECT id, title FROM reminders", as: (Int, Int).self))
-///   }
-/// } catch let error as OrbitDatabaseColumnDecodingError {
-///   print(error.columnIndex, error.columnName, error.reason)
-/// }
-/// ```
-public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
-  /// The zero-based position of the column in the result row.
-  public let columnIndex: Int
+  /// A decoding failure, reported against the column it happened on.
+  ///
+  /// SQLite is untyped enough that a schema change or a hand-written `SELECT` can quietly hand a
+  /// column back in the wrong storage class. This names which column it was.
+  ///
+  /// ```swift
+  /// do {
+  ///   _ = try await database.read { transaction in
+  ///     try transaction.fetchAll(#sql("SELECT id, title FROM reminders", as: (Int, Int).self))
+  ///   }
+  /// } catch let error as OrbitDatabaseColumnDecodingError {
+  ///   print(error.columnIndex, error.columnName, error.reason)
+  /// }
+  /// ```
+  public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
+    /// The zero-based position of the column in the result row.
+    public let columnIndex: Int
 
-  /// The column's name, or `"?"` when SQLite had none for it.
-  public let columnName: String
+    /// The column's name, or `"?"` when SQLite had none for it.
+    public let columnName: String
 
-  /// What the decoder expected, phrased to follow "Expected column N (name) ".
-  public let reason: String
+    /// What the decoder expected, phrased to follow "Expected column N (name) ".
+    public let reason: String
 
-  /// The SQL of the statement that produced the row.
-  public let sql: String
+    /// The SQL of the statement that produced the row.
+    public let sql: String
+
+    @usableFromInline
+    init(
+      library: UnsafePointer<SQLiteLibrary>,
+      statement: OpaquePointer,
+      columnIndex: Int32,
+      reason: String
+    ) {
+      self.columnIndex = Int(columnIndex)
+      self.columnName =
+        library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?"
+      self.reason = reason
+      self.sql =
+        library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
+    }
+
+    /// The column, its name, what was expected of it, and the SQL that produced it.
+    public var description: String {
+      """
+      Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
+
+      \(sql)
+      """
+    }
+  }
 
   @usableFromInline
-  init(
-    library: UnsafePointer<SQLiteLibrary>,
-    statement: OpaquePointer,
-    columnIndex: Int32,
-    reason: String
-  ) {
-    self.columnIndex = Int(columnIndex)
-    self.columnName =
-      library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?"
-    self.reason = reason
-    self.sql = library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
+  func orbitStorageClassName(_ columnType: Int32) -> String {
+    switch SQLiteColumnType(rawValue: columnType) {
+    case .blob: "BLOB"
+    case .float: "REAL"
+    case .integer: "INTEGER"
+    case .null: "NULL"
+    case .text: "TEXT"
+    default: "unknown"
+    }
   }
-
-  /// The column, its name, what was expected of it, and the SQL that produced it.
-  public var description: String {
-    """
-    Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
-
-    \(sql)
-    """
-  }
-}
-
-@usableFromInline
-func orbitStorageClassName(_ columnType: Int32) -> String {
-  switch SQLiteColumnType(rawValue: columnType) {
-  case .blob: "BLOB"
-  case .float: "REAL"
-  case .integer: "INTEGER"
-  case .null: "NULL"
-  case .text: "TEXT"
-  default: "unknown"
-  }
-}
+#endif

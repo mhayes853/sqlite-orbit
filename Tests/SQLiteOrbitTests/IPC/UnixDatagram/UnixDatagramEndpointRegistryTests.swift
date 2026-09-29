@@ -54,8 +54,10 @@
 
         // Written in place, which no endpoint does, so no entry of the directory changes and the
         // registry has no reason to read it again.
-        let marker = try sender.createDatabaseDirectory(coordinationKey: key)
-          .appending(path: "peer")
+        let marker = URL(
+          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: key).string
+        )
+        .appending(path: "peer")
 
         try Data(UnixDatagramWireProtocol.encodeMarker(self.lists)).write(to: marker)
 
@@ -67,8 +69,12 @@
     func unreadableMarkersAdvertiseTheFullDatabaseAndTemporaryOnesNothing() throws {
       try withTemporaryDirectory("registry") { directory in
         let sender = try unixDatagramRegistry(directory, endpointName: "sender")
-        let markers = try sender.createDatabaseDirectory(
-          coordinationKey: self.database.coordinationKey
+        let markers = URL(
+          fileURLWithPath:
+            try sender.createDatabaseDirectory(
+              coordinationKey: self.database.coordinationKey
+            )
+            .string
         )
 
         let corrupt: [String: [UInt8]] = ["empty": [], "short": [0xff], "truncated": [0, 1, 0]]
@@ -96,7 +102,9 @@
         try crashed?.advertise(self.items, coordinationKey: unsent.coordinationKey)
         let socketPath = try #require(crashed?.socketPath)
         // What a peer leaves if it dies between writing a marker and renaming it into place.
-        let interrupted = try sender.createDatabaseDirectory(coordinationKey: "interrupted")
+        let interrupted = URL(
+          fileURLWithPath: try sender.createDatabaseDirectory(coordinationKey: "interrupted").string
+        )
         try Data().write(to: interrupted.appending(path: ".crashed.tmp"))
 
         // Released without being shut down, which closes its socket and leaves everything else, as
@@ -207,7 +215,7 @@
     watchesDirectories: Bool = true
   ) throws -> UnixDatagramEndpointRegistry {
     try UnixDatagramEndpointRegistry(
-      directory: directory,
+      directory: OrbitCoordinationDirectory(path: directory.path),
       endpointName: endpointName,
       maximumDatagramByteCount: 60 * 1024,
       receiveBufferByteCount: 256 * 1024,

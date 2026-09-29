@@ -1,5 +1,3 @@
-import StructuredQueries
-
 enum SQLiteWriteTransactionMode: Equatable, Sendable {
   case immediate
   case concurrent
@@ -218,7 +216,7 @@ struct SQLiteHandle: ~Copyable {
   borrowing func execute(_ sql: String) throws {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    try Self.execute(sql, on: pointer, library: library)
+    try Self.executeScript(sql, on: pointer, library: library)
   }
 
   borrowing func read<Result: ~Copyable>(
@@ -418,25 +416,20 @@ struct SQLiteHandle: ~Copyable {
   }
 
   static func execute(
-    _ query: QueryFragment,
+    _ query: SQL,
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
-    let (sql, bindings) = prepareQuery(query)
-    guard let statement = try library.pointee.prepare(sql, on: connection) else {
-      throw SQLiteError.reported(
-        by: library.pointee,
-        on: connection,
-        code: SQLiteResultCode.ok.rawValue,
-        sql: sql
-      )
+    // SQL that holds no statement, such as an empty query, has nothing to run.
+    guard let statement = try library.pointee.prepareStatement(query.text, on: connection) else {
+      return
     }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
-    try bind(bindings, to: statement, library: library)
-    try stepToCompletion(statement, on: connection, library: library, sql: sql)
+    try bind(query, to: statement, library: library)
+    try stepToCompletion(statement, on: connection, library: library, sql: query.text)
   }
 
-  static func execute(
+  static func executeScript(
     _ sql: String,
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
@@ -477,13 +470,10 @@ struct SQLiteHandle: ~Copyable {
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard let statement else { return }
         next = tail ?? end
+        let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
 
         if let statements,
-          sqliteInvalidatesStatementCache(
-            after: authorizations,
-            statement: statement,
-            library: library
-          )
+          sqliteInvalidatesStatementCache(after: authorizations, isReadOnly: isReadOnly)
         {
           statements.invalidate()
         }
@@ -491,6 +481,7 @@ struct SQLiteHandle: ~Copyable {
         if let observations {
           let preparedStatement = SQLitePreparedStatement(
             pointer: statement,
+            isReadOnly: isReadOnly,
             authorizations: authorizations,
             statements: statements,
             connection: connection,
@@ -525,22 +516,77 @@ struct SQLiteHandle: ~Copyable {
 }
 
 extension SQLiteLibrary {
-  // Compiles the first statement in `sql`, or returns `nil` when it holds none, as a comment or
-  // whitespace does. SQLite can hand back a statement even when it reports a failure, so one is
-  // finalized here rather than left for the caller to leak.
+  // Compiles the first statement in fixed SQL the package wrote itself, or returns `nil` when it
+  // holds none, as a comment or whitespace does.
   func prepare(
     _ sql: String,
     on connection: OpaquePointer,
     flags: UInt32 = 0
   ) throws -> OpaquePointer? {
+    try prepare(sql, on: connection, flags: flags, isSingleStatement: false)
+  }
+
+  // Compiles the one statement a caller's SQL holds, or returns `nil` when it holds none, as an
+  // empty query, whitespace, or a comment does. SQL holding a second statement is refused, since
+  // a cursor steps only the first and the rest would otherwise be silently skipped.
+  func prepareStatement(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32 = 0
+  ) throws -> OpaquePointer? {
+    try prepare(sql, on: connection, flags: flags, isSingleStatement: true)
+  }
+
+  // SQLite can hand back a statement even when it reports a failure, so one is finalized here
+  // rather than left for the caller to leak.
+  private func prepare(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32,
+    isSingleStatement: Bool
+  ) throws -> OpaquePointer? {
     var statement: OpaquePointer?
-    let code = sql.withCString {
-      statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
+    var hasTrailingStatement = false
+    let code = sql.withCString { start in
+      var tail: UnsafePointer<CChar>?
+      let code = statements.preparation.prepare(connection, start, -1, flags, &statement, &tail)
+      if isSingleStatement, code == SQLiteResultCode.ok.rawValue, let tail {
+        hasTrailingStatement = self.hasStatement(in: tail, on: connection)
+      }
+      return code
     }
     guard code == SQLiteResultCode.ok.rawValue else {
       if let statement { _ = statements.execution.finalize(statement) }
       throw SQLiteError.reported(by: self, on: connection, code: code, sql: sql)
     }
+    guard !hasTrailingStatement else {
+      if let statement { _ = statements.execution.finalize(statement) }
+      throw SQLiteError(
+        code: .error,
+        message: "SQL holds more than one statement; run a script with executeScript(_:)",
+        sql: sql
+      )
+    }
     return statement
+  }
+
+  // Whether the text after a statement holds another one rather than only whitespace, semicolons,
+  // and comments. The common case, nothing at all, is answered without compiling anything.
+  private func hasStatement(in text: UnsafePointer<CChar>, on connection: OpaquePointer) -> Bool {
+    var next = text
+    while next.pointee != 0 {
+      switch UInt8(bitPattern: next.pointee) {
+      case UInt8(ascii: " "), UInt8(ascii: "\t"), UInt8(ascii: "\n"), UInt8(ascii: "\r"),
+        UInt8(ascii: ";"):
+        next += 1
+      default:
+        // Only SQLite can tell a comment from a statement, so let it compile what is left.
+        var statement: OpaquePointer?
+        let code = statements.preparation.prepare(connection, next, -1, 0, &statement, nil)
+        if let statement { _ = statements.execution.finalize(statement) }
+        return code != SQLiteResultCode.ok.rawValue || statement != nil
+      }
+    }
+    return false
   }
 }
