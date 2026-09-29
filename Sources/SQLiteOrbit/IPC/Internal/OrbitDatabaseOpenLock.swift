@@ -1,5 +1,9 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  import Foundation
+  #if canImport(FoundationEssentials)
+    import FoundationEssentials
+  #else
+    import Foundation
+  #endif
 
   /// The lock a process holds on a database while it opens it, one file per database in the
   /// coordination directory's `open-locks/`.
@@ -78,7 +82,7 @@
         let remaining = ContinuousClock.now.duration(to: deadline)
         guard remaining > .zero else { return false }
         let delay = Duration.milliseconds(delays[min(attempt, delays.count) - 1])
-        Thread.sleep(forTimeInterval: min(delay, remaining) / .seconds(1))
+        CurrentThread.sleep(for: min(delay, remaining))
         return true
       }
     }
