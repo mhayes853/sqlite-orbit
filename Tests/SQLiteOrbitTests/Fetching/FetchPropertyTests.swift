@@ -245,6 +245,55 @@
       #expect(reminders.count == 1)
     }
 
+    @Test(arguments: [false, true])
+    func subscriptionTaskCancellationDetachesAndKeepsTheLastValue(alreadyCancelled: Bool)
+      async throws
+    {
+      let database = try await remindersDatabase(titles: "Milk")
+      let storage = OrbitFetchStorage<[String]>(value: [])
+      let subscription = try await storage.load(
+        request: TitleSearch(term: "Milk"),
+        database: database,
+        scheduler: nil
+      )
+      defer { subscription.cancel() }
+      let id = OrbitFetchSourceID(
+        request: TitleSearch(term: "Milk"),
+        database: database,
+        scheduler: nil
+      )
+      #expect(storage.value == ["Milk"])
+      #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
+
+      // Immediate execution reaches the suspension in `.task` before this task is returned.
+      let completion = Lock<Result<Void, any Error>?>(nil)
+      let task = Task.immediate {
+        if alreadyCancelled {
+          withUnsafeCurrentTask { $0?.cancel() }
+        }
+        do {
+          try await subscription.task
+          completion.withLock { $0 = .success(()) }
+        } catch {
+          completion.withLock { $0 = .failure(error) }
+        }
+      }
+      defer { task.cancel() }
+      if !alreadyCancelled {
+        #expect(completion.withLock { $0 == nil })
+        task.cancel()
+      }
+      try await waitUntil { completion.withLock { $0 != nil } }
+      await task.value
+      let result = try #require(completion.withLock { $0 })
+      #expect(throws: CancellationError.self) { try result.get() }
+      #expect(!OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
+
+      try await insertReminders("Milk", into: database)
+      #expect(storage.value == ["Milk"])
+      #expect(!OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
+    }
+
     @Test(arguments: PendingLoadInterruption.allCases)
     func interruptingAPendingLoadResumesItWithCancellation(
       _ interruption: PendingLoadInterruption

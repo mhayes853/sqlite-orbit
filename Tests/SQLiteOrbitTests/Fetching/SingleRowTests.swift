@@ -6,6 +6,77 @@
   @Suite
   struct SingleRowTests {
     @Test
+    func savingRemainsTrueUntilAHeldUpdateCompletes() async throws {
+      let database = try await settingsDatabase()
+      @SingleRow(Settings.self, database: database) var settings
+      let property = $settings
+      let gate = TestGate()
+      defer { gate.open() }
+      let update = Task {
+        try await property.update { value in
+          value.theme = "dark"
+          try gate.enter()
+        }
+      }
+      defer { update.cancel() }
+      try await gate.waitUntilEntered()
+      #expect(property.isSaving)
+      gate.open()
+      try await update.value
+      #expect(!property.isSaving)
+      #expect(property.saveError == nil)
+      let persisted = try await database.read { try Settings.find(in: $0) }
+      var expected = Settings.defaultValue
+      expected.theme = "dark"
+      #expect(persisted == expected)
+      try await property.save(expected)
+      #expect(property.saveError == nil)
+      #expect(!property.isSaving)
+    }
+
+    @Test(arguments: ["mutation", "identity", "constraint"])
+    func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(failure: String) async throws {
+      let database = try await settingsDatabase()
+      try await database.write { try Settings.defaultValue.save(in: $0) }
+      @SingleRow(Settings.self, database: database) var settings
+      if failure == "constraint" {
+        try await database.write {
+          try $0.execute(
+            "CREATE TRIGGER reject_update BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT, 'refused'); END"
+          )
+        }
+      }
+      do {
+        try await $settings.update { value in
+          value.theme = "dark"
+          if failure == "mutation" { throw TestError() }
+          if failure == "identity" { value = Settings(id: 1, theme: "changed", launchCount: 0) }
+        }
+        Issue.record("The update should fail for \(failure)")
+      } catch {
+        switch failure {
+        case "mutation": #expect(error is TestError)
+        case "identity": #expect(error is OrbitRowIdentityMismatchError)
+        default: #expect((error as? SQLiteError)?.primaryCode == .constraint)
+        }
+      }
+      #expect(!$settings.isSaving)
+      #expect($settings.saveError != nil)
+      let unchanged = try await database.read { try Settings.find(in: $0) }
+      #expect(unchanged == Settings.defaultValue)
+      if failure == "constraint" {
+        try await database.write { try $0.execute("DROP TRIGGER reject_update") }
+      }
+      var replacement = Settings.defaultValue
+      replacement.theme = "dark"
+      try await $settings.save(replacement)
+      #expect(!$settings.isSaving)
+      #expect($settings.saveError == nil)
+      let persisted = try await database.read { try Settings.find(in: $0) }
+      #expect(persisted == replacement)
+    }
+
+    @Test
     func queryHelpersFindSaveAndUpdateTheSingleton() async throws {
       let database = try await settingsDatabase()
 
