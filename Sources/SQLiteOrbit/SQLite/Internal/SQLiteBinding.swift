@@ -1,23 +1,24 @@
-import StructuredQueries
-
 func bind(
-  _ bindings: [QueryBinding],
+  _ sql: SQL,
   to statement: OpaquePointer,
   library: UnsafePointer<SQLiteLibrary>
 ) throws {
-  for (offset, binding) in bindings.enumerated() {
-    try bind(binding, to: statement, at: Int32(offset + 1), library: library)
+  if let failure = sql.bindingFailure {
+    throw failure.error
+  }
+  for (offset, value) in sql.bindings.enumerated() {
+    try bind(value, to: statement, at: Int32(offset + 1), library: library)
   }
 }
 
 private func bind(
-  _ binding: QueryBinding,
+  _ value: OrbitDatabaseValue,
   to statement: OpaquePointer,
   at index: Int32,
   library: UnsafePointer<SQLiteLibrary>
 ) throws {
   let code: Int32
-  switch binding {
+  switch value {
   case .blob(let bytes):
     code = bytes.withUnsafeBytes { buffer in
       // A null pointer binds SQL NULL, so an empty blob needs a pointer that is merely unread.
@@ -29,27 +30,14 @@ private func bind(
       }
       return library.pointee.bindings.blob(statement, index, baseAddress, Int32(buffer.count))
     }
-  case .bool(let bool):
-    code = library.pointee.bindings.int64(statement, index, bool ? 1 : 0)
-  case .date(let date):
-    code = bindText(date.orbitISO8601String, to: statement, at: index, library: library)
-  case .double(let double):
+  case .real(let double):
     code = library.pointee.bindings.double(statement, index, double)
-  case .int(let integer):
+  case .integer(let integer):
     code = library.pointee.bindings.int64(statement, index, integer)
   case .null:
     code = library.pointee.bindings.null(statement, index)
   case .text(let string):
     code = bindText(string, to: statement, at: index, library: library)
-  case .uint(let integer):
-    guard integer <= UInt64(Int64.max) else {
-      throw OrbitDatabaseIntegerOverflowError(value: integer)
-    }
-    code = library.pointee.bindings.int64(statement, index, Int64(integer))
-  case .uuid(let uuid):
-    code = bindText(uuid.uuidString.lowercased(), to: statement, at: index, library: library)
-  case .invalid(let error):
-    throw error.underlyingError
   }
   guard code == SQLiteResultCode.ok.rawValue else {
     throw SQLiteError(code: SQLiteResultCode(rawValue: code), message: "could not bind parameter")
@@ -75,12 +63,22 @@ private func bindText(
   }
 }
 
-func prepareQuery(_ query: QueryFragment) -> (sql: String, bindings: [QueryBinding]) {
-  let prepared = query.prepare { _ in "?" }
-  guard !prepared.sql.isEmpty else {
-    // A query builder can legitimately produce no SQL, such as `Values` with no rows. SQLite
-    // cannot prepare an empty string, so stand in a statement that selects nothing.
-    return ("SELECT 1 WHERE 0 -- empty query", [])
+@usableFromInline
+struct OrbitDatabaseIntegerOverflowError<Value: Sendable>: Error {
+  @usableFromInline
+  let value: Value
+
+  @usableFromInline
+  init(value: Value) {
+    self.value = value
   }
-  return (prepared.sql, prepared.bindings)
+}
+
+extension OrbitDatabaseIntegerOverflowError: CustomStringConvertible {
+  @usableFromInline
+  var description: String {
+    Value.self == UInt64.self
+      ? "Unsigned integer \(value) overflows Int64.max"
+      : "Integer \(value) overflows the type it is decoded as"
+  }
 }

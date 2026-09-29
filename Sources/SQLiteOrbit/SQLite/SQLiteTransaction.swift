@@ -1,5 +1,3 @@
-import StructuredQueries
-
 /// A read transaction lent by a native SQLite driver.
 ///
 /// The transaction is a view onto a connection rather than an owner of one. It is noncopyable and
@@ -7,7 +5,7 @@ import StructuredQueries
 ///
 /// ```swift
 /// let titles = try await database.read { (transaction: borrowing SQLiteReadTransaction) in
-///   try transaction.fetchAll(Reminder.select(\.title))
+///   try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
 /// }
 /// ```
 public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
@@ -64,13 +62,14 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   ///   - query: The query to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this transaction ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
+  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try cursor(for: query.fragment, cached: cached)
+    try cursor(for: query.sql, cached: cached, requiresReadOnly: true)
   }
 
   /// Notifies transaction observers that this transaction may have read a database region.
@@ -92,12 +91,14 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
 
   @_lifetime(borrow self)
   borrowing func cursor(
-    for query: QueryFragment,
-    cached: Bool
+    for query: SQL,
+    cached: Bool,
+    requiresReadOnly: Bool
   ) throws -> SQLiteRowCursor {
     try SQLiteRowCursor(
       query,
       cached: cached,
+      requiresReadOnly: requiresReadOnly,
       connection: connection,
       library: library,
       statements: statements,
@@ -114,7 +115,7 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
 ///
 /// ```swift
 /// try await database.write { (transaction: borrowing SQLiteWriteTransaction) in
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///   try transaction.execute("INSERT INTO reminders (id, title) VALUES (1, 'Get milk')")
 /// }
 /// ```
 public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTransaction, ~Copyable,
@@ -161,13 +162,14 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   ///   - query: The query to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this transaction ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
+  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.fragment, cached: cached)
+    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: true)
   }
 
   /// Creates a cursor over the rows a write query returns, such as one with a `RETURNING` clause.
@@ -182,7 +184,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
     _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.fragment, cached: cached)
+    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: false)
   }
 
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
@@ -209,27 +211,31 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// - Parameter query: The query to run. Any rows it returns are stepped past and discarded.
   /// - Throws: A ``SQLiteError`` when the statement fails.
   public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
-    guard !query.fragment.isEmpty else { return }
-    var cursor = try base.cursor(for: query.fragment, cached: false)
+    guard !query.sql.text.isEmpty else { return }
+    var cursor = try base.cursor(for: query.sql, cached: false, requiresReadOnly: false)
     while try cursor.next() != nil {}
   }
 
-  /// Runs SQL that the query builder does not model, such as schema changes.
+  /// Runs a script of one or more statements, such as a schema.
   ///
-  /// Several statements may be given at once, separated by semicolons, and any rows they produce
-  /// are discarded.
+  /// Statements are separated by semicolons, and any rows they produce are discarded. A script
+  /// takes no parameters: its text is run as it is, so build it only from text the program itself
+  /// controls, and run a statement with values in it through ``SQL`` instead, which binds them.
   ///
   /// ```swift
-  /// try transaction.execute(
-  ///   "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+  /// try transaction.executeScript(
+  ///   """
+  ///   CREATE TABLE lists (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+  ///   CREATE TABLE reminders (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists(id));
+  ///   """
   /// )
   /// ```
   ///
-  /// - Parameter sql: One or more statements.
+  /// - Parameter script: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
-  public borrowing func execute(_ sql: String) throws {
-    try SQLiteHandle.execute(
-      sql,
+  public borrowing func executeScript(_ script: String) throws {
+    try SQLiteHandle.executeScript(
+      script,
       on: base.connection,
       library: base.library,
       authorizer: base.authorizer,

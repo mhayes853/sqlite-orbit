@@ -1,5 +1,3 @@
-import StructuredQueriesSQLite
-
 /// The settings a native SQLite driver applies to every connection it opens.
 ///
 /// A configuration is applied once per connection, before any transaction can reach it, so a
@@ -9,7 +7,10 @@ import StructuredQueriesSQLite
 /// var configuration = SQLiteConfiguration.default
 /// configuration.readerCount = 8
 /// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
-/// configuration.register(function: $repeated)
+/// configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+///   arguments in
+///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
+/// }
 /// let driver = try SQLitePool(path: .file(url), configuration: configuration)
 /// ```
 public struct SQLiteConfiguration: Sendable {
@@ -142,7 +143,7 @@ public struct SQLiteConfiguration: Sendable {
 /// This is the escape hatch for registering what the package does not model — an update hook or a
 /// virtual table module. The closure receives primitive ``SQLiteConnectionAccess`` once the
 /// connection has been configured. It exposes the raw connection and its library, and can execute
-/// a `QueryFragment` with bindings.
+/// ``SQL`` with bindings.
 ///
 /// A setup runs on the connection's own queue, before any transaction can reach it.
 ///
@@ -186,67 +187,6 @@ public struct SQLiteConnectionSetup: Sendable {
 }
 
 extension SQLiteConfiguration {
-  /// Registers a collating sequence on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(collation: CaseInsensitiveCollation())
-  /// ```
-  ///
-  /// - Parameter collation: The collation to install. Its name is what SQL refers to it by.
-  public mutating func register(
-    collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
-  ) {
-    register(.collations, providedBy: \.collations) { connection in
-      orbitInstall(
-        collation: collation,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
-  /// Registers a scalar function on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// @DatabaseFunction(isDeterministic: true)
-  /// func repeated(_ text: String, _ count: Int) -> String {
-  ///   String(repeating: text, count: count)
-  /// }
-  ///
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(function: $repeated)
-  /// ```
-  ///
-  /// - Parameter function: The function to install. Its name is what SQL calls it by.
-  public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-    register(.scalarFunctions, providedBy: \.scalarFunctions) { connection in
-      orbitInstall(
-        function: function,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
-  /// Registers an aggregate function on every connection opened with this configuration.
-  ///
-  /// ```swift
-  /// var configuration = SQLiteConfiguration.default
-  /// configuration.register(function: $longestTitle)
-  /// ```
-  ///
-  /// - Parameter function: The function to install. Its name is what SQL calls it by.
-  public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-    register(.aggregateFunctions, providedBy: \.aggregateFunctions) { connection in
-      orbitInstall(
-        function: function,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
-    }
-  }
-
   /// Adds a setup that installs something on every connection, on a build that has the entry
   /// points to install it with.
   ///
@@ -254,7 +194,7 @@ extension SQLiteConfiguration {
   ///   - feature: The operation the build has to provide, named by the error it is refused with.
   ///   - group: The entry points it installs with, which a build without them leaves `nil`.
   ///   - install: Installs on the connection and returns the build's result code.
-  private mutating func register<Group>(
+  mutating func register<Group>(
     _ feature: SQLiteLibraryFeature,
     providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
     install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32

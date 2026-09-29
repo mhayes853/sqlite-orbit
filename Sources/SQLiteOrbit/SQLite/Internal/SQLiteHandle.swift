@@ -1,5 +1,3 @@
-import StructuredQueries
-
 enum SQLiteWriteTransactionMode: Equatable, Sendable {
   case immediate
   case concurrent
@@ -218,7 +216,7 @@ struct SQLiteHandle: ~Copyable {
   borrowing func execute(_ sql: String) throws {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    try Self.execute(sql, on: pointer, library: library)
+    try Self.executeScript(sql, on: pointer, library: library)
   }
 
   borrowing func read<Result: ~Copyable>(
@@ -418,12 +416,13 @@ struct SQLiteHandle: ~Copyable {
   }
 
   static func execute(
-    _ query: QueryFragment,
+    _ query: SQL,
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
-    let (sql, bindings) = prepareQuery(query)
-    guard let statement = try library.pointee.prepare(sql, on: connection) else {
+    let sql = query.preparedText
+    guard let statement = try library.pointee.prepare(sql, on: connection, isSingleStatement: true)
+    else {
       throw SQLiteError.reported(
         by: library.pointee,
         on: connection,
@@ -432,11 +431,11 @@ struct SQLiteHandle: ~Copyable {
       )
     }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
-    try bind(bindings, to: statement, library: library)
+    try bind(query, to: statement, library: library)
     try stepToCompletion(statement, on: connection, library: library, sql: sql)
   }
 
-  static func execute(
+  static func executeScript(
     _ sql: String,
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
@@ -531,16 +530,52 @@ extension SQLiteLibrary {
   func prepare(
     _ sql: String,
     on connection: OpaquePointer,
-    flags: UInt32 = 0
+    flags: UInt32 = 0,
+    isSingleStatement: Bool = false
   ) throws -> OpaquePointer? {
     var statement: OpaquePointer?
-    let code = sql.withCString {
-      statements.preparation.prepare(connection, $0, -1, flags, &statement, nil)
+    var hasTrailingStatement = false
+    let code = sql.withCString { start in
+      var tail: UnsafePointer<CChar>?
+      let code = statements.preparation.prepare(connection, start, -1, flags, &statement, &tail)
+      if isSingleStatement, code == SQLiteResultCode.ok.rawValue, let tail {
+        hasTrailingStatement = self.hasStatement(in: tail, on: connection)
+      }
+      return code
     }
     guard code == SQLiteResultCode.ok.rawValue else {
       if let statement { _ = statements.execution.finalize(statement) }
       throw SQLiteError.reported(by: self, on: connection, code: code, sql: sql)
     }
+    guard !hasTrailingStatement else {
+      if let statement { _ = statements.execution.finalize(statement) }
+      // A cursor steps only the first statement, so the rest would otherwise be silently skipped.
+      throw SQLiteError(
+        code: .error,
+        message: "SQL holds more than one statement; run a script with executeScript(_:)",
+        sql: sql
+      )
+    }
     return statement
+  }
+
+  // Whether the text after a statement holds another one rather than only whitespace, semicolons,
+  // and comments. The common case, nothing at all, is answered without compiling anything.
+  private func hasStatement(in text: UnsafePointer<CChar>, on connection: OpaquePointer) -> Bool {
+    var next = text
+    while next.pointee != 0 {
+      switch UInt8(bitPattern: next.pointee) {
+      case UInt8(ascii: " "), UInt8(ascii: "\t"), UInt8(ascii: "\n"), UInt8(ascii: "\r"),
+        UInt8(ascii: ";"):
+        next += 1
+      default:
+        // Only SQLite can tell a comment from a statement, so let it compile what is left.
+        var statement: OpaquePointer?
+        let code = statements.preparation.prepare(connection, next, -1, 0, &statement, nil)
+        if let statement { _ = statements.execution.finalize(statement) }
+        return code != SQLiteResultCode.ok.rawValue || statement != nil
+      }
+    }
+    return false
   }
 }

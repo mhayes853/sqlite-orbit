@@ -1,5 +1,3 @@
-public import StructuredQueriesSQLite
-
 /// Controls iteration over the rows returned by a query.
 ///
 /// Returned from the body of ``OrbitDatabaseWriteTransaction/execute(_:_:)`` to say whether the
@@ -7,9 +5,10 @@ public import StructuredQueriesSQLite
 ///
 /// ```swift
 /// try await database.write { transaction in
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") }
-///     .returning(\.id)) { row in
-///     print(try row.decode(Int.self))
+///   try transaction.execute(
+///     "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id"
+///   ) { row in
+///     print(row[0].integerValue ?? 0)
 ///     return .stop
 ///   }
 /// }
@@ -25,12 +24,14 @@ public enum OrbitDatabaseRowIteration: Sendable {
 ///
 /// Transactions are noncopyable and nonescapable so a database can safely lend a connection whose
 /// lifetime is bounded by an ``OrbitDatabaseReader/read(_:)`` or ``OrbitDatabaseWriter/write(_:)``
-/// call. The `fetch` family in `OrbitDatabaseTransaction+StructuredQueries` is built on the one
-/// requirement below, so a conformance only has to know how to lend a cursor.
+/// call. The `fetch` family is built on the one requirement below, so a conformance only has to
+/// know how to lend a cursor.
 ///
 /// ```swift
 /// let pending = try await database.read { transaction in
-///   try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+///   try transaction.fetchAll("SELECT title FROM reminders WHERE NOT is_completed") { row in
+///     row[0].textValue ?? ""
+///   }
 /// }
 /// ```
 public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
@@ -49,7 +50,8 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
   ///     connection, so only pass `true` when the cursor is fully consumed and discarded before
   ///     any other cursor over that SQL is created.
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound. A driver refuses
+  ///   a statement that SQLite reports may write with the code ``SQLiteResultCode/readOnly``.
   @_lifetime(borrow self)
   borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
@@ -63,8 +65,8 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
 ///
 /// ```swift
 /// try await database.write { transaction in
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
-///   try transaction.execute(Reminder.where { $0.id == 1 }.update { $0.isCompleted = true })
+///   try transaction.execute("INSERT INTO reminders (id, title) VALUES (1, \("Get milk"))")
+///   try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = 1")
 /// }
 /// ```
 public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~Escapable {
@@ -92,7 +94,7 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
   ///
   /// ```swift
   /// let deleted = try await database.write { transaction in
-  ///   try transaction.execute(Reminder.where(\.isCompleted).delete())
+  ///   try transaction.execute("DELETE FROM reminders WHERE is_completed")
   ///   return transaction.changesCount
   /// }
   /// ```
@@ -110,7 +112,7 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
   ///
   /// ```swift
   /// let id = try await database.write { transaction in
-  ///   try transaction.execute(Reminder.insert { Reminder.Draft(title: "Get milk") })
+  ///   try transaction.execute("INSERT INTO reminders (title) VALUES (\("Get milk"))")
   ///   return transaction.lastInsertedRowID
   /// }
   /// ```
@@ -130,115 +132,200 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
 }
 
 extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
-  /// Creates a raw row cursor over the rows returned by a `SELECT`-shaped statement.
+  /// Creates a cursor over the rows raw SQL returns.
   ///
-  /// Rows are lent undecoded, which is the escape hatch for reading columns the query builder
-  /// does not describe. ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` is the typed
-  /// equivalent.
+  /// The SQL must only read: a driver refuses a statement that SQLite reports may write with a
+  /// ``SQLiteError`` whose code is ``SQLiteResultCode/readOnly``.
   ///
   /// ```swift
   /// try await database.read { transaction in
-  ///   var cursor = try transaction.rowCursor(Reminder.select(\.title))
-  ///   try cursor.forEach { print(try $0.decode(String.self)) }
+  ///   var cursor = try transaction.rowCursor("SELECT title FROM reminders WHERE list_id = \(id)")
+  ///   try cursor.forEach { print($0[0].textValue ?? "") }
   /// }
   /// ```
   ///
   /// - Parameters:
-  ///   - statement: A statement that only reads.
-  ///   - cached: Whether the driver may reuse a prepared statement for this SQL.
-  /// - Returns: A cursor over the statement's rows.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
+  /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(
-    _ statement: some PartialSelectStatement,
-    cached: Bool = false
-  ) throws -> RowCursor {
-    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(statement), cached: cached)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> RowCursor {
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
   }
 
-  /// Creates a raw row cursor over the rows returned by raw SQL.
-  ///
-  /// The capability of raw SQL cannot be read off its type, so the caller is stating that it
-  /// reads.
+  /// Returns a value made from each row raw SQL returns.
   ///
   /// ```swift
-  /// var cursor = try transaction.rowCursor(#sql("PRAGMA table_info(reminders)", as: Void.self))
+  /// let titles = try await database.read { transaction in
+  ///   try transaction.fetchAll("SELECT title FROM reminders ORDER BY title") { row in
+  ///     row[0].textValue ?? ""
+  ///   }
+  /// }
   /// ```
   ///
   /// - Parameters:
-  ///   - statement: The SQL to run.
-  ///   - cached: Whether the driver may reuse a prepared statement for this SQL.
-  /// - Returns: A cursor over the statement's rows.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
-  @_lifetime(borrow self)
-  public borrowing func rowCursor<QueryValue>(
-    _ statement: SQLQueryExpression<QueryValue>,
-    cached: Bool = false
-  ) throws -> RowCursor {
-    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(statement), cached: cached)
+  ///   - sql: The SQL to run, which must only read.
+  ///   - transform: Makes a value from a row. The row is only valid for the call.
+  /// - Returns: The values, in the order the rows were returned.
+  /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails or may
+  ///   write.
+  public borrowing func fetchAll<Element>(
+    _ sql: SQL,
+    _ transform: (inout Row) throws -> Element
+  ) throws -> [Element] {
+    var cursor = try rowCursor(sql)
+    var elements: [Element] = []
+    while var row = try cursor.next() {
+      elements.append(try transform(&row))
+    }
+    return elements
+  }
+
+  /// Returns a value made from the first row raw SQL returns, or `nil` when it returns none.
+  ///
+  /// Only the first row is read.
+  ///
+  /// ```swift
+  /// let count = try await database.read { transaction in
+  ///   try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run, which must only read.
+  ///   - transform: Makes a value from the row. The row is only valid for the call.
+  /// - Returns: The value, or `nil` when the SQL returned no rows.
+  /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails or may
+  ///   write.
+  public borrowing func fetchOne<Element>(
+    _ sql: SQL,
+    _ transform: (inout Row) throws -> Element
+  ) throws -> Element? {
+    var cursor = try rowCursor(sql)
+    guard var row = try cursor.next() else { return nil }
+    return try transform(&row)
   }
 }
 
 extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
-  /// Creates a raw row cursor over the rows returned by a write statement.
+  /// Runs raw SQL, discarding any rows it returns.
+  ///
+  /// Interpolated values are bound as parameters rather than spliced into the text. Read
+  /// ``changesCount`` afterwards for how many rows it changed.
   ///
   /// ```swift
-  /// var cursor = try transaction.executeRowCursor(
-  ///   Reminder.insert { Reminder(id: 1, title: "Get milk") }.returning(\.id)
-  /// )
+  /// try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = \(id)")
   /// ```
   ///
-  /// - Parameters:
-  ///   - statement: The statement to run.
-  ///   - cached: Whether the driver may reuse a prepared statement for this SQL.
-  /// - Returns: A cursor over the rows the statement returned.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
-  @_lifetime(borrow self)
-  public borrowing func executeRowCursor(
-    _ statement: some Statement,
-    cached: Bool = false
-  ) throws -> RowCursor {
-    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement), cached: cached)
-  }
-
-  /// Executes a statement, discarding any rows it returns.
-  ///
-  /// ```swift
-  /// try transaction.execute(Reminder.where(\.isCompleted).delete())
-  /// let deleted = transaction.changesCount
-  /// ```
-  ///
-  /// - Parameter statement: The statement to run.
+  /// - Parameter sql: The SQL to run.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  public borrowing func execute(_ statement: some Statement) throws {
-    try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
+  public borrowing func execute(_ sql: SQL) throws {
+    try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql))
   }
 
-  /// Executes a statement and lends any returned rows to `body`.
+  /// Runs raw SQL and lends any returned rows to `body`.
   ///
   /// Rows are lent one at a time and `body` decides whether to read the next, so a `RETURNING`
   /// clause can be consumed without collecting it.
   ///
   /// ```swift
   /// try transaction.execute(
-  ///   Reminder.insert { Reminder(id: 1, title: "Get milk") }.returning(\.id)
+  ///   "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id"
   /// ) { row in
-  ///   print(try row.decode(Int.self))
+  ///   print(row[0].integerValue ?? 0)
   ///   return .next
   /// }
   /// ```
   ///
   /// - Parameters:
-  ///   - statement: The statement to run.
+  ///   - sql: The SQL to run.
   ///   - body: Receives each returned row and says whether to read the next.
   /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
   public borrowing func execute(
-    _ statement: some Statement,
+    _ sql: SQL,
     _ body: (inout Row) throws -> OrbitDatabaseRowIteration
   ) throws {
-    var cursor = try executeRowCursor(statement)
+    var cursor = try executeRowCursor(sql)
     while var row = try cursor.next() {
       if try body(&row) == .stop { return }
     }
+  }
+
+  /// Creates a cursor over the rows raw SQL that may write returns, such as from a `RETURNING`
+  /// clause.
+  ///
+  /// ```swift
+  /// var cursor = try transaction.executeRowCursor(
+  ///   "DELETE FROM reminders WHERE is_completed RETURNING id"
+  /// )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL.
+  /// - Returns: A cursor over the rows the statement returned.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  @_lifetime(borrow self)
+  public borrowing func executeRowCursor(_ sql: SQL, cached: Bool = false) throws -> RowCursor {
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql), cached: cached)
+  }
+
+  /// Returns a value made from each row raw SQL returns, where the SQL may write.
+  ///
+  /// This is the write transaction's counterpart to the read-only
+  /// ``OrbitDatabaseReadTransaction/fetchAll(_:_:)``, so a `RETURNING` clause can be collected.
+  ///
+  /// ```swift
+  /// let ids = try await database.write { transaction in
+  ///   try transaction.fetchAll("DELETE FROM reminders WHERE is_completed RETURNING id") { row in
+  ///     row[0].integerValue ?? 0
+  ///   }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - transform: Makes a value from a row. The row is only valid for the call.
+  /// - Returns: The values, in the order the rows were returned.
+  /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails.
+  public borrowing func fetchAll<Element>(
+    _ sql: SQL,
+    _ transform: (inout Row) throws -> Element
+  ) throws -> [Element] {
+    var cursor = try executeRowCursor(sql)
+    var elements: [Element] = []
+    while var row = try cursor.next() {
+      elements.append(try transform(&row))
+    }
+    return elements
+  }
+
+  /// Returns a value made from the first row raw SQL returns, where the SQL may write.
+  ///
+  /// Only the first row is read. SQLite makes every change a `RETURNING` statement reports on
+  /// its first step, so the rows left unread are written all the same.
+  ///
+  /// ```swift
+  /// let id = try await database.write { transaction in
+  ///   try transaction.fetchOne(
+  ///     "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id"
+  ///   ) { $0[0].integerValue }
+  /// }
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - transform: Makes a value from the first row. The row is only valid for the call.
+  /// - Returns: The value, or `nil` when the SQL returned no rows.
+  /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails.
+  public borrowing func fetchOne<Element>(
+    _ sql: SQL,
+    _ transform: (inout Row) throws -> Element
+  ) throws -> Element? {
+    var cursor = try executeRowCursor(sql)
+    guard var row = try cursor.next() else { return nil }
+    return try transform(&row)
   }
 }

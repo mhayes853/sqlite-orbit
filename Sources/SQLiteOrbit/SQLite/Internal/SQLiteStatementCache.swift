@@ -1,5 +1,3 @@
-import StructuredQueries
-
 final class SQLiteStatementCache {
   private struct Table: Hashable {
     let schema: SQLiteSchemaName
@@ -51,7 +49,7 @@ final class SQLiteStatementCache {
 
   private func prepare(_ sql: String, flags: UInt32) throws -> SQLitePreparedStatement {
     let (statement, authorizations) = try authorizer.recordingAuthorizations {
-      try library.pointee.prepare(sql, on: connection, flags: flags)
+      try library.pointee.prepare(sql, on: connection, flags: flags, isSingleStatement: true)
     }
     guard let statement else {
       throw SQLiteError.reported(
@@ -192,21 +190,21 @@ final class SQLiteStatementCache {
     in table: String,
     schema: SQLiteSchemaName
   ) -> TableUpdateScope? {
-    let query: QueryFragment =
-      """
+    let query: SQL = """
       SELECT
         info.name,
         info.hidden,
         coalesce(upper(ltrim(tables.sql)) GLOB 'CREATE VIRTUAL TABLE *', 0)
-      FROM pragma_table_xinfo(\(bind: table), \(bind: schema.rawValue)) AS info
+      FROM pragma_table_xinfo(\(table), \(schema.rawValue)) AS info
       LEFT JOIN \(quote: schema.rawValue).sqlite_schema AS tables
-        ON tables.type = 'table' AND tables.name = \(bind: table) COLLATE NOCASE
+        ON tables.type = 'table' AND tables.name = \(table) COLLATE NOCASE
       """
-    let (sql, bindings) = prepareQuery(query)
-    guard let statement = try? library.pointee.prepare(sql, on: connection) else { return nil }
+    guard let statement = try? library.pointee.prepare(query.text, on: connection) else {
+      return nil
+    }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
     do {
-      try bind(bindings, to: statement, library: library)
+      try bind(query, to: statement, library: library)
     } catch {
       return nil
     }
@@ -255,8 +253,12 @@ struct SQLitePreparedStatement {
   let invalidatesStatementCache: Bool
   let cacheGeneration: UInt64
 
+  // `sqlite3_stmt_readonly`, which is what a read transaction is refused a statement by.
+  let isReadOnly: Bool
+
   init(pointer: OpaquePointer, metadata: Self) {
     self.pointer = pointer
+    self.isReadOnly = metadata.isReadOnly
     self.readRegion = metadata.readRegion
     self.changedRegion = metadata.changedRegion
     self.invalidatesStatementCache = metadata.invalidatesStatementCache
@@ -274,6 +276,7 @@ struct SQLitePreparedStatement {
   ) {
     self.pointer = pointer
     self.cacheGeneration = cacheGeneration
+    self.isReadOnly = library.pointee.statements.inspection.isReadOnly(pointer) != 0
     self.readRegion = sqliteDatabaseRegion(readBy: authorizations) { table in
       guard let authorizer else { return nil }
       return sqliteResolvedSchema(
@@ -288,7 +291,7 @@ struct SQLitePreparedStatement {
       ?? authorizations.reduce(into: OrbitDatabaseRegion.empty) { region, authorization in
         region.formUnion(authorization.changedRegion { _, _ in nil })
       }
-    if changedRegion.isEmpty && library.pointee.statements.inspection.isReadOnly(pointer) == 0 {
+    if changedRegion.isEmpty && !isReadOnly {
       changedRegion = .fullDatabase
     }
     self.changedRegion = changedRegion

@@ -1,4 +1,3 @@
-import StructuredQueries
 
 #if SystemSQLite
   import CSQLite3
@@ -727,14 +726,30 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   /// The SQLite build this connection runs against.
   public var sqlite: SQLiteLibrary { libraryPointer.pointee }
 
-  /// Executes a query fragment to completion, safely binding its values.
-  public borrowing func execute(_ query: QueryFragment) throws {
-    try SQLiteHandle.execute(query, on: connection, library: libraryPointer)
+  /// Executes a statement to completion, binding its values as parameters.
+  ///
+  /// ```swift
+  /// try connection.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('theme', \(theme))")
+  /// ```
+  ///
+  /// - Parameter sql: The statement to run. Any rows it returns are discarded.
+  /// - Throws: A ``SQLiteError`` when the statement fails.
+  public borrowing func execute(_ sql: SQL) throws {
+    try SQLiteHandle.execute(sql, on: connection, library: libraryPointer)
   }
 
-  /// Executes one or more raw SQL statements to completion.
-  public borrowing func execute(_ sql: String) throws {
-    try SQLiteHandle.execute(sql, on: connection, library: libraryPointer)
+  /// Executes a script of one or more statements to completion.
+  ///
+  /// A script takes no parameters, so build it only from text the program itself controls.
+  ///
+  /// ```swift
+  /// try connection.executeScript("PRAGMA cache_size = -8000; PRAGMA temp_store = MEMORY")
+  /// ```
+  ///
+  /// - Parameter script: One or more statements, separated by semicolons.
+  /// - Throws: A ``SQLiteError`` naming the SQL that failed.
+  public borrowing func executeScript(_ script: String) throws {
+    try SQLiteHandle.executeScript(script, on: connection, library: libraryPointer)
   }
 }
 

@@ -1,4 +1,6 @@
-public import StructuredQueriesSQLite
+#if StructuredQueries
+  public import StructuredQueriesSQLite
+#endif
 
 /// The transaction capability a query requires.
 ///
@@ -7,7 +9,7 @@ public import StructuredQueriesSQLite
 ///
 /// ```swift
 /// func run<Access: OrbitDatabaseAccess>(_ query: OrbitDatabaseQuery<Access>) {
-///   print(query.fragment)
+///   print(query.sql)
 /// }
 /// ```
 public protocol OrbitDatabaseAccess: Sendable {}
@@ -17,7 +19,7 @@ public protocol OrbitDatabaseAccess: Sendable {}
 /// An uninhabited type used only as a marker.
 ///
 /// ```swift
-/// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(Reminder.all)
+/// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>("SELECT * FROM reminders")
 /// ```
 public enum OrbitDatabaseReadAccess: OrbitDatabaseAccess {}
 
@@ -26,85 +28,119 @@ public enum OrbitDatabaseReadAccess: OrbitDatabaseAccess {}
 /// An uninhabited type used only as a marker.
 ///
 /// ```swift
-/// let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(Reminder.where(\.isCompleted).delete())
+/// let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
+///   "DELETE FROM reminders WHERE is_completed"
+/// )
 /// ```
 public enum OrbitDatabaseWriteAccess: OrbitDatabaseAccess {}
 
 /// A query paired with the transaction capability it requires.
 ///
-/// A value of this type can only be built from a statement whose capability the type system has
-/// already established, so a driver can run one without checking it again. This is what keeps
-/// ``OrbitDatabaseReadTransaction`` from being handed a mutation: no
-/// `OrbitDatabaseQuery<OrbitDatabaseReadAccess>` can be built from a statement that writes.
-///
-/// The capability is read off the statement's own position in the Structured Queries protocol
-/// hierarchy rather than a list of known statement types, so statements the library keeps private,
-/// such as the one behind `union`, are classified correctly too.
+/// ``OrbitDatabaseReadTransaction`` only accepts `OrbitDatabaseQuery<OrbitDatabaseReadAccess>`, so
+/// a read transaction cannot be handed a mutation it was never meant to run. Raw SQL cannot show
+/// its capability through its type, so a driver checks a read query when it prepares it, and
+/// refuses one that SQLite reports may write with a ``SQLiteError`` whose code is
+/// ``SQLiteResultCode/readOnly``.
 ///
 /// ```swift
 /// try await database.read { transaction in
 ///   var cursor = try transaction.rowCursor(
-///     OrbitDatabaseQuery<OrbitDatabaseReadAccess>(Reminder.all),
+///     OrbitDatabaseQuery<OrbitDatabaseReadAccess>("SELECT title FROM reminders"),
 ///     cached: false
 ///   )
 ///   return try cursor.forEach { _ in }
 /// }
 /// ```
 public struct OrbitDatabaseQuery<Access: OrbitDatabaseAccess>: Sendable {
-  /// The query to run.
-  public let fragment: QueryFragment
+  /// The SQL to run.
+  public let sql: SQL
 
-  private init(unchecked fragment: QueryFragment) {
-    self.fragment = fragment
+  init(unchecked sql: SQL) {
+    self.sql = sql
   }
 }
 
 extension OrbitDatabaseQuery where Access == OrbitDatabaseReadAccess {
-  /// Wraps a `SELECT`-shaped statement.
+  /// Wraps SQL that only reads.
   ///
-  /// This covers `Select`, `Where`, `Table`, `Values`, `With` over a select, and the compound
-  /// selects produced by `union`, `intersect`, and `except`.
-  ///
-  /// ```swift
-  /// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(Reminder.where { !$0.isCompleted })
-  /// ```
-  ///
-  /// - Parameter statement: The statement to run.
-  public init(_ statement: some PartialSelectStatement) {
-    self.init(unchecked: statement.query)
-  }
-
-  /// Wraps raw SQL.
-  ///
-  /// Raw SQL is ordinary to write, but its capability cannot be established from its type, so it
-  /// is accepted by read and write transactions alike. The caller is stating that the SQL reads.
+  /// The driver checks the statement when it prepares it, so SQL that may write is refused rather
+  /// than run.
   ///
   /// ```swift
   /// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(
-  ///   #sql("SELECT count(*) FROM reminders", as: Int.self)
+  ///   "SELECT title FROM reminders WHERE id = \(id)"
   /// )
   /// ```
   ///
-  /// - Parameter statement: The SQL to run.
-  public init<QueryValue>(_ statement: SQLQueryExpression<QueryValue>) {
-    self.init(unchecked: statement.query)
+  /// - Parameter sql: The SQL to run.
+  public init(_ sql: SQL) {
+    self.init(unchecked: sql)
   }
 }
 
 extension OrbitDatabaseQuery where Access == OrbitDatabaseWriteAccess {
-  /// Wraps any statement.
-  ///
-  /// Every statement can run in a write transaction, including `INSERT`, `UPDATE`, `DELETE`, and
-  /// the temporary trigger and view definitions from the SQLite layer.
+  /// Wraps SQL that may write.
   ///
   /// ```swift
   /// let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
-  ///   Reminder.insert { Reminder(id: 1, title: "Get milk") }
+  ///   "INSERT INTO reminders (title) VALUES (\(title))"
   /// )
   /// ```
   ///
-  /// - Parameter statement: The statement to run.
-  public init(_ statement: some Statement) {
-    self.init(unchecked: statement.query)
+  /// - Parameter sql: The SQL to run.
+  public init(_ sql: SQL) {
+    self.init(unchecked: sql)
   }
 }
+
+#if StructuredQueries
+  extension OrbitDatabaseQuery where Access == OrbitDatabaseReadAccess {
+    /// Wraps a `SELECT`-shaped statement.
+    ///
+    /// This covers `Select`, `Where`, `Table`, `Values`, `With` over a select, and the compound
+    /// selects produced by `union`, `intersect`, and `except`. The capability is read off the
+    /// statement's own position in the Structured Queries protocol hierarchy rather than a list of
+    /// known statement types, so statements the library keeps private, such as the one behind
+    /// `union`, are classified correctly too.
+    ///
+    /// ```swift
+    /// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(Reminder.where { !$0.isCompleted })
+    /// ```
+    ///
+    /// - Parameter statement: The statement to run.
+    public init(_ statement: some PartialSelectStatement) {
+      self.init(unchecked: SQL(fragment: statement.query))
+    }
+
+    /// Wraps typed raw SQL.
+    ///
+    /// ```swift
+    /// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(
+    ///   #sql("SELECT count(*) FROM reminders", as: Int.self)
+    /// )
+    /// ```
+    ///
+    /// - Parameter statement: The SQL to run.
+    public init<QueryValue>(_ statement: SQLQueryExpression<QueryValue>) {
+      self.init(unchecked: SQL(fragment: statement.query))
+    }
+  }
+
+  extension OrbitDatabaseQuery where Access == OrbitDatabaseWriteAccess {
+    /// Wraps any statement.
+    ///
+    /// Every statement can run in a write transaction, including `INSERT`, `UPDATE`, `DELETE`, and
+    /// the temporary trigger and view definitions from the SQLite layer.
+    ///
+    /// ```swift
+    /// let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
+    ///   Reminder.insert { Reminder(id: 1, title: "Get milk") }
+    /// )
+    /// ```
+    ///
+    /// - Parameter statement: The statement to run.
+    public init(_ statement: some Statement) {
+      self.init(unchecked: SQL(fragment: statement.query))
+    }
+  }
+#endif

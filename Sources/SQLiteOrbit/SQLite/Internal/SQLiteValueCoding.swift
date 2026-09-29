@@ -1,19 +1,9 @@
-import Foundation
+#if Foundation
+import _SQLiteOrbitFoundation
 
 // How values that SQLite has no native type for are spelled in the database.
 //
 // These centralize how native connections represent a `Date` or UUID.
-
-@usableFromInline
-struct OrbitDatabaseIntegerOverflowError<Value: Sendable>: Error {
-  @usableFromInline
-  let value: Value
-
-  @usableFromInline
-  init(value: Value) {
-    self.value = value
-  }
-}
 
 extension Date {
   @usableFromInline
@@ -93,3 +83,4 @@ struct InvalidOrbitDatabaseUUIDError: Error {
   @usableFromInline
   init() {}
 }
+#endif

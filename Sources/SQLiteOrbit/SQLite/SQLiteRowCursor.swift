@@ -1,5 +1,3 @@
-import StructuredQueries
-
 /// A cursor over the rows a statement produces.
 ///
 /// The cursor holds a statement lent by the connection's cache and gives it back when it goes out
@@ -12,8 +10,8 @@ import StructuredQueries
 ///
 /// ```swift
 /// try await database.read { transaction in
-///   var cursor: SQLiteRowCursor = try transaction.rowCursor(Reminder.select(\.title))
-///   try cursor.forEach { print(try $0.decode(String.self)) }
+///   var cursor: SQLiteRowCursor = try transaction.rowCursor("SELECT title FROM reminders")
+///   try cursor.forEach { print($0[0].textValue ?? "") }
 /// }
 /// ```
 public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
@@ -46,19 +44,29 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   @_lifetime(borrow statements)
   init(
-    _ query: QueryFragment,
+    _ query: SQL,
     cached: Bool,
+    requiresReadOnly: Bool,
     connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
     observations: OrbitDatabaseTransactionObservationContext
   ) throws {
-    let (sql, bindings) = prepareQuery(query)
+    let sql = query.preparedText
     let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
     let statement = preparedStatement.pointer
     do {
-      try bind(bindings, to: statement, library: library)
+      // Raw SQL cannot show through its type that it only reads, so a read query is held to it
+      // here, before anything has run.
+      if requiresReadOnly && !preparedStatement.isReadOnly {
+        throw SQLiteError(
+          code: .readOnly,
+          message: "a read-only query may write; run it in a write transaction instead",
+          sql: sql
+        )
+      }
+      try bind(query, to: statement, library: library)
     } catch {
       // The statement never reached a cursor, so nothing else will give it back.
       if cached {
@@ -149,62 +157,96 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
 /// One result row, valid only until its cursor advances.
 ///
-/// Each `decode` reads the next column of the row, so decoding a row's columns is a walk from
-/// left to right rather than a set of random accesses.
+/// Read a column by its position or by its name. Reading a column this way does not disturb the
+/// Structured Queries decoder, which walks the row from left to right on its own.
 ///
 /// ```swift
 /// try await database.read { transaction in
-///   var cursor = try transaction.rowCursor(
-///     #sql("SELECT id, title FROM reminders", as: Void.self)
-///   )
+///   var cursor = try transaction.rowCursor("SELECT id, title FROM reminders")
 ///   while var row: SQLiteRow = try cursor.next() {
-///     print(try row.decode(Int.self), try row.decode(String.self))
+///     print(row[0].integerValue ?? 0, row[column: "title"]?.textValue ?? "")
 ///   }
 /// }
 /// ```
 public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
-  @usableFromInline
-  var decoder: SQLiteRowDecoder
+  #if StructuredQueries
+    @usableFromInline
+    var decoder: SQLiteRowDecoder
 
-  @usableFromInline
-  @_lifetime(borrow cursor)
-  init(cursor: borrowing SQLiteRowCursor) {
-    self.decoder = SQLiteRowDecoder(library: cursor.library, statement: cursor.statement)
-  }
+    @usableFromInline
+    var library: UnsafePointer<SQLiteLibrary> { decoder.library }
 
-  /// Decodes the next column of this row.
-  ///
-  /// - Parameter type: The value to decode.
-  /// - Returns: The decoded value.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its storage class or
-  ///   contents cannot produce `type`.
-  @inlinable
-  @_lifetime(self: copy self)
-  public mutating func decode<Value: QueryRepresentable>(
-    _ type: Value.Type
-  ) throws -> Value.QueryOutput {
-    do {
-      return try Value(decoder: &decoder).queryOutput
-    } catch let error as QueryDecodingError {
-      throw decoder.describe(error)
+    @usableFromInline
+    var statement: OpaquePointer { decoder.statement }
+
+    @usableFromInline
+    @_lifetime(borrow cursor)
+    init(cursor: borrowing SQLiteRowCursor) {
+      self.decoder = SQLiteRowDecoder(library: cursor.library, statement: cursor.statement)
     }
+  #else
+    @usableFromInline
+    let library: UnsafePointer<SQLiteLibrary>
+
+    @usableFromInline
+    let statement: OpaquePointer
+
+    @usableFromInline
+    @_lifetime(borrow cursor)
+    init(cursor: borrowing SQLiteRowCursor) {
+      self.library = cursor.library
+      self.statement = cursor.statement
+    }
+  #endif
+
+  /// How many columns the row has.
+  public var columnCount: Int {
+    Int(library.pointee.columns.count(statement))
   }
 
-  /// Decodes the next columns of this row as a tuple, one column per value.
+  /// The name of a column, as SQLite reports it.
   ///
-  /// - Parameter type: The tuple of values to decode.
-  /// - Returns: The decoded values.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column that could not be decoded.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @inlinable
-  @_lifetime(self: copy self)
-  public mutating func decode<each Value: QueryRepresentable>(
-    _ type: (repeat each Value).Type
-  ) throws -> (repeat (each Value).QueryOutput) {
-    do {
-      return try decoder.decodeColumns((repeat each Value).self)
-    } catch let error as QueryDecodingError {
-      throw decoder.describe(error)
+  /// - Parameter index: The column's zero-based position, which must be less than
+  ///   ``columnCount``.
+  /// - Returns: The column's name, or an empty string when SQLite has none for it.
+  public func columnName(at index: Int) -> String {
+    precondition(
+      index >= 0 && index < columnCount,
+      "Column index \(index) is out of range for a row of \(columnCount) columns"
+    )
+    return library.pointee.columns.name(statement, Int32(index)).map(String.init(cString:)) ?? ""
+  }
+
+  /// The value of a column, in the storage class SQLite holds it in.
+  ///
+  /// - Parameter index: The column's zero-based position. A position outside the row stops the
+  ///   process.
+  public subscript(index: Int) -> OrbitDatabaseValue {
+    precondition(
+      index >= 0 && index < columnCount,
+      "Column index \(index) is out of range for a row of \(columnCount) columns"
+    )
+    let column = Int32(index)
+    // Each value is read in the storage class SQLite reports, so reading it never converts it, and
+    // a later decode of the same column sees what it would have seen anyway.
+    switch SQLiteColumnType(rawValue: library.pointee.columns.type(statement, column)) {
+    case .integer:
+      return .integer(library.pointee.columns.int64(statement, column))
+    case .float:
+      return .real(library.pointee.columns.double(statement, column))
+    case .text:
+      // The value is read before its size, which is the order SQLite documents as safe.
+      guard let text = library.pointee.columns.text(statement, column) else { return .text("") }
+      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
+      return .text(
+        String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
+      )
+    case .blob:
+      guard let bytes = library.pointee.columns.blob(statement, column) else { return .blob([]) }
+      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
+      return .blob([UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount)))
+    default:
+      return .null
     }
   }
 }

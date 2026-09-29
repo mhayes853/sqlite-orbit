@@ -1,3 +1,7 @@
+#if StructuredQueries
+  import StructuredQueriesSQLite
+#endif
+
 /// Why a value observation fetched a value.
 ///
 /// ```swift
@@ -78,7 +82,7 @@ private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
   case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
-  case query(QueryFragment)
+  case query(SQL)
 
   var initialRegion: OrbitDatabaseRegion? {
     guard case .constant(let region) = self else { return nil }
@@ -333,229 +337,231 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     )
   }
 
-  /// Creates an observation that fetches every value produced by a query.
-  ///
-  /// The observed region is derived from the query against the database's schema.
-  ///
-  /// - Parameter query: The query to observe and fetch.
-  /// - Returns: An observation of all values produced by `query`.
-  public static func trackingAll<QueryValue: QueryRepresentable>(
-    _ query: some PartialSelectStatement<QueryValue>
-  ) -> Self where Value == [QueryValue.QueryOutput] {
-    trackingAllValues(query.query, as: QueryValue.self)
-  }
-
-  /// Creates an observation that fetches the first value produced by a query.
-  ///
-  /// The observed region is derived from the query against the database's schema.
-  ///
-  /// - Parameter query: The query to observe and fetch.
-  /// - Returns: An observation of the first value produced by `query`, or `nil`.
-  public static func trackingOne<QueryValue: QueryRepresentable>(
-    _ query: some PartialSelectStatement<QueryValue>
-  ) -> Self where Value == QueryValue.QueryOutput? {
-    trackingOneValue(query.query, as: QueryValue.self)
-  }
-
-  /// Creates an observation that fetches every tuple produced by a query.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingAll<each QueryValue: QueryRepresentable>(
-    _ query: some PartialSelectStatement<(repeat each QueryValue)>
-  ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-    trackingAllTuples(query.query, as: (repeat each QueryValue).self)
-  }
-
-  /// Creates an observation that fetches the first tuple produced by a query.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingOne<each QueryValue: QueryRepresentable>(
-    _ query: some PartialSelectStatement<(repeat each QueryValue)>
-  ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-    trackingOneTuple(query.query, as: (repeat each QueryValue).self)
-  }
-
-  /// Creates an observation that fetches every row produced by a table query.
-  public static func trackingAll<S: SelectStatement>(
-    _ query: S
-  ) -> Self where S.QueryValue == (), S.Joins == (), Value == [S.From.QueryOutput] {
-    trackingAllValues(query.query, as: S.From.self)
-  }
-
-  /// Creates an observation that fetches the first row produced by a table query.
-  public static func trackingOne<S: SelectStatement>(
-    _ query: S
-  ) -> Self where S.QueryValue == (), S.Joins == (), Value == S.From.QueryOutput? {
-    trackingOneValue(query.asSelect().limit(1).query, as: S.From.self)
-  }
-
-  /// Creates an observation that fetches every row produced by a table query.
-  ///
-  /// Joined tables are decoded after the query's `FROM` table.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  public static func trackingAll<
-    S: SelectStatement,
-    FirstJoin: Table,
-    each AdditionalJoin: Table
-  >(
-    _ query: S
-  ) -> Self
-  where
-    S.QueryValue == (), S.Joins == (FirstJoin, repeat each AdditionalJoin),
-    Value
-      == [(S.From.QueryOutput, FirstJoin.QueryOutput, repeat (each AdditionalJoin).QueryOutput)]
-  {
-    let query = query.selectStar().query
-    return trackingAllTuples(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
-  }
-
-  /// Creates an observation that fetches the first row produced by a table query.
-  ///
-  /// Joined tables are decoded after the query's `FROM` table.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  public static func trackingOne<
-    S: SelectStatement,
-    FirstJoin: Table,
-    each AdditionalJoin: Table
-  >(
-    _ query: S
-  ) -> Self
-  where
-    S.QueryValue == (), S.Joins == (FirstJoin, repeat each AdditionalJoin),
-    Value
-      == (
-        S.From.QueryOutput, FirstJoin.QueryOutput, repeat (each AdditionalJoin).QueryOutput
-      )?
-  {
-    let query = query.asSelect().limit(1).selectStar().query
-    return trackingOneTuple(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
-  }
-
-  /// Creates an observation that fetches every value decoded from a query fragment.
-  ///
-  /// - Parameters:
-  ///   - query: The query fragment to observe and fetch.
-  ///   - type: The representation used to decode each row.
-  /// - Returns: An observation of all decoded values.
-  public static func trackingAll<QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as type: QueryValue.Type
-  ) -> Self where Value == [QueryValue.QueryOutput] {
-    trackingAllValues(query, as: type)
-  }
-
-  /// Creates an observation that fetches the first value decoded from a query fragment.
-  ///
-  /// - Parameters:
-  ///   - query: The query fragment to observe and fetch.
-  ///   - type: The representation used to decode the row.
-  /// - Returns: An observation of the first decoded value, or `nil`.
-  public static func trackingOne<QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as type: QueryValue.Type
-  ) -> Self where Value == QueryValue.QueryOutput? {
-    trackingOneValue(query, as: type)
-  }
-
-  /// Creates an observation that fetches every tuple decoded from a query fragment.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingAll<each QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as type: (repeat each QueryValue).Type
-  ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-    trackingAllTuples(query, as: type)
-  }
-
-  /// Creates an observation that fetches the first tuple decoded from a query fragment.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingOne<each QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as type: (repeat each QueryValue).Type
-  ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-    trackingOneTuple(query, as: type)
-  }
-
-  /// Creates an observation that fetches every value produced by typed SQL.
-  public static func trackingAll<QueryValue: QueryRepresentable>(
-    _ query: SQLQueryExpression<QueryValue>
-  ) -> Self where Value == [QueryValue.QueryOutput] {
-    trackingAllValues(query.query, as: QueryValue.self)
-  }
-
-  /// Creates an observation that fetches the first value produced by typed SQL.
-  public static func trackingOne<QueryValue: QueryRepresentable>(
-    _ query: SQLQueryExpression<QueryValue>
-  ) -> Self where Value == QueryValue.QueryOutput? {
-    trackingOneValue(query.query, as: QueryValue.self)
-  }
-
-  /// Creates an observation that fetches every tuple produced by typed SQL.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingAll<each QueryValue: QueryRepresentable>(
-    _ query: SQLQueryExpression<(repeat each QueryValue)>
-  ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-    trackingAllTuples(query.query, as: (repeat each QueryValue).self)
-  }
-
-  /// Creates an observation that fetches the first tuple produced by typed SQL.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  @_disfavoredOverload
-  public static func trackingOne<each QueryValue: QueryRepresentable>(
-    _ query: SQLQueryExpression<(repeat each QueryValue)>
-  ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-    trackingOneTuple(query.query, as: (repeat each QueryValue).self)
-  }
-
-  private static func trackingAllValues<QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as _: QueryValue.Type
-  ) -> Self where Value == [QueryValue.QueryOutput] {
-    tracking(regionSource: .query(query)) { transaction in
-      try transaction.fetchAll(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+  #if StructuredQueries
+    /// Creates an observation that fetches every value produced by a query.
+    ///
+    /// The observed region is derived from the query against the database's schema.
+    ///
+    /// - Parameter query: The query to observe and fetch.
+    /// - Returns: An observation of all values produced by `query`.
+    public static func trackingAll<QueryValue: QueryRepresentable>(
+      _ query: some PartialSelectStatement<QueryValue>
+    ) -> Self where Value == [QueryValue.QueryOutput] {
+      trackingAllValues(query.query, as: QueryValue.self)
     }
-  }
 
-  private static func trackingOneValue<QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as _: QueryValue.Type
-  ) -> Self where Value == QueryValue.QueryOutput? {
-    tracking(regionSource: .query(query)) { transaction in
-      try transaction.fetchOne(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+    /// Creates an observation that fetches the first value produced by a query.
+    ///
+    /// The observed region is derived from the query against the database's schema.
+    ///
+    /// - Parameter query: The query to observe and fetch.
+    /// - Returns: An observation of the first value produced by `query`, or `nil`.
+    public static func trackingOne<QueryValue: QueryRepresentable>(
+      _ query: some PartialSelectStatement<QueryValue>
+    ) -> Self where Value == QueryValue.QueryOutput? {
+      trackingOneValue(query.query, as: QueryValue.self)
     }
-  }
 
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  private static func trackingAllTuples<each QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as _: (repeat each QueryValue).Type
-  ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-    tracking(regionSource: .query(query)) { transaction in
-      try transaction.fetchAll(
-        SQLQueryExpression<(repeat each QueryValue)>(
-          query,
-          as: (repeat each QueryValue).self
+    /// Creates an observation that fetches every tuple produced by a query.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingAll<each QueryValue: QueryRepresentable>(
+      _ query: some PartialSelectStatement<(repeat each QueryValue)>
+    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
+      trackingAllTuples(query.query, as: (repeat each QueryValue).self)
+    }
+
+    /// Creates an observation that fetches the first tuple produced by a query.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingOne<each QueryValue: QueryRepresentable>(
+      _ query: some PartialSelectStatement<(repeat each QueryValue)>
+    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
+      trackingOneTuple(query.query, as: (repeat each QueryValue).self)
+    }
+
+    /// Creates an observation that fetches every row produced by a table query.
+    public static func trackingAll<S: SelectStatement>(
+      _ query: S
+    ) -> Self where S.QueryValue == (), S.Joins == (), Value == [S.From.QueryOutput] {
+      trackingAllValues(query.query, as: S.From.self)
+    }
+
+    /// Creates an observation that fetches the first row produced by a table query.
+    public static func trackingOne<S: SelectStatement>(
+      _ query: S
+    ) -> Self where S.QueryValue == (), S.Joins == (), Value == S.From.QueryOutput? {
+      trackingOneValue(query.asSelect().limit(1).query, as: S.From.self)
+    }
+
+    /// Creates an observation that fetches every row produced by a table query.
+    ///
+    /// Joined tables are decoded after the query's `FROM` table.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    public static func trackingAll<
+      S: SelectStatement,
+      FirstJoin: Table,
+      each AdditionalJoin: Table
+    >(
+      _ query: S
+    ) -> Self
+    where
+      S.QueryValue == (), S.Joins == (FirstJoin, repeat each AdditionalJoin),
+      Value
+        == [(S.From.QueryOutput, FirstJoin.QueryOutput, repeat (each AdditionalJoin).QueryOutput)]
+    {
+      let query = query.selectStar().query
+      return trackingAllTuples(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
+    }
+
+    /// Creates an observation that fetches the first row produced by a table query.
+    ///
+    /// Joined tables are decoded after the query's `FROM` table.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    public static func trackingOne<
+      S: SelectStatement,
+      FirstJoin: Table,
+      each AdditionalJoin: Table
+    >(
+      _ query: S
+    ) -> Self
+    where
+      S.QueryValue == (), S.Joins == (FirstJoin, repeat each AdditionalJoin),
+      Value
+        == (
+          S.From.QueryOutput, FirstJoin.QueryOutput, repeat (each AdditionalJoin).QueryOutput
+        )?
+    {
+      let query = query.asSelect().limit(1).selectStar().query
+      return trackingOneTuple(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
+    }
+
+    /// Creates an observation that fetches every value decoded from a query fragment.
+    ///
+    /// - Parameters:
+    ///   - query: The query fragment to observe and fetch.
+    ///   - type: The representation used to decode each row.
+    /// - Returns: An observation of all decoded values.
+    public static func trackingAll<QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as type: QueryValue.Type
+    ) -> Self where Value == [QueryValue.QueryOutput] {
+      trackingAllValues(query, as: type)
+    }
+
+    /// Creates an observation that fetches the first value decoded from a query fragment.
+    ///
+    /// - Parameters:
+    ///   - query: The query fragment to observe and fetch.
+    ///   - type: The representation used to decode the row.
+    /// - Returns: An observation of the first decoded value, or `nil`.
+    public static func trackingOne<QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as type: QueryValue.Type
+    ) -> Self where Value == QueryValue.QueryOutput? {
+      trackingOneValue(query, as: type)
+    }
+
+    /// Creates an observation that fetches every tuple decoded from a query fragment.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingAll<each QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as type: (repeat each QueryValue).Type
+    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
+      trackingAllTuples(query, as: type)
+    }
+
+    /// Creates an observation that fetches the first tuple decoded from a query fragment.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingOne<each QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as type: (repeat each QueryValue).Type
+    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
+      trackingOneTuple(query, as: type)
+    }
+
+    /// Creates an observation that fetches every value produced by typed SQL.
+    public static func trackingAll<QueryValue: QueryRepresentable>(
+      _ query: SQLQueryExpression<QueryValue>
+    ) -> Self where Value == [QueryValue.QueryOutput] {
+      trackingAllValues(query.query, as: QueryValue.self)
+    }
+
+    /// Creates an observation that fetches the first value produced by typed SQL.
+    public static func trackingOne<QueryValue: QueryRepresentable>(
+      _ query: SQLQueryExpression<QueryValue>
+    ) -> Self where Value == QueryValue.QueryOutput? {
+      trackingOneValue(query.query, as: QueryValue.self)
+    }
+
+    /// Creates an observation that fetches every tuple produced by typed SQL.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingAll<each QueryValue: QueryRepresentable>(
+      _ query: SQLQueryExpression<(repeat each QueryValue)>
+    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
+      trackingAllTuples(query.query, as: (repeat each QueryValue).self)
+    }
+
+    /// Creates an observation that fetches the first tuple produced by typed SQL.
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    @_disfavoredOverload
+    public static func trackingOne<each QueryValue: QueryRepresentable>(
+      _ query: SQLQueryExpression<(repeat each QueryValue)>
+    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
+      trackingOneTuple(query.query, as: (repeat each QueryValue).self)
+    }
+
+    private static func trackingAllValues<QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as _: QueryValue.Type
+    ) -> Self where Value == [QueryValue.QueryOutput] {
+      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
+        try transaction.fetchAll(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+      }
+    }
+
+    private static func trackingOneValue<QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as _: QueryValue.Type
+    ) -> Self where Value == QueryValue.QueryOutput? {
+      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
+        try transaction.fetchOne(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+      }
+    }
+
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    private static func trackingAllTuples<each QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as _: (repeat each QueryValue).Type
+    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
+      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
+        try transaction.fetchAll(
+          SQLQueryExpression<(repeat each QueryValue)>(
+            query,
+            as: (repeat each QueryValue).self
+          )
         )
-      )
+      }
     }
-  }
 
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  private static func trackingOneTuple<each QueryValue: QueryRepresentable>(
-    _ query: QueryFragment,
-    as _: (repeat each QueryValue).Type
-  ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-    tracking(regionSource: .query(query)) { transaction in
-      try transaction.fetchOne(
-        SQLQueryExpression<(repeat each QueryValue)>(
-          query,
-          as: (repeat each QueryValue).self
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+    private static func trackingOneTuple<each QueryValue: QueryRepresentable>(
+      _ query: QueryFragment,
+      as _: (repeat each QueryValue).Type
+    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
+      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
+        try transaction.fetchOne(
+          SQLQueryExpression<(repeat each QueryValue)>(
+            query,
+            as: (repeat each QueryValue).self
+          )
         )
-      )
+      }
     }
-  }
+  #endif
 
   private func mapReducer<Output: Sendable>(
     _ derive:
