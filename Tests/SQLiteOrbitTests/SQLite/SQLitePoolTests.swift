@@ -52,25 +52,18 @@
     }
   }
 
-  @Test(arguments: [0, -1])
-  func aNonpositiveReaderCountStillOpensOneReader(readerCount: Int) async throws {
-    try await withTestDatabaseFile("pool") { file in
-      let openedConnections = TestCounter()
-      var configuration = SQLiteConfiguration.default
-      configuration.readerCount = readerCount
-      configuration.connectionSetups.append(
-        SQLiteConnectionSetup { _ in
-          openedConnections.increment()
-          return SQLiteResultCode.ok.rawValue
-        }
-      )
-
-      let pool = try file.pool(configuration: configuration)
-      // One writer and one reader must have been configured, even for an invalid count.
-      #expect(openedConnections.value == 2)
-      #expect(try await pool.read { try $0.fetchOne(#sql("SELECT 1", as: Int.self)) } == 1)
+  #if os(macOS) || os(Linux) || os(Windows) || os(FreeBSD) || os(OpenBSD)
+    @Test(arguments: [0, -1])
+    func aNonpositiveReaderCountFailsAPrecondition(readerCount: Int) async {
+      await #expect(processExitsWith: .failure) { [readerCount] in
+        var configuration = SQLiteConfiguration.default
+        configuration.readerCount = readerCount
+        // The precondition runs before opening any connections. Swallow ordinary opening
+        // errors so they cannot make this exit test pass in place of the precondition.
+        _ = try? SQLitePool(path: .memory, configuration: configuration)
+      }
     }
-  }
+  #endif
 
   @Test
   func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {

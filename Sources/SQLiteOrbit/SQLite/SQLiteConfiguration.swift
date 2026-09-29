@@ -24,6 +24,7 @@ public struct SQLiteConfiguration: Sendable {
   public var key: SQLiteKey?
 
   /// The number of reader connections a pool opens, and so how many reads can run at once.
+  /// Must be greater than zero when opening a ``SQLitePool``.
   ///
   /// Each connection runs its work on a thread of its own, so this bounds threads rather than any
   /// share of the cooperative pool.
