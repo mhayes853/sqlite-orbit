@@ -33,6 +33,12 @@ jobs:
           # here and in the default job alike, which is what shows the traits only add API.
           - name: lean
             traits: "--disable-default-traits --traits SystemSQLite"
+            forbidden-modules: "Foundation|FoundationEssentials|FoundationInternationalization"
+          # Foundation conveniences without Structured Queries, which must stay within
+          # FoundationEssentials rather than pulling in all of Foundation and ICU.
+          - name: Foundation without Structured Queries
+            traits: "--disable-default-traits --traits SystemSQLite,Foundation"
+            forbidden-modules: "Foundation|FoundationInternationalization"
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +50,18 @@ jobs:
 
       - name: Test
         run: swift test ${{ matrix.traits }}
+
+      # The compiler's dependency files list every module the library's sources loaded, which is
+      # what shows a trait kept its Foundation out.
+      - name: Check loaded Foundation modules
+        if: matrix.forbidden-modules
+        run: |
+          loaded=$(cat .build/debug/SQLiteOrbit.build/*.d | tr ' ' '\n' \
+            | grep -oE '[A-Za-z_]+\.swiftmodule' | sed 's/\.swiftmodule$//' | sort -u)
+          if echo "$loaded" | grep -xE '${{ matrix.forbidden-modules }}'; then
+            echo "SQLiteOrbit loaded a Foundation module this configuration must not use." >&2
+            exit 1
+          fi
 
   test-turso:
     name: Linux (Turso)
