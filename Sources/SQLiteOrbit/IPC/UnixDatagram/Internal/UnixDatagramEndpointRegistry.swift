@@ -47,7 +47,7 @@
   ///
   /// To keep the system from removing its files in the first place, every send and every receive
   /// touches the endpoint's socket, its markers and the directories they are in, if it has been
-  /// ``defaultRefreshInterval`` since it last did.
+  /// the configured refresh interval since it last did.
   final class UnixDatagramEndpointRegistry: Sendable {
     private struct State {
       var watcher: UnixDirectoryWatcher?
@@ -75,13 +75,6 @@
       /// Whether a file was put back since the endpoint's thread last reported a repair.
       var hasRepaired = false
     }
-
-    /// How long after this endpoint last touched its files a send or a receive touches them again.
-    ///
-    /// Far shorter than the three days after which macOS removes temporary files nobody has used,
-    /// and far longer than the time between the operations it is checked on, so it costs next to
-    /// nothing.
-    static let defaultRefreshInterval = Duration.seconds(60 * 60)
 
     let endpointName: String
     let socketPath: String
@@ -117,7 +110,7 @@
       maximumDatagramByteCount: Int,
       receiveBufferByteCount: Int,
       watchesDirectories: Bool = true,
-      refreshInterval: Duration = defaultRefreshInterval
+      refreshInterval: Duration = UnixDatagramIPCTransport.Configuration.defaultRefreshInterval
     ) throws {
       let socketsDirectory = directory.socketsDirectory
       let databasesDirectory = directory.databasesDirectory

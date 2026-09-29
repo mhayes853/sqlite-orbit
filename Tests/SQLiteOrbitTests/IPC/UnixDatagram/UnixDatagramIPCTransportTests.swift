@@ -377,7 +377,21 @@
           )
         }
       }
+      #expect(throws: (any Error).self) {
+        try UnixDatagramIPCTransport(
+          configuration: .init(directoryPath: directory.path, refreshInterval: .seconds(-1))
+        )
+      }
     }
+  }
+
+  @Test
+  func unixDatagramConfigurationRefreshesHourlyByDefault() {
+    #expect(UnixDatagramIPCTransport.Configuration.default.refreshInterval == .seconds(60 * 60))
+    #expect(
+      UnixDatagramIPCTransport.Configuration.default.refreshInterval
+        == UnixDatagramIPCTransport.Configuration.defaultRefreshInterval
+    )
   }
 
   /// A receiver whose handler holds the transport's thread at the first message until

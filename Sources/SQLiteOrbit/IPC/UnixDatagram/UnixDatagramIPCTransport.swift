@@ -70,8 +70,15 @@
       public static let defaultDirectoryPath = FileSystem.temporaryDirectory
         .appending("sqlite-orbit").string
 
+      /// How long an endpoint waits, by default, before touching its files in the coordination
+      /// directory again: an hour.
+      ///
+      /// It is well within the days most systems let temporary files sit unused before removing
+      /// them.
+      public static let defaultRefreshInterval = Duration.seconds(60 * 60)
+
       /// The configuration used by a database that does not supply one, which uses
-      /// ``defaultDirectoryPath``.
+      /// ``defaultDirectoryPath`` and ``defaultRefreshInterval``.
       public static let `default` = Self()
 
       /// The path of the coordination directory this process shares with its peers.
@@ -94,6 +101,16 @@
       /// memory. It must be at least ``maximumDatagramByteCount``.
       public var receiveBufferByteCount: Int
 
+      /// How long after this endpoint last touched its socket, its markers and the directories
+      /// they are in, a send or a receive touches them again.
+      ///
+      /// Systems that clean their temporary directories remove files nobody has used for a
+      /// while, and an endpoint whose files are removed must repair them before peers can reach
+      /// it again. Touching them while the endpoint is in use keeps them from looking abandoned.
+      /// Keep it well below the age at which the system removes files. It must not be negative,
+      /// and `.zero` touches them on every send and receive.
+      public var refreshInterval: Duration
+
       /// Creates a configuration.
       ///
       /// ```swift
@@ -109,14 +126,18 @@
       ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
       ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
       ///     be at least `maximumDatagramByteCount`.
+      ///   - refreshInterval: How long after this endpoint last touched its files in the
+      ///     coordination directory a send or a receive touches them again.
       public init(
         directoryPath: String = Self.defaultDirectoryPath,
         maximumDatagramByteCount: Int = 60 * 1024,
-        receiveBufferByteCount: Int = 256 * 1024
+        receiveBufferByteCount: Int = 256 * 1024,
+        refreshInterval: Duration = Self.defaultRefreshInterval
       ) {
         self.directoryPath = FilePath(directoryPath).absolute().string
         self.maximumDatagramByteCount = maximumDatagramByteCount
         self.receiveBufferByteCount = receiveBufferByteCount
+        self.refreshInterval = refreshInterval
       }
     }
 
@@ -193,19 +214,11 @@
     ///   endpoint.
     /// - Throws: A ``UnixSystemError`` if the configuration is invalid, the coordination directory
     ///   cannot be created, or the socket cannot be created and bound.
-    public convenience init(configuration: Configuration) throws {
-      try self.init(
-        configuration: configuration,
-        refreshInterval: UnixDatagramEndpointRegistry.defaultRefreshInterval
-      )
-    }
-
-    /// Creates a transport endpoint that touches its files in the coordination directory on a
-    /// send or a receive `refreshInterval` after it last did.
-    init(configuration: Configuration, refreshInterval: Duration) throws {
+    public init(configuration: Configuration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
-        configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount
+        configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount,
+        configuration.refreshInterval >= .zero
       else {
         throw UnixSystemError.invalidArgument("invalid transport configuration")
       }
@@ -218,7 +231,7 @@
         endpointName: String(endpointName),
         maximumDatagramByteCount: configuration.maximumDatagramByteCount,
         receiveBufferByteCount: configuration.receiveBufferByteCount,
-        refreshInterval: refreshInterval
+        refreshInterval: configuration.refreshInterval
       )
       // After binding, so the sweep can never take this endpoint for one of the dead it removes.
       UnixDatagramStaleCleanup.sweep(
@@ -493,15 +506,19 @@
       ///   - maximumDatagramByteCount: The largest datagram this endpoint sends or accepts.
       ///   - receiveBufferByteCount: The size of this endpoint's socket receive buffer, which must
       ///     be at least `maximumDatagramByteCount`.
+      ///   - refreshInterval: How long after this endpoint last touched its files in the
+      ///     coordination directory a send or a receive touches them again.
       public init(
         directory: URL,
         maximumDatagramByteCount: Int = 60 * 1024,
-        receiveBufferByteCount: Int = 256 * 1024
+        receiveBufferByteCount: Int = 256 * 1024,
+        refreshInterval: Duration = Self.defaultRefreshInterval
       ) {
         self.init(
           directoryPath: directory.path,
           maximumDatagramByteCount: maximumDatagramByteCount,
-          receiveBufferByteCount: receiveBufferByteCount
+          receiveBufferByteCount: receiveBufferByteCount,
+          refreshInterval: refreshInterval
         )
       }
     }
