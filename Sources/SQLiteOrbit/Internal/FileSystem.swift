@@ -230,17 +230,18 @@ enum FileSystem {
   /// The absolute path with every symbolic link in it resolved, or `nil` if any of its
   /// components does not exist.
   ///
-  /// It is what Foundation reads a path through when it resolves symbolic links: the path the
-  /// kernel has for the file on Darwin, and `realpath` elsewhere.
+  /// It is what Foundation reads a path through when it resolves symbolic links: on Darwin, the
+  /// path the kernel has for the file, or failing that each component resolved in turn, and
+  /// `realpath` elsewhere.
   static func resolvingSymbolicLinks(_ path: String) -> String? {
     #if os(Windows)
       return nil
+    #elseif canImport(Darwin)
+      if path.utf8.first == UInt8(ascii: "/"), let fullPath = kernelFullPath(path) {
+        return fullPath
+      }
+      return resolvingSymbolicLinksByComponent(path)
     #else
-      #if canImport(Darwin)
-        if let fullPath = kernelFullPath(path) {
-          return fullPath
-        }
-      #endif
       guard let resolved = realpath(path, nil) else { return nil }
       defer { free(resolved) }
       return String(cString: resolved)
@@ -248,6 +249,40 @@ enum FileSystem {
   }
 
   #if canImport(Darwin)
+    /// The path with each symbolic link replaced by its destination, one component at a time, as
+    /// Darwin's Foundation resolves it when the kernel has no full path for it.
+    ///
+    /// Every component must exist. Darwin's `realpath` differs here: it takes a `..` after a link
+    /// to a file as the file's directory, where this fails as Foundation does.
+    private static func resolvingSymbolicLinksByComponent(_ path: String) -> String? {
+      let slash = UInt8(ascii: "/")
+      var utf8 = Array(path.utf8)
+      var scan = 0
+      var linkCount = 0
+      while true {
+        // Where the component began, at the slash before it, which a relative link keeps.
+        let componentStart = scan
+        while scan < utf8.count, utf8[scan] == slash { scan += 1 }
+        while scan < utf8.count, utf8[scan] != slash { scan += 1 }
+        let prefix = String(decoding: utf8[..<scan], as: UTF8.self)
+        guard let entry = entry(atPath: prefix) else { return nil }
+        if entry == .symbolicLink, let destination = symbolicLinkDestination(atPath: prefix),
+          !destination.isEmpty
+        {
+          // Darwin's `MAXSYMLINKS`.
+          guard linkCount <= 32 else { return nil }
+          linkCount += 1
+          let isAbsolute = destination.utf8.first == slash
+          utf8 =
+            Array(utf8[..<(isAbsolute ? 0 : componentStart + 1)]) + Array(destination.utf8)
+            + Array(utf8[scan...])
+          scan = isAbsolute ? 0 : componentStart
+        } else if scan == utf8.count {
+          return String(decoding: utf8, as: UTF8.self)
+        }
+      }
+    }
+
     /// The path the kernel has for the file at `path`, following a symbolic link at its end.
     private static func kernelFullPath(_ path: String) -> String? {
       var attributes = attrlist()

@@ -104,24 +104,18 @@ enum FilePath {
   /// - The path is made absolute as ``absolute(_:)`` makes it, so a tilde at its start is expanded
   ///   outside Darwin and is an ordinary component on Darwin.
   /// - Runs of slashes become one, and trailing slashes go.
-  /// - On Darwin, `.` and `..` segments are then removed by the rules of RFC 3986, without
-  ///   looking at the file system, so a `..` after a symbolic link names the directory the link
-  ///   is in.
-  /// - Elsewhere, a path that still has a `..` component has its symbolic links resolved, if
-  ///   every component of it exists, so each `..` names the parent it does on disk. Then its `.`
-  ///   and `..` segments are removed, and a path beginning `/private/`, `/private/var/automount/`
-  ///   or `/var/automount/` loses that prefix if what is left exists and is not in one of the
-  ///   system's top-level directories.
+  /// - A path that still has a `..` component has its symbolic links resolved, if every
+  ///   component of it exists, so each `..` names the parent it does on disk. A `..` after a link
+  ///   to a file cannot be resolved, so it is removed as text instead.
+  /// - Its `.` and `..` segments are removed, and a path beginning `/private/`,
+  ///   `/private/var/automount/` or `/var/automount/` loses that prefix if what is left exists and
+  ///   is not in one of the system's top-level directories.
   ///
   /// A relative path is returned unchanged where the current directory cannot be read.
   static func standardized(_ path: String) -> String {
     let path = absolute(path)
     guard path.utf8.first == slash else { return path }
-    #if canImport(Darwin)
-      return droppingTrailingSlashes(removingDotSegments(compressingSlashes(path)))
-    #else
-      return droppingTrailingSlashes(standardizingAbsolutePath(path))
-    #endif
+    return droppingTrailingSlashes(standardizingAbsolutePath(path))
   }
 
   /// A file path made absolute as the platform's Foundation spells
@@ -166,8 +160,8 @@ enum FilePath {
     }
   #endif
 
-  /// Standardizes an absolute path as Foundation's `standardizingPath` does outside Darwin, and
-  /// as its `resolvingSymlinksInPath()` does on every platform once the links are resolved:
+  /// Standardizes an absolute path as Foundation's `standardizingPath` does, and as its
+  /// `resolvingSymlinksInPath()` does once the links are resolved:
   /// runs of slashes become one, trailing slashes go, a `..` is resolved through symbolic links
   /// where every component exists, `.` and `..` segments are removed, and a `/private/`,
   /// `/private/var/automount/` or `/var/automount/` prefix goes if what is left exists and is not
