@@ -87,80 +87,79 @@ enum FileSystem {
     #endif
   }
 
-  /// The current user's home directory, which a path beginning `~/` starts from, found as
-  /// Foundation finds it: `CFFIXED_USER_HOME`, then the user database's entry for the user, then
-  /// `HOME`, then `/var/empty`. A simulator reads `CFFIXED_USER_HOME` or `HOME` first.
-  ///
-  /// A process whose effective user is root is taken to be its real user, as Foundation does.
-  static var homeDirectoryPath: String {
-    #if os(Windows)
-      return "/var/empty"
-    #else
-      #if targetEnvironment(simulator)
-        if let home = getenv("CFFIXED_USER_HOME") ?? getenv("HOME") {
-          return standardizedHome(String(cString: home))
-        }
-      #endif
-      if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
-        return standardizedHome(home)
-      }
-      #if !os(WASI)
-        var uid = geteuid()
-        if uid == 0 {
-          uid = getuid()
-        }
-        if let home = userEntryHome({ getpwuid_r(uid, $0, $1, $2, $3) }) {
+  // Darwin's Foundation takes a tilde at the start of a file path for an ordinary component,
+  // where the others expand it, so only they need to know where a home directory is.
+  #if !canImport(Darwin)
+    /// The current user's home directory, which a path beginning `~/` starts from, found as
+    /// Foundation finds it: `CFFIXED_USER_HOME`, then the user database's entry for the user, then
+    /// `HOME`, then `/var/empty`.
+    ///
+    /// A process whose effective user is root is taken to be its real user, as Foundation does.
+    static var homeDirectoryPath: String {
+      #if os(Windows)
+        return "/var/empty"
+      #else
+        if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
           return standardizedHome(home)
         }
+        #if !os(WASI)
+          var uid = geteuid()
+          if uid == 0 {
+            uid = getuid()
+          }
+          if let home = userEntryHome({ getpwuid_r(uid, $0, $1, $2, $3) }) {
+            return standardizedHome(home)
+          }
+        #endif
+        if let home = getenv("HOME") {
+          return standardizedHome(String(cString: home))
+        }
+        return "/var/empty"
       #endif
-      if let home = getenv("HOME") {
-        return standardizedHome(String(cString: home))
-      }
-      return "/var/empty"
-    #endif
-  }
+    }
 
-  /// The home directory of the user named `user`, which a path beginning `~user/` starts from, or
-  /// `nil` if there is no such user.
-  static func homeDirectoryPath(forUser user: String) -> String? {
-    #if os(Windows) || os(WASI)
-      return nil
-    #else
-      if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
-        return standardizedHome(home)
-      }
-      return userEntryHome { getpwnam_r(user, $0, $1, $2, $3) }.map(standardizedHome)
-    #endif
-  }
+    /// The home directory of the user named `user`, which a path beginning `~user/` starts from, or
+    /// `nil` if there is no such user.
+    static func homeDirectoryPath(forUser user: String) -> String? {
+      #if os(Windows) || os(WASI)
+        return nil
+      #else
+        if let home = environmentValue(securelyNamed: "CFFIXED_USER_HOME") {
+          return standardizedHome(home)
+        }
+        return userEntryHome { getpwnam_r(user, $0, $1, $2, $3) }.map(standardizedHome)
+      #endif
+    }
 
-  #if !os(Windows) && !os(WASI)
-    /// The home directory in the user database entry `lookUp` finds, as `getpwuid_r` or
-    /// `getpwnam_r` finds one.
-    private static func userEntryHome(
-      _ lookUp: (
-        UnsafeMutablePointer<passwd>,
-        UnsafeMutablePointer<CChar>,
-        Int,
-        UnsafeMutablePointer<UnsafeMutablePointer<passwd>?>
-      ) -> Int32
-    ) -> String? {
-      var entry = passwd()
-      var result: UnsafeMutablePointer<passwd>?
-      var buffer = [CChar](repeating: 0, count: 16 * 1024)
-      let status = buffer.withUnsafeMutableBufferPointer { buffer in
-        lookUp(&entry, buffer.baseAddress!, buffer.count, &result)
+    #if !os(Windows) && !os(WASI)
+      /// The home directory in the user database entry `lookUp` finds, as `getpwuid_r` or
+      /// `getpwnam_r` finds one.
+      private static func userEntryHome(
+        _ lookUp: (
+          UnsafeMutablePointer<passwd>,
+          UnsafeMutablePointer<CChar>,
+          Int,
+          UnsafeMutablePointer<UnsafeMutablePointer<passwd>?>
+        ) -> Int32
+      ) -> String? {
+        var entry = passwd()
+        var result: UnsafeMutablePointer<passwd>?
+        var buffer = [CChar](repeating: 0, count: 16 * 1024)
+        let status = buffer.withUnsafeMutableBufferPointer { buffer in
+          lookUp(&entry, buffer.baseAddress!, buffer.count, &result)
+        }
+        guard status == 0, result != nil else { return nil }
+        // Bionic declares `pw_dir` as possibly null.
+        let directory: UnsafeMutablePointer<CChar>? = entry.pw_dir
+        return directory.map { String(cString: $0) }
       }
-      guard status == 0, result != nil else { return nil }
-      // Bionic declares `pw_dir` as possibly null.
-      let directory: UnsafeMutablePointer<CChar>? = entry.pw_dir
-      return directory.map { String(cString: $0) }
+    #endif
+
+    private static func standardizedHome(_ path: String) -> String {
+      let path = FilePath.expandingTilde(path)
+      return path.utf8.first == UInt8(ascii: "/") ? FilePath.standardizingAbsolutePath(path) : path
     }
   #endif
-
-  private static func standardizedHome(_ path: String) -> String {
-    let path = FilePath.expandingTilde(path)
-    return path.utf8.first == UInt8(ascii: "/") ? FilePath.standardizingAbsolutePath(path) : path
-  }
 
   /// Whether a file is at `path`, following a symbolic link to what it names.
   static func fileExists(atPath path: String) -> Bool {
