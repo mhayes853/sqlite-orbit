@@ -3,6 +3,7 @@ actor SQLiteSerialConnection {
   // this access on threaded runtimes; on a single-threaded runtime no other job can run during it.
   private nonisolated(unsafe) let handle: SQLiteHandle
   private let interrupt: @Sendable () -> Void
+  private let suspension: SQLiteWriteSuspension?
 
   #if _runtime(_multithreaded)
     private let executor: SQLiteConnectionExecutor
@@ -19,13 +20,15 @@ actor SQLiteSerialConnection {
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
     driverSetupSQL: [String] = [],
-    idleTimeout: Duration? = nil
+    idleTimeout: Duration? = nil,
+    suspension: SQLiteWriteSuspension? = nil
   ) throws {
     let handle = try SQLiteHandle.open(
       path: path,
       flags: flags,
       configuration: configuration,
-      driverSetupSQL: driverSetupSQL
+      driverSetupSQL: driverSetupSQL,
+      suspension: suspension
     )
     // The connection is captured as an address rather than a pointer, which is what lets this
     // closure be shared without an unchecked conformance on `OpaquePointer`. It stays valid
@@ -33,6 +36,7 @@ actor SQLiteSerialConnection {
     let address = UInt(bitPattern: handle.pointer)
     let entryPoint = handle.library.pointee.connections.interrupt
     self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
+    self.suspension = suspension
     #if _runtime(_multithreaded)
       self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
     #else
@@ -107,10 +111,17 @@ actor SQLiteSerialConnection {
     #if _runtime(_multithreaded)
       // `sync` runs the work as this actor's executor. Hopping onto the actor is impossible for
       // a closure the caller only lent us.
-      return try executor.sync { try work(handle) }
+      return try executor.sync { try trackingSuspension { try work(handle) } }
     #else
-      return try withConnectionAccess { try work(handle) }
+      return try withConnectionAccess { try trackingSuspension { try work(handle) } }
     #endif
+  }
+
+  private nonisolated func trackingSuspension<Result>(
+    _ work: () throws -> Result
+  ) throws -> Result {
+    guard let suspension else { return try work() }
+    return try suspension.trackingAccess(interrupt: interrupt, work)
   }
 
   #if !_runtime(_multithreaded)
@@ -140,9 +151,9 @@ actor SQLiteSerialConnection {
         // A task may have been cancelled while waiting to enter the actor.
         try Task.checkCancellation()
         #if _runtime(_multithreaded)
-          return try work(handle)
+          return try trackingSuspension { try work(handle) }
         #else
-          return try withConnectionAccess { try work(handle) }
+          return try withConnectionAccess { try trackingSuspension { try work(handle) } }
         #endif
       } onCancel: {
         token.fire()

@@ -225,7 +225,7 @@ extension OrbitObservableDatabase {
 /// a type also has process-local configurations, callers must supply a multiprocess-capable
 /// instance. ``OrbitIPCDatabase`` additionally requires the writer to conform to
 /// ``OrbitObservableDatabase`` so it can combine local transaction events with peer announcements.
-public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter {
+public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter, OrbitSuspendable {
   /// The identifier an ``OrbitIPCDatabase`` uses when its caller does not supply one.
   var defaultIdentifier: OrbitDatabaseIdentifier { get }
 }

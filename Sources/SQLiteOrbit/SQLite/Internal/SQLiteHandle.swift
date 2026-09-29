@@ -77,7 +77,8 @@ struct SQLiteHandle: ~Copyable {
     path: OrbitDatabasePath,
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
-    driverSetupSQL: [String] = []
+    driverSetupSQL: [String] = [],
+    suspension: SQLiteWriteSuspension? = nil
   ) throws -> SQLiteHandle {
     let libraryStorage = UnsafeMutablePointer<SQLiteLibrary>.allocate(capacity: 1)
     libraryStorage.initialize(to: configuration.library)
@@ -106,6 +107,13 @@ struct SQLiteHandle: ~Copyable {
       throw error
     }
 
+    if let suspension {
+      // This handle owns its copy of the entry points, so other connections are unaffected.
+      libraryStorage.pointee.statements.execution.step = suspension.step(
+        of: libraryStorage.pointee,
+        on: pointer
+      )
+    }
     let handle = SQLiteHandle(
       pointer: pointer,
       libraryStorage: libraryStorage,

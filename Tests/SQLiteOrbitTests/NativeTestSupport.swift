@@ -4,7 +4,12 @@
 
   // IPC tests use an in-memory queue to isolate the announcement machinery from filesystem IPC.
   // Production SQLiteQueue does not make this promise because it can represent a private database.
-  extension SQLiteQueue: OrbitMultiprocessDatabaseWriter {}
+  extension SQLiteQueue: OrbitMultiprocessDatabaseWriter {
+    // These IPC tests use a private in-memory queue, so no other process can be blocked by it.
+    public var isSuspended: Bool { false }
+    public func suspend() {}
+    public func resume() {}
+  }
 
   /// The build the enabled trait supplied, which tests interpose on to observe individual entry
   /// points. Naming it once here is what lets the suite run under any of them.

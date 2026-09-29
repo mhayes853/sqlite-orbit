@@ -87,6 +87,54 @@ Two ordinary SQLite drivers provide process-local access, and the multiprocess-c
 Each connection runs on a serial executor of its own, a dispatch queue on Apple platforms and
 Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
+### Suspending a shared database
+
+An iOS app that is suspended while its SQLite connection holds a write lock on a database shared
+with another process can be terminated with `0xDEAD10CC`. `SQLitePool` and the default
+`OrbitIPCDatabase` support `suspend()` and `resume()`. Suspension interrupts the active writer and
+refuses new write statements until the database resumes; a refused operation throws
+`OrbitDatabaseSuspendedError`. Read connections remain available. `suspend()` starts the interruption
+but does not wait for an in-flight write to finish rolling back, so database writes should still be
+kept short and app lifecycle work should allow them to finish.
+
+In a SwiftUI app on iOS, tvOS, or visionOS, put the modifier on a long-lived root view:
+
+```swift
+WindowGroup {
+  RemindersRoot()
+    .orbitDatabaseSuspension(database)
+}
+```
+
+For UIKit, retain a controller for the database's lifetime. `.application` observes the whole app;
+`.scene(scene)` is for a database exclusively owned by that scene:
+
+```swift
+let database = try OrbitIPCDatabase(path: databasePath)
+let suspension = OrbitDatabaseSuspensionController(
+  database: database,
+  observing: .application
+)
+```
+
+On watchOS the SwiftUI modifier follows `scenePhase`. On macOS it observes AppKit application
+activation; an inactive app may have merely lost focus, so use the explicit `isActive:` overload if
+that policy is too broad. AppKit apps can likewise use a controller observing `.application`, or
+retain a manual controller and drive it from their chosen signal:
+
+```swift
+let suspension = OrbitDatabaseSuspensionController(database: database)
+suspension.setActive(false)  // The owner is about to be suspended.
+suspension.setActive(true)   // The owner is active again.
+```
+
+SwiftUI views with their own lifecycle signal can use
+`.orbitDatabaseSuspension(database, isActive: isActive)` on any Apple platform. Keep one lifecycle
+owner per database; the modifier replaces its controller when the database instance changes. Do not
+use a scene scope for a database shared between active scenes.
+Custom `OrbitMultiprocessDatabaseWriter` implementations must implement `OrbitSuspendable`
+so an `OrbitIPCDatabase` can forward these calls to its writer.
+
 A driver is opened with an `OrbitDatabasePath` rather than a string, so the databases that no second
 connection can reach are named outright:
 
