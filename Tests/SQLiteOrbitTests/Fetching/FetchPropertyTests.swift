@@ -278,7 +278,7 @@
         storage.adoptIfNeeded(
           from: OrbitFetchStorage(
             value: [],
-            loadError: FetchTestError(),
+            loadError: TestError(),
             sourceID: OrbitFetchSourceID(
               request: TitleSearch(term: "Milk"),
               database: nil,
@@ -308,7 +308,7 @@
       }
       if interruption == .adoptError {
         #expect(storage.sourceID != nil)
-        #expect(storage.loadError is FetchTestError)
+        #expect(storage.loadError is TestError)
       }
     }
 
@@ -483,77 +483,74 @@
 
     @Test
     func missingDatabaseDeclarationsKeepTheirIdentityAndRecover() async throws {
-      let previous = OrbitDefaultDatabase.currentIfConfigured
-      OrbitDefaultDatabase.set(nil)
-      defer { OrbitDefaultDatabase.set(previous) }
-      func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
-        .make(value: [], request: TitleSearch(term: term), database: nil, scheduler: nil)
+      try await withProcessDefaultDatabase(nil) {
+        func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
+          .make(value: [], request: TitleSearch(term: term), database: nil, scheduler: nil)
+        }
+        let storage = declaration("Milk")
+        let missingID = try #require(storage.sourceID)
+        #expect(declaration("Milk").sourceID == missingID)
+        #expect(declaration("Eggs").sourceID != missingID)
+
+        let database = try await remindersDatabase(titles: "Milk")
+        OrbitDefaultDatabase.set(database)
+        storage.adoptIfNeeded(from: declaration("Milk"))
+        #expect(storage.sourceID != missingID)
+        #expect(storage.value == ["Milk"])
+        #expect(storage.loadError == nil)
+
+        OrbitDefaultDatabase.set(nil)
+        storage.adoptIfNeeded(from: declaration("Milk"))
+        #expect(storage.sourceID == missingID)
+        #expect(storage.untrackedValue.isEmpty)
       }
-      let storage = declaration("Milk")
-      let missingID = try #require(storage.sourceID)
-      #expect(declaration("Milk").sourceID == missingID)
-      #expect(declaration("Eggs").sourceID != missingID)
-
-      let database = try await remindersDatabase(titles: "Milk")
-      OrbitDefaultDatabase.set(database)
-      storage.adoptIfNeeded(from: declaration("Milk"))
-      #expect(storage.sourceID != missingID)
-      #expect(storage.value == ["Milk"])
-      #expect(storage.loadError == nil)
-
-      OrbitDefaultDatabase.set(nil)
-      storage.adoptIfNeeded(from: declaration("Milk"))
-      #expect(storage.sourceID == missingID)
-      #expect(storage.untrackedValue.isEmpty)
     }
 
     @Test(arguments: [false, true])
     func aStorageWithoutADatabaseStartsReadingOnceOneIsAvailable(
       isSetAsDefault: Bool
     ) async throws {
-      let previous = OrbitDefaultDatabase.currentIfConfigured
-      OrbitDefaultDatabase.set(nil)
-      defer { OrbitDefaultDatabase.set(previous) }
-      let storage = OrbitFetchStorage<[String]>
-        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+      try await withProcessDefaultDatabase(nil) {
+        let storage = OrbitFetchStorage<[String]>
+          .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
 
-      // Either attached to the storage, or set as the default after the storage was made.
-      let database = try await remindersDatabase(titles: "Milk")
-      if isSetAsDefault {
-        OrbitDefaultDatabase.set(database)
-        storage.attachIfNeeded(database: nil)
-      } else {
-        storage.attachIfNeeded(database: database)
+        // Either attached to the storage, or set as the default after the storage was made.
+        let database = try await remindersDatabase(titles: "Milk")
+        if isSetAsDefault {
+          OrbitDefaultDatabase.set(database)
+          storage.attachIfNeeded(database: nil)
+        } else {
+          storage.attachIfNeeded(database: database)
+        }
+
+        #expect(storage.value == ["Milk"])
+        #expect(storage.loadError == nil)
       }
-
-      #expect(storage.value == ["Milk"])
-      #expect(storage.loadError == nil)
     }
 
     @Test
     func aStorageOnTheProcessDefaultMovesToAnAttachedDatabase() async throws {
       let processDefault = try await remindersDatabase(titles: "Milk")
-      let previous = OrbitDefaultDatabase.currentIfConfigured
-      OrbitDefaultDatabase.set(processDefault)
-      defer { OrbitDefaultDatabase.set(previous) }
-      let storage = OrbitFetchStorage<[String]>
-        .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
-      #expect(storage.value == ["Milk"])
+      try await withProcessDefaultDatabase(processDefault) {
+        let storage = OrbitFetchStorage<[String]>
+          .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+        #expect(storage.value == ["Milk"])
 
-      let attached = try await remindersDatabase(titles: "Milk", "Milk")
-      storage.attachIfNeeded(database: attached)
-      #expect(storage.value == ["Milk", "Milk"])
+        let attached = try await remindersDatabase(titles: "Milk", "Milk")
+        storage.attachIfNeeded(database: attached)
+        #expect(storage.value == ["Milk", "Milk"])
 
-      // The database it already reads from asks for nothing, and neither does no database at all.
-      storage.attachIfNeeded(database: attached)
-      storage.attachIfNeeded(database: nil)
-      #expect(storage.value == ["Milk", "Milk"])
+        // The database it already reads from asks for nothing, and neither does no database at all.
+        storage.attachIfNeeded(database: attached)
+        storage.attachIfNeeded(database: nil)
+        #expect(storage.value == ["Milk", "Milk"])
 
-      // It observes the database it moved to, and no longer the one it left.
-      try await insertReminders("Milk", into: attached)
-      try await waitUntil { storage.value == ["Milk", "Milk", "Milk"] }
-      try await insertReminders("Milk", into: processDefault)
-      #expect(storage.value == ["Milk", "Milk", "Milk"])
+        // It observes the database it moved to, and no longer the one it left.
+        try await insertReminders("Milk", into: attached)
+        try await waitUntil { storage.value == ["Milk", "Milk", "Milk"] }
+        try await insertReminders("Milk", into: processDefault)
+        #expect(storage.value == ["Milk", "Milk", "Milk"])
+      }
     }
 
     @Test
@@ -640,12 +637,11 @@
     @Test
     func theDefaultDatabaseCanBeSetForTheProcess() async throws {
       let database = try await remindersDatabase(titles: "Milk")
-      OrbitDefaultDatabase.set(database)
-      defer { OrbitDefaultDatabase.set(nil) }
 
-      @FetchAll(Reminder.all) var reminders
-
-      #expect(reminders.count == 1)
+      try await withProcessDefaultDatabase(database) {
+        @FetchAll(Reminder.all) var reminders
+        #expect(reminders.count == 1)
+      }
     }
 
     #if Dependencies
@@ -798,18 +794,18 @@
         let database = try await remindersDatabase(titles: "Milk")
 
         @FetchAll(Reminder.order(by: \.id), database: database) var reminders
-        let didChange = Lock(false)
+        let didChange = TestCounter()
 
         withObservationTracking {
           _ = reminders
         } onChange: {
-          didChange.withLock { $0 = true }
+          didChange.increment()
         }
-        #expect(!didChange.withLock { $0 })
+        #expect(didChange.value == 0)
 
         try await insertReminders("Eggs", into: database)
 
-        try await waitUntil { didChange.withLock { $0 } }
+        try await didChange.waitForCount(1)
       }
     #endif
 
@@ -1080,30 +1076,31 @@
 
     @Test
     func anotherProcessesWriteReachesTheProperty() async throws {
-      let network = InMemoryIPCTransport.Network()
-      let path = OrbitDatabasePath(temporaryDatabasePath("fetch-ipc"))
-      let identifier = OrbitDatabaseIdentifier(rawValue: "fetch-ipc")
+      try await withTestDatabaseFile("fetch") { file in
+        let network = InMemoryIPCTransport.Network()
+        let identifier = OrbitDatabaseIdentifier(rawValue: "fetch-ipc")
 
-      let reader = OrbitIPCDatabase(
-        writer: try SQLitePool(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport(network: network)
-      )
-      let writer = OrbitIPCDatabase(
-        writer: try SQLitePool(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport(network: network)
-      )
-      try await writer.write { transaction in
-        try transaction.execute(remindersSchema)
+        let reader = OrbitIPCDatabase(
+          writer: try file.pool(),
+          id: identifier,
+          transport: InMemoryIPCTransport(network: network)
+        )
+        let writer = OrbitIPCDatabase(
+          writer: try file.pool(),
+          id: identifier,
+          transport: InMemoryIPCTransport(network: network)
+        )
+        try await writer.write { transaction in
+          try transaction.execute(remindersSchema)
+        }
+
+        @FetchAll(Reminder.order(by: \.id), database: reader) var reminders
+        #expect(reminders.isEmpty)
+
+        try await insertReminders("Milk", into: writer)
+
+        try await waitUntil { reminders.map(\.title) == ["Milk"] }
       }
-
-      @FetchAll(Reminder.order(by: \.id), database: reader) var reminders
-      #expect(reminders.isEmpty)
-
-      try await insertReminders("Milk", into: writer)
-
-      try await waitUntil { reminders.map(\.title) == ["Milk"] }
     }
 
     @Test
@@ -1162,14 +1159,12 @@
     case adoptError
   }
 
-  private struct FetchTestError: Error {}
-
   private actor SchedulerActor {}
 
   private func countingRemindersDatabase(
     titles: String...
-  ) async throws -> CountingObservableDatabase {
-    let database = CountingObservableDatabase(try SQLiteQueue(path: ":memory:"))
+  ) async throws -> AnnouncingTestDatabase {
+    let database = AnnouncingTestDatabase(try inMemoryDatabase())
     try await database.write { transaction in
       try transaction.execute(remindersSchema)
       for title in titles {
@@ -1177,97 +1172,6 @@
       }
     }
     return database
-  }
-
-  /// A database that reports its own commits and counts the observers registered on it.
-  ///
-  /// Nothing else reveals how many subscriptions a pair of fetch properties took out, which is
-  /// the whole question when they are meant to be sharing one.
-  private final class CountingObservableDatabase: OrbitObservableDatabase {
-    let defaultIdentifier: OrbitDatabaseIdentifier
-
-    private let base: SQLiteQueue
-    private let observers = OrbitDatabaseTransactionObservers()
-    private let subscriptions = Lock(0)
-
-    /// How many observers have been registered, whether or not they are still registered.
-    var subscriptionCount: Int {
-      subscriptions.withLock { $0 }
-    }
-
-    init(_ base: SQLiteQueue) {
-      self.base = base
-      self.defaultIdentifier = base.defaultIdentifier
-    }
-
-    func read<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) async throws -> Result {
-      try await base.read(body)
-    }
-
-    func readBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) throws -> Result {
-      try base.readBlocking(body)
-    }
-
-    func readWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.readWithoutTransaction(body)
-    }
-
-    func readWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) throws -> Result {
-      try base.readWithoutTransactionBlocking(body)
-    }
-
-    func write<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) async throws -> Result {
-      let (result, region) = try await base.write { transaction in
-        try transaction.recordingDatabaseRegion(body)
-      }
-      announceCommit(region: region)
-      return result
-    }
-
-    func writeBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) throws -> Result {
-      let (result, region) = try base.writeBlocking { transaction in
-        try transaction.recordingDatabaseRegion(body)
-      }
-      announceCommit(region: region)
-      return result
-    }
-
-    func writeWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.writeWithoutTransaction(body)
-    }
-
-    func writeWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) throws -> Result {
-      try base.writeWithoutTransactionBlocking(body)
-    }
-
-    func subscribe(
-      transactionObserver: any OrbitDatabaseTransactionObserver,
-      region: OrbitDatabaseRegion
-    ) throws -> OrbitRegionSubscription {
-      subscriptions.withLock { $0 += 1 }
-      return observers.subscribe(transactionObserver, region: region)
-    }
-
-    private func announceCommit(region: OrbitDatabaseRegion) {
-      observers.didChange(in: region)
-      observers.didCommit(origin: .local, region: region)
-    }
   }
 
   /// A scheduler that holds everything it is given until a test lets it go, and passes
