@@ -12,49 +12,45 @@
     )
   )
   func scanningComparesNativePoolAndQueue() async throws {
-    let path = temporaryDatabasePath("bench")
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path + suffix)
-      }
-    }
-    let rowCount = 200_000
+    try await withTestDatabaseFile("bench") { file in
+      let rowCount = 200_000
 
-    let pool = try SQLitePool(path: OrbitDatabasePath(path))
-    try await pool.write { transaction in
-      try transaction.execute(
-        "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
-      )
-      for id in 1...rowCount {
+      let pool = try file.pool()
+      try await pool.write { transaction in
         try transaction.execute(
-          Item.insert { Item(id: id, title: "row \(id)", amount: Double(id) / 3) }
+          "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
         )
+        for id in 1...rowCount {
+          try transaction.execute(
+            Item.insert { Item(id: id, title: "row \(id)", amount: Double(id) / 3) }
+          )
+        }
       }
-    }
 
-    let queue = try SQLiteQueue(path: OrbitDatabasePath(path))
+      let queue = try file.queue()
 
-    func measure(_ name: String, _ body: () async throws -> Int) async rethrows {
-      var best = Duration.seconds(1_000)
-      for _ in 0..<3 {
-        let clock = ContinuousClock()
-        let start = clock.now
-        let count = try await body()
-        let elapsed = clock.now - start
-        #expect(count == rowCount)
-        best = min(best, elapsed)
+      func measure(_ name: String, _ body: () async throws -> Int) async rethrows {
+        var best = Duration.seconds(1_000)
+        for _ in 0..<3 {
+          let clock = ContinuousClock()
+          let start = clock.now
+          let count = try await body()
+          let elapsed = clock.now - start
+          #expect(count == rowCount)
+          best = min(best, elapsed)
+        }
+        print("BENCH \(name): \(best)")
       }
-      print("BENCH \(name): \(best)")
-    }
 
-    try await measure("pool") {
-      try await pool.read { transaction in
-        try transaction.fetchAll(Item.all).count
+      try await measure("pool") {
+        try await pool.read { transaction in
+          try transaction.fetchAll(Item.all).count
+        }
       }
-    }
-    try await measure("queue") {
-      try await queue.read { transaction in
-        try transaction.fetchAll(Item.all).count
+      try await measure("queue") {
+        try await queue.read { transaction in
+          try transaction.fetchAll(Item.all).count
+        }
       }
     }
   }

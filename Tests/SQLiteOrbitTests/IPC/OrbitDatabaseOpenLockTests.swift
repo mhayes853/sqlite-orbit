@@ -6,45 +6,45 @@
 
   @Test
   func openLockMakesASecondAcquisitionWaitForTheFirst() async throws {
-    let directory = try makeShortTemporaryDirectory("lock")
-    defer { try? FileManager.default.removeItem(at: directory) }
-    let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
-    let order = Lock([String]())
+    try await withTemporaryDirectory("lock") { directory in
+      let databaseIdentifier = OrbitDatabaseIdentifier(rawValue: "open-lock")
+      let order = Lock([String]())
 
-    let holder = LockHolder { whileHeld in
-      try OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: databaseIdentifier,
-        directory: directory,
-        configuration: .default
-      ) {
-        whileHeld()
-        order.withLock { $0.append("first") }
+      let holder = LockHolder { whileHeld in
+        try OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: databaseIdentifier,
+          directory: directory,
+          configuration: .default
+        ) {
+          whileHeld()
+          order.withLock { $0.append("first") }
+        }
       }
-    }
 
-    let didAcquireSecond = Lock(false)
-    // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
-    // before the holder lets go.
-    var patient = SQLiteConfiguration.default
-    patient.busyTimeout = .maximum
-    Thread.detachNewThread { [patient] in
-      try? OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: databaseIdentifier,
-        directory: directory,
-        configuration: patient
-      ) {
-        order.withLock { $0.append("second") }
-        didAcquireSecond.withLock { $0 = true }
+      let didAcquireSecond = Lock(false)
+      // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
+      // before the holder lets go.
+      var patient = SQLiteConfiguration.default
+      patient.busyTimeout = .maximum
+      Thread.detachNewThread { [patient] in
+        try? OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: databaseIdentifier,
+          directory: directory,
+          configuration: patient
+        ) {
+          order.withLock { $0.append("second") }
+          didAcquireSecond.withLock { $0 = true }
+        }
       }
+
+      // The second acquisition cannot be observed to *not* happen without giving it a chance to.
+      try await Task.sleep(for: .milliseconds(50))
+      #expect(order.withLock { $0 }.isEmpty)
+
+      holder.release()
+      try await waitUntil { didAcquireSecond.withLock { $0 } }
+      #expect(order.withLock { $0 } == ["first", "second"])
     }
-
-    // The second acquisition cannot be observed to *not* happen without giving it a chance to.
-    try await Task.sleep(for: .milliseconds(50))
-    #expect(order.withLock { $0 }.isEmpty)
-
-    holder.release()
-    try await waitUntil { didAcquireSecond.withLock { $0 } }
-    #expect(order.withLock { $0 } == ["first", "second"])
   }
 
   @Test
@@ -60,41 +60,29 @@
     #expect(didAcquire)
   }
 
-  @Test
-  func openLockGivesUpWithBusyOnceTheBusyTimeoutRunsOut() async throws {
+  @Test(arguments: [Duration.zero, .milliseconds(200)])
+  func openLockGivesUpWithBusyOnceTheBusyTimeoutRunsOut(_ busyTimeout: Duration) async throws {
     let held = try HeldOpenLock()
     defer { held.release() }
     var configuration = SQLiteConfiguration.default
-    configuration.busyTimeout = .limit(.milliseconds(200))
+    configuration.busyTimeout = .limit(busyTimeout)
 
     let (error, elapsed) = try await held.take(configuration: configuration)
 
     #expect(error?.code == .busy)
-    #expect(elapsed >= .milliseconds(200))
-  }
-
-  @Test
-  func openLockGivesUpAtOnceWithoutABusyTimeout() async throws {
-    let held = try HeldOpenLock()
-    defer { held.release() }
-    var configuration = SQLiteConfiguration.default
-    configuration.busyTimeout = .limit(.zero)
-
-    let (error, _) = try await held.take(configuration: configuration)
-
-    #expect(error?.code == .busy)
+    #expect(elapsed >= busyTimeout)
   }
 
   @Test
   func openLockWaitsByTheBusyHandlerRatherThanTheTimeout() async throws {
     let held = try HeldOpenLock()
     defer { held.release() }
-    let attempts = Lock([Int]())
+    let attempts = TestRecorder<Int>()
     var configuration = SQLiteConfiguration.default
     // Would give up at once, were the handler not asked instead.
     configuration.busyTimeout = .limit(.zero)
     configuration.busyHandler = { attempt in
-      attempts.withLock { $0.append(attempt) }
+      attempts.append(attempt)
       Thread.sleep(forTimeInterval: 0.005)
       return attempt < 3
     }
@@ -102,7 +90,7 @@
     let (error, _) = try await held.take(configuration: configuration)
 
     #expect(error?.code == .busy)
-    #expect(attempts.withLock { $0 } == [1, 2, 3])
+    #expect(attempts.values == [1, 2, 3])
   }
 
   /// A coordination directory in which another thread holds the open lock of the database `one`.
@@ -211,7 +199,7 @@
       try await Task.sleep(for: .milliseconds(300))
       switch fate {
       case .resumed:
-        try peer.go()
+        try peer.stop()
         peer.resume(holder)
         try await peer.waitForSuccessfulExit(holder)
       case .killed:
@@ -251,19 +239,19 @@
       let holder = try peer.spawnHolder()
       try await peer.waitUntilReady()
       peer.suspend(holder)
-      let attempts = Lock([Int]())
+      let attempts = TestRecorder<Int>()
       var configuration = SQLiteConfiguration.default
       // The handler is asked instead of waiting this out.
       configuration.busyTimeout = .maximum
       configuration.busyHandler = { attempt in
-        attempts.withLock { $0.append(attempt) }
+        attempts.append(attempt)
         return false
       }
 
       let (error, _) = try await peer.database.open(configuration: configuration)
 
       #expect(error?.code == .busy)
-      #expect(attempts.withLock { $0 } == [1])
+      #expect(attempts.values == [1])
     }
   }
 
@@ -279,46 +267,43 @@
     }
   }
 
-  /// A process that holds the open lock of a database another process set up, until told to go
-  /// on.
+  /// A process that holds the open lock of a database another process set up, until told to stop.
   @Test
-  func openLockProcessPeer() throws {
-    let environment = ProcessTestEnvironment(prefix: OpenLockPeer.prefix)
-    guard environment["MODE"] == "hold" else { return }
-    let database = try environment.url("DATABASE")
-
-    try OrbitDatabaseOpenLock.withLock(
-      databaseIdentifier: .forDatabase(path: OrbitDatabasePath(database.path)),
-      directory: try environment.url("DIRECTORY"),
-      configuration: .default
-    ) {
-      try touch(try environment.url("READY"))
-      processTestWaitForFile(try environment.url("GO"))
+  func openLockProcessPeer() async {
+    await runProcessTestPeer(OpenLockPeer.helper) { peer in
+      guard peer.mode == "hold" else { throw peer.unknownMode }
+      let database = OpenLockPeer.database(in: peer.directory)
+      try OrbitDatabaseOpenLock.withLock(
+        databaseIdentifier: .forDatabase(path: OrbitDatabasePath(database.path)),
+        directory: database.directory,
+        configuration: .default
+      ) {
+        try peer.markReady()
+        peer.waitForStopBlocking()
+      }
     }
-    processTestExit(0)
   }
 
   /// A database, the coordination directory its pools open it through, and the one helper
   /// process a test runs holding its open lock.
   private final class OpenLockPeer: ProcessTestHarness {
-    static let prefix = "SQLITE_ORBIT_OPEN_LOCK_HELPER_"
+    static let helper = "openLockProcessPeer"
 
-    var database: OpenLockDatabase {
-      OpenLockDatabase(path: self.file("test.sqlite").path, directory: self.file("c"))
-    }
+    var database: OpenLockDatabase { Self.database(in: self.directory) }
 
     init(_ name: String) throws {
-      try super.init(helper: "openLockProcessPeer", environmentPrefix: Self.prefix, name: name)
+      try super.init(helper: Self.helper, name: name)
+    }
+
+    static func database(in directory: URL) -> OpenLockDatabase {
+      OpenLockDatabase(
+        path: directory.appending(path: "test.sqlite").path,
+        directory: directory.appending(path: "c")
+      )
     }
 
     func spawnHolder() throws -> Process {
-      try self.spawn([
-        "MODE": "hold",
-        "DIRECTORY": self.database.directory.path,
-        "DATABASE": self.database.path,
-        "READY": self.file("ready").path,
-        "GO": self.file("go").path
-      ])
+      try self.spawn(mode: "hold")
     }
   }
 

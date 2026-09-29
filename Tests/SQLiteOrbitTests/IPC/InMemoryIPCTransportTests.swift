@@ -3,15 +3,20 @@ import Testing
 @testable import SQLiteOrbit
 
 @Test
-func inMemoryTransportBroadcastsToEveryPeerButTheSender() async throws {
+func inMemoryTransportBroadcastsToEverySubscriptionOfEveryPeerButTheSender() async throws {
   let network = InMemoryIPCTransport.Network()
   let sender = InMemoryIPCTransport(network: network)
   let receivers = (0..<8).map { _ in InMemoryIPCTransport(network: network) }
   let senderRecorder = IPCMessageRecorder()
   let recorders = receivers.map { _ in IPCMessageRecorder() }
+  let secondRecorder = IPCMessageRecorder()
   let database = OrbitDatabaseIdentifier(rawValue: "broadcast")
   let subscriptions =
-    try [sender.subscribe(to: database, onMessage: senderRecorder.append)]
+    try [
+      sender.subscribe(to: database, onMessage: senderRecorder.append),
+      // A second subscription of one peer, which hears the message once too.
+      receivers[0].subscribe(to: database, onMessage: secondRecorder.append)
+    ]
     + zip(receivers, recorders)
     .map {
       try $0.subscribe(to: database, onMessage: $1.append)
@@ -20,7 +25,7 @@ func inMemoryTransportBroadcastsToEveryPeerButTheSender() async throws {
 
   try await sender.send(message)
 
-  for recorder in recorders {
+  for recorder in recorders + [secondRecorder] {
     #expect(recorder.values == [message])
   }
   #expect(senderRecorder.values.isEmpty)
@@ -28,7 +33,7 @@ func inMemoryTransportBroadcastsToEveryPeerButTheSender() async throws {
 }
 
 @Test
-func inMemoryTransportIsolatesDatabasesAndCancelsSynchronously() async throws {
+func inMemoryTransportIsolatesDatabasesAndNetworksAndCancelsSynchronously() async throws {
   let network = InMemoryIPCTransport.Network()
   let sender = InMemoryIPCTransport(network: network)
   let receiver = InMemoryIPCTransport(network: network)
@@ -37,45 +42,12 @@ func inMemoryTransportIsolatesDatabasesAndCancelsSynchronously() async throws {
   let subscription = try receiver.subscribe(to: observed, onMessage: recorder.append)
 
   try await sender.send(commit(.init(rawValue: "other")))
+  // A transport on a network of its own reaches nobody on this one.
+  try await InMemoryIPCTransport().send(commit(observed))
   subscription.cancel()
   try await sender.send(commit(observed))
 
   #expect(recorder.values.isEmpty)
-}
-
-@Test
-func inMemoryTransportInvokesEveryLocalSubscriptionOnce() async throws {
-  let network = InMemoryIPCTransport.Network()
-  let sender = InMemoryIPCTransport(network: network)
-  let receiver = InMemoryIPCTransport(network: network)
-  let first = IPCMessageRecorder()
-  let second = IPCMessageRecorder()
-  let database = OrbitDatabaseIdentifier(rawValue: "multi-subscription")
-  let subscriptions = try [
-    receiver.subscribe(to: database, onMessage: first.append),
-    receiver.subscribe(to: database, onMessage: second.append)
-  ]
-  let message = commit(database)
-
-  try await sender.send(message)
-
-  #expect(first.values == [message])
-  #expect(second.values == [message])
-  _ = subscriptions
-}
-
-@Test
-func inMemoryTransportsOnDifferentNetworksCannotSeeEachOther() async throws {
-  let sender = InMemoryIPCTransport()
-  let receiver = InMemoryIPCTransport()
-  let recorder = IPCMessageRecorder()
-  let database = OrbitDatabaseIdentifier(rawValue: "unreachable")
-  let subscription = try receiver.subscribe(to: database, onMessage: recorder.append)
-
-  try await sender.send(commit(database))
-
-  #expect(recorder.values.isEmpty)
-  _ = subscription
 }
 
 @Test
@@ -204,22 +176,5 @@ struct InMemoryIPCTransportRegionTests {
     try await sender.send(commit(database, region: items))
 
     #expect(itemsRecorder.values.isEmpty)
-  }
-}
-
-func commit(
-  _ database: OrbitDatabaseIdentifier,
-  region: OrbitDatabaseRegion = .fullDatabase
-) -> OrbitIPCMessage {
-  .transactionDidCommit(.init(databaseIdentifier: database, region: region))
-}
-
-final class IPCMessageRecorder: Sendable {
-  private let messages = Lock([OrbitIPCMessage]())
-  var values: [OrbitIPCMessage] { self.messages.withLock { $0 } }
-  func append(_ message: OrbitIPCMessage) { self.messages.withLock { $0.append(message) } }
-
-  func waitForCount(_ count: Int) async throws {
-    try await waitUntil(timeout: .seconds(5)) { self.messages.withLock { $0.count } >= count }
   }
 }

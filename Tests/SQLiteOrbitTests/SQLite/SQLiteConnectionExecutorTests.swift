@@ -67,7 +67,7 @@
       for (index, label) in ["A", "B", "C", "D", "E", "F"].enumerated() {
         if index.isMultiple(of: 2) {
           completions.append(
-            Task.immediate { @Sendable in await isolated.run { log.withLock { $0.append(label) } } }
+            Task { @Sendable in await isolated.run { log.withLock { $0.append(label) } } }
           )
         } else {
           completions.append(
@@ -248,10 +248,9 @@
     }
   }
 
-  // The thread is started before this returns, however busy the cooperative pool is, and the
-  // returned task finishes once it has run `body`.
+  // The returned task finishes once the detached thread has run `body`.
   private func onNewThread(_ body: @escaping @Sendable () -> Void) -> Task<Void, Never> {
-    Task.immediate {
+    Task {
       await withCheckedContinuation { continuation in
         DetachedThread.spawn(name: "executor test") {
           body()

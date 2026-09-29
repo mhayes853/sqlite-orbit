@@ -6,17 +6,22 @@
 
   @Suite
   struct OrbitIPCDatabaseAnnouncementTests {
-    @Test
-    func writeAnnouncesTheTransactionItCommits() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "announced")
+    @Test(arguments: [false, true])
+    func writeAnnouncesTheTransactionItCommits(blocking: Bool) async throws {
+      let identifier = OrbitDatabaseIdentifier.unique()
       let delegate = RecordingOrbitIPCDatabaseDelegate()
       let (database, transport) = try makeAnnouncingDatabase(
         id: identifier,
         delegate: delegate
       )
 
-      try await database.write { transaction in
-        try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+      let createItems = #sql("CREATE TABLE items (id INTEGER)", as: Void.self)
+      if blocking {
+        try database.writeBlocking { try $0.execute(createItems) }
+        // A blocking write announces on a task of its own, once it has returned.
+        try await waitUntil { delegate.events.count == 2 }
+      } else {
+        try await database.write { try $0.execute(createItems) }
       }
 
       let message = OrbitIPCMessage.transactionDidCommit(
@@ -27,23 +32,6 @@
         delegate.events == [
           .willAnnounce(message),
           .didSuccessfullyAnnounce(message)
-        ]
-      )
-    }
-
-    @Test
-    func blockingWriteAnnouncesTheTransactionItCommits() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "blocking-announcement")
-      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
-
-      try database.writeBlocking { transaction in
-        try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
-      }
-      try await waitUntil { transport.messages.count == 1 }
-
-      #expect(
-        transport.messages == [
-          .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
         ]
       )
     }
@@ -117,20 +105,12 @@
     }
 
     @Test
-    func readIsNotAnnounced() async throws {
+    func neitherAReadNorARolledBackWriteIsAnnounced() async throws {
       let (database, transport) = try makeAnnouncingDatabase()
 
       _ = try await database.read { transaction in
         try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
       }
-
-      #expect(transport.messages.isEmpty)
-    }
-
-    @Test
-    func rolledBackWriteIsNotAnnounced() async throws {
-      let (database, transport) = try makeAnnouncingDatabase()
-
       await #expect(throws: WriteFailure.self) {
         try await database.write { _ in throw WriteFailure() }
       }
@@ -258,7 +238,7 @@
         id: identifier,
         transport: receivingTransport
       )
-      let observer = RecordingPeerTransactionObserver()
+      let observer = TransactionEventRecorder()
       let subscription = try database.subscribe(transactionObserver: observer)
       let region = OrbitDatabaseRegion(column: "title", in: "items")
 
@@ -283,7 +263,7 @@
         id: identifier,
         transport: InMemoryIPCTransport()
       )
-      let observer = RecordingPeerTransactionObserver()
+      let observer = TransactionEventRecorder()
 
       #expect(throws: AnnouncementFailure.self) {
         try database.subscribe(transactionObserver: observer)
@@ -297,9 +277,9 @@
       #expect(observer.events.isEmpty)
     }
 
-    @Test
-    func siblingHandleReportsItsRegionBeforeItsCommit() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "sibling-region")
+    @Test(arguments: [false, true])
+    func siblingHandleReportsARegionBeforeItsOneLocalCommit(withoutTransaction: Bool) async throws {
+      let identifier = OrbitDatabaseIdentifier.unique()
       let writingDatabase = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: .memory),
         id: identifier,
@@ -310,12 +290,14 @@
         id: identifier,
         transport: InMemoryIPCTransport()
       )
-      let observer = RecordingPeerTransactionObserver()
+      let observer = TransactionEventRecorder()
       let subscription = try observingDatabase.subscribe(transactionObserver: observer)
       let region = OrbitDatabaseRegion(table: "items")
 
-      try await writingDatabase.write { transaction in
-        transaction.notifyChanges(in: region)
+      if withoutTransaction {
+        try await writingDatabase.writeWithoutTransaction { $0.notifyChanges(in: region) }
+      } else {
+        try await writingDatabase.write { $0.notifyChanges(in: region) }
       }
 
       #expect(observer.events == [.didChange(region), .didCommit(.local)])
@@ -349,20 +331,28 @@
       )
     }
 
-    @Test
-    func writeWithoutTransactionThatThrowsAnnouncesWhatCommittedBeforeTheFailure() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-failure")
+    @Test(arguments: [false, true])
+    func writeWithoutTransactionThatThrowsAnnouncesWhatCommittedBeforeTheFailure(
+      blocking: Bool
+    ) async throws {
+      let identifier = OrbitDatabaseIdentifier.unique()
       let (database, transport) = try makeAnnouncingDatabase(id: identifier)
       try await createAnnouncementTables(in: database)
       transport.removeAllMessages()
+      let body: @Sendable (borrowing SQLiteWriteConnection) throws -> Void = { connection in
+        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+        try connection.transaction { transaction in
+          try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+        }
+        throw WriteFailure()
+      }
 
-      await #expect(throws: WriteFailure.self) {
-        try await database.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-          try connection.transaction { transaction in
-            try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
-          }
-          throw WriteFailure()
+      if blocking {
+        #expect(throws: WriteFailure.self) { try database.writeWithoutTransactionBlocking(body) }
+        try await waitUntil { transport.messages.count == 1 }
+      } else {
+        await #expect(throws: WriteFailure.self) {
+          try await database.writeWithoutTransaction(body)
         }
       }
 
@@ -402,30 +392,6 @@
     }
 
     @Test
-    func blockingWriteWithoutTransactionAnnouncesWhatCommittedWhenItThrows() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "blocking-without-transaction")
-      let (database, transport) = try makeAnnouncingDatabase(id: identifier)
-      try await createAnnouncementTables(in: database)
-      transport.removeAllMessages()
-
-      #expect(throws: WriteFailure.self) {
-        try database.writeWithoutTransactionBlocking { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-          throw WriteFailure()
-        }
-      }
-      try await waitUntil { transport.messages.count == 1 }
-
-      #expect(
-        transport.messages == [
-          .transactionDidCommit(
-            .init(databaseIdentifier: identifier, region: OrbitDatabaseRegion(table: "items"))
-          )
-        ]
-      )
-    }
-
-    @Test
     func peerReceivesOneAnnouncementForAWriteWithoutTransaction() async throws {
       let network = InMemoryIPCTransport.Network()
       let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-peer")
@@ -436,10 +402,8 @@
       )
       try await createAnnouncementTables(in: database)
       let peerTransport = InMemoryIPCTransport(network: network)
-      let received = Lock([OrbitIPCMessage]())
-      let subscription = try peerTransport.subscribe(to: identifier) { message in
-        received.withLock { $0.append(message) }
-      }
+      let received = IPCMessageRecorder()
+      let subscription = try peerTransport.subscribe(to: identifier, onMessage: received.append)
 
       try await database.writeWithoutTransaction { connection in
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
@@ -449,37 +413,13 @@
       let committed = OrbitDatabaseRegion(table: "items")
         .union(OrbitDatabaseRegion(table: "lists"))
       #expect(
-        received.withLock { $0 } == [
+        received.values == [
           .transactionDidCommit(.init(databaseIdentifier: identifier, region: committed))
         ]
       )
       _ = subscription
     }
 
-    @Test
-    func siblingHandleSeesWriteWithoutTransactionAsOneLocalCommit() async throws {
-      let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-sibling")
-      let writingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: .memory),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      let observingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: .memory),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      let observer = RecordingPeerTransactionObserver()
-      let subscription = try observingDatabase.subscribe(transactionObserver: observer)
-      let region = OrbitDatabaseRegion(table: "items")
-
-      try await writingDatabase.writeWithoutTransaction { connection in
-        connection.notifyChanges(in: region)
-      }
-
-      #expect(observer.events == [.didChange(region), .didCommit(.local)])
-      _ = subscription
-    }
   }
 
   private func createAnnouncementTables(in database: OrbitIPCDatabase) async throws {
@@ -587,28 +527,6 @@
       recordedEvents.withLock {
         $0.append(.didFailToAnnounce(message, errorType: "\(type(of: error))"))
       }
-    }
-  }
-
-  private enum RecordedPeerTransactionEvent: Equatable, Sendable {
-    case didChange(OrbitDatabaseRegion)
-    case didCommit(OrbitDatabaseTransactionOrigin)
-  }
-
-  private final class RecordingPeerTransactionObserver:
-    OrbitDatabaseTransactionObserver,
-    Sendable
-  {
-    private let recordedEvents = Lock([RecordedPeerTransactionEvent]())
-
-    var events: [RecordedPeerTransactionEvent] { recordedEvents.withLock { $0 } }
-
-    func databaseDidChange(in region: OrbitDatabaseRegion) {
-      recordedEvents.withLock { $0.append(.didChange(region)) }
-    }
-
-    func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-      recordedEvents.withLock { $0.append(.didCommit(commit.origin)) }
     }
   }
 

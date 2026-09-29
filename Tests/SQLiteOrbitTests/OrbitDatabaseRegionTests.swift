@@ -44,6 +44,7 @@ struct OrbitDatabaseRegionTests {
     #expect(title.overlaps(both))
     #expect(!title.overlaps(completed))
     #expect(Set([title, OrbitDatabaseRegion(column: "TITLE", in: "REMINDERS")]).count == 1)
+    #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
   }
 
   @Test
@@ -177,11 +178,6 @@ struct OrbitDatabaseRegionTests {
     #expect(reminders.intersection(auxiliaryReminders) == .empty)
     #expect(!reminders.overlaps(tags))
     #expect(!reminders.overlaps(auxiliaryReminders))
-  }
-
-  @Test
-  func anEmptyColumnSequenceIsTheEmptyRegion() {
-    #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
   }
 
   @Test

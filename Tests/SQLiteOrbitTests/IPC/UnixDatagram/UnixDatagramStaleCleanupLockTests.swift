@@ -132,7 +132,7 @@
       let skipped = try await withDeadline(.seconds(5)) { coordination.sweep() }
       #expect(skipped == nil)
 
-      try peer.go()
+      try peer.stop()
       peer.resume(holder)
       try await peer.waitForSuccessfulExit(holder)
       // Let go of, and unlinked, as it always is.
@@ -160,7 +160,7 @@
       peer.suspend(sweeper)
 
       let back = try coordination.bindSocket("back")
-      try peer.go()
+      try peer.stop()
       peer.resume(sweeper)
       try await peer.waitForSuccessfulExit(sweeper)
 
@@ -174,82 +174,72 @@
   /// A process that holds the sweep's lock, sweeps, or holds what an endpoint holds, in a
   /// coordination directory another process set up, and stalls where its mode says.
   ///
-  /// - `hold`: holds the lock until told to go on.
+  /// - `hold`: holds the lock until told to stop.
   /// - `sweep-and-hang`: sweeps, and stalls for good after its first removal.
-  /// - `sweep-and-wait`: sweeps, stalls after its first removal until told to go on, and reports
+  /// - `sweep-and-wait`: sweeps, stalls after its first removal until told to stop, and reports
   ///   how many markers it removed.
   /// - `advertise-and-hang`: advertises a database, and holds its open lock until it is killed.
   @Test
-  func staleCleanupProcessPeer() throws {
-    let environment = ProcessTestEnvironment(prefix: StaleCleanupPeer.prefix)
-    guard let mode = environment["MODE"] else { return }
-    let coordination = StaleCleanupDirectory(try environment.url("DIRECTORY"))
-    let ready = try environment.url("READY")
-    let go = try environment.url("GO")
+  func staleCleanupProcessPeer() async {
+    await runProcessTestPeer(StaleCleanupPeer.helper) { peer in
+      let coordination = StaleCleanupPeer.coordination(in: peer.directory)
 
-    switch mode {
-    case "hold":
-      _ = try UnixFileLock.withExclusiveLockIfAvailable(atPath: coordination.sweepLock.path) {
-        try touch(ready)
-        processTestWaitForFile(go)
-      }
-    case "sweep-and-hang", "sweep-and-wait":
-      var hasStalled = false
-      let summary = coordination.sweep { _ in
-        guard !hasStalled else { return }
-        hasStalled = true
-        try? touch(ready)
-        if mode == "sweep-and-hang" {
-          Thread.sleep(forTimeInterval: 30)
-          processTestExit(1)
+      switch peer.mode {
+      case "hold":
+        _ = try UnixFileLock.withExclusiveLockIfAvailable(atPath: coordination.sweepLock.path) {
+          try peer.markReady()
+          peer.waitForStopBlocking()
         }
-        processTestWaitForFile(go)
+      case "sweep-and-hang", "sweep-and-wait":
+        let hangs = peer.mode == "sweep-and-hang"
+        var hasStalled = false
+        let summary = coordination.sweep { _ in
+          guard !hasStalled else { return }
+          hasStalled = true
+          try? peer.markReady()
+          if hangs {
+            Thread.sleep(forTimeInterval: 30)
+            processTestExit(1)
+          }
+          peer.waitForStopBlocking()
+        }
+        try peer.writeResult(summary?.markerCount ?? -1)
+      case "advertise-and-hang":
+        let database = OrbitDatabaseIdentifier(rawValue: "crashed")
+        let directory = coordination.directory
+        let transport = try ipcTransport(directory)
+        let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
+        try OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: database,
+          directory: directory,
+          configuration: .default
+        ) {
+          try peer.markReady()
+          Thread.sleep(forTimeInterval: 30)
+        }
+        _ = subscription
+      default:
+        throw peer.unknownMode
       }
-      let result = try environment.url("RESULT")
-      try Data(String(summary?.markerCount ?? -1).utf8).write(to: result, options: .atomic)
-    case "advertise-and-hang":
-      let database = OrbitDatabaseIdentifier(rawValue: "crashed")
-      let directory = coordination.directory
-      let transport = try UnixDatagramIPCTransport(configuration: .init(directory: directory))
-      let subscription = try transport.subscribe(to: database, region: .fullDatabase) { _ in }
-      try OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: database,
-        directory: directory,
-        configuration: .default
-      ) {
-        try touch(ready)
-        Thread.sleep(forTimeInterval: 30)
-      }
-      _ = subscription
-    default:
-      processTestExit(1)
     }
-    processTestExit(0)
   }
 
   /// A coordination directory, and the one helper process a test runs in it.
   final class StaleCleanupPeer: ProcessTestHarness {
-    static let prefix = "SQLITE_ORBIT_STALE_HELPER_"
+    static let helper = "staleCleanupProcessPeer"
 
-    lazy var coordination = StaleCleanupDirectory(self.file("c"))
+    lazy var coordination = Self.coordination(in: self.directory)
 
     init(_ name: String) throws {
-      try super.init(helper: "staleCleanupProcessPeer", environmentPrefix: Self.prefix, name: name)
+      try super.init(helper: Self.helper, name: name)
+    }
+
+    static func coordination(in directory: URL) -> StaleCleanupDirectory {
+      StaleCleanupDirectory(directory.appending(path: "c"))
     }
 
     func spawn(_ mode: String) throws -> Process {
-      try self.spawn([
-        "MODE": mode,
-        "DIRECTORY": self.coordination.directory.path,
-        "READY": self.file("ready").path,
-        "GO": self.file("go").path,
-        "RESULT": self.file("result").path
-      ])
-    }
-
-    /// How many markers the helper's sweep removed.
-    func result() throws -> Int {
-      try #require(Int(String(contentsOf: self.file("result"), encoding: .utf8)))
+      try self.spawn(mode: mode)
     }
   }
 #endif
