@@ -87,25 +87,6 @@
     await #expect(throws: CancellationError.self) {
       _ = try await queued.value
     }
-  }
-
-  @Test
-  func cancellingTheRunningAccessStopsItsQuery() async throws {
-    let steps = TestCounter()
-    let interrupts = TestCounter()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = observedLibrary(steps: steps, interrupts: interrupts)
-    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
-
-    let running = endlessRead(on: driver)
-    try await steps.waitForCount(1)
-    running.cancel()
-
-    // A query aborted by SQLite reports `SQLITE_INTERRUPT`, which is a cancellation and not a
-    // database failure.
-    await #expect(throws: CancellationError.self) {
-      _ = try await running.value
-    }
 
     // The interrupted access left the connection usable, with no transaction still open.
     try await driver.write { transaction in

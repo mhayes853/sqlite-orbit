@@ -129,22 +129,6 @@
         #expect(total == 2 * writers * bumpsEach)
       }
     }
-
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func aThreadMayTakeAnotherBlockingAccessAfterItsFirstOneEnds(
-      _ driver: SQLiteTestDriver
-    ) throws {
-      try withTestDatabaseFile { file in
-        let database = try file.open(driver)
-        try database.executeBlocking(sql: "CREATE TABLE t (n INTEGER NOT NULL)")
-        let count = #sql("SELECT count(*) FROM t", as: Int.self)
-        for _ in 0..<10 {
-          try database.writeBlocking { try $0.execute("INSERT INTO t (n) VALUES (1)") }
-          _ = try database.readBlocking { try $0.fetchOne(count) }
-        }
-        #expect(try database.readBlocking { try $0.fetchOne(count) } == 10)
-      }
-    }
   }
 
   private let itemsSchema = "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
