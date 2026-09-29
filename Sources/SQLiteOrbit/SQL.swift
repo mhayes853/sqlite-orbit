@@ -77,12 +77,6 @@ public struct SQL: Hashable, Sendable {
     sql.append(rhs)
     return sql
   }
-
-  // What SQLite is handed. It cannot prepare an empty string, and a composed query can
-  // legitimately come out empty, so a statement that selects nothing stands in.
-  var preparedText: String {
-    text.isEmpty ? "SELECT 1 WHERE 0 -- empty query" : text
-  }
 }
 
 struct SQLBindingFailure: Hashable, Sendable {

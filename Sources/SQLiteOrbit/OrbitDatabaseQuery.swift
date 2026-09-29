@@ -38,9 +38,9 @@ public enum OrbitDatabaseWriteAccess: OrbitDatabaseAccess {}
 ///
 /// ``OrbitDatabaseReadTransaction`` only accepts `OrbitDatabaseQuery<OrbitDatabaseReadAccess>`, so
 /// a read transaction cannot be handed a mutation it was never meant to run. Raw SQL cannot show
-/// its capability through its type, so a driver checks a read query when it prepares it, and
-/// refuses one that SQLite reports may write with a ``SQLiteError`` whose code is
-/// ``SQLiteResultCode/readOnly``.
+/// its capability through its type, so a read transaction checks each statement when it prepares
+/// it, and refuses one that SQLite reports may write with a ``SQLiteError`` whose code is
+/// ``SQLiteResultCode/readOnly``. A write transaction may write, so it runs a read query as it is.
 ///
 /// ```swift
 /// try await database.read { transaction in
@@ -63,8 +63,8 @@ public struct OrbitDatabaseQuery<Access: OrbitDatabaseAccess>: Sendable {
 extension OrbitDatabaseQuery where Access == OrbitDatabaseReadAccess {
   /// Wraps SQL that only reads.
   ///
-  /// The driver checks the statement when it prepares it, so SQL that may write is refused rather
-  /// than run.
+  /// A read transaction checks the statement when it prepares it, so SQL that may write is
+  /// refused there rather than run.
   ///
   /// ```swift
   /// let query = OrbitDatabaseQuery<OrbitDatabaseReadAccess>(

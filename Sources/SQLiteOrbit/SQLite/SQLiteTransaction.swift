@@ -179,18 +179,20 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
 
   /// Creates a cursor over the rows a read query returns.
   ///
+  /// A write transaction may write, so the query is not held to reading, and whatever it changes
+  /// is reported to observers like any other write.
+  ///
   /// - Parameters:
   ///   - query: The query to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this transaction ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
-  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
     cached: Bool
   ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: true)
+    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: false)
   }
 
   /// Creates a cursor over the rows a write query returns, such as one with a `RETURNING` clause.
@@ -210,7 +212,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
 
   /// Creates a cursor over the rows raw SQL returns.
   ///
-  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  /// A write transaction may write, so the SQL is not held to reading.
   ///
   /// ```swift
   /// var cursor = try transaction.rowCursor("SELECT title FROM reminders")
@@ -220,7 +222,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   ///   - sql: The SQL to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this transaction ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
@@ -270,13 +272,12 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
 
   /// Runs a query to completion, discarding any rows it returns.
   ///
-  /// A query that builds no SQL runs nothing at all, so it leaves ``changesCount`` reporting
-  /// whatever the statement before it changed.
+  /// A query that holds no statement, such as one that builds no SQL, runs nothing at all, so it
+  /// leaves ``changesCount`` reporting whatever the statement before it changed.
   ///
   /// - Parameter query: The query to run. Any rows it returns are stepped past and discarded.
   /// - Throws: A ``SQLiteError`` when the statement fails.
   public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
-    guard !query.sql.text.isEmpty else { return }
     var cursor = try base.cursor(for: query.sql, cached: false, requiresReadOnly: false)
     while try cursor.next() != nil {}
   }

@@ -28,11 +28,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let isCached: Bool
 
-  var preparedStatement: SQLitePreparedStatement
-
-  // What SQLite steps. A statement recompiled on its first step keeps its pointer and has only
-  // its metadata replaced.
-  var statement: OpaquePointer { preparedStatement.pointer }
+  // What SQLite steps, or `nil` for SQL that holds no statement, such as an empty query, which
+  // produces no rows. A statement recompiled on its first step keeps its pointer and has only its
+  // metadata replaced.
+  var preparedStatement: SQLitePreparedStatement?
 
   let authorizer: SQLiteAuthorizerDispatcher
 
@@ -53,28 +52,23 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     authorizer: SQLiteAuthorizerDispatcher,
     observations: OrbitDatabaseTransactionObservationContext
   ) throws {
-    let sql = query.preparedText
-    let preparedStatement = cached ? try statements.checkOut(sql) : try statements.prepare(sql)
-    let statement = preparedStatement.pointer
-    do {
-      // Raw SQL cannot show through its type that it only reads, so a read query is held to it
-      // here, before anything has run.
-      if requiresReadOnly && !preparedStatement.isReadOnly {
-        throw SQLiteError(
-          code: .readOnly,
-          message: "a read-only query may write; run it in a write transaction instead",
-          sql: sql
-        )
+    let sql = query.text
+    let preparedStatement =
+      cached
+      ? try statements.checkOut(sql, requiresReadOnly: requiresReadOnly)
+      : try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
+    if let preparedStatement {
+      do {
+        try bind(query, to: preparedStatement.pointer, library: library)
+      } catch {
+        // The statement never reached a cursor, so nothing else will give it back.
+        if cached {
+          statements.checkIn(preparedStatement, sql: sql)
+        } else {
+          _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
+        }
+        throw error
       }
-      try bind(query, to: statement, library: library)
-    } catch {
-      // The statement never reached a cursor, so nothing else will give it back.
-      if cached {
-        statements.checkIn(preparedStatement, sql: sql)
-      } else {
-        _ = library.pointee.statements.execution.finalize(statement)
-      }
-      throw error
     }
     self.library = library
     self.connection = connection
@@ -87,10 +81,11 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   }
 
   deinit {
+    guard let preparedStatement else { return }
     if isCached {
       statements.checkIn(preparedStatement, sql: sql)
     } else {
-      _ = library.pointee.statements.execution.finalize(statement)
+      _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
     }
   }
 
@@ -103,7 +98,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
-    guard !isExhausted else { return nil }
+    guard !isExhausted, let statement = preparedStatement?.pointer else { return nil }
     if !didPublishAccesses {
       didPublishAccesses = true
       // SQLite may recompile a cached statement on its first step after another connection changed
@@ -118,6 +113,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
           statements.refreshedMetadata(for: statement, sql: sql)
           ?? SQLitePreparedStatement(
             pointer: statement,
+            isReadOnly: library.pointee.statements.inspection.isReadOnly(statement) != 0,
             authorizations: authorizations,
             cacheGeneration: statements.generation,
             statements: statements,
@@ -127,12 +123,13 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
           )
       }
       publishAccesses()
-      return try row(for: code)
+      return try row(for: code, of: statement)
     }
-    return try row(for: library.pointee.statements.execution.step(statement))
+    return try row(for: library.pointee.statements.execution.step(statement), of: statement)
   }
 
   private mutating func publishAccesses() {
+    guard let preparedStatement else { return }
     observations.didRead(in: preparedStatement.readRegion)
     observations.didChange(in: preparedStatement.changedRegion)
     if preparedStatement.invalidatesStatementCache {
@@ -141,10 +138,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   }
 
   @_lifetime(&self)
-  private mutating func row(for code: Int32) throws -> SQLiteRow? {
+  private mutating func row(for code: Int32, of statement: OpaquePointer) throws -> SQLiteRow? {
     switch code {
     case SQLiteResultCode.row.rawValue:
-      return SQLiteRow(cursor: self)
+      return SQLiteRow(cursor: self, statement: statement)
     case SQLiteResultCode.done.rawValue:
       isExhausted = true
       return nil
@@ -181,8 +178,8 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
 
     @usableFromInline
     @_lifetime(borrow cursor)
-    init(cursor: borrowing SQLiteRowCursor) {
-      self.decoder = SQLiteRowDecoder(library: cursor.library, statement: cursor.statement)
+    init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
+      self.decoder = SQLiteRowDecoder(library: cursor.library, statement: statement)
     }
   #else
     @usableFromInline
@@ -193,9 +190,9 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
 
     @usableFromInline
     @_lifetime(borrow cursor)
-    init(cursor: borrowing SQLiteRowCursor) {
+    init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.library = cursor.library
-      self.statement = cursor.statement
+      self.statement = statement
     }
   #endif
 
@@ -210,10 +207,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   ///   ``columnCount``.
   /// - Returns: The column's name, or an empty string when SQLite has none for it.
   public func columnName(at index: Int) -> String {
-    precondition(
-      index >= 0 && index < columnCount,
-      "Column index \(index) is out of range for a row of \(columnCount) columns"
-    )
+    precondition(index: index)
     return library.pointee.columns.name(statement, Int32(index)).map(String.init(cString:)) ?? ""
   }
 
@@ -222,31 +216,31 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   /// - Parameter index: The column's zero-based position. A position outside the row stops the
   ///   process.
   public subscript(index: Int) -> OrbitDatabaseValue {
-    precondition(
-      index >= 0 && index < columnCount,
-      "Column index \(index) is out of range for a row of \(columnCount) columns"
-    )
-    let column = Int32(index)
+    precondition(index: index)
     // Each value is read in the storage class SQLite reports, so reading it never converts it, and
     // a later decode of the same column sees what it would have seen anyway.
-    switch SQLiteColumnType(rawValue: library.pointee.columns.type(statement, column)) {
-    case .integer:
-      return .integer(library.pointee.columns.int64(statement, column))
-    case .float:
-      return .real(library.pointee.columns.double(statement, column))
-    case .text:
-      // The value is read before its size, which is the order SQLite documents as safe.
-      guard let text = library.pointee.columns.text(statement, column) else { return .text("") }
-      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-      return .text(
-        String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
-      )
-    case .blob:
-      guard let bytes = library.pointee.columns.blob(statement, column) else { return .blob([]) }
-      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-      return .blob([UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount)))
-    default:
-      return .null
+    return library.pointee.columns.value(statement, at: Int32(index))
+  }
+
+  /// The value of the first column with a name, or `nil` when the row has no such column.
+  ///
+  /// Names are compared byte for byte against the ones SQLite holds, from left to right, so
+  /// finding a column allocates nothing.
+  ///
+  /// - Parameter name: The column's name.
+  public subscript(column name: String) -> OrbitDatabaseValue? {
+    for column in 0..<library.pointee.columns.count(statement)
+    where library.pointee.columns.hasName(name, statement, at: column) {
+      return library.pointee.columns.value(statement, at: column)
     }
+    return nil
+  }
+
+  private func precondition(index: Int) {
+    let count = columnCount
+    Swift.precondition(
+      index >= 0 && index < count,
+      "Column index \(index) is out of range for a row of \(count) columns"
+    )
   }
 }

@@ -124,11 +124,7 @@
       _ statement: some Statement,
       _ body: (inout Row) throws -> OrbitDatabaseRowIteration
     ) throws {
-      try withOrbitCursor(try executeRowCursor(statement)) { cursor in
-        while var row = try cursor.next() {
-          if try body(&row) == .stop { return }
-        }
-      }
+      try execute(SQL(fragment: statement.query), body)
     }
   }
 

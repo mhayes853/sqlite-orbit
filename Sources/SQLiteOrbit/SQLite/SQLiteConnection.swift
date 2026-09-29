@@ -99,7 +99,8 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///   - query: The query to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this connection's access ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
+  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
   public borrowing func rowCursor(
     _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
@@ -416,7 +417,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
   /// Creates a cursor over the rows raw SQL returns.
   ///
-  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  /// A write connection may write, so the SQL is not held to reading.
   ///
   /// ```swift
   /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
@@ -426,7 +427,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///   - sql: The SQL to run.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this connection's access ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
@@ -571,7 +572,7 @@ final class SQLiteConnectionState {
     /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever
     ///   it had changed.
     public borrowing func execute(_ statement: some Statement) throws {
-      try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement).sql)
+      try execute(SQL(fragment: statement.query))
     }
   }
 #endif

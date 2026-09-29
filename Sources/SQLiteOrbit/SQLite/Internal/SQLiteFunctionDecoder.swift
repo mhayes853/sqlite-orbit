@@ -14,51 +14,48 @@
       self.api = arguments.api
     }
 
-    private mutating func argument(
-      _ expected: SQLiteColumnType,
-      for columnType: Any.Type
-    ) throws(QueryDecodingError) -> OpaquePointer? {
+    // Reads the argument the decoder is standing on and steps past it when it is SQL NULL or
+    // `decoded` accepts it. Any other value is a type mismatch, which leaves the decoder where it
+    // is.
+    private mutating func decodeArgument<Value>(
+      _ columnType: Any.Type,
+      _ decoded: (OrbitDatabaseValue) -> Value?
+    ) throws(QueryDecodingError) -> Value? {
       guard currentIndex < argumentCount else {
         throw QueryDecodingError.other(
           MissingDatabaseFunctionArgumentError(index: Int(currentIndex))
         )
       }
-      let value = arguments?[Int(currentIndex)]
-      switch SQLiteColumnType(rawValue: api.type(value)) {
-      case .null:
+      let value = api.value(arguments?[Int(currentIndex)])
+      if case .null = value {
         currentIndex += 1
         return nil
-      case expected:
-        currentIndex += 1
-        return value
-      default:
+      }
+      guard let decodedValue = decoded(value) else {
         throw QueryDecodingError.typeMismatch(columnType)
       }
+      currentIndex += 1
+      return decodedValue
     }
 
     mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
-      guard let value = try argument(.blob, for: columnType) else { return nil }
-      // A zero-length blob has no buffer to point at.
-      guard let blob = api.blob(value) else { return [] }
-      let count = Int(api.byteCount(value))
-      return [UInt8](UnsafeRawBufferPointer(start: blob, count: count))
+      try decodeArgument(columnType, \.blobValue)
     }
 
     mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
-      try argument(.float, for: columnType).map(api.double)
+      // Not `realValue`, which would read an integer as a real.
+      try decodeArgument(columnType) { value in
+        guard case .real(let real) = value else { return nil }
+        return real
+      }
     }
 
     mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
-      try argument(.integer, for: columnType).map(api.int64)
+      try decodeArgument(columnType, \.integerValue)
     }
 
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
-      guard let value = try argument(.text, for: columnType) else { return nil }
-      // SQLite strings may contain NUL bytes, so they cannot be decoded as C strings. Ask for the
-      // bytes before their count, which is the order SQLite documents as safe after conversion.
-      guard let text = api.text(value) else { return "" }
-      let count = Int(api.byteCount(value))
-      return String(decoding: UnsafeBufferPointer(start: text, count: count), as: UTF8.self)
+      try decodeArgument(columnType, \.textValue)
     }
 
     mutating func decode(_ columnType: Bool.Type) throws(QueryDecodingError) -> Bool? {

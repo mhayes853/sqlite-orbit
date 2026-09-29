@@ -514,12 +514,19 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       trackingOneTuple(query.query, as: (repeat each QueryValue).self)
     }
 
+    // The query is lowered to SQL once, and that SQL both derives the region and runs each fetch,
+    // rather than being lowered again every time the observation fetches.
+
     private static func trackingAllValues<QueryValue: QueryRepresentable>(
       _ query: QueryFragment,
       as _: QueryValue.Type
     ) -> Self where Value == [QueryValue.QueryOutput] {
-      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
-        try transaction.fetchAll(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+      let sql = SQL(fragment: query)
+      return tracking(regionSource: .query(sql)) { transaction in
+        try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
+          base: try transaction.rowCursor(sql, cached: true)
+        )
+        .collect()
       }
     }
 
@@ -527,8 +534,12 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       _ query: QueryFragment,
       as _: QueryValue.Type
     ) -> Self where Value == QueryValue.QueryOutput? {
-      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
-        try transaction.fetchOne(SQLQueryExpression<QueryValue>(query, as: QueryValue.self))
+      let sql = SQL(fragment: query)
+      return tracking(regionSource: .query(sql)) { transaction in
+        try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
+          base: try transaction.rowCursor(sql, cached: true)
+        )
+        .first()
       }
     }
 
@@ -537,13 +548,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       _ query: QueryFragment,
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
-        try transaction.fetchAll(
-          SQLQueryExpression<(repeat each QueryValue)>(
-            query,
-            as: (repeat each QueryValue).self
-          )
-        )
+      let sql = SQL(fragment: query)
+      return tracking(regionSource: .query(sql)) { transaction in
+        try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
+          try cursor.collectTuples((repeat each QueryValue).self)
+        }
       }
     }
 
@@ -552,13 +561,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       _ query: QueryFragment,
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-      tracking(regionSource: .query(SQL(fragment: query))) { transaction in
-        try transaction.fetchOne(
-          SQLQueryExpression<(repeat each QueryValue)>(
-            query,
-            as: (repeat each QueryValue).self
-          )
-        )
+      let sql = SQL(fragment: query)
+      return tracking(regionSource: .query(sql)) { transaction in
+        try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
+          try cursor.firstTuple((repeat each QueryValue).self)
+        }
       }
     }
   #endif

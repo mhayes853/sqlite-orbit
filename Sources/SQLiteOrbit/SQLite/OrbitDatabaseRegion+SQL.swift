@@ -35,12 +35,9 @@ extension SQLiteReadTransaction {
   fileprivate borrowing func databaseRegion(readBy query: SQL) throws
     -> OrbitDatabaseRegion
   {
-    let (statement, authorizations) = try sqlitePrepare(
-      query,
-      on: connection,
-      library: library,
-      authorizer: authorizer
-    )
+    let (statement, authorizations) = try authorizer.recordingAuthorizations {
+      try library.pointee.prepareStatement(query.text, on: connection)
+    }
     guard let statement else { return .empty }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
 
@@ -98,13 +95,10 @@ func sqliteResolvedSchema(
 ) -> SQLiteSchemaName? {
   let query: SQL = "SELECT * FROM \(quote: table) LIMIT 0"
   guard
-    let prepared = try? sqlitePrepare(
-      query,
-      on: connection,
-      library: library,
-      authorizer: authorizer
-    ),
-    let statement = prepared.statement
+    let prepared = try? authorizer.recordingAuthorizations(during: {
+      try library.pointee.prepare(query.text, on: connection)
+    }),
+    let statement = prepared.result
   else { return nil }
   defer { _ = library.pointee.statements.execution.finalize(statement) }
 
@@ -113,16 +107,4 @@ func sqliteResolvedSchema(
     $0.sourceName == nil && $0.firstArgument?.asciiLowercased == normalizedTable
   }?
   .schemaName.map(SQLiteSchemaName.init(rawValue:))
-}
-
-private func sqlitePrepare(
-  _ query: SQL,
-  on connection: OpaquePointer,
-  library: UnsafePointer<SQLiteLibrary>,
-  authorizer: SQLiteAuthorizerDispatcher
-) throws -> (statement: OpaquePointer?, authorizations: [SQLiteAuthorization]) {
-  let (statement, authorizations) = try authorizer.recordingAuthorizations {
-    try library.pointee.prepare(query.text, on: connection, isSingleStatement: true)
-  }
-  return (statement, authorizations)
 }

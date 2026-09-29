@@ -42,28 +42,7 @@ public struct SQLiteFunctionArguments: ~Copyable, ~Escapable {
       index >= 0 && index < count,
       "Argument index \(index) is out of range for a call with \(count) arguments"
     )
-    let value = values?[index]
-    switch SQLiteColumnType(rawValue: api.type(value)) {
-    case .integer:
-      return .integer(api.int64(value))
-    case .float:
-      return .real(api.double(value))
-    case .text:
-      // SQLite strings may contain NUL bytes, so they cannot be read as C strings. The bytes are
-      // asked for before their count, which is the order SQLite documents as safe.
-      guard let text = api.text(value) else { return .text("") }
-      let byteCount = Int(api.byteCount(value))
-      return .text(
-        String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
-      )
-    case .blob:
-      // A zero-length blob has no buffer to point at.
-      guard let bytes = api.blob(value) else { return .blob([]) }
-      let byteCount = Int(api.byteCount(value))
-      return .blob([UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount)))
-    default:
-      return .null
-    }
+    return api.value(values?[index])
   }
 }
 

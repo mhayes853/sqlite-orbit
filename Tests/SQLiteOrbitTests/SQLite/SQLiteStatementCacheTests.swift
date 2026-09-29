@@ -23,7 +23,7 @@
               cached: true,
               requiresReadOnly: true
             )
-            return cursor.preparedStatement.readRegion
+            return cursor.preparedStatement?.readRegion
           }
           #expect(region == currentTitlesRegion(over: "alternate_items"))
 
@@ -37,7 +37,7 @@
               cached: true,
               requiresReadOnly: false
             )
-            return cursor.preparedStatement.readRegion
+            return cursor.preparedStatement?.readRegion
           }
           #expect(writerRegion == currentTitlesRegion(over: "alternate_items"))
         }
@@ -74,7 +74,7 @@
               cached: true,
               requiresReadOnly: false
             )
-            return cursor.preparedStatement.readRegion
+            return cursor.preparedStatement?.readRegion
           }
           #expect(region == currentTitlesRegion(over: "alternate_items"))
         }

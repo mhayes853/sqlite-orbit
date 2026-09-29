@@ -86,12 +86,7 @@
     @inlinable
     mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
       guard let column = try column(.blob, columnType) else { return nil }
-      // SQLite asks for the value before its size: reading the size can convert the value, and a
-      // pointer taken before that conversion is the one it invalidates.
-      guard let bytes = library.pointee.columns.blob(statement, column) else { return [] }
-      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-      guard byteCount > 0 else { return [] }
-      return [UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount))
+      return library.pointee.columns.blobValue(statement, at: column)
     }
 
     @inlinable
@@ -118,11 +113,7 @@
     @inlinable
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
       guard let column = try column(.text, columnType) else { return nil }
-      // The value is read before its size, which is the order SQLite documents as safe.
-      guard let text = library.pointee.columns.text(statement, column) else { return "" }
-      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
-      guard byteCount > 0 else { return "" }
-      return String(decoding: UnsafeBufferPointer(start: text, count: byteCount), as: UTF8.self)
+      return library.pointee.columns.textValue(statement, at: column)
     }
 
     @inlinable

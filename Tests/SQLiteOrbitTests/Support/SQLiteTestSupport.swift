@@ -234,6 +234,29 @@
     }
   }
 
+  extension SQLiteStatementCache {
+    /// Checks out the statement `sql` compiles to, which must hold one, without holding it to
+    /// reading.
+    func checkOut(_ sql: String) throws -> SQLitePreparedStatement {
+      try Self.requireStatement(checkOut(sql, requiresReadOnly: false), sql: sql)
+    }
+
+    /// Compiles the statement `sql` holds, which must hold one, without holding it to reading.
+    func prepare(_ sql: String) throws -> SQLitePreparedStatement {
+      try Self.requireStatement(prepare(sql, requiresReadOnly: false), sql: sql)
+    }
+
+    private static func requireStatement(
+      _ statement: SQLitePreparedStatement?,
+      sql: String
+    ) throws -> SQLitePreparedStatement {
+      guard let statement else {
+        throw SQLiteError(code: .error, message: "SQL holds no statement", sql: sql)
+      }
+      return statement
+    }
+  }
+
   extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
     /// The first column, read as `Value`, or `nil` when it is `NULL` or of another type.
     func first<Value: TestColumnValue>(as type: Value.Type) -> Value? {
@@ -262,7 +285,7 @@
       as type: Value.Type
     ) async throws -> [Value] {
       try await self.read { transaction in
-        try transaction.fetchAll("\(raw: sql)") { $0.first(as: Value.self) }.compactMap { $0 }
+        try transaction.fetchAll("\(raw: sql)", as: Value.self)
       }
     }
 
@@ -273,7 +296,7 @@
       as type: Value.Type
     ) async throws -> Value? {
       try await self.read { transaction in
-        try transaction.fetchOne("\(raw: sql)") { $0.first(as: Value.self) } ?? nil
+        try transaction.fetchOne("\(raw: sql)", as: Value.self)
       }
     }
 
@@ -284,7 +307,7 @@
       as type: Value.Type
     ) throws -> Value? {
       try self.readBlocking { transaction in
-        try transaction.fetchOne("\(raw: sql)") { $0.first(as: Value.self) } ?? nil
+        try transaction.fetchOne("\(raw: sql)", as: Value.self)
       }
     }
 

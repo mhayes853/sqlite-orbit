@@ -54,7 +54,7 @@
       case .bool(let bool):
         self = .integer(bool ? 1 : 0)
       case .date(let date):
-        self = .text(date.orbitISO8601String)
+        self.init(date)
       case .double(let double):
         self = .real(double)
       case .int(let integer):
@@ -69,7 +69,7 @@
         }
         self = .integer(Int64(integer))
       case .uuid(let uuid):
-        self = .text(uuid.uuidString.lowercased())
+        self.init(uuid)
       case .invalid(let error):
         throw error.underlyingError
       }

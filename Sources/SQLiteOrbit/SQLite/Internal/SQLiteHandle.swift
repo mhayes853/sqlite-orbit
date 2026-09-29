@@ -420,19 +420,13 @@ struct SQLiteHandle: ~Copyable {
     on connection: OpaquePointer,
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
-    let sql = query.preparedText
-    guard let statement = try library.pointee.prepare(sql, on: connection, isSingleStatement: true)
-    else {
-      throw SQLiteError.reported(
-        by: library.pointee,
-        on: connection,
-        code: SQLiteResultCode.ok.rawValue,
-        sql: sql
-      )
+    // SQL that holds no statement, such as an empty query, has nothing to run.
+    guard let statement = try library.pointee.prepareStatement(query.text, on: connection) else {
+      return
     }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
     try bind(query, to: statement, library: library)
-    try stepToCompletion(statement, on: connection, library: library, sql: sql)
+    try stepToCompletion(statement, on: connection, library: library, sql: query.text)
   }
 
   static func executeScript(
@@ -476,13 +470,10 @@ struct SQLiteHandle: ~Copyable {
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard let statement else { return }
         next = tail ?? end
+        let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
 
         if let statements,
-          sqliteInvalidatesStatementCache(
-            after: authorizations,
-            statement: statement,
-            library: library
-          )
+          sqliteInvalidatesStatementCache(after: authorizations, isReadOnly: isReadOnly)
         {
           statements.invalidate()
         }
@@ -490,6 +481,7 @@ struct SQLiteHandle: ~Copyable {
         if let observations {
           let preparedStatement = SQLitePreparedStatement(
             pointer: statement,
+            isReadOnly: isReadOnly,
             authorizations: authorizations,
             statements: statements,
             connection: connection,
@@ -524,14 +516,34 @@ struct SQLiteHandle: ~Copyable {
 }
 
 extension SQLiteLibrary {
-  // Compiles the first statement in `sql`, or returns `nil` when it holds none, as a comment or
-  // whitespace does. SQLite can hand back a statement even when it reports a failure, so one is
-  // finalized here rather than left for the caller to leak.
+  // Compiles the first statement in fixed SQL the package wrote itself, or returns `nil` when it
+  // holds none, as a comment or whitespace does.
   func prepare(
     _ sql: String,
     on connection: OpaquePointer,
-    flags: UInt32 = 0,
-    isSingleStatement: Bool = false
+    flags: UInt32 = 0
+  ) throws -> OpaquePointer? {
+    try prepare(sql, on: connection, flags: flags, isSingleStatement: false)
+  }
+
+  // Compiles the one statement a caller's SQL holds, or returns `nil` when it holds none, as an
+  // empty query, whitespace, or a comment does. SQL holding a second statement is refused, since
+  // a cursor steps only the first and the rest would otherwise be silently skipped.
+  func prepareStatement(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32 = 0
+  ) throws -> OpaquePointer? {
+    try prepare(sql, on: connection, flags: flags, isSingleStatement: true)
+  }
+
+  // SQLite can hand back a statement even when it reports a failure, so one is finalized here
+  // rather than left for the caller to leak.
+  private func prepare(
+    _ sql: String,
+    on connection: OpaquePointer,
+    flags: UInt32,
+    isSingleStatement: Bool
   ) throws -> OpaquePointer? {
     var statement: OpaquePointer?
     var hasTrailingStatement = false
@@ -549,7 +561,6 @@ extension SQLiteLibrary {
     }
     guard !hasTrailingStatement else {
       if let statement { _ = statements.execution.finalize(statement) }
-      // A cursor steps only the first statement, so the rest would otherwise be silently skipped.
       throw SQLiteError(
         code: .error,
         message: "SQL holds more than one statement; run a script with executeScript(_:)",

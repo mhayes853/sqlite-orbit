@@ -31,6 +31,13 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
   /// - Parameter index: The column's zero-based position. A position outside the row stops the
   ///   process.
   subscript(index: Int) -> OrbitDatabaseValue { get }
+
+  /// The value of the first column with a name, or `nil` when the row has no such column.
+  ///
+  /// Names are compared exactly, and the columns are searched from left to right.
+  ///
+  /// - Parameter name: The column's name.
+  subscript(column name: String) -> OrbitDatabaseValue? { get }
 }
 
 extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {

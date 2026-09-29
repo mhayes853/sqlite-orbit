@@ -179,6 +179,16 @@
       }
       #expect(rows.isEmpty)
       #expect(changes == 2)
+
+      // SQL that holds only whitespace or comments holds no statement either.
+      for sql: SQL in ["  \n", "-- nothing", "/* nothing */ ;"] {
+        let rows = try await database.read { transaction in
+          try transaction.fetchAll(sql) { $0.columnCount }
+        }
+        #expect(rows.isEmpty)
+        try await database.write { try $0.execute(sql) }
+        try await database.writeWithoutTransaction { try $0.execute(sql) }
+      }
     }
 
     @Test
@@ -284,22 +294,16 @@
     }
 
     @Test
-    func aReadQueryIsHeldToReadingEvenInAWriteTransaction() async throws {
+    func aWriteTransactionRunsAReadQueryThatWrites() async throws {
       let database = try inMemoryDatabase()
       try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        let error = #expect(throws: SQLiteError.self) {
-          var cursor = try transaction.rowCursor(
-            OrbitDatabaseQuery<OrbitDatabaseReadAccess>("INSERT INTO items (id) VALUES (1)"),
-            cached: false
-          )
-          _ = try cursor.next()
-        }
-        #expect(error?.code == .readOnly)
-        // The write form of the same statement runs.
-        try transaction.execute(
-          OrbitDatabaseQuery<OrbitDatabaseWriteAccess>("INSERT INTO items (id) VALUES (1)")
+        // Only a read transaction holds a statement to reading; a write transaction may write.
+        var cursor = try transaction.rowCursor(
+          OrbitDatabaseQuery<OrbitDatabaseReadAccess>("INSERT INTO items (id) VALUES (1)"),
+          cached: false
         )
+        _ = try cursor.next()
       }
       #expect(try await database.rowCount(of: "items") == 1)
     }
