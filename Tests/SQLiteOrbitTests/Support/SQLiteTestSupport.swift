@@ -129,7 +129,9 @@
       /// The coordination directory ``ipcDatabase(configuration:)`` opens the database through,
       /// beside the database file.
       var coordination: UnixDatagramIPCTransport.Configuration {
-        UnixDatagramIPCTransport.Configuration(directoryPath: self.directory.appending(path: "c").path)
+        UnixDatagramIPCTransport.Configuration(
+          directoryPath: self.directory.appending(path: "c").path
+        )
       }
 
       /// Opens the database with an ``OrbitIPCDatabase``, coordinating through ``coordination``.
