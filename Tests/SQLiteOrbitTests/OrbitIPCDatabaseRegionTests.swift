@@ -26,7 +26,7 @@
         id: identifier,
         transport: InMemoryIPCTransport()
       )
-      let observer = CommitRecorder()
+      let observer = TransactionEventRecorder()
       let subscription = try observingDatabase.subscribe(
         transactionObserver: observer,
         region: items
@@ -341,16 +341,6 @@
 
     func send(_ message: OrbitIPCMessage) async throws {
       try await base.send(message)
-    }
-  }
-
-  private final class CommitRecorder: OrbitDatabaseTransactionObserver, Sendable {
-    private let recorded = Lock([OrbitDatabaseCommit]())
-
-    var commits: [OrbitDatabaseCommit] { recorded.withLock { $0 } }
-
-    func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-      recorded.withLock { $0.append(commit) }
     }
   }
 

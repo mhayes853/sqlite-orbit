@@ -222,12 +222,9 @@
 
       let databasePath = harness.databasePath
       let coordination = harness.coordination
-      let didOpen = Lock(false)
-      Thread.detachNewThread {
-        _ = try? OrbitIPCDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
-        didOpen.withLock { $0 = true }
+      _ = try await withDeadline(.seconds(5)) {
+        try OrbitIPCDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
       }
-      try await waitUntil(timeout: .seconds(5)) { didOpen.withLock { $0 } }
       #expect(FileManager.default.fileExists(atPath: harness.databasePath))
     }
   }

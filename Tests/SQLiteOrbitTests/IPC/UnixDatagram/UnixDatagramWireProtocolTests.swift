@@ -108,89 +108,98 @@ func unixDatagramWireProtocolSkipsEntriesOfUnknownKinds() throws {
   )
 }
 
-@Test
-func unixDatagramWireProtocolRejectsMalformedHeaders() {
-  var badMagic = rawDatagram()
-  badMagic[0] = 0
-  #expect(throws: UnixDatagramWireError.invalidMagic) { try decodeDatabaseIPCMessages(badMagic) }
-  #expect(throws: UnixDatagramWireError.unsupportedProtocolVersion(2)) {
-    try decodeDatabaseIPCMessages(rawDatagram(version: 2))
+@Test(arguments: MalformedDatagram.all)
+func unixDatagramWireProtocolRejectsMalformedDatagrams(_ datagram: MalformedDatagram) {
+  #expect(throws: datagram.error) { try decodeDatabaseIPCMessages(datagram.bytes) }
+}
+
+/// A datagram broken in one way, and the error decoding it must report.
+struct MalformedDatagram: Sendable, CustomTestStringConvertible {
+  let testDescription: String
+  let bytes: [UInt8]
+  let error: UnixDatagramWireError
+
+  static var all: [MalformedDatagram] {
+    var badMagic = rawDatagram()
+    badMagic[0] = 0
+    // Table names and columns compare without regard to ASCII case, so differently spelled
+    // strings can still name the same one.
+    let caseVariants = utf8("db", "main", "items", "Items", "title", "TITLE")
+    return [
+      // The header.
+      MalformedDatagram("bad magic", badMagic, .invalidMagic),
+      MalformedDatagram("version 2", rawDatagram(version: 2), .unsupportedProtocolVersion(2)),
+      MalformedDatagram("header flags", rawDatagram(flags: 1), .invalidFlags),
+      MalformedDatagram("no entries", rawDatagram(entries: []), .emptyBatch),
+      MalformedDatagram("trailing bytes", rawDatagram() + [0], .trailingBytes),
+      // The string table.
+      MalformedDatagram("invalid UTF-8", rawDatagram(strings: [[0xff]]), .invalidUTF8),
+      MalformedDatagram(
+        "database string out of range",
+        rawDatagram(entries: [(1, commitPayload(database: 1))]),
+        .stringIndexOutOfRange
+      ),
+      MalformedDatagram(
+        "table string out of range",
+        rawDatagram(
+          strings: utf8("db", "main"),
+          entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 1, [])]))]
+        ),
+        .stringIndexOutOfRange
+      ),
+      // Payloads.
+      MalformedDatagram(
+        "payload longer than its length",
+        rawDatagram(entries: [(1, commitPayload() + [0])]),
+        .payloadLengthMismatch
+      ),
+      MalformedDatagram(
+        "truncated payload",
+        rawDatagram(entries: [(1, Array(commitPayload().dropLast()))]),
+        .truncated
+      ),
+      MalformedDatagram(
+        "region flags",
+        rawDatagram(entries: [(1, commitPayload(regionFlags: 2))]),
+        .invalidFlags
+      ),
+      MalformedDatagram(
+        "table flags",
+        rawDatagram(
+          strings: utf8("db", "main", "items"),
+          entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 2, [])]))]
+        ),
+        .invalidFlags
+      ),
+      // Regions.
+      MalformedDatagram(
+        "duplicate table",
+        rawDatagram(
+          strings: caseVariants,
+          entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 1, []), (1, 3, 1, [])]))]
+        ),
+        .duplicateRegionEntry
+      ),
+      MalformedDatagram(
+        "duplicate column",
+        rawDatagram(
+          strings: caseVariants,
+          entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 0, [4, 5])]))]
+        ),
+        .duplicateRegionEntry
+      )
+    ]
   }
-  #expect(throws: UnixDatagramWireError.invalidFlags) {
-    try decodeDatabaseIPCMessages(rawDatagram(flags: 1))
-  }
-  #expect(throws: UnixDatagramWireError.emptyBatch) {
-    try decodeDatabaseIPCMessages(rawDatagram(entries: []))
-  }
-  #expect(throws: UnixDatagramWireError.trailingBytes) {
-    try decodeDatabaseIPCMessages(rawDatagram() + [0])
+
+  init(_ description: String, _ bytes: [UInt8], _ error: UnixDatagramWireError) {
+    self.testDescription = description
+    self.bytes = bytes
+    self.error = error
   }
 }
 
 @Test
-func unixDatagramWireProtocolRejectsMalformedStrings() {
-  #expect(throws: UnixDatagramWireError.invalidUTF8) {
-    try decodeDatabaseIPCMessages(rawDatagram(strings: [[0xff]]))
-  }
-  #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
-    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload(database: 1))]))
-  }
-  #expect(throws: UnixDatagramWireError.stringIndexOutOfRange) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(
-        strings: utf8("db", "main"),
-        entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 1, [])]))]
-      )
-    )
-  }
-}
-
-@Test
-func unixDatagramWireProtocolRejectsMalformedPayloads() {
-  #expect(throws: UnixDatagramWireError.payloadLengthMismatch) {
-    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload() + [0])]))
-  }
-  #expect(throws: UnixDatagramWireError.truncated) {
-    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, Array(commitPayload().dropLast()))]))
-  }
-  #expect(throws: UnixDatagramWireError.invalidFlags) {
-    try decodeDatabaseIPCMessages(rawDatagram(entries: [(1, commitPayload(regionFlags: 2))]))
-  }
-  #expect(throws: UnixDatagramWireError.invalidFlags) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(
-        strings: utf8("db", "main", "items"),
-        entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 2, [])]))]
-      )
-    )
-  }
-}
-
-@Test
-func unixDatagramWireProtocolRejectsDuplicateRegionEntries() {
-  // Table names and columns compare without regard to ASCII case, so differently spelled strings
-  // can still name the same one.
-  let strings = utf8("db", "main", "items", "Items", "title", "TITLE")
-  #expect(throws: UnixDatagramWireError.duplicateRegionEntry) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(
-        strings: strings,
-        entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 1, []), (1, 3, 1, [])]))]
-      )
-    )
-  }
-  #expect(throws: UnixDatagramWireError.duplicateRegionEntry) {
-    try decodeDatabaseIPCMessages(
-      rawDatagram(
-        strings: strings,
-        entries: [(1, commitPayload(regionFlags: 0, tables: [(1, 2, 0, [4, 5])]))]
-      )
-    )
-  }
-}
-
-@Test
-func unixDatagramWireProtocolBroadensOversizedRegions() throws {
+func unixDatagramWireProtocolBroadensOversizedRegionsAndRefusesWhatItCannot() throws {
   let message = databaseIPCMessage(
     region: OrbitDatabaseRegion(column: "title", in: "items")
   )
@@ -202,10 +211,7 @@ func unixDatagramWireProtocolBroadensOversizedRegions() throws {
   #expect(throws: UnixDatagramWireError.datagramTooLarge) {
     try UnixDatagramWireProtocol.encode(message, maximumByteCount: 21)
   }
-}
-
-@Test
-func unixDatagramWireProtocolRejectsOversizedDatabaseIdentifiers() {
+  // A database identifier cannot be broadened, so one too long for a string is refused.
   #expect(throws: UnixDatagramWireError.databaseIdentifierTooLong) {
     try UnixDatagramWireProtocol.encode(databaseIPCMessage(String(repeating: "x", count: 65_536)))
   }
