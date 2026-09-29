@@ -453,7 +453,8 @@ func databaseCursorsSelectTopKValues() async throws {
   #expect(emptyExtremes.max.isEmpty)
 
   // The heap has to agree with a full sort for every `k`, on inputs in arbitrary order.
-  var generator = SystemRandomNumberGenerator()
+  let seed: UInt64 = 0x5351_4C49_5445
+  var generator = CursorTestRandomGenerator(state: seed)
   for _ in 0..<20 {
     let values = (0..<25).map { _ in Int.random(in: -1000...1000, using: &generator) }
     let shuffledState = TestDatabaseState(rows: values.map { [.int(Int64($0))] })
@@ -462,13 +463,13 @@ func databaseCursorsSelectTopKValues() async throws {
       let top = try withTestRead(shuffledState) { transaction in
         try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(k)
       }
-      #expect(top == sorted.suffix(k).reversed())
+      #expect(top == sorted.suffix(k).reversed(), "seed=\(seed), k=\(k), input=\(values)")
 
       let extremes = try withTestRead(shuffledState) { transaction in
         try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(k)
       }
-      #expect(extremes.min == Array(sorted.prefix(k)))
-      #expect(extremes.max == sorted.suffix(k).reversed())
+      #expect(extremes.min == Array(sorted.prefix(k)), "seed=\(seed), k=\(k), input=\(values)")
+      #expect(extremes.max == sorted.suffix(k).reversed(), "seed=\(seed), k=\(k), input=\(values)")
     }
   }
 
@@ -784,5 +785,18 @@ extension QueryBinding {
   fileprivate static func extractUUID(_ binding: Self) -> UUID? {
     guard case .uuid(let value) = binding else { return nil }
     return value
+  }
+}
+
+// SplitMix64 keeps the generated corpus reproducible without depending on system entropy.
+private struct CursorTestRandomGenerator: RandomNumberGenerator {
+  var state: UInt64
+
+  mutating func next() -> UInt64 {
+    state &+= 0x9E37_79B9_7F4A_7C15
+    var value = state
+    value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+    value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+    return value ^ (value >> 31)
   }
 }

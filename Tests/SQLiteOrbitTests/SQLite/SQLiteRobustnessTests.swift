@@ -17,6 +17,52 @@
     return handle
   }
 
+  private final class StatementLifecycleProbe: Sendable {
+    let prepared = TestCounter()
+    let finalized = TestCounter()
+    private let cachedPointers = Lock<Set<UInt>>([])
+
+    func configuration(matching sqlPrefix: String) -> SQLiteConfiguration {
+      let base = builtInTestLibrary
+      var configuration = SQLiteConfiguration.default
+      configuration.library.statements.preparation.prepare = {
+        [self]
+        connection,
+        sql,
+        count,
+        flags,
+        statement,
+        tail in
+        let code = base.statements.preparation.prepare(
+          connection,
+          sql,
+          count,
+          flags,
+          statement,
+          tail
+        )
+        // Metadata probes use flags=0; only track statements prepared for the cache.
+        if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee,
+          flags & SQLitePrepareFlags.persistent.rawValue != 0,
+          let sql, String(cString: sql).hasPrefix(sqlPrefix)
+        {
+          cachedPointers.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+          prepared.increment()
+        }
+        return code
+      }
+      configuration.library.statements.execution.finalize = { [self] statement in
+        if let statement,
+          cachedPointers.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
+        {
+          finalized.increment()
+        }
+        return base.statements.execution.finalize(statement)
+      }
+      return configuration
+    }
+  }
+
   @Test
   func rawSQLStopsAtAnEmbeddedNulTheWaySQLiteDoes() throws {
     let handle = try openConnection()
@@ -66,45 +112,64 @@
 
   @Test
   func aStatementIsReusableAfterTheQueryUsingItFails() throws {
-    let handle = try openConnection()
-    try handle.write { transaction in
-      try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
-    }
-
-    // Decoding the title as an integer fails partway through the cursor's life.
-    try handle.read { transaction in
-      _ = #expect(throws: (any Error).self) {
-        _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
+    let probe = StatementLifecycleProbe()
+    do {
+      let handle = try openConnection(
+        configuration: probe.configuration(matching: "SELECT title FROM items")
+      )
+      try handle.write { transaction in
+        try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
       }
-    }
 
-    // The statement went back to the cache in a usable state rather than mid-scan.
-    let titles = try handle.read { transaction in
-      try transaction.fetchAll(Item.select(\.title))
+      // Decoding the title as an integer fails partway through the cursor's life.
+      try handle.read { transaction in
+        _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+          _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
+        }
+      }
+
+      // The statement went back to the cache in a usable state rather than mid-scan.
+      let titles = try handle.read { transaction in
+        try transaction.fetchAll(#sql("SELECT title FROM items", as: String.self))
+      }
+      #expect(titles == ["kept"])
+      #expect(probe.prepared.value == 1)
+      #expect(probe.finalized.value == 0)
     }
-    #expect(titles == ["kept"])
+    #expect(probe.finalized.value == probe.prepared.value)
   }
 
   @Test
   func aPartiallyReadCursorDoesNotResumeWhenItsStatementIsReused() throws {
-    let handle = try openConnection()
-    try handle.write { transaction in
-      for id in 1...3 {
-        try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+    let probe = StatementLifecycleProbe()
+    do {
+      let handle = try openConnection(
+        configuration: probe.configuration(matching: "SELECT title FROM items")
+      )
+      try handle.write { transaction in
+        for id in 1...3 {
+          try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+        }
       }
-    }
 
-    try handle.read { transaction in
-      // Abandon the cursor after one row, so its statement goes back to the cache mid-scan.
-      var cursor = try transaction.fetchCursor(Item.all.order { $0.id })
-      _ = try cursor.next()
-    }
+      try handle.read { transaction in
+        // Abandon the cursor after one row, so its statement goes back to the cache mid-scan.
+        var cursor = try transaction.fetchCursor(
+          #sql("SELECT title FROM items ORDER BY id", as: String.self),
+          cached: true
+        )
+        #expect(try cursor.next() == "item 1")
+      }
 
-    let titles = try handle.read { transaction in
-      try transaction.fetchAll(Item.all.order { $0.id }).map(\.title)
+      let titles = try handle.read { transaction in
+        try transaction.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+      }
+      // A statement that was not reset would start from the second row.
+      #expect(titles == ["item 1", "item 2", "item 3"])
+      #expect(probe.prepared.value == 1)
+      #expect(probe.finalized.value == 0)
     }
-    // A statement that was not reset would start from the second row.
-    #expect(titles == ["item 1", "item 2", "item 3"])
+    #expect(probe.finalized.value == probe.prepared.value)
   }
 
   @Test
@@ -172,34 +237,42 @@
 
   @Test
   func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
-    let handle = try openConnection()
-    try handle.execute("CREATE TABLE numbers (value INTEGER)")
+    let probe = StatementLifecycleProbe()
+    do {
+      let handle = try openConnection(
+        configuration: probe.configuration(matching: "INSERT INTO numbers")
+      )
+      try handle.execute("CREATE TABLE numbers (value INTEGER)")
 
-    // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
-    // rather than wrapped.
-    for _ in 0..<3 {
-      #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
-        try handle.write { transaction in
-          try transaction.execute(
-            #sql(
-              "INSERT INTO numbers (value) VALUES (\(UInt64.max))",
-              as: Void.self
+      // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
+      // rather than wrapped.
+      for _ in 0..<3 {
+        #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
+          try handle.write { transaction in
+            _ = try transaction.fetchAll(
+              #sql(
+                "INSERT INTO numbers (value) VALUES (\(UInt64.max)) RETURNING value",
+                as: UInt64.self
+              )
             )
-          )
+          }
         }
       }
-    }
 
-    // The statement that failed to bind was given back, so the cache did not leak it.
-    try handle.write { transaction in
-      try transaction.execute(
-        #sql("INSERT INTO numbers (value) VALUES (\(1, as: Int.self))", as: Void.self)
-      )
+      // The statement that failed to bind was given back, so the cache did not leak it.
+      try handle.write { transaction in
+        _ = try transaction.fetchAll(
+          #sql("INSERT INTO numbers (value) VALUES (\(UInt64(1))) RETURNING value", as: UInt64.self)
+        )
+      }
+      let stored = try handle.read { transaction in
+        try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
+      }
+      #expect(stored == [1])
+      #expect(probe.prepared.value == 1)
+      #expect(probe.finalized.value == 0)
     }
-    let stored = try handle.read { transaction in
-      try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
-    }
-    #expect(stored == [1])
+    #expect(probe.finalized.value == probe.prepared.value)
   }
 
   @Test
@@ -278,7 +351,7 @@
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
 
-      // Half of these are cancelled almost immediately, most while still queued for a reader or the
+      // A third of these are cancelled immediately, often while still queued for a reader or the
       // writer. Whatever they were holding has to come back either way.
       await withTaskGroup(of: Void.self) { group in
         for index in 0..<200 {
@@ -297,7 +370,13 @@
             if index.isMultiple(of: 3) {
               task.cancel()
             }
-            _ = try? await task.value
+            do {
+              try await task.value
+            } catch is CancellationError {
+              #expect(index.isMultiple(of: 3), "Uncancelled access \(index) failed")
+            } catch {
+              Issue.record(error, "Unexpected failure for access \(index)")
+            }
           }
         }
         await group.waitForAll()
@@ -336,11 +415,16 @@
       }
 
       var successfulIDs: [Int] = []
-      for write in writes {
-        if let id = try? await write.value {
-          successfulIDs.append(id)
+      for (offset, write) in writes.enumerated() {
+        do {
+          successfulIDs.append(try await write.value)
+        } catch is CancellationError {
+          #expect(offset.isMultiple(of: 2), "Uncancelled write \(offset + 1) failed")
+        } catch {
+          Issue.record(error, "Unexpected failure for write \(offset + 1)")
         }
       }
+      #expect(Set(successfulIDs).isSuperset(of: stride(from: 2, through: 300, by: 2)))
       let storedIDs = try await driver.read { transaction in
         try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
       }
