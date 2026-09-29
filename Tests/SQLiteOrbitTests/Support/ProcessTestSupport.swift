@@ -135,17 +135,9 @@
     ///   - helper: The name of the helper test to spawn, which it hands to
     ///     ``runProcessTestPeer(_:_:)`` too.
     ///   - name: A name for the directory, as ``makeShortTemporaryDirectory(_:)`` takes.
-    convenience init(helper: String, name: String) throws {
-      try self.init(
-        helper: helper,
-        environmentPrefix: ProcessTestPeer.environmentPrefix(helper: helper),
-        name: name
-      )
-    }
-
-    init(helper: String, environmentPrefix: String, name: String) throws {
+    init(helper: String, name: String) throws {
       self.helper = helper
-      self.environmentPrefix = environmentPrefix
+      self.environmentPrefix = ProcessTestPeer.environmentPrefix(helper: helper)
       self.directory = try makeShortTemporaryDirectory(name)
     }
 
@@ -179,7 +171,7 @@
       )
     }
 
-    func spawn(_ variables: [String: String]) throws -> Process {
+    private func spawn(_ variables: [String: String]) throws -> Process {
       let process = Process()
       process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
       process.arguments = self.arguments
@@ -278,15 +270,6 @@
         print(self.helperOutput(index).suffix(2000))
       }
     }
-
-    // Replaced by the indexed `waitUntilReady(_:)` and `start()`, and removed once every harness
-    // has moved to them.
-
-    /// Waits for a helper to create the file `ready`.
-    func waitUntilReady() async throws { try await waitForFile(self.file("ready")) }
-
-    /// Creates the file `go`, which a helper waits for to go on.
-    func go() throws { try touch(self.file("go")) }
   }
 
   // MARK: - The helper's side
@@ -440,22 +423,5 @@
       processTestExit(1)
     }
     processTestExit(0)
-  }
-
-  /// The variables a ``ProcessTestHarness`` spawned a helper with, read in the helper.
-  ///
-  /// Replaced by ``ProcessTestPeer``, and removed once every helper has moved to it.
-  struct ProcessTestEnvironment {
-    /// The prefix the harness put before each name.
-    let prefix: String
-
-    subscript(name: String) -> String? {
-      ProcessInfo.processInfo.environment[self.prefix + name]
-    }
-
-    /// The file the variable `name` holds the path of.
-    func url(_ name: String) throws -> URL {
-      URL(fileURLWithPath: try #require(self[name]))
-    }
   }
 #endif

@@ -211,7 +211,7 @@
       try await Task.sleep(for: .milliseconds(300))
       switch fate {
       case .resumed:
-        try peer.go()
+        try peer.stop()
         peer.resume(holder)
         try await peer.waitForSuccessfulExit(holder)
       case .killed:
@@ -279,46 +279,43 @@
     }
   }
 
-  /// A process that holds the open lock of a database another process set up, until told to go
-  /// on.
+  /// A process that holds the open lock of a database another process set up, until told to stop.
   @Test
-  func openLockProcessPeer() throws {
-    let environment = ProcessTestEnvironment(prefix: OpenLockPeer.prefix)
-    guard environment["MODE"] == "hold" else { return }
-    let database = try environment.url("DATABASE")
-
-    try OrbitDatabaseOpenLock.withLock(
-      databaseIdentifier: .forDatabase(path: OrbitDatabasePath(database.path)),
-      directory: try environment.url("DIRECTORY"),
-      configuration: .default
-    ) {
-      try touch(try environment.url("READY"))
-      processTestWaitForFile(try environment.url("GO"))
+  func openLockProcessPeer() async {
+    await runProcessTestPeer(OpenLockPeer.helper) { peer in
+      guard peer.mode == "hold" else { throw peer.unknownMode }
+      let database = OpenLockPeer.database(in: peer.directory)
+      try OrbitDatabaseOpenLock.withLock(
+        databaseIdentifier: .forDatabase(path: OrbitDatabasePath(database.path)),
+        directory: database.directory,
+        configuration: .default
+      ) {
+        try peer.markReady()
+        peer.waitForStopBlocking()
+      }
     }
-    processTestExit(0)
   }
 
   /// A database, the coordination directory its pools open it through, and the one helper
   /// process a test runs holding its open lock.
   private final class OpenLockPeer: ProcessTestHarness {
-    static let prefix = "SQLITE_ORBIT_OPEN_LOCK_HELPER_"
+    static let helper = "openLockProcessPeer"
 
-    var database: OpenLockDatabase {
-      OpenLockDatabase(path: self.file("test.sqlite").path, directory: self.file("c"))
-    }
+    var database: OpenLockDatabase { Self.database(in: self.directory) }
 
     init(_ name: String) throws {
-      try super.init(helper: "openLockProcessPeer", environmentPrefix: Self.prefix, name: name)
+      try super.init(helper: Self.helper, name: name)
+    }
+
+    static func database(in directory: URL) -> OpenLockDatabase {
+      OpenLockDatabase(
+        path: directory.appending(path: "test.sqlite").path,
+        directory: directory.appending(path: "c")
+      )
     }
 
     func spawnHolder() throws -> Process {
-      try self.spawn([
-        "MODE": "hold",
-        "DIRECTORY": self.database.directory.path,
-        "DATABASE": self.database.path,
-        "READY": self.file("ready").path,
-        "GO": self.file("go").path
-      ])
+      try self.spawn(mode: "hold")
     }
   }
 
