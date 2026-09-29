@@ -113,6 +113,118 @@
       flock(descriptor, LOCK_EX | LOCK_NB) == 0
     }
 
+    /// Creates the directory at `path`, and each missing directory above it, as
+    /// `FileManager.createDirectory(atPath:withIntermediateDirectories:)` does. A directory
+    /// already there, including one another process creates meanwhile, is left as it is.
+    ///
+    /// - Throws: A ``UnixSystemError`` if a directory cannot be created, or if something other
+    ///   than a directory is in the way, with `EEXIST`.
+    static func createDirectory(atPath path: String) throws {
+      if mkdir(path, 0o777) == 0 { return }
+      switch errno {
+      case EEXIST:
+        break
+      case ENOENT:
+        let parent = FilePath.deletingLastComponent(of: path)
+        guard parent != FilePath.droppingTrailingSlashes(path), !parent.isEmpty else {
+          throw UnixSystemError.last("mkdir")
+        }
+        try Self.createDirectory(atPath: parent)
+        if mkdir(path, 0o777) == 0 { return }
+        guard errno == EEXIST else { throw UnixSystemError.last("mkdir") }
+      default:
+        throw UnixSystemError.last("mkdir")
+      }
+      var status = stat()
+      guard stat(path, &status) == 0 else { throw UnixSystemError.last("stat") }
+      guard mode_t(status.st_mode) & S_IFMT == S_IFDIR else {
+        throw UnixSystemError(operation: "mkdir", code: EEXIST)
+      }
+    }
+
+    /// The names of what is in the directory at `path`, in no particular order, leaving out `.`
+    /// and `..`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if the directory cannot be read, with `ENOENT` if it is
+    ///   not there.
+    static func contentsOfDirectory(atPath path: String) throws -> [String] {
+      guard let directory = opendir(path) else { throw UnixSystemError.last("opendir") }
+      defer { closedir(directory) }
+      var names: [String] = []
+      while true {
+        errno = 0
+        guard let entry = readdir(directory) else {
+          guard errno == 0 else { throw UnixSystemError.last("readdir") }
+          return names
+        }
+        let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+          String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        if name != "." && name != ".." {
+          names.append(name)
+        }
+      }
+    }
+
+    /// Everything in the file at `path`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if it cannot be read, with `ENOENT` if nothing is there.
+    static func contentsOfFile(atPath path: String) throws -> [UInt8] {
+      let descriptor = try UnixDescriptor(Self.openExistingFile(atPath: path), from: "open")
+      var contents: [UInt8] = []
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while true {
+        let count = buffer.withUnsafeMutableBytes {
+          Self.readBytes(from: descriptor.rawValue, into: $0)
+        }
+        guard count >= 0 else { throw UnixSystemError.last("read") }
+        guard count > 0 else { return contents }
+        contents.append(contentsOf: buffer[..<count])
+      }
+    }
+
+    /// Writes `bytes` to the file at `path`, creating it if it is not there and replacing what it
+    /// held if it is, in place, as `Data.write(to:)` does without `.atomic`.
+    ///
+    /// - Throws: A ``UnixSystemError`` if it cannot be written, with `ENOENT` if its directory is
+    ///   not there.
+    static func writeFile(_ bytes: [UInt8], atPath path: String) throws {
+      let descriptor = try UnixDescriptor(
+        open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666),
+        from: "open"
+      )
+      var written = 0
+      while written < bytes.count {
+        let count = bytes.withUnsafeBytes {
+          Self.writeBytes(UnsafeRawBufferPointer(rebasing: $0[written...]), to: descriptor.rawValue)
+        }
+        if count < 0 {
+          guard errno == EINTR else { throw UnixSystemError.last("write") }
+          continue
+        }
+        written += count
+      }
+    }
+
+    /// How long before now the file at `path` itself, not what a symbolic link there names, was
+    /// last modified, by the system's clock, or `nil` if it cannot be looked up.
+    ///
+    /// A file modified after now, by a clock set back, has a negative age.
+    static func ageOfFile(atPath path: String) -> Duration? {
+      var status = stat()
+      var now = timespec()
+      guard lstat(path, &status) == 0, clock_gettime(CLOCK_REALTIME, &now) == 0 else {
+        return nil
+      }
+      #if canImport(Darwin)
+        let modified = status.st_mtimespec
+      #else
+        let modified = status.st_mtim
+      #endif
+      return .seconds(Int64(now.tv_sec) - Int64(modified.tv_sec))
+        + .nanoseconds(Int64(now.tv_nsec) - Int64(modified.tv_nsec))
+    }
+
     /// Which file the path `path` names now, following a symbolic link.
     ///
     /// - Returns: The file's identity, or `nil` if it cannot be looked up, as when nothing is

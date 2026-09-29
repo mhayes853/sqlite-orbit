@@ -115,6 +115,101 @@
     }
 
     @Test
+    func createsADirectoryAndEveryMissingOneAboveIt() throws {
+      let nested = directory.appending(path: "a/b/c").path
+      try UnixPlatform.createDirectory(atPath: nested)
+      var isDirectory: ObjCBool = false
+      #expect(FileManager.default.fileExists(atPath: nested, isDirectory: &isDirectory))
+      #expect(isDirectory.boolValue)
+
+      // Already there, with a trailing slash or without.
+      try UnixPlatform.createDirectory(atPath: nested)
+      try UnixPlatform.createDirectory(atPath: nested + "/")
+
+      let file = directory.appending(path: "file").path
+      #expect(FileManager.default.createFile(atPath: file, contents: nil))
+      #expect(throws: UnixSystemError(operation: "mkdir", code: UnixPlatform.ErrorCode.fileExists))
+      {
+        try UnixPlatform.createDirectory(atPath: file)
+      }
+      #expect(throws: UnixSystemError.self) {
+        try UnixPlatform.createDirectory(atPath: file + "/below")
+      }
+    }
+
+    @Test
+    func listsWhatIsInADirectory() throws {
+      for name in ["a", ".hidden", "é"] {
+        #expect(
+          FileManager.default.createFile(
+            atPath: directory.appending(path: name).path,
+            contents: nil
+          )
+        )
+      }
+      try FileManager.default.createDirectory(
+        at: directory.appending(path: "child"),
+        withIntermediateDirectories: false
+      )
+
+      let names = try UnixPlatform.contentsOfDirectory(atPath: directory.path)
+      #expect(names.sorted() == ["a", ".hidden", "é", "child"].sorted())
+      #expect(
+        names.sorted()
+          == (try FileManager.default.contentsOfDirectory(atPath: directory.path)).sorted()
+      )
+      #expect(
+        throws: UnixSystemError(operation: "opendir", code: UnixPlatform.ErrorCode.noSuchFile)
+      ) {
+        try UnixPlatform.contentsOfDirectory(atPath: directory.appending(path: "missing").path)
+      }
+    }
+
+    @Test
+    func writesAndReadsAFileWhole() throws {
+      let path = directory.appending(path: "file").path
+      #expect(
+        throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
+      ) {
+        try UnixPlatform.contentsOfFile(atPath: path)
+      }
+
+      let large = (0..<10_000).map { UInt8(truncatingIfNeeded: $0) }
+      try UnixPlatform.writeFile(large, atPath: path)
+      #expect(try UnixPlatform.contentsOfFile(atPath: path) == large)
+      #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data(large))
+
+      // Replaced in place, and cut short rather than overwritten.
+      try UnixPlatform.writeFile([1, 2, 3], atPath: path)
+      #expect(try UnixPlatform.contentsOfFile(atPath: path) == [1, 2, 3])
+      try UnixPlatform.writeFile([], atPath: path)
+      #expect(try UnixPlatform.contentsOfFile(atPath: path) == [])
+
+      #expect(
+        throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
+      ) {
+        try UnixPlatform.writeFile([1], atPath: directory.appending(path: "missing/file").path)
+      }
+    }
+
+    @Test
+    func agesAFileByItsModificationTime() throws {
+      let path = directory.appending(path: "file").path
+      #expect(UnixPlatform.ageOfFile(atPath: path) == nil)
+
+      #expect(FileManager.default.createFile(atPath: path, contents: nil))
+      let age = try #require(UnixPlatform.ageOfFile(atPath: path))
+      #expect(age >= .seconds(-1) && age < .seconds(60))
+
+      try FileManager.default.setAttributes(
+        [.modificationDate: Date.now.addingTimeInterval(-3_600)],
+        ofItemAtPath: path
+      )
+      let older = try #require(UnixPlatform.ageOfFile(atPath: path))
+      #expect(older >= .seconds(3_599) && older < .seconds(3_660))
+    }
+
+    @Test
     func identifiesTheFileAtAPath() throws {
       let path = directory.appending(path: "file").path
       #expect(UnixPlatform.fileIdentity(atPath: path) == nil)

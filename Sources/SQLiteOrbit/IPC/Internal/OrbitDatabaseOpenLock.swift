@@ -1,10 +1,4 @@
 #if canImport(Darwin) || os(Linux) || os(Android)
-  #if canImport(FoundationEssentials)
-    import FoundationEssentials
-  #else
-    import Foundation
-  #endif
-
   /// The lock a process holds on a database while it opens it, one file per database in the
   /// coordination directory's `open-locks/`.
   ///
@@ -28,13 +22,16 @@
     ///   ends, a ``UnixSystemError`` if the lock cannot be taken, or whatever `body` throws.
     static func withLock<Result>(
       databaseIdentifier: OrbitDatabaseIdentifier,
-      directory: URL,
+      directoryPath: String,
       configuration: SQLiteConfiguration,
       _ body: () throws -> Result
     ) throws -> Result {
-      let locksDirectory = Self.locksDirectory(in: directory)
-      try FileManager.default.createDirectory(at: locksDirectory, withIntermediateDirectories: true)
-      let path = locksDirectory.appending(path: "\(databaseIdentifier.coordinationKey).lock").path
+      let locksDirectory = Self.locksDirectory(in: directoryPath)
+      try UnixPlatform.createDirectory(atPath: locksDirectory)
+      let path = FilePath.appending(
+        "\(databaseIdentifier.coordinationKey).lock",
+        to: locksDirectory
+      )
       let keepsWaiting =
         configuration.busyHandler ?? Self.waiting(within: configuration.busyTimeout)
       if let result = try UnixFileLock.withExclusiveLock(
@@ -55,21 +52,22 @@
       )
     }
 
-    /// Removes every lock file in the coordination directory `directory` that nobody holds.
+    /// Removes every lock file in the coordination directory at `directoryPath` that nobody holds.
     ///
     /// - Returns: How many were removed.
-    static func removeUnheldLocks(directory: URL) -> Int {
-      let locksDirectory = Self.locksDirectory(in: directory)
-      guard let names = try? FileManager.default.contentsOfDirectory(atPath: locksDirectory.path)
-      else { return 0 }
+    static func removeUnheldLocks(directoryPath: String) -> Int {
+      let locksDirectory = Self.locksDirectory(in: directoryPath)
+      guard let names = try? UnixPlatform.contentsOfDirectory(atPath: locksDirectory) else {
+        return 0
+      }
       return names.count { name in
         name.hasSuffix(".lock")
-          && UnixFileLock.removeIfUnlocked(atPath: locksDirectory.appending(path: name).path)
+          && UnixFileLock.removeIfUnlocked(atPath: FilePath.appending(name, to: locksDirectory))
       }
     }
 
-    private static func locksDirectory(in directory: URL) -> URL {
-      directory.appending(path: "open-locks", directoryHint: .isDirectory)
+    private static func locksDirectory(in directoryPath: String) -> String {
+      FilePath.appending("open-locks", to: FilePath.absolute(directoryPath))
     }
 
     /// Waits before each try again as SQLite's own busy timeout waits between tries at its locks:

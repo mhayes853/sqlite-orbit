@@ -50,7 +50,7 @@
           path: path,
           configuration: configuration,
           identifier: identifier,
-          coordinationDirectory: coordination.directory
+          coordinationDirectoryPath: coordination.directoryPath
         ),
         id: identifier,
         transport: try UnixDatagramIPCTransport.shared(configuration: coordination),
