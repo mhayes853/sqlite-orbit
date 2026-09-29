@@ -193,6 +193,49 @@
     }
 
     @Test
+    func rekeyingToRawBytesKeepsTheDataAndRejectsTheOldKey() async throws {
+      try await withTestDatabaseFile("cipher") { file in
+        let oldKey = SQLiteKey.passphrase("old passphrase")
+        let newKey = SQLiteKey.raw([0x00, 0xFF, 0x42, 0x10, 0x00, 0x7F])
+        let database = try SQLiteQueue(
+          path: file.path,
+          configuration: .sqlCipher(key: oldKey)
+        )
+        try await database.write { transaction in
+          try transaction.execute(#sql("CREATE TABLE notes (title TEXT NOT NULL)", as: Void.self))
+          try transaction.execute(#sql("INSERT INTO notes VALUES ('survives')", as: Void.self))
+        }
+
+        try await database.writeWithoutTransaction { connection in
+          let encryption = try #require(connection.sqlite.encryption)
+          let code = newKey.withUnsafeBytes { bytes in
+            encryption.rekey(
+              connection.sqliteConnection,
+              "main",
+              bytes.baseAddress,
+              Int32(bytes.count)
+            )
+          }
+          #expect(code == SQLiteResultCode.ok.rawValue)
+        }
+        _ = consume database
+
+        #expect(throws: SQLiteError.self) {
+          _ = try SQLiteQueue(path: file.path, configuration: .sqlCipher(key: oldKey))
+        }
+
+        let reopened = try SQLiteQueue(
+          path: file.path,
+          configuration: .sqlCipher(key: newKey)
+        )
+        let titles = try await reopened.read { transaction in
+          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+        }
+        #expect(titles == ["survives"])
+      }
+    }
+
+    @Test
     func anEncryptedDatabaseStillRunsCollationsAndFunctions() async throws {
       // The point of removing `supportsTypedCallbacks`: a build that is not the platform SQLite
       // drives Swift callbacks exactly as the linked one does.
