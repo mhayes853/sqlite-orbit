@@ -2,8 +2,6 @@ import Testing
 
 @testable import SQLiteOrbit
 
-private struct FetchFailure: Error {}
-
 @Suite
 struct OrbitValueObservationReadCoordinatorTests {
   @Test
@@ -92,11 +90,11 @@ struct OrbitValueObservationSubscriberRegistryTests {
   @Test
   func aSubscriberRegisteringDuringAPublicationIsCaughtUpExactlyOnce() throws {
     var registry = OrbitValueObservationSubscriberRegistry<Int>()
-    let early = Lock([Int]())
-    let late = Lock([Int]())
+    let early = TestRecorder<Int>()
+    let late = TestRecorder<Int>()
 
     let firstRegistration = registry.add(
-      subscriber { change in early.withLock { $0.append(change.value) } }
+      subscriber { change in early.append(change.value) }
     )
     guard case .success = firstRegistration else {
       Issue.record("the first subscriber was refused")
@@ -108,7 +106,7 @@ struct OrbitValueObservationSubscriberRegistryTests {
 
     // A subscriber that arrives after the publication is captured but before it is delivered is
     // caught up through its registration instead, so it must not also be in `owed`.
-    let lateSubscriber = subscriber { change in late.withLock { $0.append(change.value) } }
+    let lateSubscriber = subscriber { change in late.append(change.value) }
     let lateRegistration = registry.add(lateSubscriber)
     #expect(owed.count == 1)
 
@@ -119,8 +117,8 @@ struct OrbitValueObservationSubscriberRegistryTests {
     }
     lateSubscriber.receive(.outcome(.success(try #require(place.latest))), from: nil)
 
-    #expect(early.withLock { $0 } == [1])
-    #expect(late.withLock { $0 } == [1])
+    #expect(early.values == [1])
+    #expect(late.values == [1])
   }
 
   @Test
@@ -151,7 +149,7 @@ struct OrbitValueObservationSubscriberRegistryTests {
       return
     }
 
-    let owed = registry.fail(FetchFailure())
+    let owed = registry.fail(TestError())
     #expect(owed.count == 1)
 
     let refused = registry.add(subscriber())
@@ -159,7 +157,7 @@ struct OrbitValueObservationSubscriberRegistryTests {
       Issue.record("a subscriber was admitted after the observation failed")
       return
     }
-    #expect(error is FetchFailure)
+    #expect(error is TestError)
 
     // The failed subscribers were released, so a later publication owes nobody.
     let stillOwed = registry.publish(OrbitValueObservationChange(value: 1, source: .initial))

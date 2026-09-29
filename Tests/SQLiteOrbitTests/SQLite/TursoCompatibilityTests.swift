@@ -10,79 +10,6 @@
     CollationOrder(lhs, rhs)
   }
 
-  private struct TemporaryTursoDatabase: ~Copyable {
-    let path: OrbitDatabasePath
-
-    init(_ name: String = "turso-pool") {
-      self.path = OrbitDatabasePath(temporaryDatabasePath(name))
-    }
-
-    deinit {
-      for suffix in ["", "-wal", "-shm", "-log"] {
-        try? FileManager.default.removeItem(atPath: path.sqlitePath + suffix)
-      }
-    }
-  }
-
-  private final class TursoGate: Sendable {
-    private let state = Lock((entered: 0, isOpen: false))
-
-    var enteredCount: Int { state.withLock { $0.entered } }
-
-    func hold() {
-      state.withLock { $0.entered += 1 }
-      while !state.withLock({ $0.isOpen }) {}
-    }
-
-    func waitUntilEntered(_ count: Int) async {
-      while state.withLock({ $0.entered }) < count {
-        await Task.yield()
-      }
-    }
-
-    func open() {
-      state.withLock { $0.isOpen = true }
-    }
-  }
-
-  private final class TursoEntryOrder: Sendable {
-    private let entries = Lock<[String]>([])
-
-    var isEmpty: Bool { entries.withLock { $0.isEmpty } }
-
-    func append(_ entry: String) {
-      entries.withLock { $0.append(entry) }
-    }
-
-    func matches(_ expected: [String]) -> Bool {
-      entries.withLock { $0 == expected }
-    }
-  }
-
-  private final class TursoCommitRecorder: OrbitDatabaseTransactionObserver, Sendable {
-    private let recordedCommits = Lock<[OrbitDatabaseCommit]>([])
-
-    var commits: [OrbitDatabaseCommit] { recordedCommits.withLock { $0 } }
-
-    func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-      recordedCommits.withLock { $0.append(commit) }
-    }
-  }
-
-  private final class TursoValueRecorder<Value: Sendable>: Sendable {
-    private let recordedValues = Lock<[Value]>([])
-
-    var values: [Value] { recordedValues.withLock { $0 } }
-
-    func record(_ change: OrbitValueObservationChange<Value>) {
-      recordedValues.withLock { $0.append(change.value) }
-    }
-
-    func waitForCount(_ count: Int) async throws {
-      try await waitUntil(timeout: .seconds(5)) { self.values.count >= count }
-    }
-  }
-
   @Test
   func tursoRunsBasicQueueTransactions() async throws {
     #expect(SQLiteConfiguration.default.library.name == "Turso")
@@ -106,396 +33,396 @@
 
   @Test
   func tursoRunsAPoolConfinedToOneProcess() async throws {
-    let path = OrbitDatabasePath(temporaryDatabasePath("turso-local"))
-    defer {
-      for suffix in ["", "-wal", "-shm"] {
-        try? FileManager.default.removeItem(atPath: path.sqlitePath + suffix)
+    try await withTestDatabaseFile("turso") { file in
+      let database = try file.tursoPool()
+      try await database.write { transaction in
+        try transaction.execute(
+          #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+        )
+        try transaction.execute(
+          #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
+        )
       }
+      let titles = try await database.read { transaction in
+        try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+      }
+      #expect(titles == ["pooled"])
     }
-
-    let database = try TursoPool(path: path)
-    try await database.write { transaction in
-      try transaction.execute(
-        #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-      )
-      try transaction.execute(
-        #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
-      )
-    }
-    let titles = try await database.read { transaction in
-      try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
-    }
-    #expect(titles == ["pooled"])
   }
 
   @Test
   func tursoPoolRunsInMVCCMode() async throws {
-    let database = TemporaryTursoDatabase("turso-mvcc")
-    let driver = try TursoPool(path: database.path)
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path)
 
-    let mode = try await driver.readWithoutTransaction { connection in
-      try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+      let mode = try await driver.readWithoutTransaction { connection in
+        try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+      }
+
+      #expect(mode?.lowercased() == "mvcc")
     }
-
-    #expect(mode?.lowercased() == "mvcc")
   }
 
   @Test
   func tursoPoolSupportsWritesOutsideATransaction() async throws {
-    let database = TemporaryTursoDatabase("turso-without-transaction")
-    let driver = try TursoPool(path: database.path)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
 
-    try await driver.writeWithoutTransaction { connection in
-      try connection.execute("INSERT INTO items (id) VALUES (1)")
-      try connection.execute("INSERT INTO items (id) VALUES (2)")
-    }
+      try await driver.writeWithoutTransaction { connection in
+        try connection.execute("INSERT INTO items (id) VALUES (1)")
+        try connection.execute("INSERT INTO items (id) VALUES (2)")
+      }
 
-    let count = try await driver.readWithoutTransaction { connection in
-      try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      let count = try await driver.readWithoutTransaction { connection in
+        try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
+      #expect(count == 2)
     }
-    #expect(count == 2)
   }
 
   @Test
   func tursoPoolRunsConcurrentWritesOnDistinctConnections() async throws {
-    let storage = TemporaryTursoDatabase("turso-writers")
-    let database = try TursoPool(path: storage.path, writerCount: 2)
-    try await database.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let gate = TursoGate()
+    try await withTestDatabaseFile("turso") { file in
+      let database = try TursoPool(path: file.path, writerCount: 2)
+      try await database.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let gate = TestGate()
 
-    let writes = (1...2)
-      .map { id in
-        Task {
-          try await database.concurrentWrite { transaction in
-            try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
-            gate.hold()
+      let writes = (1...2)
+        .map { id in
+          Task {
+            try await database.concurrentWrite { transaction in
+              try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
+              try gate.enter()
+            }
           }
         }
+
+      try await gate.waitUntilEntered(2)
+      gate.open()
+      for write in writes { try await write.value }
+
+      let count = try await database.read { transaction in
+        try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
       }
-
-    await gate.waitUntilEntered(2)
-    gate.open()
-    for write in writes { try await write.value }
-
-    let count = try await database.read { transaction in
-      try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      #expect(count == 2)
     }
-    #expect(count == 2)
   }
 
   @Test
   func tursoPoolPublishesEachConcurrentCommitWithItsActiveWriterCohort() async throws {
-    let database = TemporaryTursoDatabase("turso-observation")
-    let driver = try TursoPool(path: database.path, writerCount: 2)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let observer = TursoCommitRecorder()
-    let subscription = try driver.subscribe(transactionObserver: observer)
-    let firstGate = TursoGate()
-    let secondGate = TursoGate()
-
-    let first = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-        firstGate.hold()
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 2)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
-    let second = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items VALUES (2)")
-        secondGate.hold()
+      let observer = TransactionEventRecorder()
+      let subscription = try driver.subscribe(transactionObserver: observer)
+      let firstGate = TestGate()
+      let secondGate = TestGate()
+
+      let first = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items VALUES (1)")
+          try firstGate.enter()
+        }
       }
+      let second = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items VALUES (2)")
+          try secondGate.enter()
+        }
+      }
+      try await firstGate.waitUntilEntered(1)
+      try await secondGate.waitUntilEntered(1)
+
+      firstGate.open()
+      try await first.value
+      let firstCommit = try #require(observer.commits.first)
+      #expect(firstCommit.origin == .local)
+      #expect(firstCommit.region.isFullDatabase)
+      let barrier = try #require(firstCommit.activeWriterBarrier)
+      #expect(barrier.hasActiveWriters)
+
+      let barrierFinished = Lock(false)
+      let wait = Task {
+        await barrier.wait()
+        barrierFinished.withLock { $0 = true }
+      }
+      for _ in 0..<100 { await Task.yield() }
+      #expect(!barrierFinished.withLock { $0 })
+
+      secondGate.open()
+      try await second.value
+      await wait.value
+      #expect(barrierFinished.withLock { $0 })
+      #expect(observer.commits.count == 2)
+      _ = subscription
     }
-    await firstGate.waitUntilEntered(1)
-    await secondGate.waitUntilEntered(1)
-
-    firstGate.open()
-    try await first.value
-    let firstCommit = try #require(observer.commits.first)
-    #expect(firstCommit.origin == .local)
-    #expect(firstCommit.region.isFullDatabase)
-    let barrier = try #require(firstCommit.activeWriterBarrier)
-    #expect(barrier.hasActiveWriters)
-
-    let barrierFinished = Lock(false)
-    let wait = Task {
-      await barrier.wait()
-      barrierFinished.withLock { $0 = true }
-    }
-    for _ in 0..<100 { await Task.yield() }
-    #expect(!barrierFinished.withLock { $0 })
-
-    secondGate.open()
-    try await second.value
-    await wait.value
-    #expect(barrierFinished.withLock { $0 })
-    #expect(observer.commits.count == 2)
-    _ = subscription
   }
 
   @Test
   func coalescedObservationWaitsForTheConcurrentTursoWriterCohort() async throws {
-    let database = TemporaryTursoDatabase("turso-coalesced-observation")
-    let driver = try TursoPool(path: database.path, writerCount: 2)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let fetchCount = Lock(0)
-    let observation = OrbitValueObservation<Int>
-      .tracking { transaction in
-        fetchCount.withLock { $0 += 1 }
-        return try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 2)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-      .refetching(.coalesced)
-    let recorder = TursoValueRecorder<Int>()
-    let subscription = try observation.subscribe(
-      to: driver,
-      onError: { Issue.record("Unexpected observation error: \($0)") },
-      onChange: recorder.record
-    )
-    try await recorder.waitForCount(1)
-    let firstGate = TursoGate()
-    let secondGate = TursoGate()
+      let fetchCount = Lock(0)
+      let observation = OrbitValueObservation<Int>
+        .tracking { transaction in
+          fetchCount.withLock { $0 += 1 }
+          return try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+        }
+        .refetching(.coalesced)
+      let recorder = TestRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: { Issue.record("Unexpected observation error: \($0)") },
+        onChange: { recorder.append($0.value) }
+      )
+      try await recorder.waitForCount(1)
+      let firstGate = TestGate()
+      let secondGate = TestGate()
 
-    let first = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-        firstGate.hold()
+      let first = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items VALUES (1)")
+          try firstGate.enter()
+        }
       }
-    }
-    let second = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items VALUES (2)")
-        secondGate.hold()
+      let second = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items VALUES (2)")
+          try secondGate.enter()
+        }
       }
+      try await firstGate.waitUntilEntered(1)
+      try await secondGate.waitUntilEntered(1)
+
+      firstGate.open()
+      try await first.value
+      for _ in 0..<100 { await Task.yield() }
+      #expect(recorder.values == [0])
+
+      secondGate.open()
+      try await second.value
+      try await recorder.waitForCount(2)
+      #expect(recorder.values == [0, 2])
+      #expect(fetchCount.withLock { $0 } == 2)
+      _ = subscription
     }
-    await firstGate.waitUntilEntered(1)
-    await secondGate.waitUntilEntered(1)
-
-    firstGate.open()
-    try await first.value
-    for _ in 0..<100 { await Task.yield() }
-    #expect(recorder.values == [0])
-
-    secondGate.open()
-    try await second.value
-    try await recorder.waitForCount(2)
-    #expect(recorder.values == [0, 2])
-    #expect(fetchCount.withLock { $0 } == 2)
-    _ = subscription
   }
 
   @Test
   func tursoPoolDoesNotPublishFailedConcurrentWrites() async throws {
-    struct Abort: Error {}
-
-    let database = TemporaryTursoDatabase("turso-observation-rollback")
-    let driver = try TursoPool(path: database.path, writerCount: 1)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE discarded (id INTEGER)")
-    }
-    let observer = TursoCommitRecorder()
-    let subscription = try driver.subscribe(transactionObserver: observer)
-
-    await #expect(throws: Abort.self) {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO discarded VALUES (1)")
-        throw Abort()
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 1)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE discarded (id INTEGER)")
       }
-    }
+      let observer = TransactionEventRecorder()
+      let subscription = try driver.subscribe(transactionObserver: observer)
 
-    #expect(observer.commits.isEmpty)
-    _ = subscription
+      await #expect(throws: TestError()) {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO discarded VALUES (1)")
+          throw TestError()
+        }
+      }
+
+      #expect(observer.commits.isEmpty)
+      _ = subscription
+    }
   }
 
   @Test
   func tursoPoolSurfacesAConcurrentWriteConflict() async throws {
-    let database = TemporaryTursoDatabase("turso-conflict")
-    let driver = try TursoPool(path: database.path, writerCount: 2)
-    try await driver.write { transaction in
-      try transaction.execute(
-        "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);"
-          + " INSERT INTO counter VALUES (1, 0)"
-      )
-    }
-    let gate = TursoGate()
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 2)
+      try await driver.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);"
+            + " INSERT INTO counter VALUES (1, 0)"
+        )
+      }
+      let gate = TestGate()
 
-    let writes = (1...2)
-      .map { value in
-        Task { () -> SQLiteError? in
-          do {
-            try await driver.concurrentWrite { transaction in
-              _ = try transaction.fetchOne(
-                #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
-              )
-              gate.hold()
-              try transaction.execute("UPDATE counter SET value = \(value) WHERE id = 1")
+      let writes = (1...2)
+        .map { value in
+          Task { () -> SQLiteError? in
+            do {
+              try await driver.concurrentWrite { transaction in
+                _ = try transaction.fetchOne(
+                  #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
+                )
+                try gate.enter()
+                try transaction.execute("UPDATE counter SET value = \(value) WHERE id = 1")
+              }
+              return nil
+            } catch let error as SQLiteError {
+              return error
+            } catch {
+              Issue.record("Unexpected conflict error: \(error)")
+              return nil
             }
-            return nil
-          } catch let error as SQLiteError {
-            return error
-          } catch {
-            Issue.record("Unexpected conflict error: \(error)")
-            return nil
           }
         }
+
+      try await gate.waitUntilEntered(2)
+      gate.open()
+      var errors: [SQLiteError] = []
+      for write in writes {
+        if let error = await write.value { errors.append(error) }
       }
 
-    await gate.waitUntilEntered(2)
-    gate.open()
-    var errors: [SQLiteError] = []
-    for write in writes {
-      if let error = await write.value { errors.append(error) }
-    }
-
-    #expect(errors.count == 1)
-    let conflict = try #require(errors.first)
-    #expect(
-      conflict.primaryCode == .busy
-        || conflict.message?.localizedCaseInsensitiveContains("conflict") == true
-    )
-    // The connection whose transaction lost the conflict was rolled back and remains usable.
-    try await driver.concurrentWrite { transaction in
-      try transaction.execute("INSERT INTO counter VALUES (2, 3)")
+      #expect(errors.count == 1)
+      let conflict = try #require(errors.first)
+      #expect(
+        conflict.primaryCode == .busy
+          || conflict.message?.localizedCaseInsensitiveContains("conflict") == true
+      )
+      // The connection whose transaction lost the conflict was rolled back and remains usable.
+      try await driver.concurrentWrite { transaction in
+        try transaction.execute("INSERT INTO counter VALUES (2, 3)")
+      }
     }
   }
 
   @Test
   func tursoPoolRunsAReadAlongsideAConcurrentWrite() async throws {
-    let database = TemporaryTursoDatabase("turso-read-write")
-    var configuration = SQLiteConfiguration.turso
-    configuration.readerCount = 1
-    let driver = try TursoPool(path: database.path, configuration: configuration, writerCount: 1)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let gate = TursoGate()
-
-    let read = Task { try await driver.read { _ in gate.hold() } }
-    let write = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
-        gate.hold()
+    try await withTestDatabaseFile("turso") { file in
+      var configuration = SQLiteConfiguration.turso
+      configuration.readerCount = 1
+      let driver = try TursoPool(path: file.path, configuration: configuration, writerCount: 1)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
+      let gate = TestGate()
 
-    await gate.waitUntilEntered(2)
-    gate.open()
-    try await read.value
-    try await write.value
+      let read = Task { try await driver.read { _ in try gate.enter() } }
+      let write = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items (id) VALUES (1)")
+          try gate.enter()
+        }
+      }
+
+      try await gate.waitUntilEntered(2)
+      gate.open()
+      try await read.value
+      try await write.value
+    }
   }
 
   @Test
   func tursoPoolWriteIsABarrierForOrdinaryAccesses() async throws {
-    let database = TemporaryTursoDatabase("turso-barrier")
-    let driver = try TursoPool(path: database.path, writerCount: 1)
-    let gate = TursoGate()
-    let entryOrder = TursoEntryOrder()
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 1)
+      let gate = TestGate()
+      let entryOrder = TestRecorder<String>()
 
-    let read = Task { try await driver.read { _ in gate.hold() } }
-    await gate.waitUntilEntered(1)
-    let barrier = Task {
-      try await driver.write { transaction in
-        entryOrder.append("barrier")
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      let read = Task { try await driver.read { _ in try gate.enter() } }
+      try await gate.waitUntilEntered(1)
+      let barrier = Task {
+        try await driver.write { transaction in
+          entryOrder.append("barrier")
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
       }
-    }
-    for _ in 0..<100 { await Task.yield() }
-    let trailingWrite = Task {
-      try await driver.concurrentWrite { _ in
-        entryOrder.append("trailing write")
+      for _ in 0..<100 { await Task.yield() }
+      let trailingWrite = Task {
+        try await driver.concurrentWrite { _ in
+          entryOrder.append("trailing write")
+        }
       }
-    }
-    for _ in 0..<100 { await Task.yield() }
-    #expect(entryOrder.isEmpty)
+      for _ in 0..<100 { await Task.yield() }
+      #expect(entryOrder.values.isEmpty)
 
-    gate.open()
-    try await read.value
-    try await barrier.value
-    try await trailingWrite.value
-    #expect(entryOrder.matches(["barrier", "trailing write"]))
+      gate.open()
+      try await read.value
+      try await barrier.value
+      try await trailingWrite.value
+      #expect(entryOrder.values == ["barrier", "trailing write"])
+    }
   }
 
   @Test
   func cancellingAQueuedTursoConcurrentWriteReturnsTheCapacity() async throws {
-    let database = TemporaryTursoDatabase("turso-cancel")
-    let driver = try TursoPool(path: database.path, writerCount: 1)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let gate = TursoGate()
-
-    let holding = Task { try await driver.concurrentWrite { _ in gate.hold() } }
-    await gate.waitUntilEntered(1)
-    let cancelled = Task {
-      try await driver.concurrentWrite { transaction in
-        try transaction.execute("INSERT INTO items (id) VALUES (1)")
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 1)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
-    for _ in 0..<100 { await Task.yield() }
-    cancelled.cancel()
-    await #expect(throws: CancellationError.self) { try await cancelled.value }
+      let gate = TestGate()
 
-    gate.open()
-    try await holding.value
-    try await driver.concurrentWrite { transaction in
-      try transaction.execute("INSERT INTO items (id) VALUES (2)")
+      let holding = Task { try await driver.concurrentWrite { _ in try gate.enter() } }
+      try await gate.waitUntilEntered(1)
+      let cancelled = Task {
+        try await driver.concurrentWrite { transaction in
+          try transaction.execute("INSERT INTO items (id) VALUES (1)")
+        }
+      }
+      for _ in 0..<100 { await Task.yield() }
+      cancelled.cancel()
+      await #expect(throws: CancellationError.self) { try await cancelled.value }
+
+      gate.open()
+      try await holding.value
+      try await driver.concurrentWrite { transaction in
+        try transaction.execute("INSERT INTO items (id) VALUES (2)")
+      }
     }
   }
 
   @Test
   func tursoPoolBlockingAccessesUseTheSameConnections() throws {
-    let database = TemporaryTursoDatabase("turso-blocking")
-    let driver = try TursoPool(path: database.path, writerCount: 2)
+    try withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 2)
 
-    try driver.writeBlocking { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    try driver.writeWithoutTransactionBlocking { connection in
-      try connection.execute("INSERT INTO items (id) VALUES (1)")
-    }
-    let count = try driver.readWithoutTransactionBlocking { connection in
-      try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
-    }
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      try driver.writeWithoutTransactionBlocking { connection in
+        try connection.execute("INSERT INTO items (id) VALUES (1)")
+      }
+      let count = try driver.readWithoutTransactionBlocking { connection in
+        try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
 
-    #expect(count == 1)
+      #expect(count == 1)
+    }
   }
 
   @Test
-  func tursoPoolBlockingWritesCanRunConcurrently() throws {
-    let database = TemporaryTursoDatabase("turso-blocking-writers")
-    let driver = try TursoPool(path: database.path, writerCount: 2)
-    try driver.writeBlocking { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    let gate = TursoGate()
-    let done = DispatchSemaphore(value: 0)
-
-    for id in 1...2 {
-      Thread.detachNewThread {
-        try! driver.concurrentWriteBlocking { transaction in
-          try transaction.execute("INSERT INTO items (id) VALUES (\(id))")
-          gate.hold()
-        }
-        done.signal()
+  func tursoPoolBlockingWritesCanRunConcurrently() async throws {
+    try await withTestDatabaseFile("turso") { file in
+      let driver = try TursoPool(path: file.path, writerCount: 2)
+      try driver.writeBlocking { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
       }
-    }
+      let gate = TestGate()
 
-    while gate.enteredCount < 2 { Thread.sleep(forTimeInterval: 0.001) }
-    gate.open()
-    done.blockingWait()
-    done.blockingWait()
+      async let writes = concurrentlyOnThreads(2) { index in
+        try driver.concurrentWriteBlocking { transaction in
+          try transaction.execute("INSERT INTO items (id) VALUES (\(index + 1))")
+          try gate.enter()
+        }
+      }
 
-    let count = try driver.readBlocking { transaction in
-      try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      try await gate.waitUntilEntered(2)
+      gate.open()
+      _ = try await writes
+
+      let count = try driver.readBlocking { transaction in
+        try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      }
+      #expect(count == 2)
     }
-    #expect(count == 2)
   }
 
   @Test(arguments: [OrbitDatabasePath.memory, .temporary, ":memory:", ""])

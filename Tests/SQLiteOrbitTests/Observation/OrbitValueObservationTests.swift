@@ -29,26 +29,7 @@
     }
 
     @Test
-    func immediateSchedulerDeliversInitialValueBeforeSubscribeReturns() async throws {
-      let driver = try await itemsDatabase()
-      let recorder = ObservationRecorder<Int>()
-
-      let subscription = try itemCountObservation()
-        .subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-
-      #expect(recorder.changes.map(\.value) == [0])
-      #expect(recorder.changes.map(\.source) == [.initial])
-      #expect(recorder.errors.isEmpty)
-      _ = subscription
-    }
-
-    @Test
-    func immediateSchedulerIntroducesNoBoundaryForCommittedValues() throws {
+    func immediateSchedulerDeliversTheInitialValueAndCommitsBeforeTheCallsReturn() throws {
       let driver = try blockingItemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
@@ -59,9 +40,13 @@
           onChange: recorder.record(change:)
         )
 
+      #expect(recorder.changes.map(\.value) == [0])
+      #expect(recorder.changes.map(\.source) == [.initial])
+
       try insertItemsBlocking(1, into: driver)
 
       #expect(recorder.changes.map(\.value) == [0, 1])
+      #expect(recorder.errors.isEmpty)
       _ = subscription
     }
 
@@ -139,8 +124,6 @@
 
     @Test
     func rolledBackWriteDoesNotEmitItsStagedValue() async throws {
-      struct Abort: Error {}
-
       let driver = try await itemsDatabase()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
@@ -151,10 +134,10 @@
         )
       try await recorder.waitForChangeCount(1)
 
-      await #expect(throws: Abort.self) {
+      await #expect(throws: TestError.self) {
         try await driver.write { transaction in
           try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-          throw Abort()
+          throw TestError()
         }
       }
       try await insertItems(2, into: driver)
@@ -165,41 +148,17 @@
     }
 
     @Test
-    func constantRegionObservesTheRegionItsFirstFetchRead() async throws {
+    func constantRegionObservesWhatItsFirstFetchReadAndIgnoresATableOnlyALaterFetchReads()
+      async throws
+    {
       let driver = try await itemsDatabase()
-      let observation = OrbitValueObservation<Int>
-        .trackingConstantRegion { transaction in
-          try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
-      let recorder = ObservationRecorder<Int>()
-      let subscription = try observation.subscribe(
-        to: driver,
-        onError: recorder.record(error:),
-        onChange: recorder.record(change:)
-      )
-      try await recorder.waitForChangeCount(1)
-
-      try await insertItems(1, into: driver)
-      try await recorder.waitForChangeCount(2)
-
-      #expect(recorder.changes.map(\.value) == [0, 1])
-      #expect(recorder.errors.isEmpty)
-      _ = subscription
-    }
-
-    @Test
-    func constantRegionIgnoresATableOnlyALaterFetchReads() async throws {
-      let driver = try await itemsDatabase()
-      try await driver.write { transaction in
-        try transaction.execute("CREATE TABLE labels (id INTEGER PRIMARY KEY)")
-      }
+      try await driver.execute(sql: "CREATE TABLE labels (id INTEGER PRIMARY KEY)")
       // The second table is read only once the first has a row, so the first fetch never reaches
       // it and the recorded region never mentions it.
       let observation = OrbitValueObservation<Int>
         .trackingConstantRegion { transaction in
-          let itemCount = #sql("SELECT COUNT(*) FROM items", as: Int.self)
           let labelCount = #sql("SELECT COUNT(*) FROM labels", as: Int.self)
-          let items = try transaction.fetchOne(itemCount) ?? 0
+          let items = try transaction.fetchOne(itemCountQuery) ?? 0
           guard items > 0 else { return 0 }
           return try items + (transaction.fetchOne(labelCount) ?? 0)
         }
@@ -244,10 +203,10 @@
     @Test
     func taskScopedSubscribeReturnsAndStopsObservingWhenItsTaskIsCancelled() async throws {
       let driver = try await itemsDatabase()
-      let events = Lock([String]())
+      let events = TestRecorder<String>()
       let recorder = ObservationRecorder<Int>()
       let observation = itemCountObservation()
-        .handleEvents(didCancel: { events.withLock { $0.append("didCancel") } })
+        .handleEvents(didCancel: { events.append("didCancel") })
       let observing = Task {
         try await observation
           .subscribe(to: driver, scheduling: .async(), onChange: recorder.record(change:))
@@ -257,7 +216,7 @@
       observing.cancel()
       // Cancellation is how it ends, so it returns rather than throwing.
       try await observing.value
-      #expect(events.withLock { $0 } == ["didCancel"])
+      #expect(events.values == ["didCancel"])
 
       try await insertItems(1, into: driver)
       try await Task.sleep(for: .milliseconds(100))
@@ -277,11 +236,10 @@
 
     @Test
     func taskScopedSubscribeThrowsTheErrorThatEndsTheObservation() async throws {
-      struct Abort: Error {}
       let driver = try await itemsDatabase()
-      let observation = OrbitValueObservation<Int>.tracking { _ in throw Abort() }
+      let observation = OrbitValueObservation<Int>.tracking { _ in throw TestError() }
 
-      await #expect(throws: Abort.self) {
+      await #expect(throws: TestError.self) {
         try await observation.subscribe(to: driver, scheduling: .async()) { _ in }
       }
     }
@@ -289,17 +247,15 @@
     @Test
     func commitFailureDiscardsThePendingValue() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      try await driver.write { transaction in
-        try transaction.execute(
-          """
+      try await driver.execute(
+        sql: """
           CREATE TABLE parents (id INTEGER PRIMARY KEY);
           CREATE TABLE children (
             parent_id INTEGER NOT NULL REFERENCES parents(id)
               DEFERRABLE INITIALLY DEFERRED
           );
           """
-        )
-      }
+      )
       let observation = OrbitValueObservation<Int>
         .tracking { transaction in
           try transaction.fetchOne(#sql("SELECT COUNT(*) FROM children", as: Int.self)) ?? 0
@@ -373,12 +329,8 @@
     @Test
     func updatesSequenceCatchesUpWithoutRefetchingOrErasingTheLatestValue() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let fetchCount = TestCounter()
+      let observation = itemCountObservation(countingFetchesIn: fetchCount)
         .filter { $0 > 0 }
 
       var first = observation.updates(in: driver).makeAsyncIterator()
@@ -386,7 +338,7 @@
 
       var second = observation.updates(in: driver).makeAsyncIterator()
       #expect(try await second.next() == .noEmission(source: .initial))
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       try await insertItems(1, into: driver)
       #expect(
@@ -408,125 +360,67 @@
             OrbitValueObservationChange(value: 1, source: .transaction(.local))
           )
       )
-      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(fetchCount.value == 3)
       _ = second
     }
 
     @Test
-    func interprocessObservationRefetchesWithExternalSource() async throws {
-      let driver = try await itemsDatabase()
-      let network = InMemoryIPCTransport.Network()
-      let receivingTransport = InMemoryIPCTransport(network: network)
-      let sendingTransport = InMemoryIPCTransport(network: network)
-      let identifier = OrbitDatabaseIdentifier(rawValue: "external-observation")
-      let database = OrbitIPCDatabase(
-        writer: driver,
-        id: identifier,
-        transport: receivingTransport
-      )
-      let changes = itemCountObservation().changes(in: database)
-      var iterator = changes.makeAsyncIterator()
-
-      let initial = try #require(try await iterator.next())
-      #expect(initial.source == .initial)
-
-      try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
-      )
-      let external = try #require(try await iterator.next())
-      #expect(external.value == 0)
-      #expect(external.source == .transaction(.external))
-    }
-
-    @Test
     func interprocessObservationIgnoresDisjointRegions() async throws {
-      let driver = try await itemsDatabase()
-      let network = InMemoryIPCTransport.Network()
-      let receivingTransport = InMemoryIPCTransport(network: network)
-      let sendingTransport = InMemoryIPCTransport(network: network)
-      let identifier = OrbitDatabaseIdentifier(rawValue: "external-region-filtering")
-      let database = OrbitIPCDatabase(
-        writer: driver,
-        id: identifier,
-        transport: receivingTransport
-      )
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let (database, peer, identifier) = try await announcingItemsDatabase("external-regions")
+      let fetchCount = TestCounter()
       let recorder = ObservationRecorder<Int>()
-      let subscription = try observation.subscribe(
+      let subscription = try itemCountObservation(
+        region: itemsRegion,
+        countingFetchesIn: fetchCount
+      )
+      .subscribe(
         to: database,
         onError: recorder.record(error:),
         onChange: recorder.record(change:)
       )
       try await recorder.waitForChangeCount(1)
 
-      try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .empty))
-      )
-      #expect(fetchCount.withLock { $0 } == 1)
-
-      try await sendingTransport.send(
-        .transactionDidCommit(
-          .init(
-            databaseIdentifier: identifier,
-            region: OrbitDatabaseRegion(table: "unrelated")
-          )
+      for region in [OrbitDatabaseRegion.empty, OrbitDatabaseRegion(table: "unrelated")] {
+        try await peer.send(
+          commit(identifier, region: region)
         )
-      )
-      #expect(fetchCount.withLock { $0 } == 1)
+        #expect(fetchCount.value == 1)
+      }
 
-      try await sendingTransport.send(
-        .transactionDidCommit(
-          .init(databaseIdentifier: identifier, region: OrbitDatabaseRegion(table: "items"))
-        )
+      try await peer.send(
+        commit(identifier, region: itemsRegion)
       )
       try await recorder.waitForChangeCount(2)
 
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
+      #expect(recorder.changes.map(\.value) == [0, 0])
       #expect(recorder.changes.map(\.source) == [.initial, .transaction(.external)])
       _ = subscription
     }
 
     @Test
     func transactionFilterUsesTheCommitOriginBeforeFetching() async throws {
-      let driver = try await itemsDatabase()
-      let network = InMemoryIPCTransport.Network()
-      let receivingTransport = InMemoryIPCTransport(network: network)
-      let sendingTransport = InMemoryIPCTransport(network: network)
-      let identifier = OrbitDatabaseIdentifier(rawValue: "filtered-observation")
-      let database = OrbitIPCDatabase(
-        writer: driver,
-        id: identifier,
-        transport: receivingTransport
-      )
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
-        .filterTransactions { $0.origin == .external }
+      let (database, peer, identifier) = try await announcingItemsDatabase("filtered-origin")
+      let fetchCount = TestCounter()
       let recorder = ObservationRecorder<Int>()
-      let subscription = try observation.subscribe(
-        to: database,
-        onError: recorder.record(error:),
-        onChange: recorder.record(change:)
-      )
+      let subscription = try itemCountObservation(countingFetchesIn: fetchCount)
+        .filterTransactions { $0.origin == .external }
+        .subscribe(
+          to: database,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
       try await recorder.waitForChangeCount(1)
 
       try await insertItems(1, into: database)
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
-      try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+      try await peer.send(
+        commit(identifier, region: .fullDatabase)
       )
       try await recorder.waitForChangeCount(2)
 
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
       #expect(recorder.changes.map(\.value) == [0, 1])
       #expect(recorder.changes.map(\.source) == [.initial, .transaction(.external)])
       _ = subscription
@@ -535,16 +429,12 @@
     @Test
     func transactionFilterReceivesThePreviousAcceptedValue() async throws {
       let driver = try await itemsDatabase()
-      let previousValues = Lock([Int?]())
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let previousValues = TestRecorder<Int?>()
+      let fetchCount = TestCounter()
+      let observation = itemCountObservation(countingFetchesIn: fetchCount)
         .removeDuplicates(by: { _, _ in true })
         .filterTransactions { _, previousValue in
-          previousValues.withLock { $0.append(previousValue) }
+          previousValues.append(previousValue)
           return true
         }
       let recorder = ObservationRecorder<Int>()
@@ -558,94 +448,53 @@
       try await insertItems(1, into: driver)
       try await insertItems(2, into: driver)
 
-      #expect(previousValues.withLock { $0 } == [0, 0])
-      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(previousValues.values == [0, 0])
+      #expect(fetchCount.value == 3)
       #expect(recorder.changes.map(\.value) == [0])
       _ = subscription
     }
 
     @Test
-    func interprocessObservationSeesSiblingHandleWriteAsLocal() async throws {
-      let directory = try makeShortTemporaryDirectory("obs")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
-      let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-observation")
-      let writingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      try await writingDatabase.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
-      let observingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      let recorder = ObservationRecorder<Int>()
-      let subscription = try itemCountObservation()
+    func interprocessObservationSeesSiblingHandleWritesAsLocalAndSkipsDisjointOnes() async throws {
+      try await withTestDatabaseFile("obs") { file in
+        let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-observation")
+        let writingDatabase = OrbitIPCDatabase(
+          writer: try file.queue(),
+          id: identifier,
+          transport: InMemoryIPCTransport()
+        )
+        try await writingDatabase.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        let observingDatabase = OrbitIPCDatabase(
+          writer: try file.queue(),
+          id: identifier,
+          transport: InMemoryIPCTransport()
+        )
+        let fetchCount = TestCounter()
+        let recorder = ObservationRecorder<Int>()
+        let subscription = try itemCountObservation(
+          region: itemsRegion,
+          countingFetchesIn: fetchCount
+        )
         .subscribe(
           to: observingDatabase,
           onError: recorder.record(error:),
           onChange: recorder.record(change:)
         )
-      try await recorder.waitForChangeCount(1)
+        try await recorder.waitForChangeCount(1)
 
-      try await insertItems(1, into: writingDatabase)
-      try await recorder.waitForChangeCount(2)
-
-      #expect(recorder.changes.map(\.value) == [0, 1])
-      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
-      _ = subscription
-    }
-
-    @Test
-    func interprocessObservationIgnoresDisjointSiblingHandleWrites() async throws {
-      let directory = try makeShortTemporaryDirectory("obs")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
-      let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-region-filtering")
-      let writingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      try await writingDatabase.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
-      let observingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+        try await writingDatabase.write { transaction in
+          transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
         }
-      let recorder = ObservationRecorder<Int>()
-      let subscription = try observation.subscribe(
-        to: observingDatabase,
-        onError: recorder.record(error:),
-        onChange: recorder.record(change:)
-      )
-      try await recorder.waitForChangeCount(1)
+        #expect(fetchCount.value == 1)
 
-      try await writingDatabase.write { transaction in
-        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
+        try await insertItems(1, into: writingDatabase)
+        try await recorder.waitForChangeCount(2)
+
+        #expect(fetchCount.value == 2)
+        #expect(recorder.changes.map(\.value) == [0, 1])
+        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+        _ = subscription
       }
-      #expect(fetchCount.withLock { $0 } == 1)
-
-      try await insertItems(1, into: writingDatabase)
-      try await recorder.waitForChangeCount(2)
-
-      #expect(fetchCount.withLock { $0 } == 2)
-      #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
-      _ = subscription
     }
 
     @Test
@@ -676,12 +525,8 @@
     @Test
     func cancellingValueSubscriptionStopsRefetching() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let fetchCount = TestCounter()
+      let observation = itemCountObservation(countingFetchesIn: fetchCount)
       let recorder = ObservationRecorder<Int>()
       let subscription = try observation.subscribe(
         to: driver,
@@ -693,18 +538,14 @@
 
       try await insertItems(1, into: driver)
 
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
     }
 
     @Test
     func subscribersShareOneRuntimeAndFetch() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let fetchCount = TestCounter()
+      let observation = itemCountObservation(countingFetchesIn: fetchCount)
       let first = ObservationRecorder<Int>()
       let second = ObservationRecorder<Int>()
       let subscriptions = try [
@@ -721,7 +562,7 @@
       ]
       try await first.waitForChangeCount(1)
       try await second.waitForChangeCount(1)
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       try await insertItems(1, into: driver)
       try await first.waitForChangeCount(2)
@@ -729,7 +570,7 @@
 
       #expect(first.changes.map(\.value) == [0, 1])
       #expect(second.changes.map(\.value) == [0, 1])
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
       _ = subscriptions
     }
 
@@ -772,12 +613,8 @@
     @Test
     func filterSuppressesValuesWithoutRepeatingTheSharedInitialFetch() throws {
       let driver = try blockingItemsDatabase()
-      let fetchCount = Lock(0)
-      let observation = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let fetchCount = TestCounter()
+      let observation = itemCountObservation(countingFetchesIn: fetchCount)
         .filter { $0 > 0 }
       let first = ObservationRecorder<Int>()
       let second = ObservationRecorder<Int>()
@@ -798,45 +635,45 @@
 
       #expect(first.changes.isEmpty)
       #expect(second.changes.isEmpty)
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       try insertItemsBlocking(1, into: driver)
 
       #expect(first.changes.map(\.value) == [1])
       #expect(second.changes.map(\.value) == [1])
       #expect(first.changes.map(\.source) == [.transaction(.local)])
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
       _ = subscriptions
     }
 
     @Test
     func updateCallbackReceivesEmissionsAndNoEmissions() throws {
       let driver = try blockingItemsDatabase()
-      let updates = Lock([OrbitValueObservationUpdate<Int>]())
-      let errors = Lock([String]())
+      let updates = TestRecorder<OrbitValueObservationUpdate<Int>>()
+      let errors = TestRecorder<String>()
       let subscription = try itemCountObservation()
         .filter { $0.isMultiple(of: 2) == false }
         .subscribe(
           to: driver,
           scheduling: .immediate,
-          onError: { error in errors.withLock { $0.append(String(describing: error)) } },
-          onUpdate: { update in updates.withLock { $0.append(update) } }
+          onError: { error in errors.append(String(describing: error)) },
+          onUpdate: { update in updates.append(update) }
         )
 
-      #expect(updates.withLock { $0 } == [.noEmission(source: .initial)])
+      #expect(updates.values == [.noEmission(source: .initial)])
 
       try insertItemsBlocking(1, into: driver)
       try insertItemsBlocking(2, into: driver)
 
       #expect(
-        updates.withLock { $0 }
+        updates.values
           == [
             .noEmission(source: .initial),
             .emitted(OrbitValueObservationChange(value: 1, source: .transaction(.local))),
             .noEmission(source: .transaction(.local))
           ]
       )
-      #expect(errors.withLock { $0 }.isEmpty)
+      #expect(errors.values.isEmpty)
       _ = subscription
     }
 
@@ -846,7 +683,7 @@
       let recorder = ObservationRecorder<String>()
       let subscription = try OrbitValueObservation<Int?>
         .tracking { transaction in
-          let count = try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+          let count = try transaction.fetchOne(itemCountQuery)
           return count == 0 ? nil : count
         }
         .compactMap { $0.map { "count=\($0)" } }
@@ -869,12 +706,12 @@
     @Test
     func operatorsRunInTheirWrittenOrder() throws {
       let driver = try blockingItemsDatabase()
-      let transformCount = Lock(0)
+      let transformCount = TestCounter()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .removeDuplicates(by: { _, _ in true })
         .map { value in
-          transformCount.withLock { $0 += 1 }
+          transformCount.increment()
           return value
         }
         .subscribe(
@@ -887,7 +724,7 @@
       try insertItemsBlocking(1, into: driver)
 
       #expect(recorder.changes.map(\.value) == [0])
-      #expect(transformCount.withLock { $0 } == 1)
+      #expect(transformCount.value == 1)
       _ = subscription
     }
 
@@ -912,7 +749,7 @@
       try insertItemsBlocking(1, into: driver)
       try insertItemsBlocking(2, into: driver)
       let count = try driver.readBlocking { transaction in
-        try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+        try transaction.fetchOne(itemCountQuery)
       }
 
       #expect(count == 2)
@@ -957,78 +794,36 @@
     @Test
     func theSequenceStartsObservingWhenIterationBegins() async throws {
       let driver = try await itemsDatabase()
-      let fetchCount = Lock(0)
-      let values = OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
+      let fetchCount = TestCounter()
+      let values = itemCountObservation(countingFetchesIn: fetchCount)
         .values(in: driver)
 
       try await Task.sleep(for: .milliseconds(20))
-      #expect(fetchCount.withLock { $0 } == 0)
+      #expect(fetchCount.value == 0)
 
       var iterator = values.makeAsyncIterator()
       #expect(try await iterator.next() == 0)
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
     }
 
-    @Test
-    func immediateRefetchControllerRetriesAReadSupersededByAnotherCommit() async throws {
+    @Test(arguments: SupersededRefetch.allCases)
+    func aRefetchControllerHandlesAReadSupersededByAnotherCommit(
+      _ refetch: SupersededRefetch
+    ) async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
+      let driver = AnnouncingTestDatabase(queue)
       let value = Lock(0)
-      let fetchCount = Lock(0)
-      let gate = FetchGate()
-      let observation = OrbitValueObservation<Int>
-        .tracking(region: .fullDatabase) { _ in
-          let count = fetchCount.withLock { count in
-            count += 1
-            return count
+      let fetchCount = TestCounter()
+      let gate = TestGate()
+      let observation = refetch.apply(
+        to: OrbitValueObservation<Int>
+          .tracking(region: .fullDatabase) { _ in
+            let count = fetchCount.increment()
+            let fetched = value.withLock { $0 }
+            if count == 2 { try gate.enter() }
+            return fetched
           }
-          let fetched = value.withLock { $0 }
-          if count == 2 { gate.hold() }
-          return fetched
-        }
-      let recorder = ObservationRecorder<Int>()
-      let subscription = try observation.subscribe(
-        to: driver,
-        onError: recorder.record(error:),
-        onChange: recorder.record(change:)
       )
-      try await recorder.waitForChangeCount(1)
-
-      value.withLock { $0 = 1 }
-      driver.announceCommit(region: .fullDatabase)
-      try await gate.waitUntilEntered()
-      value.withLock { $0 = 2 }
-      driver.announceCommit(region: .fullDatabase)
-      gate.open()
-      try await recorder.waitForChangeCount(2)
-
-      #expect(recorder.changes.map(\.value) == [0, 2])
-      #expect(fetchCount.withLock { $0 } == 3)
-      _ = subscription
-    }
-
-    @Test
-    func onceRefetchControllerPublishesItsSingleFetchWhenSuperseded() async throws {
-      let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
-      let value = Lock(0)
-      let fetchCount = Lock(0)
-      let gate = FetchGate()
-      let observation = OrbitValueObservation<Int>
-        .tracking(region: .fullDatabase) { _ in
-          let count = fetchCount.withLock { count in
-            count += 1
-            return count
-          }
-          let fetched = value.withLock { $0 }
-          if count == 2 { gate.hold() }
-          return fetched
-        }
-        .refetching(.once)
       let recorder = ObservationRecorder<Int>()
       let subscription = try observation.subscribe(
         to: driver,
@@ -1046,22 +841,26 @@
       try await recorder.waitForChangeCount(2)
       for _ in 0..<100 { await Task.yield() }
 
-      #expect(recorder.changes.map(\.value) == [0, 1])
-      #expect(fetchCount.withLock { $0 } == 2)
+      // `.immediate` retries the superseded read, where `.once` publishes it as it stands.
+      switch refetch {
+      case .immediate:
+        #expect(recorder.changes.map(\.value) == [0, 2])
+        #expect(fetchCount.value == 3)
+      case .once:
+        #expect(recorder.changes.map(\.value) == [0, 1])
+        #expect(fetchCount.value == 2)
+      }
       _ = subscription
     }
 
     @Test
     func coalescedRefetchControllerWaitsOnlyForAnActiveWriterCohort() async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
-      let fetchCount = Lock(0)
+      let driver = AnnouncingTestDatabase(queue)
+      let fetchCount = TestCounter()
       let observation = OrbitValueObservation<Int>
         .tracking(region: .fullDatabase) { _ in
-          fetchCount.withLock {
-            $0 += 1
-            return $0
-          }
+          fetchCount.increment()
         }
         .refetching(.coalesced)
       let recorder = ObservationRecorder<Int>()
@@ -1075,7 +874,7 @@
       let activeWriter = SQLitePoolWriterBarrier(writerCount: 1)
       driver.announceCommit(region: .fullDatabase, activeWriterBarrier: activeWriter)
       for _ in 0..<100 { await Task.yield() }
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       activeWriter.writerDidFinish()
       try await recorder.waitForChangeCount(2)
@@ -1085,14 +884,14 @@
       )
       try await recorder.waitForChangeCount(3)
 
-      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(fetchCount.value == 3)
       _ = subscription
     }
 
     @Test
     func customRefetchControllerReceivesRegionsReasonsAndTrackedRegion() async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
+      let driver = AnnouncingTestDatabase(queue)
       let controller = RecordingRefetchController()
       let trackedRegion = OrbitDatabaseRegion(table: "items")
       let observation = OrbitValueObservation<Int>
@@ -1118,39 +917,6 @@
     }
 
     @Test
-    func aControllerIsToldALocalWriteCameFromThisProcess() async throws {
-      let (database, _, identifier) = try await announcingItemsDatabase("local-origin")
-      let controller = CommitWaitingRefetchController(commitCount: 1)
-      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
-
-      // Outside a transaction, so no fetch before the commit answers it and the controller runs.
-      try await database.writeWithoutTransaction { connection in
-        try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-      }
-      let snapshot = try await controller.snapshot()
-
-      #expect(snapshot.commits.map(\.origin) == [.local])
-      #expect(snapshot.commits.allSatisfy { $0.region.overlaps(itemsRegion) })
-      _ = (subscription, identifier)
-    }
-
-    @Test
-    func aControllerIsToldAnAnnouncedWriteCameFromAnotherProcess() async throws {
-      let (database, peer, identifier) = try await announcingItemsDatabase("external-origin")
-      let controller = CommitWaitingRefetchController(commitCount: 1)
-      let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
-
-      // What another process's database sends on committing, arriving over the shared network.
-      try await peer.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
-      )
-      let snapshot = try await controller.snapshot()
-
-      #expect(snapshot.commits == [OrbitDatabaseCommit(origin: .external, region: itemsRegion)])
-      _ = subscription
-    }
-
-    @Test
     func aControllerIsToldTheOriginOfEachCommitItIsCoalescing() async throws {
       let (database, peer, identifier) = try await announcingItemsDatabase("both-origins")
       let controller = CommitWaitingRefetchController(commitCount: 2)
@@ -1160,11 +926,14 @@
         try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
       }
       try await peer.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
+        commit(identifier, region: itemsRegion)
       )
       let snapshot = try await controller.snapshot()
 
+      // A local write comes from this process, and one announced over the network from another.
       #expect(snapshot.commits.map(\.origin) == [.local, .external])
+      #expect(snapshot.commits.allSatisfy { $0.region.overlaps(itemsRegion) })
+      #expect(snapshot.commits.last == OrbitDatabaseCommit(origin: .external, region: itemsRegion))
       #expect(snapshot.reasons == [.databaseChange, .externalProcessChange])
       _ = subscription
     }
@@ -1176,7 +945,7 @@
       let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
 
       try await peer.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: itemsRegion))
+        commit(identifier, region: itemsRegion)
       )
       _ = try await controller.snapshot()
       try await waitUntil { controller.fetchCount == 1 }
@@ -1193,7 +962,7 @@
     @Test
     func aControllerThatReturnsWithoutFetchingRunsAgainForAnInvalidationItMissed() async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
+      let driver = AnnouncingTestDatabase(queue)
       let value = Lock(0)
       let controller = SkipFirstRefetchController()
       let observation = OrbitValueObservation<Int>
@@ -1224,7 +993,7 @@
     @Test
     func aControllerThatNeverFetchesIsNotRunAgainForTheSameInvalidation() async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
+      let driver = AnnouncingTestDatabase(queue)
       let controller = SkipFirstRefetchController(skipsEveryRun: true)
       let observation = OrbitValueObservation<Int>
         .tracking(region: .fullDatabase) { _ in 0 }
@@ -1250,18 +1019,15 @@
     @Test
     func aControllerDoesNotSeeInvalidationsTheInitialFetchAlreadyAnswered() async throws {
       let queue = try await itemsDatabase()
-      let driver = PostCommitObservableDatabase(queue)
-      let fetchCount = Lock(0)
-      let gate = FetchGate()
+      let driver = AnnouncingTestDatabase(queue)
+      let fetchCount = TestCounter()
+      let gate = TestGate()
       let controller = RecordingRefetchController()
       let trackedRegion = OrbitDatabaseRegion(table: "items")
       let observation = OrbitValueObservation<Int>
         .tracking(region: trackedRegion) { _ in
-          let count = fetchCount.withLock { count in
-            count += 1
-            return count
-          }
-          if count == 1 { gate.hold() }
+          let count = fetchCount.increment()
+          if count == 1 { try gate.enter() }
           return count
         }
         .refetching(controller)
@@ -1292,16 +1058,16 @@
     @Test
     func handleEventsReportsTheRuntimeLifecycle() async throws {
       let driver = try await itemsDatabase()
-      let events = Lock([String]())
+      let events = TestRecorder<String>()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .handleEvents(
-          willStart: { events.withLock { $0.append("willStart") } },
-          willFetch: { events.withLock { $0.append("willFetch") } },
-          databaseDidChange: { events.withLock { $0.append("databaseDidChange") } },
-          didReceiveValue: { value in events.withLock { $0.append("didReceiveValue(\(value))") } },
-          didFail: { _ in events.withLock { $0.append("didFail") } },
-          didCancel: { events.withLock { $0.append("didCancel") } }
+          willStart: { events.append("willStart") },
+          willFetch: { events.append("willFetch") },
+          databaseDidChange: { events.append("databaseDidChange") },
+          didReceiveValue: { value in events.append("didReceiveValue(\(value))") },
+          didFail: { _ in events.append("didFail") },
+          didCancel: { events.append("didCancel") }
         )
         .subscribe(
           to: driver,
@@ -1310,13 +1076,13 @@
         )
 
       try await recorder.waitForChangeCount(1)
-      #expect(events.withLock { $0 } == ["willStart", "willFetch", "didReceiveValue(0)"])
+      #expect(events.values == ["willStart", "willFetch", "didReceiveValue(0)"])
 
       try await insertItems(1, into: driver)
       try await recorder.waitForChangeCount(2)
       // A local write is fetched inside its own transaction, so its fetch precedes the commit.
       #expect(
-        events.withLock { $0 } == [
+        events.values == [
           "willStart",
           "willFetch",
           "didReceiveValue(0)",
@@ -1327,19 +1093,19 @@
       )
 
       subscription.cancel()
-      #expect(events.withLock { $0 }.last == "didCancel")
+      #expect(events.values.last == "didCancel")
     }
 
     @Test
     func handleEventsSkipsFetchesTheObservationDoesNotMake() async throws {
       let driver = try await itemsDatabase()
-      let events = Lock([String]())
+      let events = TestRecorder<String>()
       let recorder = ObservationRecorder<Int>()
       let subscription = try itemCountObservation()
         .filterTransactions { _ in false }
         .handleEvents(
-          willFetch: { events.withLock { $0.append("willFetch") } },
-          databaseDidChange: { events.withLock { $0.append("databaseDidChange") } }
+          willFetch: { events.append("willFetch") },
+          databaseDidChange: { events.append("databaseDidChange") }
         )
         .subscribe(
           to: driver,
@@ -1350,7 +1116,7 @@
       try await recorder.waitForChangeCount(1)
       try await insertItems(1, into: driver)
 
-      #expect(events.withLock { $0 } == ["willFetch"])
+      #expect(events.values == ["willFetch"])
       #expect(recorder.changes.map(\.value) == [0])
       _ = subscription
     }
@@ -1358,10 +1124,10 @@
     @Test
     func handleEventsSurvivesDownstreamOperators() async throws {
       let driver = try await itemsDatabase()
-      let values = Lock([Int]())
+      let values = TestRecorder<Int>()
       let recorder = ObservationRecorder<String>()
       let subscription = try itemCountObservation()
-        .handleEvents(didReceiveValue: { value in values.withLock { $0.append(value) } })
+        .handleEvents(didReceiveValue: { value in values.append(value) })
         .map { "count=\($0)" }
         .subscribe(
           to: driver,
@@ -1372,134 +1138,62 @@
       try await recorder.waitForChangeCount(1)
 
       // The operator sees the value at its own position in the chain, before `map` runs.
-      #expect(values.withLock { $0 } == [0])
+      #expect(values.values == [0])
       #expect(recorder.changes.map(\.value) == ["count=0"])
       _ = subscription
     }
 
     @Test
-    func handleEventsReportsAFetchFailure() async throws {
+    func aFetchErrorTerminatesTheSequenceAndIsReportedToHandleEvents() async throws {
       let driver = try SQLiteQueue(path: .memory)
-      let failures = Lock(0)
+      let failures = TestCounter()
       let values = itemCountObservation()
-        .handleEvents(didFail: { _ in failures.withLock { $0 += 1 } })
+        .handleEvents(didFail: { _ in failures.increment() })
         .values(in: driver)
       var iterator = values.makeAsyncIterator()
 
       await #expect(throws: (any Error).self) {
         _ = try await iterator.next()
       }
-      #expect(failures.withLock { $0 } == 1)
+      #expect(failures.value == 1)
     }
 
-    @Test
-    func fetchErrorTerminatesTheAsyncSequence() async throws {
-      let driver = try SQLiteQueue(path: .memory)
-      let values = itemCountObservation().values(in: driver)
-      var iterator = values.makeAsyncIterator()
-
-      await #expect(throws: (any Error).self) {
-        _ = try await iterator.next()
-      }
-    }
-
-    @Test
-    func explicitRegionSkipsUnrelatedLocalWrites() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
-          CREATE TABLE items (id INTEGER PRIMARY KEY);
-          CREATE TABLE notes (id INTEGER PRIMARY KEY);
-          """
-        )
-      }
-      let fetchCount = Lock(0)
+    @Test(arguments: [false, true])
+    func aRegionSkipsUnrelatedLocalWrites(isExplicit: Bool) throws {
+      let driver = try itemsAndNotesDatabase()
+      let fetchCount = TestCounter()
       let recorder = ObservationRecorder<Int>()
-      let subscription = try OrbitValueObservation<Int>
-        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
-        .subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
+      let subscription = try itemCountObservation(
+        region: isExplicit ? itemsRegion : nil,
+        countingFetchesIn: fetchCount
+      )
+      .subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO notes VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 1)
+      try driver.executeBlocking(sql: "INSERT INTO notes VALUES (1)")
+      #expect(fetchCount.value == 1)
       #expect(recorder.changes.map(\.value) == [0])
 
       try driver.writeBlocking { transaction in
-        transaction.notifyChanges(in: OrbitDatabaseRegion(table: "items"))
+        transaction.notifyChanges(in: itemsRegion)
       }
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
       #expect(recorder.changes.map(\.value) == [0, 0])
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 3)
+      try driver.executeBlocking(sql: "INSERT INTO items VALUES (1)")
+      #expect(fetchCount.value == 3)
       #expect(recorder.changes.map(\.value) == [0, 0, 1])
-      _ = subscription
-    }
-
-    @Test
-    func automaticRegionSkipsUnrelatedLocalWrites() throws {
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
-          CREATE TABLE items (id INTEGER PRIMARY KEY);
-          CREATE TABLE notes (id INTEGER PRIMARY KEY);
-          """
-        )
-      }
-      let fetchCount = Lock(0)
-      let recorder = ObservationRecorder<Int>()
-      let subscription = try OrbitValueObservation<Int>
-        .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
-        .subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO notes VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 1)
-
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 2)
-      #expect(recorder.changes.map(\.value) == [0, 1])
       _ = subscription
     }
 
     @Test
     func automaticRegionRefreshesWhenSQLiteRecompilesACachedStatement() async throws {
       try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
-        try await database.write { transaction in
-          try transaction.execute(
-            """
-            CREATE TABLE original_items (title TEXT NOT NULL);
-            CREATE TABLE alternate_items (title TEXT NOT NULL);
-            INSERT INTO original_items VALUES ('Original');
-            INSERT INTO alternate_items VALUES ('Alternate');
-            CREATE VIEW current_items AS SELECT title FROM original_items;
-            """
-          )
-        }
+        try await database.execute(sql: currentItemsViewSchema)
 
         let recorder = ObservationRecorder<String?>()
         let subscription = try OrbitValueObservation<String?>
@@ -1515,19 +1209,10 @@
           )
         try await recorder.waitForChangeCount(1)
 
-        try await database.write { transaction in
-          try transaction.execute(
-            """
-            DROP VIEW current_items;
-            CREATE VIEW current_items AS SELECT title FROM alternate_items;
-            """
-          )
-        }
+        try await database.execute(sql: currentItemsViewRedefinition)
         try await recorder.waitForChangeCount(2)
 
-        try await database.write { transaction in
-          try transaction.execute("UPDATE alternate_items SET title = 'Changed'")
-        }
+        try await database.execute(sql: "UPDATE alternate_items SET title = 'Changed'")
         try await recorder.waitForChangeCount(3)
 
         #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
@@ -1537,86 +1222,63 @@
 
     @Test
     func automaticRegionFollowsAViewRedefinedThroughAnotherConnection() async throws {
-      let directory = try makeShortTemporaryDirectory("obs")
-      defer { try? FileManager.default.removeItem(at: directory) }
-
-      let path = OrbitDatabasePath.file(directory.appending(component: "database.sqlite"))
-      let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
-      var configuration = SQLiteConfiguration.default
-      configuration.readerCount = 1
-      let observingDatabase = OrbitIPCDatabase(
-        writer: try SQLitePool(path: path, configuration: configuration),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-      try await observingDatabase.write { transaction in
-        try transaction.execute(
-          """
-          CREATE TABLE original_items (title TEXT NOT NULL);
-          CREATE TABLE alternate_items (title TEXT NOT NULL);
-          INSERT INTO original_items VALUES ('Original');
-          INSERT INTO alternate_items VALUES ('Alternate');
-          CREATE VIEW current_items AS SELECT title FROM original_items;
-          """
+      try await withTestDatabaseFile("obs") { file in
+        let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
+        var configuration = SQLiteConfiguration.default
+        configuration.readerCount = 1
+        let observingDatabase = OrbitIPCDatabase(
+          writer: try file.pool(configuration: configuration),
+          id: identifier,
+          transport: InMemoryIPCTransport()
         )
-      }
-      // The schema changes through a connection outside the pool, as another process's would.
-      let writingDatabase = OrbitIPCDatabase(
-        writer: try SQLiteQueue(path: path),
-        id: identifier,
-        transport: InMemoryIPCTransport()
-      )
-
-      let recorder = ObservationRecorder<String?>()
-      let subscription = try OrbitValueObservation<String?>
-        .tracking { transaction in
-          try transaction.fetchOne(#sql("SELECT title FROM current_items", as: String.self))
-        }
-        .subscribe(
-          to: observingDatabase,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
+        try await observingDatabase.execute(sql: currentItemsViewSchema)
+        // The schema changes through a connection outside the pool, as another process's would.
+        let writingDatabase = OrbitIPCDatabase(
+          writer: try file.queue(),
+          id: identifier,
+          transport: InMemoryIPCTransport()
         )
-      try await recorder.waitForChangeCount(1)
 
-      try await writingDatabase.write { transaction in
-        try transaction.execute(
-          """
-          DROP VIEW current_items;
-          CREATE VIEW current_items AS SELECT title FROM alternate_items;
-          """
-        )
+        let recorder = ObservationRecorder<String?>()
+        let subscription = try OrbitValueObservation<String?>
+          .tracking { transaction in
+            try transaction.fetchOne(#sql("SELECT title FROM current_items", as: String.self))
+          }
+          .subscribe(
+            to: observingDatabase,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+        try await recorder.waitForChangeCount(1)
+
+        try await writingDatabase.execute(sql: currentItemsViewRedefinition)
+        try await recorder.waitForChangeCount(2)
+
+        try await writingDatabase.execute(sql: "UPDATE alternate_items SET title = 'Changed'")
+        try await recorder.waitForChangeCount(3)
+
+        #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
+        #expect(recorder.errors.isEmpty)
+        _ = subscription
       }
-      try await recorder.waitForChangeCount(2)
-
-      try await writingDatabase.write { transaction in
-        try transaction.execute("UPDATE alternate_items SET title = 'Changed'")
-      }
-      try await recorder.waitForChangeCount(3)
-
-      #expect(recorder.changes.map(\.value) == ["Original", "Alternate", "Changed"])
-      #expect(recorder.errors.isEmpty)
-      _ = subscription
     }
 
     @Test
     func automaticRegionFollowsTheReadsOfEachSuccessfulFetch() throws {
       let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
+      try driver.executeBlocking(
+        sql: """
           CREATE TABLE settings (useNotes INTEGER NOT NULL);
           CREATE TABLE items (id INTEGER PRIMARY KEY);
           CREATE TABLE notes (id INTEGER PRIMARY KEY);
           INSERT INTO settings VALUES (0);
           """
-        )
-      }
-      let fetchCount = Lock(0)
+      )
+      let fetchCount = TestCounter()
       let recorder = ObservationRecorder<Int>()
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
+          fetchCount.increment()
           let useNotes =
             try transaction.fetchOne(
               #sql("SELECT useNotes FROM settings", as: Bool.self)
@@ -1633,25 +1295,17 @@
           onChange: recorder.record(change:)
         )
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO notes VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 1)
+      try driver.executeBlocking(sql: "INSERT INTO notes VALUES (1)")
+      #expect(fetchCount.value == 1)
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("UPDATE settings SET useNotes = 1")
-      }
+      try driver.executeBlocking(sql: "UPDATE settings SET useNotes = 1")
       #expect(recorder.changes.map(\.value) == [0, 1])
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-      }
-      #expect(fetchCount.withLock { $0 } == 2)
+      try driver.executeBlocking(sql: "INSERT INTO items VALUES (1)")
+      #expect(fetchCount.value == 2)
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO notes VALUES (2)")
-      }
-      #expect(fetchCount.withLock { $0 } == 3)
+      try driver.executeBlocking(sql: "INSERT INTO notes VALUES (2)")
+      #expect(fetchCount.value == 3)
       #expect(recorder.changes.map(\.value) == [0, 1, 2])
       _ = subscription
     }
@@ -1659,11 +1313,11 @@
     @Test
     func automaticRegionIncludesManuallyPublishedReads() throws {
       let driver = try SQLiteQueue(path: .memory)
-      let fetchCount = Lock(0)
+      let fetchCount = TestCounter()
       let region = OrbitDatabaseRegion(table: "raw_items")
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
+          fetchCount.increment()
           transaction.notifyReads(in: region)
           return 1
         }
@@ -1677,67 +1331,52 @@
       try driver.writeBlocking { transaction in
         transaction.notifyChanges(in: OrbitDatabaseRegion(table: "unrelated"))
       }
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       try driver.writeBlocking { transaction in
         transaction.notifyChanges(in: region)
       }
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
       _ = subscription
     }
 
     @Test
     func rollbackClearsItsPublishedRegion() throws {
-      struct Abort: Error {}
+      let driver = try itemsAndNotesDatabase()
+      let fetchCount = TestCounter()
+      let subscription = try itemCountObservation(
+        region: itemsRegion,
+        countingFetchesIn: fetchCount
+      )
+      .subscribe(
+        to: driver,
+        scheduling: .immediate,
+        onError: { _ in },
+        onChange: { _ in }
+      )
 
-      let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
-          CREATE TABLE items (id INTEGER PRIMARY KEY);
-          CREATE TABLE notes (id INTEGER PRIMARY KEY);
-          """
-        )
-      }
-      let fetchCount = Lock(0)
-      let subscription = try OrbitValueObservation<Int>
-        .tracking(region: OrbitDatabaseRegion(table: "items")) { transaction in
-          fetchCount.withLock { $0 += 1 }
-          return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
-        }
-        .subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: { _ in },
-          onChange: { _ in }
-        )
-
-      #expect(throws: Abort.self) {
+      #expect(throws: TestError.self) {
         try driver.writeBlocking { transaction in
           try transaction.execute("INSERT INTO items VALUES (1)")
-          throw Abort()
+          throw TestError()
         }
       }
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO notes VALUES (1)")
-      }
+      try driver.executeBlocking(sql: "INSERT INTO notes VALUES (1)")
 
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
       _ = subscription
     }
 
     @Test
     func trackingAllDerivesItsRegionFromTypedSQL() throws {
       let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
+      try driver.executeBlocking(
+        sql: """
           CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, ignored TEXT);
           CREATE TABLE notes (id INTEGER PRIMARY KEY);
           INSERT INTO items VALUES (1, 'Before', NULL);
           """
-        )
-      }
+      )
       let recorder = ObservationRecorder<[String]>()
       let observation = OrbitValueObservation.trackingAll(
         #sql("SELECT title FROM items ORDER BY id", as: String.self)
@@ -1755,9 +1394,7 @@
       }
       #expect(recorder.changes.map(\.value) == [["Before"]])
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("UPDATE items SET title = 'After' WHERE id = 1")
-      }
+      try driver.executeBlocking(sql: "UPDATE items SET title = 'After' WHERE id = 1")
       #expect(recorder.changes.map(\.value) == [["Before"], ["After"]])
       #expect(recorder.errors.isEmpty)
       _ = subscription
@@ -1766,9 +1403,8 @@
     @Test
     func trackingAllAndOneInferTypedQueryOutputs() throws {
       let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute(
-          """
+      try driver.executeBlocking(
+        sql: """
           CREATE TABLE observed_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
           CREATE TABLE observed_items (
             id INTEGER PRIMARY KEY,
@@ -1778,8 +1414,7 @@
           INSERT INTO observed_groups VALUES (1, 'Group');
           INSERT INTO observed_items VALUES (1, 1, 'One'), (2, 1, 'Two');
           """
-        )
-      }
+      )
 
       let all = OrbitValueObservation.trackingAll(ObservedItem.order { $0.id })
       let allRecorder = ObservationRecorder<[ObservedItem]>()
@@ -1837,9 +1472,7 @@
     @Test
     func queryFragmentTrackingOneObservesAnOptionalValue() throws {
       let driver = try SQLiteQueue(path: .memory)
-      try driver.writeBlocking { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-      }
+      try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
       let query: QueryFragment = "SELECT title FROM items ORDER BY id LIMIT 1"
       let recorder = ObservationRecorder<String?>()
       let subscription =
@@ -1853,9 +1486,7 @@
         )
 
       #expect(recorder.changes.map(\.value) == [nil])
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1, 'One')")
-      }
+      try driver.executeBlocking(sql: "INSERT INTO items VALUES (1, 'One')")
       #expect(recorder.changes.map(\.value) == [nil, "One"])
       _ = subscription
     }
@@ -1874,25 +1505,14 @@
           onChange: recorder.record(change:)
         )
 
-      try driver.writeBlocking { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-      }
+      try driver.executeBlocking(sql: "INSERT INTO items VALUES (1)")
       #expect(recorder.changes.map(\.value) == [1])
       _ = subscription
     }
 
     @Test
     func queryObservationConservativelyRefetchesAfterExternalCommit() async throws {
-      let driver = try await itemsDatabase()
-      let network = InMemoryIPCTransport.Network()
-      let receivingTransport = InMemoryIPCTransport(network: network)
-      let sendingTransport = InMemoryIPCTransport(network: network)
-      let identifier = OrbitDatabaseIdentifier(rawValue: "query-region-external-observation")
-      let database = OrbitIPCDatabase(
-        writer: driver,
-        id: identifier,
-        transport: receivingTransport
-      )
+      let (database, peer, identifier) = try await announcingItemsDatabase("query-external")
       let changes =
         OrbitValueObservation
         .trackingAll(#sql("SELECT id FROM items", as: Int.self))
@@ -1900,8 +1520,8 @@
       var iterator = changes.makeAsyncIterator()
 
       #expect(try await iterator.next()?.source == .initial)
-      try await sendingTransport.send(
-        .transactionDidCommit(.init(databaseIdentifier: identifier, region: .fullDatabase))
+      try await peer.send(
+        commit(identifier, region: .fullDatabase)
       )
       #expect(try await iterator.next()?.source == .transaction(.external))
     }
@@ -1926,12 +1546,24 @@
         )
 
       let count = try driver.readBlocking { transaction in
-        try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self))
+        try transaction.fetchOne(itemCountQuery)
       }
       #expect(count == 1)
       #expect(recorder.changes.isEmpty)
       #expect(recorder.errors.count == 1)
       _ = subscription
+    }
+  }
+
+  enum SupersededRefetch: CaseIterable, Sendable {
+    case immediate, once
+
+    fileprivate func apply(to observation: OrbitValueObservation<Int>) -> OrbitValueObservation<Int>
+    {
+      switch self {
+      case .immediate: observation.refetching(.immediate)
+      case .once: observation.refetching(.once)
+      }
     }
   }
 
@@ -1948,111 +1580,67 @@
     var name: String
   }
 
-  private func itemsDatabase() async throws -> SQLiteQueue {
-    let driver = try SQLiteQueue(path: .memory)
-    try await driver.write { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
-    return driver
-  }
-
-  /// The database ``itemsDatabase()`` makes, made without suspending.
-  private func blockingItemsDatabase() throws -> SQLiteQueue {
-    let driver = try SQLiteQueue(path: .memory)
-    try driver.writeBlocking { transaction in
-      try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-    }
+  /// A database with an items table and a notes table no items observation reads.
+  private func itemsAndNotesDatabase() throws -> SQLiteQueue {
+    let driver = try blockingItemsDatabase()
+    try driver.executeBlocking(sql: "CREATE TABLE notes (id INTEGER PRIMARY KEY)")
     return driver
   }
 
   private func itemCountObservation() -> OrbitValueObservation<Int> {
     OrbitValueObservation.tracking { transaction in
-      try transaction.fetchOne(#sql("SELECT COUNT(*) FROM items", as: Int.self)) ?? 0
+      try transaction.fetchOne(itemCountQuery) ?? 0
     }
   }
 
-  private func insertItems(
-    _ ids: Int...,
-    into database: some OrbitDatabaseWriter
-  ) async throws {
-    try await database.write { transaction in
-      for id in ids {
-        try transaction.execute(
-          #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
-        )
-      }
+  /// ``itemCountObservation()``, counting its fetches in `fetchCount`, and watching `region` rather
+  /// than what each fetch reads when one is given.
+  private func itemCountObservation(
+    region: OrbitDatabaseRegion? = nil,
+    countingFetchesIn fetchCount: TestCounter
+  ) -> OrbitValueObservation<Int> {
+    let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Int = { transaction in
+      fetchCount.increment()
+      return try transaction.fetchOne(itemCountQuery) ?? 0
     }
+    guard let region else { return .tracking(fetch) }
+    return .tracking(region: region, fetch)
   }
 
-  private func insertItemsBlocking(
-    _ ids: Int...,
-    into database: some OrbitDatabaseWriter
-  ) throws {
-    try database.writeBlocking { transaction in
-      for id in ids {
-        try transaction.execute(
-          #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
-        )
-      }
-    }
-  }
-
+  /// Records what an observation delivers to a subscriber, as its `onChange` and `onError`.
   private final class ObservationRecorder<Value: Sendable>: Sendable {
-    private struct State: Sendable {
-      var changes = [OrbitValueObservationChange<Value>]()
-      var errors = [String]()
-    }
+    private let recordedChanges = TestRecorder<OrbitValueObservationChange<Value>>()
+    private let recordedErrors = TestRecorder<String>()
 
-    private let state = Lock(State())
-
-    var changes: [OrbitValueObservationChange<Value>] { state.withLock { $0.changes } }
-    var errors: [String] { state.withLock { $0.errors } }
+    var changes: [OrbitValueObservationChange<Value>] { self.recordedChanges.values }
+    var errors: [String] { self.recordedErrors.values }
 
     func record(change: OrbitValueObservationChange<Value>) {
-      state.withLock { $0.changes.append(change) }
+      self.recordedChanges.append(change)
     }
 
     func record(error: any Error) {
-      state.withLock { $0.errors.append(String(describing: error)) }
+      self.recordedErrors.append(String(describing: error))
     }
 
     func waitForChangeCount(_ count: Int) async throws {
-      try await waitUntil(timeout: .seconds(5)) { self.changes.count >= count }
-    }
-  }
-
-  private final class FetchGate: Sendable {
-    private let state = Lock((entered: false, isOpen: false))
-
-    func hold() {
-      state.withLock { $0.entered = true }
-      while !state.withLock({ $0.isOpen }) {}
-    }
-
-    func waitUntilEntered() async throws {
-      try await waitUntil(timeout: .seconds(5)) { self.state.withLock { $0.entered } }
-    }
-
-    func open() {
-      state.withLock { $0.isOpen = true }
+      try await self.recordedChanges.waitForCount(count)
     }
   }
 
   private final class RecordingRefetchController: OrbitValueObservationRefetchController, Sendable {
-    private let recordedSnapshots = Lock<[OrbitValueObservationRefetchSnapshot]>([])
+    private let recordedSnapshots = TestRecorder<OrbitValueObservationRefetchSnapshot>()
 
-    var snapshots: [OrbitValueObservationRefetchSnapshot] {
-      recordedSnapshots.withLock { $0 }
-    }
+    var snapshots: [OrbitValueObservationRefetchSnapshot] { self.recordedSnapshots.values }
 
     func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
       var context = context
-      recordedSnapshots.withLock { $0.append(context.snapshot()) }
+      self.recordedSnapshots.append(context.snapshot())
       await context.fetch(publishing: .force)
     }
 
     func waitForSnapshot() async throws {
-      try await waitUntil(timeout: .seconds(5)) { !self.snapshots.isEmpty }
+      try await self.recordedSnapshots.waitForCount(1)
     }
   }
 
@@ -2063,13 +1651,13 @@
   {
     private let commitCount: Int
     private let recorded = Lock<OrbitValueObservationRefetchSnapshot?>(nil)
-    private let fetches = Lock(0)
+    private let fetches = TestCounter()
 
     init(commitCount: Int) {
       self.commitCount = commitCount
     }
 
-    var fetchCount: Int { fetches.withLock { $0 } }
+    var fetchCount: Int { fetches.value }
 
     func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
       var context = context
@@ -2081,7 +1669,7 @@
       let snapshot = context.snapshot()
       recorded.withLock { $0 = snapshot }
       await context.fetch(publishing: .force)
-      fetches.withLock { $0 += 1 }
+      fetches.increment()
     }
 
     func snapshot() async throws -> OrbitValueObservationRefetchSnapshot {
@@ -2168,91 +1756,6 @@
 
     func stopSkipping() {
       state.withLock { $0.isSkipping = false }
-    }
-  }
-
-  private final class PostCommitObservableDatabase: OrbitObservableDatabase {
-    private let base: SQLiteQueue
-    private let observers = OrbitDatabaseTransactionObservers()
-
-    init(_ base: SQLiteQueue) {
-      self.base = base
-    }
-
-    func read<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) async throws -> Result {
-      try await base.read(body)
-    }
-
-    func readWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.readWithoutTransaction(body)
-    }
-
-    func write<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) async throws -> Result {
-      let (result, region) = try await base.write { transaction in
-        try transaction.recordingDatabaseRegion(body)
-      }
-      announceCommit(region: region)
-      return result
-    }
-
-    func writeWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.writeWithoutTransaction(body)
-    }
-
-    func readBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) throws -> Result {
-      try base.readBlocking(body)
-    }
-
-    func readWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) throws -> Result {
-      try base.readWithoutTransactionBlocking(body)
-    }
-
-    func writeBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) throws -> Result {
-      let (result, region) = try base.writeBlocking { transaction in
-        try transaction.recordingDatabaseRegion(body)
-      }
-      announceCommit(region: region)
-      return result
-    }
-
-    func writeWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) throws -> Result {
-      try base.writeWithoutTransactionBlocking(body)
-    }
-
-    func subscribe(
-      transactionObserver: any OrbitDatabaseTransactionObserver,
-      region: OrbitDatabaseRegion
-    ) throws -> OrbitRegionSubscription {
-      observers.subscribe(transactionObserver, region: region)
-    }
-
-    func announceCommit(
-      region: OrbitDatabaseRegion,
-      origin: OrbitDatabaseTransactionOrigin = .local,
-      activeWriterBarrier: SQLitePoolWriterBarrier? = nil
-    ) {
-      observers.didChange(in: region)
-      observers.didCommit(
-        origin: origin,
-        region: region,
-        activeWriterBarrier: activeWriterBarrier
-      )
     }
   }
 

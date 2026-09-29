@@ -1,5 +1,4 @@
 #if BuiltInSQLite && canImport(Observation)
-  import Dispatch
   import Observation
   import StructuredQueriesSQLite
   import Testing
@@ -8,10 +7,37 @@
 
   @Suite
   struct OrbitValueObservationExternalValueTests {
-    private struct Filters: Sendable {
+    struct Filters: Sendable {
       var usesPrimary = true
       var primary = 1
       var secondary = 10
+    }
+
+    /// The ways to change `primary` from 1 to 2 through its own member.
+    enum MemberMutation: CaseIterable, Sendable {
+      case assignment, modify, keyPathUpdate
+
+      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+      func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        switch self {
+        case .assignment: filters.primary = 2
+        case .modify: filters.primary += 1
+        case .keyPathUpdate: filters.update(\.primary) { $0 += 1 }
+        }
+      }
+    }
+
+    /// The ways to change `primary` from 1 to 2 through the whole value.
+    enum WholeValueMutation: CaseIterable, Sendable {
+      case replacement, modify
+
+      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+      func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        switch self {
+        case .replacement: filters.value = Filters(primary: 2)
+        case .modify: filters.value.primary += 1
+        }
+      }
     }
 
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
@@ -36,110 +62,64 @@
       }
     }
 
-    @Test
-    func dynamicMemberObservationTracksOnlyTheAccessedField() {
+    @Test(arguments: MemberMutation.allCases)
+    func aMemberMutationInvalidatesOnlyThatMembersObservers(_ mutation: MemberMutation) {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Lock(0)
+      let primaryChanges = TestCounter()
+      let secondaryChanges = TestCounter()
 
       withObservationTracking {
         _ = filters.primary
       } onChange: {
-        changes.withLock { $0 += 1 }
+        primaryChanges.increment()
+      }
+      withObservationTracking {
+        _ = filters.secondary
+      } onChange: {
+        secondaryChanges.increment()
       }
 
-      filters.secondary = 11
-      #expect(changes.withLock { $0 } == 0)
+      mutation.apply(to: filters)
 
-      filters.primary = 2
-      #expect(changes.withLock { $0 } == 1)
+      #expect(filters.primary == 2)
+      #expect(primaryChanges.value == 1)
+      #expect(secondaryChanges.value == 0)
+    }
+
+    @Test(arguments: WholeValueMutation.allCases)
+    func aWholeValueMutationInvalidatesEveryMembersObservers(_ mutation: WholeValueMutation) {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
+      let filters = OrbitValueObservation.ExternalValue(Filters())
+      let changes = TestCounter()
+
+      // The member it changes is not the one observed, so only a whole-value change reaches it.
+      withObservationTracking {
+        _ = filters.secondary
+      } onChange: {
+        changes.increment()
+      }
+
+      mutation.apply(to: filters)
+
+      #expect(filters.primary == 2)
+      #expect(changes.value == 1)
     }
 
     @Test
     func wholeValueObservationTracksEveryMemberMutation() {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Lock(0)
+      let changes = TestCounter()
 
       withObservationTracking {
         _ = filters.value
       } onChange: {
-        changes.withLock { $0 += 1 }
+        changes.increment()
       }
 
       filters.secondary = 11
-      #expect(changes.withLock { $0 } == 1)
-    }
-
-    @Test
-    func replacingTheWholeValueInvalidatesMemberObservation() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let changes = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        changes.withLock { $0 += 1 }
-      }
-
-      filters.value = Filters(primary: 2)
-      #expect(changes.withLock { $0 } == 1)
-    }
-
-    @Test
-    func keyPathUpdateIsAtomicAndFieldSpecific() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Lock(0)
-      let secondaryChanges = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        primaryChanges.withLock { $0 += 1 }
-      }
-      withObservationTracking {
-        _ = filters.secondary
-      } onChange: {
-        secondaryChanges.withLock { $0 += 1 }
-      }
-
-      filters.update(\.primary) { $0 += 1 }
-
-      #expect(filters.primary == 2)
-      #expect(primaryChanges.withLock { $0 } == 1)
-      #expect(secondaryChanges.withLock { $0 } == 0)
-    }
-
-    @Test
-    func modifyAccessorsPreserveObservationGranularity() {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let filters = OrbitValueObservation.ExternalValue(Filters())
-      let primaryChanges = Lock(0)
-      let secondaryChanges = Lock(0)
-
-      withObservationTracking {
-        _ = filters.primary
-      } onChange: {
-        primaryChanges.withLock { $0 += 1 }
-      }
-      withObservationTracking {
-        _ = filters.secondary
-      } onChange: {
-        secondaryChanges.withLock { $0 += 1 }
-      }
-
-      filters.primary += 1
-
-      #expect(filters.primary == 2)
-      #expect(primaryChanges.withLock { $0 } == 1)
-      #expect(secondaryChanges.withLock { $0 } == 0)
-
-      filters.value.primary += 1
-
-      #expect(filters.primary == 3)
-      #expect(secondaryChanges.withLock { $0 } == 1)
+      #expect(changes.value == 1)
     }
 
     @Test
@@ -147,21 +127,21 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = OrbitValueObservation.ExternalValue(false)
-      let changes = Lock([OrbitValueObservationChange<Bool>]())
+      let changes = TestRecorder<OrbitValueObservationChange<Bool>>()
       let subscription = try OrbitValueObservation<Bool>
         .tracking { _ in external.value }
         .subscribe(
           to: driver,
           scheduling: .immediate,
           onError: { _ in },
-          onChange: { change in changes.withLock { $0.append(change) } }
+          onChange: { change in changes.append(change) }
         )
 
       external.value = true
-      try await waitUntil(timeout: .seconds(5)) { changes.withLock { $0.count == 2 } }
+      try await changes.waitForCount(2)
 
-      #expect(changes.withLock { $0.map(\.value) } == [false, true])
-      #expect(changes.withLock { $0.map(\.source) } == [.initial, .observable])
+      #expect(changes.values.map(\.value) == [false, true])
+      #expect(changes.values.map(\.source) == [.initial, .observable])
       _ = subscription
     }
 
@@ -170,20 +150,20 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = LockedObservableFlag(false)
-      let values = Lock([Bool]())
+      let values = TestRecorder<Bool>()
       let subscription = try OrbitValueObservation<Bool>
         .tracking(region: .empty) { _ in external.value }
         .subscribe(
           to: driver,
           scheduling: .immediate,
           onError: { _ in },
-          onChange: { change in values.withLock { $0.append(change.value) } }
+          onChange: { change in values.append(change.value) }
         )
 
       external.value = true
-      try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 2 } }
+      try await values.waitForCount(2)
 
-      #expect(values.withLock { $0 } == [false, true])
+      #expect(values.values == [false, true])
       _ = subscription
     }
 
@@ -192,20 +172,15 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let external = OrbitValueObservation.ExternalValue(0)
-      let fetchCount = Lock(0)
-      let values = Lock([Int]())
-      let secondFetchStarted = DispatchSemaphore(value: 0)
-      let releaseSecondFetch = DispatchSemaphore(value: 0)
+      let fetchCount = TestCounter()
+      let values = TestRecorder<Int>()
+      let secondFetch = TestGate()
       let subscription = try OrbitValueObservation<Int>
         .tracking { _ in
           let value = external.value
-          let invocation = fetchCount.withLock { count in
-            count += 1
-            return count
-          }
+          let invocation = fetchCount.increment()
           if invocation == 2 {
-            secondFetchStarted.signal()
-            releaseSecondFetch.wait()
+            try secondFetch.enter()
           }
           return value
         }
@@ -213,17 +188,17 @@
           to: driver,
           scheduling: .immediate,
           onError: { _ in },
-          onChange: { change in values.withLock { $0.append(change.value) } }
+          onChange: { change in values.append(change.value) }
         )
 
       external.value = 1
-      #expect(secondFetchStarted.blockingWait(timeout: .now() + 5) == .success)
+      try await secondFetch.waitUntilEntered()
       external.value = 2
-      releaseSecondFetch.signal()
-      try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 2 } }
+      secondFetch.open()
+      try await values.waitForCount(2)
 
-      #expect(values.withLock { $0 } == [0, 2])
-      #expect(fetchCount.withLock { $0 } == 3)
+      #expect(values.values == [0, 2])
+      #expect(fetchCount.value == 3)
       _ = subscription
     }
 
@@ -245,11 +220,11 @@
         )
       }
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let fetchCount = Lock(0)
-      let values = Lock([Int]())
+      let fetchCount = TestCounter()
+      let values = TestRecorder<Int>()
       let subscription = try OrbitValueObservation<Int>
         .tracking { transaction in
-          fetchCount.withLock { $0 += 1 }
+          fetchCount.increment()
           let usesSecondary =
             try transaction.fetchOne(
               #sql("SELECT usesSecondary FROM settings", as: Bool.self)
@@ -260,7 +235,7 @@
           to: driver,
           scheduling: .immediate,
           onError: { _ in },
-          onChange: { change in values.withLock { $0.append(change.value) } }
+          onChange: { change in values.append(change.value) }
         )
 
       await #expect(throws: (any Error).self) {
@@ -269,16 +244,16 @@
           try transaction.execute("INSERT INTO children VALUES (1)")
         }
       }
-      #expect(fetchCount.withLock { $0 } == 2)
-      #expect(values.withLock { $0 } == [1])
+      #expect(fetchCount.value == 2)
+      #expect(values.values == [1])
 
       filters.secondary = 11
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
 
       filters.primary = 2
-      try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 2 } }
-      #expect(values.withLock { $0 } == [1, 2])
-      #expect(fetchCount.withLock { $0 } == 3)
+      try await values.waitForCount(2)
+      #expect(values.values == [1, 2])
+      #expect(fetchCount.value == 3)
       _ = subscription
     }
 
@@ -287,34 +262,34 @@
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let driver = try SQLiteQueue(path: .memory)
       let filters = OrbitValueObservation.ExternalValue(Filters())
-      let values = Lock([Int]())
-      let fetchCount = Lock(0)
+      let values = TestRecorder<Int>()
+      let fetchCount = TestCounter()
       let subscription = try OrbitValueObservation<Int>
         .tracking { _ in
-          fetchCount.withLock { $0 += 1 }
+          fetchCount.increment()
           return filters.usesPrimary ? filters.primary : filters.secondary
         }
         .subscribe(
           to: driver,
           scheduling: .immediate,
           onError: { _ in },
-          onChange: { change in values.withLock { $0.append(change.value) } }
+          onChange: { change in values.append(change.value) }
         )
 
       filters.secondary = 11
-      #expect(fetchCount.withLock { $0 } == 1)
+      #expect(fetchCount.value == 1)
 
       filters.usesPrimary = false
-      try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 2 } }
-      #expect(values.withLock { $0 } == [1, 11])
+      try await values.waitForCount(2)
+      #expect(values.values == [1, 11])
 
       filters.primary = 2
-      #expect(fetchCount.withLock { $0 } == 2)
+      #expect(fetchCount.value == 2)
 
       filters.secondary = 12
-      try await waitUntil(timeout: .seconds(5)) { values.withLock { $0.count == 3 } }
-      #expect(values.withLock { $0 } == [1, 11, 12])
-      #expect(fetchCount.withLock { $0 } == 3)
+      try await values.waitForCount(3)
+      #expect(values.values == [1, 11, 12])
+      #expect(fetchCount.value == 3)
       _ = subscription
     }
   }

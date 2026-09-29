@@ -38,16 +38,11 @@
     maximumReaderCount: Int = 4,
     _ body: (SQLitePool) async throws -> Result
   ) async throws -> Result {
-    let directory = try makeShortTemporaryDirectory("pool")
-    defer { try? FileManager.default.removeItem(at: directory) }
-
     var configuration = configuration
     configuration.readerCount = maximumReaderCount
-    let pool = try SQLitePool(
-      path: .file(directory.appendingPathComponent("db.sqlite")),
-      configuration: configuration
-    )
-    return try await body(pool)
+    return try await withTestDatabaseFile("pool") { file in
+      try await body(try file.pool(configuration: configuration))
+    }
   }
 
   func concurrentReads<Result: Sendable>(

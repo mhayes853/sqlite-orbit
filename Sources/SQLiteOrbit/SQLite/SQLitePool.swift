@@ -57,6 +57,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///     this one up for as long as `configuration`'s busy timeout or busy handler lets SQLite
   ///     wait for a lock, and no longer, so one frozen partway through its open cannot hold it up
   ///     for good.
+  /// - Precondition: `configuration.readerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
   ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
   ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy timeout
@@ -67,6 +68,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     identifier: OrbitDatabaseIdentifier? = nil,
     coordinationDirectory: URL? = nil
   ) throws {
+    precondition(configuration.readerCount > 0, "SQLitePool requires at least one reader")
     guard !path.isPrivateToConnection else {
       throw SQLitePoolUnavailableError(path: path)
     }
@@ -109,7 +111,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
 
     // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
     // the raw connection into an error rather than a surprise.
-    let readers = try (0..<max(1, configuration.readerCount))
+    let readers = try (0..<configuration.readerCount)
       .map { _ in
         try SQLiteSerialConnection(
           path: path,

@@ -21,6 +21,9 @@ jobs:
           # The linked system SQLite, which is what a caller gets by default.
           - name: default traits
             traits: ""
+          # The default database and test trait also integrate with swift-dependencies.
+          - name: SystemSQLite + Dependencies
+            traits: "--traits SystemSQLite,Dependencies"
           # SQLCipher in place of the platform SQLite. The two are mutually exclusive, so this
           # also covers the package building with `SystemSQLite` off.
           - name: SQLCipher

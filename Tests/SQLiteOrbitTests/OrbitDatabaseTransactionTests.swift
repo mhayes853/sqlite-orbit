@@ -6,26 +6,20 @@ import Testing
 
 #if BuiltInSQLite
   @Test
-  func orbitIPCDatabaseUsesTheDriversDefaultIdentifier() throws {
+  func orbitIPCDatabaseTakesTheDriversDefaultIdentifierUnlessGivenOne() throws {
     let identifier = OrbitDatabaseIdentifier(rawValue: "native-default")
     let driver = try SQLiteQueue(path: ":memory:", identifier: identifier)
-    let database = OrbitIPCDatabase(writer: driver, transport: InMemoryIPCTransport())
-
-    #expect(database.id == identifier)
-  }
-
-  @Test
-  func orbitIPCDatabaseCanOverrideItsIdentifier() {
-    let driver = try! SQLiteQueue(path: ":memory:")
     let override = OrbitDatabaseIdentifier(rawValue: "application-defined")
 
-    let database = OrbitIPCDatabase(
+    let defaulted = OrbitIPCDatabase(writer: driver, transport: InMemoryIPCTransport())
+    let overridden = OrbitIPCDatabase(
       writer: driver,
       id: override,
       transport: InMemoryIPCTransport()
     )
 
-    #expect(database.id == override)
+    #expect(defaulted.id == identifier)
+    #expect(overridden.id == override)
   }
 #endif
 
@@ -386,21 +380,17 @@ func databaseCursorsSupportTerminalAlgorithms() async throws {
   #expect(reverseMinimumAndMaximum?.max == 1)
 
   state.visitedRowCount = 0
-  var didThrow = false
-  do {
+  #expect(throws: TestError.self) {
     _ = try withTestRead(state) { transaction in
       try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
         .count { value in
           if value == 4 {
-            throw TerminalAlgorithmError.stop
+            throw TestError()
           }
           return true
         }
     }
-  } catch is TerminalAlgorithmError {
-    didThrow = true
   }
-  #expect(didThrow)
   #expect(state.visitedRowCount == 3)
 
   let emptyState = TestDatabaseState()
@@ -463,7 +453,8 @@ func databaseCursorsSelectTopKValues() async throws {
   #expect(emptyExtremes.max.isEmpty)
 
   // The heap has to agree with a full sort for every `k`, on inputs in arbitrary order.
-  var generator = SystemRandomNumberGenerator()
+  let seed: UInt64 = 0x5351_4C49_5445
+  var generator = CursorTestRandomGenerator(state: seed)
   for _ in 0..<20 {
     let values = (0..<25).map { _ in Int.random(in: -1000...1000, using: &generator) }
     let shuffledState = TestDatabaseState(rows: values.map { [.int(Int64($0))] })
@@ -472,31 +463,27 @@ func databaseCursorsSelectTopKValues() async throws {
       let top = try withTestRead(shuffledState) { transaction in
         try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).topK(k)
       }
-      #expect(top == sorted.suffix(k).reversed())
+      #expect(top == sorted.suffix(k).reversed(), "seed=\(seed), k=\(k), input=\(values)")
 
       let extremes = try withTestRead(shuffledState) { transaction in
         try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self)).minMaxK(k)
       }
-      #expect(extremes.min == Array(sorted.prefix(k)))
-      #expect(extremes.max == sorted.suffix(k).reversed())
+      #expect(extremes.min == Array(sorted.prefix(k)), "seed=\(seed), k=\(k), input=\(values)")
+      #expect(extremes.max == sorted.suffix(k).reversed(), "seed=\(seed), k=\(k), input=\(values)")
     }
   }
 
-  var didThrow = false
-  do {
+  #expect(throws: TestError.self) {
     _ = try withTestRead(state) { transaction in
       try transaction.fetchCursor(#sql("SELECT value FROM numbers", as: Int.self))
         .topK(2) { lhs, rhs in
           if lhs == 5 || rhs == 5 {
-            throw TerminalAlgorithmError.stop
+            throw TestError()
           }
           return lhs < rhs
         }
     }
-  } catch is TerminalAlgorithmError {
-    didThrow = true
   }
-  #expect(didThrow)
 }
 
 @Test
@@ -645,10 +632,6 @@ private struct TestReturningWriteStatement: Statement {
   typealias From = Never
 
   let query: QueryFragment = "UPDATE testRecords SET title = title RETURNING id"
-}
-
-private enum TerminalAlgorithmError: Error {
-  case stop
 }
 
 private struct TestDatabaseRow: OrbitDatabaseRow {
@@ -802,5 +785,18 @@ extension QueryBinding {
   fileprivate static func extractUUID(_ binding: Self) -> UUID? {
     guard case .uuid(let value) = binding else { return nil }
     return value
+  }
+}
+
+// SplitMix64 keeps the generated corpus reproducible without depending on system entropy.
+private struct CursorTestRandomGenerator: RandomNumberGenerator {
+  var state: UInt64
+
+  mutating func next() -> UInt64 {
+    state &+= 0x9E37_79B9_7F4A_7C15
+    var value = state
+    value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+    value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+    return value ^ (value >> 31)
   }
 }

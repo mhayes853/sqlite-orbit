@@ -5,6 +5,84 @@
 
   @Suite
   struct RowTests {
+    @Test(arguments: [false, true])
+    func savingRemainsTrueUntilAHeldUpdateCompletes(overlappingFailure: Bool) async throws {
+      let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
+      @Row(EditableReminder.self, id: 1, database: database) var reminder
+      let property = $reminder
+      let gate = TestGate()
+      defer { gate.open() }
+      let update = Task {
+        try await property.update { value in
+          value.title = "Eggs"
+          try gate.enter()
+        }
+      }
+      defer { update.cancel() }
+      try await gate.waitUntilEntered()
+      #expect(property.isSaving)
+      if overlappingFailure {
+        // This save fails before reaching the database, while the first update is still held.
+        await #expect(throws: OrbitRowIdentityMismatchError.self) {
+          try await property.save(EditableReminder(id: 2, title: "wrong", notes: ""))
+        }
+        #expect(property.saveError is OrbitRowIdentityMismatchError)
+        #expect(property.isSaving)
+      }
+      gate.open()
+      try await update.value
+      #expect(!property.isSaving)
+      if !overlappingFailure { #expect(property.saveError == nil) }
+      let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+      var expected = EditableReminder(id: 1, title: "Milk", notes: "")
+      expected.title = "Eggs"
+      #expect(persisted == expected)
+      try await property.save(expected)
+      #expect(property.saveError == nil)
+      #expect(!property.isSaving)
+    }
+
+    @Test(arguments: ["mutation", "identity", "constraint"])
+    func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(failure: String) async throws {
+      let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
+      @Row(EditableReminder.self, id: 1, database: database) var reminder
+      if failure == "constraint" {
+        try await database.write {
+          try $0.execute(
+            "CREATE TRIGGER reject_update BEFORE UPDATE ON editableReminders BEGIN SELECT RAISE(ABORT, 'refused'); END"
+          )
+        }
+      }
+      do {
+        try await $reminder.update { value in
+          value.title = "Eggs"
+          if failure == "mutation" { throw TestError() }
+          if failure == "identity" { value = EditableReminder(id: 2, title: "changed", notes: "") }
+        }
+        Issue.record("The update should fail for \(failure)")
+      } catch {
+        switch failure {
+        case "mutation": #expect(error is TestError)
+        case "identity": #expect(error is OrbitRowIdentityMismatchError)
+        default: #expect((error as? SQLiteError)?.primaryCode == .constraint)
+        }
+      }
+      #expect(!$reminder.isSaving)
+      #expect($reminder.saveError != nil)
+      let unchanged = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+      #expect(unchanged == EditableReminder(id: 1, title: "Milk", notes: ""))
+      if failure == "constraint" {
+        try await database.write { try $0.execute("DROP TRIGGER reject_update") }
+      }
+      var replacement = EditableReminder(id: 1, title: "Milk", notes: "")
+      replacement.title = "Eggs"
+      try await $reminder.save(replacement)
+      #expect(!$reminder.isSaving)
+      #expect($reminder.saveError == nil)
+      let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+      #expect(persisted == replacement)
+    }
+
     @Test
     func aMissingRowIsNilAndLaterInsertionIsObserved() async throws {
       let database = try await rowsDatabase()
