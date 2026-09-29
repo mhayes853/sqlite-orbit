@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueries
   import Testing
 
   @testable import SQLiteOrbit
@@ -213,13 +212,13 @@
   }
 
   @Test
-  func connectionAccessExecutesQueryFragmentsWithBindings() throws {
+  func connectionAccessExecutesSQLWithBindings() throws {
     var configuration = SQLiteConfiguration.default
     configuration.connectionSetups = [
       SQLiteConnectionSetup { connection in
         try connection.execute("CREATE TABLE settings (value TEXT NOT NULL)")
         let value = "bound during setup"
-        let query: QueryFragment = "INSERT INTO settings VALUES (\(bind: value))"
+        let query: SQL = "INSERT INTO settings VALUES (\(value))"
         try connection.execute(query)
         return SQLiteResultCode.ok.rawValue
       }

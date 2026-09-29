@@ -80,7 +80,7 @@ struct SQLiteLibraryMacroTests {
         authorizer: SQLiteLibrary.Authorizer(install: sqlite3_set_authorizer),
         busyHandler: SQLiteLibrary.BusyHandler(install: sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
-          try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
+          try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? "1" : "0")")
         },
         scalarFunctions: SQLiteLibrary.ScalarFunctions(
           register: sqlite3_create_function_v2,
@@ -224,7 +224,7 @@ struct SQLiteLibraryMacroTests {
         authorizer: SQLiteLibrary.Authorizer(install: SQLCipher.sqlite3_set_authorizer),
         busyHandler: SQLiteLibrary.BusyHandler(install: SQLCipher.sqlite3_busy_handler),
         trustedSchema: { connection, enabled in
-          try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
+          try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? "1" : "0")")
         },
         scalarFunctions: SQLiteLibrary.ScalarFunctions(
           register: SQLCipher.sqlite3_create_function_v2,

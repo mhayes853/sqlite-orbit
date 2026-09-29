@@ -233,7 +233,8 @@
       self.columnName =
         library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?"
       self.reason = reason
-      self.sql = library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
+      self.sql =
+        library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
     }
 
     /// The column, its name, what was expected of it, and the SQL that produced it.

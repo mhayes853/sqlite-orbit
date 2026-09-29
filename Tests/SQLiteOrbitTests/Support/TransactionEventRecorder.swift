@@ -1,12 +1,10 @@
-import StructuredQueries
-
 @testable import SQLiteOrbit
 
 /// A transaction observer that records everything it is told, in order.
 ///
 /// ```swift
 /// let recorder = TransactionEventRecorder(
-///   countOnWillCommit: #sql("SELECT count(*) FROM items", as: Int.self)
+///   countOnWillCommit: "SELECT count(*) FROM items"
 /// )
 /// let subscription = try database.subscribe(transactionObserver: recorder)
 /// try await database.write { try $0.execute("INSERT INTO items (id) VALUES (1)") }
@@ -29,14 +27,14 @@ final class TransactionEventRecorder: OrbitDatabaseTransactionObserver, Sendable
   }
 
   private let state = Lock(State())
-  private let countOnWillCommit: SQLQueryExpression<Int>?
+  private let countOnWillCommit: SQL?
 
   /// Makes a recorder.
   ///
   /// - Parameter countOnWillCommit: A query each committing transaction runs, whose result is
   ///   recorded as ``Event/willCommit(_:)``, so the recorder sees what the transaction is about
   ///   to commit. Without one, the recorder records no ``Event/willCommit(_:)``.
-  init(countOnWillCommit: SQLQueryExpression<Int>? = nil) {
+  init(countOnWillCommit: SQL? = nil) {
     self.countOnWillCommit = countOnWillCommit
   }
 
@@ -79,7 +77,7 @@ final class TransactionEventRecorder: OrbitDatabaseTransactionObserver, Sendable
 
   func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
     guard let query = self.countOnWillCommit else { return }
-    let count = try transaction.fetchOne(query) ?? 0
+    let count = try transaction.fetchOne(query) { Int($0[0].integerValue ?? 0) } ?? 0
     self.state.withLock { $0.events.append(.willCommit(count)) }
   }
 

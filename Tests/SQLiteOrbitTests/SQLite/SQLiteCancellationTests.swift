@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueries
   import Testing
 
   @testable import SQLiteOrbit
@@ -29,15 +28,13 @@
     Task {
       try await driver.read { transaction in
         try transaction.fetchAll(
-          #sql(
-            """
-            WITH RECURSIVE counter(x) AS (
-              SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 2000000000
-            )
-            SELECT count(*) FROM counter
-            """,
-            as: Int.self
+          """
+          WITH RECURSIVE counter(x) AS (
+            SELECT 1 UNION ALL SELECT x + 1 FROM counter WHERE x < 2000000000
           )
+          SELECT count(*) FROM counter
+          """,
+          as: Int.self
         )
       }
     }
@@ -59,7 +56,7 @@
     // This one is stuck behind it on the connection's queue, and is cancelled while waiting.
     let queued = Task {
       try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+        try transaction.fetchAll("SELECT 1", as: Int.self)
       }
     }
     for _ in 0..<5000 {
@@ -93,7 +90,7 @@
       try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
     }
     let count = try await driver.read { transaction in
-      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
     }
     #expect(count == [0])
   }
@@ -122,7 +119,7 @@
 
     // The cancelled write never ran.
     let rows = try await driver.read { transaction in
-      try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+      try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
     }
     #expect(rows == [0])
   }
@@ -198,9 +195,7 @@
     let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
     let first = Task {
       try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql("SELECT 1 -- first cancellation target", as: Int.self)
-        )
+        try transaction.fetchAll("SELECT 1 -- first cancellation target", as: Int.self)
       }
     }
     try await waitUntil { probe.firstStepEntered }
@@ -213,7 +208,7 @@
     let second = Task {
       try await driver.read { transaction in
         probe.enterSecondAccess()
-        return try transaction.fetchAll(#sql("SELECT 2", as: Int.self))
+        return try transaction.fetchAll("SELECT 2", as: Int.self)
       }
     }
 
@@ -235,7 +230,7 @@
 
     _ = try await concurrently(50) { _ in
       try await driver.read { transaction in
-        try overlap.track { _ = try transaction.fetchAll(#sql("SELECT 1", as: Int.self)) }
+        try overlap.track { _ = try transaction.fetchAll("SELECT 1", as: Int.self) }
       }
     }
 

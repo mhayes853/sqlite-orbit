@@ -56,8 +56,9 @@
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      var cursor = try transaction.rowCursor(self)
-      while try cursor.next() != nil {}
+      try withOrbitCursor(try transaction.rowCursor(self)) { cursor in
+        while try cursor.next() != nil {}
+      }
     }
   }
 
@@ -78,8 +79,33 @@
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      var cursor = try transaction.rowCursor(self)
-      while try cursor.next() != nil {}
+      try withOrbitCursor(try transaction.rowCursor(self)) { cursor in
+        while try cursor.next() != nil {}
+      }
+    }
+
+    /// Executes this raw SQL in a write transaction, discarding any rows it returns.
+    ///
+    /// A write transaction may run SQL that writes, so this is preferred over the read overload
+    /// whenever the transaction can write.
+    ///
+    /// ```swift
+    /// try await database.write { transaction in
+    ///   try #sql("DELETE FROM reminders WHERE isCompleted").execute(transaction)
+    /// }
+    /// ```
+    ///
+    /// - Parameter transaction: The write transaction in which to execute the SQL.
+    /// - Throws: A ``SQLiteError`` when the statement fails.
+    public func execute<Transaction>(
+      _ transaction: borrowing Transaction
+    ) throws
+    where
+      Transaction: OrbitDatabaseWriteTransaction,
+      Transaction: ~Copyable,
+      Transaction: ~Escapable
+    {
+      try transaction.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(self))
     }
 
     /// Executes this raw SQL on a write connection outside a transaction.

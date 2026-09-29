@@ -124,9 +124,10 @@
       _ statement: some Statement,
       _ body: (inout Row) throws -> OrbitDatabaseRowIteration
     ) throws {
-      var cursor = try executeRowCursor(statement)
-      while var row = try cursor.next() {
-        if try body(&row) == .stop { return }
+      try withOrbitCursor(try executeRowCursor(statement)) { cursor in
+        while var row = try cursor.next() {
+          if try body(&row) == .stop { return }
+        }
       }
     }
   }
@@ -353,8 +354,9 @@
     public borrowing func fetchAll<each QueryValue: QueryRepresentable>(
       _ statement: some PartialSelectStatement<(repeat each QueryValue)>
     ) throws -> [(repeat (each QueryValue).QueryOutput)] {
-      var cursor = try rowCursor(statement, cached: true)
-      return try cursor.collectTuples((repeat each QueryValue).self)
+      return try withOrbitCursor(try rowCursor(statement, cached: true)) { cursor in
+        try cursor.collectTuples((repeat each QueryValue).self)
+      }
     }
 
     /// Fetches the first tuple produced by a select statement.
@@ -366,8 +368,9 @@
     public borrowing func fetchOne<each QueryValue: QueryRepresentable>(
       _ statement: some PartialSelectStatement<(repeat each QueryValue)>
     ) throws -> (repeat (each QueryValue).QueryOutput)? {
-      var cursor = try rowCursor(statement, cached: true)
-      return try cursor.firstTuple((repeat each QueryValue).self)
+      return try withOrbitCursor(try rowCursor(statement, cached: true)) { cursor in
+        try cursor.firstTuple((repeat each QueryValue).self)
+      }
     }
 
     /// Fetches every table value from a select statement that has no explicit projection.
@@ -501,8 +504,9 @@
     public borrowing func fetchAll<each QueryValue: QueryRepresentable>(
       _ statement: SQLQueryExpression<(repeat each QueryValue)>
     ) throws -> [(repeat (each QueryValue).QueryOutput)] {
-      var cursor = try rowCursor(statement, cached: true)
-      return try cursor.collectTuples((repeat each QueryValue).self)
+      return try withOrbitCursor(try rowCursor(statement, cached: true)) { cursor in
+        try cursor.collectTuples((repeat each QueryValue).self)
+      }
     }
 
     /// Fetches the first tuple produced by raw SQL.
@@ -514,8 +518,9 @@
     public borrowing func fetchOne<each QueryValue: QueryRepresentable>(
       _ statement: SQLQueryExpression<(repeat each QueryValue)>
     ) throws -> (repeat (each QueryValue).QueryOutput)? {
-      var cursor = try rowCursor(statement, cached: true)
-      return try cursor.firstTuple((repeat each QueryValue).self)
+      return try withOrbitCursor(try rowCursor(statement, cached: true)) { cursor in
+        try cursor.firstTuple((repeat each QueryValue).self)
+      }
     }
 
     /// Fetches the row with the given primary key.
@@ -628,8 +633,9 @@
     public borrowing func fetchAll<each QueryValue: QueryRepresentable>(
       _ statement: some Statement<(repeat each QueryValue)>
     ) throws -> [(repeat (each QueryValue).QueryOutput)] {
-      var cursor = try executeRowCursor(statement, cached: true)
-      return try cursor.collectTuples((repeat each QueryValue).self)
+      return try withOrbitCursor(try executeRowCursor(statement, cached: true)) { cursor in
+        try cursor.collectTuples((repeat each QueryValue).self)
+      }
     }
 
     /// Fetches the first tuple returned by a write statement.
@@ -641,8 +647,9 @@
     public borrowing func fetchOne<each QueryValue: QueryRepresentable>(
       _ statement: some Statement<(repeat each QueryValue)>
     ) throws -> (repeat (each QueryValue).QueryOutput)? {
-      var cursor = try executeRowCursor(statement, cached: true)
-      return try cursor.firstTuple((repeat each QueryValue).self)
+      return try withOrbitCursor(try executeRowCursor(statement, cached: true)) { cursor in
+        try cursor.firstTuple((repeat each QueryValue).self)
+      }
     }
   }
 #endif

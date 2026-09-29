@@ -45,7 +45,7 @@
       var sections: [(name: Key.QueryOutput, elements: OrbitFetchElementIndices)] = []
       var positionsByName: [Key.QueryOutput: Int] = [:]
       var cursor = try transaction.rowCursor(
-        SQLQueryExpression<Void>(query, as: Void.self),
+        OrbitDatabaseQuery<OrbitDatabaseReadAccess>(SQL(fragment: query)),
         cached: true
       )
       while var row = try cursor.next() {

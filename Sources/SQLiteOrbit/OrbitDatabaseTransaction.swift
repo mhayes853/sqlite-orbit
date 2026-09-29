@@ -175,12 +175,13 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
   ) throws -> [Element] {
-    var cursor = try rowCursor(sql)
-    var elements: [Element] = []
-    while var row = try cursor.next() {
-      elements.append(try transform(&row))
+    try withOrbitCursor(try rowCursor(sql)) { cursor in
+      var elements: [Element] = []
+      while var row = try cursor.next() {
+        elements.append(try transform(&row))
+      }
+      return elements
     }
-    return elements
   }
 
   /// Returns a value made from the first row raw SQL returns, or `nil` when it returns none.
@@ -203,9 +204,10 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
   ) throws -> Element? {
-    var cursor = try rowCursor(sql)
-    guard var row = try cursor.next() else { return nil }
-    return try transform(&row)
+    try withOrbitCursor(try rowCursor(sql)) { cursor in
+      guard var row = try cursor.next() else { return nil }
+      return try transform(&row)
+    }
   }
 }
 
@@ -247,9 +249,10 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     _ sql: SQL,
     _ body: (inout Row) throws -> OrbitDatabaseRowIteration
   ) throws {
-    var cursor = try executeRowCursor(sql)
-    while var row = try cursor.next() {
-      if try body(&row) == .stop { return }
+    try withOrbitCursor(try executeRowCursor(sql)) { cursor in
+      while var row = try cursor.next() {
+        if try body(&row) == .stop { return }
+      }
     }
   }
 
@@ -294,12 +297,13 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
   ) throws -> [Element] {
-    var cursor = try executeRowCursor(sql)
-    var elements: [Element] = []
-    while var row = try cursor.next() {
-      elements.append(try transform(&row))
+    try withOrbitCursor(try executeRowCursor(sql)) { cursor in
+      var elements: [Element] = []
+      while var row = try cursor.next() {
+        elements.append(try transform(&row))
+      }
+      return elements
     }
-    return elements
   }
 
   /// Returns a value made from the first row raw SQL returns, where the SQL may write.
@@ -324,8 +328,9 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
   ) throws -> Element? {
-    var cursor = try executeRowCursor(sql)
-    guard var row = try cursor.next() else { return nil }
-    return try transform(&row)
+    try withOrbitCursor(try executeRowCursor(sql)) { cursor in
+      guard var row = try cursor.next() else { return nil }
+      return try transform(&row)
+    }
   }
 }

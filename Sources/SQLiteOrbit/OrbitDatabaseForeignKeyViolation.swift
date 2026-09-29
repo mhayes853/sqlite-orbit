@@ -76,18 +76,13 @@ extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
     guard sqlite.isForeignKeyCheckAvailable else {
       throw SQLiteFeatureUnavailableError(libraryName: sqlite.name, feature: .foreignKeyCheck)
     }
-    var violations: [OrbitDatabaseForeignKeyViolation] = []
-    var cursor = try rowCursor("PRAGMA foreign_key_check")
-    while let row = try cursor.next() {
-      violations.append(
-        OrbitDatabaseForeignKeyViolation(
-          table: row[0].textValue ?? "",
-          rowID: row[1].integerValue,
-          parentTable: row[2].textValue ?? "",
-          foreignKeyIndex: Int(row[3].integerValue ?? 0)
-        )
+    return try fetchAll("PRAGMA foreign_key_check") { row in
+      OrbitDatabaseForeignKeyViolation(
+        table: row[0].textValue ?? "",
+        rowID: row[1].integerValue,
+        parentTable: row[2].textValue ?? "",
+        foreignKeyIndex: Int(row[3].integerValue ?? 0)
       )
     }
-    return violations
   }
 }

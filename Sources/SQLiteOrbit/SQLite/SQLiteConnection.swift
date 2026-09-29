@@ -108,6 +108,27 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try base.cursor(for: query.sql, cached: cached, requiresReadOnly: true)
   }
 
+  /// Creates a cursor over the rows raw SQL returns.
+  ///
+  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Returns: A cursor valid until this connection's access ends.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  @_lifetime(borrow self)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+    // Spelled out on the concrete type, rather than left to the protocol extension, because
+    // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
+    // returned.
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
+  }
+
   /// Notifies transaction observers that this connection may have read a database region.
   ///
   /// Use this after a read performed through ``sqliteConnection`` or another API that SQLiteOrbit
@@ -391,6 +412,27 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ) throws -> SQLiteRowCursor {
     try applyPendingSettings()
     return try base.rowCursor(query, cached: cached)
+  }
+
+  /// Creates a cursor over the rows raw SQL returns.
+  ///
+  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Returns: A cursor valid until this connection's access ends.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  @_lifetime(borrow self)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+    // Spelled out on the concrete type, rather than left to the protocol extension, because
+    // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
+    // returned.
+    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
   }
 
   /// Runs a statement to completion, committing it and discarding any rows it returns.

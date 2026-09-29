@@ -99,6 +99,19 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
   }
 }
 
+// Swift 6.3 deinitializes the uninitialized result of a throwing call when the caller binds a
+// nonescapable value returned indirectly, as a generic one is, to a local, so a cursor whose
+// statement failed to prepare would be torn down as garbage. Handing the result straight to this
+// function as an argument never binds it, and the function binds the cursor only once it exists.
+@usableFromInline
+func withOrbitCursor<Cursor: OrbitDatabaseRowCursor & ~Copyable & ~Escapable, Result>(
+  _ cursor: consuming Cursor,
+  _ body: (inout Cursor) throws -> Result
+) rethrows -> Result {
+  var cursor = cursor
+  return try body(&cursor)
+}
+
 /// A cursor over decoded values returned by a database statement.
 ///
 /// Rows are decoded and produced one at a time, so a query whose results do not fit in memory can

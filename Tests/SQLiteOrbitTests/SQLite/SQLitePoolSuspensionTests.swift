@@ -1,6 +1,5 @@
 #if BuiltInSQLite
   import Foundation
-  import StructuredQueries
   import Testing
 
   @testable import SQLiteOrbit
@@ -44,7 +43,7 @@
         pool.suspend()
 
         let count = try await pool.writeWithoutTransaction { connection in
-          try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try connection.fetchOne("SELECT count(*) FROM items", as: Int.self)
         }
 
         #expect(count == 0)
@@ -91,7 +90,7 @@
         let running = Task {
           try await pool.write { transaction in
             try transaction.execute("INSERT INTO items DEFAULT VALUES")
-            _ = try transaction.fetchAll(endlessCount)
+            _ = try transaction.fetchAll(endlessCount, as: Int.self)
           }
         }
         try await waitUntil { steps.count > 0 }
@@ -200,15 +199,12 @@
 
   private let endlessMarker = "RECURSIVE endless"
 
-  private let endlessCount = #sql(
-    """
+  private let endlessCount: SQL = """
     WITH RECURSIVE endless(x) AS (
       SELECT 1 UNION ALL SELECT x + 1 FROM endless WHERE x < 2000000000
     )
     SELECT count(*) FROM endless
-    """,
-    as: Int.self
-  )
+    """
 
   private func createItems(in pool: SQLitePool) async throws {
     try await pool.write { transaction in
@@ -218,7 +214,7 @@
 
   private func itemCount(in pool: SQLitePool) async throws -> Int? {
     try await pool.read { transaction in
-      try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+      try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
     }
   }
 

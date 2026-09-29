@@ -1,4 +1,3 @@
-
 #if SystemSQLite
   import CSQLite3
 #elseif SQLCipher

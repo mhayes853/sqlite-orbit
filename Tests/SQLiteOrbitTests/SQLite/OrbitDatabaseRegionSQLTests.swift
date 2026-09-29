@@ -1,17 +1,16 @@
 #if BuiltInSQLite
   @testable import SQLiteOrbit
-  import StructuredQueries
   import Testing
 
   @Suite
-  struct OrbitDatabaseRegionQueryFragmentTests {
+  struct OrbitDatabaseRegionSQLTests {
     @Test
     func discoversProjectionPredicateOrderingJoinAndCTEColumns() async throws {
       let database = try regionDatabase()
 
       let region = try await database.read { transaction in
         let isCompleted = false
-        let query: QueryFragment =
+        let query: SQL =
           """
           WITH pending AS (
             SELECT id, title
@@ -39,7 +38,7 @@
       let database = try regionDatabase()
 
       try await database.read { transaction in
-        let star: QueryFragment = "SELECT * FROM reminders"
+        let star: SQL = "SELECT * FROM reminders"
         let starRegion = try OrbitDatabaseRegion(star, in: transaction)
         #expect(
           starRegion
@@ -49,13 +48,13 @@
             )
         )
 
-        let count: QueryFragment = "SELECT count(*) FROM reminders"
+        let count: SQL = "SELECT count(*) FROM reminders"
         let countRegion = try OrbitDatabaseRegion(count, in: transaction)
         #expect(countRegion == OrbitDatabaseRegion(table: "reminders"))
 
-        let constant: QueryFragment = "SELECT 1"
+        let constant: SQL = "SELECT 1"
         let constantRegion = try OrbitDatabaseRegion(constant, in: transaction)
-        let emptyRegion = try OrbitDatabaseRegion(QueryFragment(), in: transaction)
+        let emptyRegion = try OrbitDatabaseRegion("", in: transaction)
         #expect(constantRegion == .empty)
         #expect(emptyRegion == .empty)
       }
@@ -66,7 +65,7 @@
       let database = try regionDatabase()
 
       let region = try await database.read { transaction in
-        let query: QueryFragment = "SELECT title FROM pending_reminders"
+        let query: SQL = "SELECT title FROM pending_reminders"
         return try OrbitDatabaseRegion(query, in: transaction)
       }
 
@@ -82,7 +81,7 @@
     func resolvesMainTemporaryAndAttachedSchemas() async throws {
       let database = try regionDatabase()
       try await database.write { transaction in
-        try transaction.execute(
+        try transaction.executeScript(
           """
           ATTACH DATABASE ':memory:' AS archive;
           CREATE TABLE archive.events (id INTEGER);
@@ -92,15 +91,15 @@
       }
 
       try await database.read { transaction in
-        let main: QueryFragment = "SELECT count(*) FROM reminders"
+        let main: SQL = "SELECT count(*) FROM reminders"
         let mainRegion = try OrbitDatabaseRegion(main, in: transaction)
         #expect(mainRegion == OrbitDatabaseRegion(table: "reminders", schema: .main))
 
-        let attached: QueryFragment = "SELECT count(*) FROM events"
+        let attached: SQL = "SELECT count(*) FROM events"
         let attachedRegion = try OrbitDatabaseRegion(attached, in: transaction)
         #expect(attachedRegion == OrbitDatabaseRegion(table: "events", schema: "archive"))
 
-        let temporary: QueryFragment = "SELECT count(*) FROM scratch"
+        let temporary: SQL = "SELECT count(*) FROM scratch"
         let temporaryRegion = try OrbitDatabaseRegion(temporary, in: transaction)
         #expect(temporaryRegion == OrbitDatabaseRegion(table: "scratch", schema: .temp))
       }
@@ -111,17 +110,17 @@
       let database = try regionDatabase()
 
       try await database.read { transaction in
-        let write: QueryFragment = "DELETE FROM reminders"
+        let write: SQL = "DELETE FROM reminders"
         #expect(throws: OrbitDatabaseRegionError.writableStatement) {
           try OrbitDatabaseRegion(write, in: transaction)
         }
 
-        let invalid: QueryFragment = "SELECT value FROM missing"
+        let invalid: SQL = "SELECT value FROM missing"
         #expect(throws: SQLiteError.self) {
           try OrbitDatabaseRegion(invalid, in: transaction)
         }
 
-        let valid: QueryFragment = "SELECT title FROM reminders"
+        let valid: SQL = "SELECT title FROM reminders"
         let validRegion = try OrbitDatabaseRegion(valid, in: transaction)
         #expect(validRegion == OrbitDatabaseRegion(column: "title", in: "reminders"))
       }
@@ -132,7 +131,7 @@
       let database = try regionDatabase()
 
       try await database.read { transaction in
-        let query: QueryFragment = "PRAGMA table_info(reminders)"
+        let query: SQL = "PRAGMA table_info(reminders)"
         let region = try OrbitDatabaseRegion(query, in: transaction)
         #expect(region == .fullDatabase)
       }
@@ -150,8 +149,8 @@
       let database = try regionDatabase(configuration: SQLiteConfiguration(library: library))
 
       try await database.read { transaction in
-        let first: QueryFragment = "SELECT title FROM reminders"
-        let second: QueryFragment = "SELECT count(*) FROM reminders"
+        let first: SQL = "SELECT title FROM reminders"
+        let second: SQL = "SELECT count(*) FROM reminders"
         _ = try OrbitDatabaseRegion(first, in: transaction)
         _ = try OrbitDatabaseRegion(second, in: transaction)
       }
@@ -164,7 +163,7 @@
     ) throws -> SQLiteQueue {
       let database = try inMemoryDatabase(configuration: configuration)
       try database.writeBlocking { transaction in
-        try transaction.execute(
+        try transaction.executeScript(
           """
           CREATE TABLE reminders (
             id INTEGER PRIMARY KEY,

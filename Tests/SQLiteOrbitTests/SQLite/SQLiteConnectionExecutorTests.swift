@@ -1,5 +1,4 @@
 #if !canImport(Darwin) && !os(Windows) && _runtime(_multithreaded)
-  import StructuredQueries
   import Testing
 
   #if os(Linux)
@@ -187,7 +186,7 @@
               for bump in 0..<bumpsEach {
                 try! connection.writeBlocking { try $0.execute("UPDATE counter SET n = n + 1") }
                 _ = try! connection.readBlocking {
-                  try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+                  try $0.fetchOne("SELECT n FROM counter", as: Int.self)
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
               }
@@ -199,7 +198,7 @@
               for bump in 0..<bumpsEach {
                 try! await connection.write { try $0.execute("UPDATE counter SET n = n + 1") }
                 _ = try! await connection.read {
-                  try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+                  try $0.fetchOne("SELECT n FROM counter", as: Int.self)
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
               }
@@ -209,7 +208,7 @@
         for thread in threads { await thread.value }
 
         let total: Int? = try connection.readBlocking {
-          try $0.fetchOne(#sql("SELECT n FROM counter", as: Int.self))
+          try $0.fetchOne("SELECT n FROM counter", as: Int.self)
         }
         #expect(total == 2 * writers * bumpsEach)
       }

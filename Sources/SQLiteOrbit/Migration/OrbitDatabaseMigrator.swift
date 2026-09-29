@@ -476,11 +476,11 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws -> (type: String, name: String)? {
     // The table of applied migrations is dropped with the rest, and the migrations create it
     // again.
-    var cursor = try transaction.rowCursor(
+    try transaction.fetchOne(
       "SELECT type, name FROM sqlite_schema WHERE \(Self.userObjects) LIMIT 1"
-    )
-    guard let row = try cursor.next() else { return nil }
-    return (row[0].textValue ?? "", row[1].textValue ?? "")
+    ) { row in
+      (row[0].textValue ?? "", row[1].textValue ?? "")
+    }
   }
 
   // MARK: - Detecting schema changes
@@ -601,25 +601,21 @@ public struct OrbitDatabaseMigrator: Sendable {
     // GRDB leaves out `pragma_` names as well, which SQLite's table-valued pragmas are called by.
     // The table of applied migrations is the migrator's own, compared through its identifiers
     // instead, and one GRDB created is spelled differently from one this migrator creates.
-    var objects: Set<SchemaObject> = []
-    var cursor = try transaction.rowCursor(
+    let objects = try transaction.fetchAll(
       """
       SELECT type, name, tbl_name, sql FROM sqlite_schema
       WHERE \(Self.userObjects) AND name NOT LIKE 'pragma\\_%' ESCAPE '\\'
         AND name <> \(tableName) COLLATE NOCASE
       """
-    )
-    while let row = try cursor.next() {
-      objects.insert(
-        SchemaObject(
-          type: row[0].textValue ?? "",
-          name: row[1].textValue ?? "",
-          tableName: row[2].textValue ?? "",
-          sql: row[3].textValue
-        )
+    ) { row in
+      SchemaObject(
+        type: row[0].textValue ?? "",
+        name: row[1].textValue ?? "",
+        tableName: row[2].textValue ?? "",
+        sql: row[3].textValue
       )
     }
-    return objects
+    return Set(objects)
   }
 
   // Everything but what SQLite and Turso keep for themselves, which neither lets be dropped:
