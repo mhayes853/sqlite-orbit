@@ -1,6 +1,71 @@
 #if StructuredQueries
   public import StructuredQueriesSQLite
+#endif
 
+/// A single database result row whose lifetime is limited to the current cursor access.
+///
+/// A row is a view onto the statement's current position. Advancing the cursor invalidates the row
+/// it lent, which is why a row is noncopyable and nonescapable. Read a column by its position, or
+/// by its name with ``subscript(column:)``.
+///
+/// ```swift
+/// try await database.read { transaction in
+///   var cursor = try transaction.rowCursor("SELECT id, title FROM reminders")
+///   while var row = try cursor.next() {
+///     print(row[0].integerValue ?? 0, row[column: "title"]?.textValue ?? "")
+///   }
+/// }
+/// ```
+public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
+  /// How many columns the row has.
+  var columnCount: Int { get }
+
+  /// The name of a column, as SQLite reports it: the `AS` name when the query gives one.
+  ///
+  /// - Parameter index: The column's zero-based position, which must be less than
+  ///   ``columnCount``.
+  /// - Returns: The column's name.
+  func columnName(at index: Int) -> String
+
+  /// The value of a column.
+  ///
+  /// Reading a column by position does not move a decoder's position through the row, so it can
+  /// be mixed with decoding.
+  ///
+  /// - Parameter index: The column's zero-based position. A position outside the row stops the
+  ///   process.
+  subscript(index: Int) -> OrbitDatabaseValue { get }
+
+  /// The value of the first column with a name, or `nil` when the row has no such column.
+  ///
+  /// Names are compared exactly, and the columns are searched from left to right.
+  ///
+  /// - Parameter name: The column's name.
+  subscript(column name: String) -> OrbitDatabaseValue? { get }
+}
+
+extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
+  /// The value of the first column with a name, or `nil` when the row has no such column.
+  ///
+  /// Names are compared exactly, and the columns are searched from left to right, so read by
+  /// position where a row has many columns and is read often.
+  ///
+  /// ```swift
+  /// let title = row[column: "title"]?.textValue
+  /// ```
+  ///
+  /// - Parameter name: The column's name.
+  public subscript(column name: String) -> OrbitDatabaseValue? {
+    for index in 0..<columnCount where columnName(at: index) == name {
+      return self[index]
+    }
+    return nil
+  }
+}
+
+// MARK: - Structured Queries
+
+#if StructuredQueries
   /// A result row that Structured Queries values can be decoded from.
   ///
   /// Each `decode` reads the next column along rather than re-reading the first, so decoding a row is
@@ -40,81 +105,5 @@
     mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput)
-  }
-
-  /// A cursor that decodes each raw row into one Structured Queries value.
-  ///
-  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-  /// that projects a single value, so it is rarely named directly.
-  ///
-  /// ```swift
-  /// try await database.read { transaction in
-  ///   var cursor: OrbitDatabaseQueryCursor = try transaction.fetchCursor(Reminder.all)
-  ///   while let reminder = try cursor.next() {
-  ///     print(reminder.title)
-  ///   }
-  /// }
-  /// ```
-  public struct OrbitDatabaseQueryCursor<Base: OrbitDatabaseRowCursor, Value: QueryRepresentable>:
-    OrbitDatabaseCursor, ~Copyable, ~Escapable
-  where Base: ~Copyable, Base: ~Escapable, Base.Row: OrbitDatabaseStructuredRow {
-    /// The value this cursor produces for each row.
-    public typealias Element = Value.QueryOutput
-
-    @usableFromInline
-    internal var base: Base
-
-    @_lifetime(copy base)
-    @usableFromInline
-    internal init(base: consuming Base) {
-      self.base = base
-    }
-
-    /// Advances the cursor and returns the next value, or `nil` when exhausted.
-    @inlinable
-    public mutating func next() throws -> Value.QueryOutput? {
-      guard var row = try base.next() else { return nil }
-      return try row.decode(Value.self)
-    }
-  }
-
-  /// A cursor that decodes each raw row into a tuple of Structured Queries values.
-  ///
-  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-  /// that projects several values, so it is rarely named directly.
-  ///
-  /// ```swift
-  /// try await database.read { transaction in
-  ///   var cursor = try transaction.fetchCursor(Reminder.select { ($0.id, $0.title) })
-  ///   while let (id, title) = try cursor.next() {
-  ///     print(id, title)
-  ///   }
-  /// }
-  /// ```
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  public struct OrbitDatabaseTupleQueryCursor<
-    Base: OrbitDatabaseRowCursor,
-    each Value: QueryRepresentable
-  >:
-    OrbitDatabaseCursor, ~Copyable, ~Escapable
-  where Base: ~Copyable, Base: ~Escapable, Base.Row: OrbitDatabaseStructuredRow {
-    /// The value this cursor produces for each row.
-    public typealias Element = (repeat (each Value).QueryOutput)
-
-    @usableFromInline
-    internal var base: Base
-
-    @_lifetime(copy base)
-    @usableFromInline
-    internal init(base: consuming Base) {
-      self.base = base
-    }
-
-    /// Advances the cursor and returns the next value, or `nil` when exhausted.
-    @inlinable
-    public mutating func next() throws -> (repeat (each Value).QueryOutput)? {
-      guard var row = try base.next() else { return nil }
-      return try row.decode((repeat each Value).self)
-    }
   }
 #endif
