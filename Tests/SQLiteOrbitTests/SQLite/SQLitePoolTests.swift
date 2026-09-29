@@ -52,6 +52,124 @@
     }
   }
 
+  @Test(arguments: [0, -1])
+  func aNonpositiveReaderCountStillOpensOneReader(readerCount: Int) async throws {
+    try await withTestDatabaseFile("pool") { file in
+      let openedConnections = TestCounter()
+      var configuration = SQLiteConfiguration.default
+      configuration.readerCount = readerCount
+      configuration.connectionSetups.append(
+        SQLiteConnectionSetup { _ in
+          openedConnections.increment()
+          return SQLiteResultCode.ok.rawValue
+        }
+      )
+
+      let pool = try file.pool(configuration: configuration)
+      // One writer and one reader must have been configured, even for an invalid count.
+      #expect(openedConnections.value == 2)
+      #expect(try await pool.read { try $0.fetchOne(#sql("SELECT 1", as: Int.self)) } == 1)
+    }
+  }
+
+  @Test
+  func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {
+    let query = "SELECT title FROM items ORDER BY id"
+    let prepared = TestCounter()
+    let finalized = TestCounter()
+    let preparedStatements = Lock<Set<UInt>>([])
+    let base = builtInTestLibrary
+    var library = base
+    library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail in
+      let code = base.statements.preparation.prepare(
+        connection,
+        sql,
+        byteCount,
+        flags,
+        statement,
+        tail
+      )
+      if code == SQLiteResultCode.ok.rawValue,
+        let sql, String(cString: sql) == query,
+        let pointer = statement?.pointee
+      {
+        _ = preparedStatements.withLock { $0.insert(UInt(bitPattern: pointer)) }
+        prepared.increment()
+      }
+      return code
+    }
+    library.statements.execution.finalize = { statement in
+      if let statement,
+        preparedStatements.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
+      {
+        finalized.increment()
+      }
+      return base.statements.execution.finalize(statement)
+    }
+
+    try await withTestDatabaseFile("pool") { file in
+      var configuration = SQLiteConfiguration.default
+      configuration.readerCount = 1
+      configuration.maximumCachedStatements = 0
+      configuration.library = library
+      let pool = try file.pool(configuration: configuration)
+      try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
+      try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
+
+      for _ in 0..<2 {
+        #expect(
+          try await pool.read {
+            try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+          } == ["One"]
+        )
+        #expect(
+          try await pool.write {
+            try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+          } == ["One"]
+        )
+      }
+      #expect(prepared.value == 4)
+      #expect(finalized.value == prepared.value)
+    }
+  }
+
+  @Test
+  func anObservationOnAPoolSeesConcurrentWrites() async throws {
+    try await withPool(readerCount: 2) { pool in
+      let observedCounts = TestRecorder<Int>()
+      let observedErrors = TestRecorder<String>()
+      let observation = OrbitValueObservation<Int>
+        .tracking { transaction in
+          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+        }
+      let subscription = try observation.subscribe(
+        to: pool,
+        onError: { observedErrors.append(String(describing: $0)) },
+        onChange: { observedCounts.append($0.value) }
+      )
+      defer { subscription.cancel() }
+      try await observedCounts.waitForCount(1)
+      #expect(observedCounts.values == [0])
+
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        for id in 1...24 {
+          group.addTask {
+            try await pool.write { transaction in
+              try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+            }
+          }
+        }
+        try await group.waitForAll()
+      }
+
+      // Refetches may combine several commits, but the last published value must be current.
+      try await waitUntil { observedCounts.last == 24 }
+      #expect(try await pool.rowCount(of: "items") == 24)
+      #expect(observedCounts.values.dropFirst().allSatisfy { $0 > 0 && $0 <= 24 })
+      #expect(observedErrors.values.isEmpty)
+    }
+  }
+
   @Test
   func poolReadersRefuseRawSQLWrites() async throws {
     try await withPool { pool throws in
