@@ -1,6 +1,7 @@
 import Observation
 import RemindersData
 import SQLiteOrbit
+import StructuredQueriesSQLite
 import SwiftUI
 import TipKit
 

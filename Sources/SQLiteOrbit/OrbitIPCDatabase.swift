@@ -8,11 +8,9 @@
 /// transport, which is what all but a caller supplying their own writer or transport wants.
 ///
 /// ```swift
-/// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
-///
 /// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
 /// try await database.write { transaction in
-///   try Reminder.insert { Reminder.Draft(title: "Buy milk") }.execute(transaction)
+///   try transaction.execute("INSERT INTO reminders (title) VALUES (\("Buy milk"))")
 /// }
 /// ```
 public final class OrbitIPCDatabase:
@@ -123,7 +121,9 @@ public final class OrbitIPCDatabase:
   /// Reads from the database inside a transaction.
   ///
   /// ```swift
-  /// let reminders = try await database.read { try $0.fetchAll(Reminder.all) }
+  /// let titles = try await database.read { transaction in
+  ///   try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue ?? "" }
+  /// }
   /// ```
   ///
   /// - Parameter body: Reads the value from a read transaction.
@@ -138,7 +138,9 @@ public final class OrbitIPCDatabase:
   /// Reads from the database inside a transaction, blocking the calling thread.
   ///
   /// ```swift
-  /// let count = try database.readBlocking { try $0.fetchCount(Reminder.all) }
+  /// let count = try database.readBlocking { transaction in
+  ///   try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+  /// }
   /// ```
   ///
   /// - Parameter body: Reads the value from a read transaction.
@@ -158,7 +160,7 @@ public final class OrbitIPCDatabase:
   ///
   /// ```swift
   /// try await database.write { transaction in
-  ///   try Reminder.insert { Reminder.Draft(title: "Buy milk") }.execute(transaction)
+  ///   try transaction.execute("INSERT INTO reminders (title) VALUES (\("Buy milk"))")
   /// }
   /// ```
   ///
@@ -185,7 +187,7 @@ public final class OrbitIPCDatabase:
   ///
   /// ```swift
   /// try database.writeBlocking { transaction in
-  ///   try Reminder.update { $0.isCompleted = true }.execute(transaction)
+  ///   try transaction.execute("UPDATE reminders SET isCompleted = \(true)")
   /// }
   /// ```
   ///
@@ -206,7 +208,7 @@ public final class OrbitIPCDatabase:
   ///
   /// ```swift
   /// let integrity = try await database.readWithoutTransaction { connection in
-  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  ///   try connection.fetchAll("PRAGMA integrity_check") { $0[0].textValue ?? "" }
   /// }
   /// ```
   ///
@@ -225,7 +227,7 @@ public final class OrbitIPCDatabase:
   ///
   /// ```swift
   /// let integrity = try database.readWithoutTransactionBlocking { connection in
-  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  ///   try connection.fetchAll("PRAGMA integrity_check") { $0[0].textValue ?? "" }
   /// }
   /// ```
   ///
@@ -393,7 +395,7 @@ extension OrbitIPCDatabase: OrbitObservableDatabase {
   /// ```swift
   /// let subscription = try database.subscribe(
   ///   transactionObserver: CommitLogger(),
-  ///   region: Reminder.databaseRegion
+  ///   region: OrbitDatabaseRegion(table: "reminders")
   /// )
   /// ```
   ///

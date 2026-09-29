@@ -21,13 +21,18 @@ jobs:
           # The linked system SQLite, which is what a caller gets by default.
           - name: default traits
             traits: ""
-          # The default database and test trait also integrate with swift-dependencies.
+          # The default database and test trait also integrate with swift-dependencies. Naming
+          # traits replaces the defaults, so Structured Queries is named to keep its tests.
           - name: SystemSQLite + Dependencies
-            traits: "--traits SystemSQLite,Dependencies"
+            traits: "--traits SystemSQLite,Dependencies,StructuredQueries"
           # SQLCipher in place of the platform SQLite. The two are mutually exclusive, so this
           # also covers the package building with `SystemSQLite` off.
           - name: SQLCipher
-            traits: "--traits SQLCipher"
+            traits: "--traits SQLCipher,StructuredQueries"
+          # Raw SQL alone, without Structured Queries or Foundation. The raw SQL suite compiles
+          # here and in the default job alike, which is what shows the traits only add API.
+          - name: lean
+            traits: "--disable-default-traits --traits SystemSQLite"
     steps:
       - uses: actions/checkout@v4
 
@@ -48,12 +53,17 @@ jobs:
       - uses: actions/checkout@v4
 
       # This downloads and links the release-hosted artifact. The rest of the test target includes
-      # cases for SQLite capabilities Turso deliberately reports as unavailable.
+      # cases for SQLite capabilities Turso deliberately reports as unavailable. Both suites use
+      # Structured Queries to set up and inspect their databases, so the trait is named too.
       - name: Test Turso compatibility
-        run: swift test --disable-default-traits --traits Turso --filter TursoCompatibilityTests
+        run: |
+          swift test --disable-default-traits --traits Turso,StructuredQueries \
+            --filter TursoCompatibilityTests
 
       - name: Test migrations with Turso
-        run: swift test --disable-default-traits --traits Turso --filter OrbitDatabaseMigratorTests
+        run: |
+          swift test --disable-default-traits --traits Turso,StructuredQueries \
+            --filter OrbitDatabaseMigratorTests
 
   test-swiftui:
     name: macOS (SwiftUI)

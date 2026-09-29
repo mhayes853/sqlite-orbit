@@ -59,7 +59,7 @@
         let driver = try TursoPool(path: file.path)
 
         let mode = try await driver.readWithoutTransaction { connection in
-          try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+          try connection.fetchOne(#sql("SELECT * FROM pragma_journal_mode", as: String.self))
         }
 
         #expect(mode?.lowercased() == "mvcc")
@@ -248,7 +248,7 @@
       try await withTestDatabaseFile("turso") { file in
         let driver = try TursoPool(path: file.path, writerCount: 2)
         try await driver.write { transaction in
-          try transaction.execute(
+          try transaction.executeScript(
             "CREATE TABLE counter (id INTEGER PRIMARY KEY, value INTEGER NOT NULL);"
               + " INSERT INTO counter VALUES (1, 0)"
           )

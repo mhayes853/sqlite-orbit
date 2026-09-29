@@ -5,6 +5,7 @@ import RemindersData
 import RemindersNotifications
 import RemindersUI
 import SQLiteOrbit
+import StructuredQueriesSQLite
 import SwiftUI
 
 enum ReminderIntentPriority: Int, AppEnum, Sendable {

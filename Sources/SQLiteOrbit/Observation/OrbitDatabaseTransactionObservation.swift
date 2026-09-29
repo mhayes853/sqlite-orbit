@@ -2,7 +2,7 @@
 ///
 /// ```swift
 /// let localOnly = OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try $0.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue } }
 ///   .filterTransactions { $0.origin == .local }
 /// ```
 public enum OrbitDatabaseTransactionOrigin: Hashable, Sendable {
@@ -185,7 +185,7 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
   /// ```swift
   /// let subscription = try database.subscribe(
   ///   transactionObserver: CommitLogger(),
-  ///   region: Reminder.databaseRegion
+  ///   region: OrbitDatabaseRegion(table: "reminders")
   /// )
   /// ```
   ///

@@ -13,14 +13,18 @@
 /// ```swift
 /// struct RemindersOverview: OrbitFetchKeyRequest {
 ///   struct Value: Sendable {
-///     var incompleteCount = 0
-///     var newest: [Reminder] = []
+///     var incompleteCount: Int64 = 0
+///     var newestTitles: [String] = []
 ///   }
 ///
 ///   func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
 ///     try Value(
-///       incompleteCount: transaction.fetchCount(Reminder.where { !$0.isCompleted }),
-///       newest: transaction.fetchAll(Reminder.order { $0.createdAt.desc() }.limit(10))
+///       incompleteCount: transaction.fetchOne(
+///         "SELECT count(*) FROM reminders WHERE NOT isCompleted"
+///       ) { $0[0].integerValue ?? 0 } ?? 0,
+///       newestTitles: transaction.fetchAll(
+///         "SELECT title FROM reminders ORDER BY createdAt DESC LIMIT 10"
+///       ) { $0[0].textValue ?? "" }
 ///     )
 ///   }
 /// }
@@ -30,7 +34,7 @@
 ///
 ///   var body: some View {
 ///     Text("\(overview.incompleteCount) remaining")
-///     ForEach(overview.newest, id: \.id) { reminder in Text(reminder.title) }
+///     ForEach(overview.newestTitles, id: \.self) { title in Text(title) }
 ///   }
 /// }
 /// ```

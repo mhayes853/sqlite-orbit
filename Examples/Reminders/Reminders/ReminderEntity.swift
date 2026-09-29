@@ -2,6 +2,7 @@ import AppIntents
 import Foundation
 import RemindersData
 import SQLiteOrbit
+import StructuredQueriesSQLite
 
 struct ReminderEntity: AppEntity, Sendable {
   static let typeDisplayRepresentation = TypeDisplayRepresentation(

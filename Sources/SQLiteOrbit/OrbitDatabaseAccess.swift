@@ -4,9 +4,9 @@
 /// queue and pool implementations, not a general-purpose driver abstraction.
 ///
 /// ```swift
-/// func countReminders(in database: some OrbitDatabaseReader) async throws -> Int {
+/// func countReminders(in database: some OrbitDatabaseReader) async throws -> Int64 {
 ///   try await database.read { transaction in
-///     try transaction.fetchCount(Reminder.all)
+///     try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue ?? 0 } ?? 0
 ///   }
 /// }
 /// ```
@@ -44,7 +44,7 @@ public protocol OrbitDatabaseReader: Sendable {
   ///
   /// ```swift
   /// let integrity = try await database.readWithoutTransaction { connection in
-  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  ///   try connection.fetchAll("PRAGMA integrity_check") { $0[0].textValue ?? "" }
   /// }
   /// ```
   ///
@@ -63,7 +63,7 @@ public protocol OrbitDatabaseReader: Sendable {
   ///
   /// ```swift
   /// let integrity = try database.readWithoutTransactionBlocking { connection in
-  ///   try connection.fetchAll(#sql("PRAGMA integrity_check", as: String.self))
+  ///   try connection.fetchAll("PRAGMA integrity_check") { $0[0].textValue ?? "" }
   /// }
   /// ```
   ///
@@ -80,7 +80,7 @@ public protocol OrbitDatabaseReader: Sendable {
 /// ```swift
 /// func complete(_ id: Int, in database: some OrbitDatabaseWriter) async throws {
 ///   try await database.write { transaction in
-///     try transaction.execute(Reminder.where { $0.id.eq(id) }.update { $0.isCompleted = true })
+///     try transaction.execute("UPDATE reminders SET isCompleted = \(true) WHERE id = \(id)")
 ///   }
 /// }
 /// ```

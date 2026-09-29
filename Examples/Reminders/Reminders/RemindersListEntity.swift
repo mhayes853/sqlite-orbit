@@ -1,6 +1,7 @@
 import AppIntents
 import RemindersData
 import SQLiteOrbit
+import StructuredQueriesSQLite
 
 struct RemindersListEntity: AppEntity, Sendable {
   static let typeDisplayRepresentation = TypeDisplayRepresentation(

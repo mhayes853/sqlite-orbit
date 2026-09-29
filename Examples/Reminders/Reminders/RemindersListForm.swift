@@ -3,6 +3,7 @@ import PhotosUI
 import RemindersData
 import RemindersUI
 import SQLiteOrbit
+import StructuredQueriesSQLite
 import SwiftUI
 
 @MainActor

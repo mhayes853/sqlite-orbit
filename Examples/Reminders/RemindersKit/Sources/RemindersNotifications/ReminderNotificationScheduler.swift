@@ -2,6 +2,7 @@ import Foundation
 import OSLog
 import RemindersData
 import SQLiteOrbit
+import StructuredQueriesSQLite
 import UserNotifications
 
 public final class ReminderNotificationScheduler: Sendable {

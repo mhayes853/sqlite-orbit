@@ -13,13 +13,16 @@ import SQLiteOrbit
 let database = try OrbitIPCDatabase(path: databasePath)
 
 try await database.write { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try transaction.execute("INSERT INTO reminders (title) VALUES (\(title))")
 }
 
-for try await reminders in OrbitValueObservation.trackingAll(Reminder.all)
-  .values(in: database)
-{
-  render(reminders)
+let titles = OrbitValueObservation.tracking { transaction in
+  try transaction.fetchAll("SELECT title FROM reminders ORDER BY title") { row in
+    row[0].textValue ?? ""
+  }
+}
+for try await titles in titles.values(in: database) {
+  render(titles)
 }
 ```
 
@@ -31,21 +34,127 @@ connection cannot outlive its access closure. `OrbitValueObservation` builds cal
 asynchronous-sequence observation on that transaction boundary, both within one process and across
 cooperating processes.
 
-[swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) is the package's
-query construction and binding layer, and `import SQLiteOrbit` re-exports it, so no second import is
-needed to build statements. Statements can be executed and decoded directly by any read or write
+Queries are written as raw `SQL`, and
+[swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) adds a type-safe
+query builder on top of it behind the `StructuredQueries` trait, which is on by default.
+
+## Raw SQL
+
+`SQL` is a string literal whose interpolated values are bound as parameters rather than spliced into
+the text, so a value can never change what a statement means. Interpolating other `SQL` splices it
+in along with its own parameters, which is how a statement is composed from parts:
+
+```swift
+let title = "Get milk"
+let isCompleted: SQL = "is_completed = \(false)"
+try await database.write { transaction in
+  try transaction.execute("INSERT INTO reminders (title) VALUES (\(title))")
+  try transaction.execute("UPDATE reminders SET priority = \(2) WHERE \(isCompleted)")
+}
+```
+
+`Int`, `Int64`, `Double`, `Bool`, `String`, `[UInt8]`, `OrbitDatabaseValue`, and their optionals
+bind as parameters. `\(quote:)` splices in a quoted identifier, and `\(raw:)` splices in text as it
+is, for the parts of a statement that are chosen at runtime but cannot be bound. `+`, `append`, and
+`joined(separator:)` build a statement from pieces. There is deliberately no initializer from a
+`String` value.
+
+Rows are read by position or by column name, as `OrbitDatabaseValue`s, one of SQLite's five storage
+classes:
+
+```swift
+let reminders = try await database.read { transaction in
+  try transaction.fetchAll("SELECT id, title FROM reminders WHERE list_id = \(listID)") { row in
+    (id: row[0].integerValue ?? 0, title: row[column: "title"]?.textValue ?? "")
+  }
+}
+
+let count = try await database.read { transaction in
+  try transaction.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+}
+```
+
+`rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
+its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
+read:
+
+```swift
+let deletedIDs = try await database.write { transaction in
+  try transaction.fetchAll("DELETE FROM reminders WHERE is_completed RETURNING id") {
+    $0[0].integerValue ?? 0
+  }
+}
+```
+
+`SQL` runs one statement. A script of several, such as a schema, runs with `executeScript`, which
+takes a plain `String` and binds nothing:
+
+```swift
+try await database.write { transaction in
+  try transaction.executeScript(
+    """
+    CREATE TABLE lists (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+    CREATE TABLE reminders (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists (id));
+    """
+  )
+}
+```
+
+An `OrbitDatabaseQuery<Access>` pairs SQL with the capability it requires, and a read transaction
+only accepts `OrbitDatabaseQuery<OrbitDatabaseReadAccess>`. Raw SQL cannot show that it only reads
+through its type, so a read query is checked with `sqlite3_stmt_readonly` when it is prepared, and
+one that may write is refused with a `SQLiteError` whose code is `.readOnly` before it runs. That
+includes pragmas that can change state as well as report it, such as `PRAGMA journal_mode`; read
+those through their table-valued form, `SELECT * FROM pragma_journal_mode`, or in a write
 transaction.
 
-Whether a statement needs a write transaction is read off its type. An `OrbitDatabaseQuery<Access>`
-pairs a statement with the capability it requires, and can only be built from a statement that
-already has it: every `SELECT`-shaped statement can become a read query, and any statement at all
-can become a write query. So a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or
-trigger definition, and this is checked at compile time rather than by a list of known statement
-types. Statements the query library keeps private, such as the one behind `union`, are classified
-too.
+## Traits
 
-Raw SQL is the exception: its capability cannot be read from its type, so it is accepted by read and
-write transactions alike, and the caller is stating which it is.
+| Trait | Default | Adds |
+| --- | --- | --- |
+| `SystemSQLite` | Yes | Links the platform SQLite and vends `SQLiteLibrary.system`. |
+| `StructuredQueries` | Yes | The swift-structured-queries query builder, `@FetchAll`, `@FetchOne`, `@Row`, `@SingleRow`, and typed regions and observations. Enables `Foundation`. |
+| `Foundation` | Yes | `Date`, `UUID`, and `Data` interpolations and `OrbitDatabaseValue` conversions, using FoundationEssentials where the toolchain has it. |
+| `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
+| `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
+| `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
+
+Every trait only adds API: SQL that compiles with a trait off compiles, and runs the same, with it
+on. Naming any trait in a manifest leaves the defaults out, so a lean build lists only what it
+needs:
+
+```swift
+.package(
+  url: "https://github.com/your-org/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["SystemSQLite"]
+)
+```
+
+`import SQLiteOrbit` does not re-export swift-structured-queries. Code that builds statements
+imports it as well:
+
+```swift
+import SQLiteOrbit
+import StructuredQueriesSQLite
+
+@Table struct Reminder {
+  let id: Int
+  var title = ""
+  var isCompleted = false
+}
+
+let pending = try await database.read { transaction in
+  try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+}
+```
+
+A statement converts to raw SQL with `SQL(fragment: statement.query)`, and a query expression can
+be interpolated into `SQL` directly. Whether a statement needs a write transaction is read off its
+type: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
+write query, so a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
+definition at compile time. Statements the query library keeps private, such as the one behind
+`union`, are classified too.
 
 ## Reminders demo
 
@@ -65,11 +174,11 @@ import SQLiteOrbit
 let database = try OrbitIPCDatabase(path: databasePath)
 
 try await database.write { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try transaction.execute("INSERT INTO reminders (title) VALUES (\(title))")
 }
 
-let reminders = try await database.read { transaction in
-  try transaction.fetchAll(Reminder.all)
+let titles = try await database.read { transaction in
+  try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue ?? "" }
 }
 ```
 
@@ -200,11 +309,12 @@ transactions:
 
 ```swift
 library.trustedSchema = { connection, enabled in
-  try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? 1 : 0)")
+  try connection.execute("PRAGMA trusted_schema = \(raw: enabled ? "1" : "0")")
 }
 ```
 
-`SQLiteConnectionAccess.execute` also accepts a `QueryFragment`, including safely bound values.
+`SQLiteConnectionAccess.execute` takes `SQL`, binding its values, and `executeScript` runs a script
+of several statements.
 
 `SQLiteLibrary.system` is vended by the `SystemSQLite` trait, which is enabled by default. Disabling
 it links no SQLite at all, leaving the library entirely to you:
@@ -221,13 +331,13 @@ The `SQLCipher` trait links SQLCipher instead and vends `SQLiteLibrary.sqlCipher
 exclusive with `SystemSQLite`: SQLCipher is a fork of SQLite and exports the same `sqlite3_*`
 symbols, so enabling both would link two builds under one set of names and leave the link order to
 decide which one every call reaches. Naming any trait leaves the defaults out, which is what makes
-the traits exclusive in practice:
+the traits exclusive in practice. Name `StructuredQueries` as well to keep the query builder:
 
 ```swift
 .package(
   url: "https://github.com/your-org/sqlite-orbit",
   from: "0.1.0",
-  traits: ["SQLCipher"]
+  traits: ["SQLCipher", "StructuredQueries"]
 )
 ```
 
@@ -321,7 +431,8 @@ try await database.read { transaction in
 }
 ```
 
-Statements come in four shapes, and `fetchAll`, `fetchOne`, and `fetchCursor` cover all of them: a
+With the `StructuredQueries` trait, statements come in four shapes, and `fetchAll`, `fetchOne`, and
+`fetchCursor` cover all of them: a
 single projected value, a tuple of projected values, an unprojected select decoding to its table,
 and a select with joins decoding to a tuple of every table in the row.
 
@@ -484,8 +595,39 @@ the first query the caller happens to run.
 
 ## Collations and functions
 
-Collating sequences and functions written in Swift are declared with the `@DatabaseCollation` and
-`@DatabaseFunction` macros, then registered on a `SQLiteConfiguration`:
+Functions written in Swift are registered on a `SQLiteConfiguration`, and receive and return
+`OrbitDatabaseValue`s. An `argumentCount` of `nil` takes any number of arguments, and an error a
+function throws fails the statement that called it:
+
+```swift
+var configuration = SQLiteConfiguration.default
+configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+  arguments in
+  arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
+}
+```
+
+An aggregate builds up an accumulator over the rows of each group:
+
+```swift
+struct LongestText: SQLiteAggregateAccumulator {
+  var longest: String?
+
+  mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
+    guard let text = arguments[0].textValue else { return }
+    if text.count > longest?.count ?? -1 { longest = text }
+  }
+
+  func finish() throws -> OrbitDatabaseValue {
+    longest.map(OrbitDatabaseValue.text) ?? nil
+  }
+}
+
+configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
+```
+
+With the `StructuredQueries` trait, collating sequences and functions can also be declared with the
+`@DatabaseCollation` and `@DatabaseFunction` macros, and registered the same way:
 
 ```swift
 @DatabaseCollation
@@ -567,7 +709,7 @@ the migrations before it left behind:
 ```swift
 try await migrator.migrate(database, upTo: "Create reminders")
 try await database.write { transaction in
-  try transaction.execute(#sql("INSERT INTO reminders (title) VALUES ('Old')", as: Void.self))
+  try transaction.execute("INSERT INTO reminders (title) VALUES ('Old')")
 }
 try await migrator.migrate(database, upTo: "Add completion")
 ```
@@ -674,11 +816,17 @@ columns:
 
 ```swift
 let everything = OrbitDatabaseRegion.fullDatabase
+let reminders = OrbitDatabaseRegion(table: "reminders")
+let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "reminders")
+let archived = OrbitDatabaseRegion(table: "reminders", schema: "archive")
+```
+
+With the `StructuredQueries` trait, regions can also be named through a table's type:
+
+```swift
 let reminders = OrbitDatabaseRegion(Reminder.self)
 let titles = Reminder.databaseRegion(\.title)
 let visibleFields = Reminder.databaseRegion { ($0.title, $0.isCompleted) }
-let rawColumns = OrbitDatabaseRegion(columns: ["title", "isCompleted"], in: "reminders")
-let archived = OrbitDatabaseRegion(table: "reminders", schema: "archive")
 ```
 
 Typed table instances produce the region of their entire table; their stored values do not narrow
@@ -688,14 +836,11 @@ symmetric difference, subtraction, containment, and overlap testing. Subtraction
 exclusions such as every column in a table except one particular column. Whole-table regions absorb
 their column regions, while regions for distinct tables or schemas do not intersect.
 
-A read transaction can derive the region of a `QueryFragment` by asking SQLite to compile it:
+A read transaction can derive the region of raw `SQL` by asking SQLite to compile it:
 
 ```swift
 let region = try await database.read { transaction in
-  try OrbitDatabaseRegion(
-    #sql("SELECT title FROM reminders WHERE NOT isCompleted", as: String.self).query,
-    in: transaction
-  )
+  try OrbitDatabaseRegion("SELECT title FROM reminders WHERE NOT isCompleted", in: transaction)
 }
 ```
 
@@ -709,7 +854,8 @@ refetching after unrelated writes.
 `SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitIPCDatabase` are observable databases. A value
 observation fetches an initial value, then fetches again after a committed write that may affect
 its region.
-`trackingAll` and `trackingOne` derive that region directly from a readable query:
+With the `StructuredQueries` trait, `trackingAll` and `trackingOne` derive that region directly
+from a readable query:
 
 ```swift
 let reminders = OrbitValueObservation.trackingAll(
@@ -990,6 +1136,7 @@ observer events. A rollback follows provisional changes with `databaseDidRollbac
 ## Fetch properties
 
 `@FetchAll`, `@FetchOne`, and `@Fetch` are the property wrappers over that observation machinery.
+`@Fetch` is always available; `@FetchAll` and `@FetchOne` need the `StructuredQueries` trait.
 A property declares the query it wants, and stays current with it:
 
 ```swift

@@ -12,7 +12,7 @@
   /// ```swift
   /// let driver = try TursoPool(path: .file(url))
   /// try await driver.concurrentWrite { transaction in
-  ///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+  ///   try transaction.execute("INSERT INTO reminders (id, title) VALUES (1, \("Get milk"))")
   /// }
   /// ```
   public final class TursoPool: OrbitConcurrentDatabaseWriter, OrbitObservableDatabase {

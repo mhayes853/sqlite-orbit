@@ -5,7 +5,7 @@
 ///
 /// ```swift
 /// do {
-///   try await database.write { try Reminder.insert { draft }.execute($0) }
+///   try await database.write { try $0.execute("INSERT INTO reminders (title) VALUES (\(title))") }
 /// } catch is OrbitDatabaseSuspendedError {
 ///   // Retry the transaction once the database is resumed.
 /// }

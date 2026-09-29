@@ -10,7 +10,7 @@
 ///   try transaction.fetchAll(
 ///     "SELECT id, title FROM reminders WHERE title = \(title) ORDER BY id"
 ///   ) { row in
-///     (row[0].integerValue!, row[1].textValue!)
+///     (row[0].integerValue ?? 0, row[1].textValue ?? "")
 ///   }
 /// }
 /// ```
