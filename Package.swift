@@ -68,7 +68,12 @@ let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
-    .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .product(
+      name: "StructuredQueriesSQLite",
+      package: "swift-structured-queries",
+      condition: .when(traits: ["StructuredQueries"])
+    ),
+    .target(name: "_SQLiteOrbitFoundation", condition: .when(traits: ["Foundation"])),
     .target(name: "CLinuxEvents", condition: .when(platforms: [.linux, .android])),
     .target(
       name: "CSQLite3",
@@ -102,13 +107,22 @@ let packageTarget1: Target = .target(
     .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
     .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
-    .define("Dependencies", .when(traits: ["Dependencies"]))
+    .define("Dependencies", .when(traits: ["Dependencies"])),
+    .define("Foundation", .when(traits: ["Foundation"])),
+    .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ],
   linkerSettings: [
     // Rust's standard library uses the platform math library. This is already implicit on
     // Apple platforms, while Linux consumers of the Turso static artifact must name it.
     .linkedLibrary("m", .when(platforms: [.linux]))
   ]
+)
+
+// Imports FoundationEssentials where the toolchain has it, and all of Foundation elsewhere, so the
+// `Foundation` trait never links more than the package uses.
+let foundationTarget: Target = .target(
+  name: "_SQLiteOrbitFoundation",
+  path: "Sources/_SQLiteOrbitFoundation"
 )
 
 let packageTarget2: Target = .target(
@@ -140,7 +154,12 @@ let packageTarget5: Target = .testTarget(
   dependencies: [
     "SQLiteOrbit",
     "SQLiteOrbitTestSupport",
-    .product(name: "StructuredQueriesSQLite", package: "swift-structured-queries"),
+    .product(
+      name: "StructuredQueriesSQLite",
+      package: "swift-structured-queries",
+      condition: .when(traits: ["StructuredQueries"])
+    ),
+    .target(name: "_SQLiteOrbitFoundation", condition: .when(traits: ["Foundation"])),
     .product(
       name: "Dependencies",
       package: "swift-dependencies",
@@ -170,13 +189,16 @@ let packageTarget5: Target = .testTarget(
     .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
     .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
-    .define("Dependencies", .when(traits: ["Dependencies"]))
+    .define("Dependencies", .when(traits: ["Dependencies"])),
+    .define("Foundation", .when(traits: ["Foundation"])),
+    .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ]
 )
 
 let packageTargets: [Target] = [
   packageTarget0,
   linuxEventsTarget,
+  foundationTarget,
   packageTarget1,
   packageTarget2,
   packageTarget3,
@@ -198,7 +220,7 @@ let package = Package(
     .library(name: "SQLiteOrbitTestSupport", targets: ["SQLiteOrbitTestSupport"])
   ],
   traits: [
-    .default(enabledTraits: ["SystemSQLite"]),
+    .default(enabledTraits: ["SystemSQLite", "StructuredQueries", "Foundation"]),
     .trait(
       name: "SystemSQLite",
       description: "Links the platform SQLite and vends `SQLiteLibrary.system`."
@@ -214,6 +236,18 @@ let package = Package(
       description:
         "Links the local Rust Turso engine and vends `SQLiteLibrary.turso`. Mutually exclusive "
         + "with the other SQLite traits, which export the same `sqlite3_*` symbols."
+    ),
+    .trait(
+      name: "Foundation",
+      description:
+        "Adds `Date`, `UUID`, `Data`, and `URL` conveniences, using FoundationEssentials where "
+        + "the toolchain provides it."
+    ),
+    .trait(
+      name: "StructuredQueries",
+      description:
+        "Adds the type-safe query layer from swift-structured-queries on top of raw `SQL`.",
+      enabledTraits: ["Foundation"]
     ),
     .trait(
       name: "Dependencies",
