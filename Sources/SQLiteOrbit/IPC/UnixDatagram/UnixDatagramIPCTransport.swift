@@ -187,8 +187,8 @@
     ///
     /// - Parameter configuration: Describes the coordination directory and buffer sizes for this
     ///   endpoint.
-    /// - Throws: A ``UnixSystemError`` if the configuration is invalid or the socket cannot
-    ///   be created and bound.
+    /// - Throws: A ``UnixSystemError`` if the configuration is invalid, the coordination directory
+    ///   cannot be created, or the socket cannot be created and bound.
     public convenience init(configuration: Configuration) throws {
       try self.init(
         configuration: configuration,

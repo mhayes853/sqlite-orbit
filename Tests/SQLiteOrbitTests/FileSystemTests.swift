@@ -99,6 +99,27 @@ struct FileSystemTests {
     #expect(URL(fileURLWithPath: path).path == FileManager.default.temporaryDirectory.path)
   }
 
+  #if !canImport(Darwin)
+    @Test
+    func tmpdirNamesTheTemporaryDirectoryWithASlashAtItsEnd() {
+      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp") == "/var/tmp/")
+      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp/") == "/var/tmp/")
+      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "/var//tmp//") == "/var//tmp//")
+      #expect(FileSystem.temporaryDirectoryPath(environmentValue: "") == "/")
+      #if os(Android)
+        #expect(FileSystem.temporaryDirectoryPath(environmentValue: nil) == "/data/local/tmp/")
+      #else
+        #expect(FileSystem.temporaryDirectoryPath(environmentValue: nil) == "/tmp/")
+      #endif
+      // Where the default coordination directory ends up, whatever the slashes.
+      #expect(
+        FileSystem.temporaryDirectoryPath(environmentValue: "/var/tmp") + "sqlite-orbit"
+          == URL(fileURLWithPath: "/var/tmp", isDirectory: true)
+          .appending(path: "sqlite-orbit", directoryHint: .isDirectory).path
+      )
+    }
+  #endif
+
   #if canImport(Darwin) || os(Linux) || os(Android)
     @Test
     func theDefaultCoordinationDirectoryIsTheOneFoundationComputed() {

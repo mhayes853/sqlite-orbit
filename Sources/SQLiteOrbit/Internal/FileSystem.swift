@@ -39,10 +39,20 @@ enum FileSystem {
       }
     #endif
     #if !os(WASI) && !os(Windows)
-      if let value = environmentValue(securelyNamed: "TMPDIR") {
-        return value.utf8.last == UInt8(ascii: "/") ? value : value + "/"
-      }
+      return temporaryDirectoryPath(environmentValue: environmentValue(securelyNamed: "TMPDIR"))
+    #else
+      return temporaryDirectoryPath(environmentValue: nil)
     #endif
+  }
+
+  /// The temporary directory `TMPDIR` names, given a slash at its end if it has none, or the
+  /// platform's own if `TMPDIR` is not set, as Foundation has it outside Darwin.
+  ///
+  /// - Parameter value: The value of `TMPDIR`, or `nil` if it is not set.
+  static func temporaryDirectoryPath(environmentValue value: String?) -> String {
+    if let value {
+      return value.utf8.last == UInt8(ascii: "/") ? value : value + "/"
+    }
     #if os(Android)
       return "/data/local/tmp/"
     #else
