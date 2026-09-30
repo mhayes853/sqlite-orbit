@@ -1,20 +1,7 @@
 #if SQLiteVec
-  import CSQLiteVec
+  import CSQLiteOrbitVec
 
-  // This is the function pointer SQLite retains. It also guards a runtime compiled with
-  // SQLITE_OMIT_LOAD_EXTENSION: on non-Apple builds Vec needs an API table, and returning an error
-  // makes opening the connection fail rather than dereferencing a null table.
-  private let sqliteVecInitializer: SQLiteExtensionInitializer = { connection, error, api in
-    let routines = api?.assumingMemoryBound(to: sqlite3_api_routines.self)
-    #if !canImport(Darwin)
-      guard
-        let routines,
-        routines.pointee.create_function_v2 != nil,
-        routines.pointee.create_module_v2 != nil
-      else { return SQLiteResultCode.error.rawValue }
-    #endif
-    return sqlite3_vec_init(connection, error, routines)
-  }
+  private let sqliteVecInitializer: SQLiteExtensionInitializer = sqlite_orbit_vec_init
 
   extension SQLiteConfiguration {
     /// Arranges SQLite Vec initialization before user setup runs on every connection.
@@ -34,25 +21,18 @@
       connectionSetups.insert(
         SQLiteConnectionSetup(
           prepare: { library in
-            guard let extensions = library.extensions else {
-              throw SQLiteFeatureUnavailableError(libraryName: library.name, feature: .sqliteVec)
-            }
-            #if canImport(Darwin)
-              if extensions.isAppleSystemSQLite { return }
-            #endif
-            guard extensions.autoExtensions != nil else {
+            if library.extensions?.isAppleSystemSQLite == true { return }
+            guard library.extensions?.autoExtensions != nil else {
               throw SQLiteFeatureUnavailableError(libraryName: library.name, feature: .sqliteVec)
             }
             try library.registerAutoExtension(sqliteVecInitializer)
           },
           install: { connection in
-            #if canImport(Darwin)
-              if connection.sqlite.extensions?.isAppleSystemSQLite == true {
-                return sqliteVecInitializer(connection.sqliteConnection, nil, nil)
-              }
-            #endif
-            // Automatic extensions were initialized by SQLite during `open`.
-            return SQLiteResultCode.ok.rawValue
+            guard connection.sqlite.extensions?.isAppleSystemSQLite == true else {
+              // Automatic extensions were initialized by SQLite during `open`.
+              return SQLiteResultCode.ok.rawValue
+            }
+            return sqliteVecInitializer(connection.sqliteConnection, nil, nil)
           }
         ),
         at: 0

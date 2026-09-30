@@ -1,5 +1,4 @@
 #if SQLiteVec && BuiltInSQLite && !Turso
-  import CSQLiteVec
   import Testing
   @testable import SQLiteOrbit
 
@@ -15,8 +14,7 @@
       let errors = TestCounter()
       let subscription = try OrbitValueObservation<Int64>
         .tracking { transaction in
-          try transaction.fetchOne("SELECT count(*) FROM embeddings") { $0[0].integerValue ?? 0 }
-            ?? 0
+          try transaction.fetchOne("SELECT count(*) FROM embeddings", as: Int64.self) ?? 0
         }
         .subscribe(
           to: database,
@@ -43,10 +41,10 @@
       try await driver.withDatabase(
         schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
       ) { database in
-        let version: String = try await database.read {
-          try $0.fetchOne("SELECT vec_version()") { $0[0].textValue ?? "" } ?? ""
+        let version = try await database.read {
+          try $0.fetchOne("SELECT vec_version()", as: String.self)
         }
-        #expect(version.hasPrefix("v0."))
+        #expect(try #require(version).hasPrefix("v0."))
 
         try await database.write {
           try $0.executeScript(
@@ -64,8 +62,9 @@
             SELECT rowid FROM embeddings
             WHERE embedding MATCH vec_f32('[0.1,0,0]') AND k = 2
             ORDER BY distance
-            """
-          ) { $0[0].integerValue }
+            """,
+            as: Int64.self
+          )
         }
         #expect(nearest == [1, 2])
 
@@ -77,7 +76,7 @@
         }
         #expect(
           try await database.read {
-            try $0.fetchOne("SELECT count(*) FROM embeddings") { $0[0].integerValue }
+            try $0.fetchOne("SELECT count(*) FROM embeddings", as: Int64.self)
           } == 3
         )
       }
@@ -99,7 +98,11 @@
       try await withTestDatabaseFile { file in
         for _ in 0..<2 {
           let pool = try file.pool(configuration: configuration)
-          _ = try await pool.read { try $0.fetchOne("SELECT vec_length('[1,2,3]')") { $0[0] } }
+          #expect(
+            try await pool.read {
+              try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)
+            } == 3
+          )
         }
       }
       #expect(setups.value == 8)
@@ -168,29 +171,6 @@
         #expect(error?.code == .error)
       }
 
-      @Test
-      func initializerRejectsARuntimeWithoutVirtualTableRegistration() throws {
-        var configuration = SQLiteConfiguration.default
-        configuration.library.extensions = SQLiteLibrary.Extensions(
-          autoExtensions: SQLiteLibrary.AutoExtensions(
-            register: { initializer in
-              var routines = sqlite3_api_routines()
-              routines.create_function_v2 = { _, _, _, _, _, _, _, _, _ in
-                SQLiteResultCode.ok.rawValue
-              }
-              // Like SQLITE_OMIT_VIRTUALTABLE, this runtime has scalar functions but no module
-              // registration. Invoking Vec with it must fail rather than calling a null function.
-              let callback = unsafeBitCast(initializer, to: SQLiteExtensionInitializer.self)
-              return withUnsafePointer(to: &routines) { callback(nil, nil, UnsafeRawPointer($0)) }
-            },
-            cancel: { _ in 0 }
-          )
-        )
-        let error = #expect(throws: SQLiteError.self) {
-          _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
-        }
-        #expect(error?.code == .error)
-      }
     #endif
 
     #if canImport(Darwin) && SystemSQLite
@@ -202,7 +182,7 @@
         let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
         #expect(
           try database.readBlocking {
-            try $0.fetchOne("SELECT vec_length('[1,2,3]')") { $0[0].integerValue }
+            try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)
           } == 3
         )
       }

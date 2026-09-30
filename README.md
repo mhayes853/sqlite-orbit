@@ -635,7 +635,7 @@ let nearest = try await database.read { transaction in
     ORDER BY distance
     """
   ) { row in
-    (row[0].integerValue, row[1].doubleValue)
+    try (row[0, as: Int64.self], row[1, as: Double.self])
   }
 }
 ```
@@ -655,8 +655,9 @@ let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 
 On non-Apple platforms, the runtime must provide the extension API table and virtual-table
 registration Vec requires; builds omitting these fail initialization. On Apple platforms, the SDK
-compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole provider. Turso and
-libraries without extension support fail the open with `SQLiteFeatureUnavailableError`.
+compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole
+provider. Turso and libraries without extension support fail the open with
+`SQLiteFeatureUnavailableError`.
 
 If you replace `configuration.connectionSetups`, call `configuration.registerSQLiteVec()` to restore
 Vec initialization. Its registration uses the configuration's library at connection opening time.

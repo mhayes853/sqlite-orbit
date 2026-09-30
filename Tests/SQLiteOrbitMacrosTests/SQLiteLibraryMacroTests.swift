@@ -165,19 +165,18 @@ struct SQLiteLibraryMacroTests {
   func qualifiedEncryptedLibrary(apis: String, includesAutoExtensions: Bool) {
     let extensions =
       includesAutoExtensions
-      ? [
-        "SQLiteLibrary.Extensions(",
-        "    autoExtensions: SQLiteLibrary.AutoExtensions(",
-        "      register: {",
-        "          SQLCipher.sqlite3_auto_extension($0)",
-        "      },",
-        "      cancel: {",
-        "          SQLCipher.sqlite3_cancel_auto_extension($0)",
-        "      }",
-        "    )",
-        "  )"
-      ]
-      .joined(separator: "\n") : "nil"
+      ? """
+      SQLiteLibrary.Extensions(
+          autoExtensions: SQLiteLibrary.AutoExtensions(
+            register: {
+                SQLCipher.sqlite3_auto_extension($0)
+            },
+            cancel: {
+                SQLCipher.sqlite3_cancel_auto_extension($0)
+            }
+          )
+        )
+      """ : "nil"
     assertMacro {
       """
       let library = #sqliteLibrary(module: "SQLCipher", apis: \(apis))

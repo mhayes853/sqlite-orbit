@@ -136,7 +136,7 @@
     configuration.connectionSetups = []
     let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
     let value = try database.readBlocking {
-      try $0.fetchOne("SELECT orbit_extension_test_marker()") { $0[0].integerValue }
+      try $0.fetchOne("SELECT orbit_extension_test_marker()", as: Int64.self)
     }
     #expect(value == 42)
     #expect(try library.cancelAutoExtension(initializer))
@@ -145,13 +145,13 @@
     // Cancellation affects future connections, but leaves an initialized connection working.
     #expect(
       try database.readBlocking {
-        try $0.fetchOne("SELECT orbit_extension_test_marker()") { $0[0].integerValue }
+        try $0.fetchOne("SELECT orbit_extension_test_marker()", as: Int64.self)
       } == 42
     )
     let later = try SQLiteQueue(path: ":memory:", configuration: configuration)
     #expect(throws: SQLiteError.self) {
       try later.readBlocking {
-        try $0.fetchOne("SELECT orbit_extension_test_marker()") { $0[0].integerValue }
+        try $0.fetchOne("SELECT orbit_extension_test_marker()", as: Int64.self)
       }
     }
   }

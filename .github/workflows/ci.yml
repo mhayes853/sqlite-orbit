@@ -108,6 +108,9 @@ jobs:
       - name: Test SQLite Vec with Apple system SQLite
         run: swift test --traits default,SQLiteVec --filter 'SQLiteVecTests|SQLiteExtensionsTests'
 
+      - name: Test SQLite Vec with SQLCipher
+        run: swift test --traits SQLCipher,StructuredQueries,SQLiteVec --filter 'SQLiteVecTests|SQLiteExtensionsTests'
+
   test-reminders:
     name: iOS (Reminders demo)
     runs-on: macos-26

@@ -68,11 +68,7 @@ let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
-    .product(
-      name: "CSQLiteVec",
-      package: "sqlite-vec-data",
-      condition: .when(traits: ["SQLiteVec"])
-    ),
+    .target(name: "CSQLiteOrbitVec", condition: .when(traits: ["SQLiteVec"])),
     .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
@@ -131,6 +127,12 @@ let foundationTarget: Target = .target(
   path: "Sources/_SQLiteOrbitFoundation"
 )
 
+// Keep Vec's platform SQLite headers out of Swift modules importing a custom SQLite build.
+let sqliteVecTarget: Target = .target(
+  name: "CSQLiteOrbitVec",
+  dependencies: [.product(name: "CSQLiteVec", package: "sqlite-vec-data")]
+)
+
 let packageTarget2: Target = .target(
   name: "SQLiteOrbitTestSupport",
   dependencies: ["SQLiteOrbit"]
@@ -160,11 +162,6 @@ let packageTarget5: Target = .testTarget(
   dependencies: [
     "SQLiteOrbit",
     "SQLiteOrbitTestSupport",
-    .product(
-      name: "CSQLiteVec",
-      package: "sqlite-vec-data",
-      condition: .when(traits: ["SQLiteVec"])
-    ),
     .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
@@ -211,6 +208,7 @@ let packageTargets: [Target] = [
   packageTarget0,
   linuxEventsTarget,
   foundationTarget,
+  sqliteVecTarget,
   packageTarget1,
   packageTarget2,
   packageTarget3,
