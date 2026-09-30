@@ -86,6 +86,24 @@ let count = try await database.read { transaction in
 }
 ```
 
+Any `ConvertibleFromOrbitDatabaseValue` is read from a column with `row[index, as:]` or
+`row[column:as:]`, and a single column is fetched with `fetchAll(_:as:)` and `fetchOne(_:as:)`.
+These are as strict about storage classes as Structured Queries decoding is, so a `NULL` only reads
+as an optional, and a column that does not convert throws an `OrbitDatabaseColumnDecodingError`
+naming it:
+
+```swift
+let reminders = try await database.read { transaction in
+  try transaction.fetchAll("SELECT id, priority FROM reminders") { row in
+    (id: try row[0, as: Int.self], priority: try row[column: "priority", as: Priority?.self])
+  }
+}
+
+let titles = try await database.read { transaction in
+  try transaction.fetchAll("SELECT title FROM reminders ORDER BY title", as: String.self)
+}
+```
+
 `rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
 its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
 read:

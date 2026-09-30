@@ -22,7 +22,7 @@
       #expect(error?.columnName == "quantity")
       // `Int` reads through SQLite's 64-bit integer accessor, so that is the type asked for.
       #expect(error?.reason == "to decode Int64, but found TEXT")
-      #expect(error?.sql.contains("not a number") == true)
+      #expect(error?.sql?.contains("not a number") == true)
     }
 
     @Test
