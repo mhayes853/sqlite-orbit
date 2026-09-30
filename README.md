@@ -666,8 +666,10 @@ The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs
 without the Vec trait. Cancellation affects future connections and leaves already initialized ones
 working. Initializers and their code must remain loaded while SQLite can call them.
 
-With this trait, `import SQLiteOrbit` also brings `CSQLiteVec` and
-`StructuredQueriesSQLiteVecCore` into scope. `EmbeddingVector` conforms to
+With this trait, `import SQLiteOrbit` brings `StructuredQueriesSQLiteVecCore` into scope. Builds
+using `SystemSQLite` also re-export `CSQLiteVec`; custom builds use Orbit's opaque C bridge to avoid
+conflicts between their SQLite headers and the platform headers imported by `CSQLiteVec`.
+`EmbeddingVector` conforms to
 `OrbitDatabaseValueConvertible`, so raw SQL can bind and fetch vectors directly:
 
 ```swift

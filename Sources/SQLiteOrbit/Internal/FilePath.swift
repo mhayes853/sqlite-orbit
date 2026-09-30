@@ -142,8 +142,8 @@ struct FilePath: Hashable, Sendable, CustomStringConvertible, ExpressibleByStrin
 
   // MARK: - Standardizing
 
-  /// The path made absolute and standardized, exactly as the platform's Foundation spells
-  /// `URL(fileURLWithPath: path).standardizedFileURL.path`:
+  /// The path made absolute and standardized, preserving the platform's original Foundation
+  /// file-URL spelling:
   ///
   /// - The path is made absolute as ``absolute()`` makes it, so a tilde at its start is expanded
   ///   outside Darwin and is an ordinary component on Darwin.
@@ -162,8 +162,8 @@ struct FilePath: Hashable, Sendable, CustomStringConvertible, ExpressibleByStrin
     return path.standardizingAbsolutePath().removingTrailingSlashes()
   }
 
-  /// The path made absolute as the platform's Foundation spells
-  /// `URL(fileURLWithPath: path).path`: a relative one is resolved against the current
+  /// The path made absolute with the platform's original Foundation file-URL spelling:
+  /// a relative one is resolved against the current
   /// directory, its `.` and `..` segments removed as it is, and trailing slashes go.
   ///
   /// Outside Darwin, a path beginning with a tilde starts from a home directory, as

@@ -23,7 +23,9 @@
       #expect(try EmbeddingVector<3>(orbitDatabaseValue: .blob(bytes)) == vector)
       #expect(try EmbeddingVector<3>?.none.orbitDatabaseValue() == .null)
       #expect(try EmbeddingVector<3>?(orbitDatabaseValue: .null) == nil)
-      #expect(SQLITE_VEC_VERSION.hasPrefix("v0."))
+      #if SystemSQLite
+        #expect(SQLITE_VEC_VERSION.hasPrefix("v0."))
+      #endif
     }
 
     @Test
