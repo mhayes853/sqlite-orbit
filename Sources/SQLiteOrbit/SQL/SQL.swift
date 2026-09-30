@@ -39,8 +39,8 @@ public struct SQL: Hashable, Sendable {
   public private(set) var bindings: [OrbitDatabaseValue]
 
   // A value that could not be lowered to a binding, such as an unsigned integer past `Int64.max`
-  // from a Structured Queries fragment. It is thrown when the statement is bound, which is where
-  // the same value always failed before it could be represented here.
+  // interpolated or from a Structured Queries fragment. It is thrown when the statement is bound,
+  // which is where the same value always failed before it could be represented here.
   var bindingFailure: SQLBindingFailure?
 
   /// Creates SQL from text that is already written, with values for its parameters.
@@ -163,8 +163,8 @@ extension SQL: ExpressibleByStringInterpolation {
 
   /// Builds ``SQL`` from a string literal.
   ///
-  /// A value is bound as a parameter, ``SQL`` is spliced in along with its own parameters, and
-  /// `\(raw:)` and `\(quote:)` splice text in directly.
+  /// A ``ConvertibleToOrbitDatabaseValue`` is bound as a parameter, ``SQL`` is spliced in along
+  /// with its own parameters, and `\(raw:)` and `\(quote:)` splice text in directly.
   ///
   /// ```swift
   /// let query: SQL = """
@@ -197,120 +197,38 @@ extension SQL: ExpressibleByStringInterpolation {
 
     /// Binds a value as a parameter.
     ///
+    /// The value is never spliced into the SQL, so it cannot change the statement's meaning. A
+    /// value that fails to convert binds `NULL`, and its error is thrown when the statement runs.
+    ///
     /// ```swift
-    /// let query: SQL = "SELECT * FROM notes WHERE body = \(OrbitDatabaseValue.text("Hi"))"
+    /// let query: SQL = "SELECT title FROM reminders WHERE priority = \(Priority.high)"
+    /// ```
+    ///
+    /// - Parameter value: The value to bind.
+    public mutating func appendInterpolation(_ value: some ConvertibleToOrbitDatabaseValue) {
+      sql.text.append("?")
+      do {
+        sql.bindings.append(try value.orbitDatabaseValue())
+      } catch {
+        sql.bindings.append(.null)
+        if sql.bindingFailure == nil {
+          sql.bindingFailure = SQLBindingFailure(error: error)
+        }
+      }
+    }
+
+    /// Binds a storage value as a parameter.
+    ///
+    /// This only exists so a storage value can be written as an implicit member, or as `nil`.
+    ///
+    /// ```swift
+    /// let query: SQL = "INSERT INTO notes (id, body) VALUES (\(.integer(1)), \(.null))"
     /// ```
     ///
     /// - Parameter value: The value to bind.
     public mutating func appendInterpolation(_ value: OrbitDatabaseValue) {
       sql.text.append("?")
       sql.bindings.append(value)
-    }
-
-    /// Binds a value as a parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The value to bind.
-    public mutating func appendInterpolation(_ value: OrbitDatabaseValue?) {
-      appendInterpolation(value ?? .null)
-    }
-
-    /// Binds an integer as a parameter.
-    ///
-    /// ```swift
-    /// let query: SQL = "SELECT title FROM reminders WHERE id = \(id)"
-    /// ```
-    ///
-    /// - Parameter value: The integer to bind.
-    public mutating func appendInterpolation(_ value: Int) {
-      appendInterpolation(.integer(Int64(value)))
-    }
-
-    /// Binds an integer as a parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The integer to bind.
-    public mutating func appendInterpolation(_ value: Int?) {
-      appendInterpolation(value.map { .integer(Int64($0)) })
-    }
-
-    /// Binds an integer as a parameter.
-    ///
-    /// - Parameter value: The integer to bind.
-    public mutating func appendInterpolation(_ value: Int64) {
-      appendInterpolation(.integer(value))
-    }
-
-    /// Binds an integer as a parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The integer to bind.
-    public mutating func appendInterpolation(_ value: Int64?) {
-      appendInterpolation(value.map(OrbitDatabaseValue.integer))
-    }
-
-    /// Binds a real number as a parameter.
-    ///
-    /// - Parameter value: The number to bind.
-    public mutating func appendInterpolation(_ value: Double) {
-      appendInterpolation(.real(value))
-    }
-
-    /// Binds a real number as a parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The number to bind.
-    public mutating func appendInterpolation(_ value: Double?) {
-      appendInterpolation(value.map(OrbitDatabaseValue.real))
-    }
-
-    /// Binds a Boolean as the integer `1` or `0`, which is how SQLite spells one.
-    ///
-    /// ```swift
-    /// let query: SQL = "SELECT title FROM reminders WHERE is_completed = \(false)"
-    /// ```
-    ///
-    /// - Parameter value: The Boolean to bind.
-    public mutating func appendInterpolation(_ value: Bool) {
-      appendInterpolation(.integer(value ? 1 : 0))
-    }
-
-    /// Binds a Boolean as the integer `1` or `0`, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The Boolean to bind.
-    public mutating func appendInterpolation(_ value: Bool?) {
-      appendInterpolation(value.map { .integer($0 ? 1 : 0) })
-    }
-
-    /// Binds text as a parameter.
-    ///
-    /// The text is never spliced into the SQL, so it cannot change the statement's meaning. Use
-    /// `\(raw:)` or `\(quote:)` for text that is part of the statement.
-    ///
-    /// ```swift
-    /// let query: SQL = "SELECT id FROM reminders WHERE title = \(title)"
-    /// ```
-    ///
-    /// - Parameter value: The text to bind.
-    public mutating func appendInterpolation(_ value: String) {
-      appendInterpolation(.text(value))
-    }
-
-    /// Binds text as a parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The text to bind.
-    public mutating func appendInterpolation(_ value: String?) {
-      appendInterpolation(value.map(OrbitDatabaseValue.text))
-    }
-
-    /// Binds bytes as a blob parameter.
-    ///
-    /// - Parameter value: The bytes to bind.
-    public mutating func appendInterpolation(_ value: [UInt8]) {
-      appendInterpolation(.blob(value))
-    }
-
-    /// Binds bytes as a blob parameter, or `NULL` when it is `nil`.
-    ///
-    /// - Parameter value: The bytes to bind.
-    public mutating func appendInterpolation(_ value: [UInt8]?) {
-      appendInterpolation(value.map(OrbitDatabaseValue.blob))
     }
 
     /// Splices in other SQL, along with its parameters.
@@ -437,7 +355,11 @@ func orbitQuoted(_ text: String, delimiter: Unicode.Scalar) -> String {
     /// let query: SQL = "SELECT count(*) FROM reminders WHERE \(Reminder.columns.isCompleted)"
     /// ```
     ///
+    /// A value that is also ``ConvertibleToOrbitDatabaseValue``, such as an `Int` or a `Date`, is
+    /// bound through that conformance instead, so it binds the same with this trait on or off.
+    ///
     /// - Parameter expression: The expression to splice in.
+    @_disfavoredOverload
     public mutating func appendInterpolation(_ expression: some QueryExpression) {
       appendInterpolation(SQL(fragment: expression.queryFragment))
     }

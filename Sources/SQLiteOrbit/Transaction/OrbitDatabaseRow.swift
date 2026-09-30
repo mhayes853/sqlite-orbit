@@ -6,13 +6,14 @@
 ///
 /// A row is a view onto the statement's current position. Advancing the cursor invalidates the row
 /// it lent, which is why a row is noncopyable and nonescapable. Read a column by its position, or
-/// by its name with ``subscript(column:)``.
+/// by its name with ``subscript(column:)``, and convert it to a type of your own with
+/// ``subscript(_:as:)`` or ``subscript(column:as:)``.
 ///
 /// ```swift
 /// try await database.read { transaction in
 ///   var cursor = try transaction.rowCursor("SELECT id, title FROM reminders")
 ///   while var row = try cursor.next() {
-///     print(row[0].integerValue ?? 0, row[column: "title"]?.textValue ?? "")
+///     print(try row[0, as: Int.self], row[column: "title"]?.textValue ?? "")
 ///   }
 /// }
 /// ```
@@ -60,6 +61,78 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
       return self[index]
     }
     return nil
+  }
+
+  /// The value of a column, converted to a type.
+  ///
+  /// Read a column that may be `NULL` as an optional.
+  ///
+  /// ```swift
+  /// let id = try row[0, as: Int.self]
+  /// let dueDate = try row[1, as: Date?.self]
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - index: The column's zero-based position. A position outside the row stops the process.
+  ///   - type: The type to convert the value to.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its value cannot be
+  ///   converted.
+  public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
+    index: Int,
+    as type: Value.Type
+  ) -> Value {
+    get throws {
+      do {
+        return try Value(orbitDatabaseValue: self[index])
+      } catch {
+        let reason =
+          switch error {
+          case let error as OrbitDatabaseValueConversionError where error.value == .null:
+            "to not be NULL"
+          case let error as OrbitDatabaseValueConversionError:
+            "to decode \(error.typeName), but found \(error.value.orbitStorageClassName)"
+              + (error.reason.map { " (\($0))" } ?? "")
+          default:
+            "to decode \(Value.self), but \(error)"
+          }
+        throw OrbitDatabaseColumnDecodingError(
+          columnIndex: index,
+          columnName: columnName(at: index),
+          reason: reason,
+          underlyingError: error
+        )
+      }
+    }
+  }
+
+  /// The value of the first column with a name, converted to a type.
+  ///
+  /// Unlike ``subscript(column:)``, which returns `nil`, this throws when the row has no column
+  /// with the name, so a misspelled column is not mistaken for a `NULL` one.
+  ///
+  /// ```swift
+  /// let priority = try row[column: "priority", as: Priority?.self]
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - name: The column's name, compared exactly.
+  ///   - type: The type to convert the value to.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when the row has no column
+  ///   with the name, or when its value cannot be converted.
+  public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
+    column name: String,
+    as type: Value.Type
+  ) -> Value {
+    get throws {
+      for index in 0..<columnCount where columnName(at: index) == name {
+        return try self[index, as: Value.self]
+      }
+      throw OrbitDatabaseColumnDecodingError(
+        columnIndex: nil,
+        columnName: name,
+        reason: "to exist"
+      )
+    }
   }
 }
 
