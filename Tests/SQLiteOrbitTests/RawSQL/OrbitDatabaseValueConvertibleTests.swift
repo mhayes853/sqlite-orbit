@@ -73,8 +73,8 @@ struct OrbitDatabaseValueConvertibleTests {
       #expect(!reads(Date.self))
       #expect(!reads(UUID.self))
       #expect(reads(Data.self) == (value.blobValue != nil))
-      #expect(reads(OrbitDatabaseUnixTime.self) == (value.integerValue != nil))
-      #expect(reads(OrbitDatabaseJulianDay.self) == (value == .real(1)))
+      #expect(reads(OrbitUnixTimeDate.self) == (value.integerValue != nil))
+      #expect(reads(OrbitJulianDayDate.self) == (value == .real(1)))
     #endif
   }
 
@@ -110,9 +110,9 @@ struct OrbitDatabaseValueConvertibleTests {
       }
       #expect(uuid?.reason != nil)
       let unixTime = #expect(throws: OrbitDatabaseValueConversionError.self) {
-        try OrbitDatabaseUnixTime(orbitDatabaseValue: .real(1))
+        try OrbitUnixTimeDate(orbitDatabaseValue: .real(1))
       }
-      #expect(unixTime?.typeName == "OrbitDatabaseUnixTime")
+      #expect(unixTime?.typeName == "OrbitUnixTimeDate")
     #endif
   }
 
@@ -180,8 +180,8 @@ struct OrbitDatabaseValueConvertibleTests {
       @Test
       func datesStoredAsNumbersRoundTripAndAgreeWithSQLite() async throws {
         let date = Date(timeIntervalSince1970: 1_517_184_480.125)
-        let unixTime = OrbitDatabaseUnixTime(date)
-        let julianDay = OrbitDatabaseJulianDay(date)
+        let unixTime = OrbitUnixTimeDate(date)
+        let julianDay = OrbitJulianDayDate(date)
         #expect(unixTime.orbitDatabaseValue() == .integer(1_517_184_480))
         #expect(julianDay.orbitDatabaseValue() == .real(2440587.5 + 1_517_184_480.125 / 86400))
 
@@ -193,10 +193,10 @@ struct OrbitDatabaseValueConvertibleTests {
             "SELECT unix, julian, unixepoch(\(date)), julianday(\(date)) FROM t"
           ) { row in
             (
-              try row[0, as: OrbitDatabaseUnixTime.self].date,
-              try row[1, as: OrbitDatabaseJulianDay.self].date,
-              try row[2, as: OrbitDatabaseUnixTime.self].date,
-              try row[3, as: OrbitDatabaseJulianDay.self].date
+              try row[0, as: OrbitUnixTimeDate.self].date,
+              try row[1, as: OrbitJulianDayDate.self].date,
+              try row[2, as: OrbitUnixTimeDate.self].date,
+              try row[3, as: OrbitJulianDayDate.self].date
             )
           }
         }

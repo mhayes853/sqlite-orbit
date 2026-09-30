@@ -367,7 +367,7 @@ where Wrapped: ConvertibleFromOrbitDatabaseValue {
   extension Date: OrbitDatabaseValueConvertible {
     /// The date as ISO 8601 text, as ``OrbitDatabaseValue/init(_:)-(Date)`` spells it.
     ///
-    /// Wrap a date in ``OrbitDatabaseUnixTime`` or ``OrbitDatabaseJulianDay`` to store it as a
+    /// Wrap a date in ``OrbitUnixTimeDate`` or ``OrbitJulianDayDate`` to store it as a
     /// number instead.
     ///
     /// ```swift
