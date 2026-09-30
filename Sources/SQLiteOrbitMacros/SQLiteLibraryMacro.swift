@@ -12,6 +12,7 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
     case collations
     case encryption
     case busyHandler
+    case autoExtensions
 
     static let standard: Set<Self> = [
       .trustedSchema,
@@ -106,6 +107,17 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
       .encryption,
       "SQLiteLibrary.Encryption(key: \(raw: qualifier)sqlite3_key_v2, rekey: \(raw: qualifier)sqlite3_rekey_v2)"
     )
+    let extensions = group(
+      .autoExtensions,
+      """
+      SQLiteLibrary.Extensions(
+        autoExtensions: SQLiteLibrary.AutoExtensions(
+          register: { \(raw: qualifier)sqlite3_auto_extension($0) },
+          cancel: { \(raw: qualifier)sqlite3_cancel_auto_extension($0) }
+        )
+      )
+      """
+    )
     return """
       SQLiteLibrary(
         runtime: SQLiteLibrary.Runtime(
@@ -172,7 +184,8 @@ public struct SQLiteLibraryMacro: ExpressionMacro {
         \(labeledArgument("scalarFunctions", scalarFunctions)),
         \(labeledArgument("aggregateFunctions", aggregateFunctions)),
         collations: \(collation),
-        encryption: \(encryption)
+        encryption: \(encryption),
+        \(labeledArgument("extensions", extensions))
       )
       """
   }

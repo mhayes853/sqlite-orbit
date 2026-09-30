@@ -68,6 +68,10 @@ public struct SQLiteLibraryFeature: RawRepresentable, Hashable, Sendable {
   public static let foreignKeyCheck = Self(rawValue: "foreign key checks")
   /// Deciding how long to wait for a lock with a callback rather than a fixed timeout.
   public static let busyHandler = Self(rawValue: "busy handlers")
+  /// Registering an initializer for future connections opened by a SQLite runtime.
+  public static let autoExtensions = Self(rawValue: "automatic extension registration")
+  /// Initializing the SQLite Vec extension.
+  public static let sqliteVec = Self(rawValue: "SQLite Vec")
 }
 
 /// Reported when an operation is not implemented by the selected SQLite library.
@@ -139,6 +143,10 @@ public struct SQLiteLibrary: Sendable {
   public var collations: Collations?
   /// Database encryption support, when the library has a codec.
   public var encryption: Encryption?
+  /// Extension registration supported by this SQLite runtime.
+  ///
+  /// This capability is part of the core API in every package trait configuration.
+  public var extensions: Extensions?
   /// How database files opened by this library may be shared.
   public var fileSharing: FileSharing
   /// Whether the library implements `PRAGMA foreign_key_check`, which finds the rows whose
@@ -163,6 +171,7 @@ public struct SQLiteLibrary: Sendable {
     aggregateFunctions: AggregateFunctions? = nil,
     collations: Collations? = nil,
     encryption: Encryption? = nil,
+    extensions: Extensions? = nil,
     name: String = "custom SQLite",
     fileSharing: FileSharing = .multipleProcesses,
     isForeignKeyCheckAvailable: Bool = true
@@ -180,6 +189,7 @@ public struct SQLiteLibrary: Sendable {
     self.aggregateFunctions = aggregateFunctions
     self.collations = collations
     self.encryption = encryption
+    self.extensions = extensions
     self.fileSharing = fileSharing
     self.isForeignKeyCheckAvailable = isForeignKeyCheckAvailable
   }
@@ -215,6 +225,10 @@ extension SQLiteLibrary {
     public static let encryption = Self(rawValue: 1 << 5)
     /// Busy-handler installation through `sqlite3_busy_handler`.
     public static let busyHandler = Self(rawValue: 1 << 6)
+    /// Process-global automatic extension registration and cancellation.
+    ///
+    /// Excluded from ``standard`` because Apple system SQLite does not support it.
+    public static let autoExtensions = Self(rawValue: 1 << 7)
 
     /// The optional APIs provided by an ordinary SQLite build.
     public static let standard: Self = [
@@ -226,7 +240,7 @@ extension SQLiteLibrary {
       .busyHandler
     ]
     /// Every optional API known to this version of SQLiteOrbit.
-    public static let all: Self = [.standard, .encryption]
+    public static let all: Self = [.standard, .encryption, .autoExtensions]
   }
 
   /// How database files opened by the library can be shared.
@@ -782,11 +796,23 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
 #if SystemSQLite
   extension SQLiteLibrary {
     /// The SQLite library supplied by the operating system.
-    public static let system = configured(
-      #sqliteLibrary(),
-      name: "system SQLite",
-      fileSharing: .multipleProcesses
-    )
+    public static let system: Self = {
+      #if canImport(Darwin)
+        var library = configured(
+          #sqliteLibrary(),
+          name: "system SQLite",
+          fileSharing: .multipleProcesses
+        )
+        library.extensions = .appleSystem
+        return library
+      #else
+        return configured(
+          #sqliteLibrary(apis: [.standard, .autoExtensions]),
+          name: "system SQLite",
+          fileSharing: .multipleProcesses
+        )
+      #endif
+    }()
   }
 #endif
 
@@ -794,7 +820,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   extension SQLiteLibrary {
     /// The package's SQLCipher library, including its codec operations.
     public static let sqlCipher = configured(
-      #sqliteLibrary(apis: [.standard, .encryption]),
+      #sqliteLibrary(apis: [.standard, .encryption, .autoExtensions]),
       name: "SQLCipher",
       fileSharing: .multipleProcesses
     )

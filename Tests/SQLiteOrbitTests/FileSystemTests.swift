@@ -22,9 +22,17 @@ struct FileSystemTests {
     ]
   )
   func aPathIsStandardizedAsFoundationStandardizesIt(path: String) {
+    #if canImport(Darwin)
+      // Foundation on macOS 26 expands tildes while constructing a URL from a relative path.
+      // Start from an absolute path to preserve Orbit's original Darwin filename spelling.
+      let referencePath =
+        path.hasPrefix("/") ? path : FileManager.default.currentDirectoryPath + "/" + path
+    #else
+      let referencePath = path
+    #endif
     #expect(
       FilePath(path).standardized().string
-        == URL(fileURLWithPath: path).standardizedFileURL.path
+        == URL(fileURLWithPath: referencePath).standardizedFileURL.path
     )
   }
 

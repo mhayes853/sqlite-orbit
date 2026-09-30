@@ -157,11 +157,11 @@
           }
         let subscription = try observation.subscribe(
           to: pool,
+          scheduling: .immediate,
           onError: { observedErrors.append(String(describing: $0)) },
           onChange: { observedCounts.append($0.value) }
         )
         defer { subscription.cancel() }
-        try await observedCounts.waitForCount(1)
         #expect(observedCounts.values == [0])
 
         try await withThrowingTaskGroup(of: Void.self) { group in

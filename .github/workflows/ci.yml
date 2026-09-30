@@ -29,6 +29,12 @@ jobs:
           # also covers the package building with `SystemSQLite` off.
           - name: SQLCipher
             traits: "--traits SQLCipher,StructuredQueries"
+          - name: SQLite Vec
+            traits: "--traits default,SQLiteVec"
+          - name: SQLCipher + SQLite Vec
+            traits: "--traits SQLCipher,StructuredQueries,SQLiteVec"
+          - name: SQLite Vec without Structured Queries
+            traits: "--traits SystemSQLite,SQLiteVec"
           # Raw SQL alone, without Structured Queries or Foundation. The raw SQL suite compiles
           # here and in the default job alike, which is what shows the traits only add API.
           - name: lean
@@ -85,7 +91,8 @@ jobs:
 
   test-swiftui:
     name: macOS (SwiftUI)
-    runs-on: macos-15
+    # EmbeddingVector uses the OS 26 InlineArray/Span runtime.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
@@ -97,6 +104,12 @@ jobs:
 
       - name: Test
         run: swift test
+
+      - name: Test SQLite Vec with Apple system SQLite
+        run: swift test --traits default,SQLiteVec --filter 'EmbeddingVectorTests|SQLiteVecTests|SQLiteExtensionsTests'
+
+      - name: Test SQLite Vec with SQLCipher
+        run: swift test --traits SQLCipher,StructuredQueries,SQLiteVec --filter 'EmbeddingVectorTests|SQLiteVecTests|SQLiteExtensionsTests'
 
   test-reminders:
     name: iOS (Reminders demo)

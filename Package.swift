@@ -68,6 +68,13 @@ let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
+    .target(name: "CSQLiteOrbitVec", condition: .when(traits: ["SQLiteVec"])),
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"])),
+    .product(
+      name: "StructuredQueriesSQLiteVecCore",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["SQLiteVec"])
+    ),
     .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
@@ -109,6 +116,7 @@ let packageTarget1: Target = .target(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
+    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ],
   linkerSettings: [
@@ -123,6 +131,15 @@ let packageTarget1: Target = .target(
 let foundationTarget: Target = .target(
   name: "_SQLiteOrbitFoundation",
   path: "Sources/_SQLiteOrbitFoundation"
+)
+
+// Keep Vec's platform SQLite headers out of Swift modules importing a custom SQLite build.
+let sqliteVecTarget: Target = .target(
+  name: "CSQLiteOrbitVec",
+  dependencies: [
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"]))
+  ],
+  cSettings: [.define("SQLITE_ORBIT_VEC", .when(traits: ["SQLiteVec"]))]
 )
 
 let packageTarget2: Target = .target(
@@ -191,6 +208,7 @@ let packageTarget5: Target = .testTarget(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
+    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ]
 )
@@ -199,6 +217,7 @@ let packageTargets: [Target] = [
   packageTarget0,
   linuxEventsTarget,
   foundationTarget,
+  sqliteVecTarget,
   packageTarget1,
   packageTarget2,
   packageTarget3,
@@ -250,12 +269,21 @@ let package = Package(
       enabledTraits: ["Foundation"]
     ),
     .trait(
+      name: "SQLiteVec",
+      description:
+        "Includes SQLite Vec and initializes it automatically on supported SQLite connections."
+    ),
+    .trait(
       name: "Dependencies",
       description:
         "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
     )
   ],
   dependencies: [
+    .package(
+      url: "https://github.com/mhayes853/sqlite-vec-data",
+      revision: "f980c99e337ff7c3aff250558d038ee2b149f47e"
+    ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
     .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),

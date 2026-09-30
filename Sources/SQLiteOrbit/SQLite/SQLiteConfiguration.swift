@@ -139,6 +139,9 @@ public struct SQLiteConfiguration: Sendable {
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
     self.connectionSetups = connectionSetups
+    #if SQLiteVec
+      registerSQLiteVec()
+    #endif
   }
 }
 
@@ -162,16 +165,33 @@ public struct SQLiteConfiguration: Sendable {
 /// )
 /// ```
 public struct SQLiteConnectionSetup: Sendable {
+  private let prepare: (@Sendable (SQLiteLibrary) throws -> Void)?
   private let install: @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
 
   /// Creates a setup from a closure run on every connection.
   ///
-  /// - Parameter install: Receives primitive access to the connection and returns a SQLite result
-  ///   code. Anything other than `SQLITE_OK` fails the open.
+  /// - Parameters:
+  ///   - prepare: Runs before opening each connection, using its selected library. Use this for
+  ///     runtime-wide initialization such as automatic extension registration. A thrown error
+  ///     prevents the connection from being opened.
+  ///   - install: Receives primitive access to the connection and returns a SQLite result code.
+  ///     Anything other than `SQLITE_OK` fails the open.
   public init(
+    prepare: (@Sendable (SQLiteLibrary) throws -> Void)? = nil,
     install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
   ) {
+    self.prepare = prepare
     self.install = install
+  }
+
+  /// Prepares `library` before opening a connection.
+  ///
+  /// Custom drivers should call this before their native open, then install the setup on the
+  /// configured connection with ``callAsFunction(_:)``.
+  /// - Throws: Whatever the preparation closure throws. A failure must prevent opening the
+  ///   connection.
+  public func prepare(using library: SQLiteLibrary) throws {
+    try prepare?(library)
   }
 
   /// Installs the setup on `connection`.
