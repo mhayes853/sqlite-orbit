@@ -207,6 +207,44 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> Element? {
     try withOrbitCursor(try rowCursor(sql, cached: true)) { try $0.first(transform) }
   }
+
+  /// Returns the first column of each row raw SQL returns, converted to a type.
+  ///
+  /// ```swift
+  /// let titles = try transaction.fetchAll("SELECT title FROM reminders", as: String.self)
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run, which must only read in a read transaction.
+  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
+  /// - Returns: The values, in the order the rows were returned.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
+  ///   ``SQLiteError`` when the statement fails.
+  public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseValue>(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> [Value] {
+    try fetchAll(sql) { row in try row[0, as: Value.self] }
+  }
+
+  /// Returns the first column of the first row raw SQL returns, converted to a type.
+  ///
+  /// ```swift
+  /// let count = try transaction.fetchOne("SELECT count(*) FROM reminders", as: Int.self)
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run, which must only read in a read transaction.
+  ///   - type: The type to convert the value to.
+  /// - Returns: The value, or `nil` when the SQL returned no rows.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
+  ///   ``SQLiteError`` when the statement fails.
+  public borrowing func fetchOne<Value: ConvertibleFromOrbitDatabaseValue>(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> Value? {
+    try fetchOne(sql) { row in try row[0, as: Value.self] }
+  }
 }
 
 extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
@@ -317,6 +355,48 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     _ transform: (inout Row) throws -> Element
   ) throws -> Element? {
     try withOrbitCursor(try executeRowCursor(sql, cached: true)) { try $0.first(transform) }
+  }
+
+  /// Returns the first column of each row raw SQL that may write returns, converted to a type.
+  ///
+  /// ```swift
+  /// let ids = try transaction.fetchAll("DELETE FROM reminders RETURNING id", as: Int.self)
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
+  /// - Returns: The values, in the order the rows were returned.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
+  ///   ``SQLiteError`` when the statement fails.
+  public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseValue>(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> [Value] {
+    try fetchAll(sql) { row in try row[0, as: Value.self] }
+  }
+
+  /// Returns the first column of the first row raw SQL that may write returns, converted to a
+  /// type.
+  ///
+  /// ```swift
+  /// let id = try transaction.fetchOne(
+  ///   "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id",
+  ///   as: Int.self
+  /// )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - type: The type to convert the value to.
+  /// - Returns: The value, or `nil` when the SQL returned no rows.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
+  ///   ``SQLiteError`` when the statement fails.
+  public borrowing func fetchOne<Value: ConvertibleFromOrbitDatabaseValue>(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> Value? {
+    try fetchOne(sql) { row in try row[0, as: Value.self] }
   }
 }
 

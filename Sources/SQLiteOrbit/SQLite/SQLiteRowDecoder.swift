@@ -186,33 +186,7 @@
     }
   }
 
-  /// A decoding failure, reported against the column it happened on.
-  ///
-  /// SQLite is untyped enough that a schema change or a hand-written `SELECT` can quietly hand a
-  /// column back in the wrong storage class. This names which column it was.
-  ///
-  /// ```swift
-  /// do {
-  ///   _ = try await database.read { transaction in
-  ///     try transaction.fetchAll(#sql("SELECT id, title FROM reminders", as: (Int, Int).self))
-  ///   }
-  /// } catch let error as OrbitDatabaseColumnDecodingError {
-  ///   print(error.columnIndex, error.columnName, error.reason)
-  /// }
-  /// ```
-  public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
-    /// The zero-based position of the column in the result row.
-    public let columnIndex: Int
-
-    /// The column's name, or `"?"` when SQLite had none for it.
-    public let columnName: String
-
-    /// What the decoder expected, phrased to follow "Expected column N (name) ".
-    public let reason: String
-
-    /// The SQL of the statement that produced the row.
-    public let sql: String
-
+  extension OrbitDatabaseColumnDecodingError {
     @usableFromInline
     init(
       library: UnsafePointer<SQLiteLibrary>,
@@ -220,21 +194,13 @@
       columnIndex: Int32,
       reason: String
     ) {
-      self.columnIndex = Int(columnIndex)
-      self.columnName =
-        library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?"
-      self.reason = reason
-      self.sql =
-        library.pointee.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
-    }
-
-    /// The column, its name, what was expected of it, and the SQL that produced it.
-    public var description: String {
-      """
-      Expected column \(columnIndex) (\(columnName.debugDescription)) \(reason).
-
-      \(sql)
-      """
+      self.init(
+        columnIndex: Int(columnIndex),
+        columnName:
+          library.pointee.columns.name(statement, columnIndex).map(String.init(cString:)) ?? "?",
+        reason: reason,
+        sql: library.pointee.statements.inspection.sql(statement).map(String.init(cString:))
+      )
     }
   }
 

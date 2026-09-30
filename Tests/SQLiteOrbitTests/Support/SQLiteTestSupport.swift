@@ -195,44 +195,7 @@
   }
 
   /// A value a test reads out of a column with the plain-SQL helpers below.
-  protocol TestColumnValue: Sendable {
-    init?(testColumn value: OrbitDatabaseValue)
-  }
-
-  extension Int: TestColumnValue {
-    init?(testColumn value: OrbitDatabaseValue) {
-      guard let integer = value.integerValue else { return nil }
-      self.init(integer)
-    }
-  }
-
-  extension Int64: TestColumnValue {
-    init?(testColumn value: OrbitDatabaseValue) {
-      guard let integer = value.integerValue else { return nil }
-      self = integer
-    }
-  }
-
-  extension Double: TestColumnValue {
-    init?(testColumn value: OrbitDatabaseValue) {
-      guard let real = value.realValue else { return nil }
-      self = real
-    }
-  }
-
-  extension Bool: TestColumnValue {
-    init?(testColumn value: OrbitDatabaseValue) {
-      guard let integer = value.integerValue else { return nil }
-      self = integer != 0
-    }
-  }
-
-  extension String: TestColumnValue {
-    init?(testColumn value: OrbitDatabaseValue) {
-      guard let text = value.textValue else { return nil }
-      self = text
-    }
-  }
+  typealias TestColumnValue = ConvertibleFromOrbitDatabaseValue & Sendable
 
   extension SQLiteStatementCache {
     /// Checks out the statement `sql` compiles to, which must hold one, without holding it to
@@ -254,26 +217,6 @@
         throw SQLiteError(code: .error, message: "SQL holds no statement", sql: sql)
       }
       return statement
-    }
-  }
-
-  extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
-    /// The first column, read as `Value`, or `nil` when it is `NULL` or of another type.
-    func first<Value: TestColumnValue>(as type: Value.Type) -> Value? {
-      Value(testColumn: self[0])
-    }
-  }
-
-  extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
-    /// Fetches the first column of every row `sql` produces. A row whose column is not a `Value`
-    /// is left out.
-    func fetchAll<Value: TestColumnValue>(_ sql: SQL, as type: Value.Type) throws -> [Value] {
-      try fetchAll(sql) { $0.first(as: Value.self) }.compactMap { $0 }
-    }
-
-    /// Fetches the first column of the first row `sql` produces.
-    func fetchOne<Value: TestColumnValue>(_ sql: SQL, as type: Value.Type) throws -> Value? {
-      try fetchOne(sql) { $0.first(as: Value.self) } ?? nil
     }
   }
 
