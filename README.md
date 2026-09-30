@@ -118,9 +118,11 @@ transaction.
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
+| `SQLiteVec` | No | Includes SQLite Vec and initializes it automatically on supported connections. |
 
 Every trait only adds API: SQL that compiles with a trait off compiles, and runs the same, with it
-on. Naming any trait in a manifest leaves the defaults out, so a lean build lists only what it
+on. `SQLiteVec` also initializes its extension when opening connections. Naming any trait in a
+manifest leaves the defaults out, so a lean build lists only what it
 needs:
 
 ```swift
@@ -591,6 +593,72 @@ codec, so that is a fact about the build rather than a claim about it.
 A codec accepts any key and only reports a wrong one once something reads the file, so a keyed
 connection reads the schema while it is being configured. A wrong key fails the open rather than
 the first query the caller happens to run.
+
+## SQLite Vec
+
+Enable the opt-in `SQLiteVec` trait to make vector functions and `vec0` tables available on
+connections opened with a `SQLiteConfiguration`:
+
+```swift
+.package(
+  url: "https://github.com/mhayes853/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["default", "SQLiteVec"]
+)
+```
+
+No application startup registration or extra Swift Testing trait is required. Vec initializes
+before user connection setups and setup SQL, on writers, pool readers, and reopened connections:
+
+```swift
+let database = try SQLiteQueue(path: databasePath)
+try await database.write { transaction in
+  try transaction.executeScript(
+    "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
+  )
+  try transaction.execute("INSERT INTO embeddings VALUES (1, vec_f32('[1,2,3]'))")
+}
+let nearest = try await database.read { transaction in
+  try transaction.fetchAll(
+    """
+    SELECT rowid, distance FROM embeddings
+    WHERE embedding MATCH vec_f32('[1,2,3]') AND k = 5
+    ORDER BY distance
+    """
+  ) { row in
+    (row[0].integerValue, row[1].doubleValue)
+  }
+}
+```
+
+Apple system SQLite uses per-connection initialization, identified by its library capability rather
+than its name or version. Other supported runtimes register Vec automatically before opening the
+connection. Automatic registration affects every future connection in that SQLite runtime, including
+connections outside Orbit; already opened connections are unaffected.
+
+Custom builds opt into their own automatic registration bindings:
+
+```swift
+let library = #sqliteLibrary(module: "MySQLite", apis: [.standard, .autoExtensions])
+let configuration = SQLiteConfiguration(library: library)
+let database = try SQLiteQueue(path: databasePath, configuration: configuration)
+```
+
+On non-Apple platforms, the runtime must provide the extension API table and virtual-table
+registration Vec requires; builds omitting these fail initialization. On Apple platforms, the SDK
+compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole provider. Turso and
+libraries without extension support fail the open with `SQLiteFeatureUnavailableError`.
+
+If you replace `configuration.connectionSetups`, call `configuration.registerSQLiteVec()` to restore
+Vec initialization. Its registration uses the configuration's library at connection opening time.
+
+The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs are available
+without the Vec trait. Cancellation affects future connections and leaves already initialized ones
+working. Initializers and their code must remain loaded while SQLite can call them.
+
+Orbit consumes only the `CSQLiteVec` product from `sqlite-vec-data` 0.6.0, without building or linking
+its SQLiteData/GRDB integration. That release does not expose `StructuredQueriesSQLiteVecCore` as a
+standalone product yet; this initial integration uses raw SQL until the query product is available.
 
 ## Collations and functions
 

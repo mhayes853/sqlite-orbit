@@ -78,6 +78,11 @@ struct SQLiteHandle: ~Copyable {
     driverSetupSQL: [String] = [],
     suspension: SQLiteWriteSuspension? = nil
   ) throws -> SQLiteHandle {
+    // Runtime registration must precede `open`, and must use the library the configuration has
+    // now, rather than one captured when a setup was added.
+    for setup in configuration.connectionSetups {
+      try setup.prepare(using: configuration.library)
+    }
     let libraryStorage = UnsafeMutablePointer<SQLiteLibrary>.allocate(capacity: 1)
     libraryStorage.initialize(to: configuration.library)
     let configurationStorage = UnsafeMutablePointer<SQLiteConfiguration>.allocate(capacity: 1)

@@ -29,6 +29,13 @@ jobs:
           # also covers the package building with `SystemSQLite` off.
           - name: SQLCipher
             traits: "--traits SQLCipher,StructuredQueries"
+          - name: SQLite Vec
+            traits: "--traits default,SQLiteVec"
+          - name: SQLCipher + SQLite Vec
+            traits: "--traits SQLCipher,StructuredQueries,SQLiteVec"
+          - name: SQLite Vec without Structured Queries
+            traits: "--traits SystemSQLite,SQLiteVec"
+            forbidden-modules: "Foundation|FoundationEssentials|FoundationInternationalization"
           # Raw SQL alone, without Structured Queries or Foundation. The raw SQL suite compiles
           # here and in the default job alike, which is what shows the traits only add API.
           - name: lean
@@ -97,6 +104,9 @@ jobs:
 
       - name: Test
         run: swift test
+
+      - name: Test SQLite Vec with Apple system SQLite
+        run: swift test --traits default,SQLiteVec --filter 'SQLiteVecTests|SQLiteExtensionsTests'
 
   test-reminders:
     name: iOS (Reminders demo)

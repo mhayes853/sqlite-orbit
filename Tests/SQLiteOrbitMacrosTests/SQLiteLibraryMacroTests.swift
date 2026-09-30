@@ -150,14 +150,34 @@ struct SQLiteLibraryMacroTests {
           )
         ),
         collations: SQLiteLibrary.Collations(create: sqlite3_create_collation_v2),
-        encryption: nil
+        encryption: nil,
+        extensions: nil
       )
       """#
     }
   }
 
-  @Test(arguments: [".all", "[.standard, .encryption]"])
-  func qualifiedEncryptedLibrary(apis: String) {
+  @Test(arguments: [
+    ("[.standard, .encryption]", false),
+    (".all", true),
+    ("[.standard, .encryption, .autoExtensions]", true)
+  ])
+  func qualifiedEncryptedLibrary(apis: String, includesAutoExtensions: Bool) {
+    let extensions =
+      includesAutoExtensions
+      ? [
+        "SQLiteLibrary.Extensions(",
+        "    autoExtensions: SQLiteLibrary.AutoExtensions(",
+        "      register: {",
+        "          SQLCipher.sqlite3_auto_extension($0)",
+        "      },",
+        "      cancel: {",
+        "          SQLCipher.sqlite3_cancel_auto_extension($0)",
+        "      }",
+        "    )",
+        "  )"
+      ]
+      .joined(separator: "\n") : "nil"
     assertMacro {
       """
       let library = #sqliteLibrary(module: "SQLCipher", apis: \(apis))
@@ -296,7 +316,8 @@ struct SQLiteLibraryMacroTests {
           )
         ),
         collations: SQLiteLibrary.Collations(create: SQLCipher.sqlite3_create_collation_v2),
-        encryption: SQLiteLibrary.Encryption(key: SQLCipher.sqlite3_key_v2, rekey: SQLCipher.sqlite3_rekey_v2)
+        encryption: SQLiteLibrary.Encryption(key: SQLCipher.sqlite3_key_v2, rekey: SQLCipher.sqlite3_rekey_v2),
+        extensions: \#(extensions)
       )
       """#
     }
@@ -375,7 +396,8 @@ struct SQLiteLibraryMacroTests {
         scalarFunctions: nil,
         aggregateFunctions: nil,
         collations: nil,
-        encryption: nil
+        encryption: nil,
+        extensions: nil
       )
       """
     }

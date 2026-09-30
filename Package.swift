@@ -69,6 +69,11 @@ let packageTarget1: Target = .target(
   dependencies: [
     "SQLiteOrbitMacros",
     .product(
+      name: "CSQLiteVec",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["SQLiteVec"])
+    ),
+    .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
       condition: .when(traits: ["StructuredQueries"])
@@ -109,6 +114,7 @@ let packageTarget1: Target = .target(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
+    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ],
   linkerSettings: [
@@ -155,6 +161,11 @@ let packageTarget5: Target = .testTarget(
     "SQLiteOrbit",
     "SQLiteOrbitTestSupport",
     .product(
+      name: "CSQLiteVec",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["SQLiteVec"])
+    ),
+    .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
       condition: .when(traits: ["StructuredQueries"])
@@ -191,6 +202,7 @@ let packageTarget5: Target = .testTarget(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
+    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ]
 )
@@ -250,12 +262,18 @@ let package = Package(
       enabledTraits: ["Foundation"]
     ),
     .trait(
+      name: "SQLiteVec",
+      description:
+        "Includes SQLite Vec and initializes it automatically on supported SQLite connections."
+    ),
+    .trait(
       name: "Dependencies",
       description:
         "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
     )
   ],
   dependencies: [
+    .package(url: "https://github.com/mhayes853/sqlite-vec-data", from: "0.6.0"),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
     .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
