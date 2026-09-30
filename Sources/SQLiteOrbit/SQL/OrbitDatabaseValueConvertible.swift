@@ -367,6 +367,9 @@ where Wrapped: ConvertibleFromOrbitDatabaseValue {
   extension Date: OrbitDatabaseValueConvertible {
     /// The date as ISO 8601 text, as ``OrbitDatabaseValue/init(_:)-(Date)`` spells it.
     ///
+    /// Wrap a date in ``OrbitDatabaseUnixTime`` or ``OrbitDatabaseJulianDay`` to store it as a
+    /// number instead.
+    ///
     /// ```swift
     /// let query: SQL = "SELECT title FROM reminders WHERE due_date < \(Date())"
     /// ```

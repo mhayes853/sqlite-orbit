@@ -123,7 +123,7 @@ transaction.
 | --- | --- | --- |
 | `SystemSQLite` | Yes | Links the platform SQLite and vends `SQLiteLibrary.system`. |
 | `StructuredQueries` | Yes | The swift-structured-queries query builder, `@FetchAll`, `@FetchOne`, `@Row`, `@SingleRow`, and typed regions and observations. Re-exports `StructuredQueriesSQLite` and enables `Foundation`. |
-| `Foundation` | Yes | `Date`, `UUID`, and `Data` conversions to and from `OrbitDatabaseValue`, so they bind in and read from raw SQL, using FoundationEssentials where the toolchain has it. |
+| `Foundation` | Yes | `Date`, `UUID`, and `Data` conversions to and from `OrbitDatabaseValue`, so they bind in and read from raw SQL, with `OrbitDatabaseUnixTime` and `OrbitDatabaseJulianDay` to store a date as a number instead of ISO 8601 text, using FoundationEssentials where the toolchain has it. |
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |

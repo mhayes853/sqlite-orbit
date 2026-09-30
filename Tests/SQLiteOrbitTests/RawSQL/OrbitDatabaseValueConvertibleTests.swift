@@ -73,6 +73,8 @@ struct OrbitDatabaseValueConvertibleTests {
       #expect(!reads(Date.self))
       #expect(!reads(UUID.self))
       #expect(reads(Data.self) == (value.blobValue != nil))
+      #expect(reads(OrbitDatabaseUnixTime.self) == (value.integerValue != nil))
+      #expect(reads(OrbitDatabaseJulianDay.self) == (value == .real(1)))
     #endif
   }
 
@@ -107,6 +109,10 @@ struct OrbitDatabaseValueConvertibleTests {
         try UUID(orbitDatabaseValue: .text("not a uuid"))
       }
       #expect(uuid?.reason != nil)
+      let unixTime = #expect(throws: OrbitDatabaseValueConversionError.self) {
+        try OrbitDatabaseUnixTime(orbitDatabaseValue: .real(1))
+      }
+      #expect(unixTime?.typeName == "OrbitDatabaseUnixTime")
     #endif
   }
 
@@ -169,6 +175,38 @@ struct OrbitDatabaseValueConvertibleTests {
       }
       #expect(balance == Money(cents: 1_250))
     }
+
+    #if Foundation
+      @Test
+      func datesStoredAsNumbersRoundTripAndAgreeWithSQLite() async throws {
+        let date = Date(timeIntervalSince1970: 1_517_184_480.125)
+        let unixTime = OrbitDatabaseUnixTime(date)
+        let julianDay = OrbitDatabaseJulianDay(date)
+        #expect(unixTime.orbitDatabaseValue() == .integer(1_517_184_480))
+        #expect(julianDay.orbitDatabaseValue() == .real(2440587.5 + 1_517_184_480.125 / 86400))
+
+        let database = try inMemoryDatabase()
+        let row = try await database.write { transaction in
+          try transaction.execute("CREATE TABLE t (unix INTEGER, julian REAL)")
+          try transaction.execute("INSERT INTO t VALUES (\(unixTime), \(julianDay))")
+          return try transaction.fetchOne(
+            "SELECT unix, julian, unixepoch(\(date)), julianday(\(date)) FROM t"
+          ) { row in
+            (
+              try row[0, as: OrbitDatabaseUnixTime.self].date,
+              try row[1, as: OrbitDatabaseJulianDay.self].date,
+              try row[2, as: OrbitDatabaseUnixTime.self].date,
+              try row[3, as: OrbitDatabaseJulianDay.self].date
+            )
+          }
+        }
+        let (unix, julian, sqliteUnix, sqliteJulian) = try #require(row)
+        #expect(unix == Date(timeIntervalSince1970: 1_517_184_480))
+        #expect(sqliteUnix == unix)
+        #expect(abs(julian.timeIntervalSince(date)) < 0.001)
+        #expect(abs(sqliteJulian.timeIntervalSince(date)) < 0.001)
+      }
+    #endif
 
     @Test
     func aConversionErrorIsThrownWhenTheStatementRunsRatherThanWhenItIsBuilt() async throws {
