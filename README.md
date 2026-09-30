@@ -127,7 +127,7 @@ transaction.
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
-| `SQLiteVec` | No | Includes SQLite Vec and initializes it automatically on supported connections. |
+| `SQLiteVec` | No | Re-exports SQLite Vec's C and query-core bindings, adds raw SQL conversions for `EmbeddingVector`, and initializes Vec automatically on supported connections. |
 
 Every trait only adds API: SQL that compiles with a trait off compiles, and runs the same, with it
 on. `SQLiteVec` also initializes its extension when opening connections. Naming any trait in a
@@ -666,9 +666,29 @@ The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs
 without the Vec trait. Cancellation affects future connections and leaves already initialized ones
 working. Initializers and their code must remain loaded while SQLite can call them.
 
-Orbit consumes only the `CSQLiteVec` product from `sqlite-vec-data` 0.6.0, without building or linking
-its SQLiteData/GRDB integration. That release does not expose `StructuredQueriesSQLiteVecCore` as a
-standalone product yet; this initial integration uses raw SQL until the query product is available.
+With this trait, `import SQLiteOrbit` also brings `CSQLiteVec` and
+`StructuredQueriesSQLiteVecCore` into scope. `EmbeddingVector` conforms to
+`OrbitDatabaseValueConvertible`, so raw SQL can bind and fetch vectors directly:
+
+```swift
+let vector = EmbeddingVector<3> { Float($0) }
+try await database.write {
+  try $0.execute("INSERT INTO embeddings VALUES (2, \(vector))")
+}
+let stored = try await database.read {
+  try $0.fetchOne("SELECT embedding FROM embeddings WHERE rowid = 2", as: EmbeddingVector<3>.self)
+}
+```
+
+Vectors use little-endian 32-bit float blobs. Decoding rejects other storage classes and blobs
+whose size does not match the vector dimension. `EmbeddingVector` follows upstream's availability
+on Apple platforms: iOS, macOS, tvOS, and visionOS 26 or later, and watchOS 26 or later.
+
+Orbit uses only the `CSQLiteVec` and `StructuredQueriesSQLiteVecCore` products, without building or
+linking SQLiteData/GRDB. The dependency is temporarily pinned to main commit `f980c99`, which
+exposes the core product. The query-core bindings bring a transitive Foundation dependency even
+when the general `StructuredQueries` trait is disabled; that trait still controls Orbit's full
+query-builder integration.
 
 ## Collations and functions
 

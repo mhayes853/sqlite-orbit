@@ -69,6 +69,12 @@ let packageTarget1: Target = .target(
   dependencies: [
     "SQLiteOrbitMacros",
     .target(name: "CSQLiteOrbitVec", condition: .when(traits: ["SQLiteVec"])),
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"])),
+    .product(
+      name: "StructuredQueriesSQLiteVecCore",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["SQLiteVec"])
+    ),
     .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
@@ -274,7 +280,10 @@ let package = Package(
     )
   ],
   dependencies: [
-    .package(url: "https://github.com/mhayes853/sqlite-vec-data", from: "0.6.0"),
+    .package(
+      url: "https://github.com/mhayes853/sqlite-vec-data",
+      revision: "f980c99e337ff7c3aff250558d038ee2b149f47e"
+    ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
     .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),

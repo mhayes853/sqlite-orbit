@@ -4,6 +4,9 @@
 #ifdef SQLITE_ORBIT_VEC
 #include <sqlite3ext.h>
 
+// Keep API-table inspection out of Swift's Clang importer: its SQLite headers may differ from
+// those used by SQLCipher or another custom build, causing conflicting struct definitions.
+
 // Vec's extension entry point has SQLite's standard initializer ABI.
 extern int sqlite3_vec_init(sqlite3 *, char **, const sqlite3_api_routines *);
 

@@ -184,7 +184,13 @@ public struct SQLiteConnectionSetup: Sendable {
     self.install = install
   }
 
-  func prepare(using library: SQLiteLibrary) throws {
+  /// Prepares `library` before opening a connection.
+  ///
+  /// Custom drivers should call this before their native open, then install the setup on the
+  /// configured connection with ``callAsFunction(_:)``.
+  /// - Throws: Whatever the preparation closure throws. A failure must prevent opening the
+  ///   connection.
+  public func prepare(using library: SQLiteLibrary) throws {
     try prepare?(library)
   }
 

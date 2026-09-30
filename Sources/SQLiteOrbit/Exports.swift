@@ -6,3 +6,8 @@
   // into scope.
   @_exported import StructuredQueriesSQLite
 #endif
+
+#if SQLiteVec
+  @_exported import CSQLiteVec
+  @_exported import StructuredQueriesSQLiteVecCore
+#endif
