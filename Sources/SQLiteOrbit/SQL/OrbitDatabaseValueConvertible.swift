@@ -1,3 +1,7 @@
+#if Foundation
+  public import _SQLiteOrbitFoundation
+#endif
+
 /// A type that can be stored as an ``OrbitDatabaseValue``.
 ///
 /// Conforming a type is what lets it be interpolated into ``SQL``, where it is bound as a
@@ -120,14 +124,9 @@ public struct OrbitDatabaseValueConversionError: Error, Hashable, CustomStringCo
   /// The type that was expected and the value that was found, such as
   /// `Expected Int, found TEXT 'abc'`.
   public var description: String {
-    var description = "Expected \(typeName), found \(value.orbitStorageClassName)"
-    if value != .null {
-      description += " \(value.debugDescription)"
-    }
-    if let reason {
-      description += ": \(reason)"
-    }
-    return description
+    let found =
+      value == .null ? "NULL" : "\(value.orbitStorageClassName) \(value.debugDescription)"
+    return "Expected \(typeName), found \(found)" + (reason.map { ": \($0)" } ?? "")
   }
 }
 
@@ -144,6 +143,10 @@ extension OrbitDatabaseValue {
   }
 }
 
+// Reading is as strict about storage classes as decoding a Structured Queries value, so a column
+// reads the same way whichever API reads it: an integer is never widened to a real, and text is
+// never parsed as a number.
+
 // MARK: - Raw representable
 
 extension ConvertibleToOrbitDatabaseValue
@@ -151,16 +154,9 @@ where Self: RawRepresentable, RawValue: ConvertibleToOrbitDatabaseValue {
   /// The value stored for this one's raw value.
   ///
   /// ```swift
-  /// enum Priority: Int, OrbitDatabaseValueConvertible {
-  ///   case low, medium, high
-  /// }
-  ///
   /// let value = try Priority.high.orbitDatabaseValue()
   /// // .integer(2)
   /// ```
-  ///
-  /// - Returns: The raw value's stored value.
-  /// - Throws: Whatever converting the raw value throws.
   public func orbitDatabaseValue() throws -> OrbitDatabaseValue {
     try rawValue.orbitDatabaseValue()
   }
@@ -175,7 +171,6 @@ where Self: RawRepresentable, RawValue: ConvertibleFromOrbitDatabaseValue {
   /// // .high
   /// ```
   ///
-  /// - Parameter value: The stored raw value.
   /// - Throws: Whatever reading the raw value throws, or ``OrbitDatabaseValueConversionError``
   ///   when no value has that raw value.
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
@@ -190,27 +185,150 @@ where Self: RawRepresentable, RawValue: ConvertibleFromOrbitDatabaseValue {
   }
 }
 
-// MARK: - Database values
+// MARK: - Integers
 
-extension OrbitDatabaseValue: OrbitDatabaseValueConvertible {
-  /// The value itself.
+extension ConvertibleToOrbitDatabaseValue where Self: FixedWidthInteger {
+  /// The integer as an ``OrbitDatabaseValue/integer(_:)``.
   ///
   /// ```swift
-  /// let value = OrbitDatabaseValue.text("Get milk").orbitDatabaseValue()
+  /// let value = try UInt8(7).orbitDatabaseValue()
+  /// // .integer(7)
   /// ```
   ///
-  /// - Returns: This value.
+  /// - Throws: An overflow error for an unsigned integer larger than `Int64.max`, which SQLite's
+  ///   signed integers cannot hold.
+  public func orbitDatabaseValue() throws -> OrbitDatabaseValue {
+    guard let integer = Int64(exactly: self) else {
+      // Structured Queries reports an unsigned integer past `Int64.max` the same way.
+      throw OrbitDatabaseIntegerOverflowError(value: UInt64(clamping: self))
+    }
+    return .integer(integer)
+  }
+}
+
+extension ConvertibleFromOrbitDatabaseValue where Self: FixedWidthInteger {
+  /// Reads an integer.
+  ///
+  /// ```swift
+  /// let level = try Int8(orbitDatabaseValue: row[0])
+  /// ```
+  ///
+  /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class, or an overflow
+  ///   error when the integer does not fit, as a negative one never does in an unsigned type.
+  public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+    guard case .integer(let integer) = value else {
+      throw OrbitDatabaseValueConversionError(value: value, type: Self.self)
+    }
+    guard let exact = Self(exactly: integer) else {
+      throw OrbitDatabaseIntegerOverflowError(value: integer)
+    }
+    self = exact
+  }
+}
+
+extension Int: OrbitDatabaseValueConvertible {}
+extension Int8: OrbitDatabaseValueConvertible {}
+extension Int16: OrbitDatabaseValueConvertible {}
+extension Int32: OrbitDatabaseValueConvertible {}
+extension Int64: OrbitDatabaseValueConvertible {}
+extension UInt: OrbitDatabaseValueConvertible {}
+extension UInt8: OrbitDatabaseValueConvertible {}
+extension UInt16: OrbitDatabaseValueConvertible {}
+extension UInt32: OrbitDatabaseValueConvertible {}
+extension UInt64: OrbitDatabaseValueConvertible {}
+
+// MARK: - Floating point numbers
+
+extension ConvertibleToOrbitDatabaseValue where Self: BinaryFloatingPoint {
+  /// The number as an ``OrbitDatabaseValue/real(_:)``.
+  ///
+  /// ```swift
+  /// let value = 1.5.orbitDatabaseValue()
+  /// ```
+  public func orbitDatabaseValue() -> OrbitDatabaseValue {
+    .real(Double(self))
+  }
+}
+
+extension ConvertibleFromOrbitDatabaseValue where Self: BinaryFloatingPoint {
+  /// Reads a real number.
+  ///
+  /// An integer is not widened, so read a column that mixes the two through
+  /// ``OrbitDatabaseValue/realValue``.
+  ///
+  /// ```swift
+  /// let average = try Double(orbitDatabaseValue: row[0])
+  /// ```
+  ///
+  /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class.
+  public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+    guard case .real(let real) = value else {
+      throw OrbitDatabaseValueConversionError(value: value, type: Self.self)
+    }
+    self.init(real)
+  }
+}
+
+extension Double: OrbitDatabaseValueConvertible {}
+extension Float: OrbitDatabaseValueConvertible {}
+
+// MARK: - Other values
+
+extension Bool: OrbitDatabaseValueConvertible {
+  /// The Boolean as the integer `1` or `0`, which is how SQLite spells one.
+  ///
+  /// ```swift
+  /// let value = true.orbitDatabaseValue()
+  /// // .integer(1)
+  /// ```
+  public func orbitDatabaseValue() -> OrbitDatabaseValue {
+    .integer(self ? 1 : 0)
+  }
+
+  /// Reads an integer as a Boolean: `false` for `0`, and `true` for anything else.
+  ///
+  /// ```swift
+  /// let isCompleted = try Bool(orbitDatabaseValue: row[0])
+  /// ```
+  public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+    guard case .integer(let integer) = value else {
+      throw OrbitDatabaseValueConversionError(value: value, type: Bool.self)
+    }
+    self = integer != 0
+  }
+}
+
+extension String: OrbitDatabaseValueConvertible {
+  public func orbitDatabaseValue() -> OrbitDatabaseValue {
+    .text(self)
+  }
+
+  public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+    guard case .text(let text) = value else {
+      throw OrbitDatabaseValueConversionError(value: value, type: String.self)
+    }
+    self = text
+  }
+}
+
+extension [UInt8]: OrbitDatabaseValueConvertible {
+  public func orbitDatabaseValue() -> OrbitDatabaseValue {
+    .blob(self)
+  }
+
+  public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+    guard case .blob(let bytes) = value else {
+      throw OrbitDatabaseValueConversionError(value: value, type: [UInt8].self)
+    }
+    self = bytes
+  }
+}
+
+extension OrbitDatabaseValue: OrbitDatabaseValueConvertible {
   public func orbitDatabaseValue() -> OrbitDatabaseValue {
     self
   }
 
-  /// Creates a copy of a stored value, in whatever storage class it is in.
-  ///
-  /// ```swift
-  /// let value = try row[0, as: OrbitDatabaseValue.self]
-  /// ```
-  ///
-  /// - Parameter value: The stored value.
   public init(orbitDatabaseValue value: OrbitDatabaseValue) {
     self = value
   }
@@ -223,16 +341,11 @@ where Wrapped: ConvertibleToOrbitDatabaseValue {
   /// The wrapped value's stored value, or `NULL` when there is none.
   ///
   /// ```swift
-  /// let dueDate: Int? = nil
-  /// let value = try dueDate.orbitDatabaseValue()
+  /// let value = try Int?.none.orbitDatabaseValue()
   /// // .null
   /// ```
-  ///
-  /// - Returns: The stored value.
-  /// - Throws: Whatever converting the wrapped value throws.
   public func orbitDatabaseValue() throws -> OrbitDatabaseValue {
-    guard let self else { return .null }
-    return try self.orbitDatabaseValue()
+    try self?.orbitDatabaseValue() ?? .null
   }
 }
 
@@ -243,14 +356,90 @@ where Wrapped: ConvertibleFromOrbitDatabaseValue {
   /// ```swift
   /// let dueDate = try row[column: "due_date", as: Int?.self]
   /// ```
-  ///
-  /// - Parameter value: The stored value.
-  /// - Throws: Whatever reading the wrapped value throws.
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
-    guard value != .null else {
-      self = nil
-      return
-    }
-    self = try Wrapped(orbitDatabaseValue: value)
+    self = try value == .null ? nil : Wrapped(orbitDatabaseValue: value)
   }
 }
+
+// MARK: - Foundation
+
+#if Foundation
+  extension Date: OrbitDatabaseValueConvertible {
+    /// The date as ISO 8601 text, as ``OrbitDatabaseValue/init(_:)-(Date)`` spells it.
+    ///
+    /// ```swift
+    /// let query: SQL = "SELECT title FROM reminders WHERE due_date < \(Date())"
+    /// ```
+    public func orbitDatabaseValue() -> OrbitDatabaseValue {
+      OrbitDatabaseValue(self)
+    }
+
+    /// Reads text spelling an ISO 8601 timestamp.
+    ///
+    /// ```swift
+    /// let dueDate = try Date(orbitDatabaseValue: row[0])
+    /// ```
+    ///
+    /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class, or for text
+    ///   that does not spell a timestamp.
+    public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+      guard case .text(let text) = value else {
+        throw OrbitDatabaseValueConversionError(value: value, type: Date.self)
+      }
+      guard let date = try? Date(orbitISO8601String: text) else {
+        throw OrbitDatabaseValueConversionError(
+          value: value,
+          type: Date.self,
+          reason: "the text is not an ISO 8601 timestamp"
+        )
+      }
+      self = date
+    }
+  }
+
+  extension UUID: OrbitDatabaseValueConvertible {
+    /// The identifier as lowercase text, as ``OrbitDatabaseValue/init(_:)-(UUID)`` spells it.
+    ///
+    /// ```swift
+    /// let query: SQL = "SELECT title FROM reminders WHERE id = \(id)"
+    /// ```
+    public func orbitDatabaseValue() -> OrbitDatabaseValue {
+      OrbitDatabaseValue(self)
+    }
+
+    /// Reads text spelling a UUID, in either case.
+    ///
+    /// ```swift
+    /// let id = try UUID(orbitDatabaseValue: row[0])
+    /// ```
+    ///
+    /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class, or for text
+    ///   that does not spell a UUID.
+    public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+      guard case .text(let text) = value else {
+        throw OrbitDatabaseValueConversionError(value: value, type: UUID.self)
+      }
+      guard let uuid = UUID(uuidString: text) else {
+        throw OrbitDatabaseValueConversionError(
+          value: value,
+          type: UUID.self,
+          reason: "the text is not a UUID"
+        )
+      }
+      self = uuid
+    }
+  }
+
+  extension Data: OrbitDatabaseValueConvertible {
+    public func orbitDatabaseValue() -> OrbitDatabaseValue {
+      OrbitDatabaseValue(self)
+    }
+
+    public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+      guard case .blob(let bytes) = value else {
+        throw OrbitDatabaseValueConversionError(value: value, type: Data.self)
+      }
+      self = Data(bytes)
+    }
+  }
+#endif

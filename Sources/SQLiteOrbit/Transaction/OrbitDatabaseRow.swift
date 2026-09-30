@@ -65,9 +65,7 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
 
   /// The value of a column, converted to a type.
   ///
-  /// The conversion is as strict about the column's storage class as the type's
-  /// ``ConvertibleFromOrbitDatabaseValue`` conformance is, so read a column that may be `NULL` as
-  /// an optional.
+  /// Read a column that may be `NULL` as an optional.
   ///
   /// ```swift
   /// let id = try row[0, as: Int.self]
@@ -78,22 +76,30 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
   ///   - index: The column's zero-based position. A position outside the row stops the process.
   ///   - type: The type to convert the value to.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its value cannot be
-  ///   converted, with the conversion's error as its
-  ///   ``OrbitDatabaseColumnDecodingError/underlyingError``.
+  ///   converted.
   public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
     index: Int,
     as type: Value.Type
   ) -> Value {
     get throws {
-      let value = self[index]
       do {
-        return try Value(orbitDatabaseValue: value)
+        return try Value(orbitDatabaseValue: self[index])
       } catch {
+        let reason =
+          switch error {
+          case let error as OrbitDatabaseValueConversionError where error.value == .null:
+            "to not be NULL"
+          case let error as OrbitDatabaseValueConversionError:
+            "to decode \(error.typeName), but found \(error.value.orbitStorageClassName)"
+              + (error.reason.map { " (\($0))" } ?? "")
+          default:
+            "to decode \(Value.self), but \(error)"
+          }
         throw OrbitDatabaseColumnDecodingError(
           columnIndex: index,
           columnName: columnName(at: index),
-          converting: error,
-          to: Value.self
+          reason: reason,
+          underlyingError: error
         )
       }
     }

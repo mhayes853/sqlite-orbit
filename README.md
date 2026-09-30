@@ -53,20 +53,9 @@ try await database.write { transaction in
 }
 ```
 
-Any `ConvertibleToOrbitDatabaseValue` binds as a parameter: the standard library's integers and
-floating point numbers, `Bool`, `String`, `[UInt8]`, `OrbitDatabaseValue`, their optionals, and
-types of your own. An enum whose raw value converts needs no body to conform in both directions:
-
-```swift
-enum Priority: Int, OrbitDatabaseValueConvertible {
-  case low, medium, high
-}
-
-try await database.write { transaction in
-  try transaction.execute("UPDATE reminders SET priority = \(Priority.high) WHERE id = \(id)")
-}
-```
-
+Any `ConvertibleToOrbitDatabaseValue` binds as a parameter: the standard library's numbers, `Bool`,
+`String`, `[UInt8]`, `OrbitDatabaseValue`, their optionals, and your own types. An enum whose raw
+value converts conforms with no body, as in `enum Priority: Int, OrbitDatabaseValueConvertible`.
 `\(quote:)` splices in a quoted identifier, and `\(raw:)` splices in text as it is, for the parts of
 a statement that are chosen at runtime but cannot be bound. `+`, `append`, and `joined(separator:)`
 build a statement from pieces. There is deliberately no initializer from a `String` value.
@@ -86,22 +75,12 @@ let count = try await database.read { transaction in
 }
 ```
 
-Any `ConvertibleFromOrbitDatabaseValue` is read from a column with `row[index, as:]` or
-`row[column:as:]`, and a single column is fetched with `fetchAll(_:as:)` and `fetchOne(_:as:)`.
-These are as strict about storage classes as Structured Queries decoding is, so a `NULL` only reads
-as an optional, and a column that does not convert throws an `OrbitDatabaseColumnDecodingError`
-naming it:
+A `ConvertibleFromOrbitDatabaseValue` reads strictly by storage class, so `NULL` only reads as an
+optional, and a column that does not convert throws an `OrbitDatabaseColumnDecodingError`:
 
 ```swift
-let reminders = try await database.read { transaction in
-  try transaction.fetchAll("SELECT id, priority FROM reminders") { row in
-    (id: try row[0, as: Int.self], priority: try row[column: "priority", as: Priority?.self])
-  }
-}
-
-let titles = try await database.read { transaction in
-  try transaction.fetchAll("SELECT title FROM reminders ORDER BY title", as: String.self)
-}
+let priority = try row[column: "priority", as: Priority?.self]
+let titles = try transaction.fetchAll("SELECT title FROM reminders", as: String.self)
 ```
 
 `rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and

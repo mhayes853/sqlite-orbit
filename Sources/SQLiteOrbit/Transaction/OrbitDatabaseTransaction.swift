@@ -211,17 +211,15 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Returns the first column of each row raw SQL returns, converted to a type.
   ///
   /// ```swift
-  /// let titles = try await database.read { transaction in
-  ///   try transaction.fetchAll("SELECT title FROM reminders ORDER BY title", as: String.self)
-  /// }
+  /// let titles = try transaction.fetchAll("SELECT title FROM reminders", as: String.self)
   /// ```
   ///
   /// - Parameters:
   ///   - sql: The SQL to run, which must only read in a read transaction.
-  ///   - type: The type to convert each row's first column to. Make it optional to read `NULL`.
+  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
   /// - Returns: The values, in the order the rows were returned.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or may write in a read transaction.
+  ///   ``SQLiteError`` when the statement fails.
   public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseValue>(
     _ sql: SQL,
     as type: Value.Type
@@ -229,21 +227,18 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
     try fetchAll(sql) { row in try row[0, as: Value.self] }
   }
 
-  /// Returns the first column of the first row raw SQL returns, converted to a type, or `nil` when
-  /// it returns no rows.
+  /// Returns the first column of the first row raw SQL returns, converted to a type.
   ///
   /// ```swift
-  /// let count = try await database.read { transaction in
-  ///   try transaction.fetchOne("SELECT count(*) FROM reminders", as: Int.self) ?? 0
-  /// }
+  /// let count = try transaction.fetchOne("SELECT count(*) FROM reminders", as: Int.self)
   /// ```
   ///
   /// - Parameters:
   ///   - sql: The SQL to run, which must only read in a read transaction.
-  ///   - type: The type to convert the row's first column to.
+  ///   - type: The type to convert the value to.
   /// - Returns: The value, or `nil` when the SQL returned no rows.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or may write in a read transaction.
+  ///   ``SQLiteError`` when the statement fails.
   public borrowing func fetchOne<Value: ConvertibleFromOrbitDatabaseValue>(
     _ sql: SQL,
     as type: Value.Type
@@ -362,21 +357,15 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     try withOrbitCursor(try executeRowCursor(sql, cached: true)) { try $0.first(transform) }
   }
 
-  /// Returns the first column of each row raw SQL returns, converted to a type, where the SQL may
-  /// write.
+  /// Returns the first column of each row raw SQL that may write returns, converted to a type.
   ///
   /// ```swift
-  /// let ids = try await database.write { transaction in
-  ///   try transaction.fetchAll(
-  ///     "DELETE FROM reminders WHERE is_completed RETURNING id",
-  ///     as: Int.self
-  ///   )
-  /// }
+  /// let ids = try transaction.fetchAll("DELETE FROM reminders RETURNING id", as: Int.self)
   /// ```
   ///
   /// - Parameters:
   ///   - sql: The SQL to run.
-  ///   - type: The type to convert each row's first column to. Make it optional to read `NULL`.
+  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
   /// - Returns: The values, in the order the rows were returned.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
   ///   ``SQLiteError`` when the statement fails.
@@ -387,21 +376,19 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     try fetchAll(sql) { row in try row[0, as: Value.self] }
   }
 
-  /// Returns the first column of the first row raw SQL returns, converted to a type, where the SQL
-  /// may write.
+  /// Returns the first column of the first row raw SQL that may write returns, converted to a
+  /// type.
   ///
   /// ```swift
-  /// let id = try await database.write { transaction in
-  ///   try transaction.fetchOne(
-  ///     "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id",
-  ///     as: Int.self
-  ///   )
-  /// }
+  /// let id = try transaction.fetchOne(
+  ///   "INSERT INTO reminders (title) VALUES (\("Get milk")) RETURNING id",
+  ///   as: Int.self
+  /// )
   /// ```
   ///
   /// - Parameters:
   ///   - sql: The SQL to run.
-  ///   - type: The type to convert the row's first column to.
+  ///   - type: The type to convert the value to.
   /// - Returns: The value, or `nil` when the SQL returned no rows.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
   ///   ``SQLiteError`` when the statement fails.

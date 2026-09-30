@@ -197,21 +197,12 @@ extension SQL: ExpressibleByStringInterpolation {
 
     /// Binds a value as a parameter.
     ///
-    /// Any ``ConvertibleToOrbitDatabaseValue`` can be bound, including an optional one, which
-    /// binds `NULL` when it is `nil`. The value is never spliced into the SQL, so it cannot change
-    /// the statement's meaning. Use `\(raw:)` or `\(quote:)` for text that is part of the
-    /// statement.
+    /// The value is never spliced into the SQL, so it cannot change the statement's meaning. A
+    /// value that fails to convert binds `NULL`, and its error is thrown when the statement runs.
     ///
     /// ```swift
-    /// let query: SQL = """
-    ///   SELECT title FROM reminders
-    ///   WHERE list_id = \(listID) AND is_completed = \(false) AND priority = \(Priority.high)
-    ///   """
+    /// let query: SQL = "SELECT title FROM reminders WHERE priority = \(Priority.high)"
     /// ```
-    ///
-    /// A value that cannot be converted, such as an unsigned integer past `Int64.max`, does not
-    /// stop the SQL from being built. It binds `NULL` so later parameters keep their positions, and
-    /// its error is thrown when the statement is run.
     ///
     /// - Parameter value: The value to bind.
     public mutating func appendInterpolation(_ value: some ConvertibleToOrbitDatabaseValue) {
@@ -228,9 +219,7 @@ extension SQL: ExpressibleByStringInterpolation {
 
     /// Binds a storage value as a parameter.
     ///
-    /// A storage value binds the same through its ``ConvertibleToOrbitDatabaseValue``
-    /// conformance, so this overload only exists to let one be written with an implicit member,
-    /// or as a bare `nil` for `NULL`.
+    /// This only exists so a storage value can be written as an implicit member, or as `nil`.
     ///
     /// ```swift
     /// let query: SQL = "INSERT INTO notes (id, body) VALUES (\(.integer(1)), \(.null))"

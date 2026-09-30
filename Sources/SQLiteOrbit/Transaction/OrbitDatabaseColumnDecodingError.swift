@@ -66,31 +66,3 @@ public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
       """
   }
 }
-
-extension OrbitDatabaseColumnDecodingError {
-  // Reports a value that a column could not be converted to, naming what was found in it.
-  init(
-    columnIndex: Int,
-    columnName: String,
-    converting error: any Error,
-    to type: Any.Type
-  ) {
-    let reason: String
-    switch error {
-    case let error as OrbitDatabaseValueConversionError where error.value == .null:
-      reason = "to not be NULL"
-    case let error as OrbitDatabaseValueConversionError:
-      reason =
-        "to decode \(error.typeName), but found \(error.value.orbitStorageClassName)"
-        + (error.reason.map { " (\($0))" } ?? "")
-    default:
-      reason = "to decode \(type), but \(error)"
-    }
-    self.init(
-      columnIndex: columnIndex,
-      columnName: columnName,
-      reason: reason,
-      underlyingError: error
-    )
-  }
-}
