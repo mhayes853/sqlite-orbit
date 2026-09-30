@@ -130,7 +130,10 @@ let foundationTarget: Target = .target(
 // Keep Vec's platform SQLite headers out of Swift modules importing a custom SQLite build.
 let sqliteVecTarget: Target = .target(
   name: "CSQLiteOrbitVec",
-  dependencies: [.product(name: "CSQLiteVec", package: "sqlite-vec-data")]
+  dependencies: [
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"]))
+  ],
+  cSettings: [.define("SQLITE_ORBIT_VEC", .when(traits: ["SQLiteVec"]))]
 )
 
 let packageTarget2: Target = .target(

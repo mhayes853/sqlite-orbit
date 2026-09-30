@@ -1,4 +1,7 @@
 #include "CSQLiteOrbitVec.h"
+
+// SwiftPM also compiles unreferenced local targets when building the whole package.
+#ifdef SQLITE_ORBIT_VEC
 #include <sqlite3ext.h>
 
 // Vec's extension entry point has SQLite's standard initializer ABI.
@@ -14,3 +17,4 @@ int sqlite_orbit_vec_init(sqlite3 *connection, char **error, const void *api) {
 #endif
   return sqlite3_vec_init(connection, error, routines);
 }
+#endif
