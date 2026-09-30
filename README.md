@@ -53,11 +53,23 @@ try await database.write { transaction in
 }
 ```
 
-`Int`, `Int64`, `Double`, `Bool`, `String`, `[UInt8]`, `OrbitDatabaseValue`, and their optionals
-bind as parameters. `\(quote:)` splices in a quoted identifier, and `\(raw:)` splices in text as it
-is, for the parts of a statement that are chosen at runtime but cannot be bound. `+`, `append`, and
-`joined(separator:)` build a statement from pieces. There is deliberately no initializer from a
-`String` value.
+Any `ConvertibleToOrbitDatabaseValue` binds as a parameter: the standard library's integers and
+floating point numbers, `Bool`, `String`, `[UInt8]`, `OrbitDatabaseValue`, their optionals, and
+types of your own. An enum whose raw value converts needs no body to conform in both directions:
+
+```swift
+enum Priority: Int, OrbitDatabaseValueConvertible {
+  case low, medium, high
+}
+
+try await database.write { transaction in
+  try transaction.execute("UPDATE reminders SET priority = \(Priority.high) WHERE id = \(id)")
+}
+```
+
+`\(quote:)` splices in a quoted identifier, and `\(raw:)` splices in text as it is, for the parts of
+a statement that are chosen at runtime but cannot be bound. `+`, `append`, and `joined(separator:)`
+build a statement from pieces. There is deliberately no initializer from a `String` value.
 
 Rows are read by position or by column name, as `OrbitDatabaseValue`s, one of SQLite's five storage
 classes:
@@ -114,7 +126,7 @@ transaction.
 | --- | --- | --- |
 | `SystemSQLite` | Yes | Links the platform SQLite and vends `SQLiteLibrary.system`. |
 | `StructuredQueries` | Yes | The swift-structured-queries query builder, `@FetchAll`, `@FetchOne`, `@Row`, `@SingleRow`, and typed regions and observations. Re-exports `StructuredQueriesSQLite` and enables `Foundation`. |
-| `Foundation` | Yes | `Date`, `UUID`, and `Data` interpolations and `OrbitDatabaseValue` conversions, using FoundationEssentials where the toolchain has it. |
+| `Foundation` | Yes | `Date`, `UUID`, and `Data` conversions to and from `OrbitDatabaseValue`, so they bind in and read from raw SQL, using FoundationEssentials where the toolchain has it. |
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
