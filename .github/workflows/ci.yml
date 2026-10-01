@@ -35,6 +35,13 @@ jobs:
             traits: "--traits SQLCipher,StructuredQueries,Vectors"
           - name: SQLite Vec without Structured Queries
             traits: "--traits SystemSQLite,Vectors"
+          # The UUIDV7 and Tagged conformances alongside Structured Queries, which binds the same
+          # types through its own conformances.
+          - name: UUIDV7 + Tagged
+            traits: "--traits default,UUIDV7,Tagged"
+          # No forbidden modules: swift-uuidv7 and swift-tagged import Foundation themselves.
+          - name: UUIDV7 + Tagged without Structured Queries
+            traits: "--disable-default-traits --traits SystemSQLite,UUIDV7,Tagged"
           # Raw SQL alone, without Structured Queries or Foundation. The raw SQL suite compiles
           # here and in the default job alike, which is what shows the traits only add API.
           - name: lean

@@ -96,6 +96,8 @@ let packageTarget1: Target = .target(
       package: "swift-dependencies",
       condition: .when(traits: ["Dependencies"])
     ),
+    .product(name: "UUIDV7", package: "swift-uuidv7", condition: .when(traits: ["UUIDV7"])),
+    .product(name: "Tagged", package: "swift-tagged", condition: .when(traits: ["Tagged"])),
   ] + tursoDependencies,
   cSettings: [
     // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
@@ -117,7 +119,9 @@ let packageTarget1: Target = .target(
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
     .define("Vectors", .when(traits: ["Vectors"])),
-    .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
+    .define("StructuredQueries", .when(traits: ["StructuredQueries"])),
+    .define("UUIDV7", .when(traits: ["UUIDV7"])),
+    .define("Tagged", .when(traits: ["Tagged"]))
   ],
   linkerSettings: [
     // Rust's standard library uses the platform math library. This is already implicit on
@@ -182,6 +186,8 @@ let packageTarget5: Target = .testTarget(
       package: "swift-dependencies",
       condition: .when(traits: ["Dependencies"])
     ),
+    .product(name: "UUIDV7", package: "swift-uuidv7", condition: .when(traits: ["UUIDV7"])),
+    .product(name: "Tagged", package: "swift-tagged", condition: .when(traits: ["Tagged"])),
     .target(
       name: "CSQLite3",
       condition: .when(traits: ["SystemSQLite"])
@@ -209,7 +215,9 @@ let packageTarget5: Target = .testTarget(
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
     .define("Vectors", .when(traits: ["Vectors"])),
-    .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
+    .define("StructuredQueries", .when(traits: ["StructuredQueries"])),
+    .define("UUIDV7", .when(traits: ["UUIDV7"])),
+    .define("Tagged", .when(traits: ["Tagged"]))
   ]
 )
 
@@ -277,6 +285,17 @@ let package = Package(
       name: "Dependencies",
       description:
         "Integrates `OrbitDefaultDatabase` with the swift-dependencies package."
+    ),
+    .trait(
+      name: "UUIDV7",
+      description:
+        "Conforms swift-uuidv7's `UUIDV7` to the database value conversion protocols, and adds "
+        + "`OrbitBinaryUUIDV7` and `OrbitUppercaseUUIDV7`."
+    ),
+    .trait(
+      name: "Tagged",
+      description:
+        "Conforms swift-tagged's `Tagged` to the database value conversion protocols."
     )
   ],
   dependencies: [
@@ -285,7 +304,28 @@ let package = Package(
       revision: "f980c99e337ff7c3aff250558d038ee2b149f47e"
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
-    .package(url: "https://github.com/pointfreeco/swift-structured-queries", from: "0.39.0"),
+    // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two
+    // together. swift-uuidv7's Structured Queries and Tagged traits follow `StructuredQueries` and
+    // `Tagged`, but its module is only built under `UUIDV7`, so each takes effect only with
+    // `UUIDV7` on as well. Likewise, Structured Queries' `Tagged` trait follows `Tagged`, but only
+    // matters with `StructuredQueries` on.
+    .package(
+      url: "https://github.com/pointfreeco/swift-structured-queries",
+      from: "0.39.0",
+      traits: [.trait(name: "Tagged", condition: .when(traits: ["Tagged"]))]
+    ),
+    .package(
+      url: "https://github.com/mhayes853/swift-uuidv7",
+      from: "0.3.0",
+      traits: [
+        .trait(
+          name: "SwiftUUIDV7StructuredQueries",
+          condition: .when(traits: ["StructuredQueries"])
+        ),
+        .trait(name: "SwiftUUIDV7Tagged", condition: .when(traits: ["Tagged"]))
+      ]
+    ),
+    .package(url: "https://github.com/pointfreeco/swift-tagged", from: "0.10.0"),
     .package(url: "https://github.com/pointfreeco/swift-macro-testing", from: "0.7.0"),
     .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0"..<"605.0.0"),
     .package(url: "https://github.com/skiptools/swift-sqlcipher", from: "1.12.0")
