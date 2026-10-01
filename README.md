@@ -127,10 +127,10 @@ transaction.
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
-| `SQLiteVec` | No | Re-exports SQLite Vec's C and query-core bindings, adds raw SQL conversions for `EmbeddingVector`, and initializes Vec automatically on supported connections. |
+| `Vectors` | No | Re-exports SQLite Vec's C and query-core bindings, adds raw SQL conversions for `EmbeddingVector`, and initializes Vec automatically on supported connections. |
 
 Every trait only adds API: SQL that compiles with a trait off compiles, and runs the same, with it
-on. `SQLiteVec` also initializes its extension when opening connections. Naming any trait in a
+on. `Vectors` also initializes its extension when opening connections. Naming any trait in a
 manifest leaves the defaults out, so a lean build lists only what it
 needs:
 
@@ -605,14 +605,14 @@ the first query the caller happens to run.
 
 ## SQLite Vec
 
-Enable the opt-in `SQLiteVec` trait to make vector functions and `vec0` tables available on
+Enable the opt-in `Vectors` trait to make vector functions and `vec0` tables available on
 connections opened with a `SQLiteConfiguration`:
 
 ```swift
 .package(
   url: "https://github.com/mhayes853/sqlite-orbit",
   from: "0.1.0",
-  traits: ["default", "SQLiteVec"]
+  traits: ["default", "Vectors"]
 )
 ```
 

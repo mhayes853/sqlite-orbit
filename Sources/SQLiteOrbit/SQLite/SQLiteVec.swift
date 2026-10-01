@@ -1,4 +1,4 @@
-#if SQLiteVec
+#if Vectors
   import CSQLiteOrbitVec
 
   private let sqliteVecInitializer: SQLiteExtensionInitializer = sqlite_orbit_vec_init
@@ -6,7 +6,7 @@
   extension SQLiteConfiguration {
     /// Arranges SQLite Vec initialization before user setup runs on every connection.
     ///
-    /// Configurations already register this when the `SQLiteVec` package trait is enabled.
+    /// Configurations already register this when the `Vectors` package trait is enabled.
     /// Call it again only if you replaced ``connectionSetups`` and want to restore Vec setup.
     ///
     /// Apple system SQLite initializes the SDK-compiled extension directly on each connection.

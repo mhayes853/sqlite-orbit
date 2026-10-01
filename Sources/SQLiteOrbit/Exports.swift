@@ -7,7 +7,7 @@
   @_exported import StructuredQueriesSQLite
 #endif
 
-#if SQLiteVec
+#if Vectors
   @_exported import StructuredQueriesSQLiteVecCore
   #if SystemSQLite
     // CSQLiteVec includes the platform SQLite headers. Custom builds such as SQLCipher may

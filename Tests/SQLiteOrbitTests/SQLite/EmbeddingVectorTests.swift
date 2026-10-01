@@ -1,4 +1,4 @@
-#if SQLiteVec && BuiltInSQLite && !Turso
+#if Vectors && BuiltInSQLite && !Turso
   import SQLiteOrbit
   import Testing
 
