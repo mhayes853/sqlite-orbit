@@ -139,7 +139,7 @@ public struct SQLiteConfiguration: Sendable {
     self.maximumCachedStatements = maximumCachedStatements
     self.setupSQL = setupSQL
     self.connectionSetups = connectionSetups
-    #if SQLiteVec
+    #if Vectors
       registerSQLiteVec()
     #endif
   }

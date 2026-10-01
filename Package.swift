@@ -68,12 +68,12 @@ let packageTarget1: Target = .target(
   name: "SQLiteOrbit",
   dependencies: [
     "SQLiteOrbitMacros",
-    .target(name: "CSQLiteOrbitVec", condition: .when(traits: ["SQLiteVec"])),
-    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"])),
+    .target(name: "CSQLiteOrbitVec", condition: .when(traits: ["Vectors"])),
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["Vectors"])),
     .product(
       name: "StructuredQueriesSQLiteVecCore",
       package: "sqlite-vec-data",
-      condition: .when(traits: ["SQLiteVec"])
+      condition: .when(traits: ["Vectors"])
     ),
     .product(
       name: "StructuredQueriesSQLite",
@@ -116,7 +116,7 @@ let packageTarget1: Target = .target(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
-    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
+    .define("Vectors", .when(traits: ["Vectors"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ],
   linkerSettings: [
@@ -137,9 +137,9 @@ let foundationTarget: Target = .target(
 let sqliteVecTarget: Target = .target(
   name: "CSQLiteOrbitVec",
   dependencies: [
-    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["SQLiteVec"]))
+    .product(name: "CSQLiteVec", package: "sqlite-vec-data", condition: .when(traits: ["Vectors"]))
   ],
-  cSettings: [.define("SQLITE_ORBIT_VEC", .when(traits: ["SQLiteVec"]))]
+  cSettings: [.define("SQLITE_ORBIT_VEC", .when(traits: ["Vectors"]))]
 )
 
 let packageTarget2: Target = .target(
@@ -208,7 +208,7 @@ let packageTarget5: Target = .testTarget(
     .define("BuiltInSQLite", .when(traits: ["Turso"])),
     .define("Dependencies", .when(traits: ["Dependencies"])),
     .define("Foundation", .when(traits: ["Foundation"])),
-    .define("SQLiteVec", .when(traits: ["SQLiteVec"])),
+    .define("Vectors", .when(traits: ["Vectors"])),
     .define("StructuredQueries", .when(traits: ["StructuredQueries"]))
   ]
 )
@@ -269,7 +269,7 @@ let package = Package(
       enabledTraits: ["Foundation"]
     ),
     .trait(
-      name: "SQLiteVec",
+      name: "Vectors",
       description:
         "Includes SQLite Vec and initializes it automatically on supported SQLite connections."
     ),
