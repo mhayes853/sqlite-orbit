@@ -6,7 +6,9 @@
 ///
 /// Conforming a type is what lets it be interpolated into ``SQL``, where it is bound as a
 /// parameter. The standard library's integers, floating point numbers, `Bool`, `String`, and
-/// `[UInt8]` already conform, as do `Date`, `UUID`, and `Data` with the `Foundation` trait.
+/// `[UInt8]` already conform, as do `Date`, `UUID`, and `Data` with the `Foundation` trait,
+/// `UUIDV7` with the `UUIDV7` trait, and a `Tagged` value whose raw value conforms with the
+/// `Tagged` trait.
 ///
 /// ```swift
 /// struct Money: ConvertibleToOrbitDatabaseValue {
