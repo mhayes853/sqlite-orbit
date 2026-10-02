@@ -229,16 +229,6 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     return library.pointee.columns.value(statement, at: Int32(index))
   }
 
-  /// The value of the first column with a name, or `nil` when the row has no such column.
-  ///
-  /// Names are compared byte for byte, with the first match retained in this cursor's mapping.
-  ///
-  /// - Parameter name: The column's name.
-  public subscript(column name: String) -> OrbitDatabaseValue? {
-    guard let index = columnIndex(named: name) else { return nil }
-    return self[index]
-  }
-
   /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.
   public func columnIndex(named name: String) -> Int? {
     columnLookup.index(named: name, library: library, statement: statement)

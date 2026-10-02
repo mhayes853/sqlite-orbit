@@ -64,8 +64,8 @@ struct OrbitRowMacroTests {
       }
 
       extension Summary: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow {
-        public init<Row: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
-          orbitDatabaseRow row: borrowing Row
+        public init<__macro_local_3RowfMu_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
+          orbitDatabaseRow row: borrowing __macro_local_3RowfMu_
         ) throws {
           self.id = try row[column: "id", as: Int.self]
           self.title = try row[column: "display_title", as: String.self]
@@ -92,8 +92,8 @@ struct OrbitRowMacroTests {
       }
 
       extension Box: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow {
-        init<Row_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
-          orbitDatabaseRow row: borrowing Row_
+        init<__macro_local_3RowfMu_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
+          orbitDatabaseRow row: borrowing __macro_local_3RowfMu_
         ) throws {
           self.`class` = try row[column: #"a "quoted" column"#, as: Row.self]
         }

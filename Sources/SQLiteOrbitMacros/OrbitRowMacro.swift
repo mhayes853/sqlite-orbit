@@ -32,36 +32,7 @@ public struct OrbitRowMacro: ExtensionMacro {
       }
     }
 
-    // Choose a generic parameter that cannot shadow one on this or an enclosing type.
-    var genericNames = Set<String>()
-    for scope in context.lexicalContext + [Syntax(declaration)] {
-      if let scope = scope.as(StructDeclSyntax.self) {
-        for parameter in scope.genericParameterClause?.parameters ?? [] {
-          genericNames.insert(parameter.name.text)
-        }
-      } else if let scope = scope.as(ClassDeclSyntax.self) {
-        for parameter in scope.genericParameterClause?.parameters ?? [] {
-          genericNames.insert(parameter.name.text)
-        }
-      } else if let scope = scope.as(EnumDeclSyntax.self) {
-        for parameter in scope.genericParameterClause?.parameters ?? [] {
-          genericNames.insert(parameter.name.text)
-        }
-      }
-    }
-    // A property may also refer to a typealias or imported type named Row.
-    for member in declaration.memberBlock.members {
-      guard let property = member.decl.as(VariableDeclSyntax.self) else { continue }
-      for binding in property.bindings {
-        if let type = binding.typeAnnotation?.type {
-          for token in type.tokens(viewMode: .sourceAccurate) {
-            genericNames.insert(token.text)
-          }
-        }
-      }
-    }
-    var rowType = "Row"
-    while genericNames.contains(rowType) { rowType += "_" }
+    let rowType = context.makeUniqueName("Row")
 
     var assignments: [String] = []
     for member in declaration.memberBlock.members {
@@ -151,8 +122,8 @@ public struct OrbitRowMacro: ExtensionMacro {
     let conformance = protocols.isEmpty ? "" : ": SQLiteOrbit.ConvertibleFromOrbitDatabaseRow"
     let result: DeclSyntax = """
       extension \(type.trimmed)\(raw: conformance) {
-        \(raw: access)init<\(raw: rowType): SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
-          orbitDatabaseRow row: borrowing \(raw: rowType)
+        \(raw: access)init<\(rowType): SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
+          orbitDatabaseRow row: borrowing \(rowType)
         ) throws {
           \(raw: assignments.joined(separator: "\n"))
         }
