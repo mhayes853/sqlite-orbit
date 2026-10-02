@@ -138,6 +138,69 @@
       }
       #expect(record.value == "Private")
     }
+
+    @Test
+    func preparedValuesTransferIntoAsyncWritesAndDefaultsComeFromTheSchema() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE defaults (id INTEGER PRIMARY KEY, title TEXT DEFAULT 'database', priority INTEGER DEFAULT 2)"
+        )
+      }
+      var values = OrbitDatabaseRowValues<DefaultsRecord>()
+      values.title = "Milk"
+      let title: String? = values.title
+      #expect(title == "Milk")
+      let inserted = try await database.write { try $0.insert(values) }
+      #expect(inserted.priority == .high)
+      let defaults = try await database.write {
+        try $0.insert(OrbitDatabaseRowValues<DefaultsRecord>())
+      }
+      #expect(defaults.title == "database")
+      let literal = try await database.write {
+        try $0.insert(DefaultsRecord.self) {
+          $0.title = "Tea"
+          $0.priority = .low
+        }
+      }
+      #expect(literal.priority == .low)
+    }
+
+    @Test
+    func decodingFailuresRollBackTheInsertAndReturningPrecedesAfterTriggers() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write {
+        try $0.execute(
+          "CREATE TABLE defaults (id INTEGER PRIMARY KEY, title TEXT, priority INTEGER DEFAULT 99)"
+        )
+      }
+      await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+        try await database.write {
+          try $0.insert(DefaultsRecord.self) { $0.title = "Invalid enum" }
+        }
+      }
+      let count = try await database.read {
+        try $0.fetchOne("SELECT count(*) FROM defaults", as: Int.self)
+      }
+      #expect(count == 0)
+      let returned = try await database.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TRIGGER rewrite_title AFTER INSERT ON defaults
+          BEGIN UPDATE defaults SET title = 'trigger' WHERE id = NEW.id; END
+          """
+        )
+        return try transaction.insert(DefaultsRecord.self) {
+          $0.title = "Original"
+          $0.priority = .low
+        }
+      }
+      #expect(returned.title == "Original")
+      let stored = try await database.read {
+        try $0.fetchOne("SELECT * FROM defaults", asRow: DefaultsRecord.self)
+      }
+      #expect(stored?.title == "trigger")
+    }
   }
 
   @OrbitRow(table: "reminders")
@@ -178,6 +241,17 @@
   {
     let id: Int
     var value: Row
+  }
+
+  private enum Priority: Int, OrbitDatabaseValueConvertible, Sendable {
+    case low, medium, high
+  }
+
+  @OrbitRow(table: "defaults")
+  private struct DefaultsRecord: Sendable {
+    let id: Int64
+    var title: String = "Swift default"
+    var priority: Priority = .low
   }
 
   @SQLiteOrbit.OrbitRow(table: "private_records")

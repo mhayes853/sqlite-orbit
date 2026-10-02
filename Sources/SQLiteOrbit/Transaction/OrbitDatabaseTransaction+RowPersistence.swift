@@ -33,7 +33,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     try insert(encodedValues(record))
   }
 
-  /// Updates one complete primary key, returning whether a record matched.
+  /// Updates one complete primary key, returning whether the statement updated a row.
   ///
   /// By default all encoded non-key columns are assigned. Explicit column lists cannot include
   /// primary keys, duplicate columns, unsupported properties, or unencoded values. Empty updates
@@ -58,7 +58,8 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// Inserts a complete record or updates it on a matching unique conflict target.
   ///
   /// The target defaults to the complete primary key. An explicit target must describe a UNIQUE
-  /// constraint supported by SQLite's column conflict syntax. Default assignments exclude both
+  /// constraint supported by SQLite's column conflict syntax; nullable alternate targets follow
+  /// SQLite's conflict behavior. Default assignments exclude both
   /// primary keys and target columns. An empty assignment list uses DO NOTHING. Conversion and
   /// metadata errors are reported before executing SQL; unrelated constraint failures propagate.
   public borrowing func upsert<Record: PersistableOrbitDatabaseRow>(
@@ -68,7 +69,8 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   ) throws {
     let write = try RowWrite(encodedValues(record))
     let targetNames = try columns.map { try write.names($0) } ?? Record.orbitPrimaryKeyColumns
-    let target = try write.identity(targetNames)
+    guard !targetNames.isEmpty else { throw OrbitDatabaseRowPersistenceError.missingPrimaryKey }
+    let target = try write.selected(targetNames)
     if !Record.orbitPrimaryKeyColumns.isEmpty {
       _ = try write.identity(Record.orbitPrimaryKeyColumns)
     }

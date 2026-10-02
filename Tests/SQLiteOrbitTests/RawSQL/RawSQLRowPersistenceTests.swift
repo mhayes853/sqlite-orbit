@@ -225,6 +225,41 @@ private struct ValuesRecord: ConvertibleToOrbitDatabaseRow {
         }
       }
     }
+
+    @Test
+    func nullableAlternateUniqueTargetsFollowSQLiteConflictSemantics() async throws {
+      let database = try inMemoryDatabase()
+      let count = try await database.write { transaction in
+        try transaction.execute(recordSchema)
+        try transaction.execute("CREATE UNIQUE INDEX unique_notes ON records(notes)")
+        try transaction.upsert(
+          Record(id: 1, title: "Milk", notes: nil, visits: 0),
+          onConflict: [\.notes]
+        )
+        try transaction.upsert(
+          Record(id: 2, title: "Tea", notes: nil, visits: 0),
+          onConflict: [\.notes]
+        )
+        return try transaction.fetchOne("SELECT count(*) FROM records", as: Int.self)
+      }
+      #expect(count == 2)
+    }
+
+    @Test
+    func missingEncodedIdentitiesFailBeforeExecution() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write { transaction in
+        try transaction.execute(recordSchema)
+        let record = IncompleteRecord(id: 1, title: "Milk")
+        #expect(throws: OrbitDatabaseRowPersistenceError.missingValue("id")) {
+          try transaction.update(record)
+        }
+        #expect(throws: OrbitDatabaseRowPersistenceError.missingValue("id")) {
+          try transaction.save(record)
+        }
+        #expect(try transaction.fetchOne("SELECT count(*) FROM records", as: Int.self) == 0)
+      }
+    }
   }
 
   private let recordSchema: SQL = """
@@ -278,6 +313,39 @@ private struct ValuesRecord: ConvertibleToOrbitDatabaseRow {
       try values.set(\.title, to: title)
       try values.set(\.notes, to: notes)
       try values.set(\.visits, to: visits)
+    }
+  }
+
+  // A handwritten encoder may omit columns; identity must still be present for update/save.
+  private struct IncompleteRecord: PersistableOrbitDatabaseRow {
+    let id: Int64
+    var title: String
+
+    static let orbitTableName = "records"
+    static let orbitPrimaryKeyColumns = ["id"]
+
+    static func orbitColumnName(for keyPath: PartialKeyPath<Self>) -> String? {
+      switch keyPath {
+      case \Self.id: "id"
+      case \Self.title: "title"
+      default: nil
+      }
+    }
+
+    init(id: Int64, title: String) {
+      self.id = id
+      self.title = title
+    }
+
+    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(
+      orbitDatabaseRow row: borrowing Row
+    ) throws {
+      id = try row[column: "id", as: Int64.self]
+      title = try row[column: "title", as: String.self]
+    }
+
+    func encodeOrbitDatabaseRow(into values: inout OrbitDatabaseRowValues<Self>) throws {
+      try values.set(\.title, to: title)
     }
   }
 #endif
