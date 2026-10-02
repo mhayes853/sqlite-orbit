@@ -1,7 +1,8 @@
 /// A value that can be initialized from a borrowed database result row.
 ///
 /// The initializer must finish reading before it returns. The resulting value owns its data and
-/// can outlive the row and transaction.
+/// can outlive the row and transaction. Use ``OrbitRow()`` to synthesize this conformance for a
+/// struct, or implement it yourself:
 ///
 /// ```swift
 /// struct ReminderSummary: ConvertibleFromOrbitDatabaseRow {
