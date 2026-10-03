@@ -83,6 +83,157 @@ let priority = try row[column: "priority", as: Priority?.self]
 let titles = try transaction.fetchAll("SELECT title FROM reminders", as: String.self)
 ```
 
+For a type made from an entire row, use `ConvertibleFromOrbitDatabaseRow`. `@OrbitRow` synthesizes
+its initializer for a struct, using property names as result-column names. `@OrbitColumn` overrides
+a name:
+
+```swift
+@OrbitRow
+struct ReminderSummary: Sendable {
+  let id: Int
+  let title: String
+  @OrbitColumn("due_date") let dueDate: String?
+}
+
+let summaries = try await database.read { transaction in
+  try transaction.fetchAll(
+    "SELECT due_date, title, id FROM reminders ORDER BY id",
+    asRow: ReminderSummary.self
+  )
+}
+
+let titles = try await database.read { transaction in
+  try transaction.fetchCursor(
+    "SELECT id, title, due_date FROM reminders",
+    asRow: ReminderSummary.self
+  )
+  .map(\.title)
+  .collect()
+}
+```
+
+`asRow:` passes the entire borrowed row to the initializer; `as:` reads its first column. Named
+reads match UTF-8 bytes exactly, including case, and choose the first duplicate name. Missing
+columns throw even for optional properties; SQL `NULL` can produce `nil`. The native cursor
+prepares its column-name mapping on the first named read and shares it across subsequent rows.
+Reordered and extra columns are supported. Initialized values own their data, while cursors must
+be consumed inside their transaction. Write transactions support `asRow:` on `fetchAll`,
+`fetchOne`, and `executeCursor` for `RETURNING` results.
+
+The row protocol and macros are available without `StructuredQueries` or `Foundation`. Stored
+instance properties must have explicit types conforming to `ConvertibleFromOrbitDatabaseValue`.
+Computed and static properties are ignored, and memberwise initialization is preserved. Mutable
+properties may have defaults, but missing columns still throw. For initialized `let` properties,
+lazy properties, property wrappers or other property attributes, conditional members, or custom
+initialization, write the conformance yourself:
+
+```swift
+struct ReminderSummary: ConvertibleFromOrbitDatabaseRow, Sendable {
+  let id: Int
+  let title: String
+
+  init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(
+    orbitDatabaseRow row: borrowing Row
+  ) throws {
+    id = try row[column: "id", as: Int.self]
+    title = try row[column: "title", as: String.self]
+  }
+}
+```
+
+For persistence, supply a table name to `@OrbitRow`. This also synthesizes
+`ConvertibleToOrbitDatabaseRow` and `PersistableOrbitDatabaseRow`, including a key-path-to-column
+mapping and complete-record encoding. Stored property types must support value conversion in both
+directions. A stored property named `id` supplies the primary key, respecting its `@OrbitColumn`
+rename. Override inference with SQL column names in `primaryKey: ["account_id", "user_id"]`, or
+use `primaryKey: []` for a keyless table. Keyless records can be inserted but cannot be saved or
+updated by primary key.
+
+```swift
+@OrbitRow(table: "reminders")
+struct Reminder: Identifiable, Sendable {
+  let id: Int64
+  var title: String
+  var isCompleted: Bool
+  @OrbitColumn("due_date") var dueDate: String?
+}
+
+let reminder = try await database.write { transaction in
+  try transaction.execute("""
+    CREATE TABLE reminders (
+      id INTEGER PRIMARY KEY,
+      title TEXT NOT NULL,
+      isCompleted INTEGER NOT NULL DEFAULT 0,
+      due_date TEXT
+    )
+    """)
+  return try transaction.insert(Reminder.self) { values in
+    values.title = "Buy milk"
+  }
+}
+// reminder.id is the database-assigned, nonoptional identity.
+```
+
+`OrbitDatabaseRowValues<Record>` is the shared typed container for pending insertions and record
+encoding. Unset columns are omitted, so the schema supplies generated IDs and database defaults;
+Swift property defaults are not substituted. Set columns are bound as parameters. Dynamic members
+expose the property's exact type wrapped in an optional, allowing values to be inspected before
+insertion:
+
+```swift
+var values = OrbitDatabaseRowValues<Reminder>()
+values.title = "Buy tea"
+let title: String? = values.title
+
+values.dueDate = nil         // Omit due_date.
+values.dueDate = .some(nil)  // Explicitly bind SQL NULL.
+try values.set(\.dueDate, to: nil) // The same explicit NULL with immediate error reporting.
+values.unset(\.dueDate)      // Omit the column and clear any deferred error.
+
+let second = try await database.write { try $0.insert(values) }
+```
+
+An optional property has a nested optional in the container: outer `nil` is omission, inner `nil`
+is SQL NULL. `contains` distinguishes an assigned NULL from an omitted column. Dynamic assignments
+retain conversion or unsupported-column errors until execution; replacing or unsetting an entry
+clears its error. `set(_:to:)` throws immediately and leaves an existing value intact on failure.
+The container also retains assigned Swift values, so getters work for outbound-only conversions.
+It is an ordinary copyable value, with independent entries and the usual Swift semantics for any
+reference values assigned to it. It does not claim `Sendable`; an async write's `sending` closure
+can transfer an unshared container to the database.
+
+Insertion uses `RETURNING *` and decodes the resulting complete record. This requires a database
+supporting SQLite's RETURNING syntax. The returned values include database-assigned IDs and defaults,
+but not subsequent changes from AFTER triggers. Constraints and decoding errors propagate. Letting
+an error escape a transaction body rolls the transaction back, including the preceding insert.
+
+For complete records, the write helpers use the same encoding and column mapping:
+
+```swift
+try await database.write { transaction in
+  var edited = reminder
+  edited.title = "Buy oat milk"
+  let found = try transaction.update(edited, columns: [\.title])
+  try transaction.save(edited)
+
+  try transaction.upsert(edited, updating: [\.title, \.isCompleted])
+}
+```
+
+`insert(record)` includes its supplied ID and returns the stored record. `update` matches the full
+primary key, assigning all encoded non-key columns by default; it returns whether the statement
+updated a row, including one whose values were already equal. `upsert` defaults to that primary key
+and non-key assignments, while `save` is its primary-key convenience. Explicit `onConflict:` key
+paths can target another UNIQUE constraint. Default upsert assignments exclude both primary-key
+and conflict-target columns; `updating: []` uses DO NOTHING. The helpers validate column mappings,
+duplicate requests, missing values, NULL primary keys, and attempts to update identity columns
+before running SQL. Empty standalone updates throw `OrbitDatabaseRowPersistenceError.emptyUpdate`.
+
+Plain `@OrbitRow` remains a decoding-only macro. These persistence APIs are also available without
+Structured Queries or Foundation. For Structured Queries `@Table` models, use its existing write
+builders and representations with `transaction.execute(Table.insert { ... })` or
+`transaction.execute(Table.upsert { ... })`; a `@Selection` alone does not identify a writable table.
+
 `rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
 its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
 read:
@@ -476,6 +627,41 @@ let titles = try await database.write { transaction in
 
 When a column does not decode, the failure is an `OrbitDatabaseColumnDecodingError` naming the
 column's index and name, the storage class actually found, and the statement's SQL.
+
+Raw `SQL` can also decode existing `@Table` and `@Selection` types through `asStructuredRow:`,
+without an additional conformance or annotation:
+
+```swift
+@Selection
+struct ReminderSummary: Sendable {
+  let id: Int
+  let title: String
+}
+
+let summaries = try await database.read { transaction in
+  try transaction.fetchAll(
+    "SELECT id, title FROM reminders ORDER BY id",
+    asStructuredRow: ReminderSummary.self
+  )
+}
+
+let titles = try await database.read { transaction in
+  try transaction.fetchCursor(
+    "SELECT id, title FROM reminders",
+    asStructuredRow: ReminderSummary.self
+  )
+  .map(\.title)
+  .collect()
+}
+```
+
+This uses Structured Queries' positional decoding, including `@Column(as:)` representations and
+grouped columns. SQL must return columns in the type's expected projection order and storage
+representations; column names are used for diagnostics. The output is `Value.QueryOutput`, so a
+table alias can decode to its underlying model. `fetchOne` returns `nil` for no rows. Write
+transactions expose the same eager overloads and `executeCursor(_:asStructuredRow:cached:)` for
+`RETURNING`. The separate labels let types supporting both conversion systems choose between
+their row initializer and Structured Queries decoding without overload ambiguity.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:

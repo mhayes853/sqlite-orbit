@@ -41,6 +41,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   var didPublishAccesses = false
 
+  let columnLookup = SQLiteRowColumnLookup()
+
   @_lifetime(borrow statements)
   init(
     _ query: SQL,
@@ -166,6 +168,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 /// }
 /// ```
 public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
+  @usableFromInline
+  let columnLookup: SQLiteRowColumnLookup
+
   #if StructuredQueries
     @usableFromInline
     var decoder: SQLiteRowDecoder
@@ -180,6 +185,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     @_lifetime(borrow cursor)
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.decoder = SQLiteRowDecoder(library: cursor.library, statement: statement)
+      self.columnLookup = cursor.columnLookup
     }
   #else
     @usableFromInline
@@ -193,6 +199,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.library = cursor.library
       self.statement = statement
+      self.columnLookup = cursor.columnLookup
     }
   #endif
 
@@ -222,18 +229,9 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     return library.pointee.columns.value(statement, at: Int32(index))
   }
 
-  /// The value of the first column with a name, or `nil` when the row has no such column.
-  ///
-  /// Names are compared byte for byte against the ones SQLite holds, from left to right, so
-  /// finding a column allocates nothing.
-  ///
-  /// - Parameter name: The column's name.
-  public subscript(column name: String) -> OrbitDatabaseValue? {
-    for column in 0..<library.pointee.columns.count(statement)
-    where library.pointee.columns.hasName(name, statement, at: column) {
-      return library.pointee.columns.value(statement, at: column)
-    }
-    return nil
+  /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.
+  public func columnIndex(named name: String) -> Int? {
+    columnLookup.index(named: name, library: library, statement: statement)
   }
 
   private func precondition(index: Int) {

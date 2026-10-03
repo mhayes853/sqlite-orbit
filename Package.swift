@@ -166,7 +166,8 @@ let packageTarget4: Target = .testTarget(
   name: "SQLiteOrbitMacrosTests",
   dependencies: [
     "SQLiteOrbitMacros",
-    .product(name: "MacroTesting", package: "swift-macro-testing")
+    .product(name: "MacroTesting", package: "swift-macro-testing"),
+    .product(name: "SwiftSyntaxMacroExpansion", package: "swift-syntax")
   ]
 )
 
