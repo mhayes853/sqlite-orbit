@@ -76,6 +76,34 @@ struct OrbitDatabaseRowValuesTests {
     values.notes = "Note"
     #expect(try values.encodedColumns().map(\.name) == ["notes", "title"])
   }
+
+  @Test
+  func canonicallyEquivalentColumnNamesRemainDistinct() throws {
+    var values = OrbitDatabaseRowValues<UnicodeValuesRecord>()
+    values.composed = "First"
+    values.decomposed = "Second"
+    let columns = try values.encodedColumns()
+    #expect(columns.map { Array($0.name.utf8) } == [Array("e\u{301}".utf8), Array("é".utf8)])
+    #expect(columns.map(\.value) == [.text("Second"), .text("First")])
+  }
+}
+
+private struct UnicodeValuesRecord: ConvertibleToOrbitDatabaseRow {
+  var composed: String
+  var decomposed: String
+
+  static func orbitColumnName(for keyPath: PartialKeyPath<Self>) -> String? {
+    switch keyPath {
+    case \Self.composed: "é"
+    case \Self.decomposed: "e\u{301}"
+    default: nil
+    }
+  }
+
+  func encodeOrbitDatabaseRow(into values: inout OrbitDatabaseRowValues<Self>) throws {
+    try values.set(\.composed, to: composed)
+    try values.set(\.decomposed, to: decomposed)
+  }
 }
 
 private enum ConversionFailure: Error { case invalid }

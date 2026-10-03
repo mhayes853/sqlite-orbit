@@ -68,15 +68,13 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     updating updateColumns: [PartialKeyPath<Record>]? = nil
   ) throws {
     let write = try RowWrite(encodedValues(record))
-    let targetNames = try columns.map { try write.names($0) } ?? Record.orbitPrimaryKeyColumns
-    guard !targetNames.isEmpty else { throw OrbitDatabaseRowPersistenceError.missingPrimaryKey }
-    let target = try write.selected(targetNames)
-    if !Record.orbitPrimaryKeyColumns.isEmpty {
-      _ = try write.identity(Record.orbitPrimaryKeyColumns)
-    }
+    let primaryKey = Record.orbitPrimaryKeyColumns
+    let keys = primaryKey.isEmpty ? [] : try write.identity(primaryKey)
+    let target = try columns.map { try write.selected(write.names($0)) } ?? keys
+    guard !target.isEmpty else { throw OrbitDatabaseRowPersistenceError.missingPrimaryKey }
     let updates = try write.assignments(
       updateColumns,
-      excluding: Record.orbitPrimaryKeyColumns + target.map(\.name)
+      excluding: primaryKey + target.map(\.name)
     )
     let conflict: SQL = target.map { "\(quote: $0.name)" }.joined(separator: ", ")
     var sql: SQL = "\(write.insertSQL) ON CONFLICT (\(conflict))"

@@ -16,6 +16,12 @@ public struct OrbitRowMacro: ExtensionMacro {
       throw rowDiagnostic(at: node, "'@OrbitRow' can only be applied to structs")
     }
     let options = try persistenceOptions(node)
+    let rowType = context.makeUniqueName("Row")
+
+    let reserved = [
+      "orbitTableName", "orbitPrimaryKeyColumns", "orbitColumnName", "encodeOrbitDatabaseRow"
+    ]
+    var properties: [(name: TokenSyntax, type: TypeSyntax, column: String)] = []
     for member in declaration.memberBlock.members {
       if let initializer = member.decl.as(InitializerDeclSyntax.self),
         initializer.signature.parameterClause.parameters.count == 1,
@@ -26,25 +32,27 @@ public struct OrbitRowMacro: ExtensionMacro {
           "'@OrbitRow' would duplicate this row initializer; use a handwritten conformance instead"
         )
       }
-    }
-
-    let rowType = context.makeUniqueName("Row")
-
-    var assignments: [String] = []
-    var encodings: [String] = []
-    var mappings: [String] = []
-    var columnNames: [String] = []
-    var inferredKey: String?
-    for member in declaration.memberBlock.members {
+      if options != nil, let function = member.decl.as(FunctionDeclSyntax.self),
+        reserved.contains(function.name.text.trimmingBackticks)
+      {
+        throw rowDiagnostic(at: function, "'@OrbitRow' would duplicate this persistence member")
+      }
       if member.decl.is(IfConfigDeclSyntax.self) {
         throw rowDiagnostic(
           at: member.decl,
           "'@OrbitRow' does not support conditional members; use a handwritten conformance"
         )
       }
-      guard let property = member.decl.as(VariableDeclSyntax.self),
-        isStoredInstanceProperty(property)
-      else { continue }
+      guard let property = member.decl.as(VariableDeclSyntax.self) else { continue }
+      if options != nil,
+        property.bindings.contains(where: {
+          $0.pattern.as(IdentifierPatternSyntax.self)
+            .map { reserved.contains($0.identifier.text.trimmingBackticks) } ?? false
+        })
+      {
+        throw rowDiagnostic(at: property, "'@OrbitRow' would duplicate this persistence member")
+      }
+      guard isStoredInstanceProperty(property) else { continue }
       guard property.bindings.count == 1,
         let binding = property.bindings.first,
         let identifier = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier
@@ -71,11 +79,7 @@ public struct OrbitRowMacro: ExtensionMacro {
           "'@OrbitRow' cannot decode a 'let' property with an initializer; remove the initializer or use a handwritten conformance"
         )
       }
-      let propertyName = identifier.trimmedDescription
-      var columnName = identifier.text
-      if columnName.first == "`", columnName.last == "`" {
-        columnName = String(columnName.dropFirst().dropLast())
-      }
+      var columnName = identifier.text.trimmingBackticks
       var didRename = false
       for element in property.attributes {
         guard let attribute = element.as(AttributeSyntax.self) else {
@@ -108,23 +112,15 @@ public struct OrbitRowMacro: ExtensionMacro {
         columnName = name
         didRename = true
       }
-      let literal = StringLiteralExprSyntax(content: columnName).description
-      if options != nil {
-        guard !columnNames.contains(where: { $0.utf8.elementsEqual(columnName.utf8) }) else {
-          throw rowDiagnostic(
-            at: property,
-            "persistent properties must use distinct SQL column names"
-          )
-        }
-        encodings.append("try values.set(\\.\(propertyName), to: self.\(propertyName))")
-        mappings.append("case \\Self.\(propertyName): return \(literal)")
-        columnNames.append(columnName)
-        let unescapedName = identifier.text.trimmingBackticks
-        if unescapedName == "id" { inferredKey = columnName }
+      if options != nil,
+        properties.contains(where: { $0.column.utf8.elementsEqual(columnName.utf8) })
+      {
+        throw rowDiagnostic(
+          at: property,
+          "persistent properties must use distinct SQL column names"
+        )
       }
-      assignments.append(
-        "self.\(propertyName) = try row[column: \(literal), as: \(propertyType.trimmedDescription).self]"
-      )
+      properties.append((identifier, propertyType, columnName))
     }
     let access =
       declaration.modifiers
@@ -134,37 +130,23 @@ public struct OrbitRowMacro: ExtensionMacro {
       .map { "\($0.name.text) " } ?? ""
     var persistence = ""
     if let options {
+      let inferredKey = properties.first { $0.name.text.trimmingBackticks == "id" }?.column
       let keys = options.primaryKey ?? inferredKey.map { [$0] } ?? []
-      var seen: [String] = []
-      for key in keys {
-        guard columnNames.contains(where: { $0.utf8.elementsEqual(key.utf8) }),
-          !seen.contains(where: { $0.utf8.elementsEqual(key.utf8) })
+      for (index, key) in keys.enumerated() {
+        guard properties.contains(where: { $0.column.utf8.elementsEqual(key.utf8) }),
+          !keys[..<index].contains(where: { $0.utf8.elementsEqual(key.utf8) })
         else {
           throw rowDiagnostic(
             at: node,
             "'primaryKey' must contain distinct stored SQL column names"
           )
         }
-        seen.append(key)
       }
-      let reserved = [
-        "orbitTableName", "orbitPrimaryKeyColumns", "orbitColumnName", "encodeOrbitDatabaseRow"
-      ]
-      for member in declaration.memberBlock.members {
-        if let function = member.decl.as(FunctionDeclSyntax.self),
-          reserved.contains(function.name.text)
-        {
-          throw rowDiagnostic(at: function, "'@OrbitRow' would duplicate this persistence member")
-        }
-        if let property = member.decl.as(VariableDeclSyntax.self),
-          property.bindings.contains(where: {
-            $0.pattern.as(IdentifierPatternSyntax.self)
-              .map { reserved.contains($0.identifier.text) }
-              ?? false
-          })
-        {
-          throw rowDiagnostic(at: property, "'@OrbitRow' would duplicate this persistence member")
-        }
+      let mappings = properties.map {
+        "case \\Self.\($0.name.trimmedDescription): return \(StringLiteralExprSyntax(content: $0.column))"
+      }
+      let encodings = properties.map {
+        "try values.set(\\.\($0.name.trimmedDescription), to: self.\($0.name.trimmedDescription))"
       }
       let tableLiteral = StringLiteralExprSyntax(content: options.table).description
       let keyLiterals = keys.map { StringLiteralExprSyntax(content: $0).description }
@@ -193,6 +175,9 @@ public struct OrbitRowMacro: ExtensionMacro {
       }
       .joined(separator: ", ")
     let conformance = protocols.isEmpty ? "" : ": \(conformances)"
+    let assignments = properties.map {
+      "self.\($0.name.trimmedDescription) = try row[column: \(StringLiteralExprSyntax(content: $0.column)), as: \($0.type.trimmedDescription).self]"
+    }
     let result: DeclSyntax = """
       extension \(type.trimmed)\(raw: conformance) {
         \(raw: access)init<\(rowType): SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(

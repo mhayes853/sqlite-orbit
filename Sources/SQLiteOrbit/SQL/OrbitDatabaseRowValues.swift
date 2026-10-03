@@ -16,9 +16,11 @@
 /// have independent entries, although any reference values retain their normal Swift semantics.
 @dynamicMemberLookup
 public struct OrbitDatabaseRowValues<Record: ConvertibleToOrbitDatabaseRow> {
+  private typealias Column = (name: String, value: OrbitDatabaseValue)
+
   private struct Entry {
-    var original: Any
-    var encoded: Result<OrbitDatabaseValue, any Error>
+    let original: Any
+    let encoded: Result<Column, any Error>
   }
 
   private var entries: [PartialKeyPath<Record>: Entry] = [:]
@@ -74,26 +76,21 @@ public struct OrbitDatabaseRowValues<Record: ConvertibleToOrbitDatabaseRow> {
   private static func encode<Value: ConvertibleToOrbitDatabaseValue>(
     _ value: Value,
     column: KeyPath<Record, Value>
-  ) throws -> OrbitDatabaseValue {
-    guard Record.orbitColumnName(for: column) != nil else {
+  ) throws -> Column {
+    guard let name = Record.orbitColumnName(for: column) else {
       throw OrbitDatabaseRowPersistenceError.unknownColumn
     }
-    return try value.orbitDatabaseValue()
+    return (name, try value.orbitDatabaseValue())
   }
 
   // Sort by exact column bytes so assignment order cannot change the prepared SQL's shape.
   func encodedColumns() throws -> [(name: String, value: OrbitDatabaseValue)] {
-    var columns: [(name: String, value: OrbitDatabaseValue)] = []
-    for (keyPath, entry) in entries {
-      let value = try entry.encoded.get()
-      guard let name = Record.orbitColumnName(for: keyPath) else {
-        throw OrbitDatabaseRowPersistenceError.unknownColumn
-      }
-      if columns.contains(where: { $0.name.utf8.elementsEqual(name.utf8) }) {
-        throw OrbitDatabaseRowPersistenceError.duplicateColumn(name)
-      }
-      columns.append((name, value))
+    let columns = try entries.values.map { try $0.encoded.get() }
+      .sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+    for (previous, column) in zip(columns, columns.dropFirst())
+    where previous.name.utf8.elementsEqual(column.name.utf8) {
+      throw OrbitDatabaseRowPersistenceError.duplicateColumn(column.name)
     }
-    return columns.sorted { $0.name.utf8.lexicographicallyPrecedes($1.name.utf8) }
+    return columns
   }
 }
