@@ -83,6 +83,91 @@ let priority = try row[column: "priority", as: Priority?.self]
 let titles = try transaction.fetchAll("SELECT title FROM reminders", as: String.self)
 ```
 
+For a type made from an entire row, use `ConvertibleFromOrbitDatabaseRow`. `@OrbitRow` synthesizes
+its initializer for a struct, using property names as result-column names. `@OrbitColumn` overrides
+a name:
+
+```swift
+@OrbitRow
+struct ReminderSummary: Sendable {
+  let id: Int
+  let title: String
+  @OrbitColumn("due_date") let dueDate: String?
+}
+
+let summaries = try await database.read { transaction in
+  try transaction.fetchAll(
+    "SELECT due_date, title, id FROM reminders ORDER BY id",
+    as: ReminderSummary.self
+  )
+}
+
+let titles = try await database.read { transaction in
+  try transaction.fetchCursor(
+    "SELECT id, title, due_date FROM reminders",
+    as: ReminderSummary.self
+  )
+  .map(\.title)
+  .collect()
+}
+```
+
+`as:` uses the row initializer for row-convertible types and reads the first column for scalar-only
+types. When a type supports both conversions, its row initializer takes precedence. Named
+reads match UTF-8 bytes exactly, including case, and choose the first duplicate name. Missing
+columns throw even for optional properties; SQL `NULL` can produce `nil`. The native cursor
+prepares its column-name mapping on the first named read and shares it across subsequent rows.
+Reordered and extra columns are supported. Initialized values own their data, while cursors must
+be consumed inside their transaction. Write transactions support `as:` on `fetchAll`,
+`fetchOne`, and `executeCursor` for `RETURNING` results.
+
+The row protocol and macros are available without `StructuredQueries` or `Foundation`. Stored
+instance properties must have explicit types conforming to `ConvertibleFromOrbitDatabaseValue`.
+Computed and static properties are ignored, and memberwise initialization is preserved. Mutable
+properties may have defaults, but missing columns still throw. For initialized `let` properties,
+lazy properties, property wrappers or other property attributes, conditional members, or custom
+initialization, write the conformance yourself:
+
+```swift
+struct ReminderSummary: ConvertibleFromOrbitDatabaseRow, Sendable {
+  let id: Int
+  let title: String
+
+  init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(
+    orbitDatabaseRow row: borrowing Row
+  ) throws {
+    id = try row[column: "id", as: Int.self]
+    title = try row[column: "title", as: String.self]
+  }
+}
+```
+
+`@OrbitRow` also synthesizes `OrbitDatabaseRowColumns`, mapping stored-property key paths to SQL
+result-column names. Typed reads infer the value type from the property and honor `@OrbitColumn`
+renames:
+
+```swift
+let titles = try await database.read { transaction in
+  try transaction.fetchAll("SELECT title, due_date FROM reminders") { row in
+    let title: String = try row[column: \ReminderSummary.title]
+    let dueDate: String? = try row[column: \ReminderSummary.dueDate]
+    let index: Int? = row.columnIndex(for: \ReminderSummary.title)
+    return title
+  }
+}
+```
+
+Unmapped properties, including computed properties, and missing result columns throw on a typed
+read. `columnIndex(for:)` returns `nil` for either. SQL NULL remains distinct from a missing column.
+Key paths check property names and value types at compile time; the SQL projection is checked at
+runtime. Named and key-path reads share the same cached column lookup. Handwritten types may
+implement `OrbitDatabaseRowColumns` independently of `ConvertibleFromOrbitDatabaseRow`.
+
+`@OrbitRow` maps SQL result columns into values, including projections, joins, aggregates, and
+`RETURNING` results. For typed inserts, updates, and upserts, use Structured Queries' `@Table`
+models and write builders with `transaction.execute(Table.insert { ... })` or
+`transaction.execute(Table.upsert { ... })`.
+
 `rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
 its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
 read:
@@ -476,6 +561,28 @@ let titles = try await database.write { transaction in
 
 When a column does not decode, the failure is an `OrbitDatabaseColumnDecodingError` naming the
 column's index and name, the storage class actually found, and the statement's SQL.
+
+For handwritten SQL returning an existing `@Table` or `@Selection`, use Structured Queries' `#sql`
+macro to declare the output type:
+
+```swift
+@Selection
+struct ReminderSummary: Sendable {
+  let id: Int
+  let title: String
+}
+
+let summaries = try await database.read { transaction in
+  try transaction.fetchAll(
+    #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
+  )
+}
+```
+
+Structured Queries decodes columns positionally using the declared representations, including
+`@Column(as:)` and grouped columns. SQL must return the expected projection order and storage
+representations. Results have type `Value.QueryOutput`, allowing a table alias to decode to its
+underlying model. The same typed statements work with lazy cursors and write `RETURNING` results.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:
