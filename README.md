@@ -142,6 +142,27 @@ struct ReminderSummary: ConvertibleFromOrbitDatabaseRow, Sendable {
 }
 ```
 
+`@OrbitRow` also synthesizes `OrbitDatabaseRowColumns`, mapping stored-property key paths to SQL
+result-column names. Typed reads infer the value type from the property and honor `@OrbitColumn`
+renames:
+
+```swift
+let titles = try await database.read { transaction in
+  try transaction.fetchAll("SELECT title, due_date FROM reminders") { row in
+    let title: String = try row[column: \ReminderSummary.title]
+    let dueDate: String? = try row[column: \ReminderSummary.dueDate]
+    let index: Int? = row.columnIndex(for: \ReminderSummary.title)
+    return title
+  }
+}
+```
+
+Unmapped properties, including computed properties, and missing result columns throw on a typed
+read. `columnIndex(for:)` returns `nil` for either. SQL NULL remains distinct from a missing column.
+Key paths check property names and value types at compile time; the SQL projection is checked at
+runtime. Named and key-path reads share the same cached column lookup. Handwritten types may
+implement `OrbitDatabaseRowColumns` independently of `ConvertibleFromOrbitDatabaseRow`.
+
 `@OrbitRow` maps SQL result columns into values, including projections, joins, aggregates, and
 `RETURNING` results. For typed inserts, updates, and upserts, use Structured Queries' `@Table`
 models and write builders with `transaction.execute(Table.insert { ... })` or

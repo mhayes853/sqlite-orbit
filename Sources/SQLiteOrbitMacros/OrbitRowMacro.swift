@@ -17,7 +17,7 @@ public struct OrbitRowMacro: ExtensionMacro {
     }
     let rowType = context.makeUniqueName("Row")
 
-    var assignments: [String] = []
+    var properties: [(name: TokenSyntax, type: TypeSyntax, column: String)] = []
     for member in declaration.memberBlock.members {
       if let initializer = member.decl.as(InitializerDeclSyntax.self),
         initializer.signature.parameterClause.parameters.count == 1,
@@ -34,7 +34,24 @@ public struct OrbitRowMacro: ExtensionMacro {
           "'@OrbitRow' does not support conditional members; use a handwritten conformance"
         )
       }
+      if let function = member.decl.as(FunctionDeclSyntax.self),
+        function.name.text.trimmingBackticks == "orbitColumnName"
+      {
+        throw rowDiagnostic(
+          at: function,
+          "'@OrbitRow' would duplicate this column mapping; use a handwritten conformance instead"
+        )
+      }
       guard let property = member.decl.as(VariableDeclSyntax.self) else { continue }
+      if property.bindings.contains(where: {
+        $0.pattern.as(IdentifierPatternSyntax.self)?.identifier.text.trimmingBackticks
+          == "orbitColumnName"
+      }) {
+        throw rowDiagnostic(
+          at: property,
+          "'@OrbitRow' would duplicate this column mapping; use a handwritten conformance instead"
+        )
+      }
       guard isStoredInstanceProperty(property) else { continue }
       guard property.bindings.count == 1,
         let binding = property.bindings.first,
@@ -95,9 +112,7 @@ public struct OrbitRowMacro: ExtensionMacro {
         columnName = name
         didRename = true
       }
-      assignments.append(
-        "self.\(identifier.trimmedDescription) = try row[column: \(StringLiteralExprSyntax(content: columnName)), as: \(propertyType.trimmedDescription).self]"
-      )
+      properties.append((identifier, propertyType, columnName))
     }
     let access =
       declaration.modifiers
@@ -105,6 +120,14 @@ public struct OrbitRowMacro: ExtensionMacro {
         $0.name.text == "public" || $0.name.text == "package"
       })
       .map { "\($0.name.text) " } ?? ""
+    let mappingAccess =
+      ([Syntax(declaration)] + context.lexicalContext)
+        .contains { syntax in
+          syntax.asProtocol(DeclGroupSyntax.self)?.modifiers
+            .contains {
+              $0.name.text == "private" || $0.name.text == "fileprivate"
+            } ?? false
+        } ? "fileprivate " : access
     let conformances =
       protocols.map { protocolType in
         protocolType.as(IdentifierTypeSyntax.self).map { "SQLiteOrbit.\($0.name.text)" }
@@ -112,12 +135,25 @@ public struct OrbitRowMacro: ExtensionMacro {
       }
       .joined(separator: ", ")
     let conformance = protocols.isEmpty ? "" : ": \(conformances)"
+    let assignments = properties.map {
+      "self.\($0.name.trimmedDescription) = try row[column: \(StringLiteralExprSyntax(content: $0.column)), as: \($0.type.trimmedDescription).self]"
+    }
+    let mappings = properties.map {
+      "case \\Self.\($0.name.trimmedDescription): return \(StringLiteralExprSyntax(content: $0.column))"
+    }
     let result: DeclSyntax = """
       extension \(type.trimmed)\(raw: conformance) {
         \(raw: access)init<\(rowType): SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
           orbitDatabaseRow row: borrowing \(rowType)
         ) throws {
           \(raw: assignments.joined(separator: "\n"))
+        }
+
+        \(raw: mappingAccess)static func orbitColumnName(for keyPath: Swift.PartialKeyPath<Self>) -> Swift.String? {
+          switch keyPath {
+          \(raw: mappings.joined(separator: "\n"))
+          default: return nil
+          }
         }
       }
       """

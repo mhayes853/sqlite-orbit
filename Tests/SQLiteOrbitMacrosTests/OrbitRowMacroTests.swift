@@ -8,7 +8,7 @@ import Testing
     [
       "OrbitRow": MacroSpec(
         type: OrbitRowMacro.self,
-        conformances: ["ConvertibleFromOrbitDatabaseRow"]
+        conformances: ["ConvertibleFromOrbitDatabaseRow", "OrbitDatabaseRowColumns"]
       ),
       "OrbitColumn": MacroSpec(type: OrbitColumnMacro.self)
     ],
@@ -16,6 +16,29 @@ import Testing
   )
 )
 struct OrbitRowMacroTests {
+  @Test
+  func rejectsExistingColumnMappings() {
+    assertMacro {
+      """
+      @OrbitRow
+      struct Summary {
+        let id: Int
+        static func orbitColumnName(for keyPath: PartialKeyPath<Self>) -> String? { nil }
+      }
+      """
+    } diagnostics: {
+      """
+      @OrbitRow
+      struct Summary {
+        let id: Int
+        static func orbitColumnName(for keyPath: PartialKeyPath<Self>) -> String? { nil }
+        ┬────────────────────────────────────────────────────────────────────────────────
+        ╰─ 🛑 '@OrbitRow' would duplicate this column mapping; use a handwritten conformance instead
+      }
+      """
+    }
+  }
+
   @Test
   func rejectsConditionalMembers() {
     assertMacro {
@@ -63,13 +86,26 @@ struct OrbitRowMacroTests {
         var isImportant: Bool { priority != nil }
       }
 
-      extension Summary: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow {
+      extension Summary: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow, SQLiteOrbit.OrbitDatabaseRowColumns {
         public init<__macro_local_3RowfMu_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
           orbitDatabaseRow row: borrowing __macro_local_3RowfMu_
         ) throws {
           self.id = try row[column: "id", as: Int.self]
           self.title = try row[column: "display_title", as: String.self]
           self.priority = try row[column: "priority", as: Int?.self]
+        }
+
+        public static func orbitColumnName(for keyPath: Swift.PartialKeyPath<Self>) -> Swift.String? {
+          switch keyPath {
+          case \\Self.id:
+            return "id"
+          case \\Self.title:
+            return "display_title"
+          case \\Self.priority:
+            return "priority"
+          default:
+            return nil
+          }
         }
       }
       """
@@ -91,11 +127,20 @@ struct OrbitRowMacroTests {
         let `class`: Row
       }
 
-      extension Box: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow {
+      extension Box: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow, SQLiteOrbit.OrbitDatabaseRowColumns {
         init<__macro_local_3RowfMu_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
           orbitDatabaseRow row: borrowing __macro_local_3RowfMu_
         ) throws {
           self.`class` = try row[column: #"a "quoted" column"#, as: Row.self]
+        }
+
+        static func orbitColumnName(for keyPath: Swift.PartialKeyPath<Self>) -> Swift.String? {
+          switch keyPath {
+          case \\Self.`class`:
+            return #"a "quoted" column"#
+          default:
+            return nil
+          }
         }
       }
       """

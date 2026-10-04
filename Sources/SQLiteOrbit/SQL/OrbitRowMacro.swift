@@ -1,4 +1,5 @@
-/// Synthesizes ``ConvertibleFromOrbitDatabaseRow`` for a struct using named result columns.
+/// Synthesizes ``ConvertibleFromOrbitDatabaseRow`` and ``OrbitDatabaseRowColumns`` for a struct
+/// using named result columns.
 ///
 /// ```swift
 /// @OrbitRow
@@ -15,10 +16,16 @@
 /// lazy properties, property wrappers, conditional members, and an existing row initializer require
 /// a handwritten conformance. The initializer is generated in an extension, preserving memberwise
 /// initialization.
+///
+/// The generated `orbitColumnName(for:)` maps stored-property key paths to result-column names,
+/// allowing typed reads such as `try row[column: \ReminderSummary.title]`. Unmapped properties
+/// return `nil`.
 @attached(
   extension,
   conformances: ConvertibleFromOrbitDatabaseRow,
-  names: named(init)
+  OrbitDatabaseRowColumns,
+  names: named(init),
+  named(orbitColumnName)
 )
 public macro OrbitRow() = #externalMacro(module: "SQLiteOrbitMacros", type: "OrbitRowMacro")
 
