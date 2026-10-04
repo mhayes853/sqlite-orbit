@@ -249,6 +249,115 @@
       }
 
       @Test(arguments: [false, true])
+      func cancellingAnOlderLoadDoesNotStopItsReplacement(cancelBeforeReplacement: Bool)
+        async throws
+      {
+        let database = try await remindersDatabase(titles: "Milk", "Eggs")
+        @Fetch(TitleSearch(term: "Milk"), database: database) var titles = [String]()
+        let first = try await $titles.load(TitleSearch(term: "Milk"), database: database)
+        if cancelBeforeReplacement { first.cancel() }
+
+        let second = try await $titles.load(TitleSearch(term: "Eggs"), database: database)
+        defer { second.cancel() }
+        first.cancel()
+        first.cancel()
+
+        try await insertReminders("Eggs", into: database)
+        try await waitUntil { titles == ["Eggs", "Eggs"] }
+      }
+
+      @Test
+      func cancellingALoadTokenDoesNotStopAnExplicitReload() async throws {
+        let database = try await remindersDatabase(titles: "Milk")
+        @Fetch(TitleSearch(term: "Milk"), database: database) var titles = [String]()
+        let subscription = try await $titles.load(TitleSearch(term: "Milk"), database: database)
+
+        try await $titles.load()
+        subscription.cancel()
+
+        try await insertReminders("Milk", into: database)
+        try await waitUntil { titles == ["Milk", "Milk"] }
+      }
+
+      @Test(arguments: [false, true], [false, true])
+      func replacementLoadsKeepTheAttachedDatabase(
+        hasProcessDefault: Bool,
+        usesObservation: Bool
+      ) async throws {
+        let processDefault = try await remindersDatabase(titles: "Eggs")
+        let attached = try await remindersDatabase(titles: "Milk", "Eggs", "Eggs")
+        try await withProcessDefaultDatabase(hasProcessDefault ? processDefault : nil) {
+          let storage = OrbitFetchStorage<[String]>
+            .make(
+              value: [],
+              request: TitleSearch(term: "Milk"),
+              database: nil,
+              scheduler: nil
+            )
+          // This is the same attachment SwiftUI performs when resolving its environment.
+          storage.attachIfNeeded(database: attached)
+          #expect(storage.value == ["Milk"])
+
+          let subscription: OrbitFetchSubscription
+          if usesObservation {
+            let observation = OrbitValueObservation.tracking { transaction in
+              try TitleSearch(term: "Eggs").fetch(transaction)
+            }
+            subscription = try await storage.load(
+              observation: observation,
+              identity: .intrinsic(observation.identity),
+              database: nil,
+              scheduler: nil
+            )
+          } else {
+            subscription = try await storage.load(
+              request: TitleSearch(term: "Eggs"),
+              database: nil,
+              scheduler: nil
+            )
+          }
+          defer { subscription.cancel() }
+          #expect(storage.value == ["Eggs", "Eggs"])
+          try await insertReminders("Eggs", into: attached)
+          try await waitUntil { storage.value == ["Eggs", "Eggs", "Eggs"] }
+        }
+      }
+
+      @Test
+      func replacementLoadsKeepAnExplicitDatabaseUntilAnotherIsRequested() async throws {
+        let explicit = try await remindersDatabase(titles: "Milk", "Eggs")
+        let offered = try await remindersDatabase(titles: "Eggs", "Eggs")
+        try await withProcessDefaultDatabase(nil) {
+          let storage = OrbitFetchStorage<[String]>
+            .make(
+              value: [],
+              request: TitleSearch(term: "Milk"),
+              database: explicit,
+              scheduler: nil
+            )
+          let first = try await storage.load(
+            request: TitleSearch(term: "Eggs"),
+            database: nil,
+            scheduler: nil
+          )
+          storage.attachIfNeeded(database: offered)
+          #expect(storage.value == ["Eggs"])
+
+          let second = try await storage.load(
+            request: TitleSearch(term: "Eggs"),
+            database: offered,
+            scheduler: nil
+          )
+          defer { second.cancel() }
+          first.cancel()
+          #expect(storage.value == ["Eggs", "Eggs"])
+          storage.attachIfNeeded(database: explicit)
+          try await insertReminders("Eggs", into: offered)
+          try await waitUntil { storage.value == ["Eggs", "Eggs", "Eggs"] }
+        }
+      }
+
+      @Test(arguments: [false, true])
       func subscriptionTaskCancellationDetachesAndKeepsTheLastValue(alreadyCancelled: Bool)
         async throws
       {

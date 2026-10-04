@@ -234,6 +234,84 @@
       }
 
       @Test(arguments: SQLiteTestDriver.allCases)
+      func writeConnectionRefusesRawAndTypedMutationCursors(
+        _ kind: SQLiteTestDriver
+      ) async throws {
+        try await kind.withDatabase(schema: itemsSchema) { driver in
+          try await driver.writeWithoutTransaction { connection in
+            for cached in [false, true] {
+              let rawError = #expect(throws: SQLiteError.self) {
+                _ = try connection.rowCursor(
+                  "INSERT INTO items (id) VALUES (1) RETURNING id",
+                  cached: cached
+                )
+              }
+              #expect(rawError?.primaryCode == .readOnly)
+
+              let typedError = #expect(throws: SQLiteError.self) {
+                _ = try connection.rowCursor(
+                  #sql("INSERT INTO items (id) VALUES (1) RETURNING id", as: Int.self),
+                  cached: cached
+                )
+              }
+              #expect(typedError?.primaryCode == .readOnly)
+            }
+
+            #expect(try connection.fetchAll(itemIDs).isEmpty)
+            try connection.execute("INSERT INTO items (id) VALUES (2)")
+            #expect(try connection.fetchAll(itemIDs) == [2])
+          }
+          #expect(try await driver.read { try $0.fetchAll(itemIDs) } == [2])
+        }
+      }
+
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func cachedMutationCursorsStayAvailableOnlyInsideExplicitTransactions(
+        _ kind: SQLiteTestDriver
+      ) async throws {
+        try await kind.withDatabase(schema: itemsSchema) { driver in
+          try await driver.writeWithoutTransaction { connection in
+            let inserted = try connection.transaction { transaction in
+              var cursor = try transaction.rowCursor(
+                "INSERT INTO items (id) VALUES (1) RETURNING id",
+                cached: true
+              )
+              return try cursor.collect { $0[0].integerValue }
+            }
+            #expect(inserted == [1])
+
+            // This SQL now has a writable statement in the same connection's cache. The read-only
+            // restriction must be checked when borrowing it as well as when preparing a new one.
+            let rawError = #expect(throws: SQLiteError.self) {
+              _ = try connection.rowCursor(
+                "INSERT INTO items (id) VALUES (1) RETURNING id",
+                cached: true
+              )
+            }
+            #expect(rawError?.primaryCode == .readOnly)
+
+            let typedError = #expect(throws: SQLiteError.self) {
+              _ = try connection.rowCursor(
+                #sql("INSERT INTO items (id) VALUES (1) RETURNING id", as: Int.self),
+                cached: true
+              )
+            }
+            #expect(typedError?.primaryCode == .readOnly)
+
+            let typedInserted = try connection.transaction { transaction in
+              var cursor = try transaction.rowCursor(
+                #sql("INSERT INTO items (id) VALUES (2) RETURNING id", as: Int.self),
+                cached: true
+              )
+              return try cursor.collect { $0[0].integerValue }
+            }
+            #expect(typedInserted == [2])
+          }
+          #expect(try await driver.read { try $0.fetchAll(itemIDs) } == [1, 2])
+        }
+      }
+
+      @Test(arguments: SQLiteTestDriver.allCases)
       func blockingAccessesWithoutTransactionReadAndWrite(_ kind: SQLiteTestDriver) throws {
         try withTestDatabaseFile { file in
           let driver = try file.open(kind)

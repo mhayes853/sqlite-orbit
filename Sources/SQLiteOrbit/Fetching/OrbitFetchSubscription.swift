@@ -32,6 +32,9 @@ public struct OrbitFetchSubscription: Sendable {
   }
 
   /// Stops the observation, leaving the property with the value it last observed.
+  ///
+  /// Cancelling again has no effect. If the property has since loaded or adopted another
+  /// observation, that observation is left running.
   public func cancel() {
     onCancel()
   }

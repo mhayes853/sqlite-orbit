@@ -14,6 +14,8 @@
 /// it finds one, so a database that arrives after the property was created — from the environment,
 /// or from a ``set(_:)`` the app had not reached yet — still starts it reading. A property that
 /// named its own database is never re-sourced.
+/// Replacing a property's request or observation with `load` keeps its resolved database unless
+/// that call supplies a new `database:`. A property with no resolved database uses this default.
 ///
 /// A property wrapper is created wherever the property it wraps lives — inside a view, a model, or
 /// a controller — and those places rarely have a database to hand. Setting the default once, as
