@@ -76,6 +76,11 @@ let packageTarget1: Target = .target(
       condition: .when(traits: ["Vectors"])
     ),
     .product(
+      name: "StructuredQueriesTursoVecCore",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["Vectors"])
+    ),
+    .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
       condition: .when(traits: ["StructuredQueries"])
@@ -279,7 +284,7 @@ let package = Package(
     .trait(
       name: "Vectors",
       description:
-        "Includes SQLite Vec and initializes it automatically on supported SQLite connections."
+        "Adds SQLite Vec and Turso vector query helpers, initializing Vec on SQLite connections."
     ),
     .trait(
       name: "Dependencies",
@@ -301,7 +306,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "f980c99e337ff7c3aff250558d038ee2b149f47e"
+      revision: "2e57f23df3724bee3b640be901f2eb5a20ca8732"
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two

@@ -83,6 +83,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Vectors builds the Vec C bridge against SQLite's extension headers, even when the
+      # connections use Turso's native functions. SystemSQLite remains disabled below.
+      - name: Install SQLite headers
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libsqlite3-dev pkg-config
+
       # This downloads and links the release-hosted artifact. The rest of the test target includes
       # cases for SQLite capabilities Turso deliberately reports as unavailable. Both suites use
       # Structured Queries to set up and inspect their databases, so the trait is named too.
@@ -95,6 +102,11 @@ jobs:
         run: |
           swift test --disable-default-traits --traits Turso,StructuredQueries \
             --filter OrbitDatabaseMigratorTests
+
+      - name: Test native vector helpers with TursoPool
+        run: |
+          swift test --disable-default-traits --traits Turso,StructuredQueries,Vectors \
+            --filter 'TursoVectorTests|EmbeddingVectorTests|TursoCompatibilityTests|OrbitDatabaseMigratorTests'
 
   test-swiftui:
     name: macOS (SwiftUI)

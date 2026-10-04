@@ -1,4 +1,4 @@
-#if Vectors && BuiltInSQLite && !Turso
+#if Vectors && BuiltInSQLite
   import SQLiteOrbit
   import Testing
 
@@ -42,6 +42,87 @@
       #expect(try EmbeddingVector<0>(orbitDatabaseValue: .blob([])).isEmpty)
     }
 
+    @Test
+    func otherNumericPrecisionsUseTaggedLittleEndianBlobs() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      let double = EmbeddingVector64<3> { [Double(1), -2, 0.5][$0] }
+      let doubleBytes: [UInt8] = [
+        0, 0, 0, 0, 0, 0, 240, 63,
+        0, 0, 0, 0, 0, 0, 0, 192,
+        0, 0, 0, 0, 0, 0, 224, 63,
+        2
+      ]
+      #expect(double.orbitDatabaseValue() == .blob(doubleBytes))
+      #expect(
+        EmbeddingVector64<3>.VectorBytesRepresentation(queryOutput: double).queryBinding
+          == .blob(doubleBytes)
+      )
+      #expect(try EmbeddingVector64<3>(orbitDatabaseValue: .blob(doubleBytes)) == double)
+
+      let half = EmbeddingVector16<3> { [Float16(1), -2, 0.5][$0] }
+      let halfBytes: [UInt8] = [0, 60, 0, 192, 0, 56, 5]
+      #expect(half.orbitDatabaseValue() == .blob(halfBytes))
+      #expect(
+        EmbeddingVector16<3>.VectorBytesRepresentation(queryOutput: half).queryBinding
+          == .blob(halfBytes)
+      )
+      #expect(try EmbeddingVector16<3>(orbitDatabaseValue: .blob(halfBytes)) == half)
+      #expect(try EmbeddingVector64<3>?(orbitDatabaseValue: .null) == nil)
+      #expect(try EmbeddingVector16<3>?(orbitDatabaseValue: .null) == nil)
+    }
+
+    @Test
+    func otherNumericPrecisionsPreserveBitsAndEmptyDimensions() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      let doubleBits: [UInt64] = [
+        0x8000_0000_0000_0000, 0x7ff0_0000_0000_0000,
+        0x7ff8_0000_0000_1234, 1
+      ]
+      let double = EmbeddingVector64<4> { Double(bitPattern: doubleBits[$0]) }
+      let decodedDouble = try EmbeddingVector64<4>(orbitDatabaseValue: double.orbitDatabaseValue())
+      #expect(decodedDouble.map(\.bitPattern) == doubleBits)
+      let halfBits: [UInt16] = [0x8000, 0x7c00, 0x7e12, 1]
+      let half = EmbeddingVector16<4> { Float16(bitPattern: halfBits[$0]) }
+      let decodedHalf = try EmbeddingVector16<4>(orbitDatabaseValue: half.orbitDatabaseValue())
+      #expect(decodedHalf.map(\.bitPattern) == halfBits)
+      #expect(EmbeddingVector64<0>(repeating: 0).orbitDatabaseValue() == .blob([2]))
+      #expect(try EmbeddingVector64<0>(orbitDatabaseValue: .blob([2])).isEmpty)
+      #expect(EmbeddingVector16<0>(repeating: 0).orbitDatabaseValue() == .blob([5]))
+      #expect(try EmbeddingVector16<0>(orbitDatabaseValue: .blob([5])).isEmpty)
+    }
+
+    @Test
+    func numericPrecisionDecodingRejectsWrongTagsAndDimensions() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      for value in [
+        OrbitDatabaseValue.blob([2]), .blob(Array(repeating: 0, count: 25)),
+        .blob(Array(repeating: 0, count: 24) + [5]), .text("[1,2,3]")
+      ] {
+        #expect(throws: OrbitDatabaseValueConversionError.self) {
+          try EmbeddingVector64<3>(orbitDatabaseValue: value)
+        }
+      }
+      for value in [
+        OrbitDatabaseValue.blob([5]), .blob(Array(repeating: 0, count: 7)),
+        .blob(Array(repeating: 0, count: 6) + [2]), .integer(1)
+      ] {
+        #expect(throws: OrbitDatabaseValueConversionError.self) {
+          try EmbeddingVector16<3>(orbitDatabaseValue: value)
+        }
+      }
+      // Float32 blobs may carry Turso's optional format tag; use the same acceptance rules as
+      // the structured query representation, while still validating the fixed dimension.
+      let float = EmbeddingVector<3>(repeating: 1)
+      let bytes = try #require(float.orbitDatabaseValue().blobValue)
+      #expect(try EmbeddingVector<3>(orbitDatabaseValue: .blob(bytes + [1])) == float)
+    }
+
     @Test(arguments: [OrbitDatabaseValue.null, .integer(1), .real(1), .text("[1,2,3]")])
     func wrongStorageClassesReportConversionErrors(_ value: OrbitDatabaseValue) {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
@@ -67,48 +148,77 @@
       #expect(error?.reason == "Expected 12 vector bytes, found \(size)")
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func vectorsBindFetchAndSearchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
-      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
-        return
-      }
-      try await driver.withDatabase(
-        schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
-      ) { database in
-        let origin = EmbeddingVector<3>(repeating: 0)
-        let neighbor = EmbeddingVector<3> { $0 == 0 ? 1 : 0 }
-        try await database.write {
-          try $0.execute("INSERT INTO embeddings VALUES (1, \(origin)), (2, \(neighbor))")
+    #if !Turso
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func otherNumericPrecisionsBindAndFetchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
+        guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+          return
         }
-        #expect(
-          try await database.read {
-            try $0.fetchOne(
-              "SELECT embedding FROM embeddings WHERE rowid = 2",
-              as: EmbeddingVector<3>.self
-            )
-          } == neighbor
-        )
-        #expect(
-          try await database.read {
-            try $0.fetchAll(
-              """
-              SELECT rowid FROM embeddings
-              WHERE embedding MATCH \(origin) AND k = 2 ORDER BY distance
-              """,
-              as: Int64.self
-            )
-          } == [1, 2]
-        )
-        #if StructuredQueries
+        try await driver.withDatabase(
+          schema: "CREATE TABLE precisions (float64 BLOB, float16 BLOB)"
+        ) { database in
+          let double = EmbeddingVector64<3> { [Double.pi, -2, .leastNonzeroMagnitude][$0] }
+          let half = EmbeddingVector16<3> { [Float16(1), -.infinity, .leastNonzeroMagnitude][$0] }
+          try await database.write {
+            try $0.execute("INSERT INTO precisions VALUES (\(double), \(half))")
+          }
+          let row = try await database.read {
+            try $0.fetchOne("SELECT float64, float16 FROM precisions") { row in
+              (
+                try row[0, as: EmbeddingVector64<3>.self],
+                try row[1, as: EmbeddingVector16<3>.self]
+              )
+            }
+          }
+          let stored = try #require(row)
+          #expect(stored.0 == double)
+          #expect(stored.1 == half)
+        }
+      }
+
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func vectorsBindFetchAndSearchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
+        guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+          return
+        }
+        try await driver.withDatabase(
+          schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
+        ) { database in
+          let origin = EmbeddingVector<3>(repeating: 0)
+          let neighbor = EmbeddingVector<3> { $0 == 0 ? 1 : 0 }
+          try await database.write {
+            try $0.execute("INSERT INTO embeddings VALUES (1, \(origin)), (2, \(neighbor))")
+          }
           #expect(
             try await database.read {
               try $0.fetchOne(
-                #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                "SELECT embedding FROM embeddings WHERE rowid = 2",
+                as: EmbeddingVector<3>.self
               )
-            } == 1
+            } == neighbor
           )
-        #endif
+          #expect(
+            try await database.read {
+              try $0.fetchAll(
+                """
+                SELECT rowid FROM embeddings
+                WHERE embedding MATCH \(origin) AND k = 2 ORDER BY distance
+                """,
+                as: Int64.self
+              )
+            } == [1, 2]
+          )
+          #if StructuredQueries
+            #expect(
+              try await database.read {
+                try $0.fetchOne(
+                  #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                )
+              } == 1
+            )
+          #endif
+        }
       }
-    }
+    #endif
   }
 #endif
