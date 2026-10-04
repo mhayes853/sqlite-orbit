@@ -727,10 +727,10 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   let configurationPointer: UnsafePointer<SQLiteConfiguration>
 
   @_lifetime(borrow handle)
-  init(handle: borrowing SQLiteHandle) {
+  init(handle: borrowing SQLiteConnection) {
     self.connection = handle.pointer
     self.libraryPointer = handle.library
-    self.configurationPointer = handle.configuration
+    self.configurationPointer = handle.configurationPointer
   }
 
   /// The underlying `sqlite3 *`.
@@ -748,7 +748,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   /// - Parameter sql: The statement to run. Any rows it returns are discarded.
   /// - Throws: A ``SQLiteError`` when the statement fails.
   public borrowing func execute(_ sql: SQL) throws {
-    try SQLiteHandle.execute(sql, on: connection, library: libraryPointer)
+    try SQLiteConnection.execute(sql, on: connection, library: libraryPointer)
   }
 
   /// Executes a script of one or more statements to completion.
@@ -762,7 +762,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   /// - Parameter script: One or more statements, separated by semicolons.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
   public borrowing func executeScript(_ script: String) throws {
-    try SQLiteHandle.executeScript(script, on: connection, library: libraryPointer)
+    try SQLiteConnection.executeScript(script, on: connection, library: libraryPointer)
   }
 }
 

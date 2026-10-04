@@ -1,16 +1,9 @@
-enum SQLiteWriteTransactionMode: Equatable, Sendable {
-  case immediate
-  case concurrent
-
-  var beginSQL: String {
-    switch self {
-    case .immediate: "BEGIN IMMEDIATE TRANSACTION"
-    case .concurrent: "BEGIN CONCURRENT TRANSACTION"
-    }
-  }
-}
-
-struct SQLiteHandle: ~Copyable {
+/// Owns a native SQLite connection and lends scoped read or write access.
+///
+/// The owner is noncopyable and does not cross concurrency boundaries. A driver chooses its
+/// executor and transaction boundaries; each lending call is synchronous and exclusive.
+/// Borrowed connections and their cursors cannot outlive the call that lent them.
+public struct SQLiteConnection: ~Copyable {
   let pointer: OpaquePointer
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
@@ -19,7 +12,8 @@ struct SQLiteHandle: ~Copyable {
   // their own that a borrowed handle can still mutate through.
   let settings: UnsafeMutablePointer<SQLiteConnectionSettings>
 
-  let isReadOnly: Bool
+  /// Whether the connection was opened with read-only access.
+  public let isReadOnly: Bool
 
   private let libraryStorage: UnsafeMutablePointer<SQLiteLibrary>
 
@@ -31,7 +25,10 @@ struct SQLiteHandle: ~Copyable {
     UnsafePointer(libraryStorage)
   }
 
-  var configuration: UnsafePointer<SQLiteConfiguration> {
+  /// The configuration used to open this connection.
+  public var configuration: SQLiteConfiguration { configurationStorage.pointee }
+
+  var configurationPointer: UnsafePointer<SQLiteConfiguration> {
     UnsafePointer(configurationStorage)
   }
 
@@ -68,16 +65,12 @@ struct SQLiteHandle: ~Copyable {
     self.settings = settings
   }
 
-  // `driverSetupSQL` runs after the configuration's own, and is kept out of the configuration a
-  // transaction reports: it is how a driver sets up a connection for its role, such as a pool's
-  // `query_only` readers, which a caller never asked for.
-  static func open(
+  /// Opens and configures a connection. Closing is automatic when the owner is destroyed.
+  public init(
     path: OrbitDatabasePath,
-    flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
-    driverSetupSQL: [String] = [],
-    suspension: SQLiteWriteSuspension? = nil
-  ) throws -> SQLiteHandle {
+    flags: SQLiteOpenFlags = [.readWrite, .create, .noMutex]
+  ) throws {
     // Runtime registration must precede `open`, and must use the library the configuration has
     // now, rather than one captured when a setup was added.
     for setup in configuration.connectionSetups {
@@ -110,22 +103,15 @@ struct SQLiteHandle: ~Copyable {
       throw error
     }
 
-    if let suspension {
-      // This handle owns its copy of the entry points, so other connections are unaffected.
-      libraryStorage.pointee.statements.execution.step = suspension.step(
-        of: libraryStorage.pointee,
-        on: pointer
-      )
-    }
-    let handle = SQLiteHandle(
+    let handle = SQLiteConnection(
       pointer: pointer,
       libraryStorage: libraryStorage,
       configurationStorage: configurationStorage,
       isReadOnly: flags.contains(.readOnly)
     )
-    try handle.configure(configuration, driverSetupSQL: driverSetupSQL)
+    try handle.configure(configuration)
     try handle.authorizer.install(on: pointer, using: handle.library)
-    return handle
+    self = consume handle
   }
 
   deinit {
@@ -143,8 +129,7 @@ struct SQLiteHandle: ~Copyable {
   }
 
   private borrowing func configure(
-    _ configuration: SQLiteConfiguration,
-    driverSetupSQL: [String]
+    _ configuration: SQLiteConfiguration
   ) throws {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
@@ -174,7 +159,7 @@ struct SQLiteHandle: ~Copyable {
     for setup in configuration.connectionSetups {
       try setup(connection)
     }
-    for sql in configuration.setupSQL + driverSetupSQL {
+    for sql in configuration.setupSQL {
       try execute(sql)
     }
   }
@@ -224,21 +209,13 @@ struct SQLiteHandle: ~Copyable {
     try Self.executeScript(sql, on: pointer, library: library)
   }
 
-  borrowing func read<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: (borrowing SQLiteReadTransaction) throws -> Result
-  ) throws -> Result {
-    try withConnectionAccess(observers: observers) { observations in
-      try beginQueryOnly()
-      return try runRead(observations: observations, body)
-    }
-  }
-
-  borrowing func readWithoutTransaction<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
+  /// Lends read access, temporarily enforcing query-only mode on writable connections.
+  /// Call the borrowed connection's `transaction` method when a stable snapshot is needed.
+  public mutating func withReadConnection<Result: ~Copyable>(
+    cancellation: SQLiteConnectionCancellation? = nil,
     _ body: (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try withConnectionAccess(observers: observers) { observations in
+    try withConnectionAccess(cancellation: cancellation) { observations in
       try beginQueryOnly()
       return try withoutTransaction { address, state in
         try body(
@@ -283,10 +260,9 @@ struct SQLiteHandle: ~Copyable {
     return value
   }
 
-  // Every read transaction begins here, whether `read` opens it or a read connection's
-  // `transaction` does.
+  // The borrowed read connection opens its transactions here.
   borrowing func runRead<Result: ~Copyable>(
-    observations: OrbitDatabaseTransactionObservationContext,
+    observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try execute("BEGIN DEFERRED TRANSACTION")
@@ -303,21 +279,20 @@ struct SQLiteHandle: ~Copyable {
     return value
   }
 
-  borrowing func write<Result: ~Copyable>(
-    mode: SQLiteWriteTransactionMode = .immediate,
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> Result {
-    try withConnectionAccess(observers: observers) { observations in
-      try runWrite(mode: mode, observations: observations, body)
-    }
-  }
-
-  borrowing func writeWithoutTransaction<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
+  /// Lends write access. Statements commit independently unless grouped in `transaction`.
+  /// A connection opened read-only rejects this call before invoking `body`.
+  public mutating func withWriteConnection<Result: ~Copyable>(
+    cancellation: SQLiteConnectionCancellation? = nil,
     _ body: (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try withConnectionAccess(observers: observers, commitsPendingChanges: true) { observations in
+    guard !isReadOnly else {
+      throw SQLiteError(
+        code: .readOnly,
+        message: "Cannot lend write access to a read-only connection"
+      )
+    }
+    return try withConnectionAccess(cancellation: cancellation, commitsPendingChanges: true) {
+      observations in
       try withoutTransaction { address, state in
         try body(
           SQLiteWriteConnection(
@@ -333,26 +308,46 @@ struct SQLiteHandle: ~Copyable {
 
   /// Establishes the invariants shared by every transaction and connection access.
   private borrowing func withConnectionAccess<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers?,
+    cancellation: SQLiteConnectionCancellation?,
     commitsPendingChanges: Bool = false,
-    _ body: (OrbitDatabaseTransactionObservationContext) throws -> Result
+    _ body: (SQLiteConnectionEvents) throws -> Result
   ) throws -> Result {
     let binding = SQLiteCurrentLibrary.bind(library)
     defer { SQLiteCurrentLibrary.unbind(restoring: binding) }
-    let observations = OrbitDatabaseTransactionObservationContext(databaseObservers: observers)
+    let observations = SQLiteConnectionEvents()
     defer {
       if commitsPendingChanges {
         // Every statement has finished by now, so any remaining change has committed.
         observations.didCommitPendingChanges()
       }
     }
-    return try withRestoredSettings { try body(observations) }
+    guard let cancellation else {
+      return try withRestoredSettings { try body(observations) }
+    }
+    let address = UInt(bitPattern: pointer)
+    let interrupt = libraryStorage.pointee.connections.interrupt
+    let interruptConnection: @Sendable () -> Void = {
+      interrupt(OpaquePointer(bitPattern: address))
+    }
+    return try cancellation.withInterruption(interrupt: interruptConnection) {
+      try withRestoredSettings { try body(observations) }
+    }
+  }
+
+  borrowing func withStatementExecution<Result: ~Copyable>(
+    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    let previous = libraryStorage.pointee.statements.execution.step
+    libraryStorage.pointee.statements.execution.step = step
+    defer { libraryStorage.pointee.statements.execution.step = previous }
+    return try operation()
   }
 
   // The caller restores the access's settings once this returns, which is after any transaction
   // left open has been rolled back: SQLite ignores `PRAGMA foreign_keys` inside one.
   private borrowing func withoutTransaction<Result: ~Copyable>(
-    _ body: (UnsafePointer<SQLiteHandle>, SQLiteConnectionState) throws -> Result
+    _ body: (UnsafePointer<SQLiteConnection>, SQLiteConnectionState) throws -> Result
   ) throws -> Result {
     let state = SQLiteConnectionState()
     // Declared before the handler below is installed, so that it runs after the handler has been
@@ -383,11 +378,11 @@ struct SQLiteHandle: ~Copyable {
     }
   }
 
-  // Every write transaction begins here, whether `write` opens it or a write connection's
-  // `transaction` does, and reports its lifecycle to the context of the access it belongs to.
+  // The borrowed write connection opens transactions here and reports their lifecycle to the
+  // access-local event router.
   borrowing func runWrite<Result: ~Copyable>(
     mode: SQLiteWriteTransactionMode = .immediate,
-    observations: OrbitDatabaseTransactionObservationContext,
+    observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     try execute(mode.beginSQL)
@@ -396,7 +391,7 @@ struct SQLiteHandle: ~Copyable {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
       try endTransaction(with: "COMMIT")
-      observations.didCommit(origin: .local)
+      observations.didCommit()
       return value
     } catch {
       rollbackIgnoringFailure()
@@ -440,7 +435,7 @@ struct SQLiteHandle: ~Copyable {
     library: UnsafePointer<SQLiteLibrary>,
     authorizer: SQLiteAuthorizerDispatcher? = nil,
     statements: SQLiteStatementCache? = nil,
-    observations: OrbitDatabaseTransactionObservationContext? = nil
+    observations: SQLiteConnectionEvents? = nil
   ) throws {
     // Each statement's length is passed explicitly rather than left to SQLite to measure again.
     try sql.withCString { start in

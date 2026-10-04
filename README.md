@@ -376,6 +376,30 @@ what committed once the access ends, even when it throws.
 
 ## Using your own SQLite build
 
+For synchronous access or a custom driver, `SQLiteConnection` owns a native connection and lends
+the same read and write views the built-in drivers use:
+
+```swift
+var owner = try SQLiteConnection(path: .memory, configuration: .default)
+try owner.withWriteConnection { connection in
+  try connection.transaction(mode: .immediate) { transaction in
+    try transaction.executeScript("CREATE TABLE reminders (title TEXT NOT NULL)")
+  }
+}
+```
+
+The owner is noncopyable and does not conform to `Sendable`. Lending is synchronous and exclusive;
+a driver supplies serialization and chooses when to start a transaction. Read lending enforces
+query-only access, and both lenders restore scoped settings and clean up before returning.
+Releasing the owner closes the connection.
+
+Observation is installed separately with a borrowed view's `withObservation(_:perform:)` and
+`SQLiteConnectionObserver`. Hooks cover their lexical scope; installing them around `transaction`
+includes its commit or rollback. Higher-level database observers adapt these events to database
+subscriptions and IPC. For cancellable access, pass a fresh `SQLiteConnectionCancellation` to a
+lender and call `cancel()` from another thread. A cancellation after that access ends cannot
+interrupt the next one.
+
 The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
 entry points are grouped by responsibility, including distinct statement preparation, execution,
 and inspection APIs. Authorizers, trusted-schema control, scalar functions, aggregate functions,

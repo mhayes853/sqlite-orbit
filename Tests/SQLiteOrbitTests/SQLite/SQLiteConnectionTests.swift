@@ -41,15 +41,15 @@
 
   private func openInMemory(
     _ configuration: SQLiteConfiguration = .default
-  ) throws -> SQLiteHandle {
-    try SQLiteHandle.open(
+  ) throws -> SQLiteConnection {
+    try SQLiteConnection.open(
       path: ":memory:",
       flags: [.readWrite, .create, .memory, .noMutex],
       configuration: configuration
     )
   }
 
-  private func scalar(_ connection: borrowing SQLiteHandle, _ sql: String) throws -> Int64 {
+  private func scalar(_ connection: borrowing SQLiteConnection, _ sql: String) throws -> Int64 {
     let library = connection.library
     var statement: OpaquePointer?
     let code = sql.withCString {
@@ -147,7 +147,7 @@
   func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
     let path = temporaryDatabasePath("missing") + "/db.sqlite"
     #expect(throws: SQLiteError.self) {
-      _ = try SQLiteHandle.open(
+      _ = try SQLiteConnection.open(
         path: OrbitDatabasePath(path),
         flags: [.readWrite],
         configuration: .default

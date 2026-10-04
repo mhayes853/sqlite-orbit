@@ -287,87 +287,73 @@ final class OrbitDatabaseTransactionObservers: Sendable {
   }
 }
 
-/// Routes one database access to its database-wide observers and any observers scoped to it.
-///
-/// A context is confined to one serialized SQLite connection access. Keeping scoped observers here
-/// instead of in the database-wide registry prevents concurrent pool reads from seeing one
-/// another's events.
-///
-/// Every event goes to the database-wide observers first and then to the scoped observers
-/// registered at the moment it happens, so a scoped observer sees the commits and rollbacks of the
-/// transactions that end while it is registered, and nothing of those that end after it is gone.
-final class OrbitDatabaseTransactionObservationContext {
-  private let databaseObservers: OrbitDatabaseTransactionObservers?
-  private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
-
-  // Outside a transaction SQLite commits each statement on its own. The pending region tells both
-  // whether one left anything to report and precisely what it changed.
-  private var pendingRegion = OrbitDatabaseRegion.empty
-
-  init(databaseObservers: OrbitDatabaseTransactionObservers?) {
-    self.databaseObservers = databaseObservers
+// The native connection reports only local lifecycle events. Database-wide observation adds
+// transaction origin and peer coordination above that public connection interface.
+extension OrbitDatabaseTransactionObservers: SQLiteConnectionObserver {
+  func connectionDidRead(in region: OrbitDatabaseRegion) { didRead(in: region) }
+  func connectionDidChange(in region: OrbitDatabaseRegion) { didChange(in: region) }
+  func connectionWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+    try willCommit(transaction)
   }
+  func connectionDidCommit(in region: OrbitDatabaseRegion) {
+    didCommit(origin: .local, region: region)
+  }
+  func connectionDidRollback() { didRollback() }
+}
 
-  func withObserver<Result: ~Copyable>(
+private struct OrbitScopedTransactionObserver: SQLiteConnectionObserver {
+  let observer: any OrbitDatabaseTransactionObserver
+
+  func connectionDidRead(in region: OrbitDatabaseRegion) { observer.databaseDidRead(in: region) }
+  func connectionDidChange(in region: OrbitDatabaseRegion) {
+    observer.databaseDidChange(in: region)
+  }
+  func connectionWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+    try observer.databaseWillCommit(transaction)
+  }
+  func connectionDidCommit(in region: OrbitDatabaseRegion) {
+    observer.databaseDidCommit(OrbitDatabaseCommit(origin: .local, region: region))
+  }
+  func connectionDidRollback() { observer.databaseDidRollback() }
+}
+
+extension SQLiteReadTransaction {
+  /// Observes database events produced only while `operation` runs in this access.
+  public borrowing func withObserver<Result: ~Copyable>(
     _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
-    scopedObservers.append(observer)
-    defer { scopedObservers.removeLast() }
-    return try operation()
+    try withObservation(OrbitScopedTransactionObserver(observer: observer), perform: operation)
   }
+}
 
-  func didRead(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    databaseObservers?.didRead(in: region)
-    for observer in scopedObservers {
-      observer.databaseDidRead(in: region)
-    }
+extension SQLiteWriteTransaction {
+  /// Observes database events produced only while `operation` runs in this access.
+  public borrowing func withObserver<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try withObservation(OrbitScopedTransactionObserver(observer: observer), perform: operation)
   }
+}
 
-  func didChange(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    pendingRegion.formUnion(region)
-    databaseObservers?.didChange(in: region)
-    for observer in scopedObservers {
-      observer.databaseDidChange(in: region)
-    }
+extension SQLiteReadConnection {
+  /// Observes database events produced only while `operation` runs in this access.
+  public borrowing func withObserver<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try withObservation(OrbitScopedTransactionObserver(observer: observer), perform: operation)
   }
+}
 
-  func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    try databaseObservers?.willCommit(transaction)
-    for observer in scopedObservers {
-      try observer.databaseWillCommit(transaction)
-    }
-  }
-
-  func didCommit(origin: OrbitDatabaseTransactionOrigin) {
-    let region = pendingRegion
-    pendingRegion = .empty
-    databaseObservers?.didCommit(origin: origin, region: region)
-    let commit = OrbitDatabaseCommit(origin: origin, region: region)
-    for observer in scopedObservers {
-      observer.databaseDidCommit(commit)
-    }
-  }
-
-  func didRollback() {
-    pendingRegion = .empty
-    databaseObservers?.didRollback()
-    for observer in scopedObservers {
-      observer.databaseDidRollback()
-    }
-  }
-
-  /// Reports the changes made since the last commit or rollback as committed, if there are any.
-  ///
-  /// This is for a statement run outside a transaction, which SQLite commits as it finishes. There
-  /// is no moment before that commit to call `databaseWillCommit` in, so the changes are reported
-  /// in the shape of a commit made by another handle. A statement that fails after its changes were
-  /// reported still counts as having committed them: an observer told about a change that did not
-  /// happen only fetches again, while one never told about a change that did misses it.
-  func didCommitPendingChanges() {
-    guard !pendingRegion.isEmpty else { return }
-    didCommit(origin: .local)
+extension SQLiteWriteConnection {
+  /// Observes database events produced only while `operation` runs in this access.
+  /// Statements committed before a throwing operation ends are reported before registration ends.
+  public borrowing func withObserver<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try withObservation(OrbitScopedTransactionObserver(observer: observer), perform: operation)
   }
 }

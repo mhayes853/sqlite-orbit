@@ -581,12 +581,12 @@ public struct OrbitDatabaseMigrator: Sendable {
     // on the database, and whatever data they seed is encrypted at rest as it is there. Nothing
     // observes it, and it runs on the calling thread: each of its accesses binds its library to
     // the thread and puts back the binding of the access this runs inside once it ends.
-    let handle = try SQLiteHandle.open(
+    var handle = try SQLiteConnection(
       path: OrbitDatabasePath(path.string),
-      flags: [.readWrite, .create, .noMutex],
-      configuration: configuration
+      configuration: configuration,
+      flags: [.readWrite, .create, .noMutex]
     )
-    return try handle.writeWithoutTransaction { connection in
+    return try handle.withWriteConnection { connection in
       try runMigrations(connection, upTo: target)
       return try schema(of: connection)
     }

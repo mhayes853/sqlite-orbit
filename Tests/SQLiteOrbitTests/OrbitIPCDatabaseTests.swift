@@ -442,16 +442,18 @@
     struct OrbitDatabaseRegionRecorderTests {
       @Test
       func recorderKeepsCommittedRegionsApartFromRolledBackAndPendingOnes() {
-        let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+        let context = SQLiteConnectionEvents()
         let recorder = OrbitDatabaseRegionRecorder()
+        let observers = OrbitDatabaseTransactionObservers()
+        let subscription = observers.subscribe(recorder)
         let committed = OrbitDatabaseRegion(table: "committed")
         let rolledBack = OrbitDatabaseRegion(table: "rolled_back")
         let autocommitted = OrbitDatabaseRegion(table: "autocommitted")
         let pending = OrbitDatabaseRegion(table: "pending")
 
-        context.withObserver(recorder) {
+        context.withObservation(observers) {
           context.didChange(in: committed)
-          context.didCommit(origin: .local)
+          context.didCommit()
           context.didChange(in: rolledBack)
           context.didRollback()
           context.didChange(in: autocommitted)
@@ -461,21 +463,25 @@
 
         #expect(recorder.committedRegion == committed.union(autocommitted))
         #expect(recorder.changedRegion == committed.union(autocommitted).union(pending))
+        _ = subscription
       }
 
       @Test
       func recorderMissesTheEventsOfTransactionsEndingAfterItsScope() {
-        let context = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+        let context = SQLiteConnectionEvents()
         let recorder = OrbitDatabaseRegionRecorder()
+        let observers = OrbitDatabaseTransactionObservers()
+        let subscription = observers.subscribe(recorder)
         let region = OrbitDatabaseRegion(table: "items")
 
-        context.withObserver(recorder) {
+        context.withObservation(observers) {
           context.didChange(in: region)
         }
         context.didRollback()
 
         #expect(recorder.committedRegion == .empty)
         #expect(recorder.changedRegion == region)
+        _ = subscription
       }
     }
 

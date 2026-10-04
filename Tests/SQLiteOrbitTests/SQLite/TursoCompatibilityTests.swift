@@ -437,7 +437,7 @@
 
     @Test
     func tursoUsesWholeDatabaseRegionsWithoutAnAuthorizer() throws {
-      let handle = try SQLiteHandle.open(
+      let handle = try SQLiteConnection.open(
         path: .memory,
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: .turso
@@ -456,7 +456,7 @@
 
     @Test
     func tursoRefusesWritesPassedThroughAReadTransaction() throws {
-      let handle = try SQLiteHandle.open(
+      var handle = try SQLiteConnection.open(
         path: .memory,
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: .turso

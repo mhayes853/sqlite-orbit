@@ -10,8 +10,8 @@
 
     private func openConnection(
       configuration: SQLiteConfiguration = .default
-    ) throws -> SQLiteHandle {
-      let handle = try SQLiteHandle.open(
+    ) throws -> SQLiteConnection {
+      let handle = try SQLiteConnection.open(
         path: ":memory:",
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: configuration
@@ -68,7 +68,7 @@
 
     @Test
     func rawSQLStopsAtAnEmbeddedNulTheWaySQLiteDoes() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       try handle.execute(
         "INSERT INTO items (id, title) VALUES (1, 'a');\u{0}INSERT INTO items (id, title) VALUES (2, 'b')"
       )
@@ -83,7 +83,7 @@
 
     @Test
     func aReadOnAWritableConnectionRefusesToMutateAndLeavesItWritable() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
 
       // The connection can write, but not while lending a read transaction: a mutation that was
       // merely rolled back at the end of the read would look like it had worked.
@@ -117,7 +117,7 @@
     func aStatementIsReusableAfterTheQueryUsingItFails() throws {
       let probe = StatementLifecycleProbe()
       do {
-        let handle = try openConnection(
+        var handle = try openConnection(
           configuration: probe.configuration(matching: "SELECT title FROM items")
         )
         try handle.write { transaction in
@@ -146,7 +146,7 @@
     func aPartiallyReadCursorDoesNotResumeWhenItsStatementIsReused() throws {
       let probe = StatementLifecycleProbe()
       do {
-        let handle = try openConnection(
+        var handle = try openConnection(
           configuration: probe.configuration(matching: "SELECT title FROM items")
         )
         try handle.write { transaction in
@@ -177,7 +177,7 @@
 
     @Test
     func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       try handle.write { transaction in
         for id in 1...4 {
           try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
@@ -207,7 +207,7 @@
     func aCacheThatHoldsNothingStillRunsQueries() throws {
       var configuration = SQLiteConfiguration.default
       configuration.maximumCachedStatements = 0
-      let handle = try openConnection(configuration: configuration)
+      var handle = try openConnection(configuration: configuration)
 
       try handle.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
@@ -220,7 +220,7 @@
 
     @Test
     func largeIntegersRoundTripWithoutLosingPrecision() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       try handle.execute("CREATE TABLE numbers (value INTEGER)")
 
       let extremes: [Int64] = [.min, -1, 0, 1, .max]
@@ -242,7 +242,7 @@
     func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
       let probe = StatementLifecycleProbe()
       do {
-        let handle = try openConnection(
+        var handle = try openConnection(
           configuration: probe.configuration(matching: "INSERT INTO numbers")
         )
         try handle.execute("CREATE TABLE numbers (value INTEGER)")
@@ -283,7 +283,7 @@
 
     @Test
     func textRoundTripsWhateverCharactersItHolds() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       // Binding with a byte count of -1 would ask SQLite to stop at the first NUL, which would
       // silently truncate the last of these to "before".
       let titles = ["Blob’s reminder", "日本語", "🧑‍🚀 emoji", "", "before\u{0}after"]
@@ -496,7 +496,7 @@
 
     @Test
     func decodingNullIntoANonOptionalIsReportedRatherThanCrashing() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       try handle.execute("CREATE TABLE numbers (value INTEGER)")
       try handle.write { transaction in
         try transaction.execute("INSERT INTO numbers (value) VALUES (NULL)")
@@ -534,7 +534,7 @@
         isArmed.withLock { $0 = false }
         return SQLiteResultCode.interrupt.rawValue
       }
-      let handle = try openConnection(configuration: configuration)
+      var handle = try openConnection(configuration: configuration)
 
       // The read's own rollback is interrupted, and that failure is reported...
       #expect(throws: SQLiteError.self) {
@@ -554,7 +554,7 @@
 
     @Test
     func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
-      let handle = try openConnection()
+      var handle = try openConnection()
       try handle.execute("CREATE TABLE numbers (value INTEGER)")
       try handle.write { transaction in
         try transaction.execute(

@@ -80,7 +80,7 @@ struct SQLiteConnectionSettings: ~Copyable {
   private mutating func executeForeignKeys(_ isEnabled: Bool) throws {
     // Numeric booleans are accepted by both SQLite and Turso. The statement runs the way one the
     // connection executes does, so cached statements compiled under the old setting are dropped.
-    try SQLiteHandle.executeScript(
+    try SQLiteConnection.executeScript(
       "PRAGMA foreign_keys = \(isEnabled ? 1 : 0)",
       on: connection,
       library: library,
@@ -93,7 +93,7 @@ struct SQLiteConnectionSettings: ~Copyable {
   mutating func setQueryOnly(_ isQueryOnly: Bool) throws {
     // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
     // keyword as a different expression kind than the pragma implementation accepts.
-    try SQLiteHandle.executeScript(
+    try SQLiteConnection.executeScript(
       "PRAGMA query_only = \(isQueryOnly ? 1 : 0)",
       on: connection,
       library: library

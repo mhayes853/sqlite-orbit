@@ -9,8 +9,8 @@
 
     private func openTestConnection(
       configuration: SQLiteConfiguration = .default
-    ) throws -> SQLiteHandle {
-      let connection = try SQLiteHandle.open(
+    ) throws -> SQLiteConnection {
+      let connection = try SQLiteConnection.open(
         path: ":memory:",
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: configuration
@@ -25,7 +25,7 @@
 
     @Test
     func cursorsAdvanceLazilyAndStopWhenExhausted() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
         for id in 1...3 {
           try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
@@ -46,7 +46,7 @@
 
     @Test
     func writeCursorsReturnRowsFromReturningClauses() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "before") })
       }
@@ -66,7 +66,7 @@
 
     @Test
     func changesCountForgetsWhatTheStatementBeforeTheLastOneChanged() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       let counts = try connection.write { transaction -> [Int] in
         var counts: [Int] = []
         try transaction.execute(
@@ -82,7 +82,7 @@
 
     @Test
     func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       let (before, first, second, afterDelete) = try connection.write {
         transaction -> (Int64, Int64, Int64, Int64) in
         // A connection that has never inserted has no rowid to report.
@@ -103,7 +103,7 @@
 
     @Test
     func bindingsAndColumnsRoundTripPrimitivesAndBlobs() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.execute(
         """
         CREATE TABLE primitives (
@@ -145,7 +145,7 @@
 
     @Test
     func anEmptyBlobRoundTripsAsABlobRatherThanNull() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.execute("CREATE TABLE blobs (payload BLOB)")
 
       let empty: [UInt8] = []
@@ -196,7 +196,7 @@
         )
       }
 
-      let connection = try openTestConnection(configuration: configuration)
+      var connection = try openTestConnection(configuration: configuration)
       try connection.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "cached") })
       }
@@ -238,7 +238,7 @@
         )
       }
 
-      let connection = try openTestConnection(configuration: configuration)
+      var connection = try openTestConnection(configuration: configuration)
       try connection.write { transaction in
         try transaction.execute("INSERT INTO items VALUES (1, 'Original')")
         try transaction.executeScript(
@@ -272,7 +272,7 @@
 
     @Test
     func transactionsExposeTheRawConnectionAndItsLibrary() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
         try transaction.execute(Item.insert { Item(id: 1, title: "raw") })
       }

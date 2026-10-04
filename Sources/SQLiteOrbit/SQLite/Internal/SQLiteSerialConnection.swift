@@ -1,7 +1,7 @@
 actor SQLiteSerialConnection {
   // Reached from `performBlocking` without hopping onto the actor. The custom executor serializes
   // this access on threaded runtimes; on a single-threaded runtime no other job can run during it.
-  private nonisolated(unsafe) let handle: SQLiteHandle
+  private nonisolated(unsafe) var handle: SQLiteConnection
   private let interrupt: @Sendable () -> Void
   private let suspension: SQLiteWriteSuspension?
 
@@ -23,19 +23,27 @@ actor SQLiteSerialConnection {
     idleTimeout: Duration? = nil,
     suspension: SQLiteWriteSuspension? = nil
   ) throws {
-    let handle = try SQLiteHandle.open(
-      path: path,
-      flags: flags,
-      configuration: configuration,
-      driverSetupSQL: driverSetupSQL,
-      suspension: suspension
-    )
-    // The connection is captured as an address rather than a pointer, which is what lets this
-    // closure be shared without an unchecked conformance on `OpaquePointer`. It stays valid
-    // because the closure and the handle are released together.
-    let address = UInt(bitPattern: handle.pointer)
-    let entryPoint = handle.library.pointee.connections.interrupt
-    self.interrupt = { entryPoint(OpaquePointer(bitPattern: address)) }
+    var handle = try SQLiteConnection(path: path, configuration: configuration, flags: flags)
+    // Role-specific setup is driver policy, performed through the same public lending API.
+    // The interrupt callback remains valid because this driver owns the connection for its lifetime.
+    if handle.isReadOnly {
+      self.interrupt = try handle.withReadConnection { connection in
+        for sql in driverSetupSQL {
+          var cursor = try connection.rowCursor(SQL(text: sql))
+          while try cursor.next() != nil {}
+        }
+        let address = UInt(bitPattern: connection.sqliteConnection)
+        let entryPoint = connection.sqlite.connections.interrupt
+        return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
+      }
+    } else {
+      self.interrupt = try handle.withWriteConnection { connection in
+        for sql in driverSetupSQL { try connection.executeScript(sql) }
+        let address = UInt(bitPattern: connection.sqliteConnection)
+        let entryPoint = connection.sqlite.connections.interrupt
+        return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
+      }
+    }
     self.suspension = suspension
     #if _runtime(_multithreaded)
       self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
@@ -49,7 +57,13 @@ actor SQLiteSerialConnection {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.read(observers: observers, body) }
+    try await perform { handle, cancellation in
+      try handle.withReadConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try connection.transaction(body)
+        }
+      }
+    }
   }
 
   func write<Result: Sendable>(
@@ -57,14 +71,26 @@ actor SQLiteSerialConnection {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.write(mode: mode, observers: observers, body) }
+    try await perform { handle, cancellation in
+      try handle.withWriteConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try connection.transaction(mode: mode, body)
+        }
+      }
+    }
   }
 
   nonisolated func readBlocking<Result: Sendable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try performBlocking { handle in try handle.read(observers: observers, body) }
+    try performBlocking { handle, cancellation in
+      try handle.withReadConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try connection.transaction(body)
+        }
+      }
+    }
   }
 
   nonisolated func writeBlocking<Result: Sendable>(
@@ -72,8 +98,12 @@ actor SQLiteSerialConnection {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try performBlocking {
-      handle in try handle.write(mode: mode, observers: observers, body)
+    try performBlocking { handle, cancellation in
+      try handle.withWriteConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try connection.transaction(mode: mode, body)
+        }
+      }
     }
   }
 
@@ -81,39 +111,63 @@ actor SQLiteSerialConnection {
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.readWithoutTransaction(observers: observers, body) }
+    try await perform { handle, cancellation in
+      try handle.withReadConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try body(connection)
+        }
+      }
+    }
   }
 
   func writeWithoutTransaction<Result: Sendable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await perform { handle in try handle.writeWithoutTransaction(observers: observers, body) }
+    try await perform { handle, cancellation in
+      try handle.withWriteConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try body(connection)
+        }
+      }
+    }
   }
 
   nonisolated func readWithoutTransactionBlocking<Result: Sendable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try performBlocking { handle in try handle.readWithoutTransaction(observers: observers, body) }
+    try performBlocking { handle, cancellation in
+      try handle.withReadConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try body(connection)
+        }
+      }
+    }
   }
 
   nonisolated func writeWithoutTransactionBlocking<Result: Sendable>(
     observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try performBlocking { handle in try handle.writeWithoutTransaction(observers: observers, body) }
+    try performBlocking { handle, cancellation in
+      try handle.withWriteConnection(cancellation: cancellation) { connection in
+        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+          try body(connection)
+        }
+      }
+    }
   }
 
   private nonisolated func performBlocking<Result: Sendable>(
-    _ work: sending (borrowing SQLiteHandle) throws -> Result
+    _ work: sending (inout SQLiteConnection, SQLiteConnectionCancellation?) throws -> Result
   ) throws -> Result {
     #if _runtime(_multithreaded)
       // `sync` runs the work as this actor's executor. Hopping onto the actor is impossible for
       // a closure the caller only lent us.
-      return try executor.sync { try trackingSuspension { try work(handle) } }
+      return try executor.sync { try trackingSuspension { try work(&handle, nil) } }
     #else
-      return try withConnectionAccess { try trackingSuspension { try work(handle) } }
+      return try withConnectionAccess { try trackingSuspension { try work(&handle, nil) } }
     #endif
   }
 
@@ -141,22 +195,20 @@ actor SQLiteSerialConnection {
   #endif
 
   private func perform<Result: Sendable>(
-    _ work: sending (borrowing SQLiteHandle) throws -> Result
+    _ work: sending (inout SQLiteConnection, SQLiteConnectionCancellation?) throws -> Result
   ) async throws -> Result {
-    let token = SQLiteInterruptToken()
+    let token = SQLiteConnectionCancellation()
     do {
       return try await withTaskCancellationHandler {
-        token.arm(interrupt)
-        defer { token.disarm() }
         // A task may have been cancelled while waiting to enter the actor.
         try Task.checkCancellation()
         #if _runtime(_multithreaded)
-          return try trackingSuspension { try work(handle) }
+          return try trackingSuspension { try work(&handle, token) }
         #else
-          return try withConnectionAccess { try trackingSuspension { try work(handle) } }
+          return try withConnectionAccess { try trackingSuspension { try work(&handle, token) } }
         #endif
       } onCancel: {
-        token.fire()
+        token.cancel()
       }
     } catch let error as SQLiteError where error.isInterruption {
       throw CancellationError()
@@ -164,19 +216,38 @@ actor SQLiteSerialConnection {
   }
 }
 
-private final class SQLiteInterruptToken: Sendable {
-  private let interrupt = Lock<(@Sendable () -> Void)?>(nil)
-
-  func arm(_ interrupt: @escaping @Sendable () -> Void) {
-    self.interrupt.withLock { $0 = interrupt }
+// Driver policy composes only public connection capabilities.
+extension SQLiteReadConnection {
+  fileprivate borrowing func withDriverScopes<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers?,
+    suspension: SQLiteWriteSuspension?,
+    _ body: () throws -> Result
+  ) rethrows -> Result {
+    if let suspension {
+      return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
+        if let observers { return try withObservation(observers, perform: body) }
+        return try body()
+      }
+    }
+    if let observers { return try withObservation(observers, perform: body) }
+    return try body()
   }
+}
 
-  func disarm() {
-    interrupt.withLock { $0 = nil }
-  }
-
-  func fire() {
-    // Invoke while holding the lock so `disarm` cannot let the next access begin first.
-    interrupt.withLock { $0?() }
+// Driver policy composes only public connection capabilities.
+extension SQLiteWriteConnection {
+  fileprivate borrowing func withDriverScopes<Result: ~Copyable>(
+    observers: OrbitDatabaseTransactionObservers?,
+    suspension: SQLiteWriteSuspension?,
+    _ body: () throws -> Result
+  ) rethrows -> Result {
+    if let suspension {
+      return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
+        if let observers { return try withObservation(observers, perform: body) }
+        return try body()
+      }
+    }
+    if let observers { return try withObservation(observers, perform: body) }
+    return try body()
   }
 }

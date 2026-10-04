@@ -35,7 +35,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let authorizer: SQLiteAuthorizerDispatcher
 
-  let observations: OrbitDatabaseTransactionObservationContext
+  let observations: SQLiteConnectionEvents
 
   var isExhausted = false
 
@@ -52,7 +52,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
-    observations: OrbitDatabaseTransactionObservationContext
+    observations: SQLiteConnectionEvents
   ) throws {
     let sql = query.text
     let preparedStatement =

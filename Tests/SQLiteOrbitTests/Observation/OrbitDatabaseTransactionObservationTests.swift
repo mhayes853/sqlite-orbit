@@ -370,21 +370,23 @@
         let databaseObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
         let subscription = databaseObservers.subscribe(databaseObserver)
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
-        let context = OrbitDatabaseTransactionObservationContext(
-          databaseObservers: databaseObservers
-        )
+        let scopedObservers = OrbitDatabaseTransactionObservers()
+        let scopedSubscription = scopedObservers.subscribe(scopedObserver)
         let region = OrbitDatabaseRegion(table: "items")
 
         try driver.readBlocking { transaction in
-          try context.withObserver(scopedObserver) {
+          let context = SQLiteConnectionEvents()
+          try context.withObservation(databaseObservers) {
+            try context.withObservation(scopedObservers) {
+              context.didChange(in: region)
+              try context.willCommit(transaction)
+              context.didCommit()
+              context.didChange(in: region)
+              context.didRollback()
+            }
             context.didChange(in: region)
-            try context.willCommit(transaction)
-            context.didCommit(origin: .local)
-            context.didChange(in: region)
-            context.didRollback()
+            context.didCommit()
           }
-          context.didChange(in: region)
-          context.didCommit(origin: .local)
         }
 
         #expect(
@@ -407,7 +409,7 @@
             .didRollback
           ]
         )
-        _ = subscription
+        _ = (subscription, scopedSubscription)
       }
 
       @Test
@@ -416,28 +418,30 @@
         let databaseObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
         let subscription = databaseObservers.subscribe(databaseObserver)
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
-        let context = OrbitDatabaseTransactionObservationContext(
-          databaseObservers: databaseObservers
-        )
+        let scopedObservers = OrbitDatabaseTransactionObservers()
+        let scopedSubscription = scopedObservers.subscribe(scopedObserver)
+        let context = SQLiteConnectionEvents()
         let region = OrbitDatabaseRegion(table: "items")
 
-        context.withObserver(scopedObserver) {
-          context.didCommitPendingChanges()
-          context.didChange(in: .empty)
-          context.didCommitPendingChanges()
+        context.withObservation(databaseObservers) {
+          context.withObservation(scopedObservers) {
+            context.didCommitPendingChanges()
+            context.didChange(in: .empty)
+            context.didCommitPendingChanges()
 
-          context.didChange(in: region)
-          context.didChange(in: region)
-          context.didCommitPendingChanges()
-          context.didCommitPendingChanges()
+            context.didChange(in: region)
+            context.didChange(in: region)
+            context.didCommitPendingChanges()
+            context.didCommitPendingChanges()
 
-          context.didChange(in: region)
-          context.didRollback()
-          context.didCommitPendingChanges()
+            context.didChange(in: region)
+            context.didRollback()
+            context.didCommitPendingChanges()
 
-          context.didChange(in: region)
-          context.didCommit(origin: .local)
-          context.didCommitPendingChanges()
+            context.didChange(in: region)
+            context.didCommit()
+            context.didCommitPendingChanges()
+          }
         }
 
         let expected: [TransactionEventRecorder.Event] = [
@@ -451,7 +455,78 @@
         ]
         #expect(databaseObserver.events == expected)
         #expect(scopedObserver.events == expected)
-        _ = subscription
+        _ = (subscription, scopedSubscription)
+      }
+
+      @Test
+      func nativeObservationScopesNestAndStopAtTheirBoundaries() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        let outer = NativeConnectionEventRecorder()
+        let inner = NativeConnectionEventRecorder()
+        let items = OrbitDatabaseRegion(table: "items")
+        let lists = OrbitDatabaseRegion(table: "lists")
+
+        try driver.readBlocking { transaction in
+          transaction.notifyReads(in: lists)
+          transaction.withObservation(outer) {
+            transaction.notifyReads(in: items)
+            transaction.withObservation(inner) {
+              transaction.notifyReads(in: lists)
+            }
+            transaction.notifyReads(in: items)
+          }
+          transaction.notifyReads(in: lists)
+        }
+
+        #expect(outer.events == [.didRead(items), .didRead(lists), .didRead(items)])
+        #expect(inner.events == [.didRead(lists)])
+      }
+
+      @Test
+      func nativeConnectionObservationReportsCommittedChangesBeforeAThrowingScopeEnds() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        let observer = NativeConnectionEventRecorder()
+
+        #expect(throws: TestError()) {
+          try driver.writeWithoutTransactionBlocking { connection in
+            try connection.withObservation(observer) {
+              try connection.execute("INSERT INTO items VALUES (1)")
+              throw TestError()
+            }
+          }
+        }
+
+        let items = OrbitDatabaseRegion(table: "items")
+        #expect(observer.events == [.didChange(items), .didCommit(items)])
+        let count = try driver.readBlocking { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
+        }
+        #expect(count == 1)
+      }
+
+      @Test
+      func nativeConnectionObserverCanRejectAnExplicitCommit() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        let observer = NativeConnectionEventRecorder(rejectsCommit: true)
+
+        #expect(throws: TestError()) {
+          try driver.writeWithoutTransactionBlocking { connection in
+            try connection.withObservation(observer) {
+              try connection.transaction { transaction in
+                try transaction.execute("INSERT INTO items VALUES (1)")
+              }
+            }
+          }
+        }
+
+        let items = OrbitDatabaseRegion(table: "items")
+        #expect(observer.events == [.didChange(items), .willCommit, .didRollback])
+        let count = try driver.readBlocking { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
+        }
+        #expect(count == 0)
       }
 
       @Test
@@ -462,7 +537,7 @@
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
 
         try await driver.write { transaction in
-          _ = try transaction.base.withObserver(scopedObserver) {
+          _ = try transaction.withObserver(scopedObserver) {
             try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
           }
         }
@@ -482,6 +557,44 @@
 
     enum LifecycleWrite: CaseIterable, Sendable {
       case queue, blocking, pool
+    }
+
+    private final class NativeConnectionEventRecorder: SQLiteConnectionObserver, Sendable {
+      enum Event: Equatable, Sendable {
+        case didRead(OrbitDatabaseRegion)
+        case didChange(OrbitDatabaseRegion)
+        case willCommit
+        case didCommit(OrbitDatabaseRegion)
+        case didRollback
+      }
+
+      private let recordedEvents = Lock<[Event]>([])
+      private let rejectsCommit: Bool
+
+      init(rejectsCommit: Bool = false) { self.rejectsCommit = rejectsCommit }
+
+      var events: [Event] { recordedEvents.withLock { $0 } }
+
+      func connectionDidRead(in region: OrbitDatabaseRegion) {
+        recordedEvents.withLock { $0.append(.didRead(region)) }
+      }
+
+      func connectionDidChange(in region: OrbitDatabaseRegion) {
+        recordedEvents.withLock { $0.append(.didChange(region)) }
+      }
+
+      func connectionWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+        recordedEvents.withLock { $0.append(.willCommit) }
+        if rejectsCommit { throw TestError() }
+      }
+
+      func connectionDidCommit(in region: OrbitDatabaseRegion) {
+        recordedEvents.withLock { $0.append(.didCommit(region)) }
+      }
+
+      func connectionDidRollback() {
+        recordedEvents.withLock { $0.append(.didRollback) }
+      }
     }
 
     /// Fails every commit it is asked to approve.

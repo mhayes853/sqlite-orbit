@@ -81,7 +81,7 @@
       }
 
       for _ in 0..<2 {
-        _ = try SQLiteHandle.open(
+        _ = try SQLiteConnection.open(
           path: ":memory:",
           flags: [.readWrite, .create, .memory, .noMutex],
           configuration: configuration
@@ -98,7 +98,7 @@
         at: 0
       )
       #expect(throws: TestError()) {
-        _ = try SQLiteHandle.open(
+        _ = try SQLiteConnection.open(
           path: ":memory:",
           flags: [.readWrite, .create, .memory, .noMutex],
           configuration: configuration

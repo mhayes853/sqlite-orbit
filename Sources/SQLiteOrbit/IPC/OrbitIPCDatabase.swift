@@ -545,7 +545,7 @@ extension SQLiteWriteTransaction {
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) rethrows -> (Result, OrbitDatabaseRegion) {
     let recorder = OrbitDatabaseRegionRecorder()
-    let result = try base.observations.withObserver(recorder) {
+    let result = try withObserver(recorder) {
       try body(self)
     }
     return (result, recorder.changedRegion)
@@ -557,12 +557,8 @@ extension SQLiteWriteConnection {
     into recorder: OrbitDatabaseRegionRecorder,
     _ body: (borrowing SQLiteWriteConnection) throws -> Result
   ) rethrows -> Result {
-    let observations = base.base.observations
-    return try observations.withObserver(recorder) {
-      // A change still pending once the body is done was made outside a transaction, and so has
-      // committed. The handle would only report that after the access, when the recorder is gone.
-      defer { observations.didCommitPendingChanges() }
-      return try body(self)
+    try withObserver(recorder) {
+      try body(self)
     }
   }
 }
