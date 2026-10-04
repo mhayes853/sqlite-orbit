@@ -1,7 +1,7 @@
 /// A cursor that initializes an owned value from each raw row.
 ///
-/// Created by ``OrbitDatabaseReadTransaction/fetchCursor(_:asRow:cached:)`` or
-/// ``OrbitDatabaseWriteTransaction/executeCursor(_:asRow:cached:)``. It supports the same lazy
+/// Created by ``OrbitDatabaseReadTransaction/fetchCursor(_:as:cached:)`` or
+/// ``OrbitDatabaseWriteTransaction/executeCursor(_:as:cached:)``. It supports the same lazy
 /// adapters and terminal operations as other ``OrbitDatabaseCursor`` conformances.
 public struct OrbitDatabaseRowDecodingCursor<
   Base: OrbitDatabaseRowCursor,

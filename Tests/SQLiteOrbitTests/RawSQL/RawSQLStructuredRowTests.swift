@@ -10,13 +10,12 @@
       let database = try inMemoryDatabase()
       let (tables, first, selections, titles) = try await database.read { transaction in
         (
-          try transaction.fetchAll(itemsSQL, asStructuredRow: Item.self),
-          try transaction.fetchOne(itemsSQL, asStructuredRow: Item.self),
+          try transaction.fetchAll(SQLQueryExpression(itemsSQL, as: Item.self)),
+          try transaction.fetchOne(SQLQueryExpression(itemsSQL, as: Item.self)),
           try transaction.fetchAll(
-            "SELECT 1, 'Milk' UNION ALL SELECT 2, 'Tea'",
-            asStructuredRow: Summary.self
+            #sql("SELECT 1, 'Milk' UNION ALL SELECT 2, 'Tea'", as: Summary.self)
           ),
-          try transaction.fetchCursor(itemsSQL, asStructuredRow: Item.self)
+          try transaction.fetchCursor(SQLQueryExpression(itemsSQL, as: Item.self))
             .filter { $0.id > 1 }
             .map(\.title)
             .collect()
@@ -36,7 +35,7 @@
     func queryOutputCanDifferFromTheRequestedRepresentation() async throws {
       let database = try inMemoryDatabase()
       let aliased: [Item] = try await database.read {
-        try $0.fetchAll(itemsSQL, asStructuredRow: TableAlias<Item, Other>.self)
+        try $0.fetchAll(SQLQueryExpression(itemsSQL, as: TableAlias<Item, Other>.self))
       }
       #expect(aliased.count == 2)
       #expect(aliased.first?.title == "Milk")
@@ -47,12 +46,9 @@
       let database = try inMemoryDatabase()
       let (dated, nested, absent) = try await database.read { transaction in
         (
-          try transaction.fetchOne("SELECT 1, 1234", asStructuredRow: Dated.self),
-          try transaction.fetchOne("SELECT 1, 'Milk', NULL, 4", asStructuredRow: Grouped.self),
-          try transaction.fetchOne(
-            "SELECT NULL, NULL, NULL, 4",
-            asStructuredRow: OptionalGrouped.self
-          )
+          try transaction.fetchOne(#sql("SELECT 1, 1234", as: Dated.self)),
+          try transaction.fetchOne(#sql("SELECT 1, 'Milk', NULL, 4", as: Grouped.self)),
+          try transaction.fetchOne(#sql("SELECT NULL, NULL, NULL, 4", as: OptionalGrouped.self))
         )
       }
       #expect(dated?.date == Date(timeIntervalSince1970: 1234))
@@ -67,11 +63,10 @@
       let database = try inMemoryDatabase()
       let (none, empty, first) = try await database.read { transaction in
         (
-          try transaction.fetchOne("SELECT 1, 'Milk' WHERE 0", asStructuredRow: Summary.self),
-          try transaction.fetchAll("", asStructuredRow: Summary.self),
+          try transaction.fetchOne(#sql("SELECT 1, 'Milk' WHERE 0", as: Summary.self)),
+          try transaction.fetchAll(#sql("", as: Summary.self)),
           try transaction.fetchOne(
-            "SELECT 1, 'Milk' UNION ALL SELECT 'bad', 'Tea'",
-            asStructuredRow: Summary.self
+            #sql("SELECT 1, 'Milk' UNION ALL SELECT 'bad', 'Tea'", as: Summary.self)
           )
         )
       }
@@ -86,17 +81,20 @@
       let (inserted, updated, deleted) = try await database.write { transaction in
         try transaction.execute("CREATE TABLE summaries (id INTEGER, title TEXT)")
         let inserted = try transaction.fetchAll(
-          "INSERT INTO summaries VALUES (1, 'Milk'), (2, 'Tea') RETURNING id, title",
-          asStructuredRow: Summary.self
+          #sql(
+            "INSERT INTO summaries VALUES (1, 'Milk'), (2, 'Tea') RETURNING id, title",
+            as: Summary.self
+          )
         )
         let updated = try transaction.fetchOne(
-          "UPDATE summaries SET title = 'Coffee' WHERE id = 2 RETURNING id, title",
-          asStructuredRow: Summary.self
+          #sql(
+            "UPDATE summaries SET title = 'Coffee' WHERE id = 2 RETURNING id, title",
+            as: Summary.self
+          )
         )
         let deleted =
           try transaction.executeCursor(
-            "DELETE FROM summaries RETURNING id, title",
-            asStructuredRow: Summary.self
+            #sql("DELETE FROM summaries RETURNING id, title", as: Summary.self)
           )
           .collect()
         return (inserted, updated, deleted)
@@ -111,36 +109,36 @@
       let database = try inMemoryDatabase()
       await #expect(throws: SQLiteError.self) {
         try await database.read {
-          try $0.fetchAll("CREATE TABLE forbidden (id INTEGER)", asStructuredRow: Summary.self)
+          try $0.fetchAll(#sql("CREATE TABLE forbidden (id INTEGER)", as: Summary.self))
         }
       }
       await #expect(throws: SQLiteError.self) {
-        try await database.read { try $0.fetchOne("SELECT FROM", asStructuredRow: Summary.self) }
+        try await database.read { try $0.fetchOne(#sql("SELECT FROM", as: Summary.self)) }
       }
       await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
         try await database.read {
-          try $0.fetchCursor("SELECT 'bad', 'Milk'", asStructuredRow: Summary.self).collect()
+          try $0.fetchCursor(#sql("SELECT 'bad', 'Milk'", as: Summary.self)).collect()
         }
       }
       await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
-        try await database.read { try $0.fetchAll("SELECT 1", asStructuredRow: Summary.self) }
+        try await database.read { try $0.fetchAll(#sql("SELECT 1", as: Summary.self)) }
       }
     }
 
     @Test
-    func labelsRemainUnambiguousForTypesSupportingBothConversions() async throws {
+    func namedAndStructuredQueriesUseTheirOwnDecoders() async throws {
       let database = try inMemoryDatabase()
       let (named, positional) = try await database.read { transaction in
         (
-          try transaction.fetchAll("SELECT 'Milk' AS title, 1 AS id", asRow: Dual.self),
-          try transaction.fetchAll("SELECT 1, 'Milk'", asStructuredRow: Dual.self)
+          try transaction.fetchAll("SELECT 'Milk' AS title, 1 AS id", as: Dual.self),
+          try transaction.fetchAll(#sql("SELECT 1, 'Milk'", as: Dual.self))
         )
       }
       #expect(named == positional)
     }
   }
 
-  private let itemsSQL: SQL =
+  private let itemsSQL: QueryFragment =
     "SELECT 1 AS arbitrary, 'Milk' AS names, NULL AS ignored UNION ALL SELECT 2, 'Tea', 3"
 
   @Table

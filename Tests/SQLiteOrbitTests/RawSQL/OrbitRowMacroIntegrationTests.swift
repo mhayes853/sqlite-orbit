@@ -13,7 +13,7 @@
       let values = try await database.read {
         try $0.fetchAll(
           "SELECT 2 AS priority, 'Milk' AS display_title, 1 AS id, 'extra' AS ignored",
-          asRow: Summary.self
+          as: Summary.self
         )
       }
       #expect(values == [expected])
@@ -26,13 +26,13 @@
       let value = try await database.read {
         try $0.fetchOne(
           "SELECT 1 AS id, 'Milk' AS display_title, NULL AS priority",
-          asRow: Summary.self
+          as: Summary.self
         )
       }
       #expect(value?.priority == nil)
       await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
         try await database.read {
-          try $0.fetchAll("SELECT 1 AS id, 'Milk' AS display_title", asRow: Summary.self)
+          try $0.fetchAll("SELECT 1 AS id, 'Milk' AS display_title", as: Summary.self)
         }
       }
     }
@@ -42,13 +42,13 @@
       let database = try inMemoryDatabase()
       let (generic, nested, declared, observed) = try await database.read { transaction in
         (
-          try transaction.fetchOne("SELECT 7 AS value", asRow: Box<Int>.self),
+          try transaction.fetchOne("SELECT 7 AS value", as: Box<Int>.self),
           try transaction.fetchOne(
             "SELECT 'hello' AS \(quote: "a \"quoted\" column")",
-            asRow: Container.Nested.self
+            as: Container.Nested.self
           ),
-          try transaction.fetchOne("SELECT 9 AS id", asRow: Declared.self),
-          try transaction.fetchOne("SELECT 4 AS id", asRow: Observed.self)
+          try transaction.fetchOne("SELECT 9 AS id", as: Declared.self),
+          try transaction.fetchOne("SELECT 4 AS id", as: Observed.self)
         )
       }
       #expect(generic?.value == 7)
@@ -67,7 +67,7 @@
         return
           try transaction.executeCursor(
             "INSERT INTO summaries VALUES (1, 'Milk', NULL), (2, 'Tea', 2) RETURNING *",
-            asRow: Summary.self
+            as: Summary.self
           )
           .map(\.title)
           .collect()
@@ -79,11 +79,11 @@
     func publicWitnessCanInitializePrivateStorageAndQualifiedMacros() async throws {
       let database = try inMemoryDatabase()
       let value = try await database.read {
-        try $0.fetchOne("SELECT 8 AS identifier", asRow: PublicOrbitRowRecord.self)
+        try $0.fetchOne("SELECT 8 AS identifier", as: PublicOrbitRowRecord.self)
       }
       #expect(value?.value == 8)
       let aliased = try await database.read {
-        try $0.fetchOne("SELECT 3 AS id", asRow: Aliased.self)
+        try $0.fetchOne("SELECT 3 AS id", as: Aliased.self)
       }
       #expect(aliased?.id == 3)
     }

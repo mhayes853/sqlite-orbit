@@ -1,11 +1,12 @@
 extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Initializes a value from every row raw SQL returns, in result order.
   ///
-  /// Unlike `as:`, which reads the first column, `asRow:` passes the entire row to the type's
-  /// initializer. Initialization and statement errors propagate.
+  /// Row-convertible types use their row initializer; scalar-only types read the first column.
+  /// When a type supports both conversions, its row initializer takes precedence. Initialization
+  /// and statement errors propagate.
   public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type
+    as type: Value.Type
   ) throws -> [Value] {
     try fetchAll(sql) { row in try Value(orbitDatabaseRow: row) }
   }
@@ -13,7 +14,27 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Initializes a value from the first row, or returns `nil` when there are no rows.
   public borrowing func fetchOne<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type
+    as type: Value.Type
+  ) throws -> Value? {
+    try fetchOne(sql) { row in try Value(orbitDatabaseRow: row) }
+  }
+
+  /// Uses row decoding for a type that also supports scalar conversion.
+  public borrowing func fetchAll<
+    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
+  >(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> [Value] {
+    try fetchAll(sql) { row in try Value(orbitDatabaseRow: row) }
+  }
+
+  /// Uses row decoding for a type that also supports scalar conversion.
+  public borrowing func fetchOne<
+    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
+  >(
+    _ sql: SQL,
+    as type: Value.Type
   ) throws -> Value? {
     try fetchOne(sql) { row in try Value(orbitDatabaseRow: row) }
   }
@@ -25,7 +46,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   @_lifetime(borrow self)
   public borrowing func fetchCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type,
+    as type: Value.Type,
     cached: Bool = false
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try rowCursor(sql, cached: cached))
@@ -36,7 +57,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// Initializes values from all returned rows, including those of a write's `RETURNING` clause.
   public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type
+    as type: Value.Type
   ) throws -> [Value] {
     try fetchAll(sql) { row in try Value(orbitDatabaseRow: row) }
   }
@@ -46,7 +67,27 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// Returns `nil` for no rows. Reading one `RETURNING` row does not limit the write's changes.
   public borrowing func fetchOne<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type
+    as type: Value.Type
+  ) throws -> Value? {
+    try fetchOne(sql) { row in try Value(orbitDatabaseRow: row) }
+  }
+
+  /// Uses row decoding for a type that also supports scalar conversion.
+  public borrowing func fetchAll<
+    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
+  >(
+    _ sql: SQL,
+    as type: Value.Type
+  ) throws -> [Value] {
+    try fetchAll(sql) { row in try Value(orbitDatabaseRow: row) }
+  }
+
+  /// Uses row decoding for a type that also supports scalar conversion.
+  public borrowing func fetchOne<
+    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
+  >(
+    _ sql: SQL,
+    as type: Value.Type
   ) throws -> Value? {
     try fetchOne(sql) { row in try Value(orbitDatabaseRow: row) }
   }
@@ -57,7 +98,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   @_lifetime(borrow self)
   public borrowing func executeCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
-    asRow type: Value.Type,
+    as type: Value.Type,
     cached: Bool = false
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try executeRowCursor(sql, cached: cached))

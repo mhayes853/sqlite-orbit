@@ -98,26 +98,27 @@ struct ReminderSummary: Sendable {
 let summaries = try await database.read { transaction in
   try transaction.fetchAll(
     "SELECT due_date, title, id FROM reminders ORDER BY id",
-    asRow: ReminderSummary.self
+    as: ReminderSummary.self
   )
 }
 
 let titles = try await database.read { transaction in
   try transaction.fetchCursor(
     "SELECT id, title, due_date FROM reminders",
-    asRow: ReminderSummary.self
+    as: ReminderSummary.self
   )
   .map(\.title)
   .collect()
 }
 ```
 
-`asRow:` passes the entire borrowed row to the initializer; `as:` reads its first column. Named
+`as:` uses the row initializer for row-convertible types and reads the first column for scalar-only
+types. When a type supports both conversions, its row initializer takes precedence. Named
 reads match UTF-8 bytes exactly, including case, and choose the first duplicate name. Missing
 columns throw even for optional properties; SQL `NULL` can produce `nil`. The native cursor
 prepares its column-name mapping on the first named read and shares it across subsequent rows.
 Reordered and extra columns are supported. Initialized values own their data, while cursors must
-be consumed inside their transaction. Write transactions support `asRow:` on `fetchAll`,
+be consumed inside their transaction. Write transactions support `as:` on `fetchAll`,
 `fetchOne`, and `executeCursor` for `RETURNING` results.
 
 The row protocol and macros are available without `StructuredQueries` or `Foundation`. Stored
@@ -540,8 +541,8 @@ let titles = try await database.write { transaction in
 When a column does not decode, the failure is an `OrbitDatabaseColumnDecodingError` naming the
 column's index and name, the storage class actually found, and the statement's SQL.
 
-Raw `SQL` can also decode existing `@Table` and `@Selection` types through `asStructuredRow:`,
-without an additional conformance or annotation:
+For handwritten SQL returning an existing `@Table` or `@Selection`, use Structured Queries' `#sql`
+macro to declare the output type:
 
 ```swift
 @Selection
@@ -552,28 +553,15 @@ struct ReminderSummary: Sendable {
 
 let summaries = try await database.read { transaction in
   try transaction.fetchAll(
-    "SELECT id, title FROM reminders ORDER BY id",
-    asStructuredRow: ReminderSummary.self
+    #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
   )
-}
-
-let titles = try await database.read { transaction in
-  try transaction.fetchCursor(
-    "SELECT id, title FROM reminders",
-    asStructuredRow: ReminderSummary.self
-  )
-  .map(\.title)
-  .collect()
 }
 ```
 
-This uses Structured Queries' positional decoding, including `@Column(as:)` representations and
-grouped columns. SQL must return columns in the type's expected projection order and storage
-representations; column names are used for diagnostics. The output is `Value.QueryOutput`, so a
-table alias can decode to its underlying model. `fetchOne` returns `nil` for no rows. Write
-transactions expose the same eager overloads and `executeCursor(_:asStructuredRow:cached:)` for
-`RETURNING`. The separate labels let types supporting both conversion systems choose between
-their row initializer and Structured Queries decoding without overload ambiguity.
+Structured Queries decodes columns positionally using the declared representations, including
+`@Column(as:)` and grouped columns. SQL must return the expected projection order and storage
+representations. Results have type `Value.QueryOutput`, allowing a table alias to decode to its
+underlying model. The same typed statements work with lazy cursors and write `RETURNING` results.
 
 For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
 `fetchCursor` decodes the statement's statically known output while advancing:
