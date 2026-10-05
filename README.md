@@ -1634,6 +1634,16 @@ require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashab
 
 ### Sections
 
+Section collections can also group values without a database or property wrapper:
+
+```swift
+let sections = OrbitFetchSectionCollection(grouping: reminders, by: \.priority)
+```
+
+Keys may be any `Hashable` type, including optionals. Sections follow first appearance, rows within
+sections retain their input order, and `sections.elements` preserves the original flat array.
+The grouping closure may throw; empty input produces no sections.
+
 `@FetchAll` can have the database group its rows. The `sectionBy:` expression is selected alongside
 each row and ordered ahead of the query's own ordering, so one pass over the result set both
 decodes the rows and lays out the sections:

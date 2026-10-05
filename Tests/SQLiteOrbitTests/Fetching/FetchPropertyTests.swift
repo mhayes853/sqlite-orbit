@@ -1219,20 +1219,7 @@
         #expect(reminders.map(\.title) == ["A", "B", "C"])
 
         @FetchAll(Reminder.order(by: \.title), database: database) var byTitle
-        let sections = OrbitFetchSectionCollection(
-          elements: byTitle,
-          sections: [
-            (
-              name: "low",
-              elements: {
-                var indices = OrbitFetchElementIndices(range: 0..<1)
-                indices.append(2)
-                return indices
-              }()
-            ),
-            (name: "high", elements: OrbitFetchElementIndices(range: 1..<2))
-          ]
-        )
+        let sections = OrbitFetchSectionCollection(grouping: byTitle, by: \.priority)
         #expect(sections[sectionName: "low"]?.map(\.title) == ["A", "C"])
         #expect(sections[sectionName: "high"]?.map(\.title) == ["B"])
       }

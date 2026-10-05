@@ -1,7 +1,12 @@
-/// The rows a ``FetchAll`` property observes, grouped into sections.
+/// An ordered collection of elements grouped by a hashable section name.
 ///
-/// You do not create this collection. A property built with a `sectionBy:` expression groups its
-/// rows into one section per distinct value of that expression, and projects them here:
+/// Group values independently of a database with ``init(grouping:by:)``:
+///
+/// ```swift
+/// let sections = OrbitFetchSectionCollection(grouping: reminders, by: \.priority)
+/// ```
+///
+/// A ``FetchAll`` property built with a `sectionBy:` expression also projects this collection:
 ///
 /// ```swift
 /// @FetchAll(Reminder.order(by: \.title), sectionBy: \.priority) var reminders
@@ -17,11 +22,11 @@
 /// }
 /// ```
 ///
-/// The grouping is the database's: the expression is evaluated by it, ordered by it, and its value
-/// as text names each section. A property with no `sectionBy:` expression still projects one, whose
-/// single section is named `nil` and holds every row.
+/// With `FetchAll`, the database evaluates and orders the section expression, whose decoded value
+/// names each section. A property with no `sectionBy:` expression still projects one section named
+/// `nil` holding every row, or no sections when there are no rows.
 public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
-  /// Every row, in the order the query produced them.
+  /// Every element, in its original input or query order.
   public let elements: [Element]
 
   private let sections: [(name: SectionName, elements: OrbitFetchElementIndices)]
@@ -43,6 +48,36 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
       sections: elements.isEmpty
         ? [] : [(sectionName, OrbitFetchElementIndices(range: elements.indices))]
     )
+  }
+
+  /// Groups elements into one section per distinct name, using the name's `Hashable` equality.
+  ///
+  /// Sections appear in the order their names first occur. Each section preserves its elements'
+  /// input order, even when they are not adjacent, and ``elements`` retains the entire input order.
+  /// Empty input produces no sections. An optional name of `nil` is an ordinary section name.
+  ///
+  /// - Parameters:
+  ///   - elements: The elements to group.
+  ///   - sectionName: Returns an element's section name, called once per element in input order.
+  /// - Throws: Any error thrown by `sectionName`, stopping at that element.
+  public init(
+    grouping elements: [Element],
+    by sectionName: (Element) throws -> SectionName
+  ) rethrows {
+    var sections: [(name: SectionName, elements: OrbitFetchElementIndices)] = []
+    var positionsByName: [SectionName: Int] = [:]
+    for (index, element) in elements.enumerated() {
+      let name = try sectionName(element)
+      if let position = positionsByName[name] {
+        sections[position].elements.append(index)
+      } else {
+        positionsByName[name] = sections.count
+        sections.append((name, OrbitFetchElementIndices(range: index..<(index + 1))))
+      }
+    }
+    self.elements = elements
+    self.sections = sections
+    self.positionsByName = positionsByName
   }
 
   init(
@@ -114,11 +149,11 @@ extension OrbitFetchSectionCollection: Equatable where Element: Equatable {
   }
 }
 
-/// One section of the rows a ``FetchAll`` property observes.
+/// One named section of an ``OrbitFetchSectionCollection``.
 ///
 /// See ``OrbitFetchSectionCollection`` for more.
 public struct OrbitFetchSection<Element, SectionName: Hashable>: Identifiable {
-  /// The name of the section, which is the value of the `sectionBy:` expression its rows share.
+  /// The name shared by the elements in this section.
   public let name: SectionName
 
   private let base: [Element]
