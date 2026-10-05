@@ -29,8 +29,7 @@ extension OrbitDatabaseRegion {
         (
           schema: indices[Array(table.schema.rawValue.utf8)]!,
           name: indices[Array(table.name.utf8)]!,
-          includesColumns: region.includesUnspecifiedColumns,
-          columns: region.exceptions.map { indices[Array($0.utf8)]! }.sorted()
+          region: region
         )
       }
       .sorted { ($0.schema, $0.name) < ($1.schema, $1.name) }
@@ -45,9 +44,10 @@ extension OrbitDatabaseRegion {
     for table in indexedTables {
       OrbitRegionBinaryCoding.appendCount(table.schema, to: &bytes)
       OrbitRegionBinaryCoding.appendCount(table.name, to: &bytes)
-      bytes.append(table.includesColumns ? 1 : 0)
-      OrbitRegionBinaryCoding.appendCount(table.columns.count, to: &bytes)
-      for column in table.columns { OrbitRegionBinaryCoding.appendCount(column, to: &bytes) }
+      bytes.append(table.region.includesUnspecifiedColumns ? 1 : 0)
+      let columns = table.region.exceptions.map { indices[Array($0.utf8)]! }.sorted()
+      OrbitRegionBinaryCoding.appendCount(columns.count, to: &bytes)
+      for column in columns { OrbitRegionBinaryCoding.appendCount(column, to: &bytes) }
     }
     return bytes
   }
@@ -75,15 +75,17 @@ extension OrbitDatabaseRegion {
     for _ in 0..<stringCount {
       let length = try Coding.readCount(bytes, at: &offset)
       guard length <= bytes.count - offset else { throw Coding.error("Truncated string") }
-      let string = bytes.extracting(offset..<(offset + length))
-        .withUnsafeBufferPointer { buffer -> String? in
+      let string = try bytes.extracting(offset..<(offset + length))
+        .withUnsafeBufferPointer { buffer in
           // This round trip validates UTF-8 on all supported deployment targets.
           let string = String(decoding: buffer, as: UTF8.self)
-          return string.utf8.elementsEqual(buffer) ? string : nil
+          guard string.utf8.elementsEqual(buffer) else {
+            throw Coding.error("Invalid UTF-8 identifier")
+          }
+          // Normalize each shared identifier once; later uses retain its string storage.
+          return string.asciiLowercased
         }
-      guard let string else { throw Coding.error("Invalid UTF-8 identifier") }
-      // Normalize each shared identifier once; later uses retain its string storage.
-      strings.append(string.asciiLowercased)
+      strings.append(string)
       offset += length
     }
 
@@ -101,7 +103,7 @@ extension OrbitDatabaseRegion {
       guard columnCount <= bytes.count - offset else { throw Coding.error("Truncated columns") }
       var columns = Set<String>()
       for _ in 0..<columnCount {
-        let column = try Coding.readString(bytes, at: &offset, strings: strings).asciiLowercased
+        let column = try Coding.readString(bytes, at: &offset, strings: strings)
         guard columns.insert(column).inserted else { throw Coding.error("Duplicate column entry") }
       }
       tables[table] = TableRegion(includesUnspecifiedColumns: includesColumns, exceptions: columns)
