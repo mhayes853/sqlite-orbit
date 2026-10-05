@@ -28,6 +28,12 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
   /// - Returns: The column's name.
   func columnName(at index: Int) -> String
 
+  /// The position of the first column with this name, or `nil` if it is missing.
+  ///
+  /// Names are compared byte for byte, including case. Drivers may cache this lookup for the
+  /// lifetime of a cursor. The default implementation searches from left to right.
+  func columnIndex(named name: String) -> Int?
+
   /// The value of a column.
   ///
   /// Reading a column by position does not move a decoder's position through the row, so it can
@@ -46,10 +52,56 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
 }
 
 extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
+  /// Finds the first column whose name matches byte for byte, or returns `nil`.
+  public func columnIndex(named name: String) -> Int? {
+    for index in 0..<columnCount where columnName(at: index).utf8.elementsEqual(name.utf8) {
+      return index
+    }
+    return nil
+  }
+
+  /// The position of a property's first mapped result column, or `nil` if the property is
+  /// unmapped or the row has no matching column. Uses the same cached, byte-exact lookup as
+  /// ``columnIndex(named:)``.
+  ///
+  /// ```swift
+  /// let index = row.columnIndex(for: \ReminderSummary.title)
+  /// ```
+  public func columnIndex<Root: OrbitDatabaseRowColumns, Value>(
+    for keyPath: KeyPath<Root, Value>
+  ) -> Int? {
+    guard let name = Root.orbitColumnName(for: keyPath) else { return nil }
+    return columnIndex(named: name)
+  }
+
+  /// Reads a property's mapped result column using the property's type.
+  ///
+  /// ``OrbitColumn(_:)`` renames are honored. Unmapped properties and missing result columns
+  /// throw ``OrbitDatabaseColumnDecodingError``, including for optional properties. SQL NULL
+  /// can decode to `nil`. The SQL projection is checked at runtime.
+  ///
+  /// ```swift
+  /// let title = try row[column: \ReminderSummary.title]
+  /// ```
+  public subscript<
+    Root: OrbitDatabaseRowColumns,
+    Value: ConvertibleFromOrbitDatabaseValue
+  >(column keyPath: KeyPath<Root, Value>) -> Value {
+    get throws {
+      guard let name = Root.orbitColumnName(for: keyPath) else {
+        throw OrbitDatabaseColumnDecodingError(
+          columnIndex: nil,
+          columnName: "?",
+          reason: "to have a SQL name mapped from \(keyPath)"
+        )
+      }
+      return try self[column: name, as: Value.self]
+    }
+  }
+
   /// The value of the first column with a name, or `nil` when the row has no such column.
   ///
-  /// Names are compared exactly, and the columns are searched from left to right, so read by
-  /// position where a row has many columns and is read often.
+  /// Uses ``columnIndex(named:)``, so drivers can reuse a cached column mapping.
   ///
   /// ```swift
   /// let title = row[column: "title"]?.textValue
@@ -57,10 +109,8 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
   ///
   /// - Parameter name: The column's name.
   public subscript(column name: String) -> OrbitDatabaseValue? {
-    for index in 0..<columnCount where columnName(at: index) == name {
-      return self[index]
-    }
-    return nil
+    guard let index = columnIndex(named: name) else { return nil }
+    return self[index]
   }
 
   /// The value of a column, converted to a type.
@@ -124,7 +174,7 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
     as type: Value.Type
   ) -> Value {
     get throws {
-      for index in 0..<columnCount where columnName(at: index) == name {
+      if let index = columnIndex(named: name) {
         return try self[index, as: Value.self]
       }
       throw OrbitDatabaseColumnDecodingError(
