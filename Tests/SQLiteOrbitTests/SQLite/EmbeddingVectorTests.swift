@@ -61,16 +61,7 @@
       )
       #expect(try EmbeddingVector64<3>(orbitDatabaseValue: .blob(doubleBytes)) == double)
 
-      let half = EmbeddingVector16<3> { [Float16(1), -2, 0.5][$0] }
-      let halfBytes: [UInt8] = [0, 60, 0, 192, 0, 56, 5]
-      #expect(half.orbitDatabaseValue() == .blob(halfBytes))
-      #expect(
-        EmbeddingVector16<3>.VectorBytesRepresentation(queryOutput: half).queryBinding
-          == .blob(halfBytes)
-      )
-      #expect(try EmbeddingVector16<3>(orbitDatabaseValue: .blob(halfBytes)) == half)
       #expect(try EmbeddingVector64<3>?(orbitDatabaseValue: .null) == nil)
-      #expect(try EmbeddingVector16<3>?(orbitDatabaseValue: .null) == nil)
     }
 
     @Test
@@ -85,14 +76,8 @@
       let double = EmbeddingVector64<4> { Double(bitPattern: doubleBits[$0]) }
       let decodedDouble = try EmbeddingVector64<4>(orbitDatabaseValue: double.orbitDatabaseValue())
       #expect(decodedDouble.map(\.bitPattern) == doubleBits)
-      let halfBits: [UInt16] = [0x8000, 0x7c00, 0x7e12, 1]
-      let half = EmbeddingVector16<4> { Float16(bitPattern: halfBits[$0]) }
-      let decodedHalf = try EmbeddingVector16<4>(orbitDatabaseValue: half.orbitDatabaseValue())
-      #expect(decodedHalf.map(\.bitPattern) == halfBits)
       #expect(EmbeddingVector64<0>(repeating: 0).orbitDatabaseValue() == .blob([2]))
       #expect(try EmbeddingVector64<0>(orbitDatabaseValue: .blob([2])).isEmpty)
-      #expect(EmbeddingVector16<0>(repeating: 0).orbitDatabaseValue() == .blob([5]))
-      #expect(try EmbeddingVector16<0>(orbitDatabaseValue: .blob([5])).isEmpty)
     }
 
     @Test
@@ -106,14 +91,6 @@
       ] {
         #expect(throws: OrbitDatabaseValueConversionError.self) {
           try EmbeddingVector64<3>(orbitDatabaseValue: value)
-        }
-      }
-      for value in [
-        OrbitDatabaseValue.blob([5]), .blob(Array(repeating: 0, count: 7)),
-        .blob(Array(repeating: 0, count: 6) + [2]), .integer(1)
-      ] {
-        #expect(throws: OrbitDatabaseValueConversionError.self) {
-          try EmbeddingVector16<3>(orbitDatabaseValue: value)
         }
       }
       // Float32 blobs may carry Turso's optional format tag; use the same acceptance rules as
@@ -155,24 +132,17 @@
           return
         }
         try await driver.withDatabase(
-          schema: "CREATE TABLE precisions (float64 BLOB, float16 BLOB)"
+          schema: "CREATE TABLE precisions (float64 BLOB)"
         ) { database in
           let double = EmbeddingVector64<3> { [Double.pi, -2, .leastNonzeroMagnitude][$0] }
-          let half = EmbeddingVector16<3> { [Float16(1), -.infinity, .leastNonzeroMagnitude][$0] }
           try await database.write {
-            try $0.execute("INSERT INTO precisions VALUES (\(double), \(half))")
+            try $0.execute("INSERT INTO precisions VALUES (\(double))")
           }
           let row = try await database.read {
-            try $0.fetchOne("SELECT float64, float16 FROM precisions") { row in
-              (
-                try row[0, as: EmbeddingVector64<3>.self],
-                try row[1, as: EmbeddingVector16<3>.self]
-              )
-            }
+            try $0.fetchOne("SELECT float64 FROM precisions", as: EmbeddingVector64<3>.self)
           }
           let stored = try #require(row)
-          #expect(stored.0 == double)
-          #expect(stored.1 == half)
+          #expect(stored == double)
         }
       }
 

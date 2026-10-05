@@ -284,7 +284,7 @@ let package = Package(
     .trait(
       name: "Vectors",
       description:
-        "Adds SQLite Vec and Turso vector query helpers, initializing Vec on SQLite connections."
+        "Adds SQLite Vec and Turso vector query helpers, initializing Vec on supported connections."
     ),
     .trait(
       name: "Dependencies",
@@ -306,7 +306,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "2e57f23df3724bee3b640be901f2eb5a20ca8732"
+      revision: "19bb3721582d414de0190d308758d9c66b2cf774"
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two
