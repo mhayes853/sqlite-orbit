@@ -15,20 +15,13 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   ) throws -> OrbitFetchSectionCollection<Element, Key> {
     try withOrbitCursor(try rowCursor(sql, cached: true)) { cursor in
       var elements: [Element] = []
-      var sections: [(name: Key, elements: OrbitFetchElementIndices)] = []
-      var positionsByName: [Key: Int] = [:]
+      var index = OrbitFetchSectionIndex<Key>()
       while var row = try cursor.next() {
         let (element, name) = try transform(&row)
-        let index = elements.count
-        if let position = positionsByName[name] {
-          sections[position].elements.append(index)
-        } else {
-          positionsByName[name] = sections.count
-          sections.append((name, OrbitFetchElementIndices(range: index..<(index + 1))))
-        }
+        index.append(elements.count, to: name)
         elements.append(element)
       }
-      return OrbitFetchSectionCollection(elements: elements, sections: sections)
+      return OrbitFetchSectionCollection(elements: elements, index: index)
     }
   }
 }

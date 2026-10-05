@@ -33,7 +33,7 @@
     /// - Throws: Any statement or decoding error.
     public func fetch<Transaction>(
       _ transaction: borrowing Transaction
-    ) throws -> OrbitFetchSectionCollection<Element.QueryOutput, Key.QueryOutput>
+    ) throws -> Value
     where
       Transaction: OrbitDatabaseReadTransaction & ~Copyable & ~Escapable,
       Transaction.Row: OrbitDatabaseStructuredRow
@@ -59,9 +59,11 @@
       >
     ) -> OrbitSectionedQuery<From, Key>
     where From.QueryOutput: Sendable, Key.QueryOutput: Hashable & Sendable {
-      let sectioned: Select<(From, Key), From, ()> =
-        orbitSectionedColumns(of: From.self, sectioning(From.columns)) + asSelect()
-      return OrbitSectionedQuery(sectioned)
+      let section = sectioning(From.columns)
+      let columns = From.unscoped
+        .select { ($0, SQLQueryExpression(section.select, as: Key.self)) }
+        .order { _ in SQLQueryExpression(section.order) }
+      return OrbitSectionedQuery(columns + asSelect())
     }
 
     /// Groups the table's rows by a column, ordering by it before existing ordering.
@@ -128,39 +130,11 @@
       Joins == (repeat each J), Columns.QueryOutput: Sendable,
       Key.QueryOutput: Hashable & Sendable
     {
-      let ordered: Select<Columns, From, Joins> =
-        orbitSectionedOrder(of: From.self, sectioning) + asSelect()
-      let sectioned: Select<(Columns, Key), From, Joins> =
-        ordered + orbitSectionedColumn(of: From.self, sectioning)
-      return OrbitSectionedQuery(sectioned)
+      let order = From.unscoped.asSelect().order { _ in SQLQueryExpression(sectioning.order) }
+      let column = From.unscoped.asSelect()
+        .select { _ in SQLQueryExpression(sectioning.select, as: Key.self) }
+      let ordered: Select<Columns, From, Joins> = order + self
+      return OrbitSectionedQuery(ordered + column)
     }
   }
-  /// A statement selecting every column of a table, then the section expression, ordered by it.
-  private func orbitSectionedColumns<From: Table, Key: QueryRepresentable>(
-    of _: From.Type,
-    _ sectionBy: _OrbitFetchSectioning<Key>
-  ) -> Select<(From, Key), From, ()> {
-    From.unscoped
-      .select { ($0, SQLQueryExpression(sectionBy.select, as: Key.self)) }
-      .order { _ in SQLQueryExpression(sectionBy.order) }
-  }
-
-  /// A statement selecting the section expression alone.
-  private func orbitSectionedColumn<From: Table, Key: QueryRepresentable>(
-    of _: From.Type,
-    _ sectionBy: _OrbitFetchSectioning<Key>
-  ) -> Select<Key, From, ()> {
-    From.unscoped.asSelect()
-      .select { _ in SQLQueryExpression(sectionBy.select, as: Key.self) }
-  }
-
-  /// A statement ordering by the section expression alone.
-  private func orbitSectionedOrder<From: Table, Key>(
-    of _: From.Type,
-    _ sectionBy: _OrbitFetchSectioning<Key>
-  ) -> Select<(), From, ()> {
-    From.unscoped.asSelect()
-      .order { _ in SQLQueryExpression(sectionBy.order) }
-  }
-
 #endif

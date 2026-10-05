@@ -29,12 +29,11 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
   /// Every element, in its original input or query order.
   public let elements: [Element]
 
-  private let sections: [(name: SectionName, elements: OrbitFetchElementIndices)]
-  private let positionsByName: [SectionName: Int]
+  private let index: OrbitFetchSectionIndex<SectionName>
 
   /// Creates an empty collection.
   public init() {
-    self.init(elements: [], sections: [])
+    self.init(elements: [], index: OrbitFetchSectionIndex())
   }
 
   /// Creates a collection of one section holding every element.
@@ -45,8 +44,12 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
   public init(elements: [Element], sectionName: SectionName) {
     self.init(
       elements: elements,
-      sections: elements.isEmpty
-        ? [] : [(sectionName, OrbitFetchElementIndices(range: elements.indices))]
+      index: elements.isEmpty
+        ? OrbitFetchSectionIndex()
+        : OrbitFetchSectionIndex(
+          sections: [(sectionName, OrbitFetchElementIndices(range: elements.indices))],
+          positionsByName: [sectionName: 0]
+        )
     )
   }
 
@@ -64,43 +67,28 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
     grouping elements: [Element],
     by sectionName: (Element) throws -> SectionName
   ) rethrows {
-    var sections: [(name: SectionName, elements: OrbitFetchElementIndices)] = []
-    var positionsByName: [SectionName: Int] = [:]
-    for (index, element) in elements.enumerated() {
-      let name = try sectionName(element)
-      if let position = positionsByName[name] {
-        sections[position].elements.append(index)
-      } else {
-        positionsByName[name] = sections.count
-        sections.append((name, OrbitFetchElementIndices(range: index..<(index + 1))))
-      }
+    var index = OrbitFetchSectionIndex<SectionName>()
+    for (offset, element) in elements.enumerated() {
+      index.append(offset, to: try sectionName(element))
     }
-    self.elements = elements
-    self.sections = sections
-    self.positionsByName = positionsByName
+    self.init(elements: elements, index: index)
   }
 
-  init(
-    elements: [Element],
-    sections: [(name: SectionName, elements: OrbitFetchElementIndices)]
-  ) {
+  init(elements: [Element], index: OrbitFetchSectionIndex<SectionName>) {
     self.elements = elements
-    self.sections = sections
-    self.positionsByName = Dictionary(
-      uniqueKeysWithValues: sections.enumerated().map { ($0.element.name, $0.offset) }
-    )
+    self.index = index
   }
 
   /// The name of each section, in the order the sections appear.
   public var sectionNames: [SectionName] {
-    sections.map(\.name)
+    index.sections.map(\.name)
   }
 
   /// Returns the section with the given name, or `nil` when there is none.
   ///
   /// - Parameter name: The name of a section.
   public subscript(sectionName name: SectionName) -> OrbitFetchSection<Element, SectionName>? {
-    guard let position = positionsByName[name] else { return nil }
+    guard let position = index.positionsByName[name] else { return nil }
     return self[position]
   }
 
@@ -108,29 +96,29 @@ public struct OrbitFetchSectionCollection<Element, SectionName: Hashable> {
   ///
   /// - Parameter name: The name of a section.
   public func contains(sectionName name: SectionName) -> Bool {
-    positionsByName[name] != nil
+    index.positionsByName[name] != nil
   }
 
   /// Returns the position of the section with the given name, or `nil` when there is none.
   ///
   /// - Parameter name: The name of a section.
   public func index(ofSectionNamed name: SectionName) -> Int? {
-    positionsByName[name]
+    index.positionsByName[name]
   }
 }
 
 extension OrbitFetchSectionCollection: RandomAccessCollection {
   /// The position of the first section.
-  public var startIndex: Int { sections.startIndex }
+  public var startIndex: Int { index.sections.startIndex }
 
   /// The position one past the last section.
-  public var endIndex: Int { sections.endIndex }
+  public var endIndex: Int { index.sections.endIndex }
 
   /// Returns the section at a position.
   ///
   /// - Parameter position: The position of a section.
   public subscript(position: Int) -> OrbitFetchSection<Element, SectionName> {
-    let section = sections[position]
+    let section = index.sections[position]
     return OrbitFetchSection(
       name: section.name,
       base: elements,
@@ -192,6 +180,23 @@ extension OrbitFetchSection: Equatable where Element: Equatable {
     lhs.name == rhs.name && lhs.elementsEqual(rhs)
   }
 }
+
+/// Builds and retains the section layout and its name lookup in one pass.
+struct OrbitFetchSectionIndex<Name: Hashable> {
+  var sections: [(name: Name, elements: OrbitFetchElementIndices)] = []
+  var positionsByName: [Name: Int] = [:]
+
+  mutating func append(_ elementIndex: Int, to name: Name) {
+    if let position = positionsByName[name] {
+      sections[position].elements.append(elementIndex)
+    } else {
+      positionsByName[name] = sections.count
+      sections.append((name, OrbitFetchElementIndices(range: elementIndex..<(elementIndex + 1))))
+    }
+  }
+}
+
+extension OrbitFetchSectionIndex: Sendable where Name: Sendable {}
 
 /// Where one section's rows sit in the flat array of every row.
 ///
