@@ -15,7 +15,7 @@
     }
 
     func wait() {
-      signaled.withLock(until: { $0 }) { _, _ in }
+      signaled.withLock(until: { $0 }, { _, _ in })
     }
   }
 #else
@@ -31,7 +31,7 @@
 #endif
 
 /// A finite snapshot of writers that were still active when another writer finished.
-final class SQLitePoolWriterBarrier: Sendable {
+final class SQLitePoolWriterBarrier: OrbitDatabaseWriterBarrier {
   private struct State {
     var remainingWriters: Int
     var continuations: [CheckedContinuation<Void, Never>] = []
@@ -67,16 +67,6 @@ final class SQLitePoolWriterBarrier: Sendable {
       return state.continuations
     }
     for continuation in continuations { continuation.resume() }
-  }
-}
-
-/// Defers satisfying older writer barriers until this commit has been published to observers.
-struct SQLitePoolWriterRelease: Sendable {
-  let activeWriterBarrier: SQLitePoolWriterBarrier
-  let completedBarriers: [SQLitePoolWriterBarrier]
-
-  func finishPublishing() {
-    for barrier in completedBarriers { barrier.writerDidFinish() }
   }
 }
 
@@ -148,104 +138,63 @@ final class SQLitePoolScheduler: Sendable {
 
   // MARK: - Scoped access
 
-  func read<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-  ) async throws -> Result {
-    let lease = try await acquire(.read)
-    defer { release(lease) }
-    return try await lease.connection.read(observers: observers, body)
-  }
-
-  func write<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) async throws -> Result {
-    let lease = try await acquire(.barrierWrite)
-    defer { release(lease) }
-    return try await lease.connection.write(observers: observers, body)
-  }
-
-  /// Runs a concurrent write and returns the finite cohort of other writers active at commit.
-  func writeTrackingConcurrentWriters<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) async throws -> (Result, SQLitePoolWriterRelease) {
-    let lease = try await acquire(.concurrentWrite)
-    do {
-      let result = try await lease.connection.write(mode: .concurrent, body)
-      return (result, release(lease, capturingActiveWriters: true)!)
-    } catch {
-      release(lease)
-      throw error
-    }
-  }
-
-  func readBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-  ) throws -> Result {
-    let lease = acquireBlocking(.read)
-    defer { release(lease) }
-    return try lease.connection.readBlocking(observers: observers, body)
-  }
-
-  func writeBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> Result {
-    let lease = acquireBlocking(.barrierWrite)
-    defer { release(lease) }
-    return try lease.connection.writeBlocking(observers: observers, body)
-  }
-
-  /// Runs a blocking concurrent write and returns the same finite cohort as the async API.
-  func writeBlockingTrackingConcurrentWriters<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> (Result, SQLitePoolWriterRelease) {
-    let lease = acquireBlocking(.concurrentWrite)
-    do {
-      let result = try lease.connection.writeBlocking(mode: .concurrent, body)
-      return (result, release(lease, capturingActiveWriters: true)!)
-    } catch {
-      release(lease)
-      throw error
-    }
-  }
-
   func readWithoutTransaction<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
     let lease = try await acquire(.read)
     defer { release(lease) }
-    return try await lease.connection.readWithoutTransaction(observers: observers, body)
+    return try await lease.connection.readWithoutTransaction(body)
   }
 
   func writeWithoutTransaction<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
     let lease = try await acquire(.barrierWrite)
     defer { release(lease) }
-    return try await lease.connection.writeWithoutTransaction(observers: observers, body)
+    return try await lease.connection.writeWithoutTransaction(body)
+  }
+
+  func concurrentWriteWithoutTransaction<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) async throws -> Result {
+    let lease = try await acquire(.concurrentWrite)
+    defer { release(lease) }
+    return try await lease.connection.writeWithoutTransaction(body)
   }
 
   func readWithoutTransactionBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
     let lease = acquireBlocking(.read)
     defer { release(lease) }
-    return try lease.connection.readWithoutTransactionBlocking(observers: observers, body)
+    return try lease.connection.readWithoutTransactionBlocking(body)
   }
 
   func writeWithoutTransactionBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
     let lease = acquireBlocking(.barrierWrite)
     defer { release(lease) }
-    return try lease.connection.writeWithoutTransactionBlocking(observers: observers, body)
+    return try lease.connection.writeWithoutTransactionBlocking(body)
+  }
+
+  func concurrentWriteWithoutTransactionBlocking<Result: Sendable>(
+    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+  ) throws -> Result {
+    let lease = acquireBlocking(.concurrentWrite)
+    defer { release(lease) }
+    return try lease.connection.writeWithoutTransactionBlocking(body)
+  }
+
+  func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
+    state.withLock { state in
+      guard !state.activeWriterIDs.isEmpty else { return nil }
+      let barrier = SQLitePoolWriterBarrier(writerCount: state.activeWriterIDs.count)
+      for writerID in state.activeWriterIDs {
+        state.writerBarriers[writerID, default: []].append(barrier)
+      }
+      return barrier
+    }
   }
 
   // MARK: - Acquiring
@@ -303,19 +252,10 @@ final class SQLitePoolScheduler: Sendable {
 
   // MARK: - Releasing
 
-  @discardableResult
-  private func release(
-    _ lease: Lease,
-    capturingActiveWriters: Bool = false
-  ) -> SQLitePoolWriterRelease? {
+  private func release(_ lease: Lease) {
     let released = state.withLock {
-      state -> (
-        wakeups: [Wakeup],
-        completedBarriers: [SQLitePoolWriterBarrier],
-        capturedBarrier: SQLitePoolWriterBarrier?
-      ) in
-      var completedBarriers: [SQLitePoolWriterBarrier] = []
-      var capturedBarrier: SQLitePoolWriterBarrier?
+      state -> (wakeups: [Wakeup], barriers: [SQLitePoolWriterBarrier]) in
+      var barriers: [SQLitePoolWriterBarrier] = []
       switch lease.kind {
       case .read:
         state.idleReaders.append(lease.connection)
@@ -323,34 +263,22 @@ final class SQLitePoolScheduler: Sendable {
       case .concurrentWrite:
         state.idleWriters.append(lease.connection)
         state.activeOrdinaryAccesses -= 1
-        precondition(state.activeWriterIDs.remove(lease.id) != nil)
-        completedBarriers = state.writerBarriers.removeValue(forKey: lease.id) ?? []
-        if capturingActiveWriters {
-          let barrier = SQLitePoolWriterBarrier(writerCount: state.activeWriterIDs.count)
-          for writerID in state.activeWriterIDs {
-            state.writerBarriers[writerID, default: []].append(barrier)
-          }
-          capturedBarrier = barrier
-        }
       case .barrierWrite:
         state.idleWriters.append(lease.connection)
         state.isBarrierWriteActive = false
       }
+      if lease.kind != .read {
+        precondition(state.activeWriterIDs.remove(lease.id) != nil)
+        barriers = state.writerBarriers.removeValue(forKey: lease.id) ?? []
+      }
       if let blockingHolder = lease.blockingHolder {
         state.blockingHolders.removeAll { $0 == blockingHolder }
       }
-      return (Self.grant(&state), completedBarriers, capturedBarrier)
+      return (Self.grant(&state), barriers)
     }
-    if !capturingActiveWriters {
-      for barrier in released.completedBarriers { barrier.writerDidFinish() }
-    }
+    // The borrowing closure has completed, including any commit publication it performs.
+    for barrier in released.barriers { barrier.writerDidFinish() }
     for wakeup in released.wakeups { wakeup.deliver() }
-    return released.capturedBarrier.map {
-      SQLitePoolWriterRelease(
-        activeWriterBarrier: $0,
-        completedBarriers: released.completedBarriers
-      )
-    }
   }
 
   // MARK: - Granting
@@ -395,6 +323,7 @@ final class SQLitePoolScheduler: Sendable {
 
       let waiter = state.waiting.removeFirst()
       state.isBarrierWriteActive = true
+      state.activeWriterIDs.insert(waiter.id)
       wakeups.append(lend(connection, to: waiter, in: &state))
       break
     }

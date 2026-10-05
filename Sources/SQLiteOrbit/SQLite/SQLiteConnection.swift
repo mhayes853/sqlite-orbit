@@ -5,9 +5,9 @@
 /// A connection lent by a native SQLite driver for reading outside a transaction.
 ///
 /// Each statement runs in its own implicit transaction, so two reads may see different states of
-/// the database if another connection commits in between. Call ``transaction(_:)`` for a
+/// the database if another connection commits in between. Call ``transaction(observer:_:)`` for a
 /// consistent snapshot. Statements that begin or end a transaction or a savepoint are refused
-/// outside ``transaction(_:)``, so the connection always knows whether it is inside one.
+/// outside ``transaction(observer:_:)``, so the connection always knows whether it is inside one.
 ///
 /// Like a transaction, the connection is a view onto a connection it borrows. It is noncopyable
 /// and nonescapable, so it cannot be captured, stored, or outlive the access that lent it.
@@ -142,7 +142,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
   /// Observes only the connection events produced while `operation` runs.
   public borrowing func withObservation<Result: ~Copyable>(
-    _ observer: any SQLiteConnectionObserver,
+    _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try base.withObservation(observer, perform: operation)
@@ -174,14 +174,22 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// - Important: Transactions do not nest. Use a savepoint inside the transaction in hand instead.
   ///
-  /// - Parameter body: Receives the transaction. It cannot escape the call.
+  /// - Parameters:
+  ///   - observer: Observes reads for the entire transaction, when supplied.
+  ///   - body: Receives the transaction. It cannot escape the call.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened.
   public borrowing func transaction<Result: ~Copyable>(
+    observer: (any OrbitDatabaseTransactionObserver)? = nil,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try state.inTransaction {
-      try handle.pointee.runRead(observations: base.observations, body)
+      if let observer {
+        return try withObservation(observer) {
+          try handle.pointee.runRead(observations: base.observations, body)
+        }
+      }
+      return try handle.pointee.runRead(observations: base.observations, body)
     }
   }
 }
@@ -190,13 +198,13 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 ///
 /// Each statement commits on its own as it finishes, which is what a few statements need: a
 /// foreign keys change, for example, is ignored inside a transaction, and `VACUUM` cannot run
-/// inside one at all. Call ``transaction(mode:_:)`` to group statements so that they commit or roll
+/// inside one at all. Call ``transaction(mode:observer:_:)`` to group statements so that they commit or roll
 /// back together. Statements that begin or end a transaction or a savepoint are refused outside
-/// ``transaction(mode:_:)``, so the connection always knows whether it is inside one.
+/// ``transaction(mode:observer:_:)``, so the connection always knows whether it is inside one.
 ///
 /// Observers see a statement outside a transaction as a commit as soon as it finishes: its changed
-/// regions followed by ``SQLiteConnectionObserver/connectionDidCommit(in:)``, without
-/// ``SQLiteConnectionObserver/connectionWillCommit(_:)``. There are no write cursors, because
+/// regions followed by ``OrbitDatabaseTransactionObserver/databaseDidCommit(_:)``, without
+/// ``OrbitDatabaseTransactionObserver/databaseWillCommit(_:)``. There are no write cursors, because
 /// a statement outside a transaction only commits once it finishes or is reset, so a partly read
 /// `RETURNING` cursor would have no clear moment at which its changes committed.
 ///
@@ -301,7 +309,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// SQLite changes foreign keys with a `PRAGMA foreign_keys` statement, which can fail, and a
   /// setter cannot throw. So setting this only records the change. It takes effect just before
-  /// this connection's next statement or ``transaction(mode:_:)``, outside any transaction, where
+  /// this connection's next statement or ``transaction(mode:observer:_:)``, outside any transaction, where
   /// SQLite honors it, and a failure to apply it is thrown from that statement or transaction. The
   /// change then stays pending for the next one to try again. Reading this returns the value last
   /// set, whether or not it has taken effect.
@@ -310,7 +318,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// `PRAGMA foreign_keys` statement run directly is not reflected here, and is not undone when the
   /// access ends.
   ///
-  /// - Important: Setting this inside this connection's own ``transaction(mode:_:)`` is a programming
+  /// - Important: Setting this inside this connection's own ``transaction(mode:observer:_:)`` is a programming
   ///   error and stops the process, since SQLite would silently ignore it there.
   public var isForeignKeysEnabled: Bool {
     get { handle.pointee.settings.pointee.isForeignKeysEnabled }
@@ -440,7 +448,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// Creates a cursor over the rows raw SQL returns.
   ///
   /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
-  /// Run a mutation through ``execute(_:)``, or create its cursor inside ``transaction(mode:_:)``.
+  /// Run a mutation through ``execute(_:)``, or create its cursor inside ``transaction(mode:observer:_:)``.
   ///
   /// ```swift
   /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
@@ -521,7 +529,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// Changes committed outside an explicit transaction are reported before the observer is
   /// removed, even when the operation throws after committing an earlier statement.
   public borrowing func withObservation<Result: ~Copyable>(
-    _ observer: any SQLiteConnectionObserver,
+    _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try base.withObservation(observer) {
@@ -560,18 +568,25 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// - Parameters:
   ///   - mode: How SQLite begins the write transaction.
+  ///   - observer: Observes the entire transaction, including commit or rollback, when supplied.
   ///   - body: Receives the transaction. It cannot escape the call.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened
   ///   or committed.
   public borrowing func transaction<Result: ~Copyable>(
     mode: SQLiteWriteTransactionMode = .immediate,
+    observer: (any OrbitDatabaseTransactionObserver)? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
     // Before `BEGIN`, since SQLite ignores a foreign keys change once the transaction is open.
     try applyPendingSettings()
     return try state.inTransaction {
-      try handle.pointee.runWrite(mode: mode, observations: base.base.observations, body)
+      if let observer {
+        return try withObservation(observer) {
+          try handle.pointee.runWrite(mode: mode, observations: base.base.observations, body)
+        }
+      }
+      return try handle.pointee.runWrite(mode: mode, observations: base.base.observations, body)
     }
   }
 

@@ -2,13 +2,13 @@
 ///
 /// Registrations nest in call order, so an outer registration receives each event first.
 final class SQLiteConnectionEvents {
-  private var observers: [any SQLiteConnectionObserver] = []
+  private var observers: [any OrbitDatabaseTransactionObserver] = []
   private var pendingRegion = OrbitDatabaseRegion.empty
 
   init() {}
 
   func withObservation<Result: ~Copyable>(
-    _ observer: any SQLiteConnectionObserver,
+    _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     observers.append(observer)
@@ -18,28 +18,29 @@ final class SQLiteConnectionEvents {
 
   func didRead(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
-    for observer in observers { observer.connectionDidRead(in: region) }
+    for observer in observers { observer.databaseDidRead(in: region) }
   }
 
   func didChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
     pendingRegion.formUnion(region)
-    for observer in observers { observer.connectionDidChange(in: region) }
+    for observer in observers { observer.databaseDidChange(in: region) }
   }
 
   func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    for observer in observers { try observer.connectionWillCommit(transaction) }
+    for observer in observers { try observer.databaseWillCommit(transaction) }
   }
 
   func didCommit() {
     let region = pendingRegion
     pendingRegion = .empty
-    for observer in observers { observer.connectionDidCommit(in: region) }
+    let commit = OrbitDatabaseCommit(origin: .local, region: region)
+    for observer in observers { observer.databaseDidCommit(commit) }
   }
 
   func didRollback() {
     pendingRegion = .empty
-    for observer in observers { observer.connectionDidRollback() }
+    for observer in observers { observer.databaseDidRollback() }
   }
 
   /// Outside a transaction SQLite commits as a statement finishes. Report even a statement that

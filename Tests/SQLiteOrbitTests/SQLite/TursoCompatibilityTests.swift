@@ -117,7 +117,7 @@
     }
 
     @Test
-    func tursoPoolPublishesEachConcurrentCommitWithItsActiveWriterCohort() async throws {
+    func tursoPoolPublishesCommitsAndCapturesAFiniteActiveWriterCohort() async throws {
       try await withTestDatabaseFile("turso") { file in
         let driver = try TursoPool(path: file.path, writerCount: 2)
         try await driver.write { transaction in
@@ -127,6 +127,12 @@
         let subscription = try driver.subscribe(transactionObserver: observer)
         let firstGate = TestGate()
         let secondGate = TestGate()
+        let thirdGate = TestGate()
+        defer {
+          firstGate.open()
+          secondGate.open()
+          thirdGate.open()
+        }
 
         let first = Task {
           try await driver.concurrentWrite { transaction in
@@ -148,22 +154,34 @@
         let firstCommit = try #require(observer.commits.first)
         #expect(firstCommit.origin == .local)
         #expect(firstCommit.region.isFullDatabase)
-        let barrier = try #require(firstCommit.activeWriterBarrier)
+        let barrier = try #require(driver.captureActiveWriters())
         #expect(barrier.hasActiveWriters)
 
-        let barrierFinished = Lock(false)
+        // This writer starts after the cohort was captured and must not extend its wait.
+        let third = Task {
+          try await driver.concurrentWrite { transaction in
+            try transaction.execute("INSERT INTO items VALUES (3)")
+            try thirdGate.enter()
+          }
+        }
+        try await thirdGate.waitUntilEntered()
+        let barrierFinished = TestCounter()
         let wait = Task {
           await barrier.wait()
-          barrierFinished.withLock { $0 = true }
+          barrierFinished.increment()
         }
         for _ in 0..<100 { await Task.yield() }
-        #expect(!barrierFinished.withLock { $0 })
+        #expect(barrierFinished.value == 0)
 
         secondGate.open()
         try await second.value
+        try await barrierFinished.waitForCount(1)
         await wait.value
-        #expect(barrierFinished.withLock { $0 })
+        #expect(!barrier.hasActiveWriters)
         #expect(observer.commits.count == 2)
+        thirdGate.open()
+        try await third.value
+        #expect(observer.commits.count == 3)
         _ = subscription
       }
     }

@@ -876,16 +876,17 @@
         try await recorder.waitForChangeCount(1)
 
         let activeWriter = SQLitePoolWriterBarrier(writerCount: 1)
-        driver.announceCommit(region: .fullDatabase, activeWriterBarrier: activeWriter)
+        driver.setActiveWriters(activeWriter)
+        driver.announceCommit(region: .fullDatabase)
+        // The runtime captures coordination synchronously with the relevant commit, so a later
+        // provider change cannot replace the cohort its controller must wait for.
+        driver.setActiveWriters(nil)
         for _ in 0..<100 { await Task.yield() }
         #expect(fetchCount.value == 1)
 
         activeWriter.writerDidFinish()
         try await recorder.waitForChangeCount(2)
-        driver.announceCommit(
-          region: .fullDatabase,
-          activeWriterBarrier: SQLitePoolWriterBarrier(writerCount: 0)
-        )
+        driver.announceCommit(region: .fullDatabase)
         try await recorder.waitForChangeCount(3)
 
         #expect(fetchCount.value == 3)

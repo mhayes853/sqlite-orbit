@@ -174,8 +174,12 @@
           configuration: .default,
           idleTimeout: .microseconds(50)
         )
-        try await connection.write { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
-        try await connection.write { try $0.execute("INSERT INTO counter (n) VALUES (0)") }
+        try await connection.writeWithoutTransaction {
+          try $0.transaction { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
+        }
+        try await connection.writeWithoutTransaction {
+          try $0.transaction { try $0.execute("INSERT INTO counter (n) VALUES (0)") }
+        }
 
         let writers = 6
         let bumpsEach = 100
@@ -184,9 +188,11 @@
           .map { _ in
             onNewThread {
               for bump in 0..<bumpsEach {
-                try! connection.writeBlocking { try $0.execute("UPDATE counter SET n = n + 1") }
-                _ = try! connection.readBlocking {
-                  try $0.fetchOne("SELECT n FROM counter", as: Int.self)
+                try! connection.writeWithoutTransactionBlocking {
+                  try $0.transaction { try $0.execute("UPDATE counter SET n = n + 1") }
+                }
+                _ = try! connection.readWithoutTransactionBlocking {
+                  try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
               }
@@ -196,9 +202,11 @@
           for _ in 0..<writers {
             group.addTask {
               for bump in 0..<bumpsEach {
-                try! await connection.write { try $0.execute("UPDATE counter SET n = n + 1") }
-                _ = try! await connection.read {
-                  try $0.fetchOne("SELECT n FROM counter", as: Int.self)
+                try! await connection.writeWithoutTransaction {
+                  try $0.transaction { try $0.execute("UPDATE counter SET n = n + 1") }
+                }
+                _ = try! await connection.readWithoutTransaction {
+                  try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
               }
@@ -207,8 +215,8 @@
         }
         for thread in threads { await thread.value }
 
-        let total: Int? = try connection.readBlocking {
-          try $0.fetchOne("SELECT n FROM counter", as: Int.self)
+        let total: Int? = try connection.readWithoutTransactionBlocking {
+          try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
         }
         #expect(total == 2 * writers * bumpsEach)
       }

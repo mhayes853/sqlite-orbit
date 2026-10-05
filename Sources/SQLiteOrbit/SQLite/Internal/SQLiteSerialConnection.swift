@@ -53,67 +53,12 @@ actor SQLiteSerialConnection {
     self.handle = handle
   }
 
-  func read<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-  ) async throws -> Result {
-    try await perform { handle, cancellation in
-      try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
-          try connection.transaction(body)
-        }
-      }
-    }
-  }
-
-  func write<Result: Sendable>(
-    mode: SQLiteWriteTransactionMode = .immediate,
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) async throws -> Result {
-    try await perform { handle, cancellation in
-      try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
-          try connection.transaction(mode: mode, body)
-        }
-      }
-    }
-  }
-
-  nonisolated func readBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-  ) throws -> Result {
-    try performBlocking { handle, cancellation in
-      try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
-          try connection.transaction(body)
-        }
-      }
-    }
-  }
-
-  nonisolated func writeBlocking<Result: Sendable>(
-    mode: SQLiteWriteTransactionMode = .immediate,
-    observers: OrbitDatabaseTransactionObservers? = nil,
-    _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-  ) throws -> Result {
-    try performBlocking { handle, cancellation in
-      try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
-          try connection.transaction(mode: mode, body)
-        }
-      }
-    }
-  }
-
   func readWithoutTransaction<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
     try await perform { handle, cancellation in
       try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+        try connection.withSuspension(self.suspension) {
           try body(connection)
         }
       }
@@ -121,12 +66,11 @@ actor SQLiteSerialConnection {
   }
 
   func writeWithoutTransaction<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
     try await perform { handle, cancellation in
       try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+        try connection.withSuspension(self.suspension) {
           try body(connection)
         }
       }
@@ -134,12 +78,11 @@ actor SQLiteSerialConnection {
   }
 
   nonisolated func readWithoutTransactionBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
     try performBlocking { handle, cancellation in
       try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+        try connection.withSuspension(self.suspension) {
           try body(connection)
         }
       }
@@ -147,12 +90,11 @@ actor SQLiteSerialConnection {
   }
 
   nonisolated func writeWithoutTransactionBlocking<Result: Sendable>(
-    observers: OrbitDatabaseTransactionObservers? = nil,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
     try performBlocking { handle, cancellation in
       try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withDriverScopes(observers: observers, suspension: self.suspension) {
+        try connection.withSuspension(self.suspension) {
           try body(connection)
         }
       }
@@ -218,36 +160,30 @@ actor SQLiteSerialConnection {
 
 // Driver policy composes only public connection capabilities.
 extension SQLiteReadConnection {
-  fileprivate borrowing func withDriverScopes<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers?,
-    suspension: SQLiteWriteSuspension?,
+  fileprivate borrowing func withSuspension<Result: ~Copyable>(
+    _ suspension: SQLiteWriteSuspension?,
     _ body: () throws -> Result
   ) rethrows -> Result {
     if let suspension {
       return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
-        if let observers { return try withObservation(observers, perform: body) }
         return try body()
       }
     }
-    if let observers { return try withObservation(observers, perform: body) }
     return try body()
   }
 }
 
 // Driver policy composes only public connection capabilities.
 extension SQLiteWriteConnection {
-  fileprivate borrowing func withDriverScopes<Result: ~Copyable>(
-    observers: OrbitDatabaseTransactionObservers?,
-    suspension: SQLiteWriteSuspension?,
+  fileprivate borrowing func withSuspension<Result: ~Copyable>(
+    _ suspension: SQLiteWriteSuspension?,
     _ body: () throws -> Result
   ) rethrows -> Result {
     if let suspension {
       return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
-        if let observers { return try withObservation(observers, perform: body) }
         return try body()
       }
     }
-    if let observers { return try withObservation(observers, perform: body) }
     return try body()
   }
 }

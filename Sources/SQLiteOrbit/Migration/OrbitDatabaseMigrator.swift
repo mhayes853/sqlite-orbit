@@ -310,7 +310,7 @@ public struct OrbitDatabaseMigrator: Sendable {
   /// connection used after a failed migration enforces foreign keys as it did before.
   ///
   /// - Important: Calling this inside the connection's own
-  ///   ``SQLiteWriteConnection/transaction(_:)`` is a programming error: each migration opens a
+  ///   ``SQLiteWriteConnection/transaction(mode:observer:_:)`` is a programming error: each migration opens a
   ///   transaction of its own, and transactions do not nest.
   ///
   /// - Parameters:

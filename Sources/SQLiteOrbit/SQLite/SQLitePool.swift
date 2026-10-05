@@ -40,8 +40,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
-  private let scheduler: SQLitePoolScheduler
-  private let suspension: SQLiteWriteSuspension
+  private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
   /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
@@ -72,54 +71,26 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       throw SQLitePoolUnavailableError(path: path)
     }
     let identifier = identifier ?? .forDatabase(path: path)
-    let suspension = SQLiteWriteSuspension(databaseIdentifier: identifier)
 
     // Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes
     // opening it at the same moment would otherwise contend for it.
-    let (writer, readers) = try Self.withOpenLock(
+    let pool = try Self.withOpenLock(
       identifier: identifier,
       directoryPath: coordinationDirectoryPath,
       configuration: configuration
     ) {
-      try Self.openConnections(path: path, configuration: configuration, suspension: suspension)
+      try SQLiteConnectionPool(
+        path: path,
+        readerConfiguration: configuration,
+        writerConfiguration: configuration,
+        readerSetupSQL: ["PRAGMA query_only = 1"],
+        writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
+        identifier: identifier
+      )
     }
 
     self.defaultIdentifier = identifier
-    self.suspension = suspension
-    self.scheduler = SQLitePoolScheduler(readers: readers, writers: [writer])
-  }
-
-  private static func openConnections(
-    path: OrbitDatabasePath,
-    configuration: SQLiteConfiguration,
-    suspension: SQLiteWriteSuspension
-  ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
-    // Each connection's role is set up apart from the caller's configuration, which is what its
-    // transactions report having been opened with.
-    //
-    // Switching to WAL does not create the `-wal` and `-shm` files; the next transaction does. A
-    // read-only connection cannot create them itself, and Apple's SQLite then fails to open a new
-    // database at all, so the writer reads once to leave them in place for the readers.
-    let writer = try SQLiteSerialConnection(
-      path: path,
-      flags: [.readWrite, .create, .noMutex],
-      configuration: configuration,
-      driverSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
-      suspension: suspension
-    )
-
-    // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
-    // the raw connection into an error rather than a surprise.
-    let readers = try (0..<configuration.readerCount)
-      .map { _ in
-        try SQLiteSerialConnection(
-          path: path,
-          flags: [.readOnly, .noMutex],
-          configuration: configuration,
-          driverSetupSQL: ["PRAGMA query_only = 1"]
-        )
-      }
-    return (writer, readers)
+    self.pool = pool
   }
 
   private static func withOpenLock<Result>(
@@ -154,7 +125,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await scheduler.read(observers: transactionObservers, body)
+    try await pool.withReadConnection { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -168,7 +141,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try scheduler.readBlocking(observers: transactionObservers, body)
+    try pool.withReadConnectionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction on the pool's single writer.
@@ -183,7 +158,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await scheduler.write(observers: transactionObservers, body)
+    try await pool.withWriteConnection { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -197,7 +174,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try scheduler.writeBlocking(observers: transactionObservers, body)
+    try pool.withWriteConnectionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction.
@@ -219,7 +198,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func readWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
+    try await pool.withReadConnection { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction and blocking the
@@ -242,7 +223,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
+    try pool.withReadConnectionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction.
@@ -267,7 +250,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
+    try await pool.withWriteConnection { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction and blocking the
@@ -291,21 +276,23 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
+    try pool.withWriteConnectionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Whether this pool currently refuses statements that could retain its writer's lock.
-  public var isSuspended: Bool { suspension.isSuspended }
+  public var isSuspended: Bool { pool.isSuspended }
 
   /// Interrupts an active writer and refuses statements that could acquire or retain its lock.
   /// Reads on the pool's read-only connections continue to work. An interrupted write rolls back
   /// and throws ``OrbitDatabaseSuspendedError``. A transactional write rolls back; earlier
   /// statements in `writeWithoutTransaction` may already have committed. This method does not
   /// wait for an active transaction to roll back.
-  public func suspend() { suspension.suspend() }
+  public func suspend() { pool.suspend() }
 
   /// Allows writes to acquire the lock again. Calling this when active has no effect.
-  public func resume() { suspension.resume() }
+  public func resume() { pool.resume() }
 
   /// Registers an observer of the transactions this driver commits.
   ///

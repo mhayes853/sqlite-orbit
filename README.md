@@ -393,12 +393,57 @@ a driver supplies serialization and chooses when to start a transaction. Read le
 query-only access, and both lenders restore scoped settings and clean up before returning.
 Releasing the owner closes the connection.
 
-Observation is installed separately with a borrowed view's `withObservation(_:perform:)` and
-`SQLiteConnectionObserver`. Hooks cover their lexical scope; installing them around `transaction`
-includes its commit or rollback. Higher-level database observers adapt these events to database
-subscriptions and IPC. For cancellable access, pass a fresh `SQLiteConnectionCancellation` to a
-lender and call `cancel()` from another thread. A cancellation after that access ends cannot
-interrupt the next one.
+Observation uses one `OrbitDatabaseTransactionObserver` protocol for scoped access and database
+subscriptions. Pass `observer:` to `transaction` to receive its complete write lifecycle:
+
+```swift
+let recorder = OrbitDatabaseRegionRecorder()
+try owner.withWriteConnection { connection in
+  try connection.transaction(observer: recorder) { transaction in
+    try transaction.execute("INSERT INTO reminders (title) VALUES (\("Get milk"))")
+  }
+}
+let committed = recorder.committedRegion
+```
+
+`withObservation(_:perform:)` observes an arbitrary portion of a borrowed connection or transaction.
+Registrations compose with outer observers and end when their closure returns or throws. A scope
+inside a transaction body ends before that transaction commits; use `transaction(observer:)` to
+include completion. Commit regions describe the whole committed transaction, potentially including
+changes made before registration.
+
+`OrbitDatabaseRegionRecorder` accumulates conservative `readRegion`, `changedRegion`, and
+`committedRegion` values. Provisional changes remain in `changedRegion` after rollback; committed
+regions come from commit events. Keep the recorder outside the operation to inspect partial commits
+after an error. `hasCommitted` also distinguishes an empty commit from no observed commit.
+
+`SQLiteConnectionPool` provides asynchronous and blocking connection loans without an observer
+registry. Its callers choose transactions and install observers using these same public APIs.
+Ordinary writer loans form a barrier; explicit concurrent writer loans can overlap readers and
+other concurrent writers. `SQLitePool` and `TursoPool` compose this primitive with their journal
+setup and database-wide subscriptions. A custom driver can use it directly:
+
+```swift
+let pool = try SQLiteConnectionPool(
+  path: path,
+  readerConfiguration: .default,
+  writerConfiguration: .default,
+  writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"]
+)
+try await pool.withWriteConnection { connection in
+  try connection.transaction(observer: recorder) { transaction in
+    try transaction.execute("INSERT INTO reminders (title) VALUES (\("Walk the dog"))")
+  }
+}
+```
+
+Commit values contain only origin and region. `captureActiveWriters()` supplies a separate finite
+writer snapshot for refetch coordination: later loans do not extend its wait, and writers finish
+only after their entire borrowing closure, including commit publication. Observable database
+adapters forward this capability when they permit overlapping writers.
+
+For cancellable owner access, pass a fresh `SQLiteConnectionCancellation` to a lender and call
+`cancel()` from another thread. A cancellation after that access ends cannot interrupt the next one.
 
 The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
 entry points are grouped by responsibility, including distinct statement preparation, execution,

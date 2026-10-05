@@ -441,7 +441,7 @@
     @Suite
     struct OrbitDatabaseRegionRecorderTests {
       @Test
-      func recorderKeepsCommittedRegionsApartFromRolledBackAndPendingOnes() {
+      func recorderKeepsCommittedRegionsApartFromAllProvisionalChanges() {
         let context = SQLiteConnectionEvents()
         let recorder = OrbitDatabaseRegionRecorder()
         let observers = OrbitDatabaseTransactionObservers()
@@ -462,7 +462,9 @@
         }
 
         #expect(recorder.committedRegion == committed.union(autocommitted))
-        #expect(recorder.changedRegion == committed.union(autocommitted).union(pending))
+        #expect(
+          recorder.changedRegion == committed.union(autocommitted).union(rolledBack).union(pending)
+        )
         _ = subscription
       }
 

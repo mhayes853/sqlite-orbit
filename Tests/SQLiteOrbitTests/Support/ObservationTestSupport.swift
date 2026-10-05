@@ -79,7 +79,7 @@
   ///
   /// Every write through it is announced once it has committed, as a database that learns of
   /// commits after the fact would, rather than inside the transaction. ``announceCommit(region:
-  /// origin:activeWriterBarrier:)`` announces one that never happened, so a test can raise
+  /// origin:)`` announces one that never happened, so a test can raise
   /// invalidations while an observation is in whatever state it arranged. It also counts the
   /// observers registered on it, which is the only way to tell how many subscriptions a group of
   /// observations took out.
@@ -89,6 +89,7 @@
     private let base: SQLiteQueue
     private let observers = OrbitDatabaseTransactionObservers()
     private let subscriptions = TestCounter()
+    private let activeWriters = Lock<(any OrbitDatabaseWriterBarrier)?>(nil)
 
     /// How many observers have been registered, whether or not they are still registered.
     var subscriptionCount: Int { self.subscriptions.value }
@@ -96,6 +97,14 @@
     init(_ base: SQLiteQueue) {
       self.base = base
       self.defaultIdentifier = base.defaultIdentifier
+    }
+
+    func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
+      activeWriters.withLock { $0 }
+    }
+
+    func setActiveWriters(_ barrier: (any OrbitDatabaseWriterBarrier)?) {
+      activeWriters.withLock { $0 = barrier }
     }
 
     func read<Result: Sendable>(
@@ -165,14 +174,12 @@
     /// Tells every observer that a transaction changed `region` and committed.
     func announceCommit(
       region: OrbitDatabaseRegion,
-      origin: OrbitDatabaseTransactionOrigin = .local,
-      activeWriterBarrier: SQLitePoolWriterBarrier? = nil
+      origin: OrbitDatabaseTransactionOrigin = .local
     ) {
       self.observers.didChange(in: region)
       self.observers.didCommit(
         origin: origin,
-        region: region,
-        activeWriterBarrier: activeWriterBarrier
+        region: region
       )
     }
   }

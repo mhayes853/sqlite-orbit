@@ -142,7 +142,7 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   /// Registrations nest in call order and never observe another connection's access. A scoped
   /// observer receives a commit or rollback only if it remains registered when that event occurs.
   public borrowing func withObservation<Result: ~Copyable>(
-    _ observer: any SQLiteConnectionObserver,
+    _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try observations.withObservation(observer, perform: operation)
@@ -373,7 +373,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// The transaction commits after its access closure returns, so a registration scoped to that
   /// closure observes its provisional changes, but not its later commit or rollback.
   public borrowing func withObservation<Result: ~Copyable>(
-    _ observer: any SQLiteConnectionObserver,
+    _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try base.withObservation(observer, perform: operation)

@@ -19,7 +19,7 @@
     /// The identity this driver's database is known by within the process.
     public let defaultIdentifier: OrbitDatabaseIdentifier
 
-    private let scheduler: SQLitePoolScheduler
+    private let pool: SQLiteConnectionPool
     private let transactionObservers = OrbitDatabaseTransactionObservers()
 
     /// Opens `path` in Turso's MVCC mode.
@@ -46,30 +46,20 @@
       // caller-supplied setup SQL always runs against the mode this driver promises.
       var writerConfiguration = configuration
       writerConfiguration.setupSQL.insert("PRAGMA journal_mode = MVCC", at: 0)
-      let writers = try (0..<max(1, writerCount))
-        .map { _ in
-          try SQLiteSerialConnection(
-            path: path,
-            flags: [.readWrite, .create, .noMutex],
-            configuration: writerConfiguration
-          )
-        }
-
       // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
       // through a read transaction an explicit error.
       var readerConfiguration = configuration
+      readerConfiguration.readerCount = max(1, configuration.readerCount)
       readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
-      let readers = try (0..<max(1, configuration.readerCount))
-        .map { _ in
-          try SQLiteSerialConnection(
-            path: path,
-            flags: [.readOnly, .noMutex],
-            configuration: readerConfiguration
-          )
-        }
-
-      self.defaultIdentifier = identifier ?? .forDatabase(path: path)
-      self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)
+      let identifier = identifier ?? .forDatabase(path: path)
+      self.defaultIdentifier = identifier
+      self.pool = try SQLiteConnectionPool(
+        path: path,
+        readerConfiguration: readerConfiguration,
+        writerConfiguration: writerConfiguration,
+        writerCount: max(1, writerCount),
+        identifier: identifier
+      )
     }
 
     /// Runs `body` in a read transaction on one of the pool's reader connections.
@@ -79,14 +69,18 @@
     public func read<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) async throws -> Result {
-      try await scheduler.read(observers: transactionObservers, body)
+      try await pool.withReadConnection { connection in
+        try connection.transaction(observer: transactionObservers, body)
+      }
     }
 
     /// Runs `body` with one reader connection outside a transaction.
     public func readWithoutTransaction<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadConnection) throws -> Result
     ) async throws -> Result {
-      try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
+      try await pool.withReadConnection { connection in
+        try connection.withObservation(transactionObservers) { try body(connection) }
+      }
     }
 
     /// Runs `body` in an immediate transaction after every earlier pool access has finished.
@@ -96,7 +90,9 @@
     public func write<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
-      try await scheduler.write(observers: transactionObservers, body)
+      try await pool.withWriteConnection { connection in
+        try connection.transaction(observer: transactionObservers, body)
+      }
     }
 
     /// Runs `body` in a concurrent Turso write transaction.
@@ -106,12 +102,14 @@
     public func concurrentWrite<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
-      let ((result, region), release) = try await scheduler.writeTrackingConcurrentWriters {
-        transaction in
-        try transaction.recordingDatabaseRegion(body)
+      return try await pool.withConcurrentWriteConnection { connection in
+        let recorder = OrbitDatabaseRegionRecorder()
+        let result = try connection.transaction(mode: .concurrent, observer: recorder, body)
+        // Publish while this writer loan remains active, before captured cohorts can finish.
+        transactionObservers.didChange(in: recorder.committedRegion)
+        transactionObservers.didCommit(origin: .local, region: recorder.committedRegion)
+        return result
       }
-      publishCommit(of: region, release: release)
-      return result
     }
 
     /// Runs `body` with one writer connection outside a transaction.
@@ -121,7 +119,9 @@
     public func writeWithoutTransaction<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
     ) async throws -> Result {
-      try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
+      try await pool.withWriteConnection { connection in
+        try connection.withObservation(transactionObservers) { try body(connection) }
+      }
     }
 
     /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -131,21 +131,27 @@
     public func readBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
     ) throws -> Result {
-      try scheduler.readBlocking(observers: transactionObservers, body)
+      try pool.withReadConnectionBlocking { connection in
+        try connection.transaction(observer: transactionObservers, body)
+      }
     }
 
     /// Runs `body` with one reader connection outside a transaction, blocking the calling thread.
     public func readWithoutTransactionBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteReadConnection) throws -> Result
     ) throws -> Result {
-      try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
+      try pool.withReadConnectionBlocking { connection in
+        try connection.withObservation(transactionObservers) { try body(connection) }
+      }
     }
 
     /// Runs an immediate transaction as a barrier, blocking the calling thread until it finishes.
     public func writeBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) throws -> Result {
-      try scheduler.writeBlocking(observers: transactionObservers, body)
+      try pool.withWriteConnectionBlocking { connection in
+        try connection.transaction(observer: transactionObservers, body)
+      }
     }
 
     /// Runs `body` in a concurrent write transaction, blocking the calling thread.
@@ -155,12 +161,14 @@
     public func concurrentWriteBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) throws -> Result {
-      let ((result, region), release) = try scheduler.writeBlockingTrackingConcurrentWriters {
-        transaction in
-        try transaction.recordingDatabaseRegion(body)
+      return try pool.withConcurrentWriteConnectionBlocking { connection in
+        let recorder = OrbitDatabaseRegionRecorder()
+        let result = try connection.transaction(mode: .concurrent, observer: recorder, body)
+        // Publish while this writer loan remains active, before captured cohorts can finish.
+        transactionObservers.didChange(in: recorder.committedRegion)
+        transactionObservers.didCommit(origin: .local, region: recorder.committedRegion)
+        return result
       }
-      publishCommit(of: region, release: release)
-      return result
     }
 
     /// Runs `body` as a barrier with one writer connection outside a transaction, blocking the
@@ -168,7 +176,9 @@
     public func writeWithoutTransactionBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
     ) throws -> Result {
-      try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
+      try pool.withWriteConnectionBlocking { connection in
+        try connection.withObservation(transactionObservers) { try body(connection) }
+      }
     }
 
     /// Registers an observer of reads and successfully committed writes.
@@ -189,16 +199,9 @@
       transactionObservers.subscribe(transactionObserver, region: region)
     }
 
-    // A concurrent write reports what it changed only once it has committed, and holds back the
-    // older writers' barriers until observers have heard of it.
-    private func publishCommit(of region: OrbitDatabaseRegion, release: SQLitePoolWriterRelease) {
-      transactionObservers.didChange(in: region)
-      transactionObservers.didCommit(
-        origin: .local,
-        region: region,
-        activeWriterBarrier: release.activeWriterBarrier
-      )
-      release.finishPublishing()
+    /// Captures active writer loans for observation scheduling, independently of commit values.
+    public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
+      pool.captureActiveWriters()
     }
   }
 #endif

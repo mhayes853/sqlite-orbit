@@ -114,11 +114,11 @@ private enum OrbitValueObservationRegionSource: Sendable {
     _ fetch: OrbitValueObservationFetch,
     in transaction: borrowing SQLiteReadTransaction
   ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
-    let recorder = OrbitValueObservationReadRegionRecorder()
-    let payload = try transaction.withObserver(recorder) {
+    let recorder = OrbitDatabaseRegionRecorder()
+    let payload = try transaction.withObservation(recorder) {
       try fetch(transaction)
     }
-    return (payload, recorder.region)
+    return (payload, recorder.readRegion)
   }
 }
 
@@ -126,20 +126,6 @@ private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
   let externalDependencies: ExternalDependencies?
-}
-
-private final class OrbitValueObservationReadRegionRecorder:
-  OrbitDatabaseTransactionObserver
-{
-  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
-
-  var region: OrbitDatabaseRegion {
-    recordedRegion.withLock { $0 }
-  }
-
-  func databaseDidRead(in region: OrbitDatabaseRegion) {
-    recordedRegion.withLock { $0.formUnion(region) }
-  }
 }
 
 private typealias OrbitValueObservationFetch =
@@ -1368,7 +1354,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
     var refetchCommits: [OrbitDatabaseCommit] = []
     var affectedRegion: OrbitDatabaseRegion?
-    var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
+    var activeWriterBarriers: [any OrbitDatabaseWriterBarrier] = []
     var subscribers = OrbitValueObservationSubscriberRegistry<Value>()
     var deliveries = OrbitValueObservationDeliveryQueue<Value>()
 
@@ -1393,6 +1379,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private let fetch: OrbitValueObservationRuntimeFetch
   private let read: @Sendable () async -> Result<OrbitValueObservationFetchOutput, any Error>
   private let readBlocking: @Sendable () -> Result<OrbitValueObservationFetchOutput, any Error>
+  private let captureActiveWriters: @Sendable () -> (any OrbitDatabaseWriterBarrier)?
   private let refetchController: any OrbitValueObservationRefetchController
   private let reducer: OrbitValueObservationReducer<Value>
   private var events: OrbitValueObservationEvents { reducer.events }
@@ -1416,6 +1403,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
+    self.captureActiveWriters = { database.captureActiveWriters() }
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
       let capture = try externalTracking.capture {
         try regionSource.fetch(fetch, in: transaction, firstFetchRegion: firstFetchRegion)
@@ -1600,7 +1588,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       source: .transaction(commit.origin),
       reason: commit.origin == .local ? .databaseChange : .externalProcessChange,
       affectedRegion: affectedRegion,
-      activeWriterBarrier: commit.activeWriterBarrier
+      activeWriterBarrier: commit.origin == .local ? captureActiveWriters() : nil
     )
   }
 
@@ -1666,7 +1654,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     source: OrbitValueObservationSource,
     reason: OrbitValueObservationRefetchReason,
     affectedRegion: OrbitDatabaseRegion?,
-    activeWriterBarrier: SQLitePoolWriterBarrier?
+    activeWriterBarrier: (any OrbitDatabaseWriterBarrier)?
   ) {
     let action = state.withLock {
       state -> (

@@ -537,7 +537,7 @@
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
 
         try await driver.write { transaction in
-          _ = try transaction.withObserver(scopedObserver) {
+          _ = try transaction.withObservation(scopedObserver) {
             try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
           }
         }
@@ -559,7 +559,7 @@
       case queue, blocking, pool
     }
 
-    private final class NativeConnectionEventRecorder: SQLiteConnectionObserver, Sendable {
+    private final class NativeConnectionEventRecorder: OrbitDatabaseTransactionObserver, Sendable {
       enum Event: Equatable, Sendable {
         case didRead(OrbitDatabaseRegion)
         case didChange(OrbitDatabaseRegion)
@@ -575,24 +575,24 @@
 
       var events: [Event] { recordedEvents.withLock { $0 } }
 
-      func connectionDidRead(in region: OrbitDatabaseRegion) {
+      func databaseDidRead(in region: OrbitDatabaseRegion) {
         recordedEvents.withLock { $0.append(.didRead(region)) }
       }
 
-      func connectionDidChange(in region: OrbitDatabaseRegion) {
+      func databaseDidChange(in region: OrbitDatabaseRegion) {
         recordedEvents.withLock { $0.append(.didChange(region)) }
       }
 
-      func connectionWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+      func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
         recordedEvents.withLock { $0.append(.willCommit) }
         if rejectsCommit { throw TestError() }
       }
 
-      func connectionDidCommit(in region: OrbitDatabaseRegion) {
-        recordedEvents.withLock { $0.append(.didCommit(region)) }
+      func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
+        recordedEvents.withLock { $0.append(.didCommit(commit.region)) }
       }
 
-      func connectionDidRollback() {
+      func databaseDidRollback() {
         recordedEvents.withLock { $0.append(.didRollback) }
       }
     }
