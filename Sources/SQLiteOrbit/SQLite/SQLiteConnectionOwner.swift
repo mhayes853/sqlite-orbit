@@ -209,13 +209,28 @@ public struct SQLiteConnection: ~Copyable {
     try Self.executeScript(sql, on: pointer, library: library)
   }
 
+  /// Lends primitive access for connection-local setup, such as installing functions or collations.
+  ///
+  /// Registrations survive this scope. SQL executes without an explicit transaction; use
+  /// `withReadConnection` or `withWriteConnection` when transaction control is needed.
+  /// A read-only connection remains read-only. Raw setup changes, including PRAGMAs, can persist.
+  public mutating func withConnectionAccess<Result: ~Copyable>(
+    cancellation: SQLiteConnectionCancellation? = nil,
+    _ body: (borrowing SQLiteConnectionAccess) throws -> Result
+  ) throws -> Result {
+    if isReadOnly {
+      return try withReadConnection(cancellation: cancellation) { try body($0.base.access) }
+    }
+    return try withWriteConnection(cancellation: cancellation) { try body($0.base.base.access) }
+  }
+
   /// Lends read access, temporarily enforcing query-only mode on writable connections.
   /// Call the borrowed connection's `transaction` method when a stable snapshot is needed.
   public mutating func withReadConnection<Result: ~Copyable>(
     cancellation: SQLiteConnectionCancellation? = nil,
     _ body: (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try withConnectionAccess(cancellation: cancellation) { observations in
+    try withManagedAccess(cancellation: cancellation) { observations in
       try beginQueryOnly()
       return try withoutTransaction { address, state in
         try body(
@@ -291,7 +306,7 @@ public struct SQLiteConnection: ~Copyable {
         message: "Cannot lend write access to a read-only connection"
       )
     }
-    return try withConnectionAccess(cancellation: cancellation, commitsPendingChanges: true) {
+    return try withManagedAccess(cancellation: cancellation, commitsPendingChanges: true) {
       observations in
       try withoutTransaction { address, state in
         try body(
@@ -307,7 +322,7 @@ public struct SQLiteConnection: ~Copyable {
   }
 
   /// Establishes the invariants shared by every transaction and connection access.
-  private borrowing func withConnectionAccess<Result: ~Copyable>(
+  private borrowing func withManagedAccess<Result: ~Copyable>(
     cancellation: SQLiteConnectionCancellation?,
     commitsPendingChanges: Bool = false,
     _ body: (SQLiteConnectionEvents) throws -> Result

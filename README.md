@@ -876,7 +876,7 @@ function throws fails the statement that called it:
 
 ```swift
 var configuration = SQLiteConfiguration.default
-configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
   arguments in
   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
 }
@@ -898,11 +898,27 @@ struct LongestText: SQLiteAggregateAccumulator {
   }
 }
 
-configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
+configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
 ```
 
+The same registration methods are available on `SQLiteConnectionAccess` for installing on one
+connection. Configuration registration delegates to these methods for every connection it opens:
+
+```swift
+var connection = try SQLiteConnection(path: ":memory:", configuration: .default)
+try connection.withConnectionAccess { access in
+  try access.registerAggregateFunction("longest", argumentCount: 1, LongestText())
+}
+```
+
+Installed callbacks live until replacement or connection close. Aggregate expressions are evaluated
+once per group. Function flags support `.deterministic`, `.directOnly`, and `.innocuous`; the Swift
+bridge supplies UTF-8 encoding. Installation failures throw from connection access, or during opening
+when registered through configuration.
+
 With the `StructuredQueries` trait, collating sequences and functions can also be declared with the
-`@DatabaseCollation` and `@DatabaseFunction` macros, and registered the same way:
+`@DatabaseCollation` and `@DatabaseFunction` macros. Their `register(collation:)` and
+`register(function:)` helpers work on both configuration and connection access:
 
 ```swift
 @DatabaseCollation

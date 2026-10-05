@@ -445,6 +445,36 @@
       #expect(values == ["abab"])
     }
 
+    @Test
+    func structuredQueriesRegistrationsWorkOnAnOpenConnection() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        try connection.register(function: $repeated)
+        try connection.register(function: $longestTitle)
+        try connection.register(collation: $reversedText)
+      }
+      let (repeated, longest, sorted) = try owner.withReadConnection { connection in
+        (
+          try connection.fetchOne(#sql("SELECT repeated('ab', 2)", as: String.self)),
+          try connection.fetchOne(
+            #sql(
+              "SELECT longestTitle(column1) FROM (VALUES ('a'), ('abcd'))",
+              as: String?.self
+            )
+          ),
+          try connection.fetchAll(
+            #sql(
+              "SELECT column1 FROM (VALUES ('ab'), ('ba')) ORDER BY column1 COLLATE reversedText",
+              as: String.self
+            )
+          )
+        )
+      }
+      #expect(repeated == "abab")
+      #expect(longest == "abcd")
+      #expect(sorted == ["ba", "ab"])
+    }
+
     @Table("samples")
     private struct Sample: Equatable, Sendable {
       let id: Int

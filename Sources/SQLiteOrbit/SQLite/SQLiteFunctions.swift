@@ -66,7 +66,7 @@ public struct SQLiteFunctionArguments: ~Copyable, ~Escapable {
 ///   }
 /// }
 ///
-/// configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
+/// configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
 /// ```
 public protocol SQLiteAggregateAccumulator {
   /// Adds one row's arguments to the accumulated state.
@@ -89,7 +89,7 @@ extension SQLiteConfiguration {
   ///
   /// ```swift
   /// var configuration = SQLiteConfiguration.default
-  /// configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+  /// configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
   ///   arguments in
   ///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
   /// }
@@ -101,24 +101,17 @@ extension SQLiteConfiguration {
   /// - Parameters:
   ///   - name: The name SQL calls the function by.
   ///   - argumentCount: How many arguments the function takes, or `nil` for any number.
-  ///   - isDeterministic: Whether the function always returns the same result for the same
-  ///     arguments, which lets SQLite use it in indexes and factor it out of loops.
+  ///   - flags: Function behavior, such as determinism or restrictions on schema use.
+  ///     The Swift bridge always uses UTF-8, regardless of encoding bits in this value.
   ///   - body: Computes the result from the arguments, which are only valid during the call.
   public mutating func registerFunction(
     _ name: String,
     argumentCount: Int?,
-    isDeterministic: Bool = false,
+    flags: SQLiteFunctionFlags = [],
     _ body: @escaping @Sendable (borrowing SQLiteFunctionArguments) throws -> OrbitDatabaseValue
   ) {
-    register(.scalarFunctions, providedBy: \.scalarFunctions) { connection in
-      orbitInstallFunction(
-        name,
-        argumentCount: argumentCount,
-        isDeterministic: isDeterministic,
-        body: body,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
+    register { connection in
+      try connection.registerFunction(name, argumentCount: argumentCount, flags: flags, body)
     }
   }
 
@@ -126,31 +119,114 @@ extension SQLiteConfiguration {
   ///
   /// ```swift
   /// var configuration = SQLiteConfiguration.default
-  /// configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
+  /// configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
   /// ```
   ///
   /// - Parameters:
   ///   - name: The name SQL calls the function by.
   ///   - argumentCount: How many arguments the function takes, or `nil` for any number.
-  ///   - isDeterministic: Whether the function always returns the same result for the same rows.
+  ///   - flags: Function behavior. The Swift bridge always uses UTF-8.
   ///   - makeAccumulator: Makes the empty state for one group, which is called once for every
   ///     group the aggregate runs over.
   public mutating func registerAggregateFunction<Accumulator: SQLiteAggregateAccumulator>(
     _ name: String,
     argumentCount: Int?,
-    isDeterministic: Bool = false,
-    _ makeAccumulator: @escaping @Sendable () -> Accumulator
+    flags: SQLiteFunctionFlags = [],
+    _ makeAccumulator: @autoclosure @escaping @Sendable () -> Accumulator
   ) {
-    let makeAccumulator: SQLiteAggregateAccumulatorFactory = makeAccumulator
-    register(.aggregateFunctions, providedBy: \.aggregateFunctions) { connection in
+    register { connection in
+      try connection.registerAggregateFunction(
+        name,
+        argumentCount: argumentCount,
+        flags: flags,
+        makeAccumulator()
+      )
+    }
+  }
+}
+
+extension SQLiteConnectionAccess {
+  /// Installs a scalar function on this connection.
+  ///
+  /// The connection retains the body until the function is replaced or the connection closes.
+  /// Throwing from the body fails the calling statement with the error's description.
+  ///
+  /// - Parameters:
+  ///   - name: The name SQL calls the function by.
+  ///   - argumentCount: A nonnegative argument count, or `nil` for any number.
+  ///   - flags: Function behavior. Encoding bits are ignored; the bridge always uses UTF-8.
+  ///   - body: Computes a result from arguments valid only during the call.
+  /// - Throws: A `SQLiteFeatureUnavailableError` if the library lacks scalar functions, or a
+  ///   `SQLiteError` if registration fails.
+  public borrowing func registerFunction(
+    _ name: String,
+    argumentCount: Int?,
+    flags: SQLiteFunctionFlags = [],
+    _ body: @escaping @Sendable (borrowing SQLiteFunctionArguments) throws -> OrbitDatabaseValue
+  ) throws {
+    try validateFunction(name, argumentCount: argumentCount)
+    try install(.scalarFunctions, providedBy: sqlite.scalarFunctions) {
+      orbitInstallFunction(
+        name,
+        argumentCount: argumentCount,
+        flags: flags,
+        body: body,
+        on: sqliteConnection,
+        library: sqlite
+      )
+    }
+  }
+
+  /// Installs an aggregate function on this connection.
+  ///
+  /// The connection retains the factory until replacement or close. The expression is evaluated
+  /// once per group, including empty groups, and each group's accumulator is released at its end.
+  ///
+  /// - Parameters:
+  ///   - name: The name SQL calls the aggregate by.
+  ///   - argumentCount: A nonnegative argument count, or `nil` for any number.
+  ///   - flags: Function behavior. Encoding bits are ignored; the bridge always uses UTF-8.
+  ///   - makeAccumulator: Creates fresh state for each group.
+  /// - Throws: A `SQLiteFeatureUnavailableError` if the library lacks aggregates, or a
+  ///   `SQLiteError` if registration fails.
+  public borrowing func registerAggregateFunction<Accumulator: SQLiteAggregateAccumulator>(
+    _ name: String,
+    argumentCount: Int?,
+    flags: SQLiteFunctionFlags = [],
+    _ makeAccumulator: @autoclosure @escaping @Sendable () -> Accumulator
+  ) throws {
+    try validateFunction(name, argumentCount: argumentCount)
+    try install(.aggregateFunctions, providedBy: sqlite.aggregateFunctions) {
       orbitInstallAggregateFunction(
         name,
         argumentCount: argumentCount,
-        isDeterministic: isDeterministic,
+        flags: flags,
         makeAccumulator: makeAccumulator,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
+        on: sqliteConnection,
+        library: sqlite
       )
+    }
+  }
+
+  private borrowing func validateFunction(_ name: String, argumentCount: Int?) throws {
+    guard !name.utf8.contains(0),
+      argumentCount.map({ $0 >= 0 && Int32(exactly: $0) != nil }) ?? true
+    else {
+      throw SQLiteError(code: .misuse, message: "Invalid function name or argument count")
+    }
+  }
+
+  borrowing func install<Group>(
+    _ feature: SQLiteLibraryFeature,
+    providedBy group: Group?,
+    _ body: () -> Int32
+  ) throws {
+    guard group != nil else {
+      throw SQLiteFeatureUnavailableError(libraryName: sqlite.name, feature: feature)
+    }
+    let code = body()
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: sqlite, on: sqliteConnection, code: code, sql: nil)
     }
   }
 }

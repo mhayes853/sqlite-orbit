@@ -11,7 +11,7 @@
 /// var configuration = SQLiteConfiguration.default
 /// configuration.readerCount = 8
 /// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
-/// configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+/// configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
 ///   arguments in
 ///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
 /// }
@@ -211,27 +211,13 @@ public struct SQLiteConnectionSetup: Sendable {
 }
 
 extension SQLiteConfiguration {
-  /// Adds a setup that installs something on every connection, on a build that has the entry
-  /// points to install it with.
-  ///
-  /// - Parameters:
-  ///   - feature: The operation the build has to provide, named by the error it is refused with.
-  ///   - group: The entry points it installs with, which a build without them leaves `nil`.
-  ///   - install: Installs on the connection and returns the build's result code.
-  mutating func register<Group>(
-    _ feature: SQLiteLibraryFeature,
-    providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
-    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
+  mutating func register(
+    _ install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Void
   ) {
     connectionSetups.append(
       SQLiteConnectionSetup { connection in
-        guard connection.sqlite[keyPath: group] != nil else {
-          throw SQLiteFeatureUnavailableError(
-            libraryName: connection.sqlite.name,
-            feature: feature
-          )
-        }
-        return install(connection)
+        try install(connection)
+        return SQLiteResultCode.ok.rawValue
       }
     )
   }
@@ -305,13 +291,7 @@ extension SQLiteConfiguration {
     public mutating func register(
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
-      registerCollation(collation.name) { lhs, rhs in
-        switch collation.compare(lhs, rhs) {
-        case .ascending: .ascending
-        case .same: .same
-        case .descending: .descending
-        }
-      }
+      register { try $0.register(collation: collation) }
     }
 
     /// Registers a scalar function on every connection opened with this configuration.
@@ -328,14 +308,7 @@ extension SQLiteConfiguration {
     ///
     /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-      registerFunction(
-        function.name,
-        argumentCount: function.argumentCount,
-        isDeterministic: function.isDeterministic
-      ) { arguments in
-        var decoder = SQLiteFunctionDecoder(arguments)
-        return try OrbitDatabaseValue(lowering: function.invoke(&decoder))
-      }
+      register { try $0.register(function: function) }
     }
 
     /// Registers an aggregate function on every connection opened with this configuration.
@@ -347,13 +320,44 @@ extension SQLiteConfiguration {
     ///
     /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-      registerAggregateFunction(
+      register { try $0.register(function: function) }
+    }
+  }
+
+  extension SQLiteConnectionAccess {
+    /// Installs a Structured Queries collation on this connection.
+    public borrowing func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) throws {
+      try registerCollation(collation.name) { lhs, rhs in
+        switch collation.compare(lhs, rhs) {
+        case .ascending: .ascending
+        case .same: .same
+        case .descending: .descending
+        }
+      }
+    }
+
+    /// Installs a Structured Queries scalar function on this connection.
+    public borrowing func register(function: some ScalarDatabaseFunction & Sendable) throws {
+      try registerFunction(
         function.name,
         argumentCount: function.argumentCount,
-        isDeterministic: function.isDeterministic
-      ) {
-        StructuredQueriesAggregateAccumulator(function: function)
+        flags: function.isDeterministic ? [.deterministic] : []
+      ) { arguments in
+        var decoder = SQLiteFunctionDecoder(arguments)
+        return try OrbitDatabaseValue(lowering: function.invoke(&decoder))
       }
+    }
+
+    /// Installs a Structured Queries aggregate function on this connection.
+    public borrowing func register(function: some AggregateDatabaseFunction & Sendable) throws {
+      try registerAggregateFunction(
+        function.name,
+        argumentCount: function.argumentCount,
+        flags: function.isDeterministic ? [.deterministic] : [],
+        StructuredQueriesAggregateAccumulator(function: function)
+      )
     }
   }
 

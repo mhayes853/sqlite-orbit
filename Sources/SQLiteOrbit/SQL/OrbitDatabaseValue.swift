@@ -6,7 +6,7 @@
 ///
 /// This is what raw ``SQL`` binds to its parameters, what an ``OrbitDatabaseRow`` reads out of a
 /// column, and what a function registered with
-/// ``SQLiteConfiguration/registerFunction(_:argumentCount:isDeterministic:_:)`` receives and
+/// ``SQLiteConfiguration/registerFunction(_:argumentCount:flags:_:)`` receives and
 /// returns. SQLite has no separate boolean or date types, so a `Bool` is stored as an integer and a
 /// date as text, the way the `Foundation` trait's conveniences spell it.
 ///

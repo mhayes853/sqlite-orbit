@@ -92,8 +92,16 @@
           }
         }
         #expect(error?.primaryCode == .readOnly)
+        try reader.withConnectionAccess { connection in
+          try connection.registerFunction("identity", argumentCount: 1) { $0[0] }
+          #expect(throws: SQLiteError.self) {
+            try connection.execute("INSERT INTO items VALUES (4)")
+          }
+        }
         let ids = try reader.withReadConnection { connection in
-          try connection.fetchAll("SELECT id FROM items ORDER BY id") { $0[0].integerValue ?? 0 }
+          try connection.fetchAll("SELECT identity(id) FROM items ORDER BY id") {
+            $0[0].integerValue ?? 0
+          }
         }
         #expect(ids == [1, 3])
       }

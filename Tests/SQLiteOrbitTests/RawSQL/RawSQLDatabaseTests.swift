@@ -348,7 +348,7 @@
     @Test
     func nativeScalarFunctionsReceiveAndReturnValues() async throws {
       var configuration = SQLiteConfiguration.default
-      configuration.registerFunction("describe", argumentCount: nil, isDeterministic: true) {
+      configuration.registerFunction("describe", argumentCount: nil, flags: [.deterministic]) {
         arguments in
         var parts: [String] = []
         for index in 0..<arguments.count {
@@ -394,10 +394,8 @@
     @Test
     func nativeAggregateFunctionsAccumulateEachGroup() async throws {
       var configuration = SQLiteConfiguration.default
-      configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
-      configuration.registerAggregateFunction("failing", argumentCount: 1) {
-        FailingAccumulator()
-      }
+      configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
+      configuration.registerAggregateFunction("failing", argumentCount: 1, FailingAccumulator())
       let database = try inMemoryDatabase(configuration: configuration)
       try await database.execute(
         sql: """
@@ -424,6 +422,120 @@
         }
       }
       #expect(error?.message?.contains("NativeFunctionFailure") == true)
+    }
+
+    @Test
+    func connectionLocalRegistrationsSurviveLendingAndHonorFlags() throws {
+      let factories = Lock(0)
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        try connection.registerFunction(
+          "echo",
+          argumentCount: 1,
+          flags: [.deterministic, .innocuous]
+        ) { $0[0] }
+        try connection.registerFunction("direct", argumentCount: 0, flags: [.directOnly]) { _ in 1 }
+        try connection.registerAggregateFunction(
+          "longest",
+          argumentCount: 1,
+          {
+            factories.withLock { $0 += 1 }
+            return LongestText()
+          }()
+        )
+        try connection.registerCollation("length") { lhs, rhs in
+          lhs.count < rhs.count ? .ascending : lhs.count > rhs.count ? .descending : .same
+        }
+        try connection.executeScript(
+          """
+          CREATE TABLE words (list INTEGER, word TEXT);
+          INSERT INTO words VALUES (1, 'abc'), (1, 'a'), (2, 'xy');
+          CREATE INDEX echo_index ON words(echo(word));
+          CREATE VIEW forbidden AS SELECT direct();
+          """
+        )
+      }
+      #expect(factories.withLock { $0 } == 0)
+      try owner.withReadConnection { (connection: borrowing SQLiteReadConnection) throws in
+        #expect(
+          try connection.fetchAll(
+            "SELECT echo(word) FROM words ORDER BY word COLLATE length"
+          ) { $0[0].textValue } == ["a", "xy", "abc"]
+        )
+        #expect(
+          try connection.fetchAll(
+            "SELECT longest(word) FROM words GROUP BY list ORDER BY list"
+          ) { $0[0].textValue } == ["abc", "xy"]
+        )
+        #expect(
+          try connection.fetchOne("SELECT longest(word) FROM words WHERE 0") { $0[0] } == .null
+        )
+        #expect(try connection.fetchOne("SELECT direct()") { $0[0] } == 1)
+        #expect(throws: SQLiteError.self) {
+          _ = try connection.fetchOne("SELECT * FROM forbidden") { $0[0] }
+        }
+      }
+      #expect(factories.withLock { $0 } == 3)
+      // Replacing a function also updates a statement cached under its previous definition.
+      try owner.withConnectionAccess { connection in
+        try connection.registerFunction("direct", argumentCount: 0) { _ in 2 }
+      }
+      let replaced = try owner.withReadConnection { connection in
+        try connection.fetchOne("SELECT direct()") { $0[0] }
+      }
+      #expect(replaced == 2)
+    }
+
+    @Test
+    func connectionLocalRegistrationReportsMissingCapabilities() throws {
+      var configuration = SQLiteConfiguration.default
+      configuration.library.scalarFunctions = nil
+      configuration.library.aggregateFunctions = nil
+      configuration.library.collations = nil
+      var owner = try SQLiteConnection(path: ":memory:", configuration: configuration)
+      try owner.withConnectionAccess { connection in
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .scalarFunctions
+          )
+        ) { try connection.registerFunction("echo", argumentCount: 1) { $0[0] } }
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .aggregateFunctions
+          )
+        ) { try connection.registerAggregateFunction("longest", argumentCount: 1, LongestText()) }
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .collations
+          )
+        ) { try connection.registerCollation("same") { _, _ in .same } }
+      }
+    }
+
+    @Test
+    func invalidFunctionRegistrationsThrowInsteadOfTrappingOrTruncating() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        for count in [Int.min, -1, Int.max] {
+          #expect(throws: SQLiteError.self) {
+            try connection.registerFunction("invalid", argumentCount: count) { _ in nil }
+          }
+          #expect(throws: SQLiteError.self) {
+            try connection.registerAggregateFunction("invalid", argumentCount: count, LongestText())
+          }
+        }
+        for name in ["invalid\u{0}suffix", String(repeating: "x", count: 256)] {
+          #expect(throws: SQLiteError.self) {
+            try connection.registerFunction(name, argumentCount: 0) { _ in nil }
+          }
+        }
+        #expect(throws: SQLiteError.self) {
+          try connection.registerCollation("invalid\u{0}suffix") { _, _ in .same }
+        }
+      }
     }
 
     // MARK: - Collations
