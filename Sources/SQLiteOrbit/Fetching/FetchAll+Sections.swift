@@ -58,9 +58,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<Element, String?>(
-          query: orbitSectionedQuery(Element.all.asSelect(), sectionBy: sectioning)
-        ),
+        request: Element.all.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -93,9 +91,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<S.From, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -126,9 +122,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -162,9 +156,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -193,9 +185,7 @@
         return try await load(statement, database: database, scheduler: scheduler)
       }
       return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<S.From, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -226,9 +216,7 @@
         return try await load(statement, database: database, scheduler: scheduler)
       }
       return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -262,9 +250,7 @@
         return try await load(statement, database: database, scheduler: scheduler)
       }
       return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectioned { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -356,31 +342,6 @@
         scheduler: scheduler
       )
     }
-  }
-
-  /// Rewrites a select statement to order by the section expression and select it alongside every
-  /// column of the statement's table.
-  private func orbitSectionedQuery<S: SelectStatement>(
-    _ statement: S,
-    sectionBy sectioning: _OrbitFetchSectioning<String?>
-  ) -> QueryFragment where S.QueryValue == (), S.Joins == () {
-    let sectioned: Select<(S.From, String?), S.From, ()> =
-      orbitSectionedColumns(of: S.From.self, sectioning) + statement.asSelect()
-    return sectioned.query
-  }
-
-  /// Rewrites a statement to order by the section expression and select it alongside its own
-  /// columns.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Table>(
-    _ statement: Select<V, From, (repeat each J)>,
-    sectionBy sectioning: _OrbitFetchSectioning<String?>
-  ) -> QueryFragment {
-    let ordered: Select<V, From, (repeat each J)> =
-      orbitSectionedOrder(of: From.self, sectioning) + statement
-    let sectioned: Select<(V, String?), From, (repeat each J)> =
-      ordered + orbitSectionedColumn(of: From.self, sectioning)
-    return sectioned.query
   }
 
   #if canImport(SwiftUI)

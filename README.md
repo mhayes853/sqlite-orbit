@@ -1644,6 +1644,33 @@ Keys may be any `Hashable` type, including optionals. Sections follow first appe
 sections retain their input order, and `sections.elements` preserves the original flat array.
 The grouping closure may throw; empty input produces no sections.
 
+A Structured Queries statement can produce a reusable request with a typed section key:
+
+```swift
+let request = Reminder.order(by: \.title).sectioned(by: \.priority)
+let sections = try await database.read { try request.fetch($0) }
+let observation = OrbitValueObservation.tracking { try request.fetch($0) }
+@Fetch(request, database: database) var observedSections = sections
+```
+
+`sectioned(by:)` selects the key alongside each element and orders by it before the query's existing
+ordering. The closure form accepts ordering terms such as `.desc(nulls: .last)` and, for explicitly
+projected joins, can receive every joined table's columns. Keys keep their decoded type and use Swift
+`Hashable` equality; sectioning retains result rows rather than introducing SQL `GROUP BY` aggregation.
+Limits apply after section ordering. With `DISTINCT`, uniqueness includes the selected section key.
+Multi-column elements use an `@Selection` type; plain tuple elements are not supported.
+
+For a statement that already selects `(element, key)`, `OrbitSectionedQuery(statement)` preserves its
+ordering. Raw SQL can use the same grouping operation without the Structured Queries trait:
+
+```swift
+let sections = try await database.read { transaction in
+  try transaction.fetchSections("SELECT title, priority FROM reminders ORDER BY title") { row in
+    (element: row[0].textValue, key: row[1].textValue)
+  }
+}
+```
+
 `@FetchAll` can have the database group its rows. The `sectionBy:` expression is selected alongside
 each row and ordered ahead of the query's own ordering, so one pass over the result set both
 decodes the rows and lays out the sections:

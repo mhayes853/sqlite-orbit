@@ -343,6 +343,35 @@
       #expect(region == OrbitDatabaseRegion(columns: ["id", "title"], in: "items"))
     }
 
+    @Test
+    func rawSectionFetchingPreservesOrderAndPropagatesErrors() throws {
+      let database = try inMemoryDatabase()
+      let sql: SQL = "SELECT column1, column2 FROM (VALUES ('A', 2), ('B', NULL), ('C', 2))"
+      try database.readBlocking { transaction in
+        var calls = 0
+        let sections = try transaction.fetchSections(sql) { row in
+          calls += 1
+          return (row[0].textValue, row[1].integerValue)
+        }
+        #expect(calls == 3)
+        #expect(sections.elements == ["A", "B", "C"])
+        #expect(sections.sectionNames == [2, nil])
+        #expect(sections[sectionName: 2]?.map { $0 } == ["A", "C"])
+        let empty = try transaction.fetchSections(sql + " WHERE 0") { ($0[0], $0[1].integerValue) }
+        #expect(empty.isEmpty && empty.elements.isEmpty)
+        #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchSections("SELECT * FROM missing_table") { ($0[0], 0) }
+        }
+        #expect(throws: NativeFunctionFailure.self) {
+          _ = try transaction.fetchSections(sql) { _ -> (Int, Int) in throw NativeFunctionFailure()
+          }
+        }
+        // A throwing transform releases its cursor, leaving the cached statement reusable.
+        let retried = try transaction.fetchSections(sql) { ($0[0].textValue, $0[1].integerValue) }
+        #expect(retried == sections)
+      }
+    }
+
     // MARK: - Functions
 
     @Test
