@@ -7,11 +7,7 @@
   struct OrbitDatabaseWriterBarrierTests {
     @Test
     func aCustomDatabaseCoordinatesRefetchesUsingOnlyPublicAPIs() async throws {
-      let queue = try SQLiteQueue(path: ":memory:")
-      try await queue.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      }
-      let database = PublicBarrierDatabase(queue)
+      let database = AnnouncingTestDatabase(try await itemsDatabase())
       let values = TestRecorder<Int64>()
       let fetches = TestCounter()
       let subscription = try OrbitValueObservation<Int64>
@@ -36,9 +32,7 @@
         later.complete()
       }
       database.setActiveWriters(first)
-      try await database.write { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1)")
-      }
+      try await insertItems(1, into: database)
       // Changing the provider after commit delivery cannot extend the captured cohort.
       database.setActiveWriters(later)
       try await waitUntil { first.waitCount == 1 }
@@ -52,15 +46,20 @@
       #expect(later.waitCount == 0)
 
       // A subsequent commit captures the new cohort independently.
-      try await database.write { transaction in
-        try transaction.execute("INSERT INTO items VALUES (2)")
-      }
+      try await insertItems(2, into: database)
       try await waitUntil { later.waitCount == 1 }
       #expect(fetches.value == 2)
       later.complete()
       try await values.waitForCount(3)
       #expect(values.values == [0, 1, 2])
       #expect(fetches.value == 3)
+
+      // Without an active cohort, coalesced refetching can proceed immediately.
+      database.setActiveWriters(nil)
+      try await insertItems(3, into: database)
+      try await values.waitForCount(4)
+      #expect(values.values == [0, 1, 2, 3])
+      #expect(fetches.value == 4)
     }
 
     @Test
@@ -70,8 +69,8 @@
     }
   }
 
-  // The provider, barrier, and observer adapter below compile against an ordinary public import.
-  // Their synchronization storage belongs to the test, independently of native pool internals.
+  // This custom barrier and the shared AnnouncingTestDatabase use only public library APIs.
+  // The asynchronous wait state belongs to the test, independently of native pool internals.
   private final class PublicObservationBarrier: OrbitDatabaseWriterBarrier, @unchecked Sendable {
     private let lock = NSLock()
     private var isActive = true
@@ -103,86 +102,4 @@
     }
   }
 
-  private final class PublicBarrierDatabase: OrbitObservableDatabase, @unchecked Sendable {
-    private let base: SQLiteQueue
-    private let lock = NSLock()
-    private var activeWriters: (any OrbitDatabaseWriterBarrier)?
-
-    init(_ base: SQLiteQueue) { self.base = base }
-
-    func setActiveWriters(_ barrier: (any OrbitDatabaseWriterBarrier)?) {
-      lock.withLock { activeWriters = barrier }
-    }
-
-    func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
-      lock.withLock { activeWriters }
-    }
-
-    func subscribe(
-      transactionObserver: any OrbitDatabaseTransactionObserver,
-      region: OrbitDatabaseRegion
-    ) throws -> OrbitRegionSubscription {
-      try base.subscribe(
-        transactionObserver: AfterCommitObserver(transactionObserver),
-        region: region
-      )
-    }
-
-    func read<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) async throws -> Result {
-      try await base.read(body)
-    }
-
-    func readBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
-    ) throws -> Result {
-      try base.readBlocking(body)
-    }
-
-    func readWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.readWithoutTransaction(body)
-    }
-
-    func readWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
-    ) throws -> Result {
-      try base.readWithoutTransactionBlocking(body)
-    }
-
-    func write<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) async throws -> Result {
-      try await base.write(body)
-    }
-
-    func writeBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
-    ) throws -> Result {
-      try base.writeBlocking(body)
-    }
-
-    func writeWithoutTransaction<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) async throws -> Result {
-      try await base.writeWithoutTransaction(body)
-    }
-
-    func writeWithoutTransactionBlocking<Result: Sendable>(
-      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-    ) throws -> Result {
-      try base.writeWithoutTransactionBlocking(body)
-    }
-  }
-
-  private struct AfterCommitObserver: OrbitDatabaseTransactionObserver {
-    let base: any OrbitDatabaseTransactionObserver
-
-    init(_ base: any OrbitDatabaseTransactionObserver) { self.base = base }
-
-    // Omitting will-commit forces observation to fetch after the fact, as concurrent drivers do.
-    func databaseDidCommit(_ commit: OrbitDatabaseCommit) { base.databaseDidCommit(commit) }
-  }
 #endif

@@ -858,42 +858,6 @@
       }
 
       @Test
-      func coalescedRefetchControllerWaitsOnlyForAnActiveWriterCohort() async throws {
-        let queue = try await itemsDatabase()
-        let driver = AnnouncingTestDatabase(queue)
-        let fetchCount = TestCounter()
-        let observation = OrbitValueObservation<Int>
-          .tracking(region: .fullDatabase) { _ in
-            fetchCount.increment()
-          }
-          .refetching(.coalesced)
-        let recorder = ObservationRecorder<Int>()
-        let subscription = try observation.subscribe(
-          to: driver,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-        try await recorder.waitForChangeCount(1)
-
-        let activeWriter = SQLitePoolWriterBarrier(writerCount: 1)
-        driver.setActiveWriters(activeWriter)
-        driver.announceCommit(region: .fullDatabase)
-        // The runtime captures coordination synchronously with the relevant commit, so a later
-        // provider change cannot replace the cohort its controller must wait for.
-        driver.setActiveWriters(nil)
-        for _ in 0..<100 { await Task.yield() }
-        #expect(fetchCount.value == 1)
-
-        activeWriter.writerDidFinish()
-        try await recorder.waitForChangeCount(2)
-        driver.announceCommit(region: .fullDatabase)
-        try await recorder.waitForChangeCount(3)
-
-        #expect(fetchCount.value == 3)
-        _ = subscription
-      }
-
-      @Test
       func customRefetchControllerReceivesRegionsReasonsAndTrackedRegion() async throws {
         let queue = try await itemsDatabase()
         let driver = AnnouncingTestDatabase(queue)

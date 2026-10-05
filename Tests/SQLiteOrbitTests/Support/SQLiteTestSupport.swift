@@ -176,6 +176,24 @@
     try await withTemporaryDirectory(label) { try await body(TestDatabaseFile(in: $0)) }
   }
 
+  // MARK: - The process-wide default database
+
+  /// Runs `body` with `database` as the process-wide default, and puts back whatever was the
+  /// default before once `body` returns.
+  ///
+  /// Anything that reads the default while `body` runs, in any task, sees `database`, so a suite
+  /// that calls this must be serialized.
+  func withProcessDefaultDatabase<Result>(
+    _ database: (any OrbitObservableDatabase)?,
+    isolation: isolated (any Actor)? = #isolation,
+    _ body: () async throws -> Result
+  ) async throws -> Result {
+    let previous = OrbitDefaultDatabase.currentIfConfigured
+    OrbitDefaultDatabase.set(database)
+    defer { OrbitDefaultDatabase.set(previous) }
+    return try await body()
+  }
+
   // MARK: - Raw SQL
 
   // Tests about a driver rather than about the queries it runs set up, and look at, their

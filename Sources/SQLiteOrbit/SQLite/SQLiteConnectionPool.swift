@@ -4,6 +4,9 @@
 /// Writer loans are barriers by default; explicit concurrent loans may overlap reads and other
 /// concurrent writers. Configure a journal mode that supports the intended concurrency before
 /// readers open, using `writerConfiguration` or `writerSetupSQL`.
+///
+/// Borrowed connections cannot escape their closure. Every loan ends after connection cleanup,
+/// including when the closure throws.
 public final class SQLiteConnectionPool: OrbitSuspendable {
   private let scheduler: SQLitePoolScheduler
   private let writerSuspensions: [SQLiteWriteSuspension]
@@ -58,9 +61,6 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a reader, waiting behind earlier barrier writes.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
   public func withReadConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
@@ -68,9 +68,6 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a writer after earlier loans finish, holding later loans until it returns.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
   public func withWriteConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
@@ -78,19 +75,14 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a writer that may overlap readers and other concurrent writer loans.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
+  /// Choose a transaction mode that supports concurrent writers.
   public func withConcurrentWriteConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.concurrentWriteWithoutTransaction(body)
+    try await scheduler.writeWithoutTransaction(concurrent: true, body)
   }
 
   /// Lends a reader, blocking the calling thread. Never call from a cooperative task.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
   public func withReadConnectionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
@@ -98,9 +90,6 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a writer as a barrier, blocking the calling thread. Never call from a cooperative task.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
   public func withWriteConnectionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
@@ -108,13 +97,11 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a concurrent writer, blocking the calling thread. Never call from a cooperative task.
-  ///
-  /// The connection cannot escape `body`. An error releases the loan after the connection
-  /// cleans up its access. Concurrent writer loans require an appropriate transaction mode.
+  /// Choose a transaction mode that supports concurrent writers.
   public func withConcurrentWriteConnectionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try scheduler.concurrentWriteWithoutTransactionBlocking(body)
+    try scheduler.writeWithoutTransactionBlocking(concurrent: true, body)
   }
 
   /// Captures the finite set of writer loans active now. Later loans do not extend the wait.

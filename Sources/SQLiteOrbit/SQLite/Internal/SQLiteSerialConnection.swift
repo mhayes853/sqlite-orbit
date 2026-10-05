@@ -165,9 +165,10 @@ extension SQLiteReadConnection {
     _ body: () throws -> Result
   ) rethrows -> Result {
     if let suspension {
-      return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
-        return try body()
-      }
+      return try withStatementExecution(
+        suspension.step(of: sqlite, on: sqliteConnection),
+        perform: body
+      )
     }
     return try body()
   }
@@ -180,9 +181,10 @@ extension SQLiteWriteConnection {
     _ body: () throws -> Result
   ) rethrows -> Result {
     if let suspension {
-      return try withStatementExecution(suspension.step(of: sqlite, on: sqliteConnection)) {
-        return try body()
-      }
+      return try withStatementExecution(
+        suspension.step(of: sqlite, on: sqliteConnection),
+        perform: body
+      )
     }
     return try body()
   }

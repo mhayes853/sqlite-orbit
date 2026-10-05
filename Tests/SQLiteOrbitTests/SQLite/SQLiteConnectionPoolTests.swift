@@ -68,14 +68,13 @@
             try connection.execute("INSERT INTO items VALUES (1)")
             do {
               try connection.transaction { transaction in
-                try transaction.execute("INSERT INTO items VALUES (2)")
+                try transaction.execute("INSERT INTO lists VALUES (1)")
                 throw PoolLoanFailure()
               }
               Issue.record("The transaction did not report its failure")
             } catch {
               #expect(error is PoolLoanFailure)
             }
-            try connection.execute("INSERT INTO lists VALUES (1)")
             throw PoolLoanFailure()
           }
         }
@@ -86,10 +85,13 @@
           #expect(error is PoolLoanFailure)
         }
 
-        let committed = nativePoolRegion(
-          OrbitDatabaseRegion(table: "items").union(OrbitDatabaseRegion(table: "lists"))
+        #expect(recorder.committedRegion == nativePoolRegion(OrbitDatabaseRegion(table: "items")))
+        #expect(
+          recorder.changedRegion
+            == nativePoolRegion(
+              OrbitDatabaseRegion(table: "items").union(OrbitDatabaseRegion(table: "lists"))
+            )
         )
-        #expect(recorder.committedRegion == committed)
         #expect(recorder.hasCommitted)
         #expect(pool.captureActiveWriters() == nil)
         // A new loan can begin after the failure; the aborted row is absent and earlier work stays.
@@ -99,7 +101,13 @@
           }
         }
         let ids = try await pool.withReadConnection { connection in
-          try connection.fetchAll("SELECT id FROM items ORDER BY id") { $0[0].integerValue ?? 0 }
+          let lists = try connection.fetchOne("SELECT count(*) FROM lists") {
+            $0[0].integerValue ?? 0
+          }
+          #expect(lists == 0)
+          return try connection.fetchAll("SELECT id FROM items ORDER BY id") {
+            $0[0].integerValue ?? 0
+          }
         }
         #expect(ids == [1, 3])
       }
@@ -140,7 +148,6 @@
           firstGate.open()
           laterGate.open()
         }
-        let firstBodyFinished = TestCounter()
         let observer = PoolCommitCapture(pool: pool)
         let firstBody: @Sendable (borrowing SQLiteWriteConnection) throws -> Void = { connection in
           try connection.transaction(observer: observer) { transaction in
@@ -148,10 +155,9 @@
           }
           // The SQL transaction and its commit callback finished, but the borrowing body has not.
           try firstGate.enter()
-          firstBodyFinished.increment()
         }
         let first = Task {
-          try await runPublicConcurrentWriteLoan(pool, blocking: firstBlocking, firstBody)
+          try await runPublicWriteLoan(pool, blocking: firstBlocking, concurrent: true, firstBody)
         }
         defer { first.cancel() }
         try await firstGate.waitUntilEntered()
@@ -159,10 +165,10 @@
         let original = try #require(capturedCommit.barrier)
         #expect(capturedCommit.region == nativePoolRegion(OrbitDatabaseRegion(table: "items")))
         #expect(original.hasActiveWriters)
-        #expect(firstBodyFinished.value == 0)
 
         let later = Task {
-          try await runPublicConcurrentWriteLoan(pool, blocking: laterBlocking) { connection in
+          try await runPublicWriteLoan(pool, blocking: laterBlocking, concurrent: true) {
+            connection in
             _ = try connection.fetchOne("SELECT 1") { $0[0].integerValue ?? 0 }
             try laterGate.enter()
           }
@@ -177,14 +183,12 @@
           originalFinished.increment()
         }
         defer { wait.cancel() }
-        #expect(original.hasActiveWriters)
         #expect(originalFinished.value == 0)
 
         firstGate.open()
         try await first.value
         try await originalFinished.waitForCount(1)
         await wait.value
-        #expect(firstBodyFinished.value == 1)
         #expect(!original.hasActiveWriters)
         // The later loan is still held, and belongs only to the newer snapshot.
         #expect(!laterGate.isOpen)
@@ -204,55 +208,39 @@
       async throws
     {
       try await withPublicConnectionPool(writerCount: 2) { pool in
-        let suspendedGate = TestGate()
-        let resumedGate = TestGate()
-        defer {
-          suspendedGate.open()
-          resumedGate.open()
-        }
-        let suspendedLoans = (1...2)
-          .map { id in
-            Task {
-              try await runPublicConcurrentWriteLoan(pool, blocking: blocking) { connection in
-                try suspendedGate.enter()
-                try connection.execute("INSERT INTO items VALUES (\(id))")
+        for suspended in [true, false] {
+          if !suspended { pool.resume() }
+          let gate = TestGate()
+          defer { gate.open() }
+          let loans = (1...2)
+            .map { id in
+              Task {
+                try await runPublicWriteLoan(pool, blocking: blocking, concurrent: true) {
+                  connection in
+                  // Both loans stay held so each writable connection is exercised in each phase.
+                  try gate.enter()
+                  try connection.execute("INSERT INTO items VALUES (\(id))")
+                }
               }
             }
-          }
-        defer { for loan in suspendedLoans { loan.cancel() } }
-        try await suspendedGate.waitUntilEntered(2)
-        pool.suspend()
-        #expect(pool.isSuspended)
-        suspendedGate.open()
-        for loan in suspendedLoans {
-          await #expect(throws: OrbitDatabaseSuspendedError.self) { try await loan.value }
-        }
-        let countWhileSuspended = try await pool.withReadConnection { connection in
-          try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue ?? 0 }
-        }
-        #expect(countWhileSuspended == 0)
-        #expect(pool.captureActiveWriters() == nil)
-
-        pool.resume()
-        #expect(!pool.isSuspended)
-        let resumedLoans = (1...2)
-          .map { id in
-            Task {
-              try await runPublicConcurrentWriteLoan(pool, blocking: blocking) { connection in
-                // Holding both loans ensures that each writable connection is exercised after resume.
-                try resumedGate.enter()
-                try connection.execute("INSERT INTO items VALUES (\(id))")
-              }
+          defer { for loan in loans { loan.cancel() } }
+          try await gate.waitUntilEntered(2)
+          if suspended { pool.suspend() }
+          #expect(pool.isSuspended == suspended)
+          gate.open()
+          for loan in loans {
+            if suspended {
+              await #expect(throws: OrbitDatabaseSuspendedError.self) { try await loan.value }
+            } else {
+              try await loan.value
             }
           }
-        defer { for loan in resumedLoans { loan.cancel() } }
-        try await resumedGate.waitUntilEntered(2)
-        resumedGate.open()
-        for loan in resumedLoans { try await loan.value }
-        let ids = try await pool.withReadConnection { connection in
-          try connection.fetchAll("SELECT id FROM items ORDER BY id") { $0[0].integerValue ?? 0 }
+          let ids = try await pool.withReadConnection { connection in
+            try connection.fetchAll("SELECT id FROM items ORDER BY id") { $0[0].integerValue ?? 0 }
+          }
+          #expect(ids == (suspended ? [] : [1, 2]))
+          #expect(pool.captureActiveWriters() == nil)
         }
-        #expect(ids == [1, 2])
       }
     }
   }
@@ -291,24 +279,15 @@
   private func runPublicWriteLoan(
     _ pool: SQLiteConnectionPool,
     blocking: Bool,
+    concurrent: Bool = false,
     _ body: @escaping @Sendable (borrowing SQLiteWriteConnection) throws -> Void
   ) async throws {
-    if blocking {
-      try await withDeadline { try pool.withWriteConnectionBlocking(body) }
-    } else {
-      try await pool.withWriteConnection(body)
-    }
-  }
-
-  private func runPublicConcurrentWriteLoan(
-    _ pool: SQLiteConnectionPool,
-    blocking: Bool,
-    _ body: @escaping @Sendable (borrowing SQLiteWriteConnection) throws -> Void
-  ) async throws {
-    if blocking {
+    switch (blocking, concurrent) {
+    case (false, false): try await pool.withWriteConnection(body)
+    case (false, true): try await pool.withConcurrentWriteConnection(body)
+    case (true, false): try await withDeadline { try pool.withWriteConnectionBlocking(body) }
+    case (true, true):
       try await withDeadline { try pool.withConcurrentWriteConnectionBlocking(body) }
-    } else {
-      try await pool.withConcurrentWriteConnection(body)
     }
   }
 

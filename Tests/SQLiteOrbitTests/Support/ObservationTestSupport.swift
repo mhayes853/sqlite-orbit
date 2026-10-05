@@ -3,7 +3,8 @@
     import StructuredQueriesSQLite
   #endif
 
-  @testable import SQLiteOrbit
+  import Foundation
+  import SQLiteOrbit
 
   // MARK: - The items table
 
@@ -83,16 +84,18 @@
   /// invalidations while an observation is in whatever state it arranged. It also counts the
   /// observers registered on it, which is the only way to tell how many subscriptions a group of
   /// observations took out.
-  final class AnnouncingTestDatabase: OrbitObservableDatabase {
+  // This provider deliberately compiles against an ordinary import, just like a custom driver.
+  final class AnnouncingTestDatabase: OrbitObservableDatabase, @unchecked Sendable {
     let defaultIdentifier: OrbitDatabaseIdentifier
 
     private let base: SQLiteQueue
-    private let observers = OrbitDatabaseTransactionObservers()
-    private let subscriptions = TestCounter()
-    private let activeWriters = Lock<(any OrbitDatabaseWriterBarrier)?>(nil)
+    private let lock = NSLock()
+    private var observers: [UUID: any OrbitDatabaseTransactionObserver] = [:]
+    private var subscriptions = 0
+    private var activeWriters: (any OrbitDatabaseWriterBarrier)?
 
     /// How many observers have been registered, whether or not they are still registered.
-    var subscriptionCount: Int { self.subscriptions.value }
+    var subscriptionCount: Int { lock.withLock { subscriptions } }
 
     init(_ base: SQLiteQueue) {
       self.base = base
@@ -100,11 +103,11 @@
     }
 
     func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
-      activeWriters.withLock { $0 }
+      lock.withLock { activeWriters }
     }
 
     func setActiveWriters(_ barrier: (any OrbitDatabaseWriterBarrier)?) {
-      activeWriters.withLock { $0 = barrier }
+      lock.withLock { activeWriters = barrier }
     }
 
     func read<Result: Sendable>(
@@ -134,20 +137,22 @@
     func write<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) async throws -> Result {
-      let (result, region) = try await self.base.write { transaction in
-        try transaction.recordingDatabaseRegion(body)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let result = try await self.base.write { transaction in
+        try transaction.withObservation(recorder) { try body(transaction) }
       }
-      self.announceCommit(region: region)
+      self.announceCommit(region: recorder.changedRegion)
       return result
     }
 
     func writeBlocking<Result: Sendable>(
       _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
     ) throws -> Result {
-      let (result, region) = try self.base.writeBlocking { transaction in
-        try transaction.recordingDatabaseRegion(body)
+      let recorder = OrbitDatabaseRegionRecorder()
+      let result = try self.base.writeBlocking { transaction in
+        try transaction.withObservation(recorder) { try body(transaction) }
       }
-      self.announceCommit(region: region)
+      self.announceCommit(region: recorder.changedRegion)
       return result
     }
 
@@ -167,8 +172,16 @@
       transactionObserver: any OrbitDatabaseTransactionObserver,
       region: OrbitDatabaseRegion
     ) throws -> OrbitRegionSubscription {
-      self.subscriptions.increment()
-      return self.observers.subscribe(transactionObserver, region: region)
+      let id = UUID()
+      lock.withLock {
+        subscriptions += 1
+        observers[id] = transactionObserver
+      }
+      // Like a local driver, report every commit regardless of the advertised region.
+      return OrbitRegionSubscription(region: region) { [weak self] in
+        guard let self else { return }
+        _ = self.lock.withLock { self.observers.removeValue(forKey: id) }
+      }
     }
 
     /// Tells every observer that a transaction changed `region` and committed.
@@ -176,29 +189,10 @@
       region: OrbitDatabaseRegion,
       origin: OrbitDatabaseTransactionOrigin = .local
     ) {
-      self.observers.didChange(in: region)
-      self.observers.didCommit(
-        origin: origin,
-        region: region
-      )
+      let callbacks = lock.withLock { Array(observers.values) }
+      for observer in callbacks { observer.databaseDidChange(in: region) }
+      let commit = OrbitDatabaseCommit(origin: origin, region: region)
+      for observer in callbacks { observer.databaseDidCommit(commit) }
     }
-  }
-
-  // MARK: - The process-wide default database
-
-  /// Runs `body` with `database` as the process-wide default, and puts back whatever was the
-  /// default before once `body` returns.
-  ///
-  /// Anything that reads the default while `body` runs, in any task, sees `database`, so a suite
-  /// that calls this must be serialized.
-  func withProcessDefaultDatabase<Result>(
-    _ database: (any OrbitObservableDatabase)?,
-    isolation: isolated (any Actor)? = #isolation,
-    _ body: () async throws -> Result
-  ) async throws -> Result {
-    let previous = OrbitDefaultDatabase.currentIfConfigured
-    OrbitDefaultDatabase.set(database)
-    defer { OrbitDefaultDatabase.set(previous) }
-    return try await body()
   }
 #endif

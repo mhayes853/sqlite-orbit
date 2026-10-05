@@ -106,8 +106,10 @@
         let recorder = OrbitDatabaseRegionRecorder()
         let result = try connection.transaction(mode: .concurrent, observer: recorder, body)
         // Publish while this writer loan remains active, before captured cohorts can finish.
-        transactionObservers.didChange(in: recorder.committedRegion)
-        transactionObservers.didCommit(origin: .local, region: recorder.committedRegion)
+        transactionObservers.databaseDidChange(in: recorder.committedRegion)
+        transactionObservers.databaseDidCommit(
+          .init(origin: .local, region: recorder.committedRegion)
+        )
         return result
       }
     }
@@ -165,8 +167,10 @@
         let recorder = OrbitDatabaseRegionRecorder()
         let result = try connection.transaction(mode: .concurrent, observer: recorder, body)
         // Publish while this writer loan remains active, before captured cohorts can finish.
-        transactionObservers.didChange(in: recorder.committedRegion)
-        transactionObservers.didCommit(origin: .local, region: recorder.committedRegion)
+        transactionObservers.databaseDidChange(in: recorder.committedRegion)
+        transactionObservers.databaseDidCommit(
+          .init(origin: .local, region: recorder.committedRegion)
+        )
         return result
       }
     }

@@ -218,7 +218,7 @@ public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter, OrbitSuspe
   var defaultIdentifier: OrbitDatabaseIdentifier { get }
 }
 
-final class OrbitDatabaseTransactionObservers: Sendable {
+final class OrbitDatabaseTransactionObservers: OrbitDatabaseTransactionObserver {
   private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
 
   /// Registers `observer` on behalf of a database whose transactions all happen in this process,
@@ -233,57 +233,35 @@ final class OrbitDatabaseTransactionObservers: Sendable {
     }
   }
 
-  func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
+  func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
     for observer in observers.withLock({ $0.all }) {
       try observer.databaseWillCommit(transaction)
     }
   }
 
-  func didRead(in region: OrbitDatabaseRegion) {
+  func databaseDidRead(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidRead(in: region)
     }
   }
 
-  func didChange(in region: OrbitDatabaseRegion) {
+  func databaseDidChange(in region: OrbitDatabaseRegion) {
     guard !region.isEmpty else { return }
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidChange(in: region)
     }
   }
 
-  func didCommit(
-    origin: OrbitDatabaseTransactionOrigin,
-    region: OrbitDatabaseRegion
-  ) {
-    let commit = OrbitDatabaseCommit(
-      origin: origin,
-      region: region
-    )
+  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidCommit(commit)
     }
   }
 
-  func didRollback() {
+  func databaseDidRollback() {
     for observer in observers.withLock({ $0.all }) {
       observer.databaseDidRollback()
     }
   }
-}
-
-extension OrbitDatabaseTransactionObservers: OrbitDatabaseTransactionObserver {
-  func databaseDidRead(in region: OrbitDatabaseRegion) { didRead(in: region) }
-  func databaseDidChange(in region: OrbitDatabaseRegion) { didChange(in: region) }
-  func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    try willCommit(transaction)
-  }
-  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-    didCommit(
-      origin: commit.origin,
-      region: commit.region
-    )
-  }
-  func databaseDidRollback() { didRollback() }
 }

@@ -102,7 +102,7 @@
     @Test
     func scopedObserversSeeTransactionOrderingRollbackAndStatementCommits() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let observer = OwnerConnectionRecorder()
+      let observer = TransactionEventRecorder(countOnWillCommit: "SELECT count(*) FROM items")
       let items = OrbitDatabaseRegion(table: "items")
       try owner.withWriteConnection { connection in
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
@@ -110,7 +110,8 @@
           try connection.transaction { transaction in
             try transaction.execute("INSERT INTO items VALUES (1)")
           }
-          #expect(observer.events == [.changed(items), .willCommit(1), .committed(items)])
+          #expect(observer.events == [.didChange(items), .willCommit(1), .didCommit(.local)])
+          #expect(observer.commits.map(\.region) == [items])
           #expect(observer.readRegions.contains { !$0.isDisjoint(with: items) })
 
           observer.removeAll()
@@ -120,11 +121,12 @@
               throw OwnerTestFailure()
             }
           }
-          #expect(observer.events == [.changed(items), .rolledBack])
+          #expect(observer.events == [.didChange(items), .didRollback])
 
           observer.removeAll()
           try connection.execute("INSERT INTO items VALUES (3)")
-          #expect(observer.events == [.changed(items), .committed(items)])
+          #expect(observer.events == [.didChange(items), .didCommit(.local)])
+          #expect(observer.commits.map(\.region) == [items])
         }
         observer.removeAll()
         try connection.execute("INSERT INTO items VALUES (4)")
@@ -139,21 +141,31 @@
       #expect(observer.readRegions.contains { !$0.isDisjoint(with: items) })
     }
 
-    @Test
-    func anObserverCanRejectCommitAndItsScopeIsRemovedAfterThrowing() throws {
+    @Test(arguments: [false, true])
+    func aRejectingObserverReceivesRollbackAndStopsAfterItsScope(transactionScoped: Bool) throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let observer = OwnerConnectionRecorder(rejectCommit: true)
+      let observer = TransactionEventRecorder(
+        countOnWillCommit: "SELECT count(*) FROM items",
+        commitError: OwnerTestFailure()
+      )
       let items = OrbitDatabaseRegion(table: "items")
       try owner.withWriteConnection { connection in
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         #expect(throws: OwnerTestFailure.self) {
-          try connection.withObservation(observer) {
-            try connection.transaction { transaction in
+          if transactionScoped {
+            try connection.transaction(observer: observer) { transaction in
               try transaction.execute("INSERT INTO items VALUES (1)")
+            }
+          } else {
+            try connection.withObservation(observer) {
+              try connection.transaction { transaction in
+                try transaction.execute("INSERT INTO items VALUES (1)")
+              }
             }
           }
         }
-        #expect(observer.events == [.changed(items), .willCommit(1), .rolledBack])
+        #expect(observer.events == [.didChange(items), .willCommit(1), .didRollback])
+        #expect(observer.commits.isEmpty)
         observer.removeAll()
         try connection.transaction { transaction in
           try transaction.execute("INSERT INTO items VALUES (2)")
@@ -169,8 +181,10 @@
     @Test
     func transactionObserverSpansItsLifecycleInsideAnOuterConnectionScope() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let outer = OwnerConnectionRecorder()
-      let transactionObserver = OwnerConnectionRecorder()
+      let outer = TransactionEventRecorder(countOnWillCommit: "SELECT count(*) FROM items")
+      let transactionObserver = TransactionEventRecorder(
+        countOnWillCommit: "SELECT count(*) FROM items"
+      )
       let items = OrbitDatabaseRegion(table: "items")
 
       try owner.withWriteConnection { connection in
@@ -179,17 +193,19 @@
           try connection.transaction(observer: transactionObserver) { transaction in
             try transaction.execute("INSERT INTO items VALUES (1)")
           }
-          let expected: [OwnerConnectionRecorder.Event] = [
-            .changed(items), .willCommit(1), .committed(items)
+          let expected: [TransactionEventRecorder.Event] = [
+            .didChange(items), .willCommit(1), .didCommit(.local)
           ]
           #expect(outer.events == expected)
           #expect(transactionObserver.events == expected)
-          #expect(transactionObserver.commits.map(\.origin) == [.local])
+          #expect(transactionObserver.commits.map(\.region) == [items])
+          #expect(outer.commits.map(\.region) == [items])
 
           transactionObserver.removeAll()
           try connection.execute("INSERT INTO items VALUES (2)")
           #expect(transactionObserver.events.isEmpty)
-          #expect(outer.events == expected + [.changed(items), .committed(items)])
+          #expect(outer.events == expected + [.didChange(items), .didCommit(.local)])
+          #expect(outer.commits.map(\.region) == [items, items])
 
           #expect(throws: OwnerTestFailure.self) {
             try connection.transaction(observer: transactionObserver) { transaction in
@@ -197,7 +213,7 @@
               throw OwnerTestFailure()
             }
           }
-          #expect(transactionObserver.events == [.changed(items), .rolledBack])
+          #expect(transactionObserver.events == [.didChange(items), .didRollback])
           #expect(transactionObserver.commits.isEmpty)
         }
       }
@@ -206,7 +222,7 @@
     @Test
     func readTransactionObserverStopsBeforeTheNextConnectionStatement() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let observer = OwnerConnectionRecorder()
+      let observer = TransactionEventRecorder(countOnWillCommit: "SELECT count(*) FROM items")
       let items = OrbitDatabaseRegion(table: "items")
       try owner.withWriteConnection { connection in
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
@@ -226,36 +242,15 @@
     }
 
     @Test
-    func transactionObserverCanRejectCommitAndStillReceiveRollback() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let observer = OwnerConnectionRecorder(rejectCommit: true)
-      let items = OrbitDatabaseRegion(table: "items")
-      try owner.withWriteConnection { connection in
-        try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        #expect(throws: OwnerTestFailure.self) {
-          try connection.transaction(observer: observer) { transaction in
-            try transaction.execute("INSERT INTO items VALUES (1)")
-          }
-        }
-        #expect(observer.events == [.changed(items), .willCommit(1), .rolledBack])
-        observer.removeAll()
-        try connection.transaction { transaction in
-          try transaction.execute("INSERT INTO items VALUES (2)")
-        }
-        #expect(observer.events.isEmpty)
-      }
-    }
-
-    @Test
     func nestedStatementExecutionScopesRestoreThePreviousWrapperAfterThrowing() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      let calls = OwnerStepCalls()
+      let calls = TestRecorder<String>()
       try owner.withWriteConnection { connection in
         let original = connection.sqlite.statements.execution.step
         #expect(throws: OwnerTestFailure.self) {
           try connection.withStatementExecution(
             { statement in
-              calls.record("outer")
+              calls.append("outer")
               return original(statement)
             }
           ) {
@@ -268,7 +263,7 @@
             do {
               try connection.withStatementExecution(
                 { statement in
-                  calls.record("inner")
+                  calls.append("inner")
                   return outer(statement)
                 }
               ) {
@@ -430,79 +425,6 @@
   }
 
   private struct OwnerTestFailure: Error {}
-
-  private final class OwnerStepCalls: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [String] = []
-
-    var values: [String] { lock.withLock { recorded } }
-
-    func record(_ value: String) {
-      lock.withLock { recorded.append(value) }
-    }
-
-    func removeAll() {
-      lock.withLock { recorded.removeAll() }
-    }
-  }
-
-  private final class OwnerConnectionRecorder: OrbitDatabaseTransactionObserver, @unchecked Sendable
-  {
-    enum Event: Equatable {
-      case changed(OrbitDatabaseRegion)
-      case willCommit(Int64)
-      case committed(OrbitDatabaseRegion)
-      case rolledBack
-    }
-
-    private let lock = NSLock()
-    private var recordedEvents: [Event] = []
-    private var recordedReads: [OrbitDatabaseRegion] = []
-    private var recordedCommits: [OrbitDatabaseCommit] = []
-    private let rejectCommit: Bool
-
-    init(rejectCommit: Bool = false) {
-      self.rejectCommit = rejectCommit
-    }
-
-    var events: [Event] { lock.withLock { recordedEvents } }
-    var readRegions: [OrbitDatabaseRegion] { lock.withLock { recordedReads } }
-    var commits: [OrbitDatabaseCommit] { lock.withLock { recordedCommits } }
-
-    func removeAll() {
-      lock.withLock {
-        recordedEvents.removeAll()
-        recordedReads.removeAll()
-        recordedCommits.removeAll()
-      }
-    }
-
-    func databaseDidRead(in region: OrbitDatabaseRegion) {
-      lock.withLock { recordedReads.append(region) }
-    }
-
-    func databaseDidChange(in region: OrbitDatabaseRegion) {
-      lock.withLock { recordedEvents.append(.changed(region)) }
-    }
-
-    func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-      let count =
-        try transaction.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue ?? 0 } ?? 0
-      lock.withLock { recordedEvents.append(.willCommit(count)) }
-      if rejectCommit { throw OwnerTestFailure() }
-    }
-
-    func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-      lock.withLock {
-        recordedEvents.append(.committed(commit.region))
-        recordedCommits.append(commit)
-      }
-    }
-
-    func databaseDidRollback() {
-      lock.withLock { recordedEvents.append(.rolledBack) }
-    }
-  }
 
   private final class OwnerLibraryCounters: @unchecked Sendable {
     struct Snapshot {

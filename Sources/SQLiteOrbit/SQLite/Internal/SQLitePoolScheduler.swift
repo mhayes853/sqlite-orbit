@@ -147,17 +147,10 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   func writeWithoutTransaction<Result: Sendable>(
+    concurrent: Bool = false,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    let lease = try await acquire(.barrierWrite)
-    defer { release(lease) }
-    return try await lease.connection.writeWithoutTransaction(body)
-  }
-
-  func concurrentWriteWithoutTransaction<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-  ) async throws -> Result {
-    let lease = try await acquire(.concurrentWrite)
+    let lease = try await acquire(concurrent ? .concurrentWrite : .barrierWrite)
     defer { release(lease) }
     return try await lease.connection.writeWithoutTransaction(body)
   }
@@ -171,17 +164,10 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   func writeWithoutTransactionBlocking<Result: Sendable>(
+    concurrent: Bool = false,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    let lease = acquireBlocking(.barrierWrite)
-    defer { release(lease) }
-    return try lease.connection.writeWithoutTransactionBlocking(body)
-  }
-
-  func concurrentWriteWithoutTransactionBlocking<Result: Sendable>(
-    _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
-  ) throws -> Result {
-    let lease = acquireBlocking(.concurrentWrite)
+    let lease = acquireBlocking(concurrent ? .concurrentWrite : .barrierWrite)
     defer { release(lease) }
     return try lease.connection.writeWithoutTransactionBlocking(body)
   }
