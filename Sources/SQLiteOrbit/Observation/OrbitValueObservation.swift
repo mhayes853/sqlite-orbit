@@ -592,9 +592,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// Applies a reducer with fresh state for each observation runtime.
   ///
   /// Subscribers sharing this observation and database share the same reducer. Another database,
-  /// or a new run after the last subscriber leaves, gets a fresh reducer from `makeReducer`.
-  /// Construct independent mutable state in the factory; it may also run for a candidate runtime
-  /// discarded when subscriptions start concurrently.
+  /// or a new run after the last subscriber leaves, evaluates the reducer expression again.
+  /// The expression is deferred until a runtime is created and should construct independent
+  /// mutable state. It may also be evaluated for a candidate runtime discarded when subscriptions
+  /// start concurrently.
   ///
   /// Calls to a reducer are serialized and process accepted fetch results, so the reducer needs
   /// no synchronization for its own state. It receives only values emitted by upstream operators.
@@ -602,10 +603,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// `.some(nil)` emits `nil` when the output is optional. A thrown error ends the runtime and is
   /// reported to every subscriber.
   ///
-  /// - Parameter makeReducer: Creates the reducer for a new runtime.
+  /// - Parameter makeReducer: An expression that creates the reducer for a new runtime.
   /// - Returns: An observation producing the reducer's outputs with the original fetch sources.
   public func applying<Reducer: OrbitValueObservationReducer>(
-    _ makeReducer: @escaping @Sendable () -> Reducer
+    _ makeReducer: @autoclosure @escaping @Sendable () -> Reducer
   ) -> OrbitValueObservation<Reducer.Output> where Reducer.Input == Value {
     mapPipeline { upstream in
       let reducer = Lock(makeReducer())
@@ -674,7 +675,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func compactMap<Output: Sendable>(
     _ transform: @escaping @Sendable (Value) throws -> Output?
   ) -> OrbitValueObservation<Output> {
-    applying { OrbitValueObservationClosureReducer(transform: transform) }
+    applying(OrbitValueObservationClosureReducer(transform: transform))
   }
 
   /// Suppresses a value when `predicate` considers it equal to the preceding emitted value.
@@ -692,7 +693,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func removeDuplicates(
     by predicate: @escaping @Sendable (Value, Value) -> Bool
   ) -> Self {
-    applying { OrbitValueObservationDistinctReducer(predicate: predicate) }
+    applying(OrbitValueObservationDistinctReducer(predicate: predicate))
   }
 
   /// Skips fetching after committed transactions for which `predicate` returns `false`.

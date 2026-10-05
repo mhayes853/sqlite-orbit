@@ -1,7 +1,8 @@
 /// Transforms observed values while remembering state within one observation runtime.
 ///
-/// Supply a factory to ``OrbitValueObservation/applying(_:)`` so each runtime starts with fresh
-/// state. The observation serializes calls to the reducer, allowing ordinary mutable properties:
+/// Pass a reducer expression to ``OrbitValueObservation/applying(_:)``. It is evaluated lazily for
+/// each runtime, giving it fresh state. The observation serializes calls to the reducer, allowing
+/// ordinary mutable properties:
 ///
 /// ```swift
 /// struct RunningTotal: OrbitValueObservationReducer {
@@ -13,7 +14,7 @@
 ///   }
 /// }
 ///
-/// let totals = counts.applying { RunningTotal() }
+/// let totals = counts.applying(RunningTotal())
 /// ```
 public protocol OrbitValueObservationReducer<Input, Output>: Sendable {
   /// The value emitted by the preceding observation.

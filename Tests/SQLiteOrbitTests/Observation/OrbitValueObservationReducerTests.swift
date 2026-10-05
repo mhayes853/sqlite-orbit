@@ -11,10 +11,11 @@
       try insertItemsBlocking(1, into: firstDatabase)
       try insertItemsBlocking(1, into: secondDatabase)
       let factories = TestCounter()
-      let observation = counts.applying {
+      @Sendable func makeReducer() -> RunningTotal {
         factories.increment()
         return RunningTotal()
       }
+      let observation = counts.applying(makeReducer())
       #expect(factories.value == 0)
 
       func subscribe(_ database: SQLiteQueue, _ values: TestRecorder<Int>) throws
@@ -73,7 +74,7 @@
         .removeDuplicates()
         .filter { _ in true }
         .compactMap { .some($0) }
-        .applying { OptionalStringReducer(received: received) }
+        .applying(OptionalStringReducer(received: received))
       let subscription = try observation.subscribe(
         to: database,
         scheduling: .immediate,
