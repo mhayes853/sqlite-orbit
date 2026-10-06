@@ -236,6 +236,10 @@
       (.limit(.milliseconds(250)), 250),
       (.limit(.zero), 0),
       (.limit(.seconds(-1)), 0),
+      (.limit(.seconds(2_147_483)), 2_147_483_000),
+      (.limit(.milliseconds(2_147_483_646)), 2_147_483_646),
+      (.limit(.milliseconds(2_147_483_647)), .max),
+      (.limit(.milliseconds(2_147_483_648)), .max),
       (.limit(.seconds(Int64.max)), .max),
       (.maximum, .max)
     ]

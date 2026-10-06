@@ -54,7 +54,7 @@ struct SQLiteConnectionSettings: ~Copyable {
   }
 
   mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
-    let code = applyBusyTimeout(timeout)
+    let code = library.pointee.connections.setBusyTimeout(connection, timeout.milliseconds)
     guard code == SQLiteResultCode.ok.rawValue else {
       throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
     }
@@ -157,9 +157,5 @@ struct SQLiteConnectionSettings: ~Copyable {
       }
     }
     if let failure { throw failure }
-  }
-
-  private func applyBusyTimeout(_ timeout: SQLiteBusyTimeout) -> Int32 {
-    library.pointee.connections.setBusyTimeout(connection, timeout.milliseconds)
   }
 }

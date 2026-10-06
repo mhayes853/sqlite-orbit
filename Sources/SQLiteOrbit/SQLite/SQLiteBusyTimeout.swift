@@ -27,7 +27,7 @@ public enum SQLiteBusyTimeout: Hashable, Sendable {
     case .limit(let duration):
       let components = duration.components
       guard components.seconds > 0 || components.attoseconds > 0 else { return 0 }
-      guard components.seconds < Int64(Int32.max) / 1000 else { return .max }
+      guard components.seconds <= Int64(Int32.max) / 1000 else { return .max }
       let milliseconds =
         components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000
       return Int32(clamping: milliseconds)

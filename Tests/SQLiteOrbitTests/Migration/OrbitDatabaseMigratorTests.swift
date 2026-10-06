@@ -3,7 +3,6 @@
 
   #if BuiltInSQLite
     import Foundation
-    import StructuredQueriesSQLite
     import Testing
 
     @testable import SQLiteOrbit
