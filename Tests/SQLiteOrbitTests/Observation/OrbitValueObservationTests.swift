@@ -1171,7 +1171,7 @@
 
       @Test
       func automaticRegionRefreshesWhenSQLiteRecompilesACachedStatement() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.execute(sql: currentItemsViewSchema)
 
           let recorder = ObservationRecorder<String?>()
@@ -1203,10 +1203,8 @@
       func automaticRegionFollowsAViewRedefinedThroughAnotherConnection() async throws {
         try await withTestDatabaseFile("obs") { file in
           let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 1
           let observingDatabase = OrbitIPCDatabase(
-            writer: try file.pool(configuration: configuration),
+            writer: try file.pool(readerCount: 1),
             id: identifier,
             transport: InMemoryIPCTransport()
           )

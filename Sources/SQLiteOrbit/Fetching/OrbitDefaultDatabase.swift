@@ -16,6 +16,8 @@
 /// named its own database is never re-sourced.
 /// Replacing a property's request or observation with `load` keeps its resolved database unless
 /// that call supplies a new `database:`. A property with no resolved database uses this default.
+/// The default may be a reader-only observable database. ``Row`` and ``SingleRow`` require it to
+/// also conform to ``OrbitDatabaseWriter`` when saving.
 ///
 /// A property wrapper is created wherever the property it wraps lives — inside a view, a model, or
 /// a controller — and those places rarely have a database to hand. Setting the default once, as

@@ -60,6 +60,22 @@ value converts conforms with no body, as in `enum Priority: Int, OrbitDatabaseVa
 a statement that are chosen at runtime but cannot be bound. `+`, `append`, and `joined(separator:)`
 build a statement from pieces. There is deliberately no initializer from a `String` value.
 
+Execution adapters can inspect validated construction parts and reconstruct SQL through public APIs:
+
+```swift
+let sql: SQL = "SELECT title FROM reminders WHERE id = \(id)"
+let parts = try sql.validatedParts()
+let reconstructed = SQL(parts: parts)
+let text = reconstructed.text
+let bindings = reconstructed.bindings
+```
+
+`.text` contains verbatim SQL, `.binding` contributes an anonymous `?` and its value, and
+`.statement(text:bindings:)` preserves prebound raw SQL. An adapter concatenates the text and binds
+the collected values by index. Raw numbered and named placeholders remain intact and are not
+rebased when parts are joined. Failed value conversions throw from `validatedParts()`; syntax and
+parameter indices are still checked by the database.
+
 Rows are read by position or by column name, as `OrbitDatabaseValue`s, one of SQLite's five storage
 classes:
 
@@ -291,6 +307,10 @@ Two ordinary SQLite drivers provide process-local access, and the multiprocess-c
 Each connection runs on a serial executor of its own, a dispatch queue on Apple platforms and
 Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
+Connection settings belong to `SQLiteConfiguration`; pool sizes are initializer parameters.
+`SQLitePool(path: configuration: readerCount:)` defaults to five readers and always uses one writer.
+`TursoPool` accepts both `readerCount` and `writerCount`, defaulting to five readers and four writers.
+
 ### Suspending a shared database
 
 An iOS app that is suspended while its SQLite connection holds a write lock on a database shared
@@ -428,6 +448,8 @@ let pool = try SQLiteConnectionPool(
   path: path,
   readerConfiguration: .default,
   writerConfiguration: .default,
+  readerCount: 4,
+  writerCount: 1,
   writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"]
 )
 try await pool.withWriteConnection { connection in
@@ -527,7 +549,7 @@ separate connection pools. Explicit concurrent writes use `BEGIN CONCURRENT`, wh
 for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for schema work:
 
 ```swift
-let driver = try TursoPool(path: databasePath, writerCount: 4)
+let driver = try TursoPool(path: databasePath, readerCount: 5, writerCount: 4)
 
 try await driver.concurrentWrite { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -1518,7 +1540,10 @@ struct RemindersApp: App {
 `OrbitDefaultDatabase.withValue(_:operation:)` overrides it for the duration of an operation, which
 is how a test gives itself a database of its own without touching the process-wide one. Accessing
 `OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
-detailed setup instructions. A SwiftUI property waits until its environment has been resolved, so
+detailed setup instructions. `OrbitDefaultDatabase.currentIfConfigured` returns `nil` instead when
+no default is available. Read-only observable databases can provide defaults for fetches; `Row` and
+`SingleRow` writes require a writer and report a read-only error if their resolved database cannot
+write. A SwiftUI property waits until its environment has been resolved, so
 providing a database with `.orbitDatabase(...)` does not require a process-wide default.
 
 Enable the `Dependencies` trait to configure the same default with
@@ -1566,6 +1591,23 @@ A property does not query until something reads it. Reading it the first time pe
 and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
 each rebuilt property costing a query.
 
+### Reusable requests
+
+Queries can produce requests usable in transactions, observations, and `Fetch`:
+
+```swift
+let request = Reminder.order(by: \.title).allRowsRequest()
+let rows = try await database.read { try request.fetch($0) }
+let observation = request.observation().removeDuplicates()
+@Fetch(request) var reminders = [Reminder]()
+```
+
+`firstRowRequest()` returns the first row or `nil`; `requiredFirstRowRequest()`
+throws `OrbitDatabaseRecordNotFoundError` when no row exists. Table, scalar, selection, and tuple
+queries have request helpers. `FetchAll` and `FetchOne` compose the same public `Fetch` lifecycle.
+Equal requests share a live observation definition; each database has its own runtime and each
+subscriber chooses its own scheduler.
+
 ### The projected value
 
 The projected value is the rest of the property: whether a read is in flight, the error one failed
@@ -1596,13 +1638,17 @@ a sort control drives:
 try await $reminders.load(Reminder.where { $0.title.contains(search) })
 ```
 
-It returns an `OrbitFetchSubscription`. Awaiting its `task` ties the observation to the lifetime of
+It returns an `OrbitFetchSubscription`. Awaiting `waitUntilFinished()` ties the observation to the lifetime of
 a SwiftUI view's `task`, so drilling into a child screen stops the query and popping back restarts
 it:
 
 ```swift
-.task { try? await $reminders.load(Reminder.order(by: \.title)).task }
+.task { try? await $reminders.load(Reminder.order(by: \.title)).waitUntilFinished() }
 ```
+
+Explicit cancellation or query replacement finishes the wait normally; an observation failure
+propagates its error. Cancelling the waiting task cancels that exact registration and throws
+`CancellationError`.
 
 Assigning one projected value to another hands over its query, and a reader projected from a member
 stays current with the rest of the property.
@@ -1619,13 +1665,27 @@ an `animation:`, which delivers every change on the main actor inside that anima
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
 ```
 
-Request-backed fetch identity follows SQLiteData: it includes the database instance, request type
-and value, and optional scheduler value. An observation-backed fetch uses the observation's
+Request-backed declaration identity includes the database instance, request type and value, and
+optional scheduler value. Equal requests share underlying observations independently of delivery
+scheduling. An observation-backed fetch uses the observation's
 definition identity, or the explicit `id:` supplied with it. Omitting a scheduler is distinct from
 explicitly supplying `.immediate`. SwiftUI remembers the declaration's identity separately from
 the currently loaded source, so a `load()` or projected-value assignment survives an unchanged
 declaration being rendered again. Changing the declaration's request, observation identity,
 database, or scheduler replaces the observation; a value-only declaration leaves it alone.
+
+Animation and initial delivery can also be composed explicitly through public schedulers:
+
+```swift
+@FetchAll(
+  Reminder.all,
+  scheduler: .mainActor.animation(.default).deferringInitialValue()
+) var reminders
+```
+
+Animation preserves the base scheduler's initial timing. `deferringInitialValue()` prevents a
+blocking initial fetch, which is also the behavior selected by the fetch `animation:` conveniences.
+Both adapters preserve `Hashable` when their base supports it.
 
 Custom schedulers should base equality and hashing on stable configuration (or instance identity),
 not mutable callback queues. The built-in schedulers already provide these conformances. Direct
@@ -1647,20 +1707,20 @@ The grouping closure may throw; empty input produces no sections.
 A Structured Queries statement can produce a reusable request with a typed section key:
 
 ```swift
-let request = Reminder.order(by: \.title).sectioned(by: \.priority)
+let request = Reminder.order(by: \.title).sectionedRequest(by: \.priority)
 let sections = try await database.read { try request.fetch($0) }
-let observation = OrbitValueObservation.tracking { try request.fetch($0) }
+let observation = request.observation()
 @Fetch(request, database: database) var observedSections = sections
 ```
 
-`sectioned(by:)` selects the key alongside each element and orders by it before the query's existing
+`sectionedRequest(by:)` selects the key alongside each element and orders by it before the query's existing
 ordering. The closure form accepts ordering terms such as `.desc(nulls: .last)` and, for explicitly
 projected joins, can receive every joined table's columns. Keys keep their decoded type and use Swift
 `Hashable` equality; sectioning retains result rows rather than introducing SQL `GROUP BY` aggregation.
 Limits apply after section ordering. With `DISTINCT`, uniqueness includes the selected section key.
 Multi-column elements use an `@Selection` type; plain tuple elements are not supported.
 
-For a statement that already selects `(element, key)`, `OrbitSectionedQuery(statement)` preserves its
+For a statement that already selects `(element, key)`, `OrbitSectionedRequest(statement)` preserves its
 ordering. Raw SQL can use the same grouping operation without the Structured Queries trait:
 
 ```swift

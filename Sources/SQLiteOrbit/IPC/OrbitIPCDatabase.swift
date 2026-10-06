@@ -15,7 +15,6 @@
 /// ```
 public final class OrbitIPCDatabase:
   Identifiable,
-  OrbitDatabaseWriter,
   OrbitSuspendable,
   Sendable
 {
@@ -378,7 +377,7 @@ extension OrbitIPCDatabase.Delegate {
   ) {}
 }
 
-extension OrbitIPCDatabase: OrbitObservableDatabase {
+extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///

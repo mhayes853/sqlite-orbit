@@ -57,7 +57,7 @@
 
       @Test
       func connectionRefreshesACachedStatementAfterItsOwnSchemaChange() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.write { transaction in
             try transaction.executeScript(itemsSchema)
           }
@@ -82,7 +82,7 @@
 
       @Test
       func unchangedSchemaKeepsCachedStatements() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.write { transaction in
             try transaction.executeScript(itemsSchema)
           }
@@ -104,9 +104,7 @@
         _ body: (SQLitePool) async throws -> Void
       ) async throws {
         try await withTestDatabaseFile("cache") { file in
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 1
-          let pool = try file.pool(configuration: configuration)
+          let pool = try file.pool(readerCount: 1)
           try await pool.write { transaction in
             try transaction.executeScript(itemsSchema)
           }

@@ -344,7 +344,7 @@
       var configuration = SQLiteConfiguration.default
       configuration.register(function: $longestTitle)
 
-      try await withPooledDatabase(configuration: configuration, maximumReaderCount: 16) {
+      try await withPooledDatabase(configuration: configuration, readerCount: 16) {
         database in
         try await database.write { transaction in
           try transaction.execute(

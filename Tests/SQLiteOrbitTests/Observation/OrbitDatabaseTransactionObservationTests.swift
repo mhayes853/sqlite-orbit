@@ -15,7 +15,7 @@
         async throws
       {
         try await withTestDatabaseFile("obs") { file in
-          let driver: any OrbitObservableDatabase =
+          let driver: any OrbitObservableDatabase & OrbitDatabaseWriter =
             write == .pool ? try file.pool() : try SQLiteQueue(path: .memory)
           try await driver.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
           let observer = TransactionEventRecorder(countOnWillCommit: itemCountSQL)

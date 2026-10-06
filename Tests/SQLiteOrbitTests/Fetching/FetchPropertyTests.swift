@@ -357,57 +357,6 @@
         }
       }
 
-      @Test(arguments: [false, true])
-      func subscriptionTaskCancellationDetachesAndKeepsTheLastValue(alreadyCancelled: Bool)
-        async throws
-      {
-        let database = try await remindersDatabase(titles: "Milk")
-        let storage = OrbitFetchStorage<[String]>(value: [])
-        let subscription = try await storage.load(
-          request: TitleSearch(term: "Milk"),
-          database: database,
-          scheduler: nil
-        )
-        defer { subscription.cancel() }
-        let id = OrbitFetchSourceID(
-          request: TitleSearch(term: "Milk"),
-          database: database,
-          scheduler: nil
-        )
-        #expect(storage.value == ["Milk"])
-        #expect(OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
-
-        let completion = Lock<Result<Void, any Error>?>(nil)
-        let started = Lock(false)
-        let task = Task {
-          started.withLock { $0 = true }
-          if alreadyCancelled {
-            withUnsafeCurrentTask { $0?.cancel() }
-          }
-          do {
-            try await subscription.task
-            completion.withLock { $0 = .success(()) }
-          } catch {
-            completion.withLock { $0 = .failure(error) }
-          }
-        }
-        defer { task.cancel() }
-        try await waitUntil { started.withLock { $0 } }
-        if !alreadyCancelled {
-          #expect(completion.withLock { $0 == nil })
-          task.cancel()
-        }
-        try await waitUntil { completion.withLock { $0 != nil } }
-        await task.value
-        let result = try #require(completion.withLock { $0 })
-        #expect(throws: CancellationError.self) { try result.get() }
-        #expect(!OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
-
-        try await insertReminders("Milk", into: database)
-        #expect(storage.value == ["Milk"])
-        #expect(!OrbitFetchObservationRegistry.shared.holdsObservation(for: id))
-      }
-
       @Test(arguments: PendingLoadInterruption.allCases)
       func interruptingAPendingLoadResumesItWithCancellation(
         _ interruption: PendingLoadInterruption
@@ -747,11 +696,17 @@
         let first = OrbitFetchStorage<[String]>
           .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
         let second = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+          .make(
+            value: [],
+            request: TitleSearch(term: "Milk"),
+            database: database,
+            scheduler: OrbitImmediateValueObservationScheduler.immediate.deferringInitialValue()
+          )
         let id = try #require(first.sourceID)
 
         #expect(first.value == ["Milk"])
-        #expect(second.value == ["Milk"])
+        try await waitUntil { second.value == ["Milk"] }
+        #expect(first.sourceID != second.sourceID)
         #expect(database.subscriptionCount == 1)
 
         try await insertReminders("Milk", into: database)

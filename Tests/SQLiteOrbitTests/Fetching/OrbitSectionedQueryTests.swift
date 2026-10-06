@@ -4,34 +4,76 @@
   import Testing
 
   @Suite
-  struct OrbitSectionedQueryTests {
+  struct OrbitSectionedRequestTests {
     @Test
     func typedKeysPreserveOrderingBindingsLimitsAndRequestIdentity() throws {
       let database = try sectionDatabase()
       let minimumID = 0
       let statement = Item.where { $0.id.gt(minimumID) }.order(by: \.title)
-      let request = statement.sectioned(by: \.bucket)
-      #expect(request == statement.sectioned { $0.bucket })
-      #expect(Set([request, statement.sectioned(by: \.bucket)]).count == 1)
+      let request = statement.sectionedRequest(by: \.bucket)
+      #expect(request == statement.sectionedRequest { $0.bucket })
+      #expect(Set([request, statement.sectionedRequest(by: \.bucket)]).count == 1)
       #expect(request.sql.bindings == [0])
       let sections = try database.readBlocking { try request.fetch($0) }
       #expect(sections.sectionNames == [nil, 1, 2])
       #expect(sections.elements.map(\.id) == [2, 4, 3, 1])
       #expect(sections[sectionName: 2]?.map(\.title) == ["A", "C"])
       let limited = try database.readBlocking {
-        try statement.limit(3).sectioned { $0.bucket.desc(nulls: .last) }.fetch($0)
+        try statement.limit(3).sectionedRequest { $0.bucket.desc(nulls: .last) }.fetch($0)
       }
       #expect(limited.sectionNames == [2, 1])
       #expect(limited.elements.map(\.id) == [3, 1, 4])
       let offset = 10
-      let expression = Item.all.sectioned { $0.id + offset }
+      let expression = Item.all.sectionedRequest { $0.id + offset }
       #expect(expression.sql.bindings == [10, 10])
       let computed = try database.readBlocking { try expression.fetch($0) }
       #expect(computed.sectionNames == [11, 12, 13, 14])
       let empty = try database.readBlocking {
-        try Item.where { $0.id.lt(0) }.sectioned(by: \.bucket).fetch($0)
+        try Item.where { $0.id.lt(0) }.sectionedRequest(by: \.bucket).fetch($0)
       }
       #expect(empty.isEmpty)
+    }
+
+    @Test
+    func statementRequestsComposeReadsAndObservations() throws {
+      let database = try sectionDatabase()
+      let statement = Item.order(by: \.id)
+      let rows = statement.allRowsRequest()
+      let observation = rows.observation()
+      let equalObservation = statement.allRowsRequest().observation()
+      #expect(observation.identity == equalObservation.identity)
+      let empty = Item.where { $0.id.lt(0) }
+      try database.readBlocking { transaction in
+        #expect(try rows.fetch(transaction).map(\.id) == [1, 2, 3, 4])
+        #expect(try statement.firstRowRequest().fetch(transaction)?.id == 1)
+        #expect(try statement.requiredFirstRowRequest().fetch(transaction).id == 1)
+        #expect(try empty.firstRowRequest().fetch(transaction) == nil)
+        #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try empty.requiredFirstRowRequest().fetch(transaction)
+        }
+        let nullable = #sql("SELECT NULL", as: Int?.self)
+        let first = nullable.firstRowRequest()
+        let required = nullable.requiredFirstRowRequest()
+        #expect(first != required)
+        #expect(try first.fetch(transaction) == nil)
+        #expect(try required.fetch(transaction) == nil)
+        #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try #sql("SELECT NULL WHERE 0", as: Int?.self).requiredFirstRowRequest()
+            .fetch(transaction)
+        }
+        let tuple = #sql(
+          "SELECT title, bucket FROM section_items ORDER BY id",
+          as: (String, Int?).self
+        )
+        let tupleRows = try tuple.allRowsRequest().fetch(transaction)
+        let firstTuple = try tuple.firstRowRequest().fetch(transaction)
+        let requiredTuple = try tuple.requiredFirstRowRequest().fetch(transaction)
+        #expect(tupleRows.map { $0.0 } == ["C", "B", "A", "D"])
+        #expect(firstTuple?.0 == "C")
+        #expect(requiredTuple.1 == 2)
+      }
+      @Fetch(rows, database: database) var fetched = [Item]()
+      #expect(fetched.map(\.id) == [1, 2, 3, 4])
     }
 
     @Test
@@ -40,9 +82,9 @@
       let statement = Item.join(Team.all) { $0.teamID.eq($1.id) }
         .order { item, _ in item.title }
         .select { item, _ in item.title }
-      let joined = statement.sectioned { _, team in team.id }
-      let from = statement.sectioned(by: \.bucket)
-      let selected = Item.order(by: \.title).select(\.title).sectioned(by: \.bucket)
+      let joined = statement.sectionedRequest { _, team in team.id }
+      let from = statement.sectionedRequest(by: \.bucket)
+      let selected = Item.order(by: \.title).select(\.title).sectionedRequest(by: \.bucket)
       let (byTeam, byBucket, titles) = try database.readBlocking {
         (try joined.fetch($0), try from.fetch($0), try selected.fetch($0))
       }
@@ -54,11 +96,11 @@
         .join(Team.as(OtherTeam.self).all) { item, _, team in item.teamID.eq(team.id) }
         .order { item, _, _ in item.title }
         .select { item, _, _ in item.title }
-        .sectioned { _, _, team in team.id }
+        .sectionedRequest { _, _, team in team.id }
       let byOtherTeam = try database.readBlocking { try multipleJoins.fetch($0) }
       #expect(byOtherTeam == byTeam)
       try database.writeBlocking { try $0.execute("UPDATE section_items SET title = 'same'") }
-      let distinct = Item.select(\.title).distinct().sectioned(by: \.bucket)
+      let distinct = Item.select(\.title).distinct().sectionedRequest(by: \.bucket)
       let groupedDistinct = try database.readBlocking { try distinct.fetch($0) }
       #expect(groupedDistinct.sectionNames == [nil, 1, 2])
       #expect(groupedDistinct.elements == ["same", "same", "same"])
@@ -67,7 +109,7 @@
     @Test
     func typedRawStatementsKeepTheirOwnOrderAndReportDecodingErrors() throws {
       let database = try sectionDatabase()
-      let request = OrbitSectionedQuery(
+      let request = OrbitSectionedRequest(
         #sql(
           "SELECT title, bucket FROM section_items ORDER BY id",
           as: (String, Int?).self
@@ -77,7 +119,7 @@
       #expect(sections.elements == ["C", "B", "A", "D"])
       #expect(sections.sectionNames == [2, nil, 1])
       #expect(sections[sectionName: 2]?.map { $0 } == ["C", "A"])
-      let invalid = OrbitSectionedQuery(
+      let invalid = OrbitSectionedRequest(
         #sql("SELECT 'title', 'invalid integer'", as: (String, Int).self)
       )
       #expect(throws: (any Error).self) { try database.readBlocking { try invalid.fetch($0) } }
@@ -86,7 +128,7 @@
     @Test
     func theSameRequestSupportsObservationAndFetch() async throws {
       let database = try sectionDatabase()
-      let request = Item.order(by: \.title).sectioned(by: \.bucket)
+      let request = Item.order(by: \.title).sectionedRequest(by: \.bucket)
       let received = TestRecorder<OrbitFetchSectionCollection<Item, Int?>>()
       let subscription = try OrbitValueObservation.tracking { try request.fetch($0) }
         .subscribe(

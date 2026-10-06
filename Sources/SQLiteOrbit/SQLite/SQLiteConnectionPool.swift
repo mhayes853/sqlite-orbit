@@ -14,7 +14,7 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
 
   /// Opens writable connections first, then the read-only connections for the same database.
   ///
-  /// The reader count comes from `readerConfiguration.readerCount`. Both counts must be positive.
+  /// Both connection counts must be positive.
   /// Role-specific setup runs after each configuration's setup and is not included in the
   /// configuration reported by borrowed connections. This primitive does not coordinate opening
   /// with other processes; a multiprocess driver must arrange that coordination.
@@ -22,13 +22,14 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     path: OrbitDatabasePath,
     readerConfiguration: SQLiteConfiguration,
     writerConfiguration: SQLiteConfiguration,
+    readerCount: Int = 5,
     writerCount: Int = 1,
     readerSetupSQL: [String] = [],
     writerSetupSQL: [String] = [],
     identifier: OrbitDatabaseIdentifier? = nil
   ) throws {
     precondition(
-      readerConfiguration.readerCount > 0,
+      readerCount > 0,
       "A connection pool requires at least one reader"
     )
     precondition(writerCount > 0, "A connection pool requires at least one writer")
@@ -47,7 +48,7 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
         suspension: suspension
       )
     }
-    let readers = try (0..<readerConfiguration.readerCount)
+    let readers = try (0..<readerCount)
       .map { _ in
         try SQLiteSerialConnection(
           path: path,

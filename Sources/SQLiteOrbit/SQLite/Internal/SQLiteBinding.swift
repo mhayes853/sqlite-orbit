@@ -3,11 +3,19 @@ func bind(
   to statement: OpaquePointer,
   library: UnsafePointer<SQLiteLibrary>
 ) throws {
-  if let failure = sql.bindingFailure {
-    throw failure.error
+  let parts = try sql.validatedParts()
+  var index: Int32 = 1
+  func bindNext(_ value: OrbitDatabaseValue) throws {
+    try bind(value, to: statement, at: index, library: library)
+    index += 1
   }
-  for (offset, value) in sql.bindings.enumerated() {
-    try bind(value, to: statement, at: Int32(offset + 1), library: library)
+  for part in parts {
+    switch part {
+    case .text: break
+    case .binding(let value): try bindNext(value)
+    case .statement(_, let values):
+      for value in values { try bindNext(value) }
+    }
   }
 }
 

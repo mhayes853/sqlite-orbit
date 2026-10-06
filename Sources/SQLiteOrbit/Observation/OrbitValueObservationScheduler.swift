@@ -346,3 +346,37 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     }
   }
 }
+
+/// A scheduler that preserves callback delivery while deferring the initial fetch.
+public struct OrbitDeferredInitialValueObservationScheduler<Base: OrbitValueObservationScheduler>:
+  OrbitValueObservationScheduler
+{
+  private let base: Base
+
+  /// Wraps a scheduler without changing where or in what order its callbacks run.
+  public init(base: Base) { self.base = base }
+
+  public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool { false }
+
+  public func schedule(
+    from isolation: isolated (any Actor)?,
+    _ action: @escaping @Sendable () -> Void
+  ) {
+    base.schedule(from: isolation, action)
+  }
+}
+
+extension OrbitDeferredInitialValueObservationScheduler: Equatable where Base: Equatable {}
+extension OrbitDeferredInitialValueObservationScheduler: Hashable where Base: Hashable {}
+extension OrbitDeferredInitialValueObservationScheduler: OrbitValueObservationMainActorScheduler
+where Base: OrbitValueObservationMainActorScheduler {}
+
+extension OrbitValueObservationScheduler {
+  /// Defers the initial fetch even when this scheduler could deliver it synchronously.
+  ///
+  /// Later callbacks retain this scheduler's destination and ordering. A hashable or main-actor
+  /// scheduler keeps those capabilities when wrapped.
+  public func deferringInitialValue() -> OrbitDeferredInitialValueObservationScheduler<Self> {
+    OrbitDeferredInitialValueObservationScheduler(base: self)
+  }
+}

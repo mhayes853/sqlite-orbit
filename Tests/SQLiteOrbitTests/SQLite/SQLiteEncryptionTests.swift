@@ -118,7 +118,7 @@
     )
     configuration.key = SQLiteKey.passphrase("open sesame")
 
-    try await withPooledDatabase(configuration: configuration, maximumReaderCount: 3) { database in
+    try await withPooledDatabase(configuration: configuration, readerCount: 3) { database in
       _ = try await database.read { _ in }
     }
 

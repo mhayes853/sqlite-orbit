@@ -317,9 +317,7 @@
     @Test
     func tursoPoolRunsAReadAlongsideAConcurrentWrite() async throws {
       try await withTestDatabaseFile("turso") { file in
-        var configuration = SQLiteConfiguration.turso
-        configuration.readerCount = 1
-        let driver = try TursoPool(path: file.path, configuration: configuration, writerCount: 1)
+        let driver = try TursoPool(path: file.path, readerCount: 1, writerCount: 1)
         try await driver.write { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         }

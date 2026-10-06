@@ -375,14 +375,6 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
       )
     }
 
-    /// The region containing every column in this instance's table.
-    ///
-    /// The instance's values do not narrow the region. Every instance of the same table has the
-    /// same region.
-    public var databaseRegion: OrbitDatabaseRegion {
-      Self.databaseRegion
-    }
-
     /// The schema this table declares, or ``SQLiteSchemaName/main`` when it declares none.
     static var sqliteSchemaName: SQLiteSchemaName {
       schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main

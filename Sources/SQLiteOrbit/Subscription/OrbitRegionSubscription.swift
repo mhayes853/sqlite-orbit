@@ -64,8 +64,11 @@ public struct OrbitRegionSubscription: Sendable {
     self.storage.region
   }
 
-  /// Whether commits outside ``region`` may be skipped, rather than reported like every other.
-  var filtersByRegion: Bool {
+  /// Whether commits outside ``region`` may be skipped.
+  ///
+  /// When `false`, every commit is reported regardless of the region. When `true`, commits
+  /// overlapping the region are reported, and commits outside it may also be reported.
+  public var filtersByRegion: Bool {
     self.storage.onUpdateRegion != nil
   }
 

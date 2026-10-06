@@ -328,11 +328,10 @@
       let counter = ConnectionCounter()
       var configuration = SQLiteConfiguration.default
       configuration.library = counter.library
-      configuration.readerCount = 3
 
       try await withTestDatabaseFile { file in
         do {
-          let driver = try SQLitePool(path: file.path, configuration: configuration)
+          let driver = try SQLitePool(path: file.path, configuration: configuration, readerCount: 3)
           try await driver.write { transaction in
             try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
           }
@@ -350,9 +349,7 @@
     @Test
     func aPoolSurvivesAStormOfCancellations() async throws {
       try await withTestDatabaseFile { file in
-        var configuration = SQLiteConfiguration.default
-        configuration.readerCount = 2
-        let driver = try SQLitePool(path: file.path, configuration: configuration)
+        let driver = try SQLitePool(path: file.path, readerCount: 2)
         try await driver.write { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         }

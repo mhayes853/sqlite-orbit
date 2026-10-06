@@ -284,7 +284,8 @@ extension Fetch: Equatable where Value: Equatable {
         wrappedValue: wrappedValue,
         request,
         database: database,
-        scheduler: OrbitFetchAnimationScheduler(animation: animation)
+        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+          .deferringInitialValue()
       )
     }
 
@@ -301,7 +302,8 @@ extension Fetch: Equatable where Value: Equatable {
         wrappedValue: wrappedValue,
         observation,
         database: database,
-        scheduler: OrbitFetchAnimationScheduler(animation: animation)
+        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+          .deferringInitialValue()
       )
     }
 
@@ -320,7 +322,8 @@ extension Fetch: Equatable where Value: Equatable {
         observation,
         id: id,
         database: database,
-        scheduler: OrbitFetchAnimationScheduler(animation: animation)
+        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+          .deferringInitialValue()
       )
     }
 
@@ -342,7 +345,8 @@ extension Fetch: Equatable where Value: Equatable {
       try await load(
         request,
         database: database,
-        scheduler: OrbitFetchAnimationScheduler(animation: animation)
+        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+          .deferringInitialValue()
       )
     }
 
@@ -357,7 +361,8 @@ extension Fetch: Equatable where Value: Equatable {
       try await load(
         observation,
         database: database,
-        scheduler: OrbitFetchAnimationScheduler(animation: animation)
+        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+          .deferringInitialValue()
       )
     }
   }

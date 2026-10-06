@@ -9,13 +9,12 @@
 ///
 /// ```swift
 /// var configuration = SQLiteConfiguration.default
-/// configuration.readerCount = 8
 /// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
 /// configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
 ///   arguments in
 ///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
 /// }
-/// let driver = try SQLitePool(path: .file(url), configuration: configuration)
+/// let driver = try SQLitePool(path: .file(url), configuration: configuration, readerCount: 8)
 /// ```
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
@@ -27,13 +26,6 @@ public struct SQLiteConfiguration: Sendable {
   /// precede it. Setting it for a ``SQLiteLibrary`` without ``SQLiteLibrary/encryption`` fails the
   /// open with ``SQLiteEncryptionUnavailableError``.
   public var key: SQLiteKey?
-
-  /// The number of reader connections a pool opens, and so how many reads can run at once.
-  /// Must be greater than zero when opening a ``SQLitePool``.
-  ///
-  /// Each connection runs its work on a thread of its own, so this bounds threads rather than any
-  /// share of the cooperative pool.
-  public var readerCount: Int
 
   /// How long SQLite waits for a lock another connection or process holds before reporting
   /// `SQLITE_BUSY`.
@@ -107,7 +99,6 @@ public struct SQLiteConfiguration: Sendable {
   ///
   /// - Parameters:
   ///   - library: The SQLite build the driver runs against.
-  ///   - readerCount: How many reader connections a pool opens.
   ///   - busyTimeout: How long SQLite waits for a lock before reporting `SQLITE_BUSY`.
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
@@ -119,7 +110,6 @@ public struct SQLiteConfiguration: Sendable {
   ///     `busyTimeout`.
   public init(
     library: SQLiteLibrary,
-    readerCount: Int = 5,
     busyTimeout: SQLiteBusyTimeout = .limit(.seconds(5)),
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
@@ -131,7 +121,6 @@ public struct SQLiteConfiguration: Sendable {
   ) {
     self.library = library
     self.key = key
-    self.readerCount = readerCount
     self.busyTimeout = busyTimeout
     self.busyHandler = busyHandler
     self.isForeignKeysEnabled = isForeignKeysEnabled

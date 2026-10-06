@@ -86,7 +86,6 @@
     func everyPoolConnectionHasVecBeforeUserSetupAndAfterReopening() async throws {
       let setups = TestCounter()
       var configuration = SQLiteConfiguration.default
-      configuration.readerCount = 3
       configuration.connectionSetups.append(
         SQLiteConnectionSetup { connection in
           // Vec must already be present in both the writer and each reader.
@@ -97,7 +96,7 @@
       )
       try await withTestDatabaseFile { file in
         for _ in 0..<2 {
-          let pool = try file.pool(configuration: configuration)
+          let pool = try file.pool(configuration: configuration, readerCount: 3)
           #expect(
             try await pool.read {
               try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)

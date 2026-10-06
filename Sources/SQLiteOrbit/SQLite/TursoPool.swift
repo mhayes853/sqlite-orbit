@@ -27,6 +27,7 @@
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
     ///   - configuration: Settings applied to every connection. Its library should be Turso.
+    ///   - readerCount: The number of read connections to open. Values below one are treated as one.
     ///   - writerCount: The number of concurrent write connections to open. Values below one are
     ///     treated as one.
     ///   - identifier: An identity applications can associate with this process-local database.
@@ -35,6 +36,7 @@
     public init(
       path: OrbitDatabasePath,
       configuration: SQLiteConfiguration = .turso,
+      readerCount: Int = 5,
       writerCount: Int = 4,
       identifier: OrbitDatabaseIdentifier? = nil
     ) throws {
@@ -49,7 +51,6 @@
       // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
       // through a read transaction an explicit error.
       var readerConfiguration = configuration
-      readerConfiguration.readerCount = max(1, configuration.readerCount)
       readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
       let identifier = identifier ?? .forDatabase(path: path)
       self.defaultIdentifier = identifier
@@ -57,6 +58,7 @@
         path: path,
         readerConfiguration: readerConfiguration,
         writerConfiguration: writerConfiguration,
+        readerCount: max(1, readerCount),
         writerCount: max(1, writerCount),
         identifier: identifier
       )

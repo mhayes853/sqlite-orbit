@@ -141,15 +141,17 @@ extension OrbitDatabaseTransactionObserver {
   public func databaseDidRollback() {}
 }
 
-/// A database whose reads and write transactions can be observed.
+/// A database that lends reads and reports observable transactions.
 ///
 /// This is what ``OrbitValueObservation`` needs from a database, and what ``OrbitIPCDatabase``
 /// provides.
+/// A read-only facade can conform without exposing write operations; mutable databases also
+/// conform to ``OrbitDatabaseWriter``.
 ///
 /// ```swift
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
-public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
+public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseReader {
   /// Captures the finite set of writers active now for observation coordination.
   ///
   /// The snapshot can include the writer currently reporting a commit. Its completion must be

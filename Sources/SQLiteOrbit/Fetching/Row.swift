@@ -22,6 +22,8 @@
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
   /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
+  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment or default can supply
+  /// the observed row, but saves throw a ``SQLiteError`` with code ``SQLiteResultCode/readOnly``.
   @propertyWrapper
   public struct Row<Value>: Sendable
   where
@@ -48,7 +50,7 @@
     public init(
       _ type: Value.Type,
       id primaryKey: Value.PrimaryKey.QueryOutput,
-      database: (any OrbitObservableDatabase)? = nil,
+      database: (any OrbitObservableDatabase & OrbitDatabaseWriter)? = nil,
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) {
       self.primaryKey = primaryKey
@@ -56,9 +58,7 @@
       let storage = OrbitRowStorage(
         fetch: .make(
           value: nil,
-          request: OrbitFetchOptionalStatementRequest<Value>(
-            statement: statement.find(Value.PrimaryKey(queryOutput: primaryKey))
-          ),
+          request: statement.find(Value.PrimaryKey(queryOutput: primaryKey)).firstRowRequest(),
           database: database,
           scheduler: scheduler
         )

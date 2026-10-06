@@ -93,9 +93,13 @@
         let sql = SQL(fragment: fragment)
         #expect(sql.text == "VALUES (?, ?, ?, ?)")
         #expect(sql.bindings == [.integer(1), .real(1.5), .text("a"), .blob([1])])
+        let parts = try sql.validatedParts()
+        #expect(parts.contains(.binding(.text("a"))))
+        #expect(SQL(parts: parts) == sql)
 
         // An unsigned integer past `Int64.max` cannot be stored, which binding reports.
         let overflowing = SQL(fragment: "SELECT \(QueryBinding.uint(.max))")
+        #expect(throws: (any Error).self) { try overflowing.validatedParts() }
         let database = try inMemoryDatabase()
         await #expect(throws: (any Error).self) {
           try await database.read { transaction in

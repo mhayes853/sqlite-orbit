@@ -239,6 +239,17 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// not change this identity. Use it to reconcile declarations without comparing closures.
   public var identity: OrbitValueObservationIdentity { definition.identity }
 
+  var weakCopy: @Sendable () -> Self? {
+    { [weak definition] in
+      guard let definition else { return nil }
+      return Self(definition: definition)
+    }
+  }
+
+  private init(definition: OrbitValueObservationDefinition<Value>) {
+    self.definition = definition
+  }
+
   private init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable,

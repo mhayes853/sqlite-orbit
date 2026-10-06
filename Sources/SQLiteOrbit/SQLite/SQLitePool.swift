@@ -43,11 +43,12 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
-  /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
+  /// Opens `path` as a WAL database with one writer and `readerCount` readers.
   ///
   /// - Parameters:
   ///   - path: The database file. A database private to its connection cannot be pooled.
   ///   - configuration: The settings applied to every connection.
+  ///   - readerCount: The number of reader connections to open. Must be greater than zero.
   ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
   ///   - coordinationDirectoryPath: The path of the directory the advisory lock that serializes
   ///     opening lives in, or `nil` for
@@ -55,7 +56,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///     only when they share it. Another process opening the same database holds this one up for
   ///     as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a lock,
   ///     and no longer, so one frozen partway through its open cannot hold it up for good.
-  /// - Precondition: `configuration.readerCount` must be greater than zero.
+  /// - Precondition: `readerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
   ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
   ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy timeout
@@ -63,10 +64,11 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public init(
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
+    readerCount: Int = 5,
     identifier: OrbitDatabaseIdentifier? = nil,
     coordinationDirectoryPath: String? = nil
   ) throws {
-    precondition(configuration.readerCount > 0, "SQLitePool requires at least one reader")
+    precondition(readerCount > 0, "SQLitePool requires at least one reader")
     guard !path.isPrivateToConnection else {
       throw SQLitePoolUnavailableError(path: path)
     }
@@ -83,6 +85,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
         path: path,
         readerConfiguration: configuration,
         writerConfiguration: configuration,
+        readerCount: readerCount,
         readerSetupSQL: ["PRAGMA query_only = 1"],
         writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
         identifier: identifier
@@ -321,6 +324,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     ///
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
+    ///   - readerCount: The number of reader connections to open. Must be greater than zero.
     ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
     ///   - coordinationDirectoryPath: The path of the directory the advisory lock that
     ///     serializes opening lives in, or `nil` for
@@ -329,12 +333,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     ///   ``SQLiteError`` when a connection cannot be opened.
     public convenience init(
       path: OrbitDatabasePath,
+      readerCount: Int = 5,
       identifier: OrbitDatabaseIdentifier? = nil,
       coordinationDirectoryPath: String? = nil
     ) throws {
       try self.init(
         path: path,
         configuration: .default,
+        readerCount: readerCount,
         identifier: identifier,
         coordinationDirectoryPath: coordinationDirectoryPath
       )
@@ -346,7 +352,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   import _SQLiteOrbitFoundation
 
   extension SQLitePool {
-    /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers,
+    /// Opens `path` as a WAL database with one writer and `readerCount` readers,
     /// coordinating its open with other processes in a directory at a file URL.
     ///
     /// ```swift
@@ -360,13 +366,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
     ///   - configuration: The settings applied to every connection.
+    ///   - readerCount: The number of reader connections to open. Must be greater than zero.
     ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
     ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or `nil`
     ///     for ``UnixDatagramIPCTransport/Configuration/defaultDirectory``. Processes coordinate
     ///     only when they share it. Another process opening the same database holds this one up
     ///     for as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a
     ///     lock, and no longer, so one frozen partway through its open cannot hold it up for good.
-    /// - Precondition: `configuration.readerCount` must be greater than zero.
+    /// - Precondition: `readerCount` must be greater than zero.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
     ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy
@@ -374,12 +381,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     public convenience init(
       path: OrbitDatabasePath,
       configuration: SQLiteConfiguration,
+      readerCount: Int = 5,
       identifier: OrbitDatabaseIdentifier? = nil,
       coordinationDirectory: URL?
     ) throws {
       try self.init(
         path: path,
         configuration: configuration,
+        readerCount: readerCount,
         identifier: identifier,
         coordinationDirectoryPath: coordinationDirectory?.path
       )
@@ -400,6 +409,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       ///
       /// - Parameters:
       ///   - path: The database file. A database private to its connection cannot be pooled.
+      ///   - readerCount: The number of reader connections to open. Must be greater than zero.
       ///   - identifier: The identity shared with other processes. Defaults to the standardized
       ///     path.
       ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or
@@ -408,12 +418,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       ///   ``SQLiteError`` when a connection cannot be opened.
       public convenience init(
         path: OrbitDatabasePath,
+        readerCount: Int = 5,
         identifier: OrbitDatabaseIdentifier? = nil,
         coordinationDirectory: URL?
       ) throws {
         try self.init(
           path: path,
           configuration: .default,
+          readerCount: readerCount,
           identifier: identifier,
           coordinationDirectoryPath: coordinationDirectory?.path
         )

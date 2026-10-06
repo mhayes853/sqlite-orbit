@@ -50,9 +50,7 @@
 
       @Test(arguments: SQLiteTestDriver.allCases)
       func concurrentWritesAndReadsFromManyTasksAllCommit(_ driver: SQLiteTestDriver) async throws {
-        var configuration = SQLiteConfiguration.default
-        configuration.readerCount = 4
-        try await driver.withDatabase(configuration: configuration, schema: itemsSchema) {
+        try await driver.withDatabase(readerCount: 4, schema: itemsSchema) {
           database in
           let count = 300
           _ = try await concurrently(2 * count) { index in

@@ -14,6 +14,8 @@
     /// wants its own database without disturbing the rest of the process. Reading this value in a
     /// view body is how a view that is not a fetch property reaches the same database its fetch
     /// properties are using.
+    /// A reader-only observable database can supply fetches; saving through ``Row`` or
+    /// ``SingleRow`` also requires ``OrbitDatabaseWriter``.
     ///
     /// ```swift
     /// struct RemindersView: View {

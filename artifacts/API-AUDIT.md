@@ -7,11 +7,13 @@ and grouped fetching (13). It also corrects cursor-cache documentation, exposes 
 database lookup, reader mapping and opaque observation identity, and makes `onUpdate` the common
 subscription callback primitive.
 
-Next discussion: validated SQL decomposition (8), fetch composition/scheduling (11–12), remaining
-observation capability requirements (7), subscription lifetimes (15), separating pool options from
-connection configuration, and removing the redundant instance `Table.databaseRegion` convenience.
-Keep migration policy/status (16), managed authorization (9), and connection-setting effect
-boundaries as later work. Row mutation primitives (14) also remain open.
+Further implemented: validated SQL parts (8), public request helpers and fetch/scheduler composition
+(11–12), reader-based observability and public region-delivery guarantees (7), shared subscription
+completion (15), explicit pool initializer counts, and removal of the instance `Table.databaseRegion`
+convenience. Request helpers consistently use a `Request` suffix, including `sectionedRequest`.
+
+Remaining later work: migration policy/status (16), managed authorization (9), and connection-setting
+effect boundaries. Row mutation primitives (14) also remain open.
 
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 

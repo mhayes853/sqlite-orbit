@@ -254,7 +254,6 @@
   ) async throws {
     try await withTemporaryDirectory("low-pool") { directory in
       var readerConfiguration = SQLiteConfiguration.default
-      readerConfiguration.readerCount = 2
       readerConfiguration.setupSQL = ["PRAGMA cache_size = 101"]
       var writerConfiguration = SQLiteConfiguration.default
       writerConfiguration.setupSQL = ["PRAGMA cache_size = 202"]
@@ -268,6 +267,7 @@
         path: OrbitDatabasePath(directory.appendingPathComponent("database.sqlite").path),
         readerConfiguration: readerConfiguration,
         writerConfiguration: writerConfiguration,
+        readerCount: 2,
         writerCount: writerCount,
         readerSetupSQL: ["PRAGMA query_only = 1"],
         writerSetupSQL: writerSetupSQL

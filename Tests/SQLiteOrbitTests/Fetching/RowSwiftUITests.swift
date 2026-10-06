@@ -125,7 +125,7 @@
       @SingleRow private var settings: BindingSettings
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase) {
+      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
         _settings = SingleRow(BindingSettings.self, database: database)
       }
 
@@ -151,7 +151,7 @@
       @Row private var reminder: BindingReminder?
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase) {
+      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
         _reminder = Row(BindingReminder.self, id: 1, database: database)
       }
 

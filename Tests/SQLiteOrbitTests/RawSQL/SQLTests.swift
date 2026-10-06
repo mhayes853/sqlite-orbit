@@ -6,19 +6,22 @@ import Testing
 @Suite
 struct SQLTests {
   @Test
-  func aLiteralWithoutInterpolationsBindsNothing() {
+  func aLiteralWithoutInterpolationsBindsNothing() throws {
     let sql: SQL = "SELECT count(*) FROM reminders"
     #expect(sql.text == "SELECT count(*) FROM reminders")
     #expect(sql.bindings.isEmpty)
+    #expect(try sql.validatedParts() == [.text(sql.text)])
   }
 
   @Test
-  func writtenTextIsUsedAsItIsWithItsBindings() {
+  func writtenTextIsUsedAsItIsWithItsBindings() throws {
     let sql = SQL(text: "SELECT 'it''s' WHERE id = ?", bindings: [.integer(1)])
     #expect(sql.text == "SELECT 'it''s' WHERE id = ?")
     #expect(sql.bindings == [.integer(1)])
     #expect(sql == "SELECT 'it''s' WHERE id = \(1)")
     #expect(SQL(text: "SELECT 1") == "SELECT 1")
+    #expect(try sql.validatedParts() == [.statement(text: sql.text, bindings: sql.bindings)])
+    #expect(try SQL(parts: sql.validatedParts()) == sql)
   }
 
   @Test
@@ -67,11 +70,19 @@ struct SQLTests {
   }
 
   @Test
-  func interpolatedSQLIsSplicedWithItsParametersInOrder() {
+  func interpolatedSQLIsSplicedWithItsParametersInOrder() throws {
     let filter: SQL = "list_id = \(3) AND title = \("Milk")"
     let sql: SQL = "SELECT \(1) FROM reminders WHERE \(filter) LIMIT \(10)"
     #expect(sql.text == "SELECT ? FROM reminders WHERE list_id = ? AND title = ? LIMIT ?")
     #expect(sql.bindings == [.integer(1), .integer(3), .text("Milk"), .integer(10)])
+    #expect(
+      try sql.validatedParts() == [
+        .text("SELECT "), .binding(1), .text(" FROM reminders WHERE "),
+        .text("list_id = "), .binding(3), .text(" AND title = "), .binding("Milk"),
+        .text(" LIMIT "), .binding(10)
+      ]
+    )
+    #expect(try SQL(parts: sql.validatedParts()) == sql)
   }
 
   @Test
@@ -115,7 +126,9 @@ struct SQLTests {
     let third: SQL = "SELECT \(2)"
     #expect(first == second)
     #expect(first != third)
-    #expect(Set([first, second, third]).count == 2)
+    let raw = SQL(text: "SELECT ?", bindings: [1])
+    let partitioned = SQL(parts: [.text("SEL"), .text("ECT "), .binding(1)])
+    #expect(Set([first, second, third, raw, partitioned]).count == 2)
   }
 
   @Test

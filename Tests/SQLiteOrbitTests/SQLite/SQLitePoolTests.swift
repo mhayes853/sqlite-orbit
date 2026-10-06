@@ -10,13 +10,11 @@
 
     /// Runs `body` with a pool on a database file of its own, holding the table `items`.
     private func withPool(
-      readerCount: Int? = nil,
+      readerCount: Int = 5,
       _ body: (SQLitePool) async throws -> Void
     ) async throws {
       try await withTestDatabaseFile("pool") { file in
-        var configuration = SQLiteConfiguration.default
-        if let readerCount { configuration.readerCount = readerCount }
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(readerCount: readerCount)
         try await pool.execute(
           sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
         )
@@ -59,22 +57,18 @@
       @Test
       func aZeroReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 0
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: 0)
         }
       }
 
       @Test
       func aNegativeReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = -1
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: -1)
         }
       }
     #endif
@@ -122,10 +116,9 @@
 
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.readerCount = 1
         configuration.maximumCachedStatements = 0
         configuration.library = library
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(configuration: configuration, readerCount: 1)
         try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
         try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
 

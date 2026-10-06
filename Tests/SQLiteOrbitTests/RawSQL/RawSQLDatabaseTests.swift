@@ -140,6 +140,13 @@
       }
       #expect(rows == [[.integer(1), .text("two"), .null]])
 
+      let raw = SQL(text: "SELECT '?', ?2, ?1, :name", bindings: [1, "two", "named"])
+      let parts = try raw.validatedParts() + [.text(", "), .binding("last")]
+      let reordered = try await database.read { transaction in
+        try transaction.fetchOne(SQL(parts: parts)) { [$0[0], $0[1], $0[2], $0[3], $0[4]] }
+      }
+      #expect(reordered == ["?", "two", 1, "named", "last"])
+
       // A parameter without a value is NULL, and a value without a parameter is refused.
       let unbound = try await database.read { transaction in
         try transaction.fetchOne(SQL(text: "SELECT ?, ?", bindings: [.integer(1)])) { $0[1] }

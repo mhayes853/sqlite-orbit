@@ -24,12 +24,16 @@
       @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
       func animationSchedulerIdentityIncludesTheAnimation() {
         #expect(
-          OrbitFetchAnimationScheduler(animation: .default)
-            == OrbitFetchAnimationScheduler(animation: .default)
+          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
+            == OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
         )
         #expect(
-          OrbitFetchAnimationScheduler(animation: .default)
-            != OrbitFetchAnimationScheduler(animation: .linear)
+          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
+            != OrbitMainActorValueObservationScheduler.mainActor.animation(.linear)
+            .deferringInitialValue()
         )
       }
 

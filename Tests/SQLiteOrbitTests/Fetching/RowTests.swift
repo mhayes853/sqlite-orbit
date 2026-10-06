@@ -8,6 +8,24 @@
 
     @Suite
     struct RowTests {
+      @Test
+      func anObservableReaderDefaultRejectsSavingAndRecordsTheError() async throws {
+        let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
+        try await OrbitDefaultDatabase.withValue(ReaderOnlyObservationDatabase(database)) {
+          @Row(EditableReminder.self, id: 1) var reminder
+          #expect(reminder?.title == "Milk")
+          do {
+            try await $reminder.update { $0.title = "Eggs" }
+            Issue.record("The reader-only default accepted a save")
+          } catch {
+            #expect((error as? SQLiteError)?.primaryCode == .readOnly)
+          }
+          #expect(($reminder.saveError as? SQLiteError)?.primaryCode == .readOnly)
+          #expect(!$reminder.isSaving)
+          #expect(reminder?.title == "Milk")
+        }
+      }
+
       @Test(arguments: [false, true])
       func savingRemainsTrueUntilAHeldUpdateCompletes(overlappingFailure: Bool) async throws {
         let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))

@@ -31,9 +31,11 @@
     /// Opens the database in `directory` with this driver.
     func open(
       in directory: URL,
-      configuration: SQLiteConfiguration = .default
+      configuration: SQLiteConfiguration = .default,
+      readerCount: Int = 5
     ) throws -> SQLiteTestDatabase {
-      try TestDatabaseFile(in: directory).open(self, configuration: configuration)
+      try TestDatabaseFile(in: directory)
+        .open(self, configuration: configuration, readerCount: readerCount)
     }
 
     /// Opens the database in `directory` with this driver, and creates the table `items`, with an
@@ -49,17 +51,19 @@
     ///
     /// - Parameters:
     ///   - configuration: The configuration to open the database with.
+    ///   - readerCount: How many readers to open when the driver is a pool.
     ///   - schema: SQL to run in a write transaction before `body`, if any.
     ///   - body: Receives the database.
     /// - Returns: Whatever `body` returns.
     func withDatabase<Result>(
       configuration: SQLiteConfiguration = .default,
+      readerCount: Int = 5,
       schema: String? = nil,
       isolation: isolated (any Actor)? = #isolation,
       _ body: (SQLiteTestDatabase) async throws -> Result
     ) async throws -> Result {
       try await withTestDatabaseFile { file in
-        let database = try file.open(self, configuration: configuration)
+        let database = try file.open(self, configuration: configuration, readerCount: readerCount)
         if let schema { try await database.execute(sql: schema) }
         return try await body(database)
       }
@@ -100,18 +104,21 @@
     }
 
     /// Opens the database with a ``SQLitePool``.
-    func pool(configuration: SQLiteConfiguration = .default) throws -> SQLitePool {
-      try SQLitePool(path: self.path, configuration: configuration)
+    func pool(configuration: SQLiteConfiguration = .default, readerCount: Int = 5) throws
+      -> SQLitePool
+    {
+      try SQLitePool(path: self.path, configuration: configuration, readerCount: readerCount)
     }
 
     /// Opens the database with `driver`.
     func open(
       _ driver: SQLiteTestDriver,
-      configuration: SQLiteConfiguration = .default
+      configuration: SQLiteConfiguration = .default,
+      readerCount: Int = 5
     ) throws -> SQLiteTestDatabase {
       switch driver {
       case .queue: try self.queue(configuration: configuration)
-      case .pool: try self.pool(configuration: configuration)
+      case .pool: try self.pool(configuration: configuration, readerCount: readerCount)
       }
     }
 
@@ -119,9 +126,15 @@
       /// Opens the database with a ``TursoPool``.
       func tursoPool(
         configuration: SQLiteConfiguration = .turso,
+        readerCount: Int = 5,
         writerCount: Int = 4
       ) throws -> TursoPool {
-        try TursoPool(path: self.path, configuration: configuration, writerCount: writerCount)
+        try TursoPool(
+          path: self.path,
+          configuration: configuration,
+          readerCount: readerCount,
+          writerCount: writerCount
+        )
       }
     #endif
 

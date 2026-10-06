@@ -85,7 +85,9 @@
   /// observers registered on it, which is the only way to tell how many subscriptions a group of
   /// observations took out.
   // This provider deliberately compiles against an ordinary import, just like a custom driver.
-  final class AnnouncingTestDatabase: OrbitObservableDatabase, @unchecked Sendable {
+  final class AnnouncingTestDatabase: OrbitDatabaseWriter, OrbitObservableDatabase,
+    @unchecked Sendable
+  {
     let defaultIdentifier: OrbitDatabaseIdentifier
 
     private let base: SQLiteQueue

@@ -21,7 +21,7 @@
 ///   try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue ?? "" }
 /// }
 /// ```
-public final class SQLiteQueue: OrbitObservableDatabase {
+public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 

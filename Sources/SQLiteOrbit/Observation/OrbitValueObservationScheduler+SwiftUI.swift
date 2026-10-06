@@ -95,11 +95,45 @@
     ///
     /// - Parameter animation: The animation applied to each scheduled callback.
     /// - Returns: A scheduler that animates this one's deliveries.
-    @MainActor
     public func animation(
       _ animation: Animation? = .default
-    ) -> OrbitTransactionValueObservationScheduler<Self> {
-      transaction(Transaction(animation: animation))
+    ) -> OrbitAnimatedValueObservationScheduler<Self> {
+      OrbitAnimatedValueObservationScheduler(base: self, animation: animation)
     }
   }
+  /// A main-actor scheduler that applies an animation to scheduled callbacks.
+  ///
+  /// Initial timing follows the base scheduler; an immediate initial value is not animated.
+  public struct OrbitAnimatedValueObservationScheduler<
+    Base: OrbitValueObservationMainActorScheduler
+  >:
+    OrbitValueObservationMainActorScheduler
+  {
+    private let base: Base
+    private let animation: Animation?
+
+    public init(base: Base, animation: Animation? = .default) {
+      self.base = base
+      self.animation = animation
+    }
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      base.immediateInitialValue(from: isolation)
+    }
+
+    public func schedule(
+      from isolation: isolated (any Actor)?,
+      _ action: @escaping @Sendable () -> Void
+    ) {
+      base.schedule(from: isolation) { [animation] in
+        MainActor.assumeIsolated { withAnimation(animation, action) }
+      }
+    }
+  }
+
+  extension OrbitAnimatedValueObservationScheduler: Equatable where Base: Equatable {}
+
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  extension OrbitAnimatedValueObservationScheduler: Hashable where Base: Hashable {}
+
 #endif

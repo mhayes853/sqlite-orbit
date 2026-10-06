@@ -16,7 +16,7 @@
       func busyTimeoutChangedByAWriteConnectionIsRestoredWhenTheAccessEnds(
         _ kind: SQLiteTestDriver
       ) async throws {
-        try await kind.withDatabase(configuration: singleReaderConfiguration()) { driver in
+        try await kind.withDatabase(readerCount: 1) { driver in
           let during = try await driver.writeWithoutTransaction { connection in
             #expect(connection.busyTimeout == .limit(.seconds(5)))
             connection.busyTimeout = .limit(.seconds(42))
@@ -38,7 +38,7 @@
         _ kind: SQLiteTestDriver
       ) async throws {
         // One reader, so that every read lands on the connection the first one changed.
-        try await kind.withDatabase(configuration: singleReaderConfiguration()) { driver in
+        try await kind.withDatabase(readerCount: 1) { driver in
           let during = try await driver.readWithoutTransaction { connection in
             connection.busyTimeout = .maximum
             #expect(connection.busyTimeout == .maximum)
@@ -93,7 +93,11 @@
         _ kind: SQLiteTestDriver
       ) async throws {
         let probe = PragmaProbe()
-        try await kind.withDatabase(configuration: probe.configuration(), schema: listsSchema) {
+        try await kind.withDatabase(
+          configuration: probe.configuration(),
+          readerCount: 1,
+          schema: listsSchema
+        ) {
           driver in
           try await driver.writeWithoutTransaction { connection in
             // Setting runs nothing, and reading returns what was set.
@@ -131,7 +135,11 @@
       @Test(arguments: SQLiteTestDriver.allCases)
       func aChangeUndoneBeforeAnyStatementRunsNoPragma(_ kind: SQLiteTestDriver) async throws {
         let probe = PragmaProbe()
-        try await kind.withDatabase(configuration: probe.configuration(), schema: listsSchema) {
+        try await kind.withDatabase(
+          configuration: probe.configuration(),
+          readerCount: 1,
+          schema: listsSchema
+        ) {
           driver in
           try await driver.writeWithoutTransaction { connection in
             connection.isForeignKeysEnabled = false
@@ -153,7 +161,11 @@
         _ kind: SQLiteTestDriver
       ) async throws {
         let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 0")
-        try await kind.withDatabase(configuration: probe.configuration(), schema: listsSchema) {
+        try await kind.withDatabase(
+          configuration: probe.configuration(),
+          readerCount: 1,
+          schema: listsSchema
+        ) {
           driver in
           probe.isFailing = true
 
@@ -257,7 +269,11 @@
         _ kind: SQLiteTestDriver
       ) async throws {
         let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 1")
-        try await kind.withDatabase(configuration: probe.configuration(), schema: listsSchema) {
+        try await kind.withDatabase(
+          configuration: probe.configuration(),
+          readerCount: 1,
+          schema: listsSchema
+        ) {
           driver in
           probe.isFailing = true
 
@@ -300,7 +316,11 @@
       @Test(arguments: SQLiteTestDriver.allCases)
       func aFailedRestoreDoesNotMaskTheBodysError(_ kind: SQLiteTestDriver) async throws {
         let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 1")
-        try await kind.withDatabase(configuration: probe.configuration(), schema: listsSchema) {
+        try await kind.withDatabase(
+          configuration: probe.configuration(),
+          readerCount: 1,
+          schema: listsSchema
+        ) {
           driver throws in
           probe.isFailing = true
 
@@ -381,7 +401,6 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.readerCount = 1
         configuration.library.statements.execution.step = { [self] statement in
           guard let text = base.statements.inspection.sql(statement) else {
             return base.statements.execution.step(statement)
@@ -398,12 +417,6 @@
         }
         return configuration
       }
-    }
-
-    private func singleReaderConfiguration() -> SQLiteConfiguration {
-      var configuration = SQLiteConfiguration.default
-      configuration.readerCount = 1
-      return configuration
     }
 
     private let listsSchema = """

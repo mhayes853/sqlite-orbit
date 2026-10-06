@@ -436,12 +436,13 @@ public struct SQLiteConnection: ~Copyable {
     library: UnsafePointer<SQLiteLibrary>
   ) throws {
     // SQL that holds no statement, such as an empty query, has nothing to run.
-    guard let statement = try library.pointee.prepareStatement(query.text, on: connection) else {
+    let text = query.text
+    guard let statement = try library.pointee.prepareStatement(text, on: connection) else {
       return
     }
     defer { _ = library.pointee.statements.execution.finalize(statement) }
     try bind(query, to: statement, library: library)
-    try stepToCompletion(statement, on: connection, library: library, sql: query.text)
+    try stepToCompletion(statement, on: connection, library: library, sql: text)
   }
 
   static func executeScript(
