@@ -21,6 +21,15 @@
     @Suite(.serialized)
     struct FetchPropertyTests {
       @Test
+      func erasedHashableValuesUseTheSameCanonicalizationForEqualityAndHashing() {
+        let integer = OrbitAnyHashableSendable(Int(1))
+        let real = OrbitAnyHashableSendable(Double(1))
+        #expect(integer == real)
+        #expect(integer.hashValue == real.hashValue)
+        #expect(Set([integer, real]).count == 1)
+      }
+
+      @Test
       func fetchAllIsPopulatedByItsFirstReadAndTracksTheRegionsItRead() async throws {
         let database = try await remindersDatabase(titles: "Milk", "Eggs")
 

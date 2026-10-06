@@ -147,6 +147,15 @@ public struct SQL: Hashable, Sendable {
     }
   }
 
+  private mutating func appendBinding(_ value: @autoclosure () throws -> OrbitDatabaseValue) {
+    do {
+      parts.append(.binding(try value()))
+    } catch {
+      parts.append(.binding(.null))
+      if bindingFailure == nil { bindingFailure = error }
+    }
+  }
+
   /// Concatenates two statements' text and parameters.
   ///
   /// ```swift
@@ -268,12 +277,7 @@ extension SQL: ExpressibleByStringInterpolation {
     ///
     /// - Parameter value: The value to bind.
     public mutating func appendInterpolation(_ value: some ConvertibleToOrbitDatabaseValue) {
-      do {
-        sql.parts.append(.binding(try value.orbitDatabaseValue()))
-      } catch {
-        sql.parts.append(.binding(.null))
-        if sql.bindingFailure == nil { sql.bindingFailure = error }
-      }
+      sql.appendBinding(try value.orbitDatabaseValue())
     }
 
     /// Binds a storage value as a parameter.
@@ -398,12 +402,7 @@ func orbitQuoted(_ text: String, delimiter: Unicode.Scalar) -> String {
         case .identifier(let identifier):
           parts.append(.text(orbitQuoted(identifier.name, delimiter: "\"")))
         case .binding(let binding):
-          do {
-            parts.append(.binding(try OrbitDatabaseValue(lowering: binding)))
-          } catch {
-            parts.append(.binding(.null))
-            if bindingFailure == nil { bindingFailure = error }
-          }
+          appendBinding(try OrbitDatabaseValue(lowering: binding))
         }
       }
     }

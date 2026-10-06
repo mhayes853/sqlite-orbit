@@ -156,7 +156,7 @@ struct OrbitAnyHashableSendable: Hashable, Sendable {
   }
 
   func hash(into hasher: inout Hasher) {
-    base.hash(into: &hasher)
+    AnyHashable(base).hash(into: &hasher)
   }
 }
 

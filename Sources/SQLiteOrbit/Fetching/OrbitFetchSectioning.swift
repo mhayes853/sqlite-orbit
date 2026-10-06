@@ -16,8 +16,9 @@
     let order: QueryFragment
 
     init(_ expression: some QueryExpression) {
-      self.select = expression.queryFragment
-      self.order = expression.queryFragment
+      let fragment = expression.queryFragment
+      self.select = fragment
+      self.order = fragment
     }
 
     init<Value>(_ orderingTerm: _OrderingTerm<Value>) {
