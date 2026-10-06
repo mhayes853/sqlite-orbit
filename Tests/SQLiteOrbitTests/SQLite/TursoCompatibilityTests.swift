@@ -519,7 +519,7 @@
       // nothing, which is what an empty result would wrongly vouch for.
       let driver = try SQLiteQueue(path: .memory)
       try await driver.writeWithoutTransaction { connection in
-        connection.isForeignKeysEnabled = false
+        try connection.setForeignKeysEnabled(false)
         try connection.executeScript(
           """
           CREATE TABLE lists (id INTEGER PRIMARY KEY);

@@ -19,7 +19,8 @@ Migration policy/status (16) and managed authorization (9) are now public. Expli
 policies and a status snapshot preserve all existing GRDB-compatible entry points. Authorization
 can be configured for every connection, replaced on a connection, or added for a synchronous scope.
 
-Remaining later work: connection-setting effect boundaries.
+Connection-setting effect boundaries are now explicit too: throwing setters apply busy-timeout
+and foreign-key changes immediately, and the corresponding properties report applied values.
 
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 

@@ -27,16 +27,10 @@ struct SQLiteConnectionSettings: ~Copyable {
 
   private(set) var busyTimeout: SQLiteBusyTimeout
 
-  /// Whether the connection's next statement should run with foreign keys enforced.
-  ///
-  /// Setting this runs nothing, since the setter a connection exposes it through cannot throw.
-  /// ``applyForeignKeys()`` puts it into effect before the connection's next statement, where a
-  /// failure has somewhere to be thrown.
-  var isForeignKeysEnabled: Bool
-
-  // What SQLite was last told, which is what a restore has to undo. A change still pending never
-  // reached SQLite, so it needs no undoing.
-  private var appliedForeignKeys: Bool
+  private(set) var isForeignKeysEnabled: Bool
+  // A pragma can change the native flag during preparation even if stepping later fails. If
+  // recovery also fails, the next access must restore it even when the last known value matches.
+  private var needsForeignKeysRestore = false
 
   // Configured off. A connection that can write turns it on only for the duration of a read.
   private(set) var isQueryOnly = false
@@ -57,24 +51,33 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.configuredForeignKeys = configuration.pointee.isForeignKeysEnabled
     self.busyTimeout = configuration.pointee.busyTimeout
     self.isForeignKeysEnabled = configuration.pointee.isForeignKeysEnabled
-    self.appliedForeignKeys = configuration.pointee.isForeignKeysEnabled
   }
 
-  mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) {
-    // `sqlite3_busy_timeout` only refuses a connection that is not open, and one lent to an access
-    // always is. Were it to refuse anyway, the timeout in effect is unchanged, and so is what this
-    // reports.
-    guard applyBusyTimeout(timeout) == SQLiteResultCode.ok.rawValue else { return }
+  mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
+    let code = applyBusyTimeout(timeout)
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+    }
     busyTimeout = timeout
     if configuration.pointee.busyHandler != nil { isBusyHandlerReplaced = true }
   }
 
-  /// Puts a pending foreign keys change into effect.
-  ///
-  /// - Throws: A ``SQLiteError`` when the pragma fails, in which case the change stays pending.
-  mutating func applyForeignKeys() throws {
-    guard isForeignKeysEnabled != appliedForeignKeys else { return }
-    try executeForeignKeys(isForeignKeysEnabled)
+  mutating func setForeignKeysEnabled(_ isEnabled: Bool) throws {
+    guard library.pointee.connections.isAutocommit(connection) != 0 else {
+      throw SQLiteError(
+        code: .misuse,
+        message: "Foreign keys cannot be changed inside a transaction"
+      )
+    }
+    guard isForeignKeysEnabled != isEnabled || needsForeignKeysRestore else { return }
+    let previous = isForeignKeysEnabled
+    do {
+      try executeForeignKeys(isEnabled)
+    } catch {
+      needsForeignKeysRestore = true
+      authorizer.withoutUserAuthorization { try? executeForeignKeys(previous) }
+      throw error
+    }
   }
 
   private mutating func executeForeignKeys(_ isEnabled: Bool) throws {
@@ -89,7 +92,8 @@ struct SQLiteConnectionSettings: ~Copyable {
         statements: statements
       )
     }
-    appliedForeignKeys = isEnabled
+    isForeignKeysEnabled = isEnabled
+    needsForeignKeysRestore = false
   }
 
   mutating func setQueryOnly(_ isQueryOnly: Bool) throws {
@@ -105,23 +109,21 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Puts every changed setting back to its configured value, and drops any change still pending.
+  /// Puts every changed setting back to its configured value.
   ///
   /// Every changed setting is attempted even after one fails, so one failure leaves no more
   /// behind than it has to. A setting that cannot be restored stays changed.
   ///
   /// - Throws: The first failure.
   mutating func restore() throws {
-    isForeignKeysEnabled = configuredForeignKeys
     var failure: (any Error)?
     if busyTimeout != configuredBusyTimeout {
       // Reapplying the timeout replaces any busy handler a connection setup installed, which is
       // why it is only reapplied once it has actually changed.
-      let code = applyBusyTimeout(configuredBusyTimeout)
-      if code == SQLiteResultCode.ok.rawValue {
-        busyTimeout = configuredBusyTimeout
-      } else {
-        failure = SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+      do {
+        try setBusyTimeout(configuredBusyTimeout)
+      } catch {
+        failure = error
       }
     }
     if isBusyHandlerReplaced {
@@ -140,9 +142,9 @@ struct SQLiteConnectionSettings: ~Copyable {
           ?? SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
       }
     }
-    if appliedForeignKeys != configuredForeignKeys {
+    if isForeignKeysEnabled != configuredForeignKeys || needsForeignKeysRestore {
       do {
-        try executeForeignKeys(configuredForeignKeys)
+        try setForeignKeysEnabled(configuredForeignKeys)
       } catch {
         failure = failure ?? error
       }

@@ -126,7 +126,7 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.isForeignKeysEnabled = false
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }

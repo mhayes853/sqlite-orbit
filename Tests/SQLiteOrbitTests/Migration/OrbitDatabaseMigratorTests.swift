@@ -514,7 +514,7 @@
               try connection.transaction { try createListsAndReminders($0) }
               let before = try connection.foreignKeyViolations()
               // A table rebuild outside the migrator: foreign keys off, the change, then the check.
-              connection.isForeignKeysEnabled = false
+              try connection.setForeignKeysEnabled(false)
               let during = try connection.transaction { transaction in
                 try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
                 return try transaction.foreignKeyViolations()
@@ -620,7 +620,7 @@
         }
 
         let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
-          connection.isForeignKeysEnabled = true
+          try connection.setForeignKeysEnabled(true)
           try migrator.migrate(connection)
           return (
             connection.isForeignKeysEnabled,
@@ -652,7 +652,7 @@
 
           let error = await #expect(throws: TestError.self) {
             try await driver.writeWithoutTransaction { connection in
-              connection.busyTimeout = .limit(.seconds(42))
+              try connection.setBusyTimeout(.limit(.seconds(42)))
               try migrator.migrate(connection)
             }
           }
@@ -662,6 +662,48 @@
           #expect(try await writerPragma("busy_timeout", on: driver) == 5000)
           #expect(try await driver.read { try migrator.appliedMigrations($0) } == ["one"])
         }
+      }
+
+      @Test(arguments: [false, true])
+      func restorationFailurePreservesTheMigrationErrorAndIsRetried(bodyThrows: Bool) async throws {
+        let failRestore = Lock(false)
+        let base = builtInTestLibrary
+        var configuration = SQLiteConfiguration.default
+        configuration.library.statements.execution.step = { statement in
+          if failRestore.withLock({ $0 }),
+            let sql = base.statements.inspection.sql(statement),
+            String(cString: sql) == "PRAGMA foreign_keys = 1"
+          {
+            return SQLiteResultCode.ioError.rawValue
+          }
+          return base.statements.execution.step(statement)
+        }
+        let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+        var migrator = OrbitDatabaseMigrator()
+        migrator.registerMigration("one", foreignKeyPolicy: .disabled) { _ in
+          failRestore.withLock { $0 = true }
+          if bodyThrows { throw TestError() }
+        }
+        do {
+          try await migrator.migrate(driver)
+          Issue.record("Restoration should have failed")
+        } catch is TestError {
+          #expect(bodyThrows)
+        } catch let error as SQLiteError {
+          #expect(!bodyThrows)
+          #expect(error.primaryCode == .ioError)
+          #expect(error.sql == "PRAGMA foreign_keys = 1")
+        }
+        let held = await #expect(throws: SQLiteError.self) {
+          try await driver.writeWithoutTransaction { _ in
+            Issue.record("Restoration is still failing")
+          }
+        }
+        #expect(held?.primaryCode == .ioError)
+        failRestore.withLock { $0 = false }
+        try await expectWriterForeignKeys(true, on: driver)
+        let applied = try await driver.read { try migrator.appliedMigrations($0) }
+        #expect(applied == (bodyThrows ? [] : ["one"]))
       }
 
       @Test(arguments: [true, false])
@@ -676,7 +718,7 @@
         }
 
         let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
-          connection.isForeignKeysEnabled = callerValue
+          try connection.setForeignKeysEnabled(callerValue)
           #expect(throws: TestError.self) { try migrator.migrate(connection) }
           return (
             connection.isForeignKeysEnabled,
@@ -728,7 +770,7 @@
 
         let running = Task { [migrator] in
           try await driver.writeWithoutTransaction { connection in
-            connection.busyTimeout = .maximum
+            try connection.setBusyTimeout(.maximum)
             try migrator.migrate(connection)
           }
         }
@@ -823,7 +865,7 @@
           let previousBeginCount = beginCount.value
           let migration = Task {
             try await driver.writeWithoutTransaction { connection in
-              connection.busyTimeout = .limit(.seconds(30))
+              try connection.setBusyTimeout(.limit(.seconds(30)))
               try migrator.migrate(connection)
             }
           }

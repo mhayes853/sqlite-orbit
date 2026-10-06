@@ -7,7 +7,7 @@
 ///
 /// ```swift
 /// try await database.writeWithoutTransaction { connection in
-///   connection.isForeignKeysEnabled = false
+///   try connection.setForeignKeysEnabled(false)
 ///   try connection.transaction { transaction in
 ///     try rebuildLists(in: transaction)
 ///     let violations = try transaction.foreignKeyViolations()

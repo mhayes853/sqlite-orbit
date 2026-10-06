@@ -149,7 +149,7 @@
             try database.readBlocking { _ in _ = ran.increment() }
           } else if action == "foreign_keys" {
             try database.writeWithoutTransactionBlocking { connection in
-              connection.isForeignKeysEnabled = false
+              try connection.setForeignKeysEnabled(false)
               try connection.execute("INSERT INTO copies VALUES ('lost')")
             }
           } else {

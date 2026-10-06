@@ -137,10 +137,18 @@ public struct SQLiteConnection: ~Copyable {
     // thing the connection does rather than merely before the first statement.
     try unlock(with: configuration.key)
     _ = libraryStorage.pointee.connections.setExtendedResultCodes(pointer, 1)
-    _ = libraryStorage.pointee.connections.setBusyTimeout(
+    let timeoutCode = libraryStorage.pointee.connections.setBusyTimeout(
       pointer,
       configuration.busyTimeout.milliseconds
     )
+    guard timeoutCode == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(
+        by: libraryStorage.pointee,
+        on: pointer,
+        code: timeoutCode,
+        sql: nil
+      )
+    }
     // Last of the two, since SQLite keeps one busy handler and the timeout is one: a configuration
     // that sets both waits by the handler.
     try installBusyHandler()

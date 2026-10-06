@@ -32,7 +32,7 @@ public struct SQLiteConfiguration: Sendable {
   ///
   /// A database shared between processes needs this: without it an overlapping write fails
   /// outright rather than queueing. An access may change it for its own duration through
-  /// ``SQLiteWriteConnection/busyTimeout`` or ``SQLiteReadConnection/busyTimeout``.
+  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` or ``SQLiteReadConnection/setBusyTimeout(_:)``.
   ///
   /// A ``busyHandler`` takes precedence over this. SQLite implements the timeout as a busy handler
   /// of its own and keeps only one per connection, so a configuration that sets both waits by the
@@ -66,7 +66,7 @@ public struct SQLiteConfiguration: Sendable {
   /// Since SQLite keeps a single busy handler per connection and implements `busyTimeout` as one,
   /// setting this takes precedence: a connection opened with both installs the handler last, so
   /// the timeout never applies. An access that changes
-  /// ``SQLiteWriteConnection/busyTimeout`` replaces the handler for its own duration, and the
+  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` replaces the handler for its own duration, and the
   /// handler is reinstalled when the access ends along with the configured timeout.
   ///
   /// A ``SQLitePool`` asks it too, in place of ``busyTimeout``, while another process that is
@@ -93,7 +93,7 @@ public struct SQLiteConfiguration: Sendable {
   /// Whether foreign key enforcement is turned on.
   ///
   /// An access may change it for its own duration through
-  /// ``SQLiteWriteConnection/isForeignKeysEnabled``.
+  /// ``SQLiteWriteConnection/setForeignKeysEnabled(_:)``.
   public var isForeignKeysEnabled: Bool
 
   /// Whether SQLite trusts schema-defined functions and virtual tables.

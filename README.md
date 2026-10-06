@@ -379,17 +379,18 @@ must commit together:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  connection.isForeignKeysEnabled = false
+  try connection.setForeignKeysEnabled(false)
   try connection.transaction { transaction in
     try transaction.execute(Reminder.delete())
   }
 }
 ```
 
-Setting `isForeignKeysEnabled` takes effect before the connection's next statement or
-`transaction`, which is also where a failure to apply it is thrown. It and the `busyTimeout` are put
-back to their configured values when the access ends, even when it throws. Any other pragma stays
-changed on the connection, so restore it before returning. Outside `transaction`, statements that
+`setForeignKeysEnabled(_:)` and `setBusyTimeout(_:)` apply changes immediately and throw if they
+fail. Their read-only properties report the successfully applied values. Changing foreign keys
+during a transaction throws. Both settings are put back to their configured values when the access
+ends, even when it throws. Any other pragma stays changed on the connection, so restore it before
+returning. Outside `transaction`, statements that
 begin or end a transaction or a savepoint are refused, so the connection always knows what has
 committed. Observers see each statement as a commit of its own, and an `OrbitIPCDatabase` announces
 what committed once the access ends, even when it throws.
@@ -1147,7 +1148,7 @@ you raise, which is put back when the access ends:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  connection.busyTimeout = .limit(.seconds(30))
+  try connection.setBusyTimeout(.limit(.seconds(30)))
   try migrator.migrate(connection)
 }
 ```

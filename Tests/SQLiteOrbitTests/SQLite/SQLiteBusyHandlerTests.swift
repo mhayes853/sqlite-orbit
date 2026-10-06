@@ -69,7 +69,7 @@
 
           // Setting the timeout is how SQLite replaces the handler, since it keeps only one.
           try await waiter.writeWithoutTransaction { connection in
-            connection.busyTimeout = .limit(.seconds(42))
+            try connection.setBusyTimeout(.limit(.seconds(42)))
             let inEffect = try connection.fetchOne(busyTimeoutPragma, as: Int.self)
             #expect(inEffect == 42_000)
           }
@@ -88,6 +88,46 @@
           #expect(error?.isBusy == true)
           #expect(attempts.value == 1)
           #expect(clock.now - started < .seconds(5))
+        }
+      }
+      @Test
+      func theHandlerSurvivesRetryingAFailedTimeoutRestore() throws {
+        try withTestDatabaseFile { file in
+          let failRestore = Lock(false)
+          let attempts = TestCounter()
+          let base = builtInTestLibrary
+          var configuration = SQLiteConfiguration.default
+          configuration.busyTimeout = .limit(.milliseconds(30))
+          configuration.busyHandler = { _ in
+            attempts.increment()
+            return false
+          }
+          configuration.library.connections.setBusyTimeout = { connection, milliseconds in
+            if milliseconds == 30, failRestore.withLock({ $0 }) {
+              return SQLiteResultCode.ioError.rawValue
+            }
+            return base.connections.setBusyTimeout(connection, milliseconds)
+          }
+          let waiter = try file.queue(configuration: configuration)
+          let error = #expect(throws: SQLiteError.self) {
+            try waiter.writeWithoutTransactionBlocking { connection in
+              try connection.setBusyTimeout(.limit(.milliseconds(42)))
+              failRestore.withLock { $0 = true }
+            }
+          }
+          #expect(error?.primaryCode == .ioError)
+          failRestore.withLock { $0 = false }
+
+          var holder = try SQLiteConnection(path: file.path, configuration: .default)
+          try holder.withWriteConnection { connection in
+            try connection.transaction { _ in
+              let blocked = #expect(throws: SQLiteError.self) {
+                try waiter.writeBlocking { _ in Issue.record("Another connection holds the lock") }
+              }
+              #expect(blocked?.isBusy == true)
+            }
+          }
+          #expect(attempts.value == 1)
         }
       }
     #endif

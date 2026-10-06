@@ -346,7 +346,7 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.busyTimeout = .maximum
+  ///   try connection.setBusyTimeout(.maximum)
   ///   try migrator.migrate(connection)
   /// }
   /// ```
@@ -444,16 +444,10 @@ public struct OrbitDatabaseMigrator: Sendable {
         feature: .foreignKeyCheck
       )
     }
-    if disablesForeignKeys {
-      // Applied just before the transaction begins.
-      connection.isForeignKeysEnabled = false
-    }
-    // Putting the value back only records it, so this runs nothing and cannot fail, and a failed
-    // migration's error is rethrown as it is. A deferred migration next turns it off again without
-    // a pragma in between; anything else applies it first: an immediate migration's transaction,
-    // the caller's next statement, or the end of the access.
-    defer { connection.isForeignKeysEnabled = wasForeignKeysEnabled }
-    try connection.transaction { transaction in
+    try transaction(
+      on: connection,
+      foreignKeysEnabled: !disablesForeignKeys && wasForeignKeysEnabled
+    ) { transaction in
       if try hasMigrationsTable(in: transaction) {
         // Another process may have applied the migration since it was found pending. Holding the
         // write lock is what makes this answer final.
@@ -487,11 +481,7 @@ public struct OrbitDatabaseMigrator: Sendable {
   ) throws {
     // Dropping a table other tables refer to with foreign keys on would first delete its rows, and
     // fail on the rows that refer to them.
-    let wasForeignKeysEnabled = connection.isForeignKeysEnabled
-    connection.isForeignKeysEnabled = false
-    // Putting the value back only records it, so this cannot fail.
-    defer { connection.isForeignKeysEnabled = wasForeignKeysEnabled }
-    try connection.transaction { transaction in
+    try transaction(on: connection, foreignKeysEnabled: false) { transaction in
       // Another process may have migrated or erased the database since the first check.
       guard try schemaChanges(transaction, reusing: &scratch) else { return }
       // Dropping a table also drops its indexes and triggers, and a virtual table its shadow
@@ -516,6 +506,23 @@ public struct OrbitDatabaseMigrator: Sendable {
       }
       try transaction.execute("PRAGMA user_version = 0")
     }
+  }
+
+  /// Restores the caller's enforcement immediately without masking a migration failure.
+  private func transaction(
+    on connection: borrowing SQLiteWriteConnection,
+    foreignKeysEnabled: Bool,
+    _ body: (borrowing SQLiteWriteTransaction) throws -> Void
+  ) throws {
+    let previous = connection.isForeignKeysEnabled
+    try connection.setForeignKeysEnabled(foreignKeysEnabled)
+    do {
+      try connection.transaction(body)
+    } catch {
+      try? connection.setForeignKeysEnabled(previous)
+      throw error
+    }
+    try connection.setForeignKeysEnabled(previous)
   }
 
   private func firstDroppableObject(
