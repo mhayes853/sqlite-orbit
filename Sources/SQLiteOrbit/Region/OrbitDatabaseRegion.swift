@@ -131,10 +131,6 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     schema: SQLiteSchemaName = .main
   ) where Columns.Element == String {
     let columns = Set(columns.map(\.asciiLowercased))
-    guard !columns.isEmpty else {
-      self.init()
-      return
-    }
     self.init(
       includesUnspecifiedTables: false,
       tableRegions: [TableIdentifier(schema: schema, name: table): .columns(columns)]
