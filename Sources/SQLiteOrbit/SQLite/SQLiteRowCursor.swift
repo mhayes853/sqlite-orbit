@@ -34,6 +34,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   var preparedStatement: SQLitePreparedStatement?
 
   let authorizer: SQLiteAuthorizerDispatcher
+  let authorizationGeneration: UInt64
 
   let observations: SQLiteConnectionEvents
 
@@ -79,11 +80,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.isCached = cached
     self.preparedStatement = preparedStatement
     self.authorizer = authorizer
+    self.authorizationGeneration = authorizer.generation
     self.observations = observations
+    if preparedStatement != nil { authorizer.activeCursors += 1 }
   }
 
   deinit {
     guard let preparedStatement else { return }
+    authorizer.activeCursors -= 1
     if isCached {
       statements.checkIn(preparedStatement, sql: sql)
     } else {
@@ -101,6 +105,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
     guard !isExhausted, let statement = preparedStatement?.pointer else { return nil }
+    guard authorizationGeneration == authorizer.generation else {
+      isExhausted = true
+      throw SQLiteError(
+        code: .misuse,
+        message: "A cursor cannot cross an authorization scope boundary",
+        sql: sql
+      )
+    }
     if !didPublishAccesses {
       didPublishAccesses = true
       // SQLite may recompile a cached statement on its first step after another connection changed

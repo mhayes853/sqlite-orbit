@@ -109,8 +109,8 @@ public struct SQLiteConnection: ~Copyable {
       configurationStorage: configurationStorage,
       isReadOnly: flags.contains(.readOnly)
     )
-    try handle.configure(configuration)
     try handle.authorizer.install(on: pointer, using: handle.library)
+    try handle.configure(configuration)
     self = consume handle
   }
 
@@ -156,6 +156,9 @@ public struct SQLiteConnection: ~Copyable {
     }
     // A setup is handed the library this connection was opened through, so whether it can run
     // against that build is its own question to answer rather than one asked on its behalf here.
+    if let authorization = configuration.authorization {
+      try connection.setAuthorization(authorization)
+    }
     for setup in configuration.connectionSetups {
       try setup(connection)
     }
@@ -261,18 +264,22 @@ public struct SQLiteConnection: ~Copyable {
   ) throws -> Result {
     // Whatever an earlier access could not restore is retried first. A setting that still cannot
     // be restored fails this access, rather than letting it run under what the earlier one left.
-    try settings.pointee.restore()
+    try restoreSettings()
     let value: Result
     do {
       value = try body()
     } catch {
       // The body's failure is the one worth reporting. A setting that still cannot be restored
       // remains changed, so the next access retries it before running.
-      try? settings.pointee.restore()
+      try? restoreSettings()
       throw error
     }
-    try settings.pointee.restore()
+    try restoreSettings()
     return value
+  }
+
+  private borrowing func restoreSettings() throws {
+    try authorizer.withoutUserAuthorization { try settings.pointee.restore() }
   }
 
   // The borrowed read connection opens its transactions here.
@@ -280,7 +287,7 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try execute("BEGIN DEFERRED TRANSACTION")
+    try authorizer.requiringExecution { try execute("BEGIN DEFERRED TRANSACTION") }
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
@@ -290,7 +297,7 @@ public struct SQLiteConnection: ~Copyable {
       rollbackIgnoringFailure()
       throw error
     }
-    try endTransaction(with: "ROLLBACK")
+    try authorizer.withoutUserAuthorization { try endTransaction(with: "ROLLBACK") }
     return value
   }
 
@@ -400,7 +407,7 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try execute(mode.beginSQL)
+    try authorizer.requiringExecution { try execute(mode.beginSQL) }
     statements.invalidateIfSchemaChanged()
     do {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
@@ -417,17 +424,17 @@ public struct SQLiteConnection: ~Copyable {
 
   private borrowing func endTransaction(with sql: String) throws {
     do {
-      try execute(sql)
+      try authorizer.requiringExecution { try execute(sql) }
     } catch {
       if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
-        try? execute("ROLLBACK")
+        authorizer.withoutUserAuthorization { try? execute("ROLLBACK") }
       }
       throw error
     }
   }
 
   private borrowing func rollbackIgnoringFailure() {
-    try? endTransaction(with: "ROLLBACK")
+    authorizer.withoutUserAuthorization { try? endTransaction(with: "ROLLBACK") }
   }
 
   static func execute(
@@ -471,7 +478,7 @@ public struct SQLiteConnection: ~Copyable {
           )
         }
         let code: Int32
-        let authorizations: [SQLiteAuthorization]
+        let authorizations: [SQLiteRawAuthorization]
         if let authorizer {
           (code, authorizations) = authorizer.recordingAuthorizations(during: prepare)
         } else {

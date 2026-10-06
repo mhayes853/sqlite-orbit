@@ -64,6 +64,21 @@ public struct OrbitDatabaseMigrator: Sendable {
     case immediate
   }
 
+  /// An explicit foreign-key policy for one migration, independent of ``defersForeignKeyChecks``.
+  public enum ForeignKeyPolicy: Hashable, Sendable {
+    /// Leaves foreign-key enforcement as configured on the connection.
+    case connection
+
+    /// Turns enforcement off while the migration runs and validates the database before commit.
+    ///
+    /// Validation runs even when the connection began with enforcement disabled. A library without
+    /// foreign-key checking support fails before running the migration or taking the write lock.
+    case validateBeforeCommit
+
+    /// Turns enforcement off while the migration runs and performs no final validation.
+    case disabled
+  }
+
   /// Whether deferred migrations registered from now on have the database checked for foreign key
   /// violations before they commit.
   ///
@@ -193,6 +208,43 @@ public struct OrbitDatabaseMigrator: Sendable {
     foreignKeyChecks: ForeignKeyChecks = .deferred,
     migrate: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) {
+    let policy: Migration.ForeignKeyPolicy =
+      switch foreignKeyChecks {
+      case .deferred: defersForeignKeyChecks ? .legacyDeferred : .disabled
+      case .immediate: .connection
+      }
+    registerMigration(identifier, policy: policy, migrate: migrate)
+  }
+
+  /// Registers a migration with an explicit policy, independent of ``defersForeignKeyChecks``.
+  ///
+  /// ``ForeignKeyPolicy/validateBeforeCommit`` validates even if the connection's foreign keys
+  /// were disabled before migration. The legacy ``ForeignKeyChecks/deferred`` option skips that
+  /// validation when the connection's foreign keys are already disabled.
+  ///
+  /// - Parameters:
+  ///   - identifier: The unique identifier recorded after this migration commits.
+  ///   - foreignKeyPolicy: How this migration enforces or validates foreign keys.
+  ///   - migrate: Runs in its own transaction. Throwing rolls the migration back.
+  public mutating func registerMigration(
+    _ identifier: String,
+    foreignKeyPolicy: ForeignKeyPolicy,
+    migrate: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
+  ) {
+    let policy: Migration.ForeignKeyPolicy =
+      switch foreignKeyPolicy {
+      case .connection: .connection
+      case .validateBeforeCommit: .validateBeforeCommit
+      case .disabled: .disabled
+      }
+    registerMigration(identifier, policy: policy, migrate: migrate)
+  }
+
+  private mutating func registerMigration(
+    _ identifier: String,
+    policy: Migration.ForeignKeyPolicy,
+    migrate: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
+  ) {
     precondition(
       !registeredMigrations.contains { $0.identifier == identifier },
       """
@@ -200,13 +252,8 @@ public struct OrbitDatabaseMigrator: Sendable {
       of its own, since the identifier is what records that it has been applied.
       """
     )
-    let checks: Migration.ForeignKeyChecks =
-      switch foreignKeyChecks {
-      case .deferred: defersForeignKeyChecks ? .deferred : .disabled
-      case .immediate: .immediate
-      }
     registeredMigrations.append(
-      Migration(identifier: identifier, foreignKeyChecks: checks, migrate: migrate)
+      Migration(identifier: identifier, foreignKeyPolicy: policy, migrate: migrate)
     )
   }
 
@@ -382,11 +429,13 @@ public struct OrbitDatabaseMigrator: Sendable {
     on connection: borrowing SQLiteWriteConnection
   ) throws {
     // SQLite ignores a change to foreign keys inside a transaction, which is why a migration runs
-    // on a connection outside one and opens its own. With foreign keys already off there is
-    // nothing to defer, and nothing a check would be guarding.
+    // on a connection outside one and opens its own. Legacy deferred checks run only when
+    // enforcement began enabled; an explicit validation policy always checks.
     let wasForeignKeysEnabled = connection.isForeignKeysEnabled
-    let disablesForeignKeys = wasForeignKeysEnabled && migration.foreignKeyChecks != .immediate
-    let checksForeignKeys = disablesForeignKeys && migration.foreignKeyChecks == .deferred
+    let disablesForeignKeys = wasForeignKeysEnabled && migration.foreignKeyPolicy != .connection
+    let checksForeignKeys =
+      migration.foreignKeyPolicy == .validateBeforeCommit
+      || (disablesForeignKeys && migration.foreignKeyPolicy == .legacyDeferred)
     // A build that cannot check would let the migration commit whatever it left dangling. Failing
     // here, with the error the check itself throws, runs none of it and takes no write lock.
     if checksForeignKeys, !connection.sqlite.isForeignKeyCheckAvailable {
@@ -627,6 +676,23 @@ public struct OrbitDatabaseMigrator: Sendable {
 
   // MARK: - Inspecting
 
+  /// Reads one snapshot of registered and applied migration identifiers.
+  ///
+  /// The returned value computes applied, pending, and completed migrations without more database
+  /// reads. An absent migrations table produces an empty set of applied identifiers.
+  ///
+  /// - Parameter transaction: A read or write transaction, or a connection.
+  /// - Throws: A ``SQLiteError`` when the migration history cannot be read.
+  public func status<Transaction>(
+    in transaction: borrowing Transaction
+  ) throws -> OrbitDatabaseMigrationStatus
+  where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
+    OrbitDatabaseMigrationStatus(
+      registeredIdentifiers: migrations,
+      appliedIdentifiers: try readAppliedIdentifiers(transaction)
+    )
+  }
+
   /// Returns the identifier of every migration the database has applied, including any this
   /// migrator does not register.
   ///
@@ -640,6 +706,13 @@ public struct OrbitDatabaseMigrator: Sendable {
   /// - Returns: Every recorded identifier.
   /// - Throws: A ``SQLiteError`` when the table of applied migrations cannot be read.
   public func appliedIdentifiers<Transaction>(
+    _ transaction: borrowing Transaction
+  ) throws -> Set<String>
+  where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
+    try status(in: transaction).appliedIdentifiers
+  }
+
+  private func readAppliedIdentifiers<Transaction>(
     _ transaction: borrowing Transaction
   ) throws -> Set<String>
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
@@ -664,8 +737,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     _ transaction: borrowing Transaction
   ) throws -> [String]
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
-    let applied = try appliedIdentifiers(transaction)
-    return migrations.filter(applied.contains)
+    try status(in: transaction).appliedMigrations
   }
 
   /// Returns the registered migrations the database has applied up to the first one it has not.
@@ -684,8 +756,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     _ transaction: borrowing Transaction
   ) throws -> [String]
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
-    let applied = try appliedIdentifiers(transaction)
-    return Array(migrations.prefix(while: applied.contains))
+    try status(in: transaction).completedMigrations
   }
 
   /// Returns whether the database has applied every registered migration.
@@ -701,8 +772,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     _ transaction: borrowing Transaction
   ) throws -> Bool
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
-    let applied = try appliedIdentifiers(transaction)
-    return migrations.allSatisfy(applied.contains)
+    try status(in: transaction).isComplete
   }
 
   /// Returns whether the database has applied a migration this migrator does not register.
@@ -723,8 +793,7 @@ public struct OrbitDatabaseMigrator: Sendable {
     _ transaction: borrowing Transaction
   ) throws -> Bool
   where Transaction: OrbitDatabaseReadTransaction, Transaction: ~Copyable, Transaction: ~Escapable {
-    let registered = Set(migrations)
-    return try !appliedIdentifiers(transaction).isSubset(of: registered)
+    try status(in: transaction).isSuperseded
   }
 
   private func hasMigrationsTable<Transaction>(
@@ -770,17 +839,15 @@ private struct SchemaObject: Hashable {
 }
 
 private struct Migration: Sendable {
-  enum ForeignKeyChecks {
-    // Foreign keys off while it runs, then the whole database checked before it commits.
-    case deferred
-    // Foreign keys off while it runs, and no check: registered while `defersForeignKeyChecks` was
-    // `false`.
+  enum ForeignKeyPolicy {
+    case connection
+    case validateBeforeCommit
+    // Preserves GRDB-compatible deferred behavior when enforcement began disabled.
+    case legacyDeferred
     case disabled
-    // Foreign keys as the connection has them.
-    case immediate
   }
 
   let identifier: String
-  let foreignKeyChecks: ForeignKeyChecks
+  let foreignKeyPolicy: ForeignKeyPolicy
   let migrate: @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
 }

@@ -123,6 +123,15 @@ final class SQLiteStatementCache {
     finalizeIdle()
   }
 
+  func invalidateAuthorization() {
+    invalidate()
+    if let schemaVersionStatement {
+      _ = library.pointee.statements.execution.finalize(schemaVersionStatement)
+      self.schemaVersionStatement = nil
+    }
+    isSchemaVersionUnavailable = false
+  }
+
   /// Drops the cached statements when another connection has changed the schema since they were
   /// compiled.
   ///
@@ -192,7 +201,7 @@ final class SQLiteStatementCache {
     _ = library.pointee.statements.execution.step(statement)
   }
 
-  func changedRegion(after authorizations: [SQLiteAuthorization]) -> OrbitDatabaseRegion {
+  func changedRegion(after authorizations: [SQLiteRawAuthorization]) -> OrbitDatabaseRegion {
     var scopes: [Table: TableUpdateScope] = [:]
     var region = OrbitDatabaseRegion.empty
     for authorization in authorizations {
@@ -293,7 +302,7 @@ struct SQLitePreparedStatement {
   init(
     pointer: OpaquePointer,
     isReadOnly: Bool,
-    authorizations: [SQLiteAuthorization],
+    authorizations: [SQLiteRawAuthorization],
     cacheGeneration: UInt64 = 0,
     statements: SQLiteStatementCache?,
     connection: OpaquePointer,
@@ -330,7 +339,7 @@ struct SQLitePreparedStatement {
 
 // `isReadOnly` is what `sqlite3_stmt_readonly` reports for the statement.
 func sqliteInvalidatesStatementCache(
-  after authorizations: [SQLiteAuthorization],
+  after authorizations: [SQLiteRawAuthorization],
   isReadOnly: Bool
 ) -> Bool {
   // Without an authorizer there is no safe way to distinguish DDL and connection-changing
@@ -342,7 +351,7 @@ func sqliteInvalidatesStatementCache(
     || (!isReadOnly && authorizations.contains { $0.action == .pragma })
 }
 
-extension SQLiteAuthorization {
+extension SQLiteRawAuthorization {
   var invalidatesStatementCache: Bool {
     switch action {
     case .createIndex, .createTable, .createTemporaryIndex, .createTemporaryTable,

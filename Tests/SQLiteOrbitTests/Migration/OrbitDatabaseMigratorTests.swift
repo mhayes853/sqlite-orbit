@@ -334,6 +334,77 @@
         #endif
       }
 
+      @Test(
+        arguments: [
+          OrbitDatabaseMigrator.ForeignKeyPolicy.connection, .validateBeforeCommit, .disabled
+        ],
+        [
+          (defers: true, enforces: true), (defers: false, enforces: true),
+          (defers: true, enforces: false), (defers: false, enforces: false)
+        ]
+      )
+      func explicitPoliciesIgnoreTheLegacyFlagAndRespectTheirOwnEnforcementRules(
+        _ policy: OrbitDatabaseMigrator.ForeignKeyPolicy,
+        settings: (defers: Bool, enforces: Bool)
+      ) async throws {
+        var configuration = SQLiteConfiguration.default
+        configuration.isForeignKeysEnabled = settings.enforces
+        let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+        let foreignKeys = TestRecorder<Int>()
+        var migrator = OrbitDatabaseMigrator()
+        migrator.defersForeignKeyChecks = settings.defers
+        migrator.registerMigration(
+          "Create lists",
+          foreignKeyPolicy: .connection,
+          migrate: createListsAndReminders
+        )
+        migrator.registerMigration("Orphan", foreignKeyPolicy: policy) { transaction in
+          foreignKeys.append(try foreignKeysPragma(in: transaction))
+          try transaction.execute("INSERT INTO reminders (id, listID) VALUES (3, 7)")
+        }
+        // Neither the flag at registration nor a later change controls an explicit policy.
+        migrator.defersForeignKeyChecks.toggle()
+
+        switch policy {
+        case .validateBeforeCommit:
+          #if Turso
+            await #expect(throws: SQLiteFeatureUnavailableError.self) {
+              try await migrator.migrate(driver)
+            }
+          #else
+            await #expect(throws: OrbitDatabaseForeignKeyViolationError.self) {
+              try await migrator.migrate(driver)
+            }
+          #endif
+        case .connection where settings.enforces:
+          let error = await #expect(throws: SQLiteError.self) {
+            try await migrator.migrate(driver)
+          }
+          #expect(error?.primaryCode == .constraint)
+        default:
+          try await migrator.migrate(driver)
+        }
+
+        let isRejected =
+          policy == .validateBeforeCommit || (policy == .connection && settings.enforces)
+        let status = try await driver.read { try migrator.status(in: $0) }
+        #expect(
+          status.appliedMigrations == (isRejected ? ["Create lists"] : ["Create lists", "Orphan"])
+        )
+        #expect(try await driver.rowCount(of: "reminders") == (isRejected ? 2 : 3))
+        #if Turso
+          if policy == .validateBeforeCommit {
+            // Unsupported validation is refused before the migration runs or takes its write lock.
+            #expect(foreignKeys.values.isEmpty)
+          } else {
+            #expect(foreignKeys.values == [policy == .connection && settings.enforces ? 1 : 0])
+          }
+        #else
+          #expect(foreignKeys.values == [policy == .connection && settings.enforces ? 1 : 0])
+        #endif
+        try await expectWriterForeignKeys(settings.enforces, on: driver)
+      }
+
       @Test
       func foreignKeysOffOnTheConnectionAreNeitherToggledNorChecked() async throws {
         var configuration = SQLiteConfiguration.default
@@ -785,26 +856,48 @@
 
       // MARK: - Inspection
 
+      @Test
+      func aStatusSnapshotDistinguishesGapsAndUnrecognizedIdentifiersWithoutADatabase() {
+        let status = OrbitDatabaseMigrationStatus(
+          registeredIdentifiers: ["one", "two", "three"],
+          appliedIdentifiers: ["one", "three", "newer"]
+        )
+        #expect(status.appliedMigrations == ["one", "three"])
+        #expect(status.pendingMigrations == ["two"])
+        #expect(status.completedMigrations == ["one"])
+        #expect(status.unrecognizedIdentifiers == ["newer"])
+        #expect(!status.isComplete)
+        #expect(status.isSuperseded)
+
+        let complete = OrbitDatabaseMigrationStatus(
+          registeredIdentifiers: status.registeredIdentifiers,
+          appliedIdentifiers: status.appliedIdentifiers.union(["two"])
+        )
+        #expect(complete.appliedMigrations == ["one", "two", "three"])
+        #expect(complete.completedMigrations == complete.appliedMigrations)
+        #expect(complete.pendingMigrations.isEmpty)
+        #expect(complete.isComplete && complete.isSuperseded)
+        let empty = OrbitDatabaseMigrationStatus(registeredIdentifiers: [], appliedIdentifiers: [])
+        #expect(empty.isComplete && !empty.isSuperseded)
+      }
+
       @Test(arguments: SQLiteTestDriver.allCases)
       func inspectingAFreshDatabaseReportsNothingApplied(_ kind: SQLiteTestDriver) async throws {
         try await kind.withDatabase { driver in
           let migrator = loggingMigrator(["one", "two"])
 
-          let fromRead = try await driver.read { try Inspection(of: migrator, in: $0) }
+          let fromRead = try await driver.read { try inspectedStatus(of: migrator, in: $0) }
           let fromConnection = try await driver.readWithoutTransaction { connection in
-            try Inspection(of: migrator, in: connection)
+            try inspectedStatus(of: migrator, in: connection)
           }
-          let fromWrite = try await driver.write { try Inspection(of: migrator, in: $0) }
+          let fromWrite = try await driver.write { try inspectedStatus(of: migrator, in: $0) }
           let fromWriteConnection = try await driver.writeWithoutTransaction { connection in
-            try Inspection(of: migrator, in: connection)
+            try inspectedStatus(of: migrator, in: connection)
           }
 
-          let nothing = Inspection(
-            identifiers: [],
-            applied: [],
-            completed: [],
-            hasCompleted: false,
-            hasBeenSuperseded: false
+          let nothing = OrbitDatabaseMigrationStatus(
+            registeredIdentifiers: migrator.migrations,
+            appliedIdentifiers: []
           )
           #expect(fromRead == nothing)
           #expect(fromConnection == nothing)
@@ -824,13 +917,10 @@
         try await driver.execute(sql: "INSERT INTO orbit_migrations VALUES ('three')")
 
         #expect(
-          try await driver.read { try Inspection(of: migrator, in: $0) }
-            == Inspection(
-              identifiers: ["one", "three"],
-              applied: ["one", "three"],
-              completed: ["one"],
-              hasCompleted: false,
-              hasBeenSuperseded: false
+          try await driver.read { try inspectedStatus(of: migrator, in: $0) }
+            == OrbitDatabaseMigrationStatus(
+              registeredIdentifiers: migrator.migrations,
+              appliedIdentifiers: ["one", "three"]
             )
         )
 
@@ -838,13 +928,10 @@
         try await migrator.migrate(driver)
 
         #expect(
-          try await driver.read { try Inspection(of: migrator, in: $0) }
-            == Inspection(
-              identifiers: ["one", "two", "three", "from a newer build"],
-              applied: ["one", "two", "three"],
-              completed: ["one", "two", "three"],
-              hasCompleted: true,
-              hasBeenSuperseded: true
+          try await driver.read { try inspectedStatus(of: migrator, in: $0) }
+            == OrbitDatabaseMigrationStatus(
+              registeredIdentifiers: migrator.migrations,
+              appliedIdentifiers: ["one", "two", "three", "from a newer build"]
             )
         )
         // The migration recorded by hand never ran, and the one registered before it did.
@@ -1760,42 +1847,23 @@
       }
     }
 
-    private struct Inspection: Equatable, Sendable {
-      var identifiers: Set<String>
-      var applied: [String]
-      var completed: [String]
-      var hasCompleted: Bool
-      var hasBeenSuperseded: Bool
-
-      init(
-        identifiers: Set<String>,
-        applied: [String],
-        completed: [String],
-        hasCompleted: Bool,
-        hasBeenSuperseded: Bool
-      ) {
-        self.identifiers = identifiers
-        self.applied = applied
-        self.completed = completed
-        self.hasCompleted = hasCompleted
-        self.hasBeenSuperseded = hasBeenSuperseded
-      }
-
-      init<Transaction>(
-        of migrator: OrbitDatabaseMigrator,
-        in transaction: borrowing Transaction
-      ) throws
-      where
-        Transaction: OrbitDatabaseReadTransaction,
-        Transaction: ~Copyable,
-        Transaction: ~Escapable
-      {
-        self.identifiers = try migrator.appliedIdentifiers(transaction)
-        self.applied = try migrator.appliedMigrations(transaction)
-        self.completed = try migrator.completedMigrations(transaction)
-        self.hasCompleted = try migrator.hasCompletedMigrations(transaction)
-        self.hasBeenSuperseded = try migrator.hasBeenSuperseded(transaction)
-      }
+    /// Checks the compatibility methods against the single-read public snapshot.
+    private func inspectedStatus<Transaction>(
+      of migrator: OrbitDatabaseMigrator,
+      in transaction: borrowing Transaction
+    ) throws -> OrbitDatabaseMigrationStatus
+    where
+      Transaction: OrbitDatabaseReadTransaction,
+      Transaction: ~Copyable,
+      Transaction: ~Escapable
+    {
+      let status = try migrator.status(in: transaction)
+      #expect(try migrator.appliedIdentifiers(transaction) == status.appliedIdentifiers)
+      #expect(try migrator.appliedMigrations(transaction) == status.appliedMigrations)
+      #expect(try migrator.completedMigrations(transaction) == status.completedMigrations)
+      #expect(try migrator.hasCompletedMigrations(transaction) == status.isComplete)
+      #expect(try migrator.hasBeenSuperseded(transaction) == status.isSuperseded)
+      return status
     }
   #endif
 #endif

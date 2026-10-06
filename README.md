@@ -985,6 +985,47 @@ names still need an explicit shared identifier. A database private to its connec
 unique identifier. Process-local drivers use their own identifiers but cannot be passed to
 `OrbitIPCDatabase`.
 
+## SQL authorization
+
+Set `SQLiteConfiguration.authorization` to install a policy on every connection opened by a queue
+or pool. Authorization receives a typed action with its schema and originating view or trigger:
+
+```swift
+var configuration = SQLiteConfiguration.default
+configuration.authorization = { event in
+  if case .attach = event.action { return .deny }
+  return .allow
+}
+```
+
+Connections and transactions also expose `withAuthorization(_:perform:)` for synchronous scopes:
+
+```swift
+try await database.read { transaction in
+  try transaction.withAuthorization({ event in
+    if case .read(table: "secrets", column: _) = event.action { return .deny }
+    return .allow
+  }) {
+    try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  }
+}
+```
+
+Scoped policies compose with the configured policy and outer scopes: any denial wins, and an
+allowance cannot override the library's transaction or read restrictions. `.ignore` uses SQLite's
+action-specific behavior, including replacing a read column with NULL; it does not generally
+prevent side effects. Ignoring required transaction control or driver settings is treated as denial.
+Recovery rollback and restoration of temporary settings bypass application policies.
+
+`SQLiteConnectionAccess.setAuthorization(_:)` replaces the persistent policy on one connection;
+read and write connections forward this operation. Pass `nil` to remove it. The change persists
+across later loans, so use configuration for a policy that must cover every pool connection.
+Policies run during statement preparation, not every cached execution: keep captured permissions
+stable and replace the policy to apply changes. Replacement and scoped entry/exit invalidate
+prepared statements. Release outstanding cursors before changing policies or entering a scope,
+and consume scoped cursors inside that scope. Handlers must not access their connection.
+Backends without authorizer support throw `SQLiteFeatureUnavailableError` when a policy is installed.
+
 ## Migrations
 
 `OrbitDatabaseMigrator` brings a database's schema up to date, one registered migration at a time.
@@ -1051,6 +1092,21 @@ Turso cannot run the check, so there a migration that would be checked throws
 `SQLiteFeatureUnavailableError` before it runs; `.immediate` migrations, which Turso enforces as
 they go, and unchecked ones apply as usual.
 
+For explicit behavior independent of the legacy deferred-check settings, use `foreignKeyPolicy:`:
+
+```swift
+migrator.registerMigration("Rebuild reminders", foreignKeyPolicy: .validateBeforeCommit) {
+  transaction in
+  // Rebuild the table with enforcement temporarily disabled.
+  // Every foreign key is checked before this migration commits.
+}
+```
+
+The policies are `.connection` (preserve the connection's enforcement), `.validateBeforeCommit`
+(disable enforcement during the migration, then validate even if it was initially disabled), and
+`.disabled` (disable enforcement without a final check). The existing `foreignKeyChecks:` overload,
+its default, and the GRDB-compatible deferred-check properties keep their original behavior.
+
 ### The table of applied migrations
 
 Applied migrations are recorded in a table named `orbit_migrations`, created by the first migration
@@ -1068,6 +1124,18 @@ lent outside one, and take it unlabeled as GRDB's do: `appliedIdentifiers(_:)`,
 `hasBeenSuperseded(_:)`. A database no migrator has run on has applied nothing, and reading it
 creates no table. `migrations` lists the registered identifiers, and GRDB's
 `disablingDeferredForeignKeyChecks()` returns a copy with `defersForeignKeyChecks` off.
+
+`status(in:)` reads the same history once and returns an `OrbitDatabaseMigrationStatus` snapshot:
+
+```swift
+let status = try await database.read { try migrator.status(in: $0) }
+print(status.pendingMigrations)
+print(status.unrecognizedIdentifiers)
+```
+
+The snapshot also exposes registered and applied identifiers, applied migrations in registration
+order, the contiguous completed prefix, `isComplete`, and `isSuperseded`. The existing inspection
+methods remain available and derive their answers from this same snapshot.
 
 ### Several processes
 

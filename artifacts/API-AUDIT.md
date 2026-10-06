@@ -15,8 +15,11 @@ convenience. Request helpers consistently use a `Request` suffix, including `sec
 Row mutation primitives (14) are now public too: primary-keyed tables expose transactional updates,
 and row bindings compose public blocking mutation methods with the existing save-state behavior.
 
-Remaining later work: migration policy/status (16), managed authorization (9), and connection-setting
-effect boundaries. Migration changes must preserve the existing GRDB-compatible entry points.
+Migration policy/status (16) and managed authorization (9) are now public. Explicit migration
+policies and a status snapshot preserve all existing GRDB-compatible entry points. Authorization
+can be configured for every connection, replaced on a connection, or added for a synchronous scope.
+
+Remaining later work: connection-setting effect boundaries.
 
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 

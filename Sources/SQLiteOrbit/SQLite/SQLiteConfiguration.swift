@@ -77,6 +77,19 @@ public struct SQLiteConfiguration: Sendable {
   /// ``SQLiteFeatureUnavailableError``.
   public var busyHandler: (@Sendable (_ attempt: Int) -> Bool)?
 
+  /// The authorization policy installed on every connection this configuration opens.
+  ///
+  /// Scoped policies add restrictions; an allowance never overrides another policy's denial.
+  /// The handler runs synchronously on each connection's executor and must not access that
+  /// connection. Captured policy decisions must remain stable: SQLite authorizes preparation,
+  /// not every execution of a cached statement. Replace a policy through `setAuthorization(_:)`
+  /// to invalidate prepared statements. A library without authorizer support fails to open.
+  ///
+  /// Applied after standard connection settings and before connection setups and `setupSQL`.
+  /// Ignoring required transaction control or driver settings is treated as denial. Library recovery
+  /// (rollback and restoring temporary settings) bypasses application policies.
+  public var authorization: SQLiteAuthorizationHandler?
+
   /// Whether foreign key enforcement is turned on.
   ///
   /// An access may change it for its own duration through
@@ -108,6 +121,7 @@ public struct SQLiteConfiguration: Sendable {
   ///   - key: The key an encrypted database is unlocked with.
   ///   - busyHandler: Decides on each attempt whether to keep waiting for a lock, in place of
   ///     `busyTimeout`.
+  ///   - authorization: The policy installed on each connection, or `nil` for no application policy.
   public init(
     library: SQLiteLibrary,
     busyTimeout: SQLiteBusyTimeout = .limit(.seconds(5)),
@@ -117,12 +131,14 @@ public struct SQLiteConfiguration: Sendable {
     setupSQL: [String] = [],
     connectionSetups: [SQLiteConnectionSetup] = [],
     key: SQLiteKey? = nil,
-    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil
+    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil,
+    authorization: SQLiteAuthorizationHandler? = nil
   ) {
     self.library = library
     self.key = key
     self.busyTimeout = busyTimeout
     self.busyHandler = busyHandler
+    self.authorization = authorization
     self.isForeignKeysEnabled = isForeignKeysEnabled
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements

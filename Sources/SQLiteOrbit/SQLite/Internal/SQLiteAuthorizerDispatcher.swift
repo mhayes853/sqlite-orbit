@@ -1,10 +1,4 @@
-enum SQLiteAuthorizationDecision: Int32 {
-  case allow = 0
-  case deny = 1
-  case ignore = 2
-}
-
-enum SQLiteAuthorizationAction: Int32 {
+enum SQLiteAuthorizationCode: Int32 {
   case createIndex = 1
   case createTable = 2
   case createTemporaryIndex = 3
@@ -40,8 +34,9 @@ enum SQLiteAuthorizationAction: Int32 {
   case recursive = 33
 }
 
-struct SQLiteAuthorization {
-  let action: SQLiteAuthorizationAction?
+struct SQLiteRawAuthorization {
+  let actionCode: Int32
+  let action: SQLiteAuthorizationCode?
   let firstArgument: String?
   let secondArgument: String?
   let schemaName: String?
@@ -51,11 +46,85 @@ struct SQLiteAuthorization {
 /// Owns SQLite's single authorizer callback and multiplexes scoped handlers over it.
 ///
 /// The dispatcher is confined to its connection's serial executor. Its callback is installed once
-/// so adding a handler does not invalidate already-prepared statements.
+/// so internal recording handlers do not invalidate prepared statements. Application policy changes
+/// explicitly invalidate the cache and advance the authorization generation.
 final class SQLiteAuthorizerDispatcher {
-  typealias Handler = (SQLiteAuthorization) -> SQLiteAuthorizationDecision
+  typealias Handler = (SQLiteRawAuthorization) -> SQLiteAuthorizationDecision
 
   private var handlers: [Handler] = []
+  private var policy: SQLiteAuthorizationHandler?
+  private var scopedPolicies: [SQLiteAuthorizationHandler] = []
+  private var isUserAuthorizationSuspended = false
+  private var requiresExecution = false
+  private(set) var generation: UInt64 = 0
+  var activeCursors = 0
+
+  func setAuthorization(
+    _ policy: SQLiteAuthorizationHandler?,
+    using library: SQLiteLibrary,
+    statements: SQLiteStatementCache
+  ) throws {
+    try checkPolicyChange(using: library)
+    guard scopedPolicies.isEmpty else {
+      throw SQLiteError(
+        code: .misuse,
+        message: "Cannot replace authorization inside an authorization scope"
+      )
+    }
+    self.policy = policy
+    policyDidChange(statements: statements)
+  }
+
+  func withAuthorization<Result: ~Copyable>(
+    _ policy: @escaping SQLiteAuthorizationHandler,
+    using library: SQLiteLibrary,
+    statements: SQLiteStatementCache,
+    perform operation: () throws -> Result
+  ) throws -> Result {
+    try checkPolicyChange(using: library)
+    scopedPolicies.append(policy)
+    policyDidChange(statements: statements)
+    defer {
+      scopedPolicies.removeLast()
+      policyDidChange(statements: statements)
+    }
+    return try operation()
+  }
+
+  private func checkPolicyChange(using library: SQLiteLibrary) throws {
+    guard library.authorizer != nil else {
+      throw SQLiteFeatureUnavailableError(libraryName: library.name, feature: .authorizer)
+    }
+    guard activeCursors == 0 else {
+      throw SQLiteError(
+        code: .misuse,
+        message: "Release outstanding cursors before changing authorization"
+      )
+    }
+  }
+
+  private func policyDidChange(statements: SQLiteStatementCache) {
+    generation &+= 1
+    statements.invalidateAuthorization()
+  }
+
+  /// Recovery must be able to roll back and restore settings even when application SQL is denied.
+  func withoutUserAuthorization<Result: ~Copyable>(_ operation: () throws -> Result) rethrows
+    -> Result
+  {
+    let previous = isUserAuthorizationSuspended
+    isUserAuthorizationSuspended = true
+    defer { isUserAuthorizationSuspended = previous }
+    return try operation()
+  }
+
+  /// Silently ignoring a managed BEGIN, COMMIT, or setting would invalidate the driver's state.
+  func requiringExecution<Result: ~Copyable>(_ operation: () throws -> Result) rethrows -> Result {
+    let previous = requiresExecution
+    requiresExecution = true
+    defer { requiresExecution = previous }
+    return try operation()
+  }
 
   func install(
     on connection: OpaquePointer,
@@ -85,8 +154,8 @@ final class SQLiteAuthorizerDispatcher {
 
   func recordingAuthorizations<Result>(
     during operation: () throws -> Result
-  ) rethrows -> (result: Result, authorizations: [SQLiteAuthorization]) {
-    var authorizations: [SQLiteAuthorization] = []
+  ) rethrows -> (result: Result, authorizations: [SQLiteRawAuthorization]) {
+    var authorizations: [SQLiteRawAuthorization] = []
     let result = try withHandler(
       { authorization in
         authorizations.append(authorization)
@@ -97,10 +166,10 @@ final class SQLiteAuthorizerDispatcher {
     return (result, authorizations)
   }
 
-  private func authorize(_ authorization: SQLiteAuthorization) -> SQLiteAuthorizationDecision {
+  private func authorize(_ authorization: SQLiteRawAuthorization) -> SQLiteAuthorizationDecision {
     var decision = SQLiteAuthorizationDecision.allow
-    for handler in handlers {
-      switch handler(authorization) {
+    func combine(_ next: SQLiteAuthorizationDecision) {
+      switch next {
       case .deny:
         decision = .deny
       case .ignore where decision == .allow:
@@ -109,7 +178,13 @@ final class SQLiteAuthorizerDispatcher {
         break
       }
     }
-    return decision
+    for handler in handlers { combine(handler(authorization)) }
+    if !isUserAuthorizationSuspended {
+      let request = SQLiteAuthorization(authorization)
+      if let policy { combine(policy(request)) }
+      for policy in scopedPolicies { combine(policy(request)) }
+    }
+    return requiresExecution && decision == .ignore ? .deny : decision
   }
 
   private static let callback: SQLiteAuthorizerCallback = {
@@ -125,8 +200,9 @@ final class SQLiteAuthorizerDispatcher {
       .takeUnretainedValue()
     return
       dispatcher.authorize(
-        SQLiteAuthorization(
-          action: SQLiteAuthorizationAction(rawValue: actionCode),
+        SQLiteRawAuthorization(
+          actionCode: actionCode,
+          action: SQLiteAuthorizationCode(rawValue: actionCode),
           firstArgument: firstArgument.map(String.init(cString:)),
           secondArgument: secondArgument.map(String.init(cString:)),
           schemaName: schemaName.map(String.init(cString:)),

@@ -26,11 +26,14 @@ actor SQLiteSerialConnection {
     var handle = try SQLiteConnection(path: path, configuration: configuration, flags: flags)
     // Role-specific setup is driver policy, performed through the same public lending API.
     // The interrupt callback remains valid because this driver owns the connection for its lifetime.
+    let authorizer = handle.authorizer
     if handle.isReadOnly {
       self.interrupt = try handle.withReadConnection { connection in
-        for sql in driverSetupSQL {
-          var cursor = try connection.rowCursor(SQL(text: sql))
-          while try cursor.next() != nil {}
+        try authorizer.requiringExecution {
+          for sql in driverSetupSQL {
+            var cursor = try connection.rowCursor(SQL(text: sql), cached: false)
+            while try cursor.next() != nil {}
+          }
         }
         let address = UInt(bitPattern: connection.sqliteConnection)
         let entryPoint = connection.sqlite.connections.interrupt
@@ -38,7 +41,9 @@ actor SQLiteSerialConnection {
       }
     } else {
       self.interrupt = try handle.withWriteConnection { connection in
-        for sql in driverSetupSQL { try connection.executeScript(sql) }
+        try authorizer.requiringExecution {
+          for sql in driverSetupSQL { try connection.executeScript(sql) }
+        }
         let address = UInt(bitPattern: connection.sqliteConnection)
         let entryPoint = connection.sqlite.connections.interrupt
         return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }

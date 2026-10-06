@@ -725,12 +725,16 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   private let connection: OpaquePointer
   let libraryPointer: UnsafePointer<SQLiteLibrary>
   let configurationPointer: UnsafePointer<SQLiteConfiguration>
+  let authorizer: SQLiteAuthorizerDispatcher
+  let statements: SQLiteStatementCache
 
   @_lifetime(borrow handle)
   init(handle: borrowing SQLiteConnection) {
     self.connection = handle.pointer
     self.libraryPointer = handle.library
     self.configurationPointer = handle.configurationPointer
+    self.authorizer = handle.authorizer
+    self.statements = handle.statements
   }
 
   /// The underlying `sqlite3 *`.
