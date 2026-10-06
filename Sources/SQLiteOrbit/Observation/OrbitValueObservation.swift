@@ -232,9 +232,12 @@ private struct OrbitValueObservationEvents: Sendable {
 public struct OrbitValueObservation<Value: Sendable>: Sendable {
   private let definition: OrbitValueObservationDefinition<Value>
 
-  /// Identity shared by every copy of this observation, used by fetch properties to reconcile
-  /// declarations without trying to compare captured closures.
-  var identity: ObjectIdentifier { ObjectIdentifier(definition) }
+  /// The identity of this observation's definition, shared by every copy.
+  ///
+  /// Constructing or transforming an observation creates a new identity, even when its fetch
+  /// produces the same values. Subscribing to different databases or restarting a runtime does
+  /// not change this identity. Use it to reconcile declarations without comparing closures.
+  public var identity: OrbitValueObservationIdentity { definition.identity }
 
   private init(
     regionSource: OrbitValueObservationRegionSource,
@@ -950,13 +953,14 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
-    try subscribeIncludingNoEmissions(
+    try subscribe(
       to: database,
       scheduling: scheduler,
       isolation: isolation,
-      onNoEmission: nil,
       onError: onError,
-      onChange: onChange
+      onUpdate: { update in
+        if case .emitted(let change) = update { onChange(change) }
+      }
     )
   }
 
@@ -984,34 +988,12 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     onError: @escaping @Sendable (any Error) -> Void,
     onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
   ) throws -> OrbitSubscription {
-    try subscribeIncludingNoEmissions(
-      to: database,
-      scheduling: scheduler,
-      isolation: isolation,
-      onNoEmission: { onUpdate(.noEmission(source: $0)) },
-      onError: onError,
-      onChange: { onUpdate(.emitted($0)) }
-    )
-  }
-
-  private func subscribeIncludingNoEmissions<
-    Database: OrbitObservableDatabase,
-    Scheduler: OrbitValueObservationScheduler
-  >(
-    to database: Database,
-    scheduling scheduler: Scheduler,
-    isolation: isolated (any Actor)?,
-    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
-    onError: @escaping @Sendable (any Error) -> Void,
-    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
-  ) throws -> OrbitSubscription {
     let runtime = try definition.runtime(for: database)
     let subscription = runtime.addSubscriber(
       scheduling: scheduler,
       isolation: isolation,
-      onNoEmission: onNoEmission,
       onError: onError,
-      onChange: onChange
+      onUpdate: onUpdate
     )
     if scheduler.immediateInitialValue(from: isolation) {
       runtime.fetchInitialValueImmediatelyIfNeeded(isolation: isolation)
@@ -1275,6 +1257,7 @@ final class OrbitOneShotSignal: Sendable {
 }
 
 private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
+  let identity = OrbitValueObservationIdentity()
   let regionSource: OrbitValueObservationRegionSource
   let fetch: OrbitValueObservationFetch
   let refetchController: any OrbitValueObservationRefetchController
@@ -1479,15 +1462,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func addSubscriber<Scheduler: OrbitValueObservationScheduler>(
     scheduling scheduler: Scheduler,
     isolation: isolated (any Actor)?,
-    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
     onError: @escaping @Sendable (any Error) -> Void,
-    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
+    onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
   ) -> OrbitSubscription {
     let subscriber = OrbitValueObservationSubscriber(
       scheduler: scheduler,
-      onNoEmission: onNoEmission,
       onError: onError,
-      onChange: onChange
+      onUpdate: onUpdate
     )
     let registration = state.withLock { $0.subscribers.add(subscriber) }
     switch registration {

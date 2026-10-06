@@ -790,6 +790,7 @@
           .map { $0.map(\.title) }
 
         OrbitDefaultDatabase.withValue(database) {
+          #expect(OrbitDefaultDatabase.currentIfConfigured === database)
           @FetchAll(Reminder.all) var reminders
           @Fetch(observation) var titles = [String]()
           #expect(reminders.count == 1)
@@ -801,7 +802,11 @@
       func theDefaultDatabaseCanBeSetForTheProcess() async throws {
         let database = try await remindersDatabase(titles: "Milk")
 
+        try await withProcessDefaultDatabase(nil) {
+          #expect(OrbitDefaultDatabase.currentIfConfigured == nil)
+        }
         try await withProcessDefaultDatabase(database) {
+          #expect(OrbitDefaultDatabase.currentIfConfigured === database)
           @FetchAll(Reminder.all) var reminders
           #expect(reminders.count == 1)
         }
@@ -819,18 +824,23 @@
 
           @Dependency(\.orbitDefaultDatabase) var processDependency
           #expect(processDependency === process)
+          #expect(OrbitDefaultDatabase.currentIfConfigured === process)
 
           withDependencies {
             $0.orbitDefaultDatabase = dependency
           } operation: {
             #expect(OrbitDefaultDatabase.current === dependency)
+            #expect(OrbitDefaultDatabase.currentIfConfigured === dependency)
 
             OrbitDefaultDatabase.withValue(scoped) {
               @Dependency(\.orbitDefaultDatabase) var scopedDependency
               #expect(OrbitDefaultDatabase.current === scoped)
+              #expect(OrbitDefaultDatabase.currentIfConfigured === scoped)
               #expect(scopedDependency === scoped)
             }
+            #expect(OrbitDefaultDatabase.currentIfConfigured === dependency)
           }
+          #expect(OrbitDefaultDatabase.currentIfConfigured === process)
         }
 
         @Test
@@ -888,19 +898,23 @@
       }
 
       @Test
-      func aMemberIsProjectedAsAReaderWhoseValuesFollowThatMember() async throws {
-        let database = try await remindersDatabase(titles: "Milk")
+      func mappedAndMemberReadersFollowTheSameObservation() async throws {
+        let database = try await countingRemindersDatabase(titles: "Milk")
 
         @FetchAll(Reminder.order(by: \.id), database: database) var reminders
-        let count = $reminders.count
+        let titles = $reminders.reader.map { $0.map(\.title) }
+        let count = titles.count
 
         #expect(count.wrappedValue == 1)
-        var values = count.values.makeAsyncIterator()
-        #expect(await values.next() == 1)
+        var values = titles.values.makeAsyncIterator()
+        #expect(await values.next() == ["Milk"])
+        #expect(database.subscriptionCount == 1)
 
         try await insertReminders("Eggs", into: database)
         try await waitUntil { count.wrappedValue == 2 }
-        #expect(await values.next() == 2)
+        #expect(await values.next() == ["Milk", "Eggs"])
+        #expect(reminders.map(\.title) == titles.wrappedValue)
+        #expect(database.subscriptionCount == 1)
       }
 
       @Test
@@ -928,12 +942,13 @@
 
         @FetchAll(Reminder.all, database: database, scheduler: scheduler) var reminders
 
-        #expect(reminders.isEmpty)
-        #expect($reminders.isLoading)
+        let count = $reminders.reader.map { $0.count }
+        #expect(count.wrappedValue == 0)
+        #expect(count.isLoading && $reminders.isLoading)
 
         scheduler.release()
-        try await waitUntil { reminders.count == 1 }
-        #expect(!$reminders.isLoading)
+        try await waitUntil { count.wrappedValue == 1 }
+        #expect(!count.isLoading && !$reminders.isLoading)
       }
 
       @Test
@@ -957,10 +972,11 @@
           let database = try await remindersDatabase(titles: "Milk")
 
           @FetchAll(Reminder.order(by: \.id), database: database) var reminders
+          let count = $reminders.reader.map { $0.count }
           let didChange = TestCounter()
 
           withObservationTracking {
-            _ = reminders
+            _ = count.wrappedValue
           } onChange: {
             didChange.increment()
           }
@@ -1050,7 +1066,8 @@
           database: database
         )
         var titles
-        #expect($titles.loadError is SQLiteError)
+        let count = $titles.reader.map { $0.count }
+        #expect(count.loadError is SQLiteError)
 
         try await database.write { transaction in
           try transaction.execute(
@@ -1059,15 +1076,16 @@
           try transaction.execute(Note.insert { Note.Draft(title: "First") })
         }
 
-        try await $titles.load()
+        try await count.load()
         #expect(titles == ["First"])
-        #expect($titles.loadError == nil)
+        #expect(count.wrappedValue == 1)
+        #expect(count.loadError == nil && $titles.loadError == nil)
 
         // The retry resumed the observation, so later writes still arrive.
         try await database.write { transaction in
           try transaction.execute(Note.insert { Note.Draft(title: "Second") })
         }
-        try await waitUntil { titles == ["First", "Second"] }
+        try await waitUntil { titles == ["First", "Second"] && count.wrappedValue == 2 }
       }
 
       // MARK: - Sections
@@ -1275,8 +1293,8 @@
 
         @FetchAll(Reminder.order(by: \.id), database: database) var reminders
 
-        var values = $reminders.values.makeAsyncIterator()
-        let titles = await values.next()?.map(\.title)
+        var values = $reminders.reader.map { $0.map(\.title) }.values.makeAsyncIterator()
+        let titles = await values.next()
         #expect(titles == ["Milk"])
       }
 

@@ -99,7 +99,7 @@ struct OrbitFetchSourceBinding<Value: Sendable>: Sendable {
 /// The identity of an observation declaration, either the observation's definition or an explicit
 /// value supplied by a caller whose declaration rebuilds the observation.
 enum OrbitFetchObservationIdentity: Hashable, Sendable {
-  case intrinsic(ObjectIdentifier)
+  case intrinsic(OrbitValueObservationIdentity)
   case explicit(type: ObjectIdentifier, value: OrbitAnyHashableSendable)
 
   init<ID: Hashable & Sendable>(_ id: ID) {

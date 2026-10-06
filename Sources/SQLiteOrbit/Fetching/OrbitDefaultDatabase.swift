@@ -56,6 +56,16 @@ public enum OrbitDefaultDatabase {
     OrbitDefaultDatabaseSource().current
   }
 
+  /// The configured default database, or `nil` when none is available.
+  ///
+  /// This follows the same precedence as ``current``: the innermost task-local override,
+  /// the `Dependencies` override when that trait is enabled, then the process-wide fallback.
+  /// Use this lookup when a default is optional; it returns `nil` instead of terminating the
+  /// process when no source has been configured.
+  public static var currentIfConfigured: (any OrbitObservableDatabase)? {
+    OrbitDefaultDatabaseSource().currentIfConfigured
+  }
+
   /// Sets the process-wide fallback database property wrappers use when none is supplied.
   ///
   /// - Parameter database: The database to use, or `nil` to leave the process without a default.
@@ -99,10 +109,6 @@ public enum OrbitDefaultDatabase {
   @TaskLocal private static var scoped: (any OrbitObservableDatabase)?
 
   private static let storage = Storage()
-
-  static var currentIfConfigured: (any OrbitObservableDatabase)? {
-    OrbitDefaultDatabaseSource().currentIfConfigured
-  }
 
   fileprivate static func resolve(
     dependency: (any OrbitObservableDatabase)?

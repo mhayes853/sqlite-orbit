@@ -42,7 +42,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Creates a cursor that lazily initializes an owned value from each row raw SQL returns.
   ///
   /// The cursor must be consumed inside this transaction. `cached` follows the prepared-statement
-  /// sharing rules of ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
+  /// reuse policy of ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
   @_lifetime(borrow self)
   public borrowing func fetchCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,

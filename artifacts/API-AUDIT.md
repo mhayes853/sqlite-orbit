@@ -1,5 +1,18 @@
 **SQLiteOrbit API audit — 2026-10-04**
 
+Follow-up status, 2026-10-06: the audit below describes the original revision. The branch has since
+addressed correctness findings 1–3, connection ownership (4), scoped observation (5), stateful
+reducers (6), writer coordination from 7, typed installation from 9, region serialization (10),
+and grouped fetching (13). It also corrects cursor-cache documentation, exposes optional default
+database lookup, reader mapping and opaque observation identity, and makes `onUpdate` the common
+subscription callback primitive.
+
+Next discussion: validated SQL decomposition (8), fetch composition/scheduling (11–12), remaining
+observation capability requirements (7), subscription lifetimes (15), separating pool options from
+connection configuration, and removing the redundant instance `Table.databaseRegion` convenience.
+Keep migration policy/status (16), managed authorization (9), and connection-setting effect
+boundaries as later work. Row mutation primitives (14) also remain open.
+
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 
 This is a source and test-code audit. No library implementation was changed, and no fresh build or runtime test suite was run. Behavioral findings below follow from the inspected implementation; suggested regression cases are listed at the end. SwiftUI and alternate SQLite trait configurations were inspected statically.
@@ -184,4 +197,3 @@ The strongest regression guard is an external-client conformance/composition tar
 Add behavioral regressions for A-load/B-load/A-cancel, repeated cancellation, query replacement with only an environment database, mutation RETURNING cursors outside a transaction, SQL conversion-error preservation through adapters, and authorization installed after a statement has been cached.
 
 The completion criterion is semantic: another module can reproduce the high-level operations with their lifetime, cancellation, region, error, and scheduling behavior intact. A smaller declaration count is useful only when that capability improves.
-

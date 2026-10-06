@@ -5,6 +5,29 @@
   @Suite
   struct OrbitValueObservationReducerTests {
     @Test
+    func identityDistinguishesDefinitionsWithoutRetainingTheirCaptures() {
+      final class Capture: Sendable {}
+      weak var captured: Capture?
+
+      func makeIdentity() -> OrbitValueObservationIdentity {
+        let capture = Capture()
+        captured = capture
+        let observation = OrbitValueObservation.tracking { [capture] _ in
+          _ = capture
+          return 0
+        }
+        let copy = observation
+        #expect(Set([observation.identity, copy.identity]).count == 1)
+        #expect(observation.map { $0 }.identity != observation.identity)
+        return observation.identity
+      }
+
+      let identity = makeIdentity()
+      #expect(captured == nil)
+      #expect(identity != OrbitValueObservation.tracking { _ in 0 }.identity)
+    }
+
+    @Test
     func reducerStateIsSharedWithinARunButIndependentAcrossDatabasesAndRestarts() throws {
       let firstDatabase = try blockingItemsDatabase()
       let secondDatabase = try blockingItemsDatabase()

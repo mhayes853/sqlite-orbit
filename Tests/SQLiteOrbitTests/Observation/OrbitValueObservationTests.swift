@@ -655,16 +655,23 @@
         let driver = try blockingItemsDatabase()
         let updates = TestRecorder<OrbitValueObservationUpdate<Int>>()
         let errors = TestRecorder<String>()
-        let subscription = try itemCountObservation()
-          .filter { $0.isMultiple(of: 2) == false }
-          .subscribe(
-            to: driver,
-            scheduling: .immediate,
-            onError: { error in errors.append(String(describing: error)) },
-            onUpdate: { update in updates.append(update) }
-          )
+        let observation = itemCountObservation().filter { !$0.isMultiple(of: 2) }
+        let changes = TestRecorder<Int>()
+        let changeSubscription = try observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { Issue.record($0) },
+          onChange: { changes.append($0.value) }
+        )
+        let subscription = try observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { error in errors.append(String(describing: error)) },
+          onUpdate: { update in updates.append(update) }
+        )
 
         #expect(updates.values == [.noEmission(source: .initial)])
+        #expect(changes.values.isEmpty)
 
         try insertItemsBlocking(1, into: driver)
         try insertItemsBlocking(2, into: driver)
@@ -678,7 +685,8 @@
             ]
         )
         #expect(errors.values.isEmpty)
-        _ = subscription
+        #expect(changes.values == [1])
+        _ = (subscription, changeSubscription)
       }
 
       @Test

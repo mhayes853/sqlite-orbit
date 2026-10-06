@@ -49,10 +49,9 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
   ///
   /// - Parameters:
   ///   - query: A query that has been shown to only read.
-  ///   - cached: Whether the driver may reuse a prepared statement it has already compiled for
-  ///     this SQL. A cached statement is shared by every cursor over the same SQL on the same
-  ///     connection, so only pass `true` when the cursor is fully consumed and discarded before
-  ///     any other cursor over that SQL is created.
+  ///   - cached: Whether the driver may reuse an idle prepared statement for this SQL. Caching is
+  ///     an optimization; each live cursor retains independent iteration state. Native SQLite
+  ///     drivers prepare another statement when an existing cursor is still using the same SQL.
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound. A read
   ///   transaction refuses a statement that SQLite reports may write with the code
@@ -581,8 +580,8 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     ///
     /// - Parameters:
     ///   - statement: The statement to run.
-    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. Pass `true` only
-    ///     when the cursor is fully consumed before another over the same SQL is created.
+    ///   - cached: Whether the driver may reuse an idle prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     /// - Returns: A cursor over the decoded values.
     /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
     @_lifetime(borrow self)
@@ -705,9 +704,9 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
 
   // MARK: - Eager fetches
 
-  // Eager fetches consume and discard their cursor before returning, so they can share the
-  // connection's cached statement. The tuple shapes go through `collectTuples`/`firstTuple` because
-  // the compiler cannot see through a cursor's `Element` when it is a pack expansion.
+  // Eager fetches consume and discard their cursor before returning, making its prepared statement
+  // available for reuse. The tuple shapes go through `collectTuples`/`firstTuple` because the compiler
+  // cannot see through a cursor's `Element` when it is a pack expansion.
 
   @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   extension OrbitDatabaseRowCursor

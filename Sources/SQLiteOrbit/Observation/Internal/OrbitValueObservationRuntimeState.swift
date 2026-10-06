@@ -15,26 +15,22 @@ final class OrbitValueObservationSubscriberLifetime: Sendable {
 struct OrbitValueObservationSubscriber<Value: Sendable>: Sendable {
   let lifetime = OrbitValueObservationSubscriberLifetime()
   let scheduler: any OrbitValueObservationScheduler
-  let onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?
   let onError: @Sendable (any Error) -> Void
-  let onChange: @Sendable (OrbitValueObservationChange<Value>) -> Void
+  let onUpdate: @Sendable (OrbitValueObservationUpdate<Value>) -> Void
 
   func receive(
     _ event: OrbitValueObservationPublicationEvent<Value>,
     from isolation: isolated (any Actor)?
   ) {
     guard self.lifetime.isSubscribed else { return }
-    if case .noEmission = event, onNoEmission == nil {
-      return
-    }
     self.scheduler.schedule(from: isolation) {
-      [lifetime, onNoEmission, onError, onChange] in
+      [lifetime, onError, onUpdate] in
       guard lifetime.isSubscribed else { return }
       switch event {
       case .noEmission(let source):
-        onNoEmission?(source)
+        onUpdate(.noEmission(source: source))
       case .outcome(.success(let change)):
-        onChange(change)
+        onUpdate(.emitted(change))
       case .outcome(.failure(let error)):
         onError(error)
       }
@@ -207,7 +203,7 @@ struct OrbitValueObservationSubscriberRegistry<Value: Sendable>: Sendable {
     source: OrbitValueObservationSource
   ) -> [OrbitValueObservationSubscriber<Value>] {
     if latest == nil { noEmissionSource = source }
-    return subscribers.all.filter { $0.onNoEmission != nil }
+    return subscribers.all
   }
 
   mutating func fail(_ error: any Error) -> [OrbitValueObservationSubscriber<Value>] {
