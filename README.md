@@ -1591,6 +1591,26 @@ A property does not query until something reads it. Reading it the first time pe
 and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
 each rebuilt property costing a query.
 
+### Row mutations
+
+Primary-keyed tables support updating the latest row within an existing write transaction:
+
+```swift
+try await database.write { transaction in
+  try Reminder.update(id: reminderID, in: transaction) { reminder in
+    reminder.title = "Buy milk"
+  }
+}
+```
+
+The mutation can return a result. A missing row or a changed primary key throws; this operation
+never inserts a replacement for a deleted row. `Row.update` uses this same public primitive.
+
+For synchronous main-actor callbacks, `Row.updateBlocking`, `SingleRow.updateBlocking`, and
+`SingleRow.saveBlocking` commit before returning and report failures through both the thrown error
+and `saveError`. These are also the operations used by SwiftUI bindings. Use the asynchronous
+methods from asynchronous code.
+
 ### Reusable requests
 
 Queries can produce requests usable in transactions, observations, and `Fetch`:

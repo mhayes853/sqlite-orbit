@@ -4,10 +4,41 @@
   #if BuiltInSQLite
     import Testing
 
-    @testable import SQLiteOrbit
+    import SQLiteOrbit
 
     @Suite
     struct RowTests {
+      @Test
+      func transactionUpdatesComposeAndKeepRowIdentity() async throws {
+        let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
+        let title = try await database.write { transaction in
+          try EditableReminder.update(id: 1, in: transaction) { $0.notes = "cold" }
+          return try EditableReminder.update(id: 1, in: transaction) { row in
+            #expect(row.notes == "cold")
+            defer { row.title = "Eggs" }
+            return row.title
+          }
+        }
+        #expect(title == "Milk")
+        await #expect(throws: OrbitRowIdentityMismatchError.self) {
+          try await database.write { transaction in
+            try EditableReminder.update(id: 1, in: transaction) { $0.notes = "rolled back" }
+            try EditableReminder.update(id: 1, in: transaction) {
+              $0 = EditableReminder(id: 2, title: "wrong", notes: "")
+            }
+          }
+        }
+        let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+        #expect(persisted == EditableReminder(id: 1, title: "Eggs", notes: "cold"))
+        await #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try await database.write { transaction in
+            try EditableReminder.update(id: 2, in: transaction) { _ in
+              Issue.record("A missing row reached the mutation")
+            }
+          }
+        }
+      }
+
       @Test
       func anObservableReaderDefaultRejectsSavingAndRecordsTheError() async throws {
         let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
@@ -63,8 +94,12 @@
         #expect(!property.isSaving)
       }
 
-      @Test(arguments: ["mutation", "identity", "constraint"])
-      func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(failure: String) async throws {
+      @MainActor
+      @Test(arguments: ["mutation", "identity", "constraint"], [false, true])
+      func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(
+        failure: String,
+        blocking: Bool
+      ) async throws {
         let database = try await rowsDatabase(EditableReminder(id: 1, title: "Milk", notes: ""))
         @Row(EditableReminder.self, id: 1, database: database) var reminder
         if failure == "constraint" {
@@ -75,12 +110,17 @@
           }
         }
         do {
-          try await $reminder.update { value in
+          let mutation: @Sendable (inout EditableReminder) throws -> Void = { value in
             value.title = "Eggs"
             if failure == "mutation" { throw TestError() }
             if failure == "identity" {
               value = EditableReminder(id: 2, title: "changed", notes: "")
             }
+          }
+          if blocking {
+            try $reminder.updateBlocking(mutation)
+          } else {
+            try await $reminder.update(mutation)
           }
           Issue.record("The update should fail for \(failure)")
         } catch {
@@ -154,8 +194,9 @@
         #expect(reminder == nil)
       }
 
-      @Test
-      func updateReadsTheLatestRowInsideItsWriteTransaction() async throws {
+      @MainActor
+      @Test(arguments: [false, true])
+      func updateReadsTheLatestRowInsideItsWriteTransaction(blocking: Bool) async throws {
         let database = try await rowsDatabase(
           EditableReminder(id: 1, title: "Milk", notes: "")
         )
@@ -170,12 +211,16 @@
           )
         }
 
-        let oldTitle = try await $reminder.update { reminder in
+        let mutation: @Sendable (inout EditableReminder) -> String = { reminder in
           let oldTitle = reminder.title
           reminder.title = "Eggs"
           return oldTitle
         }
 
+        let oldTitle =
+          if blocking { try $reminder.updateBlocking(mutation) } else {
+            try await $reminder.update(mutation)
+          }
         #expect(oldTitle == "Milk")
         let persisted = try await database.read { transaction in
           try transaction.find(EditableReminder.all, key: 1)

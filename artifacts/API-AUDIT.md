@@ -12,8 +12,11 @@ Further implemented: validated SQL parts (8), public request helpers and fetch/s
 completion (15), explicit pool initializer counts, and removal of the instance `Table.databaseRegion`
 convenience. Request helpers consistently use a `Request` suffix, including `sectionedRequest`.
 
+Row mutation primitives (14) are now public too: primary-keyed tables expose transactional updates,
+and row bindings compose public blocking mutation methods with the existing save-state behavior.
+
 Remaining later work: migration policy/status (16), managed authorization (9), and connection-setting
-effect boundaries. Row mutation primitives (14) also remain open.
+effect boundaries. Migration changes must preserve the existing GRDB-compatible entry points.
 
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 

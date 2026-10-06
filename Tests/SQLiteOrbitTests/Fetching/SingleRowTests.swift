@@ -4,7 +4,7 @@
   #if BuiltInSQLite
     import Testing
 
-    @testable import SQLiteOrbit
+    import SQLiteOrbit
 
     @Suite
     struct SingleRowTests {
@@ -37,8 +37,12 @@
         #expect(!property.isSaving)
       }
 
-      @Test(arguments: ["mutation", "identity", "constraint"])
-      func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(failure: String) async throws {
+      @MainActor
+      @Test(arguments: ["mutation", "identity", "constraint"], [false, true])
+      func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(
+        failure: String,
+        blocking: Bool
+      ) async throws {
         let database = try await settingsDatabase()
         try await database.write { try Settings.defaultValue.save(in: $0) }
         @SingleRow(Settings.self, database: database) var settings
@@ -50,10 +54,15 @@
           }
         }
         do {
-          try await $settings.update { value in
+          let mutation: @Sendable (inout Settings) throws -> Void = { value in
             value.theme = "dark"
             if failure == "mutation" { throw TestError() }
             if failure == "identity" { value = Settings(id: 1, theme: "changed", launchCount: 0) }
+          }
+          if blocking {
+            try $settings.updateBlocking(mutation)
+          } else {
+            try await $settings.update(mutation)
           }
           Issue.record("The update should fail for \(failure)")
         } catch {
@@ -72,7 +81,11 @@
         }
         var replacement = Settings.defaultValue
         replacement.theme = "dark"
-        try await $settings.save(replacement)
+        if blocking {
+          try $settings.saveBlocking(replacement)
+        } else {
+          try await $settings.save(replacement)
+        }
         #expect(!$settings.isSaving)
         #expect($settings.saveError == nil)
         let persisted = try await database.read { try Settings.find(in: $0) }
@@ -118,19 +131,24 @@
         #expect(count == 0)
       }
 
-      @Test
-      func updatingAnEmptyTableInsertsAndObservesTheSingleton() async throws {
+      @MainActor
+      @Test(arguments: [false, true])
+      func updatingAnEmptyTableInsertsAndObservesTheSingleton(blocking: Bool) async throws {
         let database = try await settingsDatabase()
 
         @SingleRow(Settings.self, database: database) var settings
 
-        let previousTheme = try await $settings.update { settings in
+        let mutation: @Sendable (inout Settings) -> String = { settings in
           let previousTheme = settings.theme
           settings.theme = "dark"
           settings.launchCount += 1
           return previousTheme
         }
 
+        let previousTheme =
+          if blocking { try $settings.updateBlocking(mutation) } else {
+            try await $settings.update(mutation)
+          }
         #expect(previousTheme == "system")
         try await waitUntil { settings.theme == "dark" && settings.launchCount == 1 }
         let persisted = try await database.read { transaction in

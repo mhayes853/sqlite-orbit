@@ -119,8 +119,13 @@
       }
     }
 
+    /// Persists the singleton before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``save(_:)``. A failure is both thrown and
+    /// recorded in ``saveError``. This is intended for synchronous main-actor callbacks, such as
+    /// a binding setter; use ``save(_:)`` from asynchronous code.
     @MainActor
-    func saveBlocking(_ value: Value) throws {
+    public func saveBlocking(_ value: Value) throws {
       try storage.writeBlocking { database in
         try database.writeBlocking { transaction in
           try value.save(in: transaction)
@@ -128,8 +133,14 @@
       }
     }
 
+    /// Mutates the latest singleton and commits before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``update(_:)``, including the default value when
+    /// no row exists. A failure is both thrown and recorded in ``saveError``. This is intended for
+    /// synchronous main-actor callbacks; use ``update(_:)`` from asynchronous code.
     @MainActor
-    func updateBlocking<Result: Sendable>(
+    @discardableResult
+    public func updateBlocking<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) throws -> Result {
       try storage.writeBlocking { database in
