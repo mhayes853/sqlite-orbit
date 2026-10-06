@@ -22,6 +22,11 @@ can be configured for every connection, replaced on a connection, or added for a
 Connection-setting effect boundaries are now explicit too: throwing setters apply busy-timeout
 and foreign-key changes immediately, and the corresponding properties report applied values.
 
+A second cleanup review at `df86b5f` fixed timeout saturation at the `Int32` millisecond boundary
+and inconsistent hashing of type-erased values, shared SQL conversion and scheduler routing, and
+removed redundant normalization and forwarding code. See the final section for newly reproduced
+issues and API discussion points; those larger behavior changes remain unimplemented.
+
 Audited revision: 650e459. The source inventory contains 149 Swift files and 30,174 lines, including comments. This review covers the database/SQLite layer, SQL and row conversion, cursors, observation, IPC, subscriptions, fetching and SwiftUI adapters, migration, suspension, macros, and test support. Three Sol agents reviewed separate areas; the primary review reconciled their findings against the source.
 
 This is a source and test-code audit. No library implementation was changed, and no fresh build or runtime test suite was run. Behavioral findings below follow from the inspected implementation; suggested regression cases are listed at the end. SwiftUI and alternate SQLite trait configurations were inspected statically.
@@ -206,3 +211,80 @@ The strongest regression guard is an external-client conformance/composition tar
 Add behavioral regressions for A-load/B-load/A-cancel, repeated cancellation, query replacement with only an environment database, mutation RETURNING cursors outside a transaction, SQL conversion-error preservation through adapters, and authorization installed after a statement has been cached.
 
 The completion criterion is semantic: another module can reproduce the high-level operations with their lifetime, cancellation, region, error, and scheduling behavior intact. A smaller declaration count is useful only when that capability improves.
+
+
+**Cleanup review — 2026-10-06**
+
+Three Sol agents reviewed the SQLite/migration, fetching/query, and observation/IPC areas. The
+primary review also checked shared utilities, macros, and the test-support boundaries. Safe changes
+were committed separately as `f5f7315` (connection settings), `02d0da2` (queries/fetch identity), and
+`2c270f9` (observation/regions). The test review removed the assertion that an idle serial queue
+must return a nil writer barrier: an already-complete barrier is equally valid under the public
+contract, and integration tests cover serial refetch behavior. Other reviewed lifecycle and error
+tests cover distinct behaviors and were retained. One concurrency test now propagates errors it
+previously discarded, and timeout boundary coverage extends the existing parameterized test.
+
+The following behaviors were reproduced using temporary tests against public library APIs. These
+reproductions were removed from the test target after validation, rather than making the current
+bugs the expected behavior of permanent tests. The findings remain open for discussion.
+
+1. **Cached transaction control bypasses the outside-transaction restriction.** In a borrowed write
+   connection, prepare and consume `rowCursor("SAVEPOINT cached", cached: true)` inside
+   `connection.transaction`, and release that savepoint before the transaction commits. Consume the
+   same cached cursor SQL after the transaction returns. It succeeds and native autocommit becomes
+   false, despite the documented prohibition. Loan cleanup eventually rolls it back, but statements
+   in the meantime no longer have the promised individual commit boundaries. The connection's
+   commit-reporting logic assumes those boundaries. Cache hits bypass the preparation-time guard;
+   enforcement must cover reuse as well as preparation.
+
+   Evidence: [cache checkout](../Sources/SQLiteOrbit/SQLite/Internal/SQLiteStatementCache.swift),
+   [outside-transaction guard and cleanup](../Sources/SQLiteOrbit/SQLite/SQLiteConnectionOwner.swift).
+
+2. **A failed composite subscription update can lose commits from its reported region.** A custom
+   multiprocess writer can return a region subscription that rejects updates. Start an
+   `OrbitIPCDatabase` subscription for `items`, using the ordinary in-memory transport, then update
+   it to `lists`. The transport and same-process registration change first; the writer throws last.
+   The outer subscription still reports `items`, but subsequent peer commits to `items` disappear,
+   while commits to `lists` arrive. Updating multiple sources needs an explicit failure policy:
+   restoration, conservative over-subscription, or invalidation of the whole subscription. Changing
+   their order alone does not resolve partial failures in general.
+
+   Evidence: [composite update](../Sources/SQLiteOrbit/IPC/OrbitIPCDatabase.swift),
+   [last-successful region contract](../Sources/SQLiteOrbit/Subscription/OrbitRegionSubscription.swift).
+
+3. **The IPC wrapper drops its writer's active-writer barrier.** Give a custom public multiprocess
+   writer a non-nil `captureActiveWriters()` result. `OrbitIPCDatabase` wrapping it returns nil,
+   because it inherits the observable protocol's default implementation. Coalesced observations
+   cannot use that underlying writer cohort through the wrapper. Existing built-in multiprocess
+   drivers use serial writes; this matters for custom drivers supplying coordination. Forwarding
+   the underlying snapshot would address that loss; coordination for commits from sibling handles
+   is a separate policy question.
+
+   Evidence: [IPC observable conformance](../Sources/SQLiteOrbit/IPC/OrbitIPCDatabase.swift),
+   [default barrier implementation](../Sources/SQLiteOrbit/Observation/OrbitDatabaseTransactionObservation.swift).
+
+4. **Section equality is a deliberate semantic choice worth revisiting.** Grouping `[1, 2, 1]`
+   and `[1, 1, 2]` by identity produces equal section collections, although their public `elements`
+   arrays differ. Equality compares sections and their rows, exactly as documented. Consequently,
+   equality-based suppression observes grouped order, not every change to the original flat order.
+   Decide whether equality should also include `elements`; this is not an undocumented violation
+   of the current contract.
+
+   Evidence: [section collection equality](../Sources/SQLiteOrbit/Fetching/OrbitFetchSectionCollection.swift).
+
+No additional confirmed library-owned "internal hell" blocker emerged. One optional extension
+point remains: the public, documentation-hidden `_OrbitFetchSectioning` carrier exposes neither
+its projection nor its ordering fragment. An external custom query helper cannot inspect those
+separately. Current `FetchAll` already composes the public `sectionedRequest(by:)`, so it does not
+require opening those members. If custom section-query builders are desired, consider a stable
+section-expression value with public fragment access. Separately, sectioning depends on upstream
+Structured Queries' underscored `_OrderingTerm`, `_OptionalProtocol`, and `_OptionalPromotable`;
+that is dependency coupling rather than inaccessible APIs within SQLiteOrbit.
+
+Evidence: [sectioning carrier](../Sources/SQLiteOrbit/Fetching/OrbitFetchSectioning.swift),
+[public sectioned request composition](../Sources/SQLiteOrbit/SQL/OrbitSectionedRequest.swift).
+
+Validation on Linux: the final default suite passed 774 tests; the minimal SystemSQLite suite
+and the 72-test Turso compatibility/migration/timeout/scheduler subset also passed. The focused
+run passed 124 tests including all four temporary reproductions. Swift formatting and diff checks
+were clean. No Apple-platform or Windows runtime validation was performed in this review.

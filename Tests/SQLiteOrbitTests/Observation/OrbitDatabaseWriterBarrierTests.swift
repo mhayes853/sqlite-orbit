@@ -61,12 +61,6 @@
       #expect(values.values == [0, 1, 2, 3])
       #expect(fetches.value == 4)
     }
-
-    @Test
-    func aSerialDatabaseNeedsNoWriterBarrier() throws {
-      let queue = try SQLiteQueue(path: ":memory:")
-      #expect(queue.captureActiveWriters() == nil)
-    }
   }
 
   // This custom barrier and the shared AnnouncingTestDatabase use only public library APIs.
