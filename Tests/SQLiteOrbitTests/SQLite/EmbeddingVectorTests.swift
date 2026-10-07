@@ -146,6 +146,70 @@
         }
       }
 
+      #if StructuredQueries
+        @Test(arguments: SQLiteTestDriver.allCases)
+        func packedBinaryColumnsSearchAndSliceWithSQLiteVec(_ driver: SQLiteTestDriver) async throws
+        {
+          guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+            return
+          }
+          try await driver.withDatabase(
+            schema:
+              "CREATE VIRTUAL TABLE binary_embeddings USING vec0(embedding bit[16], label text)"
+          ) { database in
+            let exact = try BinaryEmbeddingVector<16>(packedBytes: [0x05, 0x01])
+            let near = try BinaryEmbeddingVector<16>(packedBytes: [0x85, 0x02])
+            let vector = BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: exact)
+            try await database.write { transaction in
+              try transaction.execute(
+                SQLiteBinaryEmbedding.insert {
+                  ($0.embedding, $0.label)
+                } values: {
+                  (
+                    Vec.bit(
+                      BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: near),
+                      as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self
+                    ),
+                    "near"
+                  )
+                  (
+                    Vec.bit(vector, as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self),
+                    "exact"
+                  )
+                }
+              )
+            }
+            try await database.read { transaction in
+              let rows = try transaction.fetchAll(SQLiteBinaryEmbedding.order { $0.label })
+              #expect(rows.map(\.embedding) == [exact, near])
+              let nearest = try transaction.fetchAll(
+                SQLiteBinaryEmbedding.where { $0.embedding.match(vector) }
+                  .order { $0.distance }.limit(2).select { ($0.label, $0.distance) }
+              )
+              #expect(nearest.map(\.0) == ["exact", "near"])
+              #expect(nearest.map(\.1) == [0, Double(exact.hammingDistance(to: near))])
+              let scalar = try transaction.fetchAll(
+                SQLiteBinaryEmbedding.order { $0.embedding.distanceHamming(to: vector) }
+                  .select { $0.embedding.distanceHamming(to: vector) }
+              )
+              #expect(scalar == nearest.map(\.1))
+              let sliced = try transaction.fetchOne(
+                #sql(
+                  "SELECT \(Vec.slice(vector, range: 8..<16, as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self))",
+                  as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
+                )
+              )
+              #expect(sliced?.packedBytes == [0x01])
+              #expect(
+                try transaction.fetchOne(
+                  #sql("SELECT \(Vec.type(vector))", as: String.self)
+                ) == "bit"
+              )
+            }
+          }
+        }
+      #endif
+
       @Test(arguments: SQLiteTestDriver.allCases)
       func vectorsBindFetchAndSearchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
         guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
@@ -191,4 +255,14 @@
       }
     #endif
   }
+
+  #if !Turso && StructuredQueries
+    @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+    @Table("binary_embeddings")
+    private struct SQLiteBinaryEmbedding: Vec0 {
+      @Column(as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self)
+      var embedding: BinaryEmbeddingVector<16>
+      var label: String
+    }
+  #endif
 #endif

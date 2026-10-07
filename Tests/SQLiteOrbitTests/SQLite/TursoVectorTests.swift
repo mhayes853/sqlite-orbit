@@ -657,6 +657,112 @@
     }
 
     @Test
+    func packedBinaryColumnsPreserveDimensionsAndAgreeWithLocalHammingDistance() async throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      try await withTestDatabaseFile("turso-vectors") { file in
+        let database = try file.tursoPool()
+        let dense = EmbeddingVector<9>([1, -1, 1, -1, -1, -1, -1, 1, 1])
+        let binary = BinaryEmbeddingVector<9>(quantizing: dense)
+        let query = BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: binary)
+        let neighbor = try BinaryEmbeddingVector<9>(packedBytes: [0x85, 0x00])
+        #expect(binary.packedBytes == [0x85, 0x01])
+        try await database.write { transaction in
+          try transaction.execute(
+            "CREATE TABLE turso_binary_embeddings (key INTEGER PRIMARY KEY, embedding BLOB NOT NULL)"
+          )
+          try transaction.execute(
+            TursoBinaryEmbedding.insert {
+              ($0.key, $0.embedding)
+            } values: {
+              (1, query)
+              (
+                2,
+                TursoVec.vector1bit(
+                  dense,
+                  as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self
+                )
+              )
+              (3, BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: neighbor))
+            }
+          )
+        }
+        try await database.read { transaction throws -> Void in
+          let rows = try transaction.fetchAll(TursoBinaryEmbedding.order { $0.key })
+          #expect(rows.map(\.embedding) == [binary, binary, neighbor])
+          let distances = try transaction.fetchAll(
+            TursoBinaryEmbedding.order { $0.key }
+              .select {
+                TursoVec.distanceHamming($0.embedding, to: query)
+              }
+          )
+          #expect(distances == rows.map { Double($0.embedding.hammingDistance(to: binary)) })
+          #expect(distances == [0, 0, 1])
+          let variable = [Bool].TursoBytesRepresentation(queryOutput: Array(neighbor))
+          #expect(
+            try transaction.fetchOne(
+              #sql("SELECT \(TursoVec.distanceHamming(query, to: variable))", as: Double.self)
+            ) == 1
+          )
+          #expect(
+            try transaction.fetchOne(
+              "SELECT embedding FROM turso_binary_embeddings WHERE key = 1",
+              as: [UInt8].self
+            )
+              == query.vectorBytes
+          )
+          // Nine and ten logical dimensions have the same packed byte count. Turso's metadata
+          // must still reject decoding a nine-dimensional value as ten dimensions.
+          #expect(throws: VectorDecodingError.dimensionMismatch(expected: 10, actual: 9)) {
+            try transaction.fetchOne(
+              #sql("SELECT \(query)", as: BinaryEmbeddingVector<10>.TursoBytesRepresentation.self)
+            )
+          }
+        }
+      }
+    }
+
+    @Test
+    func fixedCompressionConveniencesMatchNativeConversionsAndBindThroughRawSQL() async throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      try await withTestDatabaseFile("turso-vectors") { file in
+        let database = try file.tursoPool()
+        let dense = EmbeddingVector<3>([0, 127.5, 255])
+        let quantized = try dense.quantized8()
+        let sparse = try dense.sparseFloat32()
+        try await database.read { transaction throws -> Void in
+          #expect(
+            try transaction.fetchOne(
+              #sql(
+                "SELECT \(TursoVec.vector8(dense, as: InlineQuantized8Vector<3>.self))",
+                as: InlineQuantized8Vector<3>.self
+              )
+            ) == quantized
+          )
+          #expect(
+            try transaction.fetchOne(
+              #sql(
+                "SELECT \(TursoVec.vector32Sparse(dense, as: SizedSparseFloat32Vector<3>.self))",
+                as: SizedSparseFloat32Vector<3>.self
+              )
+            ) == sparse
+          )
+          #expect(
+            try transaction.fetchOne("SELECT \(quantized)", as: InlineQuantized8Vector<3>.self)
+              == quantized
+          )
+          #expect(
+            try transaction.fetchOne("SELECT \(sparse)", as: SizedSparseFloat32Vector<3>.self)
+              == sparse
+          )
+        }
+      }
+    }
+
+    @Test
     func vectorFailuresRollBackWritesAndLeaveThePoolUsable() async throws {
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
@@ -758,5 +864,14 @@
     @Column(primaryKey: true)
     var key: Int
     var embedding: SparseFloat32Vector
+  }
+
+  @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+  @Table("turso_binary_embeddings")
+  private struct TursoBinaryEmbedding {
+    @Column(primaryKey: true)
+    var key: Int
+    @Column(as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self)
+    var embedding: BinaryEmbeddingVector<9>
   }
 #endif
