@@ -1,4 +1,4 @@
-#if Vectors && BuiltInSQLite && !Turso
+#if Vectors && BuiltInSQLite
   import SQLiteOrbit
   import Testing
 
@@ -42,6 +42,64 @@
       #expect(try EmbeddingVector<0>(orbitDatabaseValue: .blob([])).isEmpty)
     }
 
+    @Test
+    func otherNumericPrecisionsUseTaggedLittleEndianBlobs() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      let double = EmbeddingVector64<3> { [Double(1), -2, 0.5][$0] }
+      let doubleBytes: [UInt8] = [
+        0, 0, 0, 0, 0, 0, 240, 63,
+        0, 0, 0, 0, 0, 0, 0, 192,
+        0, 0, 0, 0, 0, 0, 224, 63,
+        2
+      ]
+      #expect(double.orbitDatabaseValue() == .blob(doubleBytes))
+      #expect(
+        EmbeddingVector64<3>.VectorBytesRepresentation(queryOutput: double).queryBinding
+          == .blob(doubleBytes)
+      )
+      #expect(try EmbeddingVector64<3>(orbitDatabaseValue: .blob(doubleBytes)) == double)
+
+      #expect(try EmbeddingVector64<3>?(orbitDatabaseValue: .null) == nil)
+    }
+
+    @Test
+    func otherNumericPrecisionsPreserveBitsAndEmptyDimensions() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      let doubleBits: [UInt64] = [
+        0x8000_0000_0000_0000, 0x7ff0_0000_0000_0000,
+        0x7ff8_0000_0000_1234, 1
+      ]
+      let double = EmbeddingVector64<4> { Double(bitPattern: doubleBits[$0]) }
+      let decodedDouble = try EmbeddingVector64<4>(orbitDatabaseValue: double.orbitDatabaseValue())
+      #expect(decodedDouble.map(\.bitPattern) == doubleBits)
+      #expect(EmbeddingVector64<0>(repeating: 0).orbitDatabaseValue() == .blob([2]))
+      #expect(try EmbeddingVector64<0>(orbitDatabaseValue: .blob([2])).isEmpty)
+    }
+
+    @Test
+    func numericPrecisionDecodingRejectsWrongTagsAndDimensions() throws {
+      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+        return
+      }
+      for value in [
+        OrbitDatabaseValue.blob([2]), .blob(Array(repeating: 0, count: 25)),
+        .blob(Array(repeating: 0, count: 24) + [5]), .text("[1,2,3]")
+      ] {
+        #expect(throws: OrbitDatabaseValueConversionError.self) {
+          try EmbeddingVector64<3>(orbitDatabaseValue: value)
+        }
+      }
+      // Float32 blobs may carry Turso's optional format tag; use the same acceptance rules as
+      // the structured query representation, while still validating the fixed dimension.
+      let float = EmbeddingVector<3>(repeating: 1)
+      let bytes = try #require(float.orbitDatabaseValue().blobValue)
+      #expect(try EmbeddingVector<3>(orbitDatabaseValue: .blob(bytes + [1])) == float)
+    }
+
     @Test(arguments: [OrbitDatabaseValue.null, .integer(1), .real(1), .text("[1,2,3]")])
     func wrongStorageClassesReportConversionErrors(_ value: OrbitDatabaseValue) {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
@@ -67,48 +125,144 @@
       #expect(error?.reason == "Expected 12 vector bytes, found \(size)")
     }
 
-    @Test(arguments: SQLiteTestDriver.allCases)
-    func vectorsBindFetchAndSearchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
-      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
-        return
-      }
-      try await driver.withDatabase(
-        schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
-      ) { database in
-        let origin = EmbeddingVector<3>(repeating: 0)
-        let neighbor = EmbeddingVector<3> { $0 == 0 ? 1 : 0 }
-        try await database.write {
-          try $0.execute("INSERT INTO embeddings VALUES (1, \(origin)), (2, \(neighbor))")
+    #if !Turso
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func otherNumericPrecisionsBindAndFetchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
+        guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+          return
         }
-        #expect(
-          try await database.read {
-            try $0.fetchOne(
-              "SELECT embedding FROM embeddings WHERE rowid = 2",
-              as: EmbeddingVector<3>.self
-            )
-          } == neighbor
-        )
-        #expect(
-          try await database.read {
-            try $0.fetchAll(
-              """
-              SELECT rowid FROM embeddings
-              WHERE embedding MATCH \(origin) AND k = 2 ORDER BY distance
-              """,
-              as: Int64.self
-            )
-          } == [1, 2]
-        )
-        #if StructuredQueries
+        try await driver.withDatabase(
+          schema: "CREATE TABLE precisions (float64 BLOB)"
+        ) { database in
+          let double = EmbeddingVector64<3> { [Double.pi, -2, .leastNonzeroMagnitude][$0] }
+          try await database.write {
+            try $0.execute("INSERT INTO precisions VALUES (\(double))")
+          }
+          let row = try await database.read {
+            try $0.fetchOne("SELECT float64 FROM precisions", as: EmbeddingVector64<3>.self)
+          }
+          let stored = try #require(row)
+          #expect(stored == double)
+        }
+      }
+
+      #if StructuredQueries
+        @Test(arguments: SQLiteTestDriver.allCases)
+        func packedBinaryColumnsSearchAndSliceWithSQLiteVec(_ driver: SQLiteTestDriver) async throws
+        {
+          guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+            return
+          }
+          try await driver.withDatabase(
+            schema:
+              "CREATE VIRTUAL TABLE binary_embeddings USING vec0(embedding bit[16], label text)"
+          ) { database in
+            let exact = try BinaryEmbeddingVector<16>(packedBytes: [0x05, 0x01])
+            let near = try BinaryEmbeddingVector<16>(packedBytes: [0x85, 0x02])
+            let vector = BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: exact)
+            try await database.write { transaction in
+              try transaction.execute(
+                SQLiteBinaryEmbedding.insert {
+                  ($0.embedding, $0.label)
+                } values: {
+                  (
+                    Vec.bit(
+                      BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: near),
+                      as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self
+                    ),
+                    "near"
+                  )
+                  (
+                    Vec.bit(vector, as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self),
+                    "exact"
+                  )
+                }
+              )
+            }
+            try await database.read { transaction in
+              let rows = try transaction.fetchAll(SQLiteBinaryEmbedding.order { $0.label })
+              #expect(rows.map(\.embedding) == [exact, near])
+              let nearest = try transaction.fetchAll(
+                SQLiteBinaryEmbedding.where { $0.embedding.match(vector) }
+                  .order { $0.distance }.limit(2).select { ($0.label, $0.distance) }
+              )
+              #expect(nearest.map(\.0) == ["exact", "near"])
+              #expect(nearest.map(\.1) == [0, Double(exact.hammingDistance(to: near))])
+              let scalar = try transaction.fetchAll(
+                SQLiteBinaryEmbedding.order { $0.embedding.distanceHamming(to: vector) }
+                  .select { $0.embedding.distanceHamming(to: vector) }
+              )
+              #expect(scalar == nearest.map(\.1))
+              let sliced = try transaction.fetchOne(
+                #sql(
+                  "SELECT \(Vec.slice(vector, range: 8..<16, as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self))",
+                  as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
+                )
+              )
+              #expect(sliced?.packedBytes == [0x01])
+              #expect(
+                try transaction.fetchOne(
+                  #sql("SELECT \(Vec.type(vector))", as: String.self)
+                ) == "bit"
+              )
+            }
+          }
+        }
+      #endif
+
+      @Test(arguments: SQLiteTestDriver.allCases)
+      func vectorsBindFetchAndSearchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
+        guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+          return
+        }
+        try await driver.withDatabase(
+          schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
+        ) { database in
+          let origin = EmbeddingVector<3>(repeating: 0)
+          let neighbor = EmbeddingVector<3> { $0 == 0 ? 1 : 0 }
+          try await database.write {
+            try $0.execute("INSERT INTO embeddings VALUES (1, \(origin)), (2, \(neighbor))")
+          }
           #expect(
             try await database.read {
               try $0.fetchOne(
-                #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                "SELECT embedding FROM embeddings WHERE rowid = 2",
+                as: EmbeddingVector<3>.self
               )
-            } == 1
+            } == neighbor
           )
-        #endif
+          #expect(
+            try await database.read {
+              try $0.fetchAll(
+                """
+                SELECT rowid FROM embeddings
+                WHERE embedding MATCH \(origin) AND k = 2 ORDER BY distance
+                """,
+                as: Int64.self
+              )
+            } == [1, 2]
+          )
+          #if StructuredQueries
+            #expect(
+              try await database.read {
+                try $0.fetchOne(
+                  #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                )
+              } == 1
+            )
+          #endif
+        }
       }
-    }
+    #endif
   }
+
+  #if !Turso && StructuredQueries
+    @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+    @Table("binary_embeddings")
+    private struct SQLiteBinaryEmbedding: Vec0 {
+      @Column(as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self)
+      var embedding: BinaryEmbeddingVector<16>
+      var label: String
+    }
+  #endif
 #endif

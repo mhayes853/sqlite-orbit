@@ -140,7 +140,7 @@ public struct SQLiteConfiguration: Sendable {
     self.setupSQL = setupSQL
     self.connectionSetups = connectionSetups
     #if Vectors
-      registerSQLiteVec()
+      registerSQLiteVecIfAvailable()
     #endif
   }
 }

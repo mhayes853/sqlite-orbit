@@ -109,11 +109,12 @@
     }
 
     @Test
-    func unsupportedRuntimeFailsBeforeOpeningEvenWithASystemName() throws {
+    func explicitlyRequiringVecOnAnUnsupportedRuntimeFailsBeforeOpening() throws {
       let opens = TestCounter()
       var configuration = SQLiteConfiguration.default
       configuration.library.name = "system SQLite"
       configuration.library.extensions = nil
+      configuration.registerSQLiteVec()
       configuration.library.connections.open = { _, _, _, _ in
         opens.increment()
         return SQLiteResultCode.ok.rawValue
@@ -124,6 +125,29 @@
         _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
       }
       #expect(opens.value == 0)
+    }
+
+    @Test
+    func automaticVecSetupUsesTheLibraryCapabilitiesAtOpenTime() throws {
+      var unsupported = SQLiteLibrary.builtIn
+      unsupported.name = "system SQLite"
+      unsupported.extensions = nil
+      var configuration = SQLiteConfiguration(library: unsupported)
+      // Capabilities can be supplied after the configuration was constructed. Its automatic
+      // setup must examine the current library, not remember the original one or its name.
+      configuration.library = .builtIn
+      let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
+      #expect(
+        try database.readBlocking {
+          try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int.self)
+        } == 3
+      )
+
+      // Conversely, replacing a supported library with one without extension registration
+      // leaves ordinary SQL usable. Explicit Vec requests remain strict, as tested above.
+      configuration.library = unsupported
+      let ordinary = try SQLiteQueue(path: ":memory:", configuration: configuration)
+      #expect(try ordinary.readBlocking { try $0.fetchOne("SELECT 42", as: Int.self) } == 42)
     }
 
     @Test

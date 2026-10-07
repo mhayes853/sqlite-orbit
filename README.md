@@ -212,12 +212,12 @@ transaction.
 | `SQLCipher` | No | Links SQLCipher in place of the system SQLite. |
 | `Turso` | No | Links Turso's engine and vends `SQLiteLibrary.turso` and `TursoPool`. |
 | `Dependencies` | No | Integrates `OrbitDefaultDatabase` with swift-dependencies. |
-| `Vectors` | No | Re-exports SQLite Vec's C and query-core bindings, adds raw SQL conversions for `EmbeddingVector`, and initializes Vec automatically on supported connections. |
+| `Vectors` | No | Re-exports SQLite Vec and Turso vector query helpers, adds raw SQL conversions for dense and encoded vectors, and initializes Vec when the library supports extensions. |
 
 Every trait only adds API: SQL that compiles with a trait off compiles, and runs the same, with it
-on. `Vectors` also initializes its extension when opening connections. Naming any trait in a
-manifest leaves the defaults out, so a lean build lists only what it
-needs:
+on. `Vectors` also initializes its extension when the selected library supports it; Turso uses
+native vector functions. Naming any trait in a manifest leaves the defaults out, so a lean build
+lists only what it needs:
 
 ```swift
 .package(
@@ -763,8 +763,10 @@ let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 On non-Apple platforms, the runtime must provide the extension API table and virtual-table
 registration Vec requires; builds omitting these fail initialization. On Apple platforms, the SDK
 compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole
-provider. Turso and libraries without extension support fail the open with
-`SQLiteFeatureUnavailableError`.
+provider. Automatic setup checks the selected library's extension capabilities at connection
+opening time and skips Vec registration when unsupported. Explicitly calling `registerSQLiteVec()`
+requires extension support and fails the open with `SQLiteFeatureUnavailableError` when it is
+missing. Turso uses native vector functions, so its connections skip automatic Vec registration.
 
 If you replace `configuration.connectionSetups`, call `configuration.registerSQLiteVec()` to restore
 Vec initialization. Its registration uses the configuration's library at connection opening time.
@@ -773,11 +775,12 @@ The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs
 without the Vec trait. Cancellation affects future connections and leaves already initialized ones
 working. Initializers and their code must remain loaded while SQLite can call them.
 
-With this trait, `import SQLiteOrbit` brings `StructuredQueriesSQLiteVecCore` into scope. Builds
-using `SystemSQLite` also re-export `CSQLiteVec`; custom builds use Orbit's opaque C bridge to avoid
-conflicts between their SQLite headers and the platform headers imported by `CSQLiteVec`.
-`EmbeddingVector` conforms to
-`OrbitDatabaseValueConvertible`, so raw SQL can bind and fetch vectors directly:
+With this trait, `import SQLiteOrbit` brings `StructuredQueriesSQLiteVecCore` and
+`StructuredQueriesTursoVecCore` into scope, including their shared numeric vector representations.
+Builds using `SystemSQLite` also re-export `CSQLiteVec`; custom builds use Orbit's opaque C bridge
+to avoid conflicts between their SQLite headers and the platform headers imported by `CSQLiteVec`.
+`EmbeddingVector` and `EmbeddingVector64` conform to `OrbitDatabaseValueConvertible`, so raw SQL
+can bind and fetch numeric vectors directly:
 
 ```swift
 let vector = EmbeddingVector<3> { Float($0) }
@@ -789,15 +792,130 @@ let stored = try await database.read {
 }
 ```
 
-Vectors use little-endian 32-bit float blobs. Decoding rejects other storage classes and blobs
-whose size does not match the vector dimension. `EmbeddingVector` follows upstream's availability
+Numeric vectors use SQLite-Vec-data's public `vectorBytes` and `init(vectorBytes:)` APIs:
+little-endian float32 bytes for `EmbeddingVector` and tagged little-endian float64 bytes for
+`EmbeddingVector64`. Raw SQL and structured query representations use the same formats, including
+accepting Turso's optional float32 tag when decoding. Decoding rejects other storage classes,
+invalid format tags, and mismatched dimensions. The vector types follow upstream's availability
 on Apple platforms: iOS, macOS, tvOS, and visionOS 26 or later, and watchOS 26 or later.
 
-Orbit uses only the `CSQLiteVec` and `StructuredQueriesSQLiteVecCore` products, without building or
-linking SQLiteData/GRDB. The dependency is temporarily pinned to main commit `f980c99`, which
-exposes the core product. The query-core bindings bring a transitive Foundation dependency even
-when the general `StructuredQueries` trait is disabled; that trait still controls Orbit's full
-query-builder integration.
+Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
+products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
+commit `93ae64c` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+The query-core bindings bring a transitive Foundation dependency even when the general
+`StructuredQueries` trait is disabled; that trait still controls Orbit's full query-builder
+integration.
+
+### Turso vectors
+
+Enable `Turso`, `StructuredQueries`, and `Vectors` together to use the native vector query helpers
+with `TursoPool`:
+
+```swift
+.package(
+  url: "https://github.com/mhayes853/sqlite-orbit",
+  from: "0.1.0",
+  traits: ["Turso", "StructuredQueries", "Vectors"]
+)
+```
+
+```swift
+@Table("documents")
+struct Document {
+  var title: String
+  var embedding: EmbeddingVector<3>
+}
+
+let database = try TursoPool(path: databasePath)
+try await database.write { transaction in
+  try transaction.execute("CREATE TABLE documents (title TEXT NOT NULL, embedding F32_BLOB(3) NOT NULL)")
+  try transaction.execute(
+    Document.insert { ($0.title, $0.embedding) } values: {
+      ("Example", TursoVec.vector32("[1,0,0]", as: EmbeddingVector<3>.self))
+    }
+  )
+}
+let vector = EmbeddingVector<3>([1, 0, 0])
+let nearest = try await database.read { transaction in
+  try transaction.fetchAll(
+    Document.order { TursoVec.distanceCosine($0.embedding, to: vector).asc() }
+      .limit(5)
+      .select {
+        ($0.title, TursoVec.extract($0.embedding), TursoVec.distanceL2($0.embedding, to: vector))
+      }
+  )
+}
+```
+
+Use `TursoVec` for the bundled Rust engine. Tables need only
+`@Table`; execute the table creation SQL separately. Fixed-size models validate dimensions when
+decoding; `F32_BLOB(3)` gives the column BLOB affinity without enforcing dimensions in the engine.
+For variable-size models, use `[Float]` with `@Column(as: [Float].VectorBytesRepresentation.self)`.
+Convert JSON explicitly before distance
+comparisons, for example `TursoVec.distanceL2(column, to: TursoVec.vector32("[1,0,0]"))`.
+
+The bundled Rust Turso engine supports `vector`/`vector32`, `vector64`, `vector8`, `vector1bit`,
+`vector32Sparse`, JSON extraction, cosine/L2/dot/Jaccard distances, and dense concatenation and
+slicing. Compressed columns store `Quantized8Vector` or `SparseFloat32Vector` directly:
+
+```swift
+@Table("encoded_documents")
+struct EncodedDocument {
+  var embedding: Quantized8Vector
+  var lexicalEmbedding: SparseFloat32Vector
+}
+
+let compressed = try Quantized8Vector(quantizing: [0, 127.5, 255])
+let sparse = try SparseFloat32Vector(dimensions: 6, indices: [2, 5], values: [1.5, 2.5])
+let dense = compressed.decodedValues()
+let denseSparse = sparse.denseValues()
+
+let embedding = EmbeddingVector<3>([0, 127.5, 255])
+let inline = try embedding.quantized8()
+let sized = try embedding.sparseFloat32()
+```
+
+`Quantized8Vector` preserves its unsigned byte codes, scale, and shift. Quantization happens only
+when explicitly requested. `SparseFloat32Vector` preserves its dimension count, indices, and
+stored values without allocating a dense array during decoding. For fixed dimensions, use
+`InlineQuantized8Vector<N>` or `SizedSparseFloat32Vector<N>`. All four encoded types also conform
+to `OrbitDatabaseValueConvertible`: raw SQL binds and reads the original bytes without
+requantizing or expanding them. Invalid constructor components throw `TursoVectorError`;
+match its extensible `code` (`.invalidQuantization` or `.invalidSparseComponents`) and use `reason`
+for diagnostics. Malformed serialized bytes throw `VectorDecodingError`.
+
+`BinaryEmbeddingVector<N>` stores packed logical bits. `packedBytes` omits database metadata;
+use `.TursoBytesRepresentation` for Turso or `.PackedBitsRepresentation` for SQLiteVec, which
+requires dimensions divisible by eight. `TursoVec.distanceHamming` returns the number of differing
+bits as a `Double`, agreeing with the local vector's `hammingDistance(to:)` integer result.
+Binary cosine distance uses the same native SQL function. Structured queries use explicit
+representations for
+`EmbeddingVector64` and binary vectors to select their blob format. Raw SQL binds and fetches
+the numeric vector types directly. Upstream now focuses on SQLiteVec and Rust Turso: libSQL
+helpers and float16/bfloat16 vector types have been removed.
+
+`TursoVec.concat` accepts two dense float32 or float64 vectors. `TursoVec.slice` also supports
+sparse float32 and uses a zero-based inclusive start and exclusive end. Both return array
+representations for dense vectors and `SparseFloat32Vector` for sparse vectors by default; use
+`as:` for fixed-size results. Binary vectors support cosine, dot,
+and Jaccard distances, but not L2.
+
+The bundled engine does not implement libSQL's `vector16`, `vectorb16`, `libsql_vector_idx`, or
+`vector_top_k`; executing their raw SQL against `TursoPool` throws `SQLiteError`.
+Use distance ordering and `limit` for nearest neighbors in the
+local engine.
+
+`TursoVectorTests` exercises conversions, Swift blob bindings, typed columns, sparse storage,
+distance ordering, concatenation, slicing, dimension errors, rollback, and connection setup
+against real file-backed `TursoPool` instances. It verifies that encoded values retain their
+bytes when fetched and rebound, verifies packed binary columns and Hamming distances against
+local results, and checks the errors for unavailable libSQL functions.
+`TursoVectorValueTests` also validates raw conversions with `StructuredQueries` disabled.
+Run the dedicated suites with:
+
+```sh
+swift test --disable-default-traits --traits Turso,StructuredQueries,Vectors --filter 'TursoVectorTests|TursoVectorValueTests'
+```
 
 ## Collations and functions
 
