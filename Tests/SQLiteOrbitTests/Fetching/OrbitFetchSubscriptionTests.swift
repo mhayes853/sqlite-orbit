@@ -115,7 +115,7 @@
     }
 
     @Test
-    func anObservableReaderCanSupplyTheDefaultDatabase() async throws {
+    func anObservableReaderCanSupplyFetchesExplicitly() async throws {
       let database = try await itemsDatabase()
       let reader = ReaderOnlyObservationDatabase(database)
       let registration = try reader.subscribe(transactionObserver: NoopObserver())
@@ -128,12 +128,10 @@
       )
       #expect(filtered.filtersByRegion)
 
-      try await OrbitDefaultDatabase.withValue(reader) {
-        let property = Fetch(wrappedValue: -1, counts)
-        #expect(property.wrappedValue == 0)
-        try await insertItems(1, into: database)
-        #expect(property.wrappedValue == 1)
-      }
+      let property = Fetch(wrappedValue: -1, counts, database: reader)
+      #expect(property.wrappedValue == 0)
+      try await insertItems(1, into: database)
+      #expect(property.wrappedValue == 1)
     }
 
     private var counts: OrbitValueObservation<Int> {

@@ -28,7 +28,7 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
   func load() async {
     guard !isNew else { return }
     await withErrorReporting {
-      let data = try await defaultRemindersDatabase.read {
+      let data = try await OrbitDefaultDatabase.current.read {
         try RemindersListAsset.find(id).select(\.coverImage).fetchOne($0) ?? nil
       }
       guard !coverImageWasChanged else { return }
@@ -69,7 +69,7 @@ final class RemindersListFormModel: ErrorReporting, Identifiable {
     let isNew = isNew
     let originalPosition = originalPosition
     return await withErrorReporting {
-      try await defaultRemindersDatabase.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         let position = isNew
           ? (try RemindersList.order { $0.position.desc() }
             .select(\.position).fetchOne(transaction) ?? -1) + 1

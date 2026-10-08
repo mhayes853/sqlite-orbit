@@ -31,7 +31,7 @@
   struct OrbitDatabaseTestTraitScopeTests {
     @Test(arguments: [1, 2])
     func databaseExpressionIsEvaluatedForEveryTestCase(_ argument: Int) async throws {
-      let database = try #require(OrbitDefaultDatabase.current as? any OrbitDatabaseWriter)
+      let database = OrbitDefaultDatabase.current
       try await database.write { transaction in
         try transaction.executeScript("CREATE TABLE marker_\(argument) (value)")
         // Every case also creates this table. It would fail if the suite shared one database.
@@ -40,7 +40,9 @@
     }
   }
 
-  private func makeAsyncTraitDatabase() async throws -> any OrbitObservableDatabase {
+  private func makeAsyncTraitDatabase() async throws -> any OrbitDatabaseWriter
+    & OrbitObservableDatabase
+  {
     try SQLiteQueue(path: .memory)
   }
 #endif

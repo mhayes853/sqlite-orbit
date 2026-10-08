@@ -16,14 +16,15 @@ import Testing
 /// }
 /// ```
 public struct OrbitDatabaseTestTrait: TestTrait, SuiteTrait, TestScoping {
-  private let makeDatabase: @Sendable () async throws -> any OrbitObservableDatabase
+  private let makeDatabase:
+    @Sendable () async throws -> any OrbitDatabaseWriter & OrbitObservableDatabase
 
   /// Makes a suite apply this trait to each test it contains.
   public var isRecursive: Bool { true }
 
   fileprivate init(
     makeDatabase:
-      @escaping @Sendable () async throws -> any OrbitObservableDatabase
+      @escaping @Sendable () async throws -> any OrbitDatabaseWriter & OrbitObservableDatabase
   ) {
     self.makeDatabase = makeDatabase
   }
@@ -48,7 +49,9 @@ extension Trait where Self == OrbitDatabaseTestTrait {
   /// as `try testDatabase()` creates a fresh database for every case; passing an existing database
   /// intentionally shares that instance.
   public static func orbitDatabase(
-    _ database: @autoclosure @escaping @Sendable () throws -> any OrbitObservableDatabase
+    _ database:
+      @autoclosure @escaping @Sendable () throws -> any OrbitDatabaseWriter
+      & OrbitObservableDatabase
   ) -> Self {
     Self { try database() }
   }
@@ -56,7 +59,7 @@ extension Trait where Self == OrbitDatabaseTestTrait {
   /// Gives each test case the database returned by an asynchronous factory.
   public static func orbitDatabase(
     _ makeDatabase:
-      @escaping @Sendable () async throws -> any OrbitObservableDatabase
+      @escaping @Sendable () async throws -> any OrbitDatabaseWriter & OrbitObservableDatabase
   ) -> Self {
     Self(makeDatabase: makeDatabase)
   }
