@@ -29,7 +29,9 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
 
   private let scheduler: SQLitePoolScheduler
   private let writerSuspensions: [SQLiteWriteSuspension]
-  private let suspended = Lock(false)
+  // Assigned after the last throwing call in `init`: Swift 6.3.3 crashes optimizing the destruction
+  // of a partially initialized `Mutex` when a throw follows its default value.
+  private let suspended: Lock<Bool>
 
   /// Opens writable connections first, then the read-only connections for the same database.
   ///
@@ -94,6 +96,7 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     self.path = path
     self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)
     self.writerSuspensions = suspensions
+    self.suspended = Lock(false)
   }
 
   /// Lends a reader, waiting behind earlier barrier writes.
