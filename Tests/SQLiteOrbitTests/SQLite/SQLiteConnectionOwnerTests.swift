@@ -327,6 +327,49 @@
       #expect(next == 2)
     }
 
+    // Backends without an authorizer cannot identify transaction-control statements.
+    @Test(.enabled(if: SQLiteConfiguration.default.library.authorizer != nil))
+    func cachedTransactionControlChecksTheCurrentScopeBeforeExecution() throws {
+      let savepoint: SQL = "SAVEPOINT cached"
+      let statements: [SQL] = [
+        "BEGIN", "COMMIT", "ROLLBACK", savepoint,
+        "RELEASE cached", "ROLLBACK TO cached"
+      ]
+      var owner = try SQLiteConnection(path: .memory, configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.execute("CREATE TABLE items (id INTEGER)")
+        try connection.transaction { transaction in
+          // Preparing without stepping also caches statements that would end this transaction.
+          for sql in statements { _ = try transaction.rowCursor(sql, cached: true) }
+          var cursor = try transaction.rowCursor(savepoint, cached: true)
+          _ = try cursor.next()
+          try transaction.execute("RELEASE cached")
+        }
+        for sql in statements {
+          var cursor = try connection.rowCursor(sql, cached: true)
+          let error = #expect(throws: SQLiteError.self) { _ = try cursor.next() }
+          #expect(error?.primaryCode == .auth)
+          #expect(try cursor.next() == nil)
+          #expect(connection.sqlite.connections.isAutocommit(connection.sqliteConnection) != 0)
+        }
+        // A cursor consults the live scope, not the scope when it was created.
+        var cursor = try connection.rowCursor(savepoint, cached: true)
+        try connection.transaction { transaction in
+          _ = try cursor.next()
+          try transaction.execute("RELEASE cached")
+        }
+        try connection.execute("INSERT INTO items VALUES (1)")
+      }
+      try owner.withReadConnection { connection in
+        var cursor = try connection.rowCursor(savepoint, cached: true)
+        let error = #expect(throws: SQLiteError.self) { _ = try cursor.next() }
+        #expect(error?.primaryCode == .auth)
+        #expect(connection.sqlite.connections.isAutocommit(connection.sqliteConnection) != 0)
+        // Rejected control statements did not prevent the subsequent write from committing.
+        #expect(try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue } == 1)
+      }
+    }
+
     @Test
     func releasingTheOwnerFinalizesCachedStatementsBeforeClosingItsConfiguredLibrary() throws {
       let counters = OwnerLibraryCounters()

@@ -226,8 +226,8 @@ previously discarded, and timeout boundary coverage extends the existing paramet
 
 The following behaviors were reproduced using temporary tests against public library APIs. These
 reproductions were removed from the test target after validation, rather than making the current
-bugs the expected behavior of permanent tests. Finding 1 remains open; the October 8 follow-up
-resolves 2 and 3 and retains SQLiteData's existing behavior for 4, as noted below.
+bugs the expected behavior of permanent tests. The October 8 follow-ups resolve 1–3 and retain
+SQLiteData's existing behavior for 4, as noted below.
 
 1. **Cached transaction control bypasses the outside-transaction restriction.** In a borrowed write
    connection, prepare and consume `rowCursor("SAVEPOINT cached", cached: true)` inside
@@ -240,6 +240,16 @@ resolves 2 and 3 and retains SQLiteData's existing behavior for 4, as noted belo
 
    Evidence: [cache checkout](../Sources/SQLiteOrbit/SQLite/Internal/SQLiteStatementCache.swift),
    [outside-transaction guard and cleanup](../Sources/SQLiteOrbit/SQLite/SQLiteConnectionOwner.swift).
+
+   Resolved 2026-10-08: prepared statements retain a transaction-control flag derived from their
+   authorizer callbacks. Connection cursors check that flag against their live transaction scope
+   before stepping, rejecting cached transaction control with `SQLITE_AUTH`. Managed transactions
+   still permit savepoints. Regression coverage checks transaction and savepoint commands, read
+   and write connections, cursor exhaustion after rejection, live scope changes, and subsequent
+   committed writes. Cleanup tests now use raw native execution to leave a transaction open.
+   This enforcement requires an authorizer-capable backend. Turso exposes no authorizer, so its
+   existing preparation guard and this execution guard cannot classify transaction control;
+   enforcing that restriction on Turso remains a separate backend capability issue.
 
 2. **A failed composite subscription update can lose commits from its reported region.** A custom
    multiprocess writer can return a region subscription that rejects updates. Start an
@@ -307,3 +317,8 @@ were clean. No Apple-platform or Windows runtime validation was performed in thi
 October 8 follow-up validation: all 775 default-suite tests passed, including the new subscription
 failure cases and the existing writer-barrier test exercised through IPC. Formatting and diff
 checks passed.
+
+Retained-metadata follow-up validation: the 41-test connection/access/settings subset and all 776
+default-suite tests passed. Three Turso compatibility checks passed; the authorizer-dependent
+regression is explicitly skipped there after confirming that Turso lacks this enforcement.
+Formatting and diff checks passed.

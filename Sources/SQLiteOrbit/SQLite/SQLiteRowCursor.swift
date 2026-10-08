@@ -35,6 +35,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let authorizer: SQLiteAuthorizerDispatcher
   let authorizationGeneration: UInt64
+  let connectionState: SQLiteConnectionState?
 
   let observations: SQLiteConnectionEvents
 
@@ -53,7 +54,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
-    observations: SQLiteConnectionEvents
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState?
   ) throws {
     let sql = query.text
     let preparedStatement =
@@ -81,6 +83,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.preparedStatement = preparedStatement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
+    self.connectionState = connectionState
     self.observations = observations
     if preparedStatement != nil { authorizer.activeCursors += 1 }
   }
@@ -110,6 +113,18 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       throw SQLiteError(
         code: .misuse,
         message: "A cursor cannot cross an authorization scope boundary",
+        sql: sql
+      )
+    }
+    // Preparation-time authorization does not run again when a cached statement is reused.
+    // Consult the live scope here, before any SQL executes or observations are published.
+    if preparedStatement?.controlsTransactions == true,
+      connectionState?.isInTransaction == false
+    {
+      isExhausted = true
+      throw SQLiteError(
+        code: .auth,
+        message: "Transaction control requires connection.transaction",
         sql: sql
       )
     }

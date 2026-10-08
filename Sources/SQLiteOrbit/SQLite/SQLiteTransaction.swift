@@ -53,16 +53,19 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
   let observations: SQLiteConnectionEvents
+  let connectionState: SQLiteConnectionState?
 
   @_lifetime(borrow handle)
   init(
     handle: borrowing SQLiteConnection,
-    observations: SQLiteConnectionEvents
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState? = nil
   ) {
     self.access = SQLiteConnectionAccess(handle: handle)
     self.statements = handle.statements
     self.authorizer = handle.authorizer
     self.observations = observations
+    self.connectionState = connectionState
   }
 
   /// The underlying `sqlite3 *`.
@@ -162,7 +165,8 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
       library: library,
       statements: statements,
       authorizer: authorizer,
-      observations: observations
+      observations: observations,
+      connectionState: connectionState
     )
   }
 }
@@ -191,9 +195,14 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   @_lifetime(borrow handle)
   init(
     handle: borrowing SQLiteConnection,
-    observations: SQLiteConnectionEvents
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState? = nil
   ) {
-    self.base = SQLiteReadTransaction(handle: handle, observations: observations)
+    self.base = SQLiteReadTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: connectionState
+    )
   }
 
   /// The underlying `sqlite3 *`.

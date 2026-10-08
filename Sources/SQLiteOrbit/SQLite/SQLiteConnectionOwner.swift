@@ -383,10 +383,8 @@ public struct SQLiteConnection: ~Copyable {
     // Declared before the handler below is installed, so that it runs after the handler has been
     // taken back off: the rollback is itself transaction control, which the handler would refuse.
     defer {
-      // The handler below only sees statements as they are prepared, so one the cache prepared
-      // where transaction control was allowed, such as inside a `transaction`, can still open a
-      // transaction when it is reused outside. A transaction left open would hold its locks, and
-      // whatever it changed, into the next access.
+      // Raw native access can still leave a transaction open. Roll it back so its locks and
+      // uncommitted changes cannot survive into the next access.
       if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
         rollbackIgnoringFailure()
       }

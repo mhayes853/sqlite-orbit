@@ -100,17 +100,22 @@
       @Test(arguments: SQLiteTestDriver.allCases)
       func transactionLeftOpenWhenTheAccessEndsIsRolledBack(_ kind: SQLiteTestDriver) async throws {
         try await kind.withDatabase(schema: itemsSchema) { driver in
-          let savepoint = #sql("SAVEPOINT leftover", as: Void.self)
-
           try await driver.writeWithoutTransaction { connection in
-            // A statement the cache prepared inside the transaction is never shown to the authorizer
-            // again, so reusing it outside is the one way left to open a transaction there.
-            try connection.transaction { transaction in
-              var cursor = try transaction.rowCursor(savepoint, cached: true)
-              while try cursor.next() != nil {}
+            // Native statement execution bypasses the cursor's transaction-scope check.
+            let statement = try connection.transaction { transaction in
+              try #require(
+                try transaction.sqlite.prepare(
+                  "SAVEPOINT leftover",
+                  on: transaction.sqliteConnection
+                )
+              )
             }
-            var cursor = try connection.rowCursor(savepoint, cached: true)
-            while try cursor.next() != nil {}
+            defer { _ = connection.sqlite.statements.execution.finalize(statement) }
+            #expect(
+              connection.sqlite.statements.execution.step(statement)
+                == SQLiteResultCode.done.rawValue
+            )
+            #expect(connection.sqlite.connections.isAutocommit(connection.sqliteConnection) == 0)
             try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
           }
 

@@ -282,6 +282,7 @@ final class SQLiteStatementCache {
 
 struct SQLitePreparedStatement {
   let pointer: OpaquePointer
+  let controlsTransactions: Bool
   let readRegion: OrbitDatabaseRegion
   let changedRegion: OrbitDatabaseRegion
   let invalidatesStatementCache: Bool
@@ -292,6 +293,7 @@ struct SQLitePreparedStatement {
 
   init(pointer: OpaquePointer, metadata: Self) {
     self.pointer = pointer
+    self.controlsTransactions = metadata.controlsTransactions
     self.isReadOnly = metadata.isReadOnly
     self.readRegion = metadata.readRegion
     self.changedRegion = metadata.changedRegion
@@ -310,6 +312,9 @@ struct SQLitePreparedStatement {
     library: UnsafePointer<SQLiteLibrary>
   ) {
     self.pointer = pointer
+    self.controlsTransactions = authorizations.contains {
+      $0.action == .transaction || $0.action == .savepoint
+    }
     self.cacheGeneration = cacheGeneration
     self.isReadOnly = isReadOnly
     self.readRegion = sqliteDatabaseRegion(readBy: authorizations) { table in

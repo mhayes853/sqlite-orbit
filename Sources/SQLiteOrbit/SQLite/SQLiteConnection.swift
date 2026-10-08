@@ -41,7 +41,11 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     observations: SQLiteConnectionEvents,
     state: SQLiteConnectionState
   ) {
-    self.base = SQLiteReadTransaction(handle: handle, observations: observations)
+    self.base = SQLiteReadTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: state
+    )
     self.handle = address
     self.state = state
   }
@@ -248,7 +252,11 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     observations: SQLiteConnectionEvents,
     state: SQLiteConnectionState
   ) {
-    self.base = SQLiteWriteTransaction(handle: handle, observations: observations)
+    self.base = SQLiteWriteTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: state
+    )
     self.handle = address
     self.state = state
   }
@@ -597,8 +605,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
 /// Tracks whether a connection lent outside a transaction is inside its own `transaction` call.
 ///
-/// The handle's authorizer consults this to refuse statements that begin or end a transaction
-/// anywhere else.
+/// The handle's authorizer and cursors consult this to refuse statements that begin or end a
+/// transaction anywhere else, including cached statements.
 final class SQLiteConnectionState {
   private(set) var isInTransaction = false
 

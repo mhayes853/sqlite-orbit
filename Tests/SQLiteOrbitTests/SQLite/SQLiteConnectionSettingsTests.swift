@@ -250,18 +250,24 @@
         _ kind: SQLiteTestDriver
       ) async throws {
         try await kind.withDatabase(schema: listsSchema) { driver in
-          let savepoint = #sql("SAVEPOINT leftover", as: Void.self)
-
           try await driver.writeWithoutTransaction { connection in
             try connection.setForeignKeysEnabled(false)
-            // Reusing a statement the cache prepared inside the transaction leaves one open when the
-            // access ends. SQLite ignores the restoring pragma until it has been rolled back.
-            try connection.transaction { transaction in
-              var cursor = try transaction.rowCursor(savepoint, cached: true)
-              while try cursor.next() != nil {}
+            // Leave a transaction open through native access. SQLite ignores the restoring pragma
+            // until that transaction has been rolled back.
+            let statement = try connection.transaction { transaction in
+              try #require(
+                try transaction.sqlite.prepare(
+                  "SAVEPOINT leftover",
+                  on: transaction.sqliteConnection
+                )
+              )
             }
-            var cursor = try connection.rowCursor(savepoint, cached: true)
-            while try cursor.next() != nil {}
+            defer { _ = connection.sqlite.statements.execution.finalize(statement) }
+            #expect(
+              connection.sqlite.statements.execution.step(statement)
+                == SQLiteResultCode.done.rawValue
+            )
+            #expect(connection.sqlite.connections.isAutocommit(connection.sqliteConnection) == 0)
           }
 
           #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
