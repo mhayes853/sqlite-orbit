@@ -226,7 +226,8 @@ previously discarded, and timeout boundary coverage extends the existing paramet
 
 The following behaviors were reproduced using temporary tests against public library APIs. These
 reproductions were removed from the test target after validation, rather than making the current
-bugs the expected behavior of permanent tests. The findings remain open for discussion.
+bugs the expected behavior of permanent tests. Finding 1 remains open; the October 8 follow-up
+resolves 2 and 3 and retains SQLiteData's existing behavior for 4, as noted below.
 
 1. **Cached transaction control bypasses the outside-transaction restriction.** In a borrowed write
    connection, prepare and consume `rowCursor("SAVEPOINT cached", cached: true)` inside
@@ -252,6 +253,12 @@ bugs the expected behavior of permanent tests. The findings remain open for disc
    Evidence: [composite update](../Sources/SQLiteOrbit/IPC/OrbitIPCDatabase.swift),
    [last-successful region contract](../Sources/SQLiteOrbit/Subscription/OrbitRegionSubscription.swift).
 
+   Resolved 2026-10-08: widen every source to the union of its current and requested regions before
+   narrowing any source. A failed widening preserves the previous coverage; a failed narrowing is
+   harmless extra delivery and does not fail the update. The public callback contract now explicitly
+   requires preserving previous coverage on error. Regression coverage exercises writer and
+   transport failures during both phases, sibling and peer delivery, and later successful updates.
+
 3. **The IPC wrapper drops its writer's active-writer barrier.** Give a custom public multiprocess
    writer a non-nil `captureActiveWriters()` result. `OrbitIPCDatabase` wrapping it returns nil,
    because it inherits the observable protocol's default implementation. Coalesced observations
@@ -263,6 +270,10 @@ bugs the expected behavior of permanent tests. The findings remain open for disc
    Evidence: [IPC observable conformance](../Sources/SQLiteOrbit/IPC/OrbitIPCDatabase.swift),
    [default barrier implementation](../Sources/SQLiteOrbit/Observation/OrbitDatabaseTransactionObservation.swift).
 
+   Resolved 2026-10-08: `OrbitIPCDatabase.captureActiveWriters()` forwards to its writer. The existing
+   public custom-driver observation test now also runs through the IPC wrapper, verifying delayed
+   refetches, finite writer cohorts, and refetching with no active writers.
+
 4. **Section equality is a deliberate semantic choice worth revisiting.** Grouping `[1, 2, 1]`
    and `[1, 1, 2]` by identity produces equal section collections, although their public `elements`
    arrays differ. Equality compares sections and their rows, exactly as documented. Consequently,
@@ -271,6 +282,10 @@ bugs the expected behavior of permanent tests. The findings remain open for disc
    of the current contract.
 
    Evidence: [section collection equality](../Sources/SQLiteOrbit/Fetching/OrbitFetchSectionCollection.swift).
+
+   Decided 2026-10-08: retain the current equality to match SQLiteData. Its
+   [ResultsSectionCollection](https://github.com/pointfreeco/sqlite-data/blob/main/Sources/SQLiteData/ResultsSectionCollection.swift)
+   also uses `lhs.elementsEqual(rhs)`, comparing section names and rows rather than flat interleaving.
 
 No additional confirmed library-owned "internal hell" blocker emerged. One optional extension
 point remains: the public, documentation-hidden `_OrbitFetchSectioning` carrier exposes neither
@@ -288,3 +303,7 @@ Validation on Linux: the final default suite passed 774 tests; the minimal Syste
 and the 72-test Turso compatibility/migration/timeout/scheduler subset also passed. The focused
 run passed 124 tests including all four temporary reproductions. Swift formatting and diff checks
 were clean. No Apple-platform or Windows runtime validation was performed in this review.
+
+October 8 follow-up validation: all 775 default-suite tests passed, including the new subscription
+failure cases and the existing writer-barrier test exercised through IPC. Formatting and diff
+checks passed.

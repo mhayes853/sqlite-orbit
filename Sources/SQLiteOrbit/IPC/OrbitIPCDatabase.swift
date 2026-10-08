@@ -378,6 +378,11 @@ extension OrbitIPCDatabase.Delegate {
 }
 
 extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
+  /// Captures the underlying writer's active writes for observation coordination.
+  public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
+    writer.captureActiveWriters()
+  }
+
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///
@@ -427,14 +432,19 @@ extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
           OrbitDatabaseCommit(origin: .external, region: commit.region)
         )
       }
+      let subscriptions = [external, sameProcess, local]
       return OrbitRegionSubscription(region: region) { region in
-        try external.updateRegion(region)
-        try sameProcess.updateRegion(region)
-        try local.updateRegion(region)
+        // Preserve the previous coverage on every source until all sources cover the new region.
+        // If widening fails, sources already updated may safely report additional commits.
+        for subscription in subscriptions {
+          try subscription.updateRegion(subscription.region.union(region))
+        }
+        // Narrowing only reduces extra notifications; failure leaves sufficient coverage intact.
+        for subscription in subscriptions {
+          try? subscription.updateRegion(region)
+        }
       } onCancel: {
-        local.cancel()
-        sameProcess.cancel()
-        external.cancel()
+        for subscription in subscriptions { subscription.cancel() }
       }
     } catch {
       local.cancel()

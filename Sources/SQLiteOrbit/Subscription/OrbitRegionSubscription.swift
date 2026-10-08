@@ -49,7 +49,8 @@ public struct OrbitRegionSubscription: Sendable {
   ///   - onUpdateRegion: Applies a new region, returning only once announcements that start
   ///     afterwards honor it, or `nil` if the registration reports every commit whatever its
   ///     region. Calls are serialized, and none is made once cancellation begins, although one
-  ///     already running may race with cancellation.
+  ///     already running may race with cancellation. If it throws, the registration must still
+  ///     report every commit overlapping its previous region; extra commits may also be reported.
   ///   - onCancel: Runs once, when the subscription is cancelled or fully released.
   public init(
     region: OrbitDatabaseRegion,

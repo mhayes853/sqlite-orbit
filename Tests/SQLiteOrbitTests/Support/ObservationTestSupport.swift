@@ -85,7 +85,7 @@
   /// observers registered on it, which is the only way to tell how many subscriptions a group of
   /// observations took out.
   // This provider deliberately compiles against an ordinary import, just like a custom driver.
-  final class AnnouncingTestDatabase: OrbitDatabaseWriter, OrbitObservableDatabase,
+  final class AnnouncingTestDatabase: OrbitMultiprocessDatabaseWriter, OrbitObservableDatabase,
     @unchecked Sendable
   {
     let defaultIdentifier: OrbitDatabaseIdentifier
@@ -95,14 +95,23 @@
     private var observers: [UUID: any OrbitDatabaseTransactionObserver] = [:]
     private var subscriptions = 0
     private var activeWriters: (any OrbitDatabaseWriterBarrier)?
+    private let onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)?
 
     /// How many observers have been registered, whether or not they are still registered.
     var subscriptionCount: Int { lock.withLock { subscriptions } }
 
-    init(_ base: SQLiteQueue) {
+    init(
+      _ base: SQLiteQueue,
+      onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)? = nil
+    ) {
       self.base = base
       self.defaultIdentifier = base.defaultIdentifier
+      self.onUpdateRegion = onUpdateRegion
     }
+
+    var isSuspended: Bool { base.isSuspended }
+    func suspend() { base.suspend() }
+    func resume() { base.resume() }
 
     func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
       lock.withLock { activeWriters }
@@ -180,7 +189,8 @@
         observers[id] = transactionObserver
       }
       // Like a local driver, report every commit regardless of the advertised region.
-      return OrbitRegionSubscription(region: region) { [weak self] in
+      return OrbitRegionSubscription(region: region, onUpdateRegion: onUpdateRegion) {
+        [weak self] in
         guard let self else { return }
         _ = self.lock.withLock { self.observers.removeValue(forKey: id) }
       }

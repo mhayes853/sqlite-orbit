@@ -5,9 +5,12 @@
 
   @Suite
   struct OrbitDatabaseWriterBarrierTests {
-    @Test
-    func aCustomDatabaseCoordinatesRefetchesUsingOnlyPublicAPIs() async throws {
+    @Test(arguments: [false, true])
+    func aCustomDatabaseCoordinatesRefetchesUsingOnlyPublicAPIs(throughIPC: Bool) async throws {
       let database = AnnouncingTestDatabase(try await itemsDatabase())
+      let observed: any OrbitObservableDatabase =
+        throughIPC
+        ? OrbitIPCDatabase(writer: database, transport: InMemoryIPCTransport()) : database
       let values = TestRecorder<Int64>()
       let fetches = TestCounter()
       let subscription = try OrbitValueObservation<Int64>
@@ -18,7 +21,7 @@
         }
         .refetching(.coalesced)
         .subscribe(
-          to: database,
+          to: observed,
           onError: { Issue.record("Unexpected observation error: \($0)") },
           onChange: { values.append($0.value) }
         )
