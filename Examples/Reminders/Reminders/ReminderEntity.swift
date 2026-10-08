@@ -102,7 +102,7 @@ struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendabl
     ]
   #endif
 
-  @Dependency(default: OrbitDefaultDatabase.current)
+  @Dependency(default: defaultRemindersDatabase)
   var database: RemindersDatabase
 
   init() {}

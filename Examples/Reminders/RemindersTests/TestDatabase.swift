@@ -10,7 +10,7 @@ func insertFixture(
   lists: [RemindersList],
   reminders: [Reminder] = []
 ) async throws {
-  try await OrbitDefaultDatabase.current.write { transaction in
+  try await defaultRemindersDatabase.write { transaction in
     try RemindersList.insert { lists }.execute(transaction)
     if !reminders.isEmpty {
       try Reminder.insert { reminders }.execute(transaction)

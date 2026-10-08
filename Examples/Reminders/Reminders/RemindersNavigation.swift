@@ -20,14 +20,14 @@ final class RemindersNavigationModel: ErrorReporting {
       switch route {
       case .list(let id):
         guard
-          let list = try await OrbitDefaultDatabase.current.read({
+          let list = try await defaultRemindersDatabase.read({
             try RemindersList.find(id).fetchOne($0)
           })
         else { throw RemindersNavigationError.missingList }
         detailButtonTapped(.list(list))
 
       case .reminder(let id):
-        let destination = try await OrbitDefaultDatabase.current.read { transaction in
+        let destination = try await defaultRemindersDatabase.read { transaction in
           guard
             let reminder = try Reminder.find(id).fetchOne(transaction),
             let list = try RemindersList.find(reminder.remindersListID).fetchOne(transaction)
@@ -47,7 +47,7 @@ final class RemindersNavigationModel: ErrorReporting {
   func open(_ action: RemindersHomeQuickActions.Action) async {
     errorMessage = nil
     await withErrorReporting {
-      let list = try await OrbitDefaultDatabase.current.read { transaction in
+      let list = try await defaultRemindersDatabase.read { transaction in
         switch action {
         case .newReminder:
           return try RemindersList.order(by: \.position).fetchOne(transaction)

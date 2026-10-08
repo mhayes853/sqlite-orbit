@@ -28,7 +28,7 @@ struct RemindersListEntity: AppEntity, Sendable {
 }
 
 struct RemindersListEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendable {
-  @Dependency(default: OrbitDefaultDatabase.current)
+  @Dependency(default: defaultRemindersDatabase)
   var database: RemindersDatabase
 
   init() {}

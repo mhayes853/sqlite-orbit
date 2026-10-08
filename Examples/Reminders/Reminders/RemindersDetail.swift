@@ -97,7 +97,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
   }
 
   init(detailType: RemindersDetailType) {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     self.detailType = detailType
 
     let defaults = RemindersDetailSettings(
@@ -149,7 +149,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         .select(\.coverImage)
     )
     do {
-      for try await data in observation.values(in: OrbitDefaultDatabase.current) {
+      for try await data in observation.values(in: defaultRemindersDatabase) {
         if let data = data ?? nil {
           coverImage = await RemindersCoverImage.load(data)
         } else {
@@ -191,7 +191,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
     let currentOrdering = ordering
     let showCompleted = showCompleted
     await withErrorReporting {
-      let didMove = try await OrbitDefaultDatabase.current.write { transaction in
+      let didMove = try await defaultRemindersDatabase.write { transaction in
         let allIDs = try Self.allReminderIDsQuery(
           ordering: currentOrdering,
           showCompleted: showCompleted
@@ -229,7 +229,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       showCompleted: showCompleted
     )
     await withErrorReporting {
-      async let persistSettings: Void = OrbitDefaultDatabase.current.write { transaction in
+      async let persistSettings: Void = defaultRemindersDatabase.write { transaction in
         try RemindersDetailSettings.upsert {
           RemindersDetailSettings.Draft(settings)
         }

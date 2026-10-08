@@ -44,7 +44,7 @@ struct RemindersModelTests {
 
   @Test
   func smartListsPresentNewRemindersForTheFirstListExceptCompleted() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let firstList = RemindersList(id: UUID(), position: 0, title: "Personal")
     let secondList = RemindersList(id: UUID(), position: 1, title: "Work")
     try await database.write {
@@ -269,7 +269,7 @@ struct RemindersModelTests {
 
   @Test
   func detailSettingsRoundTripThroughDatabase() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let model = RemindersDetailModel(detailType: .all)
     await model.load()
 
@@ -316,7 +316,7 @@ struct RemindersModelTests {
 
   @Test
   func manualMovePersistsPositionsAndPreference() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let list = RemindersList(id: UUID(), title: "Work")
     let reminders = [
       Reminder(id: UUID(), position: 0, remindersListID: list.id, title: "A"),
@@ -348,7 +348,7 @@ struct RemindersModelTests {
 
   @Test
   func movingFilteredRemindersUpdatesHiddenPositions() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let list = RemindersList(id: UUID(), title: "Work")
     let day = Date(timeIntervalSince1970: 1_789_560_000)
     let reminders = [
@@ -394,7 +394,7 @@ struct RemindersModelTests {
 
   @Test
   func movingPastACompletedReminderUpdatesItsPosition() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let list = RemindersList(id: UUID(), title: "Work")
     let reminders = [
       Reminder(id: UUID(), position: 0, remindersListID: list.id, title: "A"),
@@ -425,7 +425,7 @@ struct RemindersModelTests {
 
   @Test
   func movingTheOnlyVisibleReminderIsANoop() async throws {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     let list = RemindersList(id: UUID(), title: "Work")
     let visible = Reminder(
       id: UUID(),

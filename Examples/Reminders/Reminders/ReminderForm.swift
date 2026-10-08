@@ -30,7 +30,7 @@ final class ReminderFormModel: ErrorReporting, Identifiable {
     calendar: Calendar = .current,
     now: Date = .now
   ) {
-    let database = OrbitDefaultDatabase.current
+    let database = defaultRemindersDatabase
     self.calendar = calendar
     id = reminder?.id ?? UUID()
     isNew = reminder == nil
@@ -126,7 +126,7 @@ final class ReminderFormModel: ErrorReporting, Identifiable {
     reminder.dueDate = dueDateToSave
     reminder.title = title
     return await withErrorReporting {
-      try await OrbitDefaultDatabase.current.write { transaction in
+      try await defaultRemindersDatabase.write { transaction in
         if isNew {
           reminder.position =
             (try Reminder.order { $0.position.desc() }
