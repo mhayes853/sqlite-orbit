@@ -28,6 +28,24 @@
     }
 
     @Test
+    func cacheKeysCompareTheJoinedTextByteForByte() {
+      let text = SQLiteStatementCacheKey("SELECT ?, 'a'")
+      let parts = SQLiteStatementCacheKey(
+        SQL(parts: [.text("SELECT "), .binding(.integer(1)), .text(", "), .text("'a'")])
+      )
+      #expect(text == parts)
+      #expect(parts == text)
+      #expect(text.hashValue == parts.hashValue)
+      #expect(SQLiteStatementCacheKey("SELECT ?, 'b'") != parts)
+      #expect(SQLiteStatementCacheKey("SELECT ?, 'a' ") != parts)
+      #expect(SQLiteStatementCacheKey("SELECT ?") != parts)
+      // Canonically equivalent strings are equal in Swift, but SQLite compiles their bytes.
+      #expect(
+        SQLiteStatementCacheKey("SELECT '\u{E9}'") != SQLiteStatementCacheKey("SELECT 'e\u{301}'")
+      )
+    }
+
+    @Test
     func executeOutsideATransactionReusesItsStatement() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in

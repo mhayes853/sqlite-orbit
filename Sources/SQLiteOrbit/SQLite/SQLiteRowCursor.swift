@@ -43,7 +43,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   var didPublishAccesses = false
 
-  let columnLookup = SQLiteRowColumnLookup()
+  // Made with the first row, so a statement that returns none, such as most writes, never needs
+  // one.
+  var columnLookup: SQLiteRowColumnLookup?
 
   @_lifetime(borrow statements)
   init(
@@ -57,11 +59,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     observations: SQLiteConnectionEvents,
     connectionState: SQLiteConnectionState?
   ) throws {
-    let sql = query.text
-    let preparedStatement =
-      cached
-      ? try statements.checkOut(sql, requiresReadOnly: requiresReadOnly)
-      : try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
+    let sql: String
+    let preparedStatement: SQLitePreparedStatement?
+    if cached {
+      (preparedStatement, sql) = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
+    } else {
+      sql = query.text
+      preparedStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
+    }
     if let preparedStatement {
       do {
         try bind(query, to: preparedStatement.pointer, library: library)
@@ -170,6 +175,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   private mutating func row(for code: Int32, of statement: OpaquePointer) throws -> SQLiteRow? {
     switch code {
     case SQLiteResultCode.row.rawValue:
+      if columnLookup == nil { columnLookup = SQLiteRowColumnLookup() }
       return SQLiteRow(cursor: self, statement: statement)
     case SQLiteResultCode.done.rawValue:
       isExhausted = true
@@ -212,7 +218,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     @_lifetime(borrow cursor)
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.decoder = SQLiteRowDecoder(library: cursor.library, statement: statement)
-      self.columnLookup = cursor.columnLookup
+      self.columnLookup = cursor.columnLookup!
     }
   #else
     @usableFromInline
@@ -226,7 +232,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.library = cursor.library
       self.statement = statement
-      self.columnLookup = cursor.columnLookup
+      self.columnLookup = cursor.columnLookup!
     }
   #endif
 

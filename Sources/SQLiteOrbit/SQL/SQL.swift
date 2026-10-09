@@ -57,12 +57,40 @@ public struct SQL: Hashable, Sendable {
   /// This is an unvalidated projection. Execution adapters should first use ``validatedParts()``
   /// so a failed value conversion cannot silently become a `NULL` binding.
   public var text: String {
-    parts.reduce(into: "") { text, part in
+    // Sized up front, so the text is allocated once rather than grown append by append.
+    var count = 0
+    for part in parts {
+      switch part {
+      case .text(let fragment), .statement(let fragment, _): count += fragment.utf8.count
+      case .binding: count += 1
+      }
+    }
+    var text = ""
+    text.reserveCapacity(count)
+    for part in parts {
       switch part {
       case .text(let fragment), .statement(let fragment, _): text.append(fragment)
       case .binding: text.append("?")
       }
     }
+    return text
+  }
+
+  /// Lends the UTF-8 of ``text`` to `body` a piece at a time, without joining the pieces, until
+  /// `body` returns `false`.
+  ///
+  /// - Returns: Whether every piece was lent.
+  func forEachTextChunk(_ body: (UnsafeRawBufferPointer) -> Bool) -> Bool {
+    for part in parts {
+      switch part {
+      case .text(let fragment), .statement(let fragment, _):
+        guard fragment.withUTF8Bytes(body) else { return false }
+      case .binding:
+        var placeholder = UInt8(ascii: "?")
+        guard withUnsafeBytes(of: &placeholder, body) else { return false }
+      }
+    }
+    return true
   }
 
   /// The parameter values in construction order, including those supplied with raw SQL.
@@ -359,6 +387,17 @@ extension SQL: CustomDebugStringConvertible {
       }
     }
     return description
+  }
+}
+
+extension String {
+  // Native strings are contiguous already; only a bridged one is copied.
+  func withUTF8Bytes<Result>(_ body: (UnsafeRawBufferPointer) -> Result) -> Result {
+    if let result = utf8.withContiguousStorageIfAvailable({ body(UnsafeRawBufferPointer($0)) }) {
+      return result
+    }
+    var copy = self
+    return copy.withUTF8 { body(UnsafeRawBufferPointer($0)) }
   }
 }
 

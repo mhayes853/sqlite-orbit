@@ -232,7 +232,10 @@
     /// Checks out the statement `sql` compiles to, which must hold one, without holding it to
     /// reading.
     func checkOut(_ sql: String) throws -> SQLitePreparedStatement {
-      try Self.requireStatement(checkOut(sql, requiresReadOnly: false), sql: sql)
+      try Self.requireStatement(
+        checkOut(SQL(text: sql), requiresReadOnly: false).statement,
+        sql: sql
+      )
     }
 
     /// Compiles the statement `sql` holds, which must hold one, without holding it to reading.

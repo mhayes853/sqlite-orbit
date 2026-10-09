@@ -14,7 +14,7 @@ final class SQLiteStatementCache {
   private let authorizer: SQLiteAuthorizerDispatcher
   private let capacity: Int
 
-  private var idle: [String: SQLitePreparedStatement] = [:]
+  private var idle: [SQLiteStatementCacheKey: SQLitePreparedStatement] = [:]
   private(set) var generation: UInt64 = 0
 
   var idleStatementCount: Int { idle.count }
@@ -45,20 +45,29 @@ final class SQLiteStatementCache {
     try prepare(sql, flags: 0, requiresReadOnly: requiresReadOnly)
   }
 
-  func checkOut(_ sql: String, requiresReadOnly: Bool) throws -> SQLitePreparedStatement? {
-    if let statement = idle.removeValue(forKey: sql) {
+  // Also returns the SQL's text, which a statement found in the cache brings along with it, so
+  // reusing a statement never joins the query's text anew.
+  func checkOut(
+    _ query: SQL,
+    requiresReadOnly: Bool
+  ) throws -> (statement: SQLitePreparedStatement?, sql: String) {
+    if let index = idle.index(forKey: SQLiteStatementCacheKey(query)) {
+      let (key, statement) = idle.remove(at: index)
+      let sql = key.text
       guard !requiresReadOnly || statement.isReadOnly else {
         checkIn(statement, sql: sql)
         throw Self.mayWriteError(sql: sql)
       }
-      return statement
+      return (statement, sql)
     }
+    let sql = query.text
     // A cache that keeps nothing gains nothing from hinting that the statement will be reused.
-    return try prepare(
+    let statement = try prepare(
       sql,
       flags: capacity > 0 ? SQLitePrepareFlags.persistent.rawValue : 0,
       requiresReadOnly: requiresReadOnly
     )
+    return (statement, sql)
   }
 
   private func prepare(
@@ -106,15 +115,16 @@ final class SQLiteStatementCache {
   func checkIn(_ statement: SQLitePreparedStatement, sql: String) {
     _ = library.pointee.statements.execution.reset(statement.pointer)
     _ = library.pointee.statements.execution.clearBindings(statement.pointer)
+    let key = SQLiteStatementCacheKey(sql)
     guard
       statement.cacheGeneration == generation,
       idle.count < capacity,
-      idle[sql] == nil
+      idle[key] == nil
     else {
       _ = library.pointee.statements.execution.finalize(statement.pointer)
       return
     }
-    idle[sql] = statement
+    idle[key] = statement
   }
 
   func invalidate() {
@@ -279,6 +289,71 @@ final class SQLiteStatementCache {
       _ = library.pointee.statements.execution.finalize(statement.pointer)
     }
     idle.removeAll()
+  }
+}
+
+// A cached statement is filed under its SQL's text, and found again from the query's parts, so
+// a query that is run again is not joined into text just to look its statement up. Both compare
+// as the UTF-8 the statement was compiled from, byte for byte.
+struct SQLiteStatementCacheKey: Hashable {
+  private enum Source {
+    case text(String)
+    case query(SQL)
+  }
+
+  private let source: Source
+
+  init(_ text: String) {
+    source = .text(text)
+  }
+
+  init(_ query: SQL) {
+    source = .query(query)
+  }
+
+  var text: String {
+    switch source {
+    case .text(let text): text
+    case .query(let query): query.text
+    }
+  }
+
+  // Hashing is a byte stream, so a query's pieces hash as their joined text does.
+  private func forEachChunk(_ body: (UnsafeRawBufferPointer) -> Bool) -> Bool {
+    switch source {
+    case .text(let text): text.withUTF8Bytes(body)
+    case .query(let query): query.forEachTextChunk(body)
+    }
+  }
+
+  func hash(into hasher: inout Hasher) {
+    _ = forEachChunk { chunk in
+      hasher.combine(bytes: chunk)
+      return true
+    }
+  }
+
+  static func == (lhs: Self, rhs: Self) -> Bool {
+    switch (lhs.source, rhs.source) {
+    case (.text(let text), _):
+      return text.withUTF8Bytes { rhs.matches($0) }
+    case (_, .text(let text)):
+      return text.withUTF8Bytes { lhs.matches($0) }
+    case (.query(let query), _):
+      // Only text is ever stored, so two queries are never compared in the cache itself.
+      return query.text.withUTF8Bytes { rhs.matches($0) }
+    }
+  }
+
+  private func matches(_ bytes: UnsafeRawBufferPointer) -> Bool {
+    var offset = 0
+    let matchedEveryChunk = forEachChunk { chunk in
+      guard chunk.count <= bytes.count - offset else { return false }
+      let slice = UnsafeRawBufferPointer(rebasing: bytes[offset..<offset + chunk.count])
+      offset += chunk.count
+      return slice.elementsEqual(chunk)
+    }
+    return matchedEveryChunk && offset == bytes.count
   }
 }
 

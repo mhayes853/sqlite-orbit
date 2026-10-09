@@ -52,6 +52,10 @@ final class SQLiteAuthorizerDispatcher {
   typealias Handler = (SQLiteRawAuthorization) -> SQLiteAuthorizationDecision
 
   private var handlers: [Handler] = []
+  // What each `recordingAuthorizations` call in progress has seen, innermost last. These are kept
+  // here rather than captured by a handler so that recording a step, which a cached statement
+  // does on every first step, allocates nothing when SQLite authorizes nothing.
+  private var recordings: [[SQLiteRawAuthorization]] = []
   private var policy: SQLiteAuthorizationHandler?
   private var scopedPolicies: [SQLiteAuthorizationHandler] = []
   private var isUserAuthorizationSuspended = false
@@ -155,15 +159,11 @@ final class SQLiteAuthorizerDispatcher {
   func recordingAuthorizations<Result>(
     during operation: () throws -> Result
   ) rethrows -> (result: Result, authorizations: [SQLiteRawAuthorization]) {
-    var authorizations: [SQLiteRawAuthorization] = []
-    let result = try withHandler(
-      { authorization in
-        authorizations.append(authorization)
-        return .allow
-      },
-      perform: operation
-    )
-    return (result, authorizations)
+    let depth = recordings.count
+    recordings.append([])
+    defer { recordings.removeLast() }
+    let result = try operation()
+    return (result, recordings[depth])
   }
 
   private func authorize(_ authorization: SQLiteRawAuthorization) -> SQLiteAuthorizationDecision {
@@ -178,6 +178,7 @@ final class SQLiteAuthorizerDispatcher {
         break
       }
     }
+    for index in recordings.indices { recordings[index].append(authorization) }
     for handler in handlers { combine(handler(authorization)) }
     if !isUserAuthorizationSuspended {
       let request = SQLiteAuthorization(authorization)
