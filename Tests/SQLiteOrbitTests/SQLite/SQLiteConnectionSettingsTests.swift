@@ -100,7 +100,97 @@
         }
       }
 
+      @Test(arguments: [false, true])
+      func scopedTimeoutsRestoreNestedValuesAndTheConfiguredHandler(throwBody: Bool) throws {
+        var configuration = SQLiteConfiguration.default
+        let installations = TestCounter()
+        if let install = configuration.library.busyHandler?.install {
+          configuration.busyHandler = { _ in false }
+          configuration.library.busyHandler?.install = { connection, callback, context in
+            installations.increment()
+            return install(connection, callback, context)
+          }
+        }
+        let driver = try SQLiteQueue(path: .memory, configuration: configuration)
+        let initialInstallations = installations.value
+        try driver.writeWithoutTransactionBlocking { connection throws in
+          do {
+            let value = try connection.withBusyTimeout(.limit(.seconds(9))) { () throws in
+              #expect(try connection.fetchOne(busyTimeout) == 9000)
+              #expect(throws: TestError.self) {
+                try connection.withBusyTimeout(.limit(.seconds(2))) {
+                  throw TestError()
+                }
+              }
+              #expect(connection.busyTimeout == .limit(.seconds(9)))
+              #expect(try connection.fetchOne(busyTimeout) == 9000)
+              #expect(installations.value == initialInstallations)
+              if throwBody { throw TestError() }
+              return 42
+            }
+            #expect(value == 42)
+            #expect(!throwBody)
+          } catch is TestError {
+            #expect(throwBody)
+          }
+          #expect(connection.busyTimeout == configuration.busyTimeout)
+          #expect(installations.value == initialInstallations * 2)
+        }
+        try driver.readWithoutTransactionBlocking { connection throws in
+          // Even an unchanged timeout replaces a configured handler, which must be restored.
+          try connection.withBusyTimeout(connection.busyTimeout) {
+            #expect(connection.busyTimeout == configuration.busyTimeout)
+          }
+          #expect(installations.value == initialInstallations * 3)
+        }
+      }
+
       // MARK: - Foreign keys
+
+      @Test
+      func scopedForeignKeysRestoreNestedSettingsBeforeTheLoanEnds() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        try driver.writeWithoutTransactionBlocking { connection throws in
+          let value = try connection.withForeignKeysEnabled(false) { () throws in
+            #expect(try connection.transaction { try $0.fetchOne(foreignKeys) } == 0)
+            #expect(throws: TestError.self) {
+              try connection.withForeignKeysEnabled(true) {
+                throw TestError()
+              }
+            }
+            #expect(connection.isForeignKeysEnabled == false)
+            #expect(try connection.fetchOne(foreignKeys) == 0)
+            return 42
+          }
+          #expect(value == 42)
+          #expect(connection.isForeignKeysEnabled == true)
+          #expect(try connection.fetchOne(foreignKeys) == 1)
+        }
+      }
+
+      @Test(arguments: [false, true])
+      func scopedRestorationFailuresPreserveTheBodyError(throwBody: Bool) throws {
+        let probe = PragmaProbe(failing: "PRAGMA foreign_keys = 1")
+        let driver = try SQLiteQueue(path: .memory, configuration: probe.configuration())
+        try driver.writeWithoutTransactionBlocking { connection throws in
+          probe.isFailing = true
+          do {
+            try connection.withForeignKeysEnabled(false) {
+              if throwBody { throw TestError() }
+            }
+            Issue.record("Expected the body or restoration to fail")
+          } catch is TestError {
+            #expect(throwBody)
+          } catch let error as SQLiteError {
+            #expect(!throwBody)
+            #expect(error.sql == "PRAGMA foreign_keys = 1")
+          }
+          #expect(connection.isForeignKeysEnabled == false)
+          // Access cleanup can retry once the injected failure is removed.
+          probe.isFailing = false
+        }
+        #expect(try driver.writeWithoutTransactionBlocking { $0.isForeignKeysEnabled })
+      }
 
       @Test(arguments: SQLiteTestDriver.allCases)
       func foreignKeysTurnedOffAreRestoredWhenTheAccessEnds(_ kind: SQLiteTestDriver) async throws {

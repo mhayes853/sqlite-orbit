@@ -23,7 +23,7 @@ struct SQLiteConnectionSettings: ~Copyable {
   // Setting the busy timeout replaces the configured busy handler, since SQLite keeps only one of
   // the two. Restoring the timeout is not enough to undo that, and a timeout set to the configured
   // value is not a change to restore at all, so the replacement is tracked on its own.
-  private var isBusyHandlerReplaced = false
+  private(set) var isBusyHandlerReplaced = false
 
   private(set) var busyTimeout: SQLiteBusyTimeout
 
@@ -109,24 +109,22 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Puts every changed setting back to its configured value.
-  ///
-  /// Every changed setting is attempted even after one fails, so one failure leaves no more
-  /// behind than it has to. A setting that cannot be restored stays changed.
-  ///
-  /// - Throws: The first failure.
-  mutating func restore() throws {
+  /// Restores the timeout and whether it had replaced the configured busy handler.
+  mutating func restoreBusyTimeout(
+    _ timeout: SQLiteBusyTimeout,
+    handlerIsReplaced: Bool
+  ) throws {
     var failure: (any Error)?
-    if busyTimeout != configuredBusyTimeout {
+    if busyTimeout != timeout {
       // Reapplying the timeout replaces any busy handler a connection setup installed, which is
       // why it is only reapplied once it has actually changed.
       do {
-        try setBusyTimeout(configuredBusyTimeout)
+        try setBusyTimeout(timeout)
       } catch {
         failure = error
       }
     }
-    if isBusyHandlerReplaced {
+    if isBusyHandlerReplaced && !handlerIsReplaced {
       // Installed after the timeout, exactly as the open did it, so the connection waits by the
       // configured handler again rather than by the timeout underneath it.
       let code = SQLiteBusyHandlerInstallation.install(
@@ -141,6 +139,22 @@ struct SQLiteConnectionSettings: ~Copyable {
           failure
           ?? SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
       }
+    }
+    if let failure { throw failure }
+  }
+
+  /// Puts every changed setting back to its configured value.
+  ///
+  /// Every changed setting is attempted even after one fails, so one failure leaves no more
+  /// behind than it has to. A setting that cannot be restored stays changed.
+  ///
+  /// - Throws: The first failure.
+  mutating func restore() throws {
+    var failure: (any Error)?
+    do {
+      try restoreBusyTimeout(configuredBusyTimeout, handlerIsReplaced: false)
+    } catch {
+      failure = error
     }
     if isForeignKeysEnabled != configuredForeignKeys || needsForeignKeysRestore {
       do {
