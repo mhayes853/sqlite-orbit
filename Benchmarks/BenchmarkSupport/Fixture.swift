@@ -38,7 +38,7 @@ public enum Fixture {
           sqlite3_bind_int64(statement, column, i)
         }
         guard sqlite3_step(statement) == SQLITE_DONE else {
-          throw FixtureError(message: String(cString: sqlite3_errmsg(connection)))
+          throw BenchmarkError(message: String(cString: sqlite3_errmsg(connection)))
         }
       }
       try execute(connection, "COMMIT")
@@ -95,13 +95,18 @@ public enum Fixture {
 
   private static func check(_ connection: OpaquePointer?, _ code: Int32) throws {
     guard code == SQLITE_OK else {
-      throw FixtureError(message: String(cString: sqlite3_errmsg(connection)))
+      throw BenchmarkError(message: String(cString: sqlite3_errmsg(connection)))
     }
   }
 }
 
-public struct FixtureError: Error, CustomStringConvertible {
+/// A benchmark's failure to set up, or to find the result it should have produced.
+public struct BenchmarkError: Error, CustomStringConvertible {
   public let message: String
+
+  public init(message: String) {
+    self.message = message
+  }
 
   public var description: String { message }
 }
