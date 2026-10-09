@@ -52,16 +52,14 @@
   extension Date {
     // Parses exactly `yyyy-MM-dd HH:mm:ss` with up to nine fractional digits, in UTC, and returns
     // `nil` for anything else so that the format style decides it. The arithmetic is the
-    // Gregorian calendar's own, so the result is the same `Date` to the bit, without the format
-    // style's work per call. Years before 1600 are left to the calendar, which switches to the
-    // Julian calendar before 1582.
-    fileprivate init?(orbitTimestampUTF8 utf8: UnsafeBufferPointer<UInt8>) {
-      // Darwin releases before swift-foundation's parser are not known to agree to the bit.
-      #if canImport(Darwin)
-        guard #available(macOS 26, iOS 26, tvOS 26, watchOS 26, visionOS 26, *) else {
-          return nil
-        }
-      #endif
+    // Gregorian calendar's own, so the result is the same `Date` to the bit as swift-foundation's
+    // parser, without the format style's work per call. Years before 1600 are left to the
+    // calendar, which switches to the Julian calendar before 1582.
+    //
+    // This runs on every platform, including Darwin releases before 26, whose Foundation predates
+    // swift-foundation's parser and may round or truncate fractional seconds differently. There,
+    // these spellings now read as they do everywhere else rather than as that Foundation read them.
+    init?(orbitTimestampUTF8 utf8: UnsafeBufferPointer<UInt8>) {
       let count = utf8.count
       guard count == 19 || (21...29).contains(count) else { return nil }
       func digit(_ index: Int) -> Int? {
