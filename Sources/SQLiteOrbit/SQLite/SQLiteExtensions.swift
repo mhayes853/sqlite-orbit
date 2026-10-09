@@ -44,6 +44,8 @@ extension SQLiteLibrary {
     public var cancel: @convention(c) (@convention(c) () -> Void) -> Int32
 
     /// Creates bindings to the selected runtime's registration entry points.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       register: @convention(c) (@convention(c) () -> Void) -> Int32,
       cancel: @convention(c) (@convention(c) () -> Void) -> Int32

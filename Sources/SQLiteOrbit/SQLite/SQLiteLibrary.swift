@@ -96,10 +96,13 @@ extension SQLiteFeatureUnavailableError: CustomStringConvertible {
 }
 
 /// A library-defined operation that enables or disables trusted-schema behavior.
+///
+/// Unlike the library's other entry points, this is a Swift closure, since it is handed a
+/// connection access and can throw. It may capture state.
 public typealias SQLiteTrustedSchemaControl =
   @Sendable (borrowing SQLiteConnectionAccess, Bool) throws -> Void
 
-/// The shape of SQLite's `sqlite3_create_function_v2` entry point.
+/// The shape of SQLite's `sqlite3_create_function_v2` entry point, as a C function pointer.
 public typealias SQLiteFunctionRegistration =
   @convention(c) (
     OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
@@ -113,6 +116,18 @@ public typealias SQLiteFunctionRegistration =
 /// The required groups form SQLiteOrbit's minimum SQLite-compatible contract. Optional groups are
 /// `nil` when a build cannot faithfully implement their behavior. Use ``sqliteLibrary(module:apis:)``
 /// to build a table from the symbols exported by a Swift module.
+///
+/// Every entry point except ``trustedSchema`` is a C function pointer, so calling one costs what
+/// calling the C function directly does. An entry point is therefore a C function, or a Swift
+/// closure that captures nothing: one that wraps another entry point can only reach state, such as
+/// a counter, through a global.
+///
+/// ```swift
+/// var library = SQLiteLibrary.system
+/// library.statements.execution.step = { statement in
+///   SQLiteLibrary.system.statements.execution.step(statement)
+/// }
+/// ```
 public struct SQLiteLibrary: Sendable {
   /// A diagnostic name for this build of SQLite.
   public var name: String
@@ -265,6 +280,8 @@ extension SQLiteLibrary {
     public var versionNumber: @convention(c) () -> Int32
 
     /// Creates a runtime operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       threadsafe: @convention(c) () -> Int32,
       versionNumber: @convention(c) () -> Int32
@@ -309,6 +326,8 @@ extension SQLiteLibrary {
         UnsafeMutablePointer<Int32>?
       ) -> Int32
     /// Creates a connection operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       open:
         @convention(c) (
@@ -375,6 +394,8 @@ extension SQLiteLibrary {
       ) -> Int32
 
     /// Creates a statement-preparation operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       prepare:
         @convention(c) (
@@ -398,6 +419,8 @@ extension SQLiteLibrary {
     public var clearBindings: @convention(c) (OpaquePointer?) -> Int32
 
     /// Creates a statement-execution operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       step: @convention(c) (OpaquePointer?) -> Int32,
       reset: @convention(c) (OpaquePointer?) -> Int32,
@@ -419,6 +442,8 @@ extension SQLiteLibrary {
     public var sql: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
 
     /// Creates a statement-inspection operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       isReadOnly: @convention(c) (OpaquePointer?) -> Int32,
       sql: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
@@ -444,6 +469,8 @@ extension SQLiteLibrary {
     public var blob: @convention(c) (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
 
     /// Creates a binding operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       parameterCount: @convention(c) (OpaquePointer?) -> Int32,
       null: @convention(c) (OpaquePointer?, Int32) -> Int32,
@@ -481,6 +508,8 @@ extension SQLiteLibrary {
     public var name: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
 
     /// Creates a column-reading operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       count: @convention(c) (OpaquePointer?) -> Int32,
       type: @convention(c) (OpaquePointer?, Int32) -> Int32,
@@ -509,6 +538,8 @@ extension SQLiteLibrary {
       @convention(c) (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32
 
     /// Creates an authorization operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       install:
         @convention(c) (
@@ -529,6 +560,8 @@ extension SQLiteLibrary {
       @convention(c) (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32
 
     /// Creates a busy-handler operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       install:
         @convention(c) (
@@ -565,6 +598,8 @@ extension SQLiteLibrary {
       public var userData: @convention(c) (OpaquePointer?) -> UnsafeMutableRawPointer?
 
       /// Creates a function-context operation group.
+      ///
+      /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
       public init(
         userData: @convention(c) (OpaquePointer?) -> UnsafeMutableRawPointer?
       ) {
@@ -588,6 +623,8 @@ extension SQLiteLibrary {
       public var byteCount: @convention(c) (OpaquePointer?) -> Int32
 
       /// Creates a function-argument operation group.
+      ///
+      /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
       public init(
         type: @convention(c) (OpaquePointer?) -> Int32,
         int64: @convention(c) (OpaquePointer?) -> Int64,
@@ -621,6 +658,8 @@ extension SQLiteLibrary {
       public var error: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
 
       /// Creates a function-result operation group.
+      ///
+      /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
       public init(
         null: @convention(c) (OpaquePointer?) -> Void,
         int64: @convention(c) (OpaquePointer?, Int64) -> Void,
@@ -647,6 +686,8 @@ extension SQLiteLibrary {
     public var callbacks: FunctionCallbacks
 
     /// Creates a scalar-function operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       register: SQLiteFunctionRegistration,
       callbacks: FunctionCallbacks
@@ -666,6 +707,8 @@ extension SQLiteLibrary {
     public var callbacks: FunctionCallbacks
 
     /// Creates an aggregate-function operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       register: SQLiteFunctionRegistration,
       context: @convention(c) (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?,
@@ -687,6 +730,8 @@ extension SQLiteLibrary {
       ) -> Int32
 
     /// Creates a collation operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       create:
         @convention(c) (
@@ -708,6 +753,8 @@ extension SQLiteLibrary {
       @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
 
     /// Creates an encryption operation group.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
       key:
         @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->

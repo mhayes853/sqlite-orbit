@@ -482,6 +482,11 @@ var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitIPCDatabase(path: databasePath, configuration: configuration)
 ```
 
+Every entry point in the table is a C function pointer, apart from trusted-schema control, so the
+package calls the build exactly as C would, without allocating or reference counting. An entry
+point you supply yourself is therefore a C function or a closure that captures nothing. A wrapper
+around another entry point reaches anything it needs through a global, as it would in C.
+
 The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
 exports. `.standard` is the default; add encryption for a module such as SQLCipher:
 
