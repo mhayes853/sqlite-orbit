@@ -303,6 +303,43 @@
     }
 
     @Test
+    func connectionsWrappedOnOneThreadEachStepThroughTheirOwnWrapper() throws {
+      // A library's step entry point captures nothing, so wrappers are found through the thread
+      // that installed them. Two connections wrapped there at once must not trade wrappers.
+      var first = try SQLiteConnection(path: ":memory:", configuration: .default)
+      var second = try SQLiteConnection(path: ":memory:", configuration: .default)
+      let calls = TestRecorder<String>()
+      try first.withWriteConnection { outer in
+        let outerStep = outer.sqlite.statements.execution.step
+        try outer.withStatementExecution(
+          { statement in
+            calls.append("first")
+            return outerStep(statement)
+          }
+        ) {
+          try second.withWriteConnection { inner in
+            let innerStep = inner.sqlite.statements.execution.step
+            try inner.withStatementExecution(
+              { statement in
+                calls.append("second")
+                return innerStep(statement)
+              }
+            ) {
+              _ = try inner.fetchOne("SELECT 1") { $0[0].integerValue ?? 0 }
+              #expect(!calls.values.isEmpty)
+              #expect(calls.values.allSatisfy { $0 == "second" })
+
+              calls.removeAll()
+              _ = try outer.fetchOne("SELECT 2") { $0[0].integerValue ?? 0 }
+              #expect(!calls.values.isEmpty)
+              #expect(calls.values.allSatisfy { $0 == "first" })
+            }
+          }
+        }
+      }
+    }
+
+    @Test
     func cancellingBeforeAccessSkipsItsBodyAndLateCancellationLeavesLaterAccessesAlone() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       let cancelled = SQLiteConnectionCancellation()
