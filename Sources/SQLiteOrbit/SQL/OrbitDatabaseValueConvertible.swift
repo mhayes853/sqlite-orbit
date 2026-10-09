@@ -175,6 +175,7 @@ where Self: RawRepresentable, RawValue: ConvertibleFromOrbitDatabaseValue {
   ///
   /// - Throws: Whatever reading the raw value throws, or ``OrbitDatabaseValueConversionError``
   ///   when no value has that raw value.
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard let converted = Self(rawValue: try RawValue(orbitDatabaseValue: value)) else {
       throw OrbitDatabaseValueConversionError(
@@ -217,6 +218,7 @@ extension ConvertibleFromOrbitDatabaseValue where Self: FixedWidthInteger {
   ///
   /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class, or an overflow
   ///   error when the integer does not fit, as a negative one never does in an unsigned type.
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard case .integer(let integer) = value else {
       throw OrbitDatabaseValueConversionError(value: value, type: Self.self)
@@ -263,6 +265,7 @@ extension ConvertibleFromOrbitDatabaseValue where Self: BinaryFloatingPoint {
   /// ```
   ///
   /// - Throws: ``OrbitDatabaseValueConversionError`` for any other storage class.
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard case .real(let real) = value else {
       throw OrbitDatabaseValueConversionError(value: value, type: Self.self)
@@ -292,6 +295,7 @@ extension Bool: OrbitDatabaseValueConvertible {
   /// ```swift
   /// let isCompleted = try Bool(orbitDatabaseValue: row[0])
   /// ```
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard case .integer(let integer) = value else {
       throw OrbitDatabaseValueConversionError(value: value, type: Bool.self)
@@ -305,6 +309,7 @@ extension String: OrbitDatabaseValueConvertible {
     .text(self)
   }
 
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard case .text(let text) = value else {
       throw OrbitDatabaseValueConversionError(value: value, type: String.self)
@@ -318,6 +323,7 @@ extension [UInt8]: OrbitDatabaseValueConvertible {
     .blob(self)
   }
 
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     guard case .blob(let bytes) = value else {
       throw OrbitDatabaseValueConversionError(value: value, type: [UInt8].self)
@@ -331,6 +337,7 @@ extension OrbitDatabaseValue: OrbitDatabaseValueConvertible {
     self
   }
 
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) {
     self = value
   }
@@ -358,6 +365,7 @@ where Wrapped: ConvertibleFromOrbitDatabaseValue {
   /// ```swift
   /// let dueDate = try row[column: "due_date", as: Int?.self]
   /// ```
+  @inlinable
   public init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
     self = try value == .null ? nil : Wrapped(orbitDatabaseValue: value)
   }

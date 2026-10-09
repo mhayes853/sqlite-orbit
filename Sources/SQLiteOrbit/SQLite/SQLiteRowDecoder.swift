@@ -49,12 +49,20 @@
     let statement: OpaquePointer
 
     @usableFromInline
+    let reader: SQLiteRowColumnReader
+
+    @usableFromInline
     var currentIndex: Int32 = 0
 
     @usableFromInline
-    init(library: UnsafePointer<SQLiteLibrary>, statement: OpaquePointer) {
+    init(
+      library: UnsafePointer<SQLiteLibrary>,
+      statement: OpaquePointer,
+      reader: SQLiteRowColumnReader
+    ) {
       self.library = library
       self.statement = statement
+      self.reader = reader
     }
 
     /// Checks the storage class of the column the decoder is standing on and steps past it.
@@ -71,7 +79,7 @@
       _ columnType: Any.Type
     ) throws(QueryDecodingError) -> Int32? {
       let column = currentIndex
-      switch library.pointee.columns.type(statement, column) {
+      switch reader.columns.type(statement, column) {
       case SQLiteColumnType.null.rawValue:
         currentIndex += 1
         return nil
@@ -86,19 +94,19 @@
     @inlinable
     mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
       guard let column = try column(.blob, columnType) else { return nil }
-      return library.pointee.columns.blobValue(statement, at: column)
+      return reader.blob(statement, at: column)
     }
 
     @inlinable
     mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
       guard let column = try column(.float, columnType) else { return nil }
-      return library.pointee.columns.double(statement, column)
+      return reader.columns.double(statement, column)
     }
 
     @inlinable
     mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
       guard let column = try column(.integer, columnType) else { return nil }
-      return library.pointee.columns.int64(statement, column)
+      return reader.columns.int64(statement, column)
     }
 
     @inlinable
@@ -113,7 +121,7 @@
     @inlinable
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
       guard let column = try column(.text, columnType) else { return nil }
-      return library.pointee.columns.textValue(statement, at: column)
+      return reader.text(statement, at: column)
     }
 
     @inlinable
@@ -134,9 +142,10 @@
 
     @inlinable
     mutating func decode(_ columnType: Date.Type) throws(QueryDecodingError) -> Date? {
-      guard let value = try decode(String.self) else { return nil }
+      // A mismatch names `String`, the type the text is read as before it is parsed.
+      guard let column = try column(.text, String.self) else { return nil }
       do {
-        return try Date(orbitISO8601String: value)
+        return try reader.withUTF8(statement, at: column, Date.init(orbitISO8601UTF8:))
       } catch {
         throw QueryDecodingError.other(error)
       }
@@ -145,10 +154,10 @@
     @inlinable
     mutating func decode(_ columnType: UUID.Type) throws(QueryDecodingError) -> UUID? {
       guard let column = try column(.text, columnType) else { return nil }
-      guard let text = library.pointee.columns.text(statement, column) else {
+      guard let text = reader.columns.text(statement, column) else {
         throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
       }
-      let byteCount = Int(library.pointee.columns.byteCount(statement, column))
+      let byteCount = Int(reader.columns.byteCount(statement, column))
       let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
       if let uuid = UUID(orbitUTF8: utf8) {
         return uuid

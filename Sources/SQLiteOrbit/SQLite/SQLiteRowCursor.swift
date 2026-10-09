@@ -43,7 +43,11 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   var didPublishAccesses = false
 
-  let columnLookup = SQLiteRowColumnLookup()
+  let columnReader: SQLiteRowColumnReader
+
+  // Read once the statement has produced a row, when SQLite can no longer recompile it, so every
+  // row shares it instead of asking SQLite again for each value read.
+  var columnCount: Int32 = -1
 
   @_lifetime(borrow statements)
   init(
@@ -81,6 +85,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.statements = copy statements
     self.isCached = cached
     self.preparedStatement = preparedStatement
+    self.columnReader = SQLiteRowColumnReader(columns: library.pointee.columns)
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
     self.connectionState = connectionState
@@ -170,6 +175,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   private mutating func row(for code: Int32, of statement: OpaquePointer) throws -> SQLiteRow? {
     switch code {
     case SQLiteResultCode.row.rawValue:
+      if columnCount < 0 {
+        columnCount = library.pointee.columns.count(statement)
+      }
       return SQLiteRow(cursor: self, statement: statement)
     case SQLiteResultCode.done.rawValue:
       isExhausted = true
@@ -195,44 +203,39 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 /// }
 /// ```
 public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
+  /// How many columns the row has.
+  public let columnCount: Int
+
+  // Stored apart from the decoder, which is mutable, so that reading one of these does not copy
+  // the decoder for every value read.
   @usableFromInline
-  let columnLookup: SQLiteRowColumnLookup
+  let library: UnsafePointer<SQLiteLibrary>
+
+  @usableFromInline
+  let statement: OpaquePointer
+
+  @usableFromInline
+  let columnReader: SQLiteRowColumnReader
 
   #if StructuredQueries
     @usableFromInline
     var decoder: SQLiteRowDecoder
-
-    @usableFromInline
-    var library: UnsafePointer<SQLiteLibrary> { decoder.library }
-
-    @usableFromInline
-    var statement: OpaquePointer { decoder.statement }
-
-    @usableFromInline
-    @_lifetime(borrow cursor)
-    init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
-      self.decoder = SQLiteRowDecoder(library: cursor.library, statement: statement)
-      self.columnLookup = cursor.columnLookup
-    }
-  #else
-    @usableFromInline
-    let library: UnsafePointer<SQLiteLibrary>
-
-    @usableFromInline
-    let statement: OpaquePointer
-
-    @usableFromInline
-    @_lifetime(borrow cursor)
-    init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
-      self.library = cursor.library
-      self.statement = statement
-      self.columnLookup = cursor.columnLookup
-    }
   #endif
 
-  /// How many columns the row has.
-  public var columnCount: Int {
-    Int(library.pointee.columns.count(statement))
+  @usableFromInline
+  @_lifetime(borrow cursor)
+  init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
+    self.library = cursor.library
+    self.statement = statement
+    self.columnReader = cursor.columnReader
+    self.columnCount = Int(cursor.columnCount)
+    #if StructuredQueries
+      self.decoder = SQLiteRowDecoder(
+        library: cursor.library,
+        statement: statement,
+        reader: cursor.columnReader
+      )
+    #endif
   }
 
   /// The name of a column, as SQLite reports it.
@@ -249,23 +252,24 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   ///
   /// - Parameter index: The column's zero-based position. A position outside the row stops the
   ///   process.
+  @inlinable
   public subscript(index: Int) -> OrbitDatabaseValue {
     precondition(index: index)
     // Each value is read in the storage class SQLite reports, so reading it never converts it, and
     // a later decode of the same column sees what it would have seen anyway.
-    return library.pointee.columns.value(statement, at: Int32(index))
+    return columnReader.value(statement, at: Int32(index))
   }
 
   /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.
   public func columnIndex(named name: String) -> Int? {
-    columnLookup.index(named: name, library: library, statement: statement)
+    columnReader.index(named: name, statement: statement)
   }
 
-  private func precondition(index: Int) {
-    let count = columnCount
+  @inlinable
+  func precondition(index: Int) {
     Swift.precondition(
-      index >= 0 && index < count,
-      "Column index \(index) is out of range for a row of \(count) columns"
+      index >= 0 && index < columnCount,
+      "Column index \(index) is out of range for a row of \(columnCount) columns"
     )
   }
 }
