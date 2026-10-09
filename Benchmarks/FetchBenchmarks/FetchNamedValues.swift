@@ -109,13 +109,13 @@ func registerFetchNamedValues() {
   )
 }
 
-// Prepared through the statement cache (`cached: true`); see FetchPositionalValues.
+// Prepared through the statement cache; see FetchPositionalValues.
 private func sumNamedValues(
   in transaction: borrowing SQLiteReadTransaction
 ) throws -> (count: Int, sum: Int) {
   var count = 0
   var sum = 0
-  var cursor = try transaction.rowCursor("SELECT * FROM item", cached: true)
+  var cursor = try transaction.rowCursor("SELECT * FROM item")
   while let row = try cursor.next() {
     sum &+= try row[column: "i0", as: Int.self]
     sum &+= try row[column: "i1", as: Int.self]

@@ -47,7 +47,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   public borrowing func fetchCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type,
-    cached: Bool = false
+    cached: Bool = true
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try rowCursor(sql, cached: cached))
   }
@@ -99,7 +99,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   public borrowing func executeCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type,
-    cached: Bool = false
+    cached: Bool = true
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try executeRowCursor(sql, cached: cached))
   }

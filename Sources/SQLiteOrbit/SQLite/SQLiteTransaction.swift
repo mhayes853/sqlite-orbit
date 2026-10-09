@@ -123,7 +123,7 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   /// - Returns: A cursor valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = true) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
@@ -271,7 +271,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// - Returns: A cursor valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = true) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
@@ -295,7 +295,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   @_lifetime(borrow self)
   public borrowing func executeRowCursor(
     _ sql: SQL,
-    cached: Bool = false
+    cached: Bool = true
   ) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type for the same reason as `rowCursor(_:cached:)`.
     try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql), cached: cached)

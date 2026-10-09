@@ -34,11 +34,11 @@ The first build compiles swift-syntax in release mode and takes several minutes.
 
 Benchmarks are named `<GRDB test>/<implementation>`, so a group's rows sit together in the output.
 Implementations are `SQLite` (the C API), `GRDB`, `Orbit` (a synchronous `SQLiteConnection`), and
-`OrbitQueue`, `OrbitPool`, or `OrbitIPC` for the asynchronous drivers. Orbit's `execute` reuses
-statements from the connection's prepared statement cache; `OrbitUncached` runs the same SQL with
-`cached: false`, preparing each statement anew. Groups GRDB has and Orbit has no
-counterpart for, such as `FetchRecordClass` and `InsertNamedValues`, are kept for parity with
-GRDB's own numbers.
+`OrbitQueue`, `OrbitPool`, or `OrbitIPC` for the asynchronous drivers. Orbit's `execute` and
+cursors reuse statements from the connection's prepared statement cache, as they do by default;
+`OrbitUncached` runs the same SQL with `cached: false`, preparing each statement anew. Groups GRDB
+has and Orbit has no counterpart for, such as `FetchRecordClass` and `InsertNamedValues`, are kept
+for parity with GRDB's own numbers.
 
 ## Fixture
 

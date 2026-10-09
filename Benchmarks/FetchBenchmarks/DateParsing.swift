@@ -77,7 +77,7 @@ func registerDateParsing() {
     }
   )
 
-  // Prepared through the statement cache (`cached: true`); GRDB prepares each iteration.
+  // Prepared through the statement cache; GRDB prepares each iteration.
   registerBenchmark(
     "DateParsing/Orbit",
     opening: { try OrbitConnection(path: .memory) },
@@ -86,7 +86,7 @@ func registerDateParsing() {
         try connection.transaction { transaction in
           var count = 0
           var first: Date?
-          var cursor = try transaction.rowCursor(SQLiteOrbit.SQL(text: request), cached: true)
+          var cursor = try transaction.rowCursor(SQLiteOrbit.SQL(text: request))
           while let row = try cursor.next() {
             let date = try row[0, as: Date.self]
             if first == nil { first = date }

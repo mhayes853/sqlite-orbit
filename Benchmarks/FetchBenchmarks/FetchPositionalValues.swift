@@ -8,9 +8,9 @@ import SQLiteOrbit
 // column index. It isolates row stepping and value extraction.
 //
 // Values are summed rather than discarded, in every implementation alike, so the reads cannot be
-// optimized away and the sum checks them. Orbit prepares through its statement cache
-// (`cached: true`), while GRDB and the C baseline prepare each iteration as GRDB's tests do; one
-// preparation is negligible next to 200,000 steps.
+// optimized away and the sum checks them. Orbit's cursor reuses a statement from its statement
+// cache, as it does by default, while GRDB and the C baseline prepare each iteration as GRDB's
+// tests do; one preparation is negligible next to 200,000 steps.
 func registerFetchPositionalValues() {
   registerBenchmark(
     "FetchPositionalValues/SQLite",
@@ -104,7 +104,7 @@ private func sumPositionalValues(
 ) throws -> (count: Int, sum: Int) {
   var count = 0
   var sum = 0
-  var cursor = try transaction.rowCursor("SELECT * FROM item", cached: true)
+  var cursor = try transaction.rowCursor("SELECT * FROM item")
   while let row = try cursor.next() {
     sum &+= try row[0, as: Int.self]
     sum &+= try row[1, as: Int.self]

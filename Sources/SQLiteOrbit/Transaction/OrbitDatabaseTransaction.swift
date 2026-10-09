@@ -47,11 +47,18 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
 
   /// Creates a raw row cursor over the rows returned by a read query.
   ///
+  /// The methods built on this one, which take raw SQL or a statement, reuse prepared statements
+  /// unless passed `cached: false`. Native SQLite drivers keep a connection's most recently used
+  /// statements, up to ``SQLiteConfiguration/maximumCachedStatements``. Pass `false` for SQL that
+  /// runs only once, so it does not take the place of a statement that is run again.
+  ///
   /// - Parameters:
   ///   - query: A query that has been shown to only read.
   ///   - cached: Whether the driver may reuse an idle prepared statement for this SQL. Caching is
-  ///     an optimization; each live cursor retains independent iteration state. Native SQLite
-  ///     drivers prepare another statement when an existing cursor is still using the same SQL.
+  ///     an optimization; each live cursor retains independent iteration state. A cursor holds its
+  ///     statement until it is dropped, so native SQLite drivers prepare another statement when an
+  ///     existing cursor is still using the same SQL, and reset a statement a cursor left
+  ///     unfinished before reusing it.
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound. A read
   ///   transaction refuses a statement that SQLite reports may write with the code
@@ -165,7 +172,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write in
   ///   a read transaction.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> RowCursor {
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool = true) throws -> RowCursor {
     try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
   }
 
@@ -346,7 +353,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// - Returns: A cursor over the rows the statement returned.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
-  public borrowing func executeRowCursor(_ sql: SQL, cached: Bool = false) throws -> RowCursor {
+  public borrowing func executeRowCursor(_ sql: SQL, cached: Bool = true) throws -> RowCursor {
     try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql), cached: cached)
   }
 
@@ -509,7 +516,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func rowCursor(
       _ statement: some PartialSelectStatement,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> RowCursor {
       try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(statement), cached: cached)
     }
@@ -531,7 +538,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func rowCursor<QueryValue>(
       _ statement: SQLQueryExpression<QueryValue>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> RowCursor {
       try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(statement), cached: cached)
     }
@@ -554,7 +561,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func executeRowCursor(
       _ statement: some Statement,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> RowCursor {
       try rowCursor(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement), cached: cached)
     }
@@ -637,7 +644,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<QueryValue: QueryRepresentable>(
       _ statement: some PartialSelectStatement<QueryValue>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseQueryCursor<RowCursor, QueryValue> {
       OrbitDatabaseQueryCursor(base: try rowCursor(statement, cached: cached))
     }
@@ -658,7 +665,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<each QueryValue: QueryRepresentable>(
       _ statement: some PartialSelectStatement<(repeat each QueryValue)>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseTupleQueryCursor<RowCursor, repeat each QueryValue> {
       OrbitDatabaseTupleQueryCursor(base: try rowCursor(statement, cached: cached))
     }
@@ -679,7 +686,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<S: SelectStatement>(
       _ statement: S,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseQueryCursor<RowCursor, S.From>
     where S.QueryValue == (), S.Joins == () {
       OrbitDatabaseQueryCursor(base: try rowCursor(statement, cached: cached))
@@ -704,7 +711,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<S: SelectStatement, each J: Table>(
       _ statement: S,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseTupleQueryCursor<RowCursor, S.From, repeat each J>
     where S.QueryValue == (), S.Joins == (repeat each J) {
       OrbitDatabaseTupleQueryCursor(base: try rowCursor(statement.selectStar(), cached: cached))
@@ -724,7 +731,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<QueryValue: QueryRepresentable>(
       _ statement: SQLQueryExpression<QueryValue>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseQueryCursor<RowCursor, QueryValue> {
       OrbitDatabaseQueryCursor(base: try rowCursor(statement, cached: cached))
     }
@@ -746,7 +753,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func fetchCursor<each QueryValue: QueryRepresentable>(
       _ statement: SQLQueryExpression<(repeat each QueryValue)>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseTupleQueryCursor<RowCursor, repeat each QueryValue> {
       OrbitDatabaseTupleQueryCursor(base: try rowCursor(statement, cached: cached))
     }
@@ -1040,7 +1047,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func executeCursor<QueryValue: QueryRepresentable>(
       _ statement: some Statement<QueryValue>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseQueryCursor<RowCursor, QueryValue> {
       OrbitDatabaseQueryCursor(base: try executeRowCursor(statement, cached: cached))
     }
@@ -1063,7 +1070,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     @_lifetime(borrow self)
     public borrowing func executeCursor<each QueryValue: QueryRepresentable>(
       _ statement: some Statement<(repeat each QueryValue)>,
-      cached: Bool = false
+      cached: Bool = true
     ) throws -> OrbitDatabaseTupleQueryCursor<RowCursor, repeat each QueryValue> {
       OrbitDatabaseTupleQueryCursor(base: try executeRowCursor(statement, cached: cached))
     }

@@ -46,7 +46,7 @@ public enum OrbitDatabaseWriteAccess: OrbitDatabaseAccess {}
 /// try await database.read { transaction in
 ///   var cursor = try transaction.rowCursor(
 ///     OrbitDatabaseQuery<OrbitDatabaseReadAccess>("SELECT title FROM reminders"),
-///     cached: false
+///     cached: true
 ///   )
 ///   return try cursor.forEach { _ in }
 /// }

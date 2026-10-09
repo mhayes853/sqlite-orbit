@@ -145,5 +145,97 @@
         #expect(try connection.fetchAll("SELECT a FROM t ORDER BY a", as: Int.self) == [1, 2])
       }
     }
+
+    // Cursors reuse statements by default too, holding theirs until they are dropped.
+
+    @Test
+    func twoCursorsOverTheSameSQLStepIndependently() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
+        )
+        try connection.transaction { transaction in
+          let sql: SQL = "SELECT a FROM t ORDER BY a"
+          // Leave a statement for this SQL in the cache, so the first cursor is lent it.
+          #expect(try transaction.fetchAll(sql, as: Int.self) == [1, 2, 3])
+          #expect(transaction.base.statements.idleStatementCount == 1)
+
+          var first = try transaction.rowCursor(sql)
+          #expect(try first.next()?[0].integerValue == 1)
+          #expect(transaction.base.statements.idleStatementCount == 0)
+
+          var second = try transaction.rowCursor(sql)
+          var secondValues: [Int64] = []
+          while let row = try second.next() { secondValues.append(row[0].integerValue ?? -1) }
+          #expect(secondValues == [1, 2, 3])
+
+          #expect(try first.next()?[0].integerValue == 2)
+          #expect(try first.next()?[0].integerValue == 3)
+          #expect(try first.next() == nil)
+        }
+        // Only one of the two statements fits under the SQL's key; the other was finalized.
+        try connection.transaction { transaction in
+          #expect(transaction.base.statements.idleStatementCount == 1)
+        }
+      }
+    }
+
+    @Test
+    func aCursorDroppedPartwayLeavesItsStatementAtTheStart() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
+        )
+        try connection.transaction { transaction in
+          let sql: SQL = "SELECT a FROM t ORDER BY a"
+          do {
+            var cursor = try transaction.rowCursor(sql)
+            #expect(try cursor.next()?[0].integerValue == 1)
+          }
+          #expect(transaction.base.statements.idleStatementCount == 1)
+
+          var cursor = try transaction.rowCursor(sql)
+          var values: [Int64] = []
+          while let row = try cursor.next() { values.append(row[0].integerValue ?? -1) }
+          #expect(values == [1, 2, 3])
+        }
+      }
+    }
+
+    @Test
+    func aCursorOpenAcrossASchemaChangeIsNotCachedAfterIt() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
+        )
+        try connection.transaction { transaction in
+          let sql: SQL = "SELECT a FROM t ORDER BY a"
+          let generation = transaction.base.statements.generation
+          do {
+            var cursor = try transaction.rowCursor(sql)
+            #expect(try cursor.next()?[0].integerValue == 1)
+
+            try transaction.execute("CREATE TABLE u (b INTEGER)")
+            #expect(transaction.base.statements.generation != generation)
+
+            #expect(try cursor.next()?[0].integerValue == 2)
+            #expect(try cursor.next()?[0].integerValue == 3)
+            #expect(try cursor.next() == nil)
+          }
+          // The cursor's statement was compiled before the change, so it was finalized rather than
+          // given back.
+          #expect(transaction.base.statements.idleStatementCount == 0)
+
+          try transaction.execute("ALTER TABLE t ADD COLUMN b INTEGER DEFAULT 7")
+          var cursor = try transaction.rowCursor("SELECT b FROM t ORDER BY a")
+          var values: [Int64] = []
+          while let row = try cursor.next() { values.append(row[0].integerValue ?? -1) }
+          #expect(values == [7, 7, 7])
+        }
+      }
+    }
   }
 #endif
