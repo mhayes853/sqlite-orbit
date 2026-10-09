@@ -17,6 +17,8 @@ final class SQLiteStatementCache {
   private var idle: [String: SQLitePreparedStatement] = [:]
   private(set) var generation: UInt64 = 0
 
+  var idleStatementCount: Int { idle.count }
+
   // The schema version the cached statements were compiled under, or `nil` when that is unknown,
   // as it is before the first transaction and after this connection changes the schema itself.
   private var schemaVersion: Int64?

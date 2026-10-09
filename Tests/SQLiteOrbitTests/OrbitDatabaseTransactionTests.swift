@@ -45,6 +45,18 @@
   }
 
   @Test
+  func executeAsksForACachedStatementUnlessToldNotTo() throws {
+    let state = TestDatabaseState()
+    try withTestWrite(state) { transaction in
+      try transaction.execute("DELETE FROM reminders")
+      try transaction.execute("DELETE FROM reminders", cached: false)
+      try transaction.execute(#sql("DELETE FROM reminders", as: Void.self))
+      try transaction.execute(#sql("DELETE FROM reminders", as: Void.self), cached: false)
+    }
+    #expect(state.executedCachedFlags == [true, false, true, false])
+  }
+
+  @Test
   func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
     let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
 
@@ -597,8 +609,12 @@
 
     var lastInsertedRowID: Int64 { 1 }
 
-    borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
+    borrowing func execute(
+      _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
+      cached: Bool
+    ) throws {
       state.executedQueries.append(query.sql)
+      state.executedCachedFlags.append(cached)
     }
   }
 
@@ -674,6 +690,7 @@
   private final class TestDatabaseState: Sendable {
     private struct State {
       var executedQueries: [SQL] = []
+      var executedCachedFlags: [Bool] = []
       var rows: [[QueryBinding]]
       var visitedRowCount = 0
     }
@@ -683,6 +700,11 @@
     var executedQueries: [SQL] {
       get { state.withLock { $0.executedQueries } }
       set { state.withLock { $0.executedQueries = newValue } }
+    }
+
+    var executedCachedFlags: [Bool] {
+      get { state.withLock { $0.executedCachedFlags } }
+      set { state.withLock { $0.executedCachedFlags = newValue } }
     }
 
     var rows: [[QueryBinding]] {

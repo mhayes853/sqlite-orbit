@@ -483,12 +483,14 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// let deleted = connection.changesCount
   /// ```
   ///
-  /// - Parameter sql: The statement to run. Any rows it returns are stepped past and discarded.
+  /// - Parameters:
+  ///   - sql: The statement to run. Any rows it returns are stepped past and discarded.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
-  public borrowing func execute(_ sql: SQL) throws {
+  public borrowing func execute(_ sql: SQL, cached: Bool = true) throws {
     defer { commitPendingChanges() }
-    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql))
+    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql), cached: cached)
   }
 
   /// Runs a script of one or more statements, such as a schema change or a pragma.
@@ -634,12 +636,13 @@ final class SQLiteConnectionState {
     /// let deleted = connection.changesCount
     /// ```
     ///
-    /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
-    ///   discarded.
+    /// - Parameters:
+    ///   - statement: The statement to run. Any rows it returns are stepped past and discarded.
+    ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
     /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever
     ///   it had changed.
-    public borrowing func execute(_ statement: some Statement) throws {
-      try execute(SQL(fragment: statement.query))
+    public borrowing func execute(_ statement: some Statement, cached: Bool = true) throws {
+      try execute(SQL(fragment: statement.query), cached: cached)
     }
   }
 #endif

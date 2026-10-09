@@ -16,17 +16,21 @@
     /// }
     /// ```
     ///
-    /// - Parameter transaction: The write transaction in which to execute the statement.
+    /// - Parameters:
+    ///   - transaction: The write transaction in which to execute the statement.
+    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     /// - Throws: A ``SQLiteError`` when the statement fails.
     public func execute<Transaction>(
-      _ transaction: borrowing Transaction
+      _ transaction: borrowing Transaction,
+      cached: Bool = true
     ) throws
     where
       Transaction: OrbitDatabaseWriteTransaction,
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      try transaction.execute(self)
+      try transaction.execute(self, cached: cached)
     }
 
     /// Executes this statement on a write connection outside a transaction.
@@ -34,10 +38,12 @@
     /// Each statement commits on its own. This overload is primarily for work that cannot run in a
     /// transaction, such as `VACUUM` or changing foreign-key enforcement.
     ///
-    /// - Parameter connection: The write connection on which to execute the statement.
+    /// - Parameters:
+    ///   - connection: The write connection on which to execute the statement.
+    ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
     /// - Throws: A ``SQLiteError`` when the statement fails.
-    public func execute(_ connection: borrowing SQLiteWriteConnection) throws {
-      try connection.execute(self)
+    public func execute(_ connection: borrowing SQLiteWriteConnection, cached: Bool = true) throws {
+      try connection.execute(self, cached: cached)
     }
   }
 
@@ -46,17 +52,21 @@
     ///
     /// Prefer a `fetch` operation when the rows are useful.
     ///
-    /// - Parameter transaction: The read transaction in which to execute the statement.
+    /// - Parameters:
+    ///   - transaction: The read transaction in which to execute the statement.
+    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     /// - Throws: A ``SQLiteError`` when the statement fails.
     public func execute<Transaction>(
-      _ transaction: borrowing Transaction
+      _ transaction: borrowing Transaction,
+      cached: Bool = true
     ) throws
     where
       Transaction: OrbitDatabaseReadTransaction,
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      try withOrbitCursor(try transaction.rowCursor(self)) { cursor in
+      try withOrbitCursor(try transaction.rowCursor(self, cached: cached)) { cursor in
         while try cursor.next() != nil {}
       }
     }
@@ -75,28 +85,34 @@
     /// }
     /// ```
     ///
-    /// - Parameter transaction: The transaction in which to execute the SQL.
+    /// - Parameters:
+    ///   - transaction: The transaction in which to execute the SQL.
+    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     /// - Throws: A ``SQLiteError`` when the statement fails, including `SQLITE_READONLY` when a
     ///   read transaction is handed SQL that may write.
     public func execute<Transaction>(
-      _ transaction: borrowing Transaction
+      _ transaction: borrowing Transaction,
+      cached: Bool = true
     ) throws
     where
       Transaction: OrbitDatabaseReadTransaction,
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      try withOrbitCursor(try transaction.rowCursor(self)) { cursor in
+      try withOrbitCursor(try transaction.rowCursor(self, cached: cached)) { cursor in
         while try cursor.next() != nil {}
       }
     }
 
     /// Executes this raw SQL on a write connection outside a transaction.
     ///
-    /// - Parameter connection: The write connection on which to execute the SQL.
+    /// - Parameters:
+    ///   - connection: The write connection on which to execute the SQL.
+    ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
     /// - Throws: A ``SQLiteError`` when the statement fails.
-    public func execute(_ connection: borrowing SQLiteWriteConnection) throws {
-      try connection.execute(self)
+    public func execute(_ connection: borrowing SQLiteWriteConnection, cached: Bool = true) throws {
+      try connection.execute(self, cached: cached)
     }
   }
 

@@ -322,10 +322,15 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// A query that holds no statement, such as one that builds no SQL, runs nothing at all, so it
   /// leaves ``changesCount`` reporting whatever the statement before it changed.
   ///
-  /// - Parameter query: The query to run. Any rows it returns are stepped past and discarded.
+  /// - Parameters:
+  ///   - query: The query to run. Any rows it returns are stepped past and discarded.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
-    var cursor = try base.cursor(for: query.sql, cached: false, requiresReadOnly: false)
+  public borrowing func execute(
+    _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
+    cached: Bool
+  ) throws {
+    var cursor = try base.cursor(for: query.sql, cached: cached, requiresReadOnly: false)
     while try cursor.next() != nil {}
   }
 

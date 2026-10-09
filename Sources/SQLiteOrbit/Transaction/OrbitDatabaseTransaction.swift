@@ -128,11 +128,19 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
 
   /// Runs a query, discarding any rows it returns.
   ///
-  /// Read ``changesCount`` afterwards for how many rows it changed.
+  /// Read ``changesCount`` afterwards for how many rows it changed. A conformance that does not
+  /// implement this runs the query through its write ``rowCursor(_:cached:)`` and steps past the
+  /// rows.
   ///
-  /// - Parameter query: The query to run. Any rows it returns are discarded.
+  /// - Parameters:
+  ///   - query: The query to run. Any rows it returns are discarded.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws
+  borrowing func execute(
+    _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
+    cached: Bool
+  ) throws
 }
 
 extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
@@ -247,6 +255,36 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
 }
 
 extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
+  /// Runs a query, discarding any rows it returns.
+  ///
+  /// This is the implementation a conformance gets when it does not provide its own: it creates
+  /// the query's cursor and steps past its rows.
+  ///
+  /// - Parameters:
+  ///   - query: The query to run. Any rows it returns are discarded.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
+  /// - Throws: A ``SQLiteError`` when the statement fails.
+  public borrowing func execute(
+    _ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>,
+    cached: Bool
+  ) throws {
+    try withOrbitCursor(try rowCursor(query, cached: cached)) { cursor in
+      while try cursor.next() != nil {}
+    }
+  }
+
+  /// Runs a query, discarding any rows it returns, through the connection's cache of prepared
+  /// statements.
+  ///
+  /// Read ``changesCount`` afterwards for how many rows it changed.
+  ///
+  /// - Parameter query: The query to run. Any rows it returns are discarded.
+  /// - Throws: A ``SQLiteError`` when the statement fails.
+  public borrowing func execute(_ query: OrbitDatabaseQuery<OrbitDatabaseWriteAccess>) throws {
+    try execute(query, cached: true)
+  }
+
   /// Runs raw SQL, discarding any rows it returns.
   ///
   /// Interpolated values are bound as parameters rather than spliced into the text. Read
@@ -256,10 +294,13 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = \(id)")
   /// ```
   ///
-  /// - Parameter sql: The SQL to run.
+  /// - Parameters:
+  ///   - sql: The SQL to run.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  public borrowing func execute(_ sql: SQL) throws {
-    try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql))
+  public borrowing func execute(_ sql: SQL, cached: Bool = true) throws {
+    try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql), cached: cached)
   }
 
   /// Runs raw SQL and lends any returned rows to `body`.
@@ -278,13 +319,16 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   ///
   /// - Parameters:
   ///   - sql: The SQL to run.
+  ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
   ///   - body: Receives each returned row and says whether to read the next.
   /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
   public borrowing func execute(
     _ sql: SQL,
+    cached: Bool = true,
     _ body: (inout Row) throws -> OrbitDatabaseRowIteration
   ) throws {
-    try withOrbitCursor(try executeRowCursor(sql)) { try $0.forEach(body) }
+    try withOrbitCursor(try executeRowCursor(sql, cached: cached)) { try $0.forEach(body) }
   }
 
   /// Creates a cursor over the rows raw SQL that may write returns, such as from a `RETURNING`
@@ -522,10 +566,13 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     /// let deleted = transaction.changesCount
     /// ```
     ///
-    /// - Parameter statement: The statement to run.
+    /// - Parameters:
+    ///   - statement: The statement to run.
+    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     /// - Throws: A ``SQLiteError`` when the statement fails.
-    public borrowing func execute(_ statement: some Statement) throws {
-      try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement))
+    public borrowing func execute(_ statement: some Statement, cached: Bool = true) throws {
+      try execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(statement), cached: cached)
     }
 
     /// Executes a statement and lends any returned rows to `body`.
@@ -544,13 +591,16 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
     ///
     /// - Parameters:
     ///   - statement: The statement to run.
+    ///   - cached: Whether the driver may reuse a prepared statement for this SQL. See
+    ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
     ///   - body: Receives each returned row and says whether to read the next.
     /// - Throws: Whatever `body` throws, or a ``SQLiteError`` when the statement fails.
     public borrowing func execute(
       _ statement: some Statement,
+      cached: Bool = true,
       _ body: (inout Row) throws -> OrbitDatabaseRowIteration
     ) throws {
-      try execute(SQL(fragment: statement.query), body)
+      try execute(SQL(fragment: statement.query), cached: cached, body)
     }
   }
 
