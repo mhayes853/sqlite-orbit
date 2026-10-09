@@ -1,3 +1,7 @@
+// The prepared statements a connection keeps between uses. A statement is checked out while it
+// runs, so two uses of the same SQL at once never share one, and checked back in afterwards. Up to
+// `capacity` statements stay idle, and a full cache makes room by finalizing the one least
+// recently checked in.
 final class SQLiteStatementCache {
   private struct Table: Hashable {
     let schema: SQLiteSchemaName
@@ -14,7 +18,15 @@ final class SQLiteStatementCache {
   private let authorizer: SQLiteAuthorizerDispatcher
   private let capacity: Int
 
-  private var idle: [SQLiteStatementCacheKey: SQLitePreparedStatement] = [:]
+  // An idle statement, stamped with when it was last given back. A full cache makes room by
+  // finalizing the statement with the oldest stamp, the one least recently used.
+  private struct IdleStatement {
+    let statement: SQLitePreparedStatement
+    let lastUse: UInt64
+  }
+
+  private var idle: [SQLiteStatementCacheKey: IdleStatement] = [:]
+  private var useCount: UInt64 = 0
   private(set) var generation: UInt64 = 0
 
   var idleStatementCount: Int { idle.count }
@@ -52,7 +64,8 @@ final class SQLiteStatementCache {
     requiresReadOnly: Bool
   ) throws -> (statement: SQLitePreparedStatement?, sql: String) {
     if let index = idle.index(forKey: SQLiteStatementCacheKey(query)) {
-      let (key, statement) = idle.remove(at: index)
+      let (key, entry) = idle.remove(at: index)
+      let statement = entry.statement
       let sql = key.text
       guard !requiresReadOnly || statement.isReadOnly else {
         checkIn(statement, sql: sql)
@@ -118,13 +131,27 @@ final class SQLiteStatementCache {
     let key = SQLiteStatementCacheKey(sql)
     guard
       statement.cacheGeneration == generation,
-      idle.count < capacity,
+      capacity > 0,
       idle[key] == nil
     else {
       _ = library.pointee.statements.execution.finalize(statement.pointer)
       return
     }
-    idle[key] = statement
+    if idle.count >= capacity {
+      evictLeastRecentlyUsed()
+    }
+    useCount &+= 1
+    idle[key] = IdleStatement(statement: statement, lastUse: useCount)
+  }
+
+  // A scan is enough: the cache is small, and this only runs when a statement the cache did not
+  // hold comes back, which almost always means one was just compiled, at a far greater cost.
+  private func evictLeastRecentlyUsed() {
+    guard
+      let oldest = idle.indices.min(by: { idle[$0].value.lastUse < idle[$1].value.lastUse })
+    else { return }
+    let (_, evicted) = idle.remove(at: oldest)
+    _ = library.pointee.statements.execution.finalize(evicted.statement.pointer)
   }
 
   func invalidate() {
@@ -285,8 +312,8 @@ final class SQLiteStatementCache {
   }
 
   private func finalizeIdle() {
-    for statement in idle.values {
-      _ = library.pointee.statements.execution.finalize(statement.pointer)
+    for entry in idle.values {
+      _ = library.pointee.statements.execution.finalize(entry.statement.pointer)
     }
     idle.removeAll()
   }

@@ -100,6 +100,10 @@ public struct SQLiteConfiguration: Sendable {
   public var isTrustedSchemaEnabled: Bool
 
   /// How many prepared statements a connection keeps for reuse.
+  ///
+  /// The default is 64. A connection that has run more distinct SQL than this finalizes the
+  /// statement it used least recently to make room, and `0` turns the cache off, so every
+  /// statement is prepared anew.
   public var maximumCachedStatements: Int
 
   /// SQL run on every connection once it has been configured.
@@ -115,7 +119,8 @@ public struct SQLiteConfiguration: Sendable {
   ///   - busyTimeout: How long SQLite waits for a lock before reporting `SQLITE_BUSY`.
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
-  ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
+  ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse, the
+  ///     least recently used making way for new ones.
   ///   - setupSQL: SQL run on every connection once it has been configured.
   ///   - connectionSetups: Native callbacks installed on every connection.
   ///   - key: The key an encrypted database is unlocked with.

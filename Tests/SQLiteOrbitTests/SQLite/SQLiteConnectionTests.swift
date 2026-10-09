@@ -7,9 +7,11 @@
   /// Counts the statements a connection prepares and finalizes.
   private struct SQLiteCallCounters: Sendable {
     let prepared = TestCounter()
+    let preparedPersistent = TestCounter()
     let finalized = TestCounter()
 
     var preparedCount: Int { self.prepared.value }
+    var preparedPersistentCount: Int { self.preparedPersistent.value }
     var finalizedCount: Int { self.finalized.value }
   }
 
@@ -27,6 +29,9 @@
       )
       if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
         counters.prepared.increment()
+        if flags & SQLitePrepareFlags.persistent.rawValue != 0 {
+          counters.preparedPersistent.increment()
+        }
       }
       return code
     }
@@ -121,6 +126,102 @@
 
     // The statement that did not fit was finalized rather than retained.
     #expect(counters.finalizedCount == finalizedAfterOpen + 1)
+  }
+
+  /// Runs each of `sqls` through the cache once, in order.
+  private func use(_ sqls: [String], on connection: borrowing SQLiteConnection) throws {
+    for sql in sqls {
+      let statement = try connection.statements.checkOut(sql)
+      connection.statements.checkIn(statement, sql: sql)
+    }
+  }
+
+  @Test
+  func aFullStatementCacheEvictsTheLeastRecentlyUsedStatement() throws {
+    let counters = SQLiteCallCounters()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = countingLibrary(counters)
+    configuration.maximumCachedStatements = 2
+
+    let connection = try openInMemory(configuration)
+    try use(["SELECT 1", "SELECT 2", "SELECT 3"], on: connection)
+    #expect(connection.statements.idleStatementCount == 2)
+
+    // The two most recent are still cached, and the first was finalized to make room.
+    let prepared = counters.preparedCount
+    let finalized = counters.finalizedCount
+    try use(["SELECT 2", "SELECT 3"], on: connection)
+    #expect(counters.preparedCount == prepared)
+    try use(["SELECT 1"], on: connection)
+    #expect(counters.preparedCount == prepared + 1)
+    // Bringing it back evicted `SELECT 2`, the least recently used of the two.
+    #expect(counters.finalizedCount == finalized + 1)
+    try use(["SELECT 3", "SELECT 1"], on: connection)
+    #expect(counters.preparedCount == prepared + 1)
+  }
+
+  @Test
+  func aRecentlyUsedStatementOutlivesAnOlderOne() throws {
+    let counters = SQLiteCallCounters()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = countingLibrary(counters)
+    configuration.maximumCachedStatements = 2
+
+    let connection = try openInMemory(configuration)
+    // `SELECT 1` was cached first, but reusing it makes `SELECT 2` the one to go.
+    try use(["SELECT 1", "SELECT 2", "SELECT 1", "SELECT 3"], on: connection)
+
+    let prepared = counters.preparedCount
+    try use(["SELECT 1", "SELECT 3"], on: connection)
+    #expect(counters.preparedCount == prepared)
+    try use(["SELECT 2"], on: connection)
+    #expect(counters.preparedCount == prepared + 1)
+  }
+
+  @Test
+  func statementCacheKeepsAtMostItsCapacityOfTheLatestStatements() throws {
+    let counters = SQLiteCallCounters()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = countingLibrary(counters)
+    configuration.maximumCachedStatements = 3
+
+    let connection = try openInMemory(configuration)
+    let sqls = (0..<10).map { "SELECT \($0)" }
+    let finalizedAfterOpen = counters.finalizedCount
+    try use(sqls, on: connection)
+    #expect(connection.statements.idleStatementCount == 3)
+    #expect(counters.finalizedCount == finalizedAfterOpen + 7)
+
+    let prepared = counters.preparedCount
+    try use(Array(sqls.suffix(3)), on: connection)
+    #expect(counters.preparedCount == prepared)
+  }
+
+  @Test
+  func theDefaultStatementCacheHoldsSixtyFourStatements() throws {
+    #expect(SQLiteConfiguration.default.maximumCachedStatements == 64)
+    let connection = try openInMemory()
+    try use((0..<100).map { "SELECT \($0)" }, on: connection)
+    #expect(connection.statements.idleStatementCount == 64)
+  }
+
+  @Test
+  func aStatementCacheWithoutCapacityKeepsNothing() throws {
+    let counters = SQLiteCallCounters()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = countingLibrary(counters)
+    configuration.maximumCachedStatements = 0
+
+    let connection = try openInMemory(configuration)
+    let prepared = counters.preparedCount
+    let persistent = counters.preparedPersistentCount
+    let finalized = counters.finalizedCount
+    try use(["SELECT 1", "SELECT 1", "SELECT 2"], on: connection)
+    #expect(connection.statements.idleStatementCount == 0)
+    #expect(counters.preparedCount == prepared + 3)
+    #expect(counters.finalizedCount == finalized + 3)
+    // Nothing is kept, so nothing is prepared as though it would be.
+    #expect(counters.preparedPersistentCount == persistent)
   }
 
   @Test
