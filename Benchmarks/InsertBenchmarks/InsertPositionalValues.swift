@@ -5,9 +5,9 @@ import GRDB
 import SQLiteOrbit
 
 // 50,000 rows of ten integers in one transaction, binding arguments by position. SQLite and GRDB
-// reuse one prepared statement. `Orbit` runs the documented `execute`, which prepares every row's
-// statement anew; `OrbitCached` runs the same SQL through the connection's statement cache, so the
-// gap between the two is the cost of preparing.
+// reuse one prepared statement. `Orbit` runs the documented `execute`, which finds the statement in
+// the connection's cache; `OrbitUncached` passes `cached: false`, preparing every row's statement
+// anew, so the gap between the two is the cost of preparing.
 func insertPositionalValuesBenchmarks() {
   Benchmark("InsertPositionalValues/SQLite") { benchmark in
     try measureInsert(benchmark, open: RawSQLiteConnection.init(path:)) { connection in
@@ -50,20 +50,20 @@ func insertPositionalValuesBenchmarks() {
     }
   }
 
-  Benchmark("InsertPositionalValues/OrbitCached") { benchmark in
+  Benchmark("InsertPositionalValues/OrbitUncached") { benchmark in
     try measureInsert(benchmark, open: openOrbitConnection) { owner in
       try owner.withWriteConnection { connection in
         try connection.transaction { transaction in
           for i in 0..<Fixture.insertedRowCount {
-            try transaction.executeCached(insertItemSQL(i))
+            try transaction.execute(insertItemSQL(i), cached: false)
           }
         }
       }
     }
   }
 
-  // The documented `execute`, uncached like `Orbit`, so the two differ only by the queue's hop to
-  // its connection's executor.
+  // The documented `execute`, like `Orbit`, so the two differ only by the queue's hop to its
+  // connection's executor.
   Benchmark("InsertPositionalValues/OrbitQueue") { benchmark in
     try await measureInsert(
       benchmark,

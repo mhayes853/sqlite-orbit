@@ -83,15 +83,6 @@ func insertItemSQL(_ i: Int) -> SQL {
   """
 }
 
-extension SQLiteWriteTransaction {
-  /// `execute(_:)`, which always prepares its statement anew, through the connection's cache of
-  /// prepared statements instead.
-  borrowing func executeCached(_ sql: SQL) throws {
-    var cursor = try executeRowCursor(sql, cached: true)
-    while try cursor.next() != nil {}
-  }
-}
-
 // MARK: - SQLite
 
 // SQLITE_TRANSIENT is a macro Swift cannot import.

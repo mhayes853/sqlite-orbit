@@ -91,8 +91,8 @@ private func argumentsBenchmarks(named name: String, value: String) {
     }
   }
 
-  // Orbit binds interpolated values every time a statement runs. `Orbit` prepares each statement
-  // anew; `OrbitCached` reuses the cached one.
+  // Orbit binds interpolated values every time a statement runs. `Orbit` reuses the cached
+  // statement; `OrbitUncached` prepares each one anew.
   Benchmark("\(name)/Orbit", configuration: .arguments) { benchmark in
     try measureOrbit(benchmark, value: value) { transaction in
       for _ in 0..<insertCount {
@@ -101,10 +101,10 @@ private func argumentsBenchmarks(named name: String, value: String) {
     }
   }
 
-  Benchmark("\(name)/OrbitCached", configuration: .arguments) { benchmark in
+  Benchmark("\(name)/OrbitUncached", configuration: .arguments) { benchmark in
     try measureOrbit(benchmark, value: value) { transaction in
       for _ in 0..<insertCount {
-        try transaction.executeCached("INSERT INTO t(a) VALUES (\(value))")
+        try transaction.execute("INSERT INTO t(a) VALUES (\(value))", cached: false)
       }
     }
   }

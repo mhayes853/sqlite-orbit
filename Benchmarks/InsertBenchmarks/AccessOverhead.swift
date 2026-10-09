@@ -57,7 +57,7 @@ func accessOverheadBenchmarks() {
     ) { owner in
       for i in 0..<accessCount {
         try owner.withWriteConnection { connection in
-          try connection.transaction { try $0.executeCached(insertItemSQL(i)) }
+          try connection.transaction { try $0.execute(insertItemSQL(i)) }
         }
       }
     }
@@ -90,7 +90,7 @@ func accessOverheadBenchmarks() {
       }
     ) { queue in
       for i in 0..<accessCount {
-        try await queue.write { try $0.executeCached(insertItemSQL(i)) }
+        try await queue.write { try $0.execute(insertItemSQL(i)) }
       }
     }
   }
@@ -123,7 +123,7 @@ func accessOverheadBenchmarks() {
       }
     ) { pool in
       for i in 0..<accessCount {
-        try await pool.write { try $0.executeCached(insertItemSQL(i)) }
+        try await pool.write { try $0.execute(insertItemSQL(i)) }
       }
     }
   }
@@ -140,7 +140,7 @@ func accessOverheadBenchmarks() {
       }
     ) { database in
       for i in 0..<accessCount {
-        try await database.write { try $0.executeCached(insertItemSQL(i)) }
+        try await database.write { try $0.execute(insertItemSQL(i)) }
       }
     }
   }

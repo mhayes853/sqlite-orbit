@@ -27,13 +27,26 @@ struct TableItem {
 private let batchRowCount = 1_000
 
 func insertRecordStructuredQueriesBenchmarks() {
-  // One `INSERT` a row, built and prepared anew each time.
+  // One `INSERT` a row, built anew each time and run through the connection's statement cache.
   Benchmark("InsertRecordStructuredQueries/Orbit") { benchmark in
     try measureInsert(benchmark, open: openOrbitConnection) { owner in
       try owner.withWriteConnection { connection in
         try connection.transaction { transaction in
           for i in 0..<Fixture.insertedRowCount {
             try transaction.execute(TableItem.insert { TableItem(i) })
+          }
+        }
+      }
+    }
+  }
+
+  // The same, with every statement prepared anew.
+  Benchmark("InsertRecordStructuredQueries/OrbitUncached") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          for i in 0..<Fixture.insertedRowCount {
+            try transaction.execute(TableItem.insert { TableItem(i) }, cached: false)
           }
         }
       }
