@@ -89,7 +89,7 @@ jobs:
       - name: Test Turso compatibility
         run: |
           swift test --disable-default-traits --traits Turso,StructuredQueries \
-            --filter TursoCompatibilityTests
+            --filter '[Tt]urso'
 
       - name: Test migrations with Turso
         run: |
