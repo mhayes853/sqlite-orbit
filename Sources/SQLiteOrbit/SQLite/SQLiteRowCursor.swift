@@ -26,7 +26,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let statements: SQLiteStatementCache
 
-  let isCached: Bool
+  // What a statement lent by the cache is given back under, or `nil` for one compiled for this
+  // cursor alone.
+  let loan: SQLiteStatementLoan?
 
   // What SQLite steps, or `nil` for SQL that holds no statement, such as an empty query, which
   // produces no rows. A statement recompiled on its first step keeps its pointer and has only its
@@ -65,9 +67,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   ) throws {
     let sql: String
     let preparedStatement: SQLitePreparedStatement?
+    let loan: SQLiteStatementLoan?
     if cached {
-      (preparedStatement, sql) = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
+      let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
+      preparedStatement = checkedOut.statement
+      loan = checkedOut.loan
+      sql = checkedOut.loan.sql
     } else {
+      loan = nil
       sql = query.text
       preparedStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
     }
@@ -76,8 +83,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
         try bind(query, to: preparedStatement.pointer, library: library)
       } catch {
         // The statement never reached a cursor, so nothing else will give it back.
-        if cached {
-          statements.checkIn(preparedStatement, sql: sql)
+        if let loan {
+          statements.checkIn(preparedStatement, loan: loan)
         } else {
           _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
         }
@@ -88,7 +95,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
-    self.isCached = cached
+    self.loan = loan
     self.preparedStatement = preparedStatement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
@@ -100,8 +107,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   deinit {
     guard let preparedStatement else { return }
     authorizer.activeCursors -= 1
-    if isCached {
-      statements.checkIn(preparedStatement, sql: sql)
+    if let loan {
+      statements.checkIn(preparedStatement, loan: loan)
     } else {
       _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
     }

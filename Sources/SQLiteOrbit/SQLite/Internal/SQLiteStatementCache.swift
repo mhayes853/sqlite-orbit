@@ -2,6 +2,11 @@
 // runs, so two uses of the same SQL at once never share one, and checked back in afterwards. Up to
 // `capacity` statements stay idle, and a full cache makes room by finalizing the one least
 // recently checked in.
+//
+// The statement checked in last waits in a slot of its own rather than in the dictionary. A loop
+// that runs one statement over and over, which is how most statements are reused, then finds it by
+// comparing the query with that one statement's text, and gives it back, without hashing or
+// touching the dictionary at all.
 final class SQLiteStatementCache {
   private struct Table: Hashable {
     let schema: SQLiteSchemaName
@@ -25,11 +30,18 @@ final class SQLiteStatementCache {
     let lastUse: UInt64
   }
 
+  // The statement checked in most recently, kept apart from `idle` and never also in it. It counts
+  // toward `capacity` like any other idle statement.
+  private var hot: (key: SQLiteStatementCacheKey, entry: IdleStatement)?
   private var idle: [SQLiteStatementCacheKey: IdleStatement] = [:]
   private var useCount: UInt64 = 0
+  // How many statements have ever been filed into `idle`, which only happens when one leaves the
+  // hot slot. A loan remembers it, so a check-in can tell that nothing equal to its statement can
+  // have reached the dictionary while it was out, and skip looking.
+  private var idleInsertionCount: UInt64 = 0
   private(set) var generation: UInt64 = 0
 
-  var idleStatementCount: Int { idle.count }
+  var idleStatementCount: Int { idle.count + (hot == nil ? 0 : 1) }
 
   // The schema version the cached statements were compiled under, or `nil` when that is unknown,
   // as it is before the first transaction and after this connection changes the schema itself.
@@ -57,30 +69,58 @@ final class SQLiteStatementCache {
     try prepare(sql, flags: 0, requiresReadOnly: requiresReadOnly)
   }
 
-  // Also returns the SQL's text, which a statement found in the cache brings along with it, so
-  // reusing a statement never joins the query's text anew.
+  // Also returns the loan the statement is checked back in under, which carries the SQL's text: a
+  // statement found in the cache brings its text along with it, so reusing a statement never joins
+  // the query's text anew.
   func checkOut(
     _ query: SQL,
     requiresReadOnly: Bool
-  ) throws -> (statement: SQLitePreparedStatement?, sql: String) {
-    if let index = idle.index(forKey: SQLiteStatementCacheKey(query)) {
-      let (key, entry) = idle.remove(at: index)
-      let statement = entry.statement
-      let sql = key.text
-      guard !requiresReadOnly || statement.isReadOnly else {
-        checkIn(statement, sql: sql)
-        throw Self.mayWriteError(sql: sql)
+  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+    // Taken out rather than copied, so a hit costs no retains, and put back on a miss.
+    if let hot = hot.take() {
+      guard hot.key.matches(query) else {
+        self.hot = hot
+        return try checkOutFromIdle(query, requiresReadOnly: requiresReadOnly)
       }
-      return (statement, sql)
+      return try lend(hot.entry.statement, filedUnder: hot.key, requiresReadOnly: requiresReadOnly)
+    }
+    return try checkOutFromIdle(query, requiresReadOnly: requiresReadOnly)
+  }
+
+  private func checkOutFromIdle(
+    _ query: SQL,
+    requiresReadOnly: Bool
+  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+    let lookup = SQLiteStatementCacheKey(query)
+    if let index = idle.index(forKey: lookup) {
+      let (key, entry) = idle.remove(at: index)
+      return try lend(entry.statement, filedUnder: key, requiresReadOnly: requiresReadOnly)
     }
     let sql = query.text
+    let loan = SQLiteStatementLoan(
+      key: SQLiteStatementCacheKey(filing: query, joinedInto: sql, lookedUpBy: lookup),
+      idleInsertionCount: idleInsertionCount
+    )
     // A cache that keeps nothing gains nothing from hinting that the statement will be reused.
     let statement = try prepare(
       sql,
       flags: capacity > 0 ? SQLitePrepareFlags.persistent.rawValue : 0,
       requiresReadOnly: requiresReadOnly
     )
-    return (statement, sql)
+    return (statement, loan)
+  }
+
+  private func lend(
+    _ statement: SQLitePreparedStatement,
+    filedUnder key: SQLiteStatementCacheKey,
+    requiresReadOnly: Bool
+  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+    let loan = SQLiteStatementLoan(key: key, idleInsertionCount: idleInsertionCount)
+    guard !requiresReadOnly || statement.isReadOnly else {
+      checkIn(statement, loan: loan)
+      throw Self.mayWriteError(sql: loan.sql)
+    }
+    return (statement, loan)
   }
 
   private func prepare(
@@ -125,31 +165,46 @@ final class SQLiteStatementCache {
     return SQLitePreparedStatement(pointer: statement, metadata: probe)
   }
 
-  func checkIn(_ statement: SQLitePreparedStatement, sql: String) {
+  func checkIn(_ statement: SQLitePreparedStatement, loan: SQLiteStatementLoan) {
     _ = library.pointee.statements.execution.reset(statement.pointer)
     _ = library.pointee.statements.execution.clearBindings(statement.pointer)
-    let key = SQLiteStatementCacheKey(sql)
+    // Another use of the same SQL at once was lent a statement of its own, and whichever comes back
+    // second finds the first already idle. Nothing reaches the dictionary except by leaving the hot
+    // slot, so when nothing has left it since this statement went out, an equal one cannot be
+    // there.
     guard
       statement.cacheGeneration == generation,
       capacity > 0,
-      idle[key] == nil
+      hot.map({ $0.key != loan.key }) ?? true,
+      loan.idleInsertionCount == idleInsertionCount || idle[loan.key] == nil
     else {
       _ = library.pointee.statements.execution.finalize(statement.pointer)
       return
     }
-    if idle.count >= capacity {
+    if idleStatementCount >= capacity {
       evictLeastRecentlyUsed()
     }
+    if let hot {
+      idle[hot.key] = hot.entry
+      idleInsertionCount &+= 1
+    }
     useCount &+= 1
-    idle[key] = IdleStatement(statement: statement, lastUse: useCount)
+    hot = (loan.key, IdleStatement(statement: statement, lastUse: useCount))
   }
 
   // A scan is enough: the cache is small, and this only runs when a statement the cache did not
-  // hold comes back, which almost always means one was just compiled, at a far greater cost.
+  // hold comes back, which almost always means one was just compiled, at a far greater cost. The
+  // hot statement is the most recently used, so it only goes when it is the only one left.
   private func evictLeastRecentlyUsed() {
     guard
       let oldest = idle.indices.min(by: { idle[$0].value.lastUse < idle[$1].value.lastUse })
-    else { return }
+    else {
+      if let hot {
+        _ = library.pointee.statements.execution.finalize(hot.entry.statement.pointer)
+        self.hot = nil
+      }
+      return
+    }
     let (_, evicted) = idle.remove(at: oldest)
     _ = library.pointee.statements.execution.finalize(evicted.statement.pointer)
   }
@@ -312,11 +367,27 @@ final class SQLiteStatementCache {
   }
 
   private func finalizeIdle() {
+    if let hot {
+      _ = library.pointee.statements.execution.finalize(hot.entry.statement.pointer)
+      self.hot = nil
+    }
     for entry in idle.values {
       _ = library.pointee.statements.execution.finalize(entry.statement.pointer)
     }
     idle.removeAll()
   }
+}
+
+// What a statement lent by the cache is checked back in under: the key it is filed under, which
+// carries the SQL's text and its hash, so giving a statement back never hashes the text again.
+struct SQLiteStatementLoan {
+  let key: SQLiteStatementCacheKey
+
+  // The cache's `idleInsertionCount` when the statement went out, when no statement equal to it
+  // was idle in the dictionary.
+  let idleInsertionCount: UInt64
+
+  var sql: String { key.text }
 }
 
 // A cached statement is filed under its SQL's text, and found again from the query's parts, so
@@ -330,12 +401,36 @@ struct SQLiteStatementCacheKey: Hashable {
 
   private let source: Source
 
+  // Worked out once, when the key is made, so a key carried from check-out to check-in, or moved
+  // out of the hot slot into the dictionary, is never hashed again.
+  private let hash: Int
+
+  // The pieces of the query whose statement is filed under this key, kept so that the same query
+  // run again, built from the very same strings, is recognized without reading its text.
+  private let pieces: [SQL.Part]?
+
   init(_ text: String) {
     source = .text(text)
+    pieces = nil
+    hash = text.withUTF8Bytes { bytes in
+      var hasher = Hasher()
+      hasher.combine(bytes: bytes)
+      return hasher.finalize()
+    }
   }
 
   init(_ query: SQL) {
     source = .query(query)
+    pieces = nil
+    hash = Self.hash(query)
+  }
+
+  // The key a query's statement is filed under, made from the text `query` was joined into and
+  // the key it was looked up by, so the text is not hashed again.
+  init(filing query: SQL, joinedInto text: String, lookedUpBy key: Self) {
+    source = .text(text)
+    pieces = query.textPieces
+    hash = key.hash
   }
 
   var text: String {
@@ -346,6 +441,15 @@ struct SQLiteStatementCacheKey: Hashable {
   }
 
   // Hashing is a byte stream, so a query's pieces hash as their joined text does.
+  private static func hash(_ query: SQL) -> Int {
+    var hasher = Hasher()
+    _ = query.forEachTextChunk { chunk in
+      hasher.combine(bytes: chunk)
+      return true
+    }
+    return hasher.finalize()
+  }
+
   private func forEachChunk(_ body: (UnsafeRawBufferPointer) -> Bool) -> Bool {
     switch source {
     case .text(let text): text.withUTF8Bytes(body)
@@ -354,13 +458,11 @@ struct SQLiteStatementCacheKey: Hashable {
   }
 
   func hash(into hasher: inout Hasher) {
-    _ = forEachChunk { chunk in
-      hasher.combine(bytes: chunk)
-      return true
-    }
+    hasher.combine(hash)
   }
 
   static func == (lhs: Self, rhs: Self) -> Bool {
+    guard lhs.hash == rhs.hash else { return false }
     switch (lhs.source, rhs.source) {
     case (.text(let text), _):
       return text.withUTF8Bytes { rhs.matches($0) }
@@ -372,13 +474,26 @@ struct SQLiteStatementCacheKey: Hashable {
     }
   }
 
+  // Whether `query` joins into this key's text, found without hashing either.
+  func matches(_ query: SQL) -> Bool {
+    if let pieces, query.hasTextIdentical(to: pieces) { return true }
+    return text.withUTF8Bytes { bytes in Self.chunks({ query.forEachTextChunk($0) }, match: bytes) }
+  }
+
   private func matches(_ bytes: UnsafeRawBufferPointer) -> Bool {
+    Self.chunks({ forEachChunk($0) }, match: bytes)
+  }
+
+  private static func chunks(
+    _ forEachChunk: ((UnsafeRawBufferPointer) -> Bool) -> Bool,
+    match bytes: UnsafeRawBufferPointer
+  ) -> Bool {
     var offset = 0
     let matchedEveryChunk = forEachChunk { chunk in
       guard chunk.count <= bytes.count - offset else { return false }
       let slice = UnsafeRawBufferPointer(rebasing: bytes[offset..<offset + chunk.count])
       offset += chunk.count
-      return slice.elementsEqual(chunk)
+      return slice.hasSameBytes(as: chunk)
     }
     return matchedEveryChunk && offset == bytes.count
   }

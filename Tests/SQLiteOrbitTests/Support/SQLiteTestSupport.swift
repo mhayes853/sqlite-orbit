@@ -229,13 +229,32 @@
   typealias TestColumnValue = ConvertibleFromOrbitDatabaseValue & Sendable
 
   extension SQLiteStatementCache {
+    /// A statement checked out of the cache, with the loan it goes back in under.
+    struct LentStatement {
+      let statement: SQLitePreparedStatement
+      let loan: SQLiteStatementLoan
+      var pointer: OpaquePointer { statement.pointer }
+    }
+
     /// Checks out the statement `sql` compiles to, which must hold one, without holding it to
     /// reading.
-    func checkOut(_ sql: String) throws -> SQLitePreparedStatement {
-      try Self.requireStatement(
-        checkOut(SQL(text: sql), requiresReadOnly: false).statement,
-        sql: sql
+    func checkOut(_ sql: String) throws -> LentStatement {
+      try checkOut(SQL(text: sql))
+    }
+
+    /// Checks out the statement `query` compiles to, which must hold one, without holding it to
+    /// reading.
+    func checkOut(_ query: SQL) throws -> LentStatement {
+      let (statement, loan) = try checkOut(query, requiresReadOnly: false)
+      return LentStatement(
+        statement: try Self.requireStatement(statement, sql: loan.sql),
+        loan: loan
       )
+    }
+
+    /// Gives back a statement checked out with `checkOut(_:)`.
+    func checkIn(_ lent: LentStatement) {
+      checkIn(lent.statement, loan: lent.loan)
     }
 
     /// Compiles the statement `sql` holds, which must hold one, without holding it to reading.
