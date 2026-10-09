@@ -71,12 +71,14 @@
 
     @Test
     func textReadsAsThePinnedDates() throws {
-      // Darwin releases before swift-foundation's parser behave differently, and the pins
-      // record that parser.
-      #if canImport(Darwin)
-        guard #available(macOS 26, iOS 26, tvOS 26, watchOS 26, visionOS 26, *) else { return }
-      #endif
       for (text, bitPattern) in Self.pinned {
+        // Darwin releases before swift-foundation's parser read other spellings their own way,
+        // and the pins record that parser. The usual spelling reads the same everywhere.
+        if !Self.isFoundationAsPinned,
+          text.utf8.withContiguousStorageIfAvailable(Date.init(orbitTimestampUTF8:)) == nil
+        {
+          continue
+        }
         let parsed = try? Date(orbitISO8601String: text)
         #expect(
           parsed?.timeIntervalSinceReferenceDate.bitPattern == bitPattern,
@@ -87,7 +89,15 @@
       }
     }
 
-    @Test
+    // Whether this Foundation's ISO 8601 parser is swift-foundation's, which the pins record.
+    private static var isFoundationAsPinned: Bool {
+      #if canImport(Darwin)
+        if #unavailable(macOS 26, iOS 26, tvOS 26, watchOS 26, visionOS 26) { return false }
+      #endif
+      return true
+    }
+
+    @Test(.enabled(if: isFoundationAsPinned))
     func textReadsAsFoundationsISO8601FormatStyleReadsIt() {
       var generator = SplitMix64(seed: 0x5EED)
       for _ in 0..<100_000 {
@@ -103,6 +113,34 @@
           != expected?.timeIntervalSinceReferenceDate.bitPattern
         {
           return
+        }
+      }
+    }
+
+    // Every byte of the usual spellings replaced with every other byte, which reaches each check
+    // the hand-written parser makes.
+    @Test(.enabled(if: isFoundationAsPinned))
+    func editedTextReadsAsFoundationsISO8601FormatStyleReadsIt() {
+      let texts = [
+        "2018-04-20 14:47:12", "2018-04-20 14:47:12.345", "2018-04-20 14:47:12.123456789"
+      ]
+      for text in texts {
+        let original = Array(text.utf8)
+        for index in original.indices {
+          for byte in UInt8.min...UInt8.max {
+            var bytes = original
+            bytes[index] = byte
+            let edited = String(decoding: bytes, as: UTF8.self)
+            let expected = foundationDate(edited)
+            let parsed = try? Date(orbitISO8601String: edited)
+            guard
+              parsed?.timeIntervalSinceReferenceDate.bitPattern
+                == expected?.timeIntervalSinceReferenceDate.bitPattern
+            else {
+              Issue.record("\(edited.debugDescription): \(String(describing: parsed))")
+              return
+            }
+          }
         }
       }
     }
