@@ -4,7 +4,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteWALCheckpointTests {
     @Test
     func aCheckpointReportsTheFramesItMovedAndATruncateEmptiesTheLog() async throws {
@@ -45,7 +45,12 @@
         let calls = TestRecorder<(String?, Int32)>()
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.connections.walCheckpoint = { connection, schema, mode, log, moved in
+        configuration.library.connections.walCheckpoint = LibraryHooks.walCheckpoint {
+          connection,
+          schema,
+          mode,
+          log,
+          moved in
           calls.append((schema.map { String(cString: $0) }, mode))
           return base.connections.walCheckpoint(connection, schema, mode, log, moved)
         }

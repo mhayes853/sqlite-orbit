@@ -3,7 +3,7 @@
   import SQLiteOrbit
   import Testing
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteConnectionOwnerTests {
     @Test
     func synchronousAccessKeepsCallerStateAndReturnsNonSendableAndNoncopyableValues() throws {
@@ -424,9 +424,8 @@
       @Test
       func configuredFunctionsUseTheOwnersLibraryForTheirCallbacks() throws {
         var configuration = SQLiteConfiguration.default
-        let base = try #require(configuration.library.scalarFunctions)
         configuration.library.scalarFunctions?.callbacks.argument.int64 = { value in
-          base.callbacks.argument.int64(value) + 100
+          builtInTestLibrary.scalarFunctions!.callbacks.argument.int64(value) + 100
         }
         configuration.registerFunction("owner_identity", argumentCount: 1) { arguments in
           .integer(arguments[0].integerValue ?? 0)
@@ -500,12 +499,12 @@
   private func ownerCountingLibrary(_ counters: OwnerLibraryCounters) -> SQLiteLibrary {
     let base = SQLiteConfiguration.default.library
     var library = base
-    library.connections.open = { path, pointer, flags, vfs in
+    library.connections.open = LibraryHooks.open { path, pointer, flags, vfs in
       let code = base.connections.open(path, pointer, flags, vfs)
       if pointer?.pointee != nil { counters.record { $0.opened += 1 } }
       return code
     }
-    library.connections.close = { pointer in
+    library.connections.close = LibraryHooks.close { pointer in
       let code = base.connections.close(pointer)
       counters.record {
         $0.closed += 1
@@ -515,14 +514,20 @@
       }
       return code
     }
-    library.statements.preparation.prepare = { connection, sql, count, flags, statement, tail in
+    library.statements.preparation.prepare = LibraryHooks.prepare {
+      connection,
+      sql,
+      count,
+      flags,
+      statement,
+      tail in
       let code = base.statements.preparation.prepare(connection, sql, count, flags, statement, tail)
       if code == SQLiteResultCode.ok.rawValue, statement?.pointee != nil {
         counters.record { $0.prepared += 1 }
       }
       return code
     }
-    library.statements.execution.finalize = { statement in
+    library.statements.execution.finalize = LibraryHooks.finalize { statement in
       if statement != nil { counters.record { $0.finalized += 1 } }
       return base.statements.execution.finalize(statement)
     }

@@ -369,8 +369,11 @@ public struct SQLiteConnection: ~Copyable {
     perform operation: () throws -> Result
   ) rethrows -> Result {
     let previous = libraryStorage.pointee.statements.execution.step
-    libraryStorage.pointee.statements.execution.step = step
-    defer { libraryStorage.pointee.statements.execution.step = previous }
+    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push(step)
+    defer {
+      libraryStorage.pointee.statements.execution.step = previous
+      SQLiteStepInterception.pop()
+    }
     return try operation()
   }
 

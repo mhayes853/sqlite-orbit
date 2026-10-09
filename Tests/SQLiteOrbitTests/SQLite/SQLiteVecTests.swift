@@ -2,7 +2,7 @@
   import Testing
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteVecTests {
     @Test
     func vectorTableObservationSeesCommittedChangesAndIgnoresRollback() throws {
@@ -113,7 +113,7 @@
       var configuration = SQLiteConfiguration.default
       configuration.library.name = "system SQLite"
       configuration.library.extensions = nil
-      configuration.library.connections.open = { _, _, _, _ in
+      configuration.library.connections.open = LibraryHooks.open { _, _, _, _ in
         opens.increment()
         return SQLiteResultCode.ok.rawValue
       }
@@ -132,14 +132,14 @@
       var configuration = SQLiteConfiguration.default
       configuration.library.extensions = SQLiteLibrary.Extensions(
         autoExtensions: SQLiteLibrary.AutoExtensions(
-          register: { _ in
+          register: LibraryHooks.registerAutoExtension { _ in
             registrations.increment()
             return SQLiteResultCode.busy.rawValue
           },
           cancel: { _ in 0 }
         )
       )
-      configuration.library.connections.open = { _, _, _, _ in
+      configuration.library.connections.open = LibraryHooks.open { _, _, _, _ in
         opens.increment()
         return SQLiteResultCode.ok.rawValue
       }

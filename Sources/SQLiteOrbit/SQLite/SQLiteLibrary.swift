@@ -101,7 +101,7 @@ public typealias SQLiteTrustedSchemaControl =
 
 /// The shape of SQLite's `sqlite3_create_function_v2` entry point.
 public typealias SQLiteFunctionRegistration =
-  @Sendable (
+  @convention(c) (
     OpaquePointer?, UnsafePointer<CChar>?, Int32, Int32, UnsafeMutableRawPointer?,
     (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
     (@convention(c) (OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?) -> Void)?,
@@ -197,7 +197,12 @@ public struct SQLiteLibrary: Sendable {
 
 extension SQLiteLibrary {
   /// SQLite's `SQLITE_TRANSIENT`: the destructor that tells SQLite to copy temporary bytes.
-  public static let transientDestructor = unsafeBitCast(-1, to: SQLiteDestructor.self)
+  ///
+  /// It is computed rather than stored, so that the entry points passing it inline a constant.
+  @inlinable
+  public static var transientDestructor: SQLiteDestructor {
+    unsafeBitCast(-1, to: SQLiteDestructor.self)
+  }
 
   /// APIs that ``sqliteLibrary(module:apis:)`` can bind when a build provides them.
   ///
@@ -255,14 +260,14 @@ extension SQLiteLibrary {
   /// Information about the loaded SQLite runtime.
   public struct Runtime: Sendable {
     /// The threading mode SQLite was compiled with: `sqlite3_threadsafe`.
-    public var threadsafe: @Sendable () -> Int32
+    public var threadsafe: @convention(c) () -> Int32
     /// The library's version as a number: `sqlite3_libversion_number`.
-    public var versionNumber: @Sendable () -> Int32
+    public var versionNumber: @convention(c) () -> Int32
 
     /// Creates a runtime operation group.
     public init(
-      threadsafe: @escaping @Sendable () -> Int32,
-      versionNumber: @escaping @Sendable () -> Int32
+      threadsafe: @convention(c) () -> Int32,
+      versionNumber: @convention(c) () -> Int32
     ) {
       self.threadsafe = threadsafe
       self.versionNumber = versionNumber
@@ -273,54 +278,54 @@ extension SQLiteLibrary {
   public struct Connections: Sendable {
     /// Opens a connection: `sqlite3_open_v2`.
     public var open:
-      @Sendable (
+      @convention(c) (
         UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32, UnsafePointer<CChar>?
       ) -> Int32
     /// Closes a connection once its statements are finalized: `sqlite3_close_v2`.
-    public var close: @Sendable (OpaquePointer?) -> Int32
+    public var close: @convention(c) (OpaquePointer?) -> Int32
     /// The connection's current error message: `sqlite3_errmsg`.
-    public var errorMessage: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
+    public var errorMessage: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
     /// The connection's current extended result code: `sqlite3_extended_errcode`.
-    public var extendedErrorCode: @Sendable (OpaquePointer?) -> Int32
+    public var extendedErrorCode: @convention(c) (OpaquePointer?) -> Int32
     /// Turns extended result codes on or off: `sqlite3_extended_result_codes`.
-    public var setExtendedResultCodes: @Sendable (OpaquePointer?, Int32) -> Int32
+    public var setExtendedResultCodes: @convention(c) (OpaquePointer?, Int32) -> Int32
     /// Sets how long a locked connection waits: `sqlite3_busy_timeout`.
-    public var setBusyTimeout: @Sendable (OpaquePointer?, Int32) -> Int32
+    public var setBusyTimeout: @convention(c) (OpaquePointer?, Int32) -> Int32
     /// Interrupts the query running on a connection: `sqlite3_interrupt`.
-    public var interrupt: @Sendable (OpaquePointer?) -> Void
+    public var interrupt: @convention(c) (OpaquePointer?) -> Void
     /// Rows changed by the most recent statement: `sqlite3_changes64`.
-    public var changes: @Sendable (OpaquePointer?) -> Int64
+    public var changes: @convention(c) (OpaquePointer?) -> Int64
     /// The rowid of the most recent successful insert: `sqlite3_last_insert_rowid`.
-    public var lastInsertedRowID: @Sendable (OpaquePointer?) -> Int64
+    public var lastInsertedRowID: @convention(c) (OpaquePointer?) -> Int64
     /// Whether the connection currently has no transaction open: `sqlite3_get_autocommit`.
-    public var isAutocommit: @Sendable (OpaquePointer?) -> Int32
+    public var isAutocommit: @convention(c) (OpaquePointer?) -> Int32
     /// Moves a write-ahead log back into the database file: `sqlite3_wal_checkpoint_v2`.
     ///
     /// Takes the schema to checkpoint, the mode, and out-parameters for the frames in the log and
     /// the frames moved out of it.
     public var walCheckpoint:
-      @Sendable (
+      @convention(c) (
         OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
         UnsafeMutablePointer<Int32>?
       ) -> Int32
     /// Creates a connection operation group.
     public init(
       open:
-        @escaping @Sendable (
+        @convention(c) (
           UnsafePointer<CChar>?, UnsafeMutablePointer<OpaquePointer?>?, Int32,
           UnsafePointer<CChar>?
         ) -> Int32,
-      close: @escaping @Sendable (OpaquePointer?) -> Int32,
-      errorMessage: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?,
-      extendedErrorCode: @escaping @Sendable (OpaquePointer?) -> Int32,
-      setExtendedResultCodes: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
-      setBusyTimeout: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
-      interrupt: @escaping @Sendable (OpaquePointer?) -> Void,
-      changes: @escaping @Sendable (OpaquePointer?) -> Int64,
-      lastInsertedRowID: @escaping @Sendable (OpaquePointer?) -> Int64,
-      isAutocommit: @escaping @Sendable (OpaquePointer?) -> Int32,
+      close: @convention(c) (OpaquePointer?) -> Int32,
+      errorMessage: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?,
+      extendedErrorCode: @convention(c) (OpaquePointer?) -> Int32,
+      setExtendedResultCodes: @convention(c) (OpaquePointer?, Int32) -> Int32,
+      setBusyTimeout: @convention(c) (OpaquePointer?, Int32) -> Int32,
+      interrupt: @convention(c) (OpaquePointer?) -> Void,
+      changes: @convention(c) (OpaquePointer?) -> Int64,
+      lastInsertedRowID: @convention(c) (OpaquePointer?) -> Int64,
+      isAutocommit: @convention(c) (OpaquePointer?) -> Int32,
       walCheckpoint:
-        @escaping @Sendable (
+        @convention(c) (
           OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
           UnsafeMutablePointer<Int32>?
         ) -> Int32
@@ -364,7 +369,7 @@ extension SQLiteLibrary {
   public struct StatementPreparation: Sendable {
     /// Compiles one statement and reports where it stopped: `sqlite3_prepare_v3`.
     public var prepare:
-      @Sendable (
+      @convention(c) (
         OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
         UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
       ) -> Int32
@@ -372,7 +377,7 @@ extension SQLiteLibrary {
     /// Creates a statement-preparation operation group.
     public init(
       prepare:
-        @escaping @Sendable (
+        @convention(c) (
           OpaquePointer?, UnsafePointer<CChar>?, Int32, UInt32,
           UnsafeMutablePointer<OpaquePointer?>?, UnsafeMutablePointer<UnsafePointer<CChar>?>?
         ) -> Int32
@@ -384,20 +389,20 @@ extension SQLiteLibrary {
   /// Operations that run and manage a prepared statement.
   public struct StatementExecution: Sendable {
     /// Advances a statement to its next row or completion: `sqlite3_step`.
-    public var step: @Sendable (OpaquePointer?) -> Int32
+    public var step: @convention(c) (OpaquePointer?) -> Int32
     /// Rewinds a statement while retaining its bindings: `sqlite3_reset`.
-    public var reset: @Sendable (OpaquePointer?) -> Int32
+    public var reset: @convention(c) (OpaquePointer?) -> Int32
     /// Destroys a statement: `sqlite3_finalize`.
-    public var finalize: @Sendable (OpaquePointer?) -> Int32
+    public var finalize: @convention(c) (OpaquePointer?) -> Int32
     /// Clears a statement's parameter bindings: `sqlite3_clear_bindings`.
-    public var clearBindings: @Sendable (OpaquePointer?) -> Int32
+    public var clearBindings: @convention(c) (OpaquePointer?) -> Int32
 
     /// Creates a statement-execution operation group.
     public init(
-      step: @escaping @Sendable (OpaquePointer?) -> Int32,
-      reset: @escaping @Sendable (OpaquePointer?) -> Int32,
-      finalize: @escaping @Sendable (OpaquePointer?) -> Int32,
-      clearBindings: @escaping @Sendable (OpaquePointer?) -> Int32
+      step: @convention(c) (OpaquePointer?) -> Int32,
+      reset: @convention(c) (OpaquePointer?) -> Int32,
+      finalize: @convention(c) (OpaquePointer?) -> Int32,
+      clearBindings: @convention(c) (OpaquePointer?) -> Int32
     ) {
       self.step = step
       self.reset = reset
@@ -409,14 +414,14 @@ extension SQLiteLibrary {
   /// Operations that inspect a prepared statement.
   public struct StatementInspection: Sendable {
     /// Whether a statement only reads: `sqlite3_stmt_readonly`.
-    public var isReadOnly: @Sendable (OpaquePointer?) -> Int32
+    public var isReadOnly: @convention(c) (OpaquePointer?) -> Int32
     /// The SQL a statement was prepared from: `sqlite3_sql`.
-    public var sql: @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
+    public var sql: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
 
     /// Creates a statement-inspection operation group.
     public init(
-      isReadOnly: @escaping @Sendable (OpaquePointer?) -> Int32,
-      sql: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<CChar>?
+      isReadOnly: @convention(c) (OpaquePointer?) -> Int32,
+      sql: @convention(c) (OpaquePointer?) -> UnsafePointer<CChar>?
     ) {
       self.isReadOnly = isReadOnly
       self.sql = sql
@@ -426,26 +431,26 @@ extension SQLiteLibrary {
   /// Operations that bind Swift values to statement parameters.
   public struct Bindings: Sendable {
     /// How many parameters a statement has: `sqlite3_bind_parameter_count`.
-    public var parameterCount: @Sendable (OpaquePointer?) -> Int32
+    public var parameterCount: @convention(c) (OpaquePointer?) -> Int32
     /// Binds SQL NULL: `sqlite3_bind_null`.
-    public var null: @Sendable (OpaquePointer?, Int32) -> Int32
+    public var null: @convention(c) (OpaquePointer?, Int32) -> Int32
     /// Binds a 64-bit integer: `sqlite3_bind_int64`.
-    public var int64: @Sendable (OpaquePointer?, Int32, Int64) -> Int32
+    public var int64: @convention(c) (OpaquePointer?, Int32, Int64) -> Int32
     /// Binds a floating-point value: `sqlite3_bind_double`.
-    public var double: @Sendable (OpaquePointer?, Int32, Double) -> Int32
+    public var double: @convention(c) (OpaquePointer?, Int32, Double) -> Int32
     /// Binds a copy of UTF-8 text: `sqlite3_bind_text` with ``transientDestructor``.
-    public var text: @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32
+    public var text: @convention(c) (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32
     /// Binds a copy of bytes: `sqlite3_bind_blob` with ``transientDestructor``.
-    public var blob: @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
+    public var blob: @convention(c) (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
 
     /// Creates a binding operation group.
     public init(
-      parameterCount: @escaping @Sendable (OpaquePointer?) -> Int32,
-      null: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
-      int64: @escaping @Sendable (OpaquePointer?, Int32, Int64) -> Int32,
-      double: @escaping @Sendable (OpaquePointer?, Int32, Double) -> Int32,
-      text: @escaping @Sendable (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32,
-      blob: @escaping @Sendable (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
+      parameterCount: @convention(c) (OpaquePointer?) -> Int32,
+      null: @convention(c) (OpaquePointer?, Int32) -> Int32,
+      int64: @convention(c) (OpaquePointer?, Int32, Int64) -> Int32,
+      double: @convention(c) (OpaquePointer?, Int32, Double) -> Int32,
+      text: @convention(c) (OpaquePointer?, Int32, UnsafePointer<CChar>?, Int32) -> Int32,
+      blob: @convention(c) (OpaquePointer?, Int32, UnsafeRawPointer?, Int32) -> Int32
     ) {
       self.parameterCount = parameterCount
       self.null = null
@@ -459,32 +464,32 @@ extension SQLiteLibrary {
   /// Operations that read values from a result row.
   public struct Columns: Sendable {
     /// How many columns a result row has: `sqlite3_column_count`.
-    public var count: @Sendable (OpaquePointer?) -> Int32
+    public var count: @convention(c) (OpaquePointer?) -> Int32
     /// A column's storage class: `sqlite3_column_type`.
-    public var type: @Sendable (OpaquePointer?, Int32) -> Int32
+    public var type: @convention(c) (OpaquePointer?, Int32) -> Int32
     /// Reads a column as a 64-bit integer: `sqlite3_column_int64`.
-    public var int64: @Sendable (OpaquePointer?, Int32) -> Int64
+    public var int64: @convention(c) (OpaquePointer?, Int32) -> Int64
     /// Reads a column as a floating-point value: `sqlite3_column_double`.
-    public var double: @Sendable (OpaquePointer?, Int32) -> Double
+    public var double: @convention(c) (OpaquePointer?, Int32) -> Double
     /// Reads a column as UTF-8 text: `sqlite3_column_text`.
-    public var text: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?
+    public var text: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?
     /// Reads a column as bytes: `sqlite3_column_blob`.
-    public var blob: @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?
+    public var blob: @convention(c) (OpaquePointer?, Int32) -> UnsafeRawPointer?
     /// The byte count of the text or blob just read: `sqlite3_column_bytes`.
-    public var byteCount: @Sendable (OpaquePointer?, Int32) -> Int32
+    public var byteCount: @convention(c) (OpaquePointer?, Int32) -> Int32
     /// A column's name: `sqlite3_column_name`.
-    public var name: @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
+    public var name: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
 
     /// Creates a column-reading operation group.
     public init(
-      count: @escaping @Sendable (OpaquePointer?) -> Int32,
-      type: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
-      int64: @escaping @Sendable (OpaquePointer?, Int32) -> Int64,
-      double: @escaping @Sendable (OpaquePointer?, Int32) -> Double,
-      text: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?,
-      blob: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeRawPointer?,
-      byteCount: @escaping @Sendable (OpaquePointer?, Int32) -> Int32,
-      name: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
+      count: @convention(c) (OpaquePointer?) -> Int32,
+      type: @convention(c) (OpaquePointer?, Int32) -> Int32,
+      int64: @convention(c) (OpaquePointer?, Int32) -> Int64,
+      double: @convention(c) (OpaquePointer?, Int32) -> Double,
+      text: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<UInt8>?,
+      blob: @convention(c) (OpaquePointer?, Int32) -> UnsafeRawPointer?,
+      byteCount: @convention(c) (OpaquePointer?, Int32) -> Int32,
+      name: @convention(c) (OpaquePointer?, Int32) -> UnsafePointer<CChar>?
     ) {
       self.count = count
       self.type = type
@@ -501,12 +506,12 @@ extension SQLiteLibrary {
   public struct Authorizer: Sendable {
     /// Installs the callback invoked while statements are compiled: `sqlite3_set_authorizer`.
     public var install:
-      @Sendable (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32
+      @convention(c) (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32
 
     /// Creates an authorization operation group.
     public init(
       install:
-        @escaping @Sendable (
+        @convention(c) (
           OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?
         ) -> Int32
     ) {
@@ -521,12 +526,12 @@ extension SQLiteLibrary {
     /// SQLite keeps one busy handler per connection, and `sqlite3_busy_timeout` is itself a busy
     /// handler, so installing either replaces the other.
     public var install:
-      @Sendable (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32
+      @convention(c) (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32
 
     /// Creates a busy-handler operation group.
     public init(
       install:
-        @escaping @Sendable (
+        @convention(c) (
           OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?
         ) -> Int32
     ) {
@@ -557,11 +562,11 @@ extension SQLiteLibrary {
     /// Operations that inspect the context passed to a custom function callback.
     public struct Context: Sendable {
       /// The pointer the function was registered with: `sqlite3_user_data`.
-      public var userData: @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?
+      public var userData: @convention(c) (OpaquePointer?) -> UnsafeMutableRawPointer?
 
       /// Creates a function-context operation group.
       public init(
-        userData: @escaping @Sendable (OpaquePointer?) -> UnsafeMutableRawPointer?
+        userData: @convention(c) (OpaquePointer?) -> UnsafeMutableRawPointer?
       ) {
         self.userData = userData
       }
@@ -570,26 +575,26 @@ extension SQLiteLibrary {
     /// Operations that read an argument passed to a custom function.
     public struct Argument: Sendable {
       /// An argument's storage class: `sqlite3_value_type`.
-      public var type: @Sendable (OpaquePointer?) -> Int32
+      public var type: @convention(c) (OpaquePointer?) -> Int32
       /// Reads an argument as a 64-bit integer: `sqlite3_value_int64`.
-      public var int64: @Sendable (OpaquePointer?) -> Int64
+      public var int64: @convention(c) (OpaquePointer?) -> Int64
       /// Reads an argument as a floating-point value: `sqlite3_value_double`.
-      public var double: @Sendable (OpaquePointer?) -> Double
+      public var double: @convention(c) (OpaquePointer?) -> Double
       /// Reads an argument as UTF-8 text: `sqlite3_value_text`.
-      public var text: @Sendable (OpaquePointer?) -> UnsafePointer<UInt8>?
+      public var text: @convention(c) (OpaquePointer?) -> UnsafePointer<UInt8>?
       /// Reads an argument as bytes: `sqlite3_value_blob`.
-      public var blob: @Sendable (OpaquePointer?) -> UnsafeRawPointer?
+      public var blob: @convention(c) (OpaquePointer?) -> UnsafeRawPointer?
       /// The byte count of the text or blob just read: `sqlite3_value_bytes`.
-      public var byteCount: @Sendable (OpaquePointer?) -> Int32
+      public var byteCount: @convention(c) (OpaquePointer?) -> Int32
 
       /// Creates a function-argument operation group.
       public init(
-        type: @escaping @Sendable (OpaquePointer?) -> Int32,
-        int64: @escaping @Sendable (OpaquePointer?) -> Int64,
-        double: @escaping @Sendable (OpaquePointer?) -> Double,
-        text: @escaping @Sendable (OpaquePointer?) -> UnsafePointer<UInt8>?,
-        blob: @escaping @Sendable (OpaquePointer?) -> UnsafeRawPointer?,
-        byteCount: @escaping @Sendable (OpaquePointer?) -> Int32
+        type: @convention(c) (OpaquePointer?) -> Int32,
+        int64: @convention(c) (OpaquePointer?) -> Int64,
+        double: @convention(c) (OpaquePointer?) -> Double,
+        text: @convention(c) (OpaquePointer?) -> UnsafePointer<UInt8>?,
+        blob: @convention(c) (OpaquePointer?) -> UnsafeRawPointer?,
+        byteCount: @convention(c) (OpaquePointer?) -> Int32
       ) {
         self.type = type
         self.int64 = int64
@@ -603,26 +608,26 @@ extension SQLiteLibrary {
     /// Operations that return a value or error from a custom function.
     public struct Result: Sendable {
       /// Returns SQL NULL: `sqlite3_result_null`.
-      public var null: @Sendable (OpaquePointer?) -> Void
+      public var null: @convention(c) (OpaquePointer?) -> Void
       /// Returns a 64-bit integer: `sqlite3_result_int64`.
-      public var int64: @Sendable (OpaquePointer?, Int64) -> Void
+      public var int64: @convention(c) (OpaquePointer?, Int64) -> Void
       /// Returns a floating-point value: `sqlite3_result_double`.
-      public var double: @Sendable (OpaquePointer?, Double) -> Void
+      public var double: @convention(c) (OpaquePointer?, Double) -> Void
       /// Returns a copy of UTF-8 text: `sqlite3_result_text` with ``transientDestructor``.
-      public var text: @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+      public var text: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
       /// Returns a copy of bytes: `sqlite3_result_blob` with ``transientDestructor``.
-      public var blob: @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void
+      public var blob: @convention(c) (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void
       /// Fails the function with a message: `sqlite3_result_error`.
-      public var error: @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+      public var error: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
 
       /// Creates a function-result operation group.
       public init(
-        null: @escaping @Sendable (OpaquePointer?) -> Void,
-        int64: @escaping @Sendable (OpaquePointer?, Int64) -> Void,
-        double: @escaping @Sendable (OpaquePointer?, Double) -> Void,
-        text: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
-        blob: @escaping @Sendable (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void,
-        error: @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
+        null: @convention(c) (OpaquePointer?) -> Void,
+        int64: @convention(c) (OpaquePointer?, Int64) -> Void,
+        double: @convention(c) (OpaquePointer?, Double) -> Void,
+        text: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void,
+        blob: @convention(c) (OpaquePointer?, UnsafeRawPointer?, Int32) -> Void,
+        error: @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, Int32) -> Void
       ) {
         self.null = null
         self.int64 = int64
@@ -643,7 +648,7 @@ extension SQLiteLibrary {
 
     /// Creates a scalar-function operation group.
     public init(
-      register: @escaping SQLiteFunctionRegistration,
+      register: SQLiteFunctionRegistration,
       callbacks: FunctionCallbacks
     ) {
       self.register = register
@@ -656,14 +661,14 @@ extension SQLiteLibrary {
     /// Registers an aggregate function.
     public var register: SQLiteFunctionRegistration
     /// Finds or allocates an aggregate invocation's state.
-    public var context: @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?
+    public var context: @convention(c) (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?
     /// Operations used by an installed function's callbacks.
     public var callbacks: FunctionCallbacks
 
     /// Creates an aggregate-function operation group.
     public init(
-      register: @escaping SQLiteFunctionRegistration,
-      context: @escaping @Sendable (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?,
+      register: SQLiteFunctionRegistration,
+      context: @convention(c) (OpaquePointer?, Int32) -> UnsafeMutableRawPointer?,
       callbacks: FunctionCallbacks
     ) {
       self.register = register
@@ -676,7 +681,7 @@ extension SQLiteLibrary {
   public struct Collations: Sendable {
     /// Registers a collating sequence: `sqlite3_create_collation_v2`.
     public var create:
-      @Sendable (
+      @convention(c) (
         OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?, SQLiteComparator?,
         SQLiteDestructor?
       ) -> Int32
@@ -684,7 +689,7 @@ extension SQLiteLibrary {
     /// Creates a collation operation group.
     public init(
       create:
-        @escaping @Sendable (
+        @convention(c) (
           OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?, SQLiteComparator?,
           SQLiteDestructor?
         ) -> Int32
@@ -697,18 +702,18 @@ extension SQLiteLibrary {
   public struct Encryption: Sendable {
     /// Unlocks a database: `sqlite3_key_v2`.
     public var key:
-      @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
+      @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
     /// Re-encrypts a database under a new key: `sqlite3_rekey_v2`.
     public var rekey:
-      @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
+      @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) -> Int32
 
     /// Creates an encryption operation group.
     public init(
       key:
-        @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
+        @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
         Int32,
       rekey:
-        @escaping @Sendable (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
+        @convention(c) (OpaquePointer?, UnsafePointer<CChar>?, UnsafeRawPointer?, Int32) ->
         Int32
     ) {
       self.key = key

@@ -73,7 +73,7 @@
       }
     #endif
 
-    @Test
+    @Test(.libraryHooks)
     func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {
       let query = "SELECT title FROM items ORDER BY id"
       let prepared = TestCounter()
@@ -81,7 +81,7 @@
       let preparedStatements = Lock<Set<UInt>>([])
       let base = builtInTestLibrary
       var library = base
-      library.statements.preparation.prepare = {
+      library.statements.preparation.prepare = LibraryHooks.prepare {
         connection,
         sql,
         byteCount,
@@ -105,7 +105,7 @@
         }
         return code
       }
-      library.statements.execution.finalize = { statement in
+      library.statements.execution.finalize = LibraryHooks.finalize { statement in
         if let statement,
           preparedStatements.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
         {

@@ -7,7 +7,7 @@
 
     @testable import SQLiteOrbit
 
-    @Suite
+    @Suite(.libraryHooks)
     struct OrbitDatabaseMigratorTests {
       // MARK: - Order
 
@@ -668,7 +668,7 @@
         let failRestore = Lock(false)
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if failRestore.withLock({ $0 }),
             let sql = base.statements.inspection.sql(statement),
             String(cString: sql) == "PRAGMA foreign_keys = 1"
@@ -739,7 +739,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if let sql = base.statements.inspection.sql(statement),
             String(cString: sql).contains("RECURSIVE counter")
           {
@@ -795,7 +795,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if isBusy.withLock({ $0 }), let sql = base.statements.inspection.sql(statement),
             String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
           {
@@ -830,7 +830,7 @@
           let base = builtInTestLibrary
           var configuration = SQLiteConfiguration.default
           configuration.library = base
-          configuration.library.statements.execution.step = { statement in
+          configuration.library.statements.execution.step = LibraryHooks.step { statement in
             if let sql = base.statements.inspection.sql(statement),
               String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
             {
@@ -1388,7 +1388,7 @@
       private func libraryIgnoringDrops() -> SQLiteLibrary {
         let base = builtInTestLibrary
         var library = base
-        library.statements.preparation.prepare = {
+        library.statements.preparation.prepare = LibraryHooks.prepare {
           connection,
           sql,
           byteCount,

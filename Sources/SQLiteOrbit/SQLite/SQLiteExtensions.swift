@@ -38,15 +38,15 @@ extension SQLiteLibrary {
   /// Native bindings for automatic extension registration in one SQLite runtime.
   public struct AutoExtensions: Sendable {
     /// Registers an initializer: `sqlite3_auto_extension`.
-    public var register: @Sendable (@convention(c) () -> Void) -> Int32
+    public var register: @convention(c) (@convention(c) () -> Void) -> Int32
 
     /// Cancels an initializer for future connections: `sqlite3_cancel_auto_extension`.
-    public var cancel: @Sendable (@convention(c) () -> Void) -> Int32
+    public var cancel: @convention(c) (@convention(c) () -> Void) -> Int32
 
     /// Creates bindings to the selected runtime's registration entry points.
     public init(
-      register: @escaping @Sendable (@convention(c) () -> Void) -> Int32,
-      cancel: @escaping @Sendable (@convention(c) () -> Void) -> Int32
+      register: @convention(c) (@convention(c) () -> Void) -> Int32,
+      cancel: @convention(c) (@convention(c) () -> Void) -> Int32
     ) {
       self.register = register
       self.cancel = cancel
