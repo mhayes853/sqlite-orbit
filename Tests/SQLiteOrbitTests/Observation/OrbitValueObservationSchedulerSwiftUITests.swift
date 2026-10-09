@@ -23,6 +23,18 @@
 
       #expect(transactionIsImmediate)
       #expect(animationIsImmediate)
+      if #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) {
+        #expect(
+          Set([
+            animationScheduler,
+            OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+          ])
+          .count == 1
+        )
+      }
+      let deferred = animationScheduler.deferringInitialValue()
+      let deferredIsImmediate = deferred.immediateInitialValue(from: MainActor.shared)
+      #expect(!deferredIsImmediate)
     }
   }
 #endif

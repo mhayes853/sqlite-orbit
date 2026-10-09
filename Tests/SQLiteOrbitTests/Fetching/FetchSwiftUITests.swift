@@ -24,12 +24,16 @@
       @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
       func animationSchedulerIdentityIncludesTheAnimation() {
         #expect(
-          OrbitFetchAnimationScheduler(animation: .default)
-            == OrbitFetchAnimationScheduler(animation: .default)
+          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
+            == OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
         )
         #expect(
-          OrbitFetchAnimationScheduler(animation: .default)
-            != OrbitFetchAnimationScheduler(animation: .linear)
+          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+            .deferringInitialValue()
+            != OrbitMainActorValueObservationScheduler.mainActor.animation(.linear)
+            .deferringInitialValue()
         )
       }
 
@@ -164,6 +168,41 @@
           try await sut.inspection.inspect(after: settle) { view in
             let texts = try view.texts()
             #expect(texts == ["Milk", "Eggs"])
+          }
+        }
+      }
+
+      @Test
+      func loadingANewQueryKeepsTheEnvironmentDatabaseAndObservationAcrossRenders() async throws {
+        let previous = OrbitDefaultDatabase.currentIfConfigured
+        OrbitDefaultDatabase.set(nil)
+        defer { OrbitDefaultDatabase.set(previous) }
+        let database = try await remindersDatabase(titles: "Milk", "Eggs")
+        let sut = EnvironmentRemindersList()
+
+        try await ViewHosting.host(sut.orbitDatabase(database)) {
+          var property: FetchAll<Reminder>?
+          try await sut.inspection.inspect(after: settle) { view in
+            let texts = try view.texts()
+            #expect(texts == ["Milk", "Eggs"])
+            property = try view.actualView().$reminders
+          }
+          let fetch = try #require(property)
+          let subscription = try await fetch.load(
+            Reminder.where { $0.title.eq("Eggs") }.order(by: \.id)
+          )
+          defer { subscription.cancel() }
+
+          try await sut.inspection.inspect(after: settle) { view in
+            let texts = try view.texts()
+            #expect(texts == ["Eggs"])
+          }
+          // The render must keep the explicitly loaded query, even though the declaration still
+          // describes every reminder. Later commits must reach that query in the environment database.
+          try await insertReminders("Milk", "Eggs", into: database)
+          try await sut.inspection.inspect(after: settle) { view in
+            let texts = try view.texts()
+            #expect(texts == ["Eggs", "Eggs"])
           }
         }
       }

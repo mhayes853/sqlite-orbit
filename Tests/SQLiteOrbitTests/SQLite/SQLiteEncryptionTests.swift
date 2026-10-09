@@ -118,7 +118,7 @@
     )
     configuration.key = SQLiteKey.passphrase("open sesame")
 
-    try await withPooledDatabase(configuration: configuration, maximumReaderCount: 3) { database in
+    try await withPooledDatabase(configuration: configuration, readerCount: 3) { database in
       _ = try await database.read { _ in }
     }
 
@@ -241,7 +241,7 @@
       // drives Swift callbacks exactly as the linked one does.
       try await withTestDatabaseFile("cipher") { file in
         var configuration = SQLiteConfiguration.sqlCipher(key: .passphrase("open sesame"))
-        configuration.registerFunction("repeated", argumentCount: 2, isDeterministic: true) {
+        configuration.registerFunction("repeated", argumentCount: 2, flags: [.deterministic]) {
           arguments in
           guard let text = arguments[0].textValue, let count = arguments[1].integerValue else {
             return nil

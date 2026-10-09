@@ -37,43 +37,31 @@
   @dynamicMemberLookup
   @propertyWrapper
   public struct FetchOne<Value: Sendable>: Sendable {
-    @OrbitFetchState private var storage: OrbitFetchStorage<Value>
-
-    private init(storage: OrbitFetchStorage<Value>) {
-      _storage = OrbitFetchState(wrappedValue: storage)
-    }
-
+    private var fetch: Fetch<Value>
     private init(
       wrappedValue: Value,
       request: some OrbitFetchKeyRequest<Value>,
       database: (any OrbitObservableDatabase)?,
       scheduler: (any OrbitValueObservationScheduler & Hashable)?
     ) {
-      self.init(
-        storage: .make(
-          value: wrappedValue,
-          request: request,
-          database: database,
-          scheduler: scheduler
-        )
-      )
+      fetch = Fetch(wrappedValue: wrappedValue, request, database: database, scheduler: scheduler)
     }
 
     /// The value the query produced.
     public var wrappedValue: Value {
-      storage.value
+      fetch.wrappedValue
     }
 
     /// Returns this property wrapper, which is how its ``isLoading``, ``loadError``, ``load()``,
     /// and member readers are reached.
     public var projectedValue: Self {
       get { self }
-      nonmutating set { storage.adopt(from: newValue.storage) }
+      nonmutating set { fetch.projectedValue = newValue.fetch }
     }
 
     /// A read-only view onto the value.
     public var reader: OrbitFetchReader<Value> {
-      OrbitFetchReader(storage)
+      fetch.reader
     }
 
     /// Returns a reader of one member of the value.
@@ -88,14 +76,14 @@
 
     /// Whether a read is in flight.
     public var isLoading: Bool {
-      storage.isLoading
+      fetch.isLoading
     }
 
     /// The error the most recent read failed with, if it failed.
     ///
     /// A failed read leaves the value it last produced in place.
     public var loadError: (any Error)? {
-      storage.loadError
+      fetch.loadError
     }
 
     /// The value as it stands, and every value the observation produces afterwards.
@@ -109,7 +97,7 @@
     ///
     /// - Throws: Whatever the read throws, which also becomes ``loadError``.
     public func load() async throws {
-      try await storage.load()
+      try await fetch.load()
     }
 
     // MARK: - Values without a query
@@ -119,7 +107,7 @@
     /// - Parameter wrappedValue: The value the property holds.
     @_disfavoredOverload
     public init(wrappedValue: Value) {
-      self.init(storage: OrbitFetchStorage(value: wrappedValue))
+      fetch = Fetch(wrappedValue: wrappedValue)
     }
 
     /// Creates a property holding a value that no query keeps current.
@@ -129,7 +117,7 @@
     ///
     /// - Parameter wrappedValue: The value the property holds.
     public init(wrappedValue: Value) where Value: _Selection, Value.QueryOutput == Value {
-      self.init(storage: OrbitFetchStorage(value: wrappedValue))
+      fetch = Fetch(wrappedValue: wrappedValue)
     }
 
     @available(
@@ -145,7 +133,7 @@
       database: (any OrbitObservableDatabase)? = nil,
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) where Value: _Selection, Value.QueryOutput == Value {
-      self.init(storage: OrbitFetchStorage(value: wrappedValue))
+      fetch = Fetch(wrappedValue: wrappedValue)
     }
 
     // MARK: - Tables
@@ -166,7 +154,7 @@
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOneStatementRequest<Value>(statement: statement.limit(1)),
+        request: (statement.limit(1)).requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -217,10 +205,10 @@
     ///
     /// They are written twice only so that an optional primary keyed table is not ambiguous between
     /// them and the non-optional overload; the read itself is the same one.
-    private static func firstRowRequest() -> OrbitFetchOptionalProtocolStatementRequest<Value>
+    private static func firstRowRequest() -> some OrbitFetchKeyRequest<Value>
     where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
-      return OrbitFetchOptionalProtocolStatementRequest<Value>(statement: statement.limit(1))
+      return (statement.limit(1)).firstRowRequest()
     }
 
     /// Creates a property observing the row the value it is declared with identifies.
@@ -245,9 +233,8 @@
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOneStatementRequest<Value>(
-          statement: statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey))
-        ),
+        request: (statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey)))
+          .requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -298,7 +285,7 @@
     ) where Value == V.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOneStatementRequest<V>(statement: statement),
+        request: statement.requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -321,7 +308,7 @@
     ) where Value == V.QueryOutput? {
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOptionalStatementRequest<V>(statement: statement),
+        request: statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -343,7 +330,7 @@
     ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOneStatementRequest<Value>(statement: statement),
+        request: statement.requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -373,9 +360,7 @@
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOptionalStatementRequest<S.From>(
-          statement: statement.asSelect().limit(1)
-        ),
+        request: (statement.asSelect().limit(1)).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -402,7 +387,7 @@
     {
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOptionalProtocolStatementRequest<S.QueryValue>(statement: statement),
+        request: statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -424,7 +409,7 @@
     ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchOptionalProtocolStatementRequest<Value>(statement: statement),
+        request: statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -472,8 +457,8 @@
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) async throws -> OrbitFetchSubscription
     where Value == V.QueryOutput {
-      return try await storage.load(
-        request: OrbitFetchOneStatementRequest<V>(statement: statement),
+      return try await fetch.load(
+        statement.requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -496,8 +481,8 @@
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) async throws -> OrbitFetchSubscription
     where Value == V.QueryOutput? {
-      return try await storage.load(
-        request: OrbitFetchOptionalStatementRequest<V>(statement: statement),
+      return try await fetch.load(
+        statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -526,10 +511,8 @@
       S.Joins == ()
     {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
-      return try await storage.load(
-        request: OrbitFetchOptionalStatementRequest<S.From>(
-          statement: statement.asSelect().limit(1)
-        ),
+      return try await fetch.load(
+        (statement.asSelect().limit(1)).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -555,8 +538,8 @@
       S.QueryValue: QueryRepresentable & _OptionalProtocol,
       Value == S.QueryValue.QueryOutput
     {
-      return try await storage.load(
-        request: OrbitFetchOptionalProtocolStatementRequest<S.QueryValue>(statement: statement),
+      return try await fetch.load(
+        statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -578,8 +561,8 @@
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) async throws -> OrbitFetchSubscription
     where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
-      return try await storage.load(
-        request: OrbitFetchOptionalProtocolStatementRequest<Value>(statement: statement),
+      return try await fetch.load(
+        statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -604,7 +587,7 @@
     extension FetchOne: DynamicProperty {
       /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        _storage.reconcile()
+        fetch.update()
       }
 
       /// Creates a property observing the first row of a table, delivering changes with an
@@ -618,7 +601,8 @@
         self.init(
           wrappedValue: wrappedValue,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -633,7 +617,8 @@
         self.init(
           wrappedValue: wrappedValue,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -648,7 +633,8 @@
         self.init(
           wrappedValue: wrappedValue,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -663,7 +649,8 @@
         self.init(
           wrappedValue: wrappedValue,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -679,7 +666,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -695,7 +683,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -711,7 +700,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -727,7 +717,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -749,7 +740,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -771,7 +763,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -788,7 +781,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -804,7 +798,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -820,7 +815,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -836,7 +832,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -857,7 +854,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -878,7 +876,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -895,7 +894,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
     }

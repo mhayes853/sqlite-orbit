@@ -57,55 +57,6 @@
       #expect(error?.code == .busy)
     }
 
-    @Test
-    func preparationUsesTheCurrentLibraryAndPrecedesOpening() throws {
-      let opens = TestCounter()
-      let preparations = TestCounter()
-      let base = builtInTestLibrary
-      var configuration = SQLiteConfiguration(library: base)
-      configuration.connectionSetups = [
-        SQLiteConnectionSetup(
-          prepare: { library in
-            #expect(library.name == "changed after setup")
-            #expect(opens.value == preparations.value)
-            preparations.increment()
-          },
-          install: { _ in SQLiteResultCode.ok.rawValue }
-        )
-      ]
-      configuration.library.name = "changed after setup"
-      configuration.library.connections.open = { path, connection, flags, vfs in
-        #expect(preparations.value == opens.value + 1)
-        opens.increment()
-        return base.connections.open(path, connection, flags, vfs)
-      }
-
-      for _ in 0..<2 {
-        _ = try SQLiteHandle.open(
-          path: ":memory:",
-          flags: [.readWrite, .create, .memory, .noMutex],
-          configuration: configuration
-        )
-      }
-      #expect(opens.value == 2)
-      #expect(preparations.value == 2)
-
-      configuration.connectionSetups.insert(
-        SQLiteConnectionSetup(
-          prepare: { _ in throw TestError() },
-          install: { _ in SQLiteResultCode.ok.rawValue }
-        ),
-        at: 0
-      )
-      #expect(throws: TestError()) {
-        _ = try SQLiteHandle.open(
-          path: ":memory:",
-          flags: [.readWrite, .create, .memory, .noMutex],
-          configuration: configuration
-        )
-      }
-      #expect(opens.value == 2)
-    }
   }
 #endif
 
@@ -131,9 +82,7 @@
     try library.registerAutoExtension(initializer)
     defer { _ = try? library.cancelAutoExtension(initializer) }
 
-    var configuration = SQLiteConfiguration(library: library)
-    // Exercise registration itself independently of the Vec integration.
-    configuration.connectionSetups = []
+    let configuration = SQLiteConfiguration(library: library)
     let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
     let value = try database.readBlocking {
       try $0.fetchOne("SELECT orbit_extension_test_marker()", as: Int64.self)

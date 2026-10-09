@@ -22,6 +22,8 @@
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
   /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
+  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment can supply
+  /// the observed row, but saves throw a ``SQLiteError`` with code ``SQLiteResultCode/readOnly``.
   @propertyWrapper
   public struct SingleRow<Value>: Sendable
   where
@@ -44,7 +46,7 @@
     /// Creates a property observing this table's singleton row.
     public init(
       _ type: Value.Type,
-      database: (any OrbitObservableDatabase)? = nil,
+      database: (any OrbitObservableDatabase & OrbitDatabaseWriter)? = nil,
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) {
       let storage = OrbitRowStorage(
@@ -117,8 +119,13 @@
       }
     }
 
+    /// Persists the singleton before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``save(_:)``. A failure is both thrown and
+    /// recorded in ``saveError``. This is intended for synchronous main-actor callbacks, such as
+    /// a binding setter; use ``save(_:)`` from asynchronous code.
     @MainActor
-    func saveBlocking(_ value: Value) throws {
+    public func saveBlocking(_ value: Value) throws {
       try storage.writeBlocking { database in
         try database.writeBlocking { transaction in
           try value.save(in: transaction)
@@ -126,8 +133,14 @@
       }
     }
 
+    /// Mutates the latest singleton and commits before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``update(_:)``, including the default value when
+    /// no row exists. A failure is both thrown and recorded in ``saveError``. This is intended for
+    /// synchronous main-actor callbacks; use ``update(_:)`` from asynchronous code.
     @MainActor
-    func updateBlocking<Result: Sendable>(
+    @discardableResult
+    public func updateBlocking<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) throws -> Result {
       try storage.writeBlocking { database in

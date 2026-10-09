@@ -6,7 +6,7 @@ typealias SQLiteAggregateAccumulatorFactory = @Sendable () -> any SQLiteAggregat
 func orbitInstallFunction(
   _ name: String,
   argumentCount: Int?,
-  isDeterministic: Bool,
+  flags: SQLiteFunctionFlags,
   body: @escaping SQLiteScalarFunctionBody,
   on connection: OpaquePointer?,
   library: SQLiteLibrary
@@ -17,7 +17,7 @@ func orbitInstallFunction(
         connection,
         name,
         Int32(argumentCount ?? -1),
-        orbitFunctionFlags(isDeterministic: isDeterministic),
+        (flags.rawValue & ~0x0f) | SQLiteFunctionFlags.utf8.rawValue,
         Box.retain(body),
         { context, argumentCount, arguments in
           let library = SQLiteCurrentLibrary.current
@@ -45,7 +45,7 @@ func orbitInstallFunction(
 func orbitInstallAggregateFunction(
   _ name: String,
   argumentCount: Int?,
-  isDeterministic: Bool,
+  flags: SQLiteFunctionFlags,
   makeAccumulator: @escaping SQLiteAggregateAccumulatorFactory,
   on connection: OpaquePointer?,
   library: SQLiteLibrary
@@ -56,7 +56,7 @@ func orbitInstallAggregateFunction(
         connection,
         name,
         Int32(argumentCount ?? -1),
-        orbitFunctionFlags(isDeterministic: isDeterministic),
+        (flags.rawValue & ~0x0f) | SQLiteFunctionFlags.utf8.rawValue,
         Box.retain(makeAccumulator),
         nil,
         { context, argumentCount, arguments in
@@ -88,14 +88,6 @@ func orbitInstallAggregateFunction(
         { Box<SQLiteAggregateAccumulatorFactory>.release($0) }
       )
   }
-}
-
-private func orbitFunctionFlags(isDeterministic: Bool) -> Int32 {
-  var flags = SQLiteFunctionFlags.utf8
-  if isDeterministic {
-    flags.insert(.deterministic)
-  }
-  return flags.rawValue
 }
 
 private func orbitResultError(

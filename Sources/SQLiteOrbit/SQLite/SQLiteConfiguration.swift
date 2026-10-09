@@ -9,13 +9,12 @@
 ///
 /// ```swift
 /// var configuration = SQLiteConfiguration.default
-/// configuration.readerCount = 8
-/// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
-/// configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+/// configuration.setups.append(.sql("PRAGMA synchronous = NORMAL"))
+/// configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
 ///   arguments in
 ///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
 /// }
-/// let driver = try SQLitePool(path: .file(url), configuration: configuration)
+/// let driver = try SQLitePool(path: .file(url), configuration: configuration, readerCount: 8)
 /// ```
 public struct SQLiteConfiguration: Sendable {
   /// The SQLite build the driver runs against.
@@ -28,19 +27,12 @@ public struct SQLiteConfiguration: Sendable {
   /// open with ``SQLiteEncryptionUnavailableError``.
   public var key: SQLiteKey?
 
-  /// The number of reader connections a pool opens, and so how many reads can run at once.
-  /// Must be greater than zero when opening a ``SQLitePool``.
-  ///
-  /// Each connection runs its work on a thread of its own, so this bounds threads rather than any
-  /// share of the cooperative pool.
-  public var readerCount: Int
-
   /// How long SQLite waits for a lock another connection or process holds before reporting
   /// `SQLITE_BUSY`.
   ///
   /// A database shared between processes needs this: without it an overlapping write fails
   /// outright rather than queueing. An access may change it for its own duration through
-  /// ``SQLiteWriteConnection/busyTimeout`` or ``SQLiteReadConnection/busyTimeout``.
+  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` or ``SQLiteReadConnection/setBusyTimeout(_:)``.
   ///
   /// A ``busyHandler`` takes precedence over this. SQLite implements the timeout as a busy handler
   /// of its own and keeps only one per connection, so a configuration that sets both waits by the
@@ -74,7 +66,7 @@ public struct SQLiteConfiguration: Sendable {
   /// Since SQLite keeps a single busy handler per connection and implements `busyTimeout` as one,
   /// setting this takes precedence: a connection opened with both installs the handler last, so
   /// the timeout never applies. An access that changes
-  /// ``SQLiteWriteConnection/busyTimeout`` replaces the handler for its own duration, and the
+  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` replaces the handler for its own duration, and the
   /// handler is reinstalled when the access ends along with the configured timeout.
   ///
   /// A ``SQLitePool`` asks it too, in place of ``busyTimeout``, while another process that is
@@ -85,10 +77,23 @@ public struct SQLiteConfiguration: Sendable {
   /// ``SQLiteFeatureUnavailableError``.
   public var busyHandler: (@Sendable (_ attempt: Int) -> Bool)?
 
+  /// The authorization policy installed on every connection this configuration opens.
+  ///
+  /// Scoped policies add restrictions; an allowance never overrides another policy's denial.
+  /// The handler runs synchronously on each connection's executor and must not access that
+  /// connection. Captured policy decisions must remain stable: SQLite authorizes preparation,
+  /// not every execution of a cached statement. Replace a policy through `setAuthorization(_:)`
+  /// to invalidate prepared statements. A library without authorizer support fails to open.
+  ///
+  /// Applied after standard connection settings and before ``setups``.
+  /// Ignoring required transaction control or driver settings is treated as denial. Library recovery
+  /// (rollback and restoring temporary settings) bypasses application policies.
+  public var authorization: SQLiteAuthorizationHandler?
+
   /// Whether foreign key enforcement is turned on.
   ///
   /// An access may change it for its own duration through
-  /// ``SQLiteWriteConnection/isForeignKeysEnabled``.
+  /// ``SQLiteWriteConnection/setForeignKeysEnabled(_:)``.
   public var isForeignKeysEnabled: Bool
 
   /// Whether SQLite trusts schema-defined functions and virtual tables.
@@ -97,143 +102,51 @@ public struct SQLiteConfiguration: Sendable {
   /// How many prepared statements a connection keeps for reuse.
   public var maximumCachedStatements: Int
 
-  /// SQL run on every connection once it has been configured.
-  public var setupSQL: [String]
-
-  /// Native callbacks installed on every connection.
-  public var connectionSetups: [SQLiteConnectionSetup]
+  /// Setups run in order on every connection after its standard settings and authorization policy.
+  /// A thrown error stops setup and closes the connection.
+  public var setups: [SQLiteSetup]
 
   /// Creates a configuration for connections opened against `library`.
   ///
   /// - Parameters:
   ///   - library: The SQLite build the driver runs against.
-  ///   - readerCount: How many reader connections a pool opens.
   ///   - busyTimeout: How long SQLite waits for a lock before reporting `SQLITE_BUSY`.
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
   ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
-  ///   - setupSQL: SQL run on every connection once it has been configured.
-  ///   - connectionSetups: Native callbacks installed on every connection.
+  ///   - setups: SQL and callbacks run in order on every configured connection.
   ///   - key: The key an encrypted database is unlocked with.
   ///   - busyHandler: Decides on each attempt whether to keep waiting for a lock, in place of
   ///     `busyTimeout`.
+  ///   - authorization: The policy installed on each connection, or `nil` for no application policy.
   public init(
     library: SQLiteLibrary,
-    readerCount: Int = 5,
     busyTimeout: SQLiteBusyTimeout = .limit(.seconds(5)),
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
-    setupSQL: [String] = [],
-    connectionSetups: [SQLiteConnectionSetup] = [],
+    setups: [SQLiteSetup] = [],
     key: SQLiteKey? = nil,
-    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil
+    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil,
+    authorization: SQLiteAuthorizationHandler? = nil
   ) {
     self.library = library
     self.key = key
-    self.readerCount = readerCount
     self.busyTimeout = busyTimeout
     self.busyHandler = busyHandler
+    self.authorization = authorization
     self.isForeignKeysEnabled = isForeignKeysEnabled
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
-    self.setupSQL = setupSQL
-    self.connectionSetups = connectionSetups
-    #if Vectors
-      registerSQLiteVec()
-    #endif
-  }
-}
-
-/// A native callback installed on every connection a configuration opens.
-///
-/// This is the escape hatch for registering what the package does not model — an update hook or a
-/// virtual table module. The closure receives primitive ``SQLiteConnectionAccess`` once the
-/// connection has been configured. It exposes the raw connection and its library, and can execute
-/// ``SQL`` with bindings.
-///
-/// A setup runs on the connection's own queue, before any transaction can reach it.
-///
-/// - Important: SQLiteOrbit owns SQLite's single authorizer callback. A setup must not replace it.
-///
-/// ```swift
-/// var configuration = SQLiteConfiguration.default
-/// configuration.connectionSetups.append(
-///   SQLiteConnectionSetup { connection in
-///     connection.sqlite.connections.setExtendedResultCodes(connection.sqliteConnection, 1)
-///   }
-/// )
-/// ```
-public struct SQLiteConnectionSetup: Sendable {
-  private let prepare: (@Sendable (SQLiteLibrary) throws -> Void)?
-  private let install: @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
-
-  /// Creates a setup from a closure run on every connection.
-  ///
-  /// - Parameters:
-  ///   - prepare: Runs before opening each connection, using its selected library. Use this for
-  ///     runtime-wide initialization such as automatic extension registration. A thrown error
-  ///     prevents the connection from being opened.
-  ///   - install: Receives primitive access to the connection and returns a SQLite result code.
-  ///     Anything other than `SQLITE_OK` fails the open.
-  public init(
-    prepare: (@Sendable (SQLiteLibrary) throws -> Void)? = nil,
-    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
-  ) {
-    self.prepare = prepare
-    self.install = install
-  }
-
-  /// Prepares `library` before opening a connection.
-  ///
-  /// Custom drivers should call this before their native open, then install the setup on the
-  /// configured connection with ``callAsFunction(_:)``.
-  /// - Throws: Whatever the preparation closure throws. A failure must prevent opening the
-  ///   connection.
-  public func prepare(using library: SQLiteLibrary) throws {
-    try prepare?(library)
-  }
-
-  /// Installs the setup on `connection`.
-  /// - Throws: Whatever the setup threw, or a ``SQLiteError`` when it reported a result code other
-  ///   than `SQLITE_OK`. Either fails the open that ran it.
-  public func callAsFunction(_ connection: borrowing SQLiteConnectionAccess) throws {
-    let code = try install(connection)
-    guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(
-        by: connection.sqlite,
-        on: connection.sqliteConnection,
-        code: code,
-        sql: nil
-      )
-    }
+    self.setups = setups
   }
 }
 
 extension SQLiteConfiguration {
-  /// Adds a setup that installs something on every connection, on a build that has the entry
-  /// points to install it with.
-  ///
-  /// - Parameters:
-  ///   - feature: The operation the build has to provide, named by the error it is refused with.
-  ///   - group: The entry points it installs with, which a build without them leaves `nil`.
-  ///   - install: Installs on the connection and returns the build's result code.
-  mutating func register<Group>(
-    _ feature: SQLiteLibraryFeature,
-    providedBy group: KeyPath<SQLiteLibrary, Group?> & Sendable,
-    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) -> Int32
+  mutating func register(
+    _ install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Void
   ) {
-    connectionSetups.append(
-      SQLiteConnectionSetup { connection in
-        guard connection.sqlite[keyPath: group] != nil else {
-          throw SQLiteFeatureUnavailableError(
-            libraryName: connection.sqlite.name,
-            feature: feature
-          )
-        }
-        return install(connection)
-      }
-    )
+    setups.append(SQLiteSetup(install))
   }
 }
 
@@ -305,13 +218,7 @@ extension SQLiteConfiguration {
     public mutating func register(
       collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
     ) {
-      registerCollation(collation.name) { lhs, rhs in
-        switch collation.compare(lhs, rhs) {
-        case .ascending: .ascending
-        case .same: .same
-        case .descending: .descending
-        }
-      }
+      register { try $0.register(collation: collation) }
     }
 
     /// Registers a scalar function on every connection opened with this configuration.
@@ -328,14 +235,7 @@ extension SQLiteConfiguration {
     ///
     /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some ScalarDatabaseFunction & Sendable) {
-      registerFunction(
-        function.name,
-        argumentCount: function.argumentCount,
-        isDeterministic: function.isDeterministic
-      ) { arguments in
-        var decoder = SQLiteFunctionDecoder(arguments)
-        return try OrbitDatabaseValue(lowering: function.invoke(&decoder))
-      }
+      register { try $0.register(function: function) }
     }
 
     /// Registers an aggregate function on every connection opened with this configuration.
@@ -347,13 +247,44 @@ extension SQLiteConfiguration {
     ///
     /// - Parameter function: The function to install. Its name is what SQL calls it by.
     public mutating func register(function: some AggregateDatabaseFunction & Sendable) {
-      registerAggregateFunction(
+      register { try $0.register(function: function) }
+    }
+  }
+
+  extension SQLiteConnectionAccess {
+    /// Installs a Structured Queries collation on this connection.
+    public borrowing func register(
+      collation: some StructuredQueriesSQLiteCore.DatabaseCollation & Sendable
+    ) throws {
+      try registerCollation(collation.name) { lhs, rhs in
+        switch collation.compare(lhs, rhs) {
+        case .ascending: .ascending
+        case .same: .same
+        case .descending: .descending
+        }
+      }
+    }
+
+    /// Installs a Structured Queries scalar function on this connection.
+    public borrowing func register(function: some ScalarDatabaseFunction & Sendable) throws {
+      try registerFunction(
         function.name,
         argumentCount: function.argumentCount,
-        isDeterministic: function.isDeterministic
-      ) {
-        StructuredQueriesAggregateAccumulator(function: function)
+        flags: function.isDeterministic ? [.deterministic] : []
+      ) { arguments in
+        var decoder = SQLiteFunctionDecoder(arguments)
+        return try OrbitDatabaseValue(lowering: function.invoke(&decoder))
       }
+    }
+
+    /// Installs a Structured Queries aggregate function on this connection.
+    public borrowing func register(function: some AggregateDatabaseFunction & Sendable) throws {
+      try registerAggregateFunction(
+        function.name,
+        argumentCount: function.argumentCount,
+        flags: function.isDeterministic ? [.deterministic] : [],
+        StructuredQueriesAggregateAccumulator(function: function)
+      )
     }
   }
 

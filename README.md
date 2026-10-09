@@ -60,6 +60,22 @@ value converts conforms with no body, as in `enum Priority: Int, OrbitDatabaseVa
 a statement that are chosen at runtime but cannot be bound. `+`, `append`, and `joined(separator:)`
 build a statement from pieces. There is deliberately no initializer from a `String` value.
 
+Execution adapters can inspect validated construction parts and reconstruct SQL through public APIs:
+
+```swift
+let sql: SQL = "SELECT title FROM reminders WHERE id = \(id)"
+let parts = try sql.validatedParts()
+let reconstructed = SQL(parts: parts)
+let text = reconstructed.text
+let bindings = reconstructed.bindings
+```
+
+`.text` contains verbatim SQL, `.binding` contributes an anonymous `?` and its value, and
+`.statement(text:bindings:)` preserves prebound raw SQL. An adapter concatenates the text and binds
+the collected values by index. Raw numbered and named placeholders remain intact and are not
+rebased when parts are joined. Failed value conversions throw from `validatedParts()`; syntax and
+parameter indices are still checked by the database.
+
 Rows are read by position or by column name, as `OrbitDatabaseValue`s, one of SQLite's five storage
 classes:
 
@@ -291,6 +307,10 @@ Two ordinary SQLite drivers provide process-local access, and the multiprocess-c
 Each connection runs on a serial executor of its own, a dispatch queue on Apple platforms and
 Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
+Connection settings belong to `SQLiteConfiguration`; pool sizes are initializer parameters.
+`SQLitePool(path: configuration: readerCount:)` defaults to five readers and always uses one writer.
+`TursoPool` accepts both `readerCount` and `writerCount`, defaulting to five readers and four writers.
+
 ### Suspending a shared database
 
 An iOS app that is suspended while its SQLite connection holds a write lock on a database shared
@@ -359,22 +379,94 @@ must commit together:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  connection.isForeignKeysEnabled = false
+  try connection.setForeignKeysEnabled(false)
   try connection.transaction { transaction in
     try transaction.execute(Reminder.delete())
   }
 }
 ```
 
-Setting `isForeignKeysEnabled` takes effect before the connection's next statement or
-`transaction`, which is also where a failure to apply it is thrown. It and the `busyTimeout` are put
-back to their configured values when the access ends, even when it throws. Any other pragma stays
-changed on the connection, so restore it before returning. Outside `transaction`, statements that
+`setForeignKeysEnabled(_:)` and `setBusyTimeout(_:)` apply changes immediately and throw if they
+fail. Their read-only properties report the successfully applied values. Changing foreign keys
+during a transaction throws. Both settings are put back to their configured values when the access
+ends, even when it throws. Any other pragma stays changed on the connection, so restore it before
+returning. Outside `transaction`, statements that
 begin or end a transaction or a savepoint are refused, so the connection always knows what has
 committed. Observers see each statement as a commit of its own, and an `OrbitIPCDatabase` announces
 what committed once the access ends, even when it throws.
 
 ## Using your own SQLite build
+
+For synchronous access or a custom driver, `SQLiteConnection` owns a native connection and lends
+the same read and write views the built-in drivers use:
+
+```swift
+var owner = try SQLiteConnection(path: .memory, configuration: .default)
+try owner.withWriteConnection { connection in
+  try connection.transaction(mode: .immediate) { transaction in
+    try transaction.executeScript("CREATE TABLE reminders (title TEXT NOT NULL)")
+  }
+}
+```
+
+The owner is noncopyable and does not conform to `Sendable`. Lending is synchronous and exclusive;
+a driver supplies serialization and chooses when to start a transaction. Read lending enforces
+query-only access, and both lenders restore scoped settings and clean up before returning.
+Releasing the owner closes the connection.
+
+Observation uses one `OrbitDatabaseTransactionObserver` protocol for scoped access and database
+subscriptions. Pass `observer:` to `transaction` to receive its complete write lifecycle:
+
+```swift
+let recorder = OrbitDatabaseRegionRecorder()
+try owner.withWriteConnection { connection in
+  try connection.transaction(observer: recorder) { transaction in
+    try transaction.execute("INSERT INTO reminders (title) VALUES (\("Get milk"))")
+  }
+}
+let committed = recorder.committedRegion
+```
+
+`withObservation(_:perform:)` observes an arbitrary portion of a borrowed connection or transaction.
+Registrations compose with outer observers and end when their closure returns or throws. A scope
+inside a transaction body ends before that transaction commits; use `transaction(observer:)` to
+include completion. Commit regions describe the whole committed transaction, potentially including
+changes made before registration.
+
+`OrbitDatabaseRegionRecorder` accumulates conservative `readRegion`, `changedRegion`, and
+`committedRegion` values. Provisional changes remain in `changedRegion` after rollback; committed
+regions come from commit events. Keep the recorder outside the operation to inspect partial commits
+after an error. `hasCommitted` also distinguishes an empty commit from no observed commit.
+
+`SQLiteConnectionPool` provides asynchronous and blocking connection loans without an observer
+registry. Its callers choose transactions and install observers using these same public APIs.
+Ordinary writer loans form a barrier; explicit concurrent writer loans can overlap readers and
+other concurrent writers. `SQLitePool` and `TursoPool` compose this primitive with their journal
+setup and database-wide subscriptions. A custom driver can use it directly:
+
+```swift
+let pool = try SQLiteConnectionPool(
+  path: path,
+  readerConfiguration: .default,
+  writerConfiguration: .default,
+  readerCount: 4,
+  writerCount: 1,
+  writerSetups: [.sql("PRAGMA journal_mode = WAL"), .sql("SELECT count(*) FROM sqlite_schema")]
+)
+try await pool.withWriteConnection { connection in
+  try connection.transaction(observer: recorder) { transaction in
+    try transaction.execute("INSERT INTO reminders (title) VALUES (\("Walk the dog"))")
+  }
+}
+```
+
+Commit values contain only origin and region. `captureActiveWriters()` supplies a separate finite
+writer snapshot for refetch coordination: later loans do not extend its wait, and writers finish
+only after their entire borrowing closure, including commit publication. Observable database
+adapters forward this capability when they permit overlapping writers.
+
+For cancellable owner access, pass a fresh `SQLiteConnectionCancellation` to a lender and call
+`cancel()` from another thread. A cancellation after that access ends cannot interrupt the next one.
 
 The core module imports no SQLite header. Every call goes through `SQLiteLibrary`. Its required
 entry points are grouped by responsibility, including distinct statement preparation, execution,
@@ -458,7 +550,7 @@ separate connection pools. Explicit concurrent writes use `BEGIN CONCURRENT`, wh
 for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for schema work:
 
 ```swift
-let driver = try TursoPool(path: databasePath, writerCount: 4)
+let driver = try TursoPool(path: databasePath, readerCount: 5, writerCount: 4)
 
 try await driver.concurrentWrite { transaction in
   try transaction.execute(Reminder.insert { reminder })
@@ -685,18 +777,21 @@ the key sits in freed memory rather than guaranteeing anything about the process
 reach material you hold: the `String` a passphrase was read from stays yours to manage.
 
 `withUnsafeBytes` lends the key out for work the package does not model — calling a build's
-`sqlite3_rekey_v2` from a `SQLiteConnectionSetup`, or keying a database brought in with `ATTACH`:
+`sqlite3_rekey_v2` from a `SQLiteSetup`, or keying a database brought in with `ATTACH`:
 
 ```swift
-configuration.connectionSetups.append(
-  SQLiteConnectionSetup { connection in
-    key.withUnsafeBytes { bytes in
+configuration.setups.append(
+  SQLiteSetup { connection in
+    let code = key.withUnsafeBytes { bytes in
       connection.sqlite.encryption!.rekey(
         connection.sqliteConnection,
         "main",
         bytes.baseAddress,
         Int32(bytes.count)
       )
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError(code: SQLiteResultCode(rawValue: code))
     }
   }
 )
@@ -710,10 +805,30 @@ A codec accepts any key and only reports a wrong one once something reads the fi
 connection reads the schema while it is being configured. A wrong key fails the open rather than
 the first query the caller happens to run.
 
+## Connection setup
+
+`SQLiteConfiguration.setups` is one ordered collection of SQL and callbacks. Each step runs after
+standard settings and authorization have been applied, before the connection is lent to callers.
+A thrown error stops setup and closes the connection.
+
+```swift
+configuration.setups = [
+  .script("CREATE TEMP TABLE scratch (value TEXT); CREATE INDEX scratch_value ON scratch(value);"),
+  .sql("INSERT INTO scratch VALUES (\(initialValue))"),
+  SQLiteSetup { connection in
+    try connection.register(function: normalize)
+  }
+]
+```
+
+Use `.sql` for a single statement with bindings and `.script` for program-controlled scripts.
+Callbacks receive `SQLiteConnectionAccess`, which exposes the opened connection and its library.
+Runtime-wide auto-extension registration uses `SQLiteLibrary.registerAutoExtension` explicitly
+before opening connections. It is independent of the setup collection.
+
 ## SQLite Vec
 
-Enable the opt-in `Vectors` trait to make vector functions and `vec0` tables available on
-connections opened with a `SQLiteConfiguration`:
+Enable the opt-in `Vectors` trait to include vector types and the SQLite Vec integration:
 
 ```swift
 .package(
@@ -723,11 +838,14 @@ connections opened with a `SQLiteConfiguration`:
 )
 ```
 
-No application startup registration or extra Swift Testing trait is required. Vec initializes
-before user connection setups and setup SQL, on writers, pool readers, and reopened connections:
+Choose the configuration's library, then explicitly register Vec before opening connections.
+The convenience handles runtime registration and per-connection setup for writers, pool readers,
+and reopened connections:
 
 ```swift
-let database = try SQLiteQueue(path: databasePath)
+var configuration = SQLiteConfiguration.default
+try configuration.registerSQLiteVec()
+let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 try await database.write { transaction in
   try transaction.executeScript(
     "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
@@ -748,26 +866,30 @@ let nearest = try await database.read { transaction in
 ```
 
 Apple system SQLite uses per-connection initialization, identified by its library capability rather
-than its name or version. Other supported runtimes register Vec automatically before opening the
-connection. Automatic registration affects every future connection in that SQLite runtime, including
+than its name or version. For other supported runtimes, `registerSQLiteVec()` immediately registers
+an automatic initializer. Automatic registration affects every future connection in that SQLite
+runtime, including
 connections outside Orbit; already opened connections are unaffected.
 
 Custom builds opt into their own automatic registration bindings:
 
 ```swift
 let library = #sqliteLibrary(module: "MySQLite", apis: [.standard, .autoExtensions])
-let configuration = SQLiteConfiguration(library: library)
+var configuration = SQLiteConfiguration(library: library)
+try configuration.registerSQLiteVec()
 let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 ```
 
 On non-Apple platforms, the runtime must provide the extension API table and virtual-table
 registration Vec requires; builds omitting these fail initialization. On Apple platforms, the SDK
 compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole
-provider. Turso and libraries without extension support fail the open with
+provider. Turso and libraries without extension support fail registration with
 `SQLiteFeatureUnavailableError`.
 
-If you replace `configuration.connectionSetups`, call `configuration.registerSQLiteVec()` to restore
-Vec initialization. Its registration uses the configuration's library at connection opening time.
+On Apple system SQLite, replacing `configuration.setups` removes the Vec initializer; call
+`try configuration.registerSQLiteVec()` again to restore it. Select the library before registering
+Vec: registration uses the currently selected runtime and is not deferred until opening.
+Registration errors are thrown immediately; per-connection initialization errors fail the open.
 
 The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs are available
 without the Vec trait. Cancellation affects future connections and leaves already initialized ones
@@ -807,7 +929,7 @@ function throws fails the statement that called it:
 
 ```swift
 var configuration = SQLiteConfiguration.default
-configuration.registerFunction("reversed", argumentCount: 1, isDeterministic: true) {
+configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
   arguments in
   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
 }
@@ -829,11 +951,27 @@ struct LongestText: SQLiteAggregateAccumulator {
   }
 }
 
-configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
+configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
 ```
 
+The same registration methods are available on `SQLiteConnectionAccess` for installing on one
+connection. Configuration registration delegates to these methods for every connection it opens:
+
+```swift
+var connection = try SQLiteConnection(path: ":memory:", configuration: .default)
+try connection.withConnectionAccess { access in
+  try access.registerAggregateFunction("longest", argumentCount: 1, LongestText())
+}
+```
+
+Installed callbacks live until replacement or connection close. Aggregate expressions are evaluated
+once per group. Function flags support `.deterministic`, `.directOnly`, and `.innocuous`; the Swift
+bridge supplies UTF-8 encoding. Installation failures throw from connection access, or during opening
+when registered through configuration.
+
 With the `StructuredQueries` trait, collating sequences and functions can also be declared with the
-`@DatabaseCollation` and `@DatabaseFunction` macros, and registered the same way:
+`@DatabaseCollation` and `@DatabaseFunction` macros. Their `register(collation:)` and
+`register(function:)` helpers work on both configuration and connection access:
 
 ```swift
 @DatabaseCollation
@@ -877,6 +1015,47 @@ explicit identifiers remain application-defined. Identity is path-based, so hard
 names still need an explicit shared identifier. A database private to its connection receives a
 unique identifier. Process-local drivers use their own identifiers but cannot be passed to
 `OrbitIPCDatabase`.
+
+## SQL authorization
+
+Set `SQLiteConfiguration.authorization` to install a policy on every connection opened by a queue
+or pool. Authorization receives a typed action with its schema and originating view or trigger:
+
+```swift
+var configuration = SQLiteConfiguration.default
+configuration.authorization = { event in
+  if case .attach = event.action { return .deny }
+  return .allow
+}
+```
+
+Connections and transactions also expose `withAuthorization(_:perform:)` for synchronous scopes:
+
+```swift
+try await database.read { transaction in
+  try transaction.withAuthorization({ event in
+    if case .read(table: "secrets", column: _) = event.action { return .deny }
+    return .allow
+  }) {
+    try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  }
+}
+```
+
+Scoped policies compose with the configured policy and outer scopes: any denial wins, and an
+allowance cannot override the library's transaction or read restrictions. `.ignore` uses SQLite's
+action-specific behavior, including replacing a read column with NULL; it does not generally
+prevent side effects. Ignoring required transaction control or driver settings is treated as denial.
+Recovery rollback and restoration of temporary settings bypass application policies.
+
+`SQLiteConnectionAccess.setAuthorization(_:)` replaces the persistent policy on one connection;
+read and write connections forward this operation. Pass `nil` to remove it. The change persists
+across later loans, so use configuration for a policy that must cover every pool connection.
+Policies run during statement preparation, not every cached execution: keep captured permissions
+stable and replace the policy to apply changes. Replacement and scoped entry/exit invalidate
+prepared statements. Release outstanding cursors before changing policies or entering a scope,
+and consume scoped cursors inside that scope. Handlers must not access their connection.
+Backends without authorizer support throw `SQLiteFeatureUnavailableError` when a policy is installed.
 
 ## Migrations
 
@@ -944,6 +1123,21 @@ Turso cannot run the check, so there a migration that would be checked throws
 `SQLiteFeatureUnavailableError` before it runs; `.immediate` migrations, which Turso enforces as
 they go, and unchecked ones apply as usual.
 
+For explicit behavior independent of the legacy deferred-check settings, use `foreignKeyPolicy:`:
+
+```swift
+migrator.registerMigration("Rebuild reminders", foreignKeyPolicy: .validateBeforeCommit) {
+  transaction in
+  // Rebuild the table with enforcement temporarily disabled.
+  // Every foreign key is checked before this migration commits.
+}
+```
+
+The policies are `.connection` (preserve the connection's enforcement), `.validateBeforeCommit`
+(disable enforcement during the migration, then validate even if it was initially disabled), and
+`.disabled` (disable enforcement without a final check). The existing `foreignKeyChecks:` overload,
+its default, and the GRDB-compatible deferred-check properties keep their original behavior.
+
 ### The table of applied migrations
 
 Applied migrations are recorded in a table named `orbit_migrations`, created by the first migration
@@ -962,6 +1156,18 @@ lent outside one, and take it unlabeled as GRDB's do: `appliedIdentifiers(_:)`,
 creates no table. `migrations` lists the registered identifiers, and GRDB's
 `disablingDeferredForeignKeyChecks()` returns a copy with `defersForeignKeyChecks` off.
 
+`status(in:)` reads the same history once and returns an `OrbitDatabaseMigrationStatus` snapshot:
+
+```swift
+let status = try await database.read { try migrator.status(in: $0) }
+print(status.pendingMigrations)
+print(status.unrecognizedIdentifiers)
+```
+
+The snapshot also exposes registered and applied identifiers, applied migrations in registration
+order, the contiguous completed prefix, `isComplete`, and `isSuperseded`. The existing inspection
+methods remain available and derive their answers from this same snapshot.
+
 ### Several processes
 
 Processes that share a database may all migrate it as they launch. Each migration's transaction
@@ -972,7 +1178,7 @@ you raise, which is put back when the access ends:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  connection.busyTimeout = .limit(.seconds(30))
+  try connection.setBusyTimeout(.limit(.seconds(30)))
   try migrator.migrate(connection)
 }
 ```
@@ -1433,7 +1639,10 @@ struct RemindersApp: App {
 `OrbitDefaultDatabase.withValue(_:operation:)` overrides it for the duration of an operation, which
 is how a test gives itself a database of its own without touching the process-wide one. Accessing
 `OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
-detailed setup instructions. A SwiftUI property waits until its environment has been resolved, so
+detailed setup instructions. `OrbitDefaultDatabase.currentIfConfigured` returns `nil` instead when
+no default is available. Read-only observable databases can provide defaults for fetches; `Row` and
+`SingleRow` writes require a writer and report a read-only error if their resolved database cannot
+write. A SwiftUI property waits until its environment has been resolved, so
 providing a database with `.orbitDatabase(...)` does not require a process-wide default.
 
 Enable the `Dependencies` trait to configure the same default with
@@ -1481,6 +1690,43 @@ A property does not query until something reads it. Reading it the first time pe
 and starts the observation, so a SwiftUI view can be re-created as often as SwiftUI likes without
 each rebuilt property costing a query.
 
+### Row mutations
+
+Primary-keyed tables support updating the latest row within an existing write transaction:
+
+```swift
+try await database.write { transaction in
+  try Reminder.update(id: reminderID, in: transaction) { reminder in
+    reminder.title = "Buy milk"
+  }
+}
+```
+
+The mutation can return a result. A missing row or a changed primary key throws; this operation
+never inserts a replacement for a deleted row. `Row.update` uses this same public primitive.
+
+For synchronous main-actor callbacks, `Row.updateBlocking`, `SingleRow.updateBlocking`, and
+`SingleRow.saveBlocking` commit before returning and report failures through both the thrown error
+and `saveError`. These are also the operations used by SwiftUI bindings. Use the asynchronous
+methods from asynchronous code.
+
+### Reusable requests
+
+Queries can produce requests usable in transactions, observations, and `Fetch`:
+
+```swift
+let request = Reminder.order(by: \.title).allRowsRequest()
+let rows = try await database.read { try request.fetch($0) }
+let observation = request.observation().removeDuplicates()
+@Fetch(request) var reminders = [Reminder]()
+```
+
+`firstRowRequest()` returns the first row or `nil`; `requiredFirstRowRequest()`
+throws `OrbitDatabaseRecordNotFoundError` when no row exists. Table, scalar, selection, and tuple
+queries have request helpers. `FetchAll` and `FetchOne` compose the same public `Fetch` lifecycle.
+Equal requests share a live observation definition; each database has its own runtime and each
+subscriber chooses its own scheduler.
+
 ### The projected value
 
 The projected value is the rest of the property: whether a read is in flight, the error one failed
@@ -1511,13 +1757,17 @@ a sort control drives:
 try await $reminders.load(Reminder.where { $0.title.contains(search) })
 ```
 
-It returns an `OrbitFetchSubscription`. Awaiting its `task` ties the observation to the lifetime of
+It returns an `OrbitFetchSubscription`. Awaiting `waitUntilFinished()` ties the observation to the lifetime of
 a SwiftUI view's `task`, so drilling into a child screen stops the query and popping back restarts
 it:
 
 ```swift
-.task { try? await $reminders.load(Reminder.order(by: \.title)).task }
+.task { try? await $reminders.load(Reminder.order(by: \.title)).waitUntilFinished() }
 ```
+
+Explicit cancellation or query replacement finishes the wait normally; an observation failure
+propagates its error. Cancelling the waiting task cancels that exact registration and throws
+`CancellationError`.
 
 Assigning one projected value to another hands over its query, and a reader projected from a member
 stays current with the rest of the property.
@@ -1534,13 +1784,27 @@ an `animation:`, which delivers every change on the main actor inside that anima
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
 ```
 
-Request-backed fetch identity follows SQLiteData: it includes the database instance, request type
-and value, and optional scheduler value. An observation-backed fetch uses the observation's
+Request-backed declaration identity includes the database instance, request type and value, and
+optional scheduler value. Equal requests share underlying observations independently of delivery
+scheduling. An observation-backed fetch uses the observation's
 definition identity, or the explicit `id:` supplied with it. Omitting a scheduler is distinct from
 explicitly supplying `.immediate`. SwiftUI remembers the declaration's identity separately from
 the currently loaded source, so a `load()` or projected-value assignment survives an unchanged
 declaration being rendered again. Changing the declaration's request, observation identity,
 database, or scheduler replaces the observation; a value-only declaration leaves it alone.
+
+Animation and initial delivery can also be composed explicitly through public schedulers:
+
+```swift
+@FetchAll(
+  Reminder.all,
+  scheduler: .mainActor.animation(.default).deferringInitialValue()
+) var reminders
+```
+
+Animation preserves the base scheduler's initial timing. `deferringInitialValue()` prevents a
+blocking initial fetch, which is also the behavior selected by the fetch `animation:` conveniences.
+Both adapters preserve `Hashable` when their base supports it.
 
 Custom schedulers should base equality and hashing on stable configuration (or instance identity),
 not mutable callback queues. The built-in schedulers already provide these conformances. Direct
@@ -1548,6 +1812,43 @@ value-observation subscriptions do not require a `Hashable` scheduler. Fetch `an
 require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashable` availability.
 
 ### Sections
+
+Section collections can also group values without a database or property wrapper:
+
+```swift
+let sections = OrbitFetchSectionCollection(grouping: reminders, by: \.priority)
+```
+
+Keys may be any `Hashable` type, including optionals. Sections follow first appearance, rows within
+sections retain their input order, and `sections.elements` preserves the original flat array.
+The grouping closure may throw; empty input produces no sections.
+
+A Structured Queries statement can produce a reusable request with a typed section key:
+
+```swift
+let request = Reminder.order(by: \.title).sectionedRequest(by: \.priority)
+let sections = try await database.read { try request.fetch($0) }
+let observation = request.observation()
+@Fetch(request, database: database) var observedSections = sections
+```
+
+`sectionedRequest(by:)` selects the key alongside each element and orders by it before the query's existing
+ordering. The closure form accepts ordering terms such as `.desc(nulls: .last)` and, for explicitly
+projected joins, can receive every joined table's columns. Keys keep their decoded type and use Swift
+`Hashable` equality; sectioning retains result rows rather than introducing SQL `GROUP BY` aggregation.
+Limits apply after section ordering. With `DISTINCT`, uniqueness includes the selected section key.
+Multi-column elements use an `@Selection` type; plain tuple elements are not supported.
+
+For a statement that already selects `(element, key)`, `OrbitSectionedRequest(statement)` preserves its
+ordering. Raw SQL can use the same grouping operation without the Structured Queries trait:
+
+```swift
+let sections = try await database.read { transaction in
+  try transaction.fetchSections("SELECT title, priority FROM reminders ORDER BY title") { row in
+    (element: row[0].textValue, key: row[1].textValue)
+  }
+}
+```
 
 `@FetchAll` can have the database group its rows. The `sectionBy:` expression is selected alongside
 each row and ordered ahead of the query's own ordering, so one pass over the result set both

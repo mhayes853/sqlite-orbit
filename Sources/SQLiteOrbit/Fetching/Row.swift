@@ -22,6 +22,8 @@
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
   /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
+  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment can supply
+  /// the observed row, but saves throw a ``SQLiteError`` with code ``SQLiteResultCode/readOnly``.
   @propertyWrapper
   public struct Row<Value>: Sendable
   where
@@ -48,7 +50,7 @@
     public init(
       _ type: Value.Type,
       id primaryKey: Value.PrimaryKey.QueryOutput,
-      database: (any OrbitObservableDatabase)? = nil,
+      database: (any OrbitObservableDatabase & OrbitDatabaseWriter)? = nil,
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) {
       self.primaryKey = primaryKey
@@ -56,9 +58,7 @@
       let storage = OrbitRowStorage(
         fetch: .make(
           value: nil,
-          request: OrbitFetchOptionalStatementRequest<Value>(
-            statement: statement.find(Value.PrimaryKey(queryOutput: primaryKey))
-          ),
+          request: statement.find(Value.PrimaryKey(queryOutput: primaryKey)).firstRowRequest(),
           database: database,
           scheduler: scheduler
         )
@@ -131,7 +131,7 @@
       let primaryKey = self.primaryKey
       return try await storage.write { database in
         try await database.write { transaction in
-          try Self.update(in: transaction, primaryKey: primaryKey, mutation)
+          try Value.update(id: primaryKey, in: transaction, mutation)
         }
       }
     }
@@ -154,34 +154,24 @@
       }
     }
 
+    /// Mutates the latest row and commits before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``update(_:)``. A failure is both thrown and
+    /// recorded in ``saveError``. This is intended for synchronous main-actor callbacks, such as
+    /// a binding setter; use ``update(_:)`` from asynchronous code.
     @MainActor
-    func updateBlocking<Result: Sendable>(
+    @discardableResult
+    public func updateBlocking<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) throws -> Result {
       let primaryKey = self.primaryKey
       return try storage.writeBlocking { database in
         try database.writeBlocking { transaction in
-          try Self.update(in: transaction, primaryKey: primaryKey, mutation)
+          try Value.update(id: primaryKey, in: transaction, mutation)
         }
       }
     }
 
-    private static func update<Result>(
-      in transaction: borrowing SQLiteWriteTransaction,
-      primaryKey: Value.PrimaryKey.QueryOutput,
-      _ mutation: (inout Value) throws -> Result
-    ) throws -> Result {
-      var value = try transaction.find(Value.all, key: Value.PrimaryKey(queryOutput: primaryKey))
-      let result = try mutation(&value)
-      guard value.primaryKey == primaryKey else {
-        throw OrbitRowIdentityMismatchError()
-      }
-      try transaction.execute(Value.update(value))
-      guard transaction.changesCount == 1 else {
-        throw OrbitDatabaseRecordNotFoundError()
-      }
-      return result
-    }
   }
 
   #if canImport(SwiftUI)

@@ -10,13 +10,11 @@
 
     /// Runs `body` with a pool on a database file of its own, holding the table `items`.
     private func withPool(
-      readerCount: Int? = nil,
+      readerCount: Int = 5,
       _ body: (SQLitePool) async throws -> Void
     ) async throws {
       try await withTestDatabaseFile("pool") { file in
-        var configuration = SQLiteConfiguration.default
-        if let readerCount { configuration.readerCount = readerCount }
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(readerCount: readerCount)
         try await pool.execute(
           sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
         )
@@ -42,16 +40,18 @@
     func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.setupSQL = ["PRAGMA cache_size = 100"]
+        configuration.setups = [.sql("PRAGMA cache_size = 100")]
         let pool = try file.pool(configuration: configuration)
 
         // The pool's own setup for each role stays out of what its transactions report.
-        let readerSetup = try await pool.read { $0.configuration.setupSQL }
-        let writerSetup = try await pool.write { $0.configuration.setupSQL }
-        let connectionSetup = try await pool.writeWithoutTransaction { $0.configuration.setupSQL }
-        #expect(readerSetup == ["PRAGMA cache_size = 100"])
-        #expect(writerSetup == ["PRAGMA cache_size = 100"])
-        #expect(connectionSetup == ["PRAGMA cache_size = 100"])
+        let readerSetup = try await pool.read { $0.configuration.setups.count }
+        let writerSetup = try await pool.write { $0.configuration.setups.count }
+        let connectionSetup = try await pool.writeWithoutTransaction {
+          $0.configuration.setups.count
+        }
+        #expect(readerSetup == 1)
+        #expect(writerSetup == 1)
+        #expect(connectionSetup == 1)
       }
     }
 
@@ -59,22 +59,18 @@
       @Test
       func aZeroReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 0
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: 0)
         }
       }
 
       @Test
       func aNegativeReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = -1
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: -1)
         }
       }
     #endif
@@ -122,10 +118,9 @@
 
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.readerCount = 1
         configuration.maximumCachedStatements = 0
         configuration.library = library
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(configuration: configuration, readerCount: 1)
         try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
         try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
 

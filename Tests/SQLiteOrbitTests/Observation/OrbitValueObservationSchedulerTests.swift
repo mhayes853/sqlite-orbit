@@ -80,6 +80,23 @@ struct OrbitValueObservationSchedulerTests {
     #expect(values.values == [1, 2])
   }
 
+  @MainActor
+  @Test
+  func deferringInitialValuePreservesMainActorDeliveryAndIdentity() {
+    let base = OrbitMainActorValueObservationScheduler.mainActor
+    let scheduler = base.deferringInitialValue()
+    let isImmediate = scheduler.immediateInitialValue(from: MainActor.shared)
+    #expect(!isImmediate)
+    #expect(Set([scheduler, base.deferringInitialValue()]).count == 1)
+    let didRun = TestCounter()
+    scheduler.schedule(from: MainActor.shared) {
+      MainActor.assumeIsolated { _ = didRun.increment() }
+    }
+    #expect(didRun.value == 1)
+    func acceptsMainActorScheduler(_: some OrbitValueObservationMainActorScheduler) {}
+    acceptsMainActorScheduler(scheduler)
+  }
+
   @Test
   func asyncSchedulerWithoutAnActorDefersItsInitialValue() {
     let scheduler = OrbitAsyncValueObservationScheduler.async()

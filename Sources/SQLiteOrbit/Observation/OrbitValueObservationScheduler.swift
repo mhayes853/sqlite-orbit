@@ -163,11 +163,7 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
     from isolation: isolated (any Actor)?,
     _ action: @escaping @Sendable () -> Void
   ) {
-    if self.isolation != nil && self.isolation === isolation {
-      drain.drainInline(action, on: isolation)
-    } else {
-      drain.enqueue(action)
-    }
+    drain.schedule(from: isolation, action)
   }
 }
 
@@ -276,11 +272,7 @@ public struct OrbitMainActorValueObservationScheduler:
     from isolation: isolated (any Actor)?,
     _ action: @escaping @Sendable () -> Void
   ) {
-    if isolation === MainActor.shared {
-      drain.drainInline(action, on: isolation)
-    } else {
-      drain.enqueue(action)
-    }
+    drain.schedule(from: isolation, action)
   }
 }
 
@@ -310,7 +302,18 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     self.priority = priority
   }
 
-  func enqueue(_ action: @escaping @Sendable () -> Void) {
+  func schedule(
+    from isolation: isolated (any Actor)?,
+    _ action: @escaping @Sendable () -> Void
+  ) {
+    if self.isolation != nil && self.isolation === isolation {
+      drainInline(action, on: isolation)
+    } else {
+      enqueue(action)
+    }
+  }
+
+  private func enqueue(_ action: @escaping @Sendable () -> Void) {
     let shouldStart = state.withLock { state in
       state.actions.append(action)
       guard !state.isDraining else { return false }
@@ -326,7 +329,7 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
   /// Only the scheduler's own isolation may call this, so a drain started for an earlier callback
   /// is suspended waiting for it and cannot be running concurrently. Queueing first is what keeps
   /// an inline callback from overtaking the ones already waiting.
-  func drainInline(
+  private func drainInline(
     _ action: @escaping @Sendable () -> Void,
     on isolation: isolated (any Actor)?
   ) {
@@ -344,5 +347,39 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     }) {
       action()
     }
+  }
+}
+
+/// A scheduler that preserves callback delivery while deferring the initial fetch.
+public struct OrbitDeferredInitialValueObservationScheduler<Base: OrbitValueObservationScheduler>:
+  OrbitValueObservationScheduler
+{
+  private let base: Base
+
+  /// Wraps a scheduler without changing where or in what order its callbacks run.
+  public init(base: Base) { self.base = base }
+
+  public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool { false }
+
+  public func schedule(
+    from isolation: isolated (any Actor)?,
+    _ action: @escaping @Sendable () -> Void
+  ) {
+    base.schedule(from: isolation, action)
+  }
+}
+
+extension OrbitDeferredInitialValueObservationScheduler: Equatable where Base: Equatable {}
+extension OrbitDeferredInitialValueObservationScheduler: Hashable where Base: Hashable {}
+extension OrbitDeferredInitialValueObservationScheduler: OrbitValueObservationMainActorScheduler
+where Base: OrbitValueObservationMainActorScheduler {}
+
+extension OrbitValueObservationScheduler {
+  /// Defers the initial fetch even when this scheduler could deliver it synchronously.
+  ///
+  /// Later callbacks retain this scheduler's destination and ordering. A hashable or main-actor
+  /// scheduler keeps those capabilities when wrapped.
+  public func deferringInitialValue() -> OrbitDeferredInitialValueObservationScheduler<Self> {
+    OrbitDeferredInitialValueObservationScheduler(base: self)
   }
 }

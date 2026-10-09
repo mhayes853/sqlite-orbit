@@ -13,6 +13,73 @@
       private let items = OrbitDatabaseRegion(table: "items")
       private let lists = OrbitDatabaseRegion(table: "lists")
 
+      @Test(arguments: [false, true], [false, true])
+      func failedRegionUpdatesPreserveRequiredCoverage(failingWriter: Bool, narrowing: Bool)
+        async throws
+      {
+        let network = InMemoryIPCTransport.Network()
+        let receiver = InMemoryIPCTransport(network: network)
+        let transport = RecordingIPCTransport(receiver, advertisedRegion: receiver.advertisedRegion)
+        let peer = InMemoryIPCTransport(network: network)
+        let rejectsUpdates = Lock(true)
+        let update: @Sendable (OrbitDatabaseRegion) throws -> Void = { region in
+          if rejectsUpdates.withLock({ $0 }), !narrowing || region == lists {
+            throw RegionUpdateFailure()
+          }
+        }
+        let writer = AnnouncingTestDatabase(
+          try SQLiteQueue(path: .memory),
+          onUpdateRegion: failingWriter ? update : nil
+        )
+        if !failingWriter {
+          transport.beforeRegionUpdate { region in
+            try update(region)
+            return false
+          }
+        }
+        let database = OrbitIPCDatabase(writer: writer, transport: transport)
+        let sibling = OrbitIPCDatabase(
+          writer: try SQLiteQueue(path: .memory),
+          id: database.id,
+          transport: InMemoryIPCTransport()
+        )
+        let observer = TransactionEventRecorder()
+        let subscription = try database.subscribe(transactionObserver: observer, region: items)
+        defer { subscription.cancel() }
+
+        if narrowing {
+          // Failed narrowing is harmless: all sources already cover the requested region.
+          try subscription.updateRegion(lists)
+        } else {
+          #expect(throws: RegionUpdateFailure.self) { try subscription.updateRegion(lists) }
+        }
+        let required = narrowing ? lists : items
+        #expect(subscription.region == required)
+        try await peer.send(
+          .transactionDidCommit(.init(databaseIdentifier: database.id, region: required))
+        )
+        try await sibling.write { $0.notifyChanges(in: required) }
+        #expect(
+          observer.commits == [
+            OrbitDatabaseCommit(origin: .external, region: required),
+            OrbitDatabaseCommit(origin: .local, region: required)
+          ]
+        )
+
+        // A later update can discard any conservative coverage left by a failure.
+        rejectsUpdates.withLock { $0 = false }
+        try subscription.updateRegion(.fullDatabase)
+        try subscription.updateRegion(lists)
+        #expect(subscription.region == lists)
+        #expect(receiver.advertisedRegion(for: database.id) == lists)
+        observer.removeAll()
+        try await peer.send(
+          .transactionDidCommit(.init(databaseIdentifier: database.id, region: items))
+        )
+        try await sibling.write { $0.notifyChanges(in: items) }
+        #expect(observer.commits.isEmpty)
+      }
+
       @Test
       func transactionObserverRegionFiltersOnlySiblingsAndPeers() async throws {
         let identifier = OrbitDatabaseIdentifier.unique()

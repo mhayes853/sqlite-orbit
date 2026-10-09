@@ -46,18 +46,11 @@
   @dynamicMemberLookup
   @propertyWrapper
   public struct FetchAll<Element: Sendable>: Sendable {
-    @OrbitFetchState var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>
-
-    init(storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>) {
-      _storage = OrbitFetchState(wrappedValue: storage)
-    }
-
+    var fetch: Fetch<OrbitFetchSectionCollection<Element, String?>>
     /// Creates a property holding rows that no query keeps current.
     private init(unobserved wrappedValue: [Element]) {
-      self.init(
-        storage: OrbitFetchStorage(
-          value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
-        )
+      fetch = Fetch(
+        wrappedValue: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
       )
     }
 
@@ -67,41 +60,34 @@
       database: (any OrbitObservableDatabase)?,
       scheduler: (any OrbitValueObservationScheduler & Hashable)?
     ) {
-      self.init(
-        storage: .make(
-          value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil),
-          request: request,
-          database: database,
-          scheduler: scheduler
-        )
+      fetch = Fetch(
+        wrappedValue: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil),
+        request,
+        database: database,
+        scheduler: scheduler
       )
     }
 
     /// The rows the query produced.
     public var wrappedValue: [Element] {
-      storage.value.elements
+      fetch.wrappedValue.elements
     }
 
     /// Returns this property wrapper, which is how its ``isLoading``, ``loadError``, ``load()``,
     /// and member readers are reached.
     public var projectedValue: Self {
       get { self }
-      nonmutating set { storage.adopt(from: newValue.storage) }
+      nonmutating set { fetch.projectedValue = newValue.fetch }
     }
 
     /// A read-only view onto the rows.
     public var reader: OrbitFetchReader<[Element]> {
-      let storage = self.storage
-      return OrbitFetchReader(
-        storage: storage,
-        tracked: { storage.value.elements },
-        untracked: { storage.untrackedValue.elements }
-      )
+      fetch.reader.map { $0.elements }
     }
 
     /// A read-only view onto the sections.
     public var sectionsReader: OrbitFetchReader<OrbitFetchSectionCollection<Element, String?>> {
-      OrbitFetchReader(storage)
+      fetch.reader
     }
 
     /// Returns a reader of one member of the rows.
@@ -116,14 +102,14 @@
 
     /// Whether a read is in flight.
     public var isLoading: Bool {
-      storage.isLoading
+      fetch.isLoading
     }
 
     /// The error the most recent read failed with, if it failed.
     ///
     /// A failed read leaves the rows it last produced in place.
     public var loadError: (any Error)? {
-      storage.loadError
+      fetch.loadError
     }
 
     /// The rows as they stand, and every set of rows the observation produces afterwards.
@@ -137,7 +123,7 @@
     ///
     /// - Throws: Whatever the read throws, which also becomes ``loadError``.
     public func load() async throws {
-      try await storage.load()
+      try await fetch.load()
     }
 
     // MARK: - Values without a query
@@ -333,8 +319,8 @@
       scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
     ) async throws -> OrbitFetchSubscription
     where Element == V.QueryOutput {
-      return try await storage.load(
-        request: OrbitFetchAllStatementRequest<V>(statement: statement),
+      return try await fetch.load(
+        OrbitFetchAllStatementRequest<V>(statement: statement),
         database: database,
         scheduler: scheduler
       )
@@ -359,7 +345,7 @@
     extension FetchAll: DynamicProperty {
       /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        _storage.reconcile()
+        fetch.update()
       }
 
       /// Creates a property observing every row of a table, delivering changes with an animation.
@@ -379,7 +365,8 @@
         self.init(
           wrappedValue: wrappedValue,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -403,7 +390,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -427,7 +415,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -451,7 +440,8 @@
           wrappedValue: wrappedValue,
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -474,7 +464,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -497,7 +488,8 @@
         try await load(
           statement,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
     }

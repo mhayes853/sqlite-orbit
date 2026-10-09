@@ -57,7 +57,7 @@ extension SQLiteReadTransaction {
 }
 
 func sqliteDatabaseRegion(
-  readBy authorizations: [SQLiteAuthorization],
+  readBy authorizations: [SQLiteRawAuthorization],
   resolvingSchema: (String) -> SQLiteSchemaName?
 ) -> OrbitDatabaseRegion {
   // A successfully compiled statement normally produces at least one authorization, even when it

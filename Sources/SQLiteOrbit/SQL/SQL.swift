@@ -32,22 +32,83 @@
 /// to say how its text is to be treated, by interpolating it with `\(raw:)` or `\(quote:)`, or by
 /// handing it over as already-written SQL through ``init(text:bindings:)``.
 public struct SQL: Hashable, Sendable {
-  /// The SQL text, with a `?` standing in for each bound parameter.
-  public private(set) var text: String
+  /// An ordered piece of SQL, preserving the boundary between SQL text and interpolated values.
+  public enum Part: Hashable, Sendable {
+    /// SQL text, used verbatim. It may contain SQL literals, identifiers, or raw placeholders.
+    case text(String)
 
-  /// The values bound to the text's parameters, in order.
-  public private(set) var bindings: [OrbitDatabaseValue]
+    /// A value interpolated as an anonymous `?` parameter.
+    case binding(OrbitDatabaseValue)
 
-  // A value that could not be lowered to a binding, such as an unsigned integer past `Int64.max`
-  // interpolated or from a Structured Queries fragment. It is thrown when the statement is bound,
-  // which is where the same value always failed before it could be represented here.
-  var bindingFailure: SQLBindingFailure?
+    /// Prebound raw SQL whose placeholders are already present in `text`.
+    ///
+    /// Numbered and named placeholders are preserved verbatim. To execute the complete SQL,
+    /// concatenate all text and append all bindings in part order, then bind that complete list
+    /// by index. Placeholder indices refer to the complete statement; they are not rebased when
+    /// fragments are appended. This case does not parse or reorder raw placeholders.
+    case statement(text: String, bindings: [OrbitDatabaseValue])
+  }
+
+  private var parts: [Part]
+  private var bindingFailure: (any Error)?
+
+  /// The SQL text, with a `?` for each interpolated value and raw placeholders left intact.
+  ///
+  /// This is an unvalidated projection. Execution adapters should first use ``validatedParts()``
+  /// so a failed value conversion cannot silently become a `NULL` binding.
+  public var text: String {
+    parts.reduce(into: "") { text, part in
+      switch part {
+      case .text(let fragment), .statement(let fragment, _): text.append(fragment)
+      case .binding: text.append("?")
+      }
+    }
+  }
+
+  /// The parameter values in construction order, including those supplied with raw SQL.
+  ///
+  /// Like ``text``, this projection does not report deferred conversion errors. Use
+  /// ``validatedParts()`` before adapting the SQL for execution.
+  public var bindings: [OrbitDatabaseValue] {
+    parts.reduce(into: []) { bindings, part in
+      switch part {
+      case .text: break
+      case .binding(let value): bindings.append(value)
+      case .statement(_, let values): bindings.append(contentsOf: values)
+      }
+    }
+  }
+
+  /// Creates SQL by concatenating ordered parts without interpreting their text.
+  ///
+  /// Parts need not alternate between text and bindings. Every binding contributes one `?`;
+  /// prebound statements retain their existing placeholders and parameter values.
+  public init(parts: [Part]) {
+    self.parts = parts
+  }
+
+  /// Returns the construction parts, throwing any error captured while converting a binding.
+  ///
+  /// This validates value conversion only. SQL syntax and parameter indices are checked by the
+  /// database when it prepares and binds the statement. The array preserves construction order;
+  /// adjacent text or binding parts are valid, and equal SQL can have different part boundaries.
+  ///
+  /// ```swift
+  /// let sql: SQL = "SELECT * FROM reminders WHERE title = \("Milk")"
+  /// let parts = try sql.validatedParts()
+  /// // [.text("SELECT * FROM reminders WHERE title = "), .binding(.text("Milk"))]
+  /// ```
+  public func validatedParts() throws -> [Part] {
+    if let bindingFailure { throw bindingFailure }
+    return parts
+  }
 
   /// Creates SQL from text that is already written, with values for its parameters.
   ///
   /// The text is used as it is, so it must come from the program itself rather than from input:
-  /// nothing in it is escaped or quoted. Each parameter in it, such as a `?`, is bound to the next
-  /// value in `bindings`, in order.
+  /// nothing in it is escaped or quoted. Values in `bindings` are assigned SQLite parameter
+  /// indices starting at one. Numbered and named placeholders follow SQLite's normal indexing
+  /// rules, including repeated references to the same parameter.
   ///
   /// ```swift
   /// let query = SQL(
@@ -64,13 +125,9 @@ public struct SQL: Hashable, Sendable {
   ///   - text: The SQL text, with a parameter standing in for each value.
   ///   - bindings: The values bound to the text's parameters, in order.
   public init(text: String, bindings: [OrbitDatabaseValue] = []) {
-    self.init(text: text, bindings: bindings, bindingFailure: nil)
-  }
-
-  init(text: String, bindings: [OrbitDatabaseValue], bindingFailure: SQLBindingFailure?) {
-    self.text = text
-    self.bindings = bindings
-    self.bindingFailure = bindingFailure
+    self.init(
+      parts: bindings.isEmpty ? [.text(text)] : [.statement(text: text, bindings: bindings)]
+    )
   }
 
   /// Appends another statement's text and parameters to this one.
@@ -84,10 +141,18 @@ public struct SQL: Hashable, Sendable {
   ///
   /// - Parameter other: The SQL to append.
   public mutating func append(_ other: SQL) {
-    text.append(other.text)
-    bindings.append(contentsOf: other.bindings)
+    parts.append(contentsOf: other.parts)
     if bindingFailure == nil {
       bindingFailure = other.bindingFailure
+    }
+  }
+
+  private mutating func appendBinding(_ value: @autoclosure () throws -> OrbitDatabaseValue) {
+    do {
+      parts.append(.binding(try value()))
+    } catch {
+      parts.append(.binding(.null))
+      if bindingFailure == nil { bindingFailure = error }
     }
   }
 
@@ -108,12 +173,20 @@ public struct SQL: Hashable, Sendable {
   }
 }
 
-struct SQLBindingFailure: Hashable, Sendable {
-  let error: any Error
+extension SQL {
+  /// Compares executable text, parameter values, and whether binding conversion succeeded.
+  /// Construction boundaries and the particular conversion error do not affect equality.
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.text == rhs.text && lhs.bindings == rhs.bindings
+      && (lhs.bindingFailure == nil) == (rhs.bindingFailure == nil)
+  }
 
-  // The failure is not part of what the SQL says, only of whether it can run.
-  static func == (lhs: Self, rhs: Self) -> Bool { true }
-  func hash(into hasher: inout Hasher) {}
+  /// Hashes executable text, parameter values, and conversion validity.
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(text)
+    hasher.combine(bindings)
+    hasher.combine(bindingFailure == nil)
+  }
 }
 
 extension Sequence<SQL> {
@@ -181,24 +254,22 @@ extension SQL: ExpressibleByStringInterpolation {
     ///   - literalCapacity: The combined length of the literal's text segments.
     ///   - interpolationCount: How many interpolations the literal has.
     public init(literalCapacity: Int, interpolationCount: Int) {
-      var text = ""
-      text.reserveCapacity(literalCapacity + interpolationCount)
-      var bindings: [OrbitDatabaseValue] = []
-      bindings.reserveCapacity(interpolationCount)
-      self.sql = SQL(text: text, bindings: bindings)
+      self.sql = SQL(parts: [])
+      self.sql.parts.reserveCapacity(interpolationCount * 2 + 1)
     }
 
     /// Appends literal SQL text.
     ///
     /// - Parameter literal: The text.
     public mutating func appendLiteral(_ literal: String) {
-      sql.text.append(literal)
+      if !literal.isEmpty { sql.parts.append(.text(literal)) }
     }
 
     /// Binds a value as a parameter.
     ///
-    /// The value is never spliced into the SQL, so it cannot change the statement's meaning. A
-    /// value that fails to convert binds `NULL`, and its error is thrown when the statement runs.
+    /// The value is never spliced into the SQL, so it cannot change the statement's meaning.
+    /// A failed conversion leaves a `NULL` placeholder in the unvalidated projections;
+    /// ``SQL/validatedParts()`` and execution throw its error before binding any values.
     ///
     /// ```swift
     /// let query: SQL = "SELECT title FROM reminders WHERE priority = \(Priority.high)"
@@ -206,15 +277,7 @@ extension SQL: ExpressibleByStringInterpolation {
     ///
     /// - Parameter value: The value to bind.
     public mutating func appendInterpolation(_ value: some ConvertibleToOrbitDatabaseValue) {
-      sql.text.append("?")
-      do {
-        sql.bindings.append(try value.orbitDatabaseValue())
-      } catch {
-        sql.bindings.append(.null)
-        if sql.bindingFailure == nil {
-          sql.bindingFailure = SQLBindingFailure(error: error)
-        }
-      }
+      sql.appendBinding(try value.orbitDatabaseValue())
     }
 
     /// Binds a storage value as a parameter.
@@ -227,8 +290,7 @@ extension SQL: ExpressibleByStringInterpolation {
     ///
     /// - Parameter value: The value to bind.
     public mutating func appendInterpolation(_ value: OrbitDatabaseValue) {
-      sql.text.append("?")
-      sql.bindings.append(value)
+      sql.parts.append(.binding(value))
     }
 
     /// Splices in other SQL, along with its parameters.
@@ -255,7 +317,7 @@ extension SQL: ExpressibleByStringInterpolation {
     ///
     /// - Parameter text: The SQL text.
     public mutating func appendInterpolation(raw text: String) {
-      sql.text.append(text)
+      appendLiteral(text)
     }
 
     /// Splices in an identifier, wrapped in double quotes with any double quote inside it doubled.
@@ -267,7 +329,7 @@ extension SQL: ExpressibleByStringInterpolation {
     ///
     /// - Parameter identifier: The table, column, or other name to quote.
     public mutating func appendInterpolation(quote identifier: String) {
-      sql.text.append(orbitQuoted(identifier, delimiter: "\""))
+      appendLiteral(orbitQuoted(identifier, delimiter: "\""))
     }
   }
 }
@@ -331,20 +393,18 @@ func orbitQuoted(_ text: String, delimiter: Unicode.Scalar) -> String {
     ///
     /// - Parameter fragment: The fragment to lower.
     public init(fragment: QueryFragment) {
-      let (text, queryBindings) = fragment.prepare { _ in "?" }
-      var bindings: [OrbitDatabaseValue] = []
-      bindings.reserveCapacity(queryBindings.count)
-      var failure: SQLBindingFailure?
-      for binding in queryBindings {
-        do {
-          bindings.append(try OrbitDatabaseValue(lowering: binding))
-        } catch {
-          // The parameter is kept so the rest stay in position; binding throws before any runs.
-          bindings.append(.null)
-          if failure == nil { failure = SQLBindingFailure(error: error) }
+      self.init(parts: [])
+      parts.reserveCapacity(fragment.segments.count)
+      for segment in fragment.segments {
+        switch segment {
+        case .sql(let text):
+          parts.append(.text(text))
+        case .identifier(let identifier):
+          parts.append(.text(orbitQuoted(identifier.name, delimiter: "\"")))
+        case .binding(let binding):
+          appendBinding(try OrbitDatabaseValue(lowering: binding))
         }
       }
-      self.init(text: text, bindings: bindings, bindingFailure: failure)
     }
   }
 

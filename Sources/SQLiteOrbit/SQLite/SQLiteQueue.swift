@@ -21,7 +21,7 @@
 ///   try transaction.fetchAll("SELECT title FROM reminders") { $0[0].textValue ?? "" }
 /// }
 /// ```
-public final class SQLiteQueue: OrbitObservableDatabase {
+public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
@@ -58,7 +58,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await connection.read(observers: transactionObservers, body)
+    try await connection.readWithoutTransaction { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction, committing it when `body` returns and rolling it back
@@ -71,7 +73,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await connection.write(observers: transactionObservers, body)
+    try await connection.writeWithoutTransaction { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -85,7 +89,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try connection.readBlocking(observers: transactionObservers, body)
+    try connection.readWithoutTransactionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -99,7 +105,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try connection.writeBlocking(observers: transactionObservers, body)
+    try connection.writeWithoutTransactionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` with the driver's one connection, reading outside a transaction.
@@ -119,7 +127,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func readWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
-    try await connection.readWithoutTransaction(observers: transactionObservers, body)
+    try await connection.readWithoutTransaction { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the driver's one connection, writing outside a transaction.
@@ -139,7 +149,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func writeWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await connection.writeWithoutTransaction(observers: transactionObservers, body)
+    try await connection.writeWithoutTransaction { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the driver's one connection, reading outside a transaction and blocking the
@@ -162,7 +174,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try connection.readWithoutTransactionBlocking(observers: transactionObservers, body)
+    try connection.readWithoutTransactionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the driver's one connection, writing outside a transaction and blocking the
@@ -186,7 +200,9 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   public func writeWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try connection.writeWithoutTransactionBlocking(observers: transactionObservers, body)
+    try connection.writeWithoutTransactionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Registers an observer of the transactions this driver commits.

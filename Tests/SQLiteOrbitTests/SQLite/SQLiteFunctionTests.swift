@@ -344,7 +344,7 @@
       var configuration = SQLiteConfiguration.default
       configuration.register(function: $longestTitle)
 
-      try await withPooledDatabase(configuration: configuration, maximumReaderCount: 16) {
+      try await withPooledDatabase(configuration: configuration, readerCount: 16) {
         database in
         try await database.write { transaction in
           try transaction.execute(
@@ -433,16 +433,46 @@
     func functionsAreAvailableToConnectionSetupSQL() async throws {
       var configuration = SQLiteConfiguration.default
       configuration.register(function: $repeated)
-      configuration.setupSQL = [
-        "CREATE TABLE configured (value TEXT NOT NULL)",
-        "INSERT INTO configured VALUES (repeated('ab', 2))"
-      ]
+      configuration.setups.append(contentsOf: [
+        .sql("CREATE TABLE configured (value TEXT NOT NULL)"),
+        .sql("INSERT INTO configured VALUES (repeated('ab', 2))")
+      ])
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
       let values = try await driver.read { transaction in
         try transaction.fetchAll(#sql("SELECT value FROM configured", as: String.self))
       }
       #expect(values == ["abab"])
+    }
+
+    @Test
+    func structuredQueriesRegistrationsWorkOnAnOpenConnection() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        try connection.register(function: $repeated)
+        try connection.register(function: $longestTitle)
+        try connection.register(collation: $reversedText)
+      }
+      let (repeated, longest, sorted) = try owner.withReadConnection { connection in
+        (
+          try connection.fetchOne(#sql("SELECT repeated('ab', 2)", as: String.self)),
+          try connection.fetchOne(
+            #sql(
+              "SELECT longestTitle(column1) FROM (VALUES ('a'), ('abcd'))",
+              as: String?.self
+            )
+          ),
+          try connection.fetchAll(
+            #sql(
+              "SELECT column1 FROM (VALUES ('ab'), ('ba')) ORDER BY column1 COLLATE reversedText",
+              as: String.self
+            )
+          )
+        )
+      }
+      #expect(repeated == "abab")
+      #expect(longest == "abcd")
+      #expect(sorted == ["ba", "ab"])
     }
 
     @Table("samples")

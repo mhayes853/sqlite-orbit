@@ -15,7 +15,6 @@
 /// ```
 public final class OrbitIPCDatabase:
   Identifiable,
-  OrbitDatabaseWriter,
   OrbitSuspendable,
   Sendable
 {
@@ -244,7 +243,7 @@ public final class OrbitIPCDatabase:
 
   /// Writes to the database outside a transaction and announces what it commits.
   ///
-  /// Each statement commits on its own, and each ``SQLiteWriteConnection/transaction(_:)`` commits
+  /// Each statement commits on its own, and each ``SQLiteWriteConnection/transaction(mode:observer:_:)`` commits
   /// as a whole, so the access as a whole is announced once, after `body` is done, as the union of
   /// the regions that committed. A transaction that rolled back is left out. A `body` that throws
   /// is announced too, since whatever committed before the failure stays committed, and an access
@@ -253,7 +252,7 @@ public final class OrbitIPCDatabase:
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.isForeignKeysEnabled = false
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }
@@ -378,7 +377,12 @@ extension OrbitIPCDatabase.Delegate {
   ) {}
 }
 
-extension OrbitIPCDatabase: OrbitObservableDatabase {
+extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
+  /// Captures the underlying writer's active writes for observation coordination.
+  public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
+    writer.captureActiveWriters()
+  }
+
   /// Observes local transactions from the underlying writer and commits announced by peer
   /// processes.
   ///
@@ -428,14 +432,19 @@ extension OrbitIPCDatabase: OrbitObservableDatabase {
           OrbitDatabaseCommit(origin: .external, region: commit.region)
         )
       }
+      let subscriptions = [external, sameProcess, local]
       return OrbitRegionSubscription(region: region) { region in
-        try external.updateRegion(region)
-        try sameProcess.updateRegion(region)
-        try local.updateRegion(region)
+        // Preserve the previous coverage on every source until all sources cover the new region.
+        // If widening fails, sources already updated may safely report additional commits.
+        for subscription in subscriptions {
+          try subscription.updateRegion(subscription.region.union(region))
+        }
+        // Narrowing only reduces extra notifications; failure leaves sufficient coverage intact.
+        for subscription in subscriptions {
+          try? subscription.updateRegion(region)
+        }
       } onCancel: {
-        local.cancel()
-        sameProcess.cancel()
-        external.cancel()
+        for subscription in subscriptions { subscription.cancel() }
       }
     } catch {
       local.cancel()
@@ -493,59 +502,12 @@ private final class OrbitDatabaseObservationHub: Sendable {
   }
 }
 
-/// Records the regions an access changes, keeping apart those whose transaction has committed from
-/// those whose transaction has not ended yet.
-///
-/// A change is pending until the transaction it was made in commits, when it joins the committed
-/// region, or rolls back, when it is discarded. An access that runs several transactions can then
-/// announce only what actually committed.
-final class OrbitDatabaseRegionRecorder: OrbitDatabaseTransactionObserver, Sendable {
-  private struct Regions {
-    var committed = OrbitDatabaseRegion.empty
-    var pending = OrbitDatabaseRegion.empty
-    var hasCommitted = false
-  }
-
-  private let regions = Lock(Regions())
-
-  /// Whether a transaction committed while this recorder was registered, even one that changed
-  /// nothing.
-  var hasCommitted: Bool { regions.withLock { $0.hasCommitted } }
-
-  /// The union of the changes whose transaction has committed while this recorder was registered.
-  var committedRegion: OrbitDatabaseRegion { regions.withLock { $0.committed } }
-
-  /// Every change not rolled back while this recorder was registered, committed or not.
-  ///
-  /// A write transaction commits after its body returns and so after the recorder scoped to the
-  /// body is gone, which leaves all of its changes pending here.
-  var changedRegion: OrbitDatabaseRegion {
-    regions.withLock { $0.committed.union($0.pending) }
-  }
-
-  func databaseDidChange(in region: OrbitDatabaseRegion) {
-    regions.withLock { $0.pending.formUnion(region) }
-  }
-
-  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-    regions.withLock { regions in
-      regions.committed.formUnion(regions.pending)
-      regions.pending = .empty
-      regions.hasCommitted = true
-    }
-  }
-
-  func databaseDidRollback() {
-    regions.withLock { $0.pending = .empty }
-  }
-}
-
 extension SQLiteWriteTransaction {
   borrowing func recordingDatabaseRegion<Result: Sendable>(
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) rethrows -> (Result, OrbitDatabaseRegion) {
     let recorder = OrbitDatabaseRegionRecorder()
-    let result = try base.observations.withObserver(recorder) {
+    let result = try withObservation(recorder) {
       try body(self)
     }
     return (result, recorder.changedRegion)
@@ -557,12 +519,8 @@ extension SQLiteWriteConnection {
     into recorder: OrbitDatabaseRegionRecorder,
     _ body: (borrowing SQLiteWriteConnection) throws -> Result
   ) rethrows -> Result {
-    let observations = base.base.observations
-    return try observations.withObserver(recorder) {
-      // A change still pending once the body is done was made outside a transaction, and so has
-      // committed. The handle would only report that after the access, when the recorder is gone.
-      defer { observations.didCommitPendingChanges() }
-      return try body(self)
+    try withObservation(recorder) {
+      try body(self)
     }
   }
 }

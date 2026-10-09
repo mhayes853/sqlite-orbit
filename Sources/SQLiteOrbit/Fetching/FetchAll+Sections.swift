@@ -26,7 +26,7 @@
     /// }
     /// ```
     public var sections: OrbitFetchSectionCollection<Element, String?> {
-      storage.value
+      fetch.wrappedValue
     }
 
     /// Creates a property observing every row of a table, grouped into sections.
@@ -58,9 +58,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<Element, String?>(
-          query: orbitSectionedQuery(Element.all.asSelect(), sectionBy: sectioning)
-        ),
+        request: Element.all.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -93,9 +91,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<S.From, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -126,9 +122,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -162,9 +156,7 @@
       }
       self.init(
         wrappedValue: wrappedValue,
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+        request: statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -192,10 +184,8 @@
       guard let sectioning = sectioning(S.From.columns) else {
         return try await load(statement, database: database, scheduler: scheduler)
       }
-      return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<S.From, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+      return try await fetch.load(
+        statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -225,10 +215,8 @@
       guard let sectioning = sectioning(From.columns) else {
         return try await load(statement, database: database, scheduler: scheduler)
       }
-      return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+      return try await fetch.load(
+        statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -261,10 +249,8 @@
       else {
         return try await load(statement, database: database, scheduler: scheduler)
       }
-      return try await storage.load(
-        request: OrbitFetchSectionedStatementRequest<V, String?>(
-          query: orbitSectionedQuery(statement, sectionBy: sectioning)
-        ),
+      return try await fetch.load(
+        statement.sectionedRequest { _ in sectioning },
         database: database,
         scheduler: scheduler
       )
@@ -358,31 +344,6 @@
     }
   }
 
-  /// Rewrites a select statement to order by the section expression and select it alongside every
-  /// column of the statement's table.
-  private func orbitSectionedQuery<S: SelectStatement>(
-    _ statement: S,
-    sectionBy sectioning: _OrbitFetchSectioning<String?>
-  ) -> QueryFragment where S.QueryValue == (), S.Joins == () {
-    let sectioned: Select<(S.From, String?), S.From, ()> =
-      orbitSectionedColumns(of: S.From.self, sectioning) + statement.asSelect()
-    return sectioned.query
-  }
-
-  /// Rewrites a statement to order by the section expression and select it alongside its own
-  /// columns.
-  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-  private func orbitSectionedQuery<V: QueryRepresentable, From: Table, each J: Table>(
-    _ statement: Select<V, From, (repeat each J)>,
-    sectionBy sectioning: _OrbitFetchSectioning<String?>
-  ) -> QueryFragment {
-    let ordered: Select<V, From, (repeat each J)> =
-      orbitSectionedOrder(of: From.self, sectioning) + statement
-    let sectioned: Select<(V, String?), From, (repeat each J)> =
-      ordered + orbitSectionedColumn(of: From.self, sectioning)
-    return sectioned.query
-  }
-
   #if canImport(SwiftUI)
     extension FetchAll {
       /// Creates a property observing every row of a table, grouped into sections, delivering
@@ -406,7 +367,8 @@
           wrappedValue: wrappedValue,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -432,7 +394,8 @@
           wrappedValue: wrappedValue,
           sectionBy: sectionKeyPath,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -460,7 +423,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -489,7 +453,8 @@
           statement,
           sectionBy: sectionKeyPath,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -517,7 +482,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -546,7 +512,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -574,7 +541,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -603,7 +571,8 @@
           statement,
           sectionBy: sectionKeyPath,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -631,7 +600,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
 
@@ -660,7 +630,8 @@
           statement,
           sectionBy: sectioning,
           database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
+          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+            .deferringInitialValue()
         )
       }
     }

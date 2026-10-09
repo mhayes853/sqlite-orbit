@@ -48,7 +48,8 @@ extension OrbitIPCDatabase {
     #endif
     try remindersMigrator(
       erasesDatabaseOnSchemaChange: erasesDatabaseOnSchemaChange
-    ).migrateBlocking(database)
+    )
+    .migrateBlocking(database)
     return database
   }
 }

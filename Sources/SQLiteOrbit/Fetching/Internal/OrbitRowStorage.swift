@@ -54,13 +54,12 @@
     func write<Result: Sendable>(
       _ operation:
         sending @escaping @Sendable (
-          any OrbitObservableDatabase
+          any OrbitObservableDatabase & OrbitDatabaseWriter
         ) async throws -> sending Result
     ) async throws -> Result {
-      let database = fetch.databaseForWriting()
-
       beginWrite()
       do {
+        let database = try fetch.databaseForWriting()
         let result = try await operation(database)
         finishWrite()
         return result
@@ -75,12 +74,11 @@
     /// This exists for synchronous interfaces such as a SwiftUI `Binding` setter. Callers must obey
     /// ``OrbitDatabaseWriter/writeBlocking(_:)``'s requirement not to invoke it from a task.
     func writeBlocking<Result: Sendable>(
-      _ operation: (any OrbitObservableDatabase) throws -> Result
+      _ operation: (any OrbitObservableDatabase & OrbitDatabaseWriter) throws -> Result
     ) throws -> Result {
-      let database = fetch.databaseForWriting()
-
       beginWrite()
       do {
+        let database = try fetch.databaseForWriting()
         let result = try operation(database)
         finishWrite()
         return result

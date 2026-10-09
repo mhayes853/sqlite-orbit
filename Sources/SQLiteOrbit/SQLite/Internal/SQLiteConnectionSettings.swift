@@ -23,20 +23,14 @@ struct SQLiteConnectionSettings: ~Copyable {
   // Setting the busy timeout replaces the configured busy handler, since SQLite keeps only one of
   // the two. Restoring the timeout is not enough to undo that, and a timeout set to the configured
   // value is not a change to restore at all, so the replacement is tracked on its own.
-  private var isBusyHandlerReplaced = false
+  private(set) var isBusyHandlerReplaced = false
 
   private(set) var busyTimeout: SQLiteBusyTimeout
 
-  /// Whether the connection's next statement should run with foreign keys enforced.
-  ///
-  /// Setting this runs nothing, since the setter a connection exposes it through cannot throw.
-  /// ``applyForeignKeys()`` puts it into effect before the connection's next statement, where a
-  /// failure has somewhere to be thrown.
-  var isForeignKeysEnabled: Bool
-
-  // What SQLite was last told, which is what a restore has to undo. A change still pending never
-  // reached SQLite, so it needs no undoing.
-  private var appliedForeignKeys: Bool
+  private(set) var isForeignKeysEnabled: Bool
+  // A pragma can change the native flag during preparation even if stepping later fails. If
+  // recovery also fails, the next access must restore it even when the last known value matches.
+  private var needsForeignKeysRestore = false
 
   // Configured off. A connection that can write turns it on only for the duration of a read.
   private(set) var isQueryOnly = false
@@ -57,70 +51,80 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.configuredForeignKeys = configuration.pointee.isForeignKeysEnabled
     self.busyTimeout = configuration.pointee.busyTimeout
     self.isForeignKeysEnabled = configuration.pointee.isForeignKeysEnabled
-    self.appliedForeignKeys = configuration.pointee.isForeignKeysEnabled
   }
 
-  mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) {
-    // `sqlite3_busy_timeout` only refuses a connection that is not open, and one lent to an access
-    // always is. Were it to refuse anyway, the timeout in effect is unchanged, and so is what this
-    // reports.
-    guard applyBusyTimeout(timeout) == SQLiteResultCode.ok.rawValue else { return }
+  mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
+    let code = library.pointee.connections.setBusyTimeout(connection, timeout.milliseconds)
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+    }
     busyTimeout = timeout
     if configuration.pointee.busyHandler != nil { isBusyHandlerReplaced = true }
   }
 
-  /// Puts a pending foreign keys change into effect.
-  ///
-  /// - Throws: A ``SQLiteError`` when the pragma fails, in which case the change stays pending.
-  mutating func applyForeignKeys() throws {
-    guard isForeignKeysEnabled != appliedForeignKeys else { return }
-    try executeForeignKeys(isForeignKeysEnabled)
+  mutating func setForeignKeysEnabled(_ isEnabled: Bool) throws {
+    guard library.pointee.connections.isAutocommit(connection) != 0 else {
+      throw SQLiteError(
+        code: .misuse,
+        message: "Foreign keys cannot be changed inside a transaction"
+      )
+    }
+    guard isForeignKeysEnabled != isEnabled || needsForeignKeysRestore else { return }
+    let previous = isForeignKeysEnabled
+    do {
+      try executeForeignKeys(isEnabled)
+    } catch {
+      needsForeignKeysRestore = true
+      authorizer.withoutUserAuthorization { try? executeForeignKeys(previous) }
+      throw error
+    }
   }
 
   private mutating func executeForeignKeys(_ isEnabled: Bool) throws {
     // Numeric booleans are accepted by both SQLite and Turso. The statement runs the way one the
     // connection executes does, so cached statements compiled under the old setting are dropped.
-    try SQLiteHandle.executeScript(
-      "PRAGMA foreign_keys = \(isEnabled ? 1 : 0)",
-      on: connection,
-      library: library,
-      authorizer: authorizer,
-      statements: statements
-    )
-    appliedForeignKeys = isEnabled
+    try authorizer.requiringExecution {
+      try SQLiteConnection.executeScript(
+        "PRAGMA foreign_keys = \(isEnabled ? 1 : 0)",
+        on: connection,
+        library: library,
+        authorizer: authorizer,
+        statements: statements
+      )
+    }
+    isForeignKeysEnabled = isEnabled
+    needsForeignKeysRestore = false
   }
 
   mutating func setQueryOnly(_ isQueryOnly: Bool) throws {
     // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
     // keyword as a different expression kind than the pragma implementation accepts.
-    try SQLiteHandle.executeScript(
-      "PRAGMA query_only = \(isQueryOnly ? 1 : 0)",
-      on: connection,
-      library: library
-    )
+    try authorizer.requiringExecution {
+      try SQLiteConnection.executeScript(
+        "PRAGMA query_only = \(isQueryOnly ? 1 : 0)",
+        on: connection,
+        library: library
+      )
+    }
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Puts every changed setting back to its configured value, and drops any change still pending.
-  ///
-  /// Every changed setting is attempted even after one fails, so one failure leaves no more
-  /// behind than it has to. A setting that cannot be restored stays changed.
-  ///
-  /// - Throws: The first failure.
-  mutating func restore() throws {
-    isForeignKeysEnabled = configuredForeignKeys
+  /// Restores the timeout and whether it had replaced the configured busy handler.
+  mutating func restoreBusyTimeout(
+    _ timeout: SQLiteBusyTimeout,
+    handlerIsReplaced: Bool
+  ) throws {
     var failure: (any Error)?
-    if busyTimeout != configuredBusyTimeout {
+    if busyTimeout != timeout {
       // Reapplying the timeout replaces any busy handler a connection setup installed, which is
       // why it is only reapplied once it has actually changed.
-      let code = applyBusyTimeout(configuredBusyTimeout)
-      if code == SQLiteResultCode.ok.rawValue {
-        busyTimeout = configuredBusyTimeout
-      } else {
-        failure = SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+      do {
+        try setBusyTimeout(timeout)
+      } catch {
+        failure = error
       }
     }
-    if isBusyHandlerReplaced {
+    if isBusyHandlerReplaced && !handlerIsReplaced {
       // Installed after the timeout, exactly as the open did it, so the connection waits by the
       // configured handler again rather than by the timeout underneath it.
       let code = SQLiteBusyHandlerInstallation.install(
@@ -136,9 +140,25 @@ struct SQLiteConnectionSettings: ~Copyable {
           ?? SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
       }
     }
-    if appliedForeignKeys != configuredForeignKeys {
+    if let failure { throw failure }
+  }
+
+  /// Puts every changed setting back to its configured value.
+  ///
+  /// Every changed setting is attempted even after one fails, so one failure leaves no more
+  /// behind than it has to. A setting that cannot be restored stays changed.
+  ///
+  /// - Throws: The first failure.
+  mutating func restore() throws {
+    var failure: (any Error)?
+    do {
+      try restoreBusyTimeout(configuredBusyTimeout, handlerIsReplaced: false)
+    } catch {
+      failure = error
+    }
+    if isForeignKeysEnabled != configuredForeignKeys || needsForeignKeysRestore {
       do {
-        try executeForeignKeys(configuredForeignKeys)
+        try setForeignKeysEnabled(configuredForeignKeys)
       } catch {
         failure = failure ?? error
       }
@@ -151,9 +171,5 @@ struct SQLiteConnectionSettings: ~Copyable {
       }
     }
     if let failure { throw failure }
-  }
-
-  private func applyBusyTimeout(_ timeout: SQLiteBusyTimeout) -> Int32 {
-    library.pointee.connections.setBusyTimeout(connection, timeout.milliseconds)
   }
 }

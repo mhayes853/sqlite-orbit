@@ -655,16 +655,23 @@
         let driver = try blockingItemsDatabase()
         let updates = TestRecorder<OrbitValueObservationUpdate<Int>>()
         let errors = TestRecorder<String>()
-        let subscription = try itemCountObservation()
-          .filter { $0.isMultiple(of: 2) == false }
-          .subscribe(
-            to: driver,
-            scheduling: .immediate,
-            onError: { error in errors.append(String(describing: error)) },
-            onUpdate: { update in updates.append(update) }
-          )
+        let observation = itemCountObservation().filter { !$0.isMultiple(of: 2) }
+        let changes = TestRecorder<Int>()
+        let changeSubscription = try observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { Issue.record($0) },
+          onChange: { changes.append($0.value) }
+        )
+        let subscription = try observation.subscribe(
+          to: driver,
+          scheduling: .immediate,
+          onError: { error in errors.append(String(describing: error)) },
+          onUpdate: { update in updates.append(update) }
+        )
 
         #expect(updates.values == [.noEmission(source: .initial)])
+        #expect(changes.values.isEmpty)
 
         try insertItemsBlocking(1, into: driver)
         try insertItemsBlocking(2, into: driver)
@@ -678,7 +685,8 @@
             ]
         )
         #expect(errors.values.isEmpty)
-        _ = subscription
+        #expect(changes.values == [1])
+        _ = (subscription, changeSubscription)
       }
 
       @Test
@@ -854,41 +862,6 @@
           #expect(recorder.changes.map(\.value) == [0, 1])
           #expect(fetchCount.value == 2)
         }
-        _ = subscription
-      }
-
-      @Test
-      func coalescedRefetchControllerWaitsOnlyForAnActiveWriterCohort() async throws {
-        let queue = try await itemsDatabase()
-        let driver = AnnouncingTestDatabase(queue)
-        let fetchCount = TestCounter()
-        let observation = OrbitValueObservation<Int>
-          .tracking(region: .fullDatabase) { _ in
-            fetchCount.increment()
-          }
-          .refetching(.coalesced)
-        let recorder = ObservationRecorder<Int>()
-        let subscription = try observation.subscribe(
-          to: driver,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-        try await recorder.waitForChangeCount(1)
-
-        let activeWriter = SQLitePoolWriterBarrier(writerCount: 1)
-        driver.announceCommit(region: .fullDatabase, activeWriterBarrier: activeWriter)
-        for _ in 0..<100 { await Task.yield() }
-        #expect(fetchCount.value == 1)
-
-        activeWriter.writerDidFinish()
-        try await recorder.waitForChangeCount(2)
-        driver.announceCommit(
-          region: .fullDatabase,
-          activeWriterBarrier: SQLitePoolWriterBarrier(writerCount: 0)
-        )
-        try await recorder.waitForChangeCount(3)
-
-        #expect(fetchCount.value == 3)
         _ = subscription
       }
 
@@ -1198,7 +1171,7 @@
 
       @Test
       func automaticRegionRefreshesWhenSQLiteRecompilesACachedStatement() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.execute(sql: currentItemsViewSchema)
 
           let recorder = ObservationRecorder<String?>()
@@ -1230,10 +1203,8 @@
       func automaticRegionFollowsAViewRedefinedThroughAnotherConnection() async throws {
         try await withTestDatabaseFile("obs") { file in
           let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 1
           let observingDatabase = OrbitIPCDatabase(
-            writer: try file.pool(configuration: configuration),
+            writer: try file.pool(readerCount: 1),
             id: identifier,
             transport: InMemoryIPCTransport()
           )

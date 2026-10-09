@@ -52,17 +52,20 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   let access: SQLiteConnectionAccess
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
-  let observations: OrbitDatabaseTransactionObservationContext
+  let observations: SQLiteConnectionEvents
+  let connectionState: SQLiteConnectionState?
 
   @_lifetime(borrow handle)
   init(
-    handle: borrowing SQLiteHandle,
-    observations: OrbitDatabaseTransactionObservationContext
+    handle: borrowing SQLiteConnection,
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState? = nil
   ) {
     self.access = SQLiteConnectionAccess(handle: handle)
     self.statements = handle.statements
     self.authorizer = handle.authorizer
     self.observations = observations
+    self.connectionState = connectionState
   }
 
   /// The underlying `sqlite3 *`.
@@ -137,11 +140,15 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
     observations.didRead(in: region)
   }
 
-  borrowing func withObserver<Result: ~Copyable>(
+  /// Observes only the connection events produced while `operation` runs.
+  ///
+  /// Registrations nest in call order and never observe another connection's access. A scoped
+  /// observer receives a commit or rollback only if it remains registered when that event occurs.
+  public borrowing func withObservation<Result: ~Copyable>(
     _ observer: any OrbitDatabaseTransactionObserver,
     perform operation: () throws -> Result
   ) rethrows -> Result {
-    try observations.withObserver(observer, perform: operation)
+    try observations.withObservation(observer, perform: operation)
   }
 
   @_lifetime(borrow self)
@@ -158,7 +165,8 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
       library: library,
       statements: statements,
       authorizer: authorizer,
-      observations: observations
+      observations: observations,
+      connectionState: connectionState
     )
   }
 }
@@ -186,10 +194,15 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
 
   @_lifetime(borrow handle)
   init(
-    handle: borrowing SQLiteHandle,
-    observations: OrbitDatabaseTransactionObservationContext
+    handle: borrowing SQLiteConnection,
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState? = nil
   ) {
-    self.base = SQLiteReadTransaction(handle: handle, observations: observations)
+    self.base = SQLiteReadTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: connectionState
+    )
   }
 
   /// The underlying `sqlite3 *`.
@@ -334,7 +347,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// - Parameter script: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
   public borrowing func executeScript(_ script: String) throws {
-    try SQLiteHandle.executeScript(
+    try SQLiteConnection.executeScript(
       script,
       on: base.connection,
       library: base.library,
@@ -363,4 +376,16 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   public borrowing func notifyReads(in region: OrbitDatabaseRegion) {
     base.observations.didRead(in: region)
   }
+
+  /// Observes only the connection events produced while `operation` runs.
+  ///
+  /// The transaction commits after its access closure returns, so a registration scoped to that
+  /// closure observes its provisional changes, but not its later commit or rollback.
+  public borrowing func withObservation<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try base.withObservation(observer, perform: operation)
+  }
+
 }
