@@ -6,6 +6,52 @@
   @Suite
   struct RawSQLRowConversionTests {
     @Test
+    func rawRequestsPreserveBindingsIdentityAndRowDecoding() async throws {
+      let database = try inMemoryDatabase()
+      let id = 42
+      let sql: SQL = "SELECT 7 AS scalar, \(id) AS id"
+      let request = sql.allRowsRequest(as: DualRecord.self)
+      let equal = sql.allRowsRequest(as: DualRecord.self)
+      let different: SQL = "SELECT 7 AS scalar, \(43) AS id"
+      #expect(Set([request, equal, different.allRowsRequest(as: DualRecord.self)]).count == 2)
+      #expect(request.sql.bindings == [.integer(42)])
+      let observation = request.observation()
+      #expect(observation.identity == equal.observation().identity)
+      try await database.read { transaction throws in
+        #expect(try request.fetch(transaction).map(\.id) == [42])
+        #expect(try sql.firstRowRequest(as: DualRecord.self).fetch(transaction)?.id == 42)
+        #expect(try sql.requiredFirstRowRequest(as: DualRecord.self).fetch(transaction).id == 42)
+        let empty: SQL = "SELECT 1 AS id WHERE 0"
+        #expect(try empty.allRowsRequest(as: DualRecord.self).fetch(transaction).isEmpty)
+        #expect(try empty.firstRowRequest(as: DualRecord.self).fetch(transaction) == nil)
+        #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try empty.requiredFirstRowRequest(as: DualRecord.self).fetch(transaction)
+        }
+        #expect(throws: Rejection.self) {
+          try sql.requiredFirstRowRequest(as: RejectedRecord.self).fetch(transaction)
+        }
+      }
+      // Borrowed connections already support lazy row decoding outside a transaction.
+      let ids = try await database.readWithoutTransaction {
+        try $0.fetchCursor(sql, as: DualRecord.self).map(\.id).collect()
+      }
+      #expect(ids == [42])
+    }
+
+    @Test
+    func rawRequestsDriveFetchPropertiesAndObserveChanges() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write { try $0.execute("CREATE TABLE records (id INTEGER)") }
+      let sql: SQL = "SELECT id FROM records ORDER BY id"
+      @Fetch(sql.allRowsRequest(as: DualRecord.self), database: database)
+      var records = [DualRecord]()
+      var values = $records.values.makeAsyncIterator()
+      #expect(await values.next()?.isEmpty == true)
+      try await database.write { try $0.execute("INSERT INTO records VALUES (42)") }
+      #expect(await values.next()?.map(\.id) == [42])
+    }
+
+    @Test
     func rowConversionWinsForTypesSupportingBothConversions() async throws {
       let database = try inMemoryDatabase()
       let sql: SQL = "SELECT 7 AS scalar, 42 AS id"

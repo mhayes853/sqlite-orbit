@@ -1,48 +1,91 @@
 #if StructuredQueries
   public import StructuredQueriesSQLite
+#endif
 
-  /// A reusable statement request created by `allRowsRequest()`, `firstRowRequest()`, or
-  /// `requiredFirstRowRequest()`.
+/// A reusable statement request created by `allRowsRequest()`, `firstRowRequest()`, or
+/// `requiredFirstRowRequest()`.
+///
+/// Requests compare their SQL, bindings, fetch mode, and decoding type. Read one with `fetch`,
+/// create its observation with `observation()`, or pass it to `Fetch`.
+public struct OrbitStatementRequest<Value: Sendable>: OrbitFetchKeyRequest {
+  /// The query and bindings this request reads.
+  public let sql: SQL
+  private let mode: Mode
+  private let decodingType: ObjectIdentifier
+  private let decodesRow: Bool
+  private let read: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+
+  fileprivate enum Mode: Hashable { case allRows, firstRow, flattenedFirstRow, requiredFirstRow }
+
+  fileprivate init<Decoded>(
+    sql: SQL,
+    mode: Mode,
+    decoding: Decoded.Type,
+    decodesRow: Bool = false,
+    read: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) {
+    self.sql = sql
+    self.mode = mode
+    self.decodingType = ObjectIdentifier(decoding)
+    self.decodesRow = decodesRow
+    self.read = read
+  }
+
+  /// Reads the statement's value in a transaction.
+  public func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
+    try read(transaction)
+  }
+
+  public static func == (lhs: Self, rhs: Self) -> Bool {
+    lhs.sql == rhs.sql && lhs.mode == rhs.mode && lhs.decodingType == rhs.decodingType
+      && lhs.decodesRow == rhs.decodesRow
+  }
+
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(sql)
+    hasher.combine(mode)
+    hasher.combine(decodingType)
+    hasher.combine(decodesRow)
+  }
+}
+
+extension SQL {
+  /// A reusable request that initializes an owned value from every result row.
   ///
-  /// Requests compare their SQL, bindings, fetch mode, and decoding type. Read one with `fetch`,
-  /// create its observation with `observation()`, or pass it to `Fetch`.
-  public struct OrbitStatementRequest<Value: Sendable>: OrbitFetchKeyRequest {
-    /// The query and bindings this request reads.
-    public let sql: SQL
-    private let mode: Mode
-    private let decodingType: ObjectIdentifier
-    private let read: @Sendable (borrowing SQLiteReadTransaction) throws -> Value
-
-    fileprivate enum Mode: Hashable { case allRows, firstRow, flattenedFirstRow, requiredFirstRow }
-
-    fileprivate init<Decoded>(
-      sql: SQL,
-      mode: Mode,
-      decoding: Decoded.Type,
-      read: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
-    ) {
-      self.sql = sql
-      self.mode = mode
-      self.decodingType = ObjectIdentifier(decoding)
-      self.read = read
-    }
-
-    /// Reads the statement's value in a transaction.
-    public func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
-      try read(transaction)
-    }
-
-    public static func == (lhs: Self, rhs: Self) -> Bool {
-      lhs.sql == rhs.sql && lhs.mode == rhs.mode && lhs.decodingType == rhs.decodingType
-    }
-
-    public func hash(into hasher: inout Hasher) {
-      hasher.combine(sql)
-      hasher.combine(mode)
-      hasher.combine(decodingType)
+  /// Available without Structured Queries. The request preserves the SQL and bindings, and uses
+  /// `ConvertibleFromOrbitDatabaseRow` even when the value also supports scalar conversion.
+  public func allRowsRequest<Value: ConvertibleFromOrbitDatabaseRow & Sendable>(
+    as type: Value.Type
+  ) -> OrbitStatementRequest<[Value]> {
+    OrbitStatementRequest(sql: self, mode: .allRows, decoding: type, decodesRow: true) {
+      try $0.fetchAll(self, as: type)
     }
   }
 
+  /// A reusable request for the first row, or `nil` when the result is empty.
+  public func firstRowRequest<Value: ConvertibleFromOrbitDatabaseRow & Sendable>(
+    as type: Value.Type
+  ) -> OrbitStatementRequest<Value?> {
+    OrbitStatementRequest(sql: self, mode: .firstRow, decoding: type, decodesRow: true) {
+      try $0.fetchOne(self, as: type)
+    }
+  }
+
+  /// A reusable request for the first row, throwing `OrbitDatabaseRecordNotFoundError` if absent.
+  /// Decoding and statement errors propagate unchanged.
+  public func requiredFirstRowRequest<Value: ConvertibleFromOrbitDatabaseRow & Sendable>(
+    as type: Value.Type
+  ) -> OrbitStatementRequest<Value> {
+    OrbitStatementRequest(sql: self, mode: .requiredFirstRow, decoding: type, decodesRow: true) {
+      guard let value = try $0.fetchOne(self, as: type) else {
+        throw OrbitDatabaseRecordNotFoundError()
+      }
+      return value
+    }
+  }
+}
+
+#if StructuredQueries
   extension Statement where QueryValue: QueryRepresentable, QueryValue.QueryOutput: Sendable {
     /// A reusable request for every result row, preserving the statement's order and bindings.
     public func allRowsRequest() -> OrbitStatementRequest<[QueryValue.QueryOutput]> {

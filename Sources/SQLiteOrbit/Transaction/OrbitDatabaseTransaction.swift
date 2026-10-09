@@ -424,23 +424,15 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
   }
 }
 
+/// Thrown when a fetch requires a row but the query produces none.
+public struct OrbitDatabaseRecordNotFoundError: Error, Sendable {
+  /// Creates the error.
+  public init() {}
+}
+
 // MARK: - Structured Queries
 
 #if StructuredQueries
-  /// Thrown by ``OrbitDatabaseReadTransaction/find(_:key:)`` when no row has the given primary key.
-  ///
-  /// ```swift
-  /// do {
-  ///   let reminder = try transaction.find(Reminder.all, key: 42)
-  /// } catch is OrbitDatabaseRecordNotFoundError {
-  ///   print("no reminder 42")
-  /// }
-  /// ```
-  public struct OrbitDatabaseRecordNotFoundError: Error, Sendable {
-    /// Creates the error.
-    public init() {}
-  }
-
   // MARK: - Undecoded rows
 
   extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
