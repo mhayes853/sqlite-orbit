@@ -63,13 +63,12 @@
       @Test
       func replacingThePersistentPolicyInvalidatesCachedStatements() throws {
         var configuration = SQLiteConfiguration.default
-        configuration.connectionSetups.append(
-          SQLiteConnectionSetup { connection in
+        configuration.setups.append(
+          SQLiteSetup { connection in
             try connection.setAuthorization(denySecrets)
-            return SQLiteResultCode.ok.rawValue
           }
         )
-        configuration.setupSQL = [schema]
+        configuration.setups.append(.script(schema))
         let database = try SQLiteQueue(path: .memory, configuration: configuration)
         try database.writeWithoutTransactionBlocking { connection in
           #expect(throws: SQLiteError.self) {
@@ -120,7 +119,7 @@
           default: return .allow
           }
         }
-        configuration.setupSQL = [schema]
+        configuration.setups.append(.script(schema))
         let database = try SQLiteQueue(path: .memory, configuration: configuration)
         let error = #expect(throws: SQLiteError.self) {
           try database.writeBlocking { try $0.execute("INSERT INTO copies VALUES ('lost')") }
@@ -135,7 +134,7 @@
       @Test(arguments: ["BEGIN", "COMMIT", "query_only", "foreign_keys"])
       func ignoringManagedControlFailsInsteadOfSilentlySkippingIt(action: String) throws {
         var configuration = SQLiteConfiguration.default
-        configuration.setupSQL = [schema]
+        configuration.setups.append(.script(schema))
         configuration.authorization = { event in
           switch event.action {
           case .transaction(operation: action), .pragma(name: action, value: _): return .ignore
@@ -217,7 +216,7 @@
 
       private func authorizationDatabase() throws -> SQLiteQueue {
         var configuration = SQLiteConfiguration.default
-        configuration.setupSQL = [schema]
+        configuration.setups.append(.script(schema))
         return try SQLiteQueue(path: .memory, configuration: configuration)
       }
     #endif

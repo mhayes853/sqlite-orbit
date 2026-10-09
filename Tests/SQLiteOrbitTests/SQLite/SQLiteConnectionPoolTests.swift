@@ -39,11 +39,14 @@
           }
         }
         #expect(ids == [41])
-        let readerSetup = try await pool.withReadConnection { $0.configuration.setupSQL }
-        let writerSetup = try await pool.withWriteConnection { $0.configuration.setupSQL }
-        #expect(readerSetup == ["PRAGMA cache_size = 101"])
-        #expect(writerSetup.contains("PRAGMA cache_size = 202"))
-        #expect(!writerSetup.contains(poolItemsSchema))
+        let readerSetups = try await pool.withReadConnection { $0.configuration.setups.count }
+        let writerSetups = try await pool.withWriteConnection { $0.configuration.setups.count }
+        #expect(readerSetups == 1)
+        #if Turso
+          #expect(writerSetups == 2)
+        #else
+          #expect(writerSetups == 1)
+        #endif
 
         let blockingIDs = try await withDeadline {
           try pool.withReadConnectionBlocking { connection in
@@ -254,14 +257,16 @@
   ) async throws {
     try await withTemporaryDirectory("low-pool") { directory in
       var readerConfiguration = SQLiteConfiguration.default
-      readerConfiguration.setupSQL = ["PRAGMA cache_size = 101"]
+      readerConfiguration.setups = [.sql("PRAGMA cache_size = 101")]
       var writerConfiguration = SQLiteConfiguration.default
-      writerConfiguration.setupSQL = ["PRAGMA cache_size = 202"]
+      writerConfiguration.setups = [.sql("PRAGMA cache_size = 202")]
       #if Turso
-        writerConfiguration.setupSQL.insert("PRAGMA journal_mode = MVCC", at: 0)
-        let writerSetupSQL = [poolItemsSchema, poolListsSchema]
+        writerConfiguration.setups.insert(.sql("PRAGMA journal_mode = MVCC"), at: 0)
+        let writerSetups: [SQLiteSetup] = [.script(poolItemsSchema), .script(poolListsSchema)]
       #else
-        let writerSetupSQL = ["PRAGMA journal_mode = WAL", poolItemsSchema, poolListsSchema]
+        let writerSetups: [SQLiteSetup] = [
+          .sql("PRAGMA journal_mode = WAL"), .script(poolItemsSchema), .script(poolListsSchema)
+        ]
       #endif
       let pool = try SQLiteConnectionPool(
         path: OrbitDatabasePath(directory.appendingPathComponent("database.sqlite").path),
@@ -269,8 +274,8 @@
         writerConfiguration: writerConfiguration,
         readerCount: 2,
         writerCount: writerCount,
-        readerSetupSQL: ["PRAGMA query_only = 1"],
-        writerSetupSQL: writerSetupSQL
+        readerSetups: [.sql("PRAGMA query_only = 1")],
+        writerSetups: writerSetups
       )
       try await body(pool)
     }

@@ -86,8 +86,10 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
         readerConfiguration: configuration,
         writerConfiguration: configuration,
         readerCount: readerCount,
-        readerSetupSQL: ["PRAGMA query_only = 1"],
-        writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
+        readerSetups: [.sql("PRAGMA query_only = 1")],
+        writerSetups: [
+          .sql("PRAGMA journal_mode = WAL"), .sql("SELECT count(*) FROM sqlite_schema")
+        ],
         identifier: identifier
       )
     }

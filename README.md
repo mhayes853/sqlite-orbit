@@ -451,7 +451,7 @@ let pool = try SQLiteConnectionPool(
   writerConfiguration: .default,
   readerCount: 4,
   writerCount: 1,
-  writerSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"]
+  writerSetups: [.sql("PRAGMA journal_mode = WAL"), .sql("SELECT count(*) FROM sqlite_schema")]
 )
 try await pool.withWriteConnection { connection in
   try connection.transaction(observer: recorder) { transaction in
@@ -777,18 +777,21 @@ the key sits in freed memory rather than guaranteeing anything about the process
 reach material you hold: the `String` a passphrase was read from stays yours to manage.
 
 `withUnsafeBytes` lends the key out for work the package does not model — calling a build's
-`sqlite3_rekey_v2` from a `SQLiteConnectionSetup`, or keying a database brought in with `ATTACH`:
+`sqlite3_rekey_v2` from a `SQLiteSetup`, or keying a database brought in with `ATTACH`:
 
 ```swift
-configuration.connectionSetups.append(
-  SQLiteConnectionSetup { connection in
-    key.withUnsafeBytes { bytes in
+configuration.setups.append(
+  SQLiteSetup { connection in
+    let code = key.withUnsafeBytes { bytes in
       connection.sqlite.encryption!.rekey(
         connection.sqliteConnection,
         "main",
         bytes.baseAddress,
         Int32(bytes.count)
       )
+    }
+    guard code == SQLiteResultCode.ok.rawValue else {
+      throw SQLiteError(code: SQLiteResultCode(rawValue: code))
     }
   }
 )
@@ -802,10 +805,30 @@ A codec accepts any key and only reports a wrong one once something reads the fi
 connection reads the schema while it is being configured. A wrong key fails the open rather than
 the first query the caller happens to run.
 
+## Connection setup
+
+`SQLiteConfiguration.setups` is one ordered collection of SQL and callbacks. Each step runs after
+standard settings and authorization have been applied, before the connection is lent to callers.
+A thrown error stops setup and closes the connection.
+
+```swift
+configuration.setups = [
+  .script("CREATE TEMP TABLE scratch (value TEXT); CREATE INDEX scratch_value ON scratch(value);"),
+  .sql("INSERT INTO scratch VALUES (\(initialValue))"),
+  SQLiteSetup { connection in
+    try connection.register(function: normalize)
+  }
+]
+```
+
+Use `.sql` for a single statement with bindings and `.script` for program-controlled scripts.
+Callbacks receive `SQLiteConnectionAccess`, which exposes the opened connection and its library.
+Runtime-wide auto-extension registration uses `SQLiteLibrary.registerAutoExtension` explicitly
+before opening connections. It is independent of the setup collection.
+
 ## SQLite Vec
 
-Enable the opt-in `Vectors` trait to make vector functions and `vec0` tables available on
-connections opened with a `SQLiteConfiguration`:
+Enable the opt-in `Vectors` trait to include vector types and the SQLite Vec integration:
 
 ```swift
 .package(
@@ -815,11 +838,14 @@ connections opened with a `SQLiteConfiguration`:
 )
 ```
 
-No application startup registration or extra Swift Testing trait is required. Vec initializes
-before user connection setups and setup SQL, on writers, pool readers, and reopened connections:
+Choose the configuration's library, then explicitly register Vec before opening connections.
+The convenience handles runtime registration and per-connection setup for writers, pool readers,
+and reopened connections:
 
 ```swift
-let database = try SQLiteQueue(path: databasePath)
+var configuration = SQLiteConfiguration.default
+try configuration.registerSQLiteVec()
+let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 try await database.write { transaction in
   try transaction.executeScript(
     "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
@@ -840,26 +866,30 @@ let nearest = try await database.read { transaction in
 ```
 
 Apple system SQLite uses per-connection initialization, identified by its library capability rather
-than its name or version. Other supported runtimes register Vec automatically before opening the
-connection. Automatic registration affects every future connection in that SQLite runtime, including
+than its name or version. For other supported runtimes, `registerSQLiteVec()` immediately registers
+an automatic initializer. Automatic registration affects every future connection in that SQLite
+runtime, including
 connections outside Orbit; already opened connections are unaffected.
 
 Custom builds opt into their own automatic registration bindings:
 
 ```swift
 let library = #sqliteLibrary(module: "MySQLite", apis: [.standard, .autoExtensions])
-let configuration = SQLiteConfiguration(library: library)
+var configuration = SQLiteConfiguration(library: library)
+try configuration.registerSQLiteVec()
 let database = try SQLiteQueue(path: databasePath, configuration: configuration)
 ```
 
 On non-Apple platforms, the runtime must provide the extension API table and virtual-table
 registration Vec requires; builds omitting these fail initialization. On Apple platforms, the SDK
 compiles Vec against the linked `sqlite3_*` symbols directly, so a custom build must be their sole
-provider. Turso and libraries without extension support fail the open with
+provider. Turso and libraries without extension support fail registration with
 `SQLiteFeatureUnavailableError`.
 
-If you replace `configuration.connectionSetups`, call `configuration.registerSQLiteVec()` to restore
-Vec initialization. Its registration uses the configuration's library at connection opening time.
+On Apple system SQLite, replacing `configuration.setups` removes the Vec initializer; call
+`try configuration.registerSQLiteVec()` again to restore it. Select the library before registering
+Vec: registration uses the currently selected runtime and is not deferred until opening.
+Registration errors are thrown immediately; per-connection initialization errors fail the open.
 
 The general `SQLiteLibrary.registerAutoExtension` and `cancelAutoExtension` APIs are available
 without the Vec trait. Cancellation affects future connections and leaves already initialized ones

@@ -9,7 +9,7 @@
 ///
 /// ```swift
 /// var configuration = SQLiteConfiguration.default
-/// configuration.setupSQL.append("PRAGMA synchronous = NORMAL")
+/// configuration.setups.append(.sql("PRAGMA synchronous = NORMAL"))
 /// configuration.registerFunction("reversed", argumentCount: 1, flags: [.deterministic]) {
 ///   arguments in
 ///   arguments[0].textValue.map { .text(String($0.reversed())) } ?? nil
@@ -85,7 +85,7 @@ public struct SQLiteConfiguration: Sendable {
   /// not every execution of a cached statement. Replace a policy through `setAuthorization(_:)`
   /// to invalidate prepared statements. A library without authorizer support fails to open.
   ///
-  /// Applied after standard connection settings and before connection setups and `setupSQL`.
+  /// Applied after standard connection settings and before ``setups``.
   /// Ignoring required transaction control or driver settings is treated as denial. Library recovery
   /// (rollback and restoring temporary settings) bypasses application policies.
   public var authorization: SQLiteAuthorizationHandler?
@@ -102,11 +102,9 @@ public struct SQLiteConfiguration: Sendable {
   /// How many prepared statements a connection keeps for reuse.
   public var maximumCachedStatements: Int
 
-  /// SQL run on every connection once it has been configured.
-  public var setupSQL: [String]
-
-  /// Native callbacks installed on every connection.
-  public var connectionSetups: [SQLiteConnectionSetup]
+  /// Setups run in order on every connection after its standard settings and authorization policy.
+  /// A thrown error stops setup and closes the connection.
+  public var setups: [SQLiteSetup]
 
   /// Creates a configuration for connections opened against `library`.
   ///
@@ -116,8 +114,7 @@ public struct SQLiteConfiguration: Sendable {
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
   ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
-  ///   - setupSQL: SQL run on every connection once it has been configured.
-  ///   - connectionSetups: Native callbacks installed on every connection.
+  ///   - setups: SQL and callbacks run in order on every configured connection.
   ///   - key: The key an encrypted database is unlocked with.
   ///   - busyHandler: Decides on each attempt whether to keep waiting for a lock, in place of
   ///     `busyTimeout`.
@@ -128,8 +125,7 @@ public struct SQLiteConfiguration: Sendable {
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
-    setupSQL: [String] = [],
-    connectionSetups: [SQLiteConnectionSetup] = [],
+    setups: [SQLiteSetup] = [],
     key: SQLiteKey? = nil,
     busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil,
     authorization: SQLiteAuthorizationHandler? = nil
@@ -142,76 +138,7 @@ public struct SQLiteConfiguration: Sendable {
     self.isForeignKeysEnabled = isForeignKeysEnabled
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled
     self.maximumCachedStatements = maximumCachedStatements
-    self.setupSQL = setupSQL
-    self.connectionSetups = connectionSetups
-    #if Vectors
-      registerSQLiteVec()
-    #endif
-  }
-}
-
-/// A native callback installed on every connection a configuration opens.
-///
-/// This is the escape hatch for registering what the package does not model — an update hook or a
-/// virtual table module. The closure receives primitive ``SQLiteConnectionAccess`` once the
-/// connection has been configured. It exposes the raw connection and its library, and can execute
-/// ``SQL`` with bindings.
-///
-/// A setup runs on the connection's own queue, before any transaction can reach it.
-///
-/// - Important: SQLiteOrbit owns SQLite's single authorizer callback. A setup must not replace it.
-///
-/// ```swift
-/// var configuration = SQLiteConfiguration.default
-/// configuration.connectionSetups.append(
-///   SQLiteConnectionSetup { connection in
-///     connection.sqlite.connections.setExtendedResultCodes(connection.sqliteConnection, 1)
-///   }
-/// )
-/// ```
-public struct SQLiteConnectionSetup: Sendable {
-  private let prepare: (@Sendable (SQLiteLibrary) throws -> Void)?
-  private let install: @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
-
-  /// Creates a setup from a closure run on every connection.
-  ///
-  /// - Parameters:
-  ///   - prepare: Runs before opening each connection, using its selected library. Use this for
-  ///     runtime-wide initialization such as automatic extension registration. A thrown error
-  ///     prevents the connection from being opened.
-  ///   - install: Receives primitive access to the connection and returns a SQLite result code.
-  ///     Anything other than `SQLITE_OK` fails the open.
-  public init(
-    prepare: (@Sendable (SQLiteLibrary) throws -> Void)? = nil,
-    install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Int32
-  ) {
-    self.prepare = prepare
-    self.install = install
-  }
-
-  /// Prepares `library` before opening a connection.
-  ///
-  /// Custom drivers should call this before their native open, then install the setup on the
-  /// configured connection with ``callAsFunction(_:)``.
-  /// - Throws: Whatever the preparation closure throws. A failure must prevent opening the
-  ///   connection.
-  public func prepare(using library: SQLiteLibrary) throws {
-    try prepare?(library)
-  }
-
-  /// Installs the setup on `connection`.
-  /// - Throws: Whatever the setup threw, or a ``SQLiteError`` when it reported a result code other
-  ///   than `SQLITE_OK`. Either fails the open that ran it.
-  public func callAsFunction(_ connection: borrowing SQLiteConnectionAccess) throws {
-    let code = try install(connection)
-    guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(
-        by: connection.sqlite,
-        on: connection.sqliteConnection,
-        code: code,
-        sql: nil
-      )
-    }
+    self.setups = setups
   }
 }
 
@@ -219,12 +146,7 @@ extension SQLiteConfiguration {
   mutating func register(
     _ install: @escaping @Sendable (borrowing SQLiteConnectionAccess) throws -> Void
   ) {
-    connectionSetups.append(
-      SQLiteConnectionSetup { connection in
-        try install(connection)
-        return SQLiteResultCode.ok.rawValue
-      }
-    )
+    setups.append(SQLiteSetup(install))
   }
 }
 

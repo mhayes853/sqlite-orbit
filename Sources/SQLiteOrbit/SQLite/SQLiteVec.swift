@@ -4,39 +4,46 @@
   private let sqliteVecInitializer: SQLiteExtensionInitializer = sqlite_orbit_vec_init
 
   extension SQLiteConfiguration {
-    /// Arranges SQLite Vec initialization before user setup runs on every connection.
+    /// Enables SQLite Vec for this configuration's selected library.
     ///
-    /// Configurations already register this when the `Vectors` package trait is enabled.
-    /// Call it again only if you replaced ``connectionSetups`` and want to restore Vec setup.
+    /// Call this explicitly after choosing `library` and before opening any connections. The
+    /// `Vectors` trait provides the integration but does not register it automatically.
     ///
-    /// Apple system SQLite initializes the SDK-compiled extension directly on each connection.
-    /// Other runtimes register an automatic initializer before opening connections. Registration
-    /// affects all future connections in that runtime, including connections outside Orbit.
+    /// Apple system SQLite initializes the SDK-compiled extension on each connection through a
+    /// prepended setup. If you replace `setups`, call this again to restore that setup.
+    /// Other runtimes register an automatic initializer immediately. Registration affects all
+    /// future connections in that runtime, including connections outside Orbit; existing
+    /// connections are unaffected. Repeated automatic registration is a harmless no-op.
     ///
-    /// A custom runtime must provide ``SQLiteLibrary/extensions`` with automatic registration
+    /// A custom runtime must provide `SQLiteLibrary.extensions` with automatic registration
     /// support. On Apple platforms, Vec calls the linked `sqlite3_*` symbols directly, so the
     /// custom runtime must be the sole provider of those symbols, as with SQLCipher.
-    /// Unsupported runtimes and registration failures fail the connection's open.
-    public mutating func registerSQLiteVec() {
-      connectionSetups.insert(
-        SQLiteConnectionSetup(
-          prepare: { library in
-            if library.extensions?.isAppleSystemSQLite == true { return }
-            guard library.extensions?.autoExtensions != nil else {
-              throw SQLiteFeatureUnavailableError(libraryName: library.name, feature: .sqliteVec)
+    ///
+    /// - Throws: `SQLiteFeatureUnavailableError` for unsupported runtimes, or `SQLiteError` when
+    ///   automatic registration fails. Apple per-connection initialization errors fail the open.
+    public mutating func registerSQLiteVec() throws {
+      if library.extensions?.isAppleSystemSQLite == true {
+        setups.insert(
+          SQLiteSetup { connection in
+            guard connection.sqlite.extensions?.isAppleSystemSQLite == true else { return }
+            let code = sqliteVecInitializer(connection.sqliteConnection, nil, nil)
+            guard code == SQLiteResultCode.ok.rawValue else {
+              throw SQLiteError.reported(
+                by: connection.sqlite,
+                on: connection.sqliteConnection,
+                code: code,
+                sql: nil
+              )
             }
-            try library.registerAutoExtension(sqliteVecInitializer)
           },
-          install: { connection in
-            guard connection.sqlite.extensions?.isAppleSystemSQLite == true else {
-              // Automatic extensions were initialized by SQLite during `open`.
-              return SQLiteResultCode.ok.rawValue
-            }
-            return sqliteVecInitializer(connection.sqliteConnection, nil, nil)
-          }
-        ),
-        at: 0
-      )
+          at: 0
+        )
+      } else {
+        guard library.extensions?.autoExtensions != nil else {
+          throw SQLiteFeatureUnavailableError(libraryName: library.name, feature: .sqliteVec)
+        }
+        try library.registerAutoExtension(sqliteVecInitializer)
+      }
     }
   }
 #endif

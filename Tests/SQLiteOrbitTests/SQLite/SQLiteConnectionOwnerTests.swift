@@ -395,26 +395,17 @@
       #expect(counts.closeCodes == [SQLiteResultCode.ok.rawValue])
     }
 
-    @Test(arguments: [false, true])
-    func failedSetupClosesAnOpenedHandleButPreparationFailureDoesNotOpenOne(
-      failsBeforeOpening: Bool
-    ) {
+    @Test
+    func failedSetupClosesAnOpenedHandle() {
       let counters = OwnerLibraryCounters()
       var configuration = SQLiteConfiguration.default
       configuration.library = ownerCountingLibrary(counters)
-      configuration.connectionSetups = [
-        SQLiteConnectionSetup(
-          prepare: { _ in
-            if failsBeforeOpening { throw OwnerTestFailure() }
-          },
-          install: { _ in throw OwnerTestFailure() }
-        )
-      ]
+      configuration.setups = [SQLiteSetup { _ in throw OwnerTestFailure() }]
       #expect(throws: OwnerTestFailure.self) {
         _ = try SQLiteConnection(path: ":memory:", configuration: configuration)
       }
       let counts = counters.snapshot
-      #expect(counts.opened == (failsBeforeOpening ? 0 : 1))
+      #expect(counts.opened == 1)
       #expect(counts.closed == counts.opened)
       #expect(counts.prepared == counts.finalized)
       #expect(counts.allStatementsFinalizedBeforeClose)

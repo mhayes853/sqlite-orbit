@@ -89,7 +89,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// handler and which therefore replaces whatever handler the connection had. A
   /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
   /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
+  /// ``SQLiteSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     handle.pointee.settings.pointee.busyTimeout
   }
@@ -301,7 +301,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// handler and which therefore replaces whatever handler the connection had. A
   /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
   /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
+  /// ``SQLiteSetup`` installed itself is not known here and is not put back.
   public var busyTimeout: SQLiteBusyTimeout {
     handle.pointee.settings.pointee.busyTimeout
   }

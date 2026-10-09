@@ -71,11 +71,6 @@ public struct SQLiteConnection: ~Copyable {
     configuration: SQLiteConfiguration,
     flags: SQLiteOpenFlags = [.readWrite, .create, .noMutex]
   ) throws {
-    // Runtime registration must precede `open`, and must use the library the configuration has
-    // now, rather than one captured when a setup was added.
-    for setup in configuration.connectionSetups {
-      try setup.prepare(using: configuration.library)
-    }
     let libraryStorage = UnsafeMutablePointer<SQLiteLibrary>.allocate(capacity: 1)
     libraryStorage.initialize(to: configuration.library)
     let configurationStorage = UnsafeMutablePointer<SQLiteConfiguration>.allocate(capacity: 1)
@@ -167,11 +162,8 @@ public struct SQLiteConnection: ~Copyable {
     if let authorization = configuration.authorization {
       try connection.setAuthorization(authorization)
     }
-    for setup in configuration.connectionSetups {
+    for setup in configuration.setups {
       try setup(connection)
-    }
-    for sql in configuration.setupSQL {
-      try execute(sql)
     }
   }
 

@@ -3,7 +3,7 @@
 /// Callers choose transaction boundaries and install observers inside each synchronous loan.
 /// Writer loans are barriers by default; explicit concurrent loans may overlap reads and other
 /// concurrent writers. Configure a journal mode that supports the intended concurrency before
-/// readers open, using `writerConfiguration` or `writerSetupSQL`.
+/// readers open, using `writerConfiguration` or `writerSetups`.
 ///
 /// Borrowed connections cannot escape their closure. Every loan ends after connection cleanup,
 /// including when the closure throws.
@@ -24,8 +24,8 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     writerConfiguration: SQLiteConfiguration,
     readerCount: Int = 5,
     writerCount: Int = 1,
-    readerSetupSQL: [String] = [],
-    writerSetupSQL: [String] = [],
+    readerSetups: [SQLiteSetup] = [],
+    writerSetups: [SQLiteSetup] = [],
     identifier: OrbitDatabaseIdentifier? = nil
   ) throws {
     precondition(
@@ -44,7 +44,7 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
         path: path,
         flags: [.readWrite, .create, .noMutex],
         configuration: writerConfiguration,
-        driverSetupSQL: writerSetupSQL,
+        driverSetups: writerSetups,
         suspension: suspension
       )
     }
@@ -54,7 +54,7 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
           path: path,
           flags: [.readOnly, .noMutex],
           configuration: readerConfiguration,
-          driverSetupSQL: readerSetupSQL
+          driverSetups: readerSetups
         )
       }
     self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)

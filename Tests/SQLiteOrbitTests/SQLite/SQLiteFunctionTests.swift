@@ -433,10 +433,10 @@
     func functionsAreAvailableToConnectionSetupSQL() async throws {
       var configuration = SQLiteConfiguration.default
       configuration.register(function: $repeated)
-      configuration.setupSQL = [
-        "CREATE TABLE configured (value TEXT NOT NULL)",
-        "INSERT INTO configured VALUES (repeated('ab', 2))"
-      ]
+      configuration.setups.append(contentsOf: [
+        .sql("CREATE TABLE configured (value TEXT NOT NULL)"),
+        .sql("INSERT INTO configured VALUES (repeated('ab', 2))")
+      ])
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
       let values = try await driver.read { transaction in

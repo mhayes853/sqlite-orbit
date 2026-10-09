@@ -40,16 +40,18 @@
     func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.setupSQL = ["PRAGMA cache_size = 100"]
+        configuration.setups = [.sql("PRAGMA cache_size = 100")]
         let pool = try file.pool(configuration: configuration)
 
         // The pool's own setup for each role stays out of what its transactions report.
-        let readerSetup = try await pool.read { $0.configuration.setupSQL }
-        let writerSetup = try await pool.write { $0.configuration.setupSQL }
-        let connectionSetup = try await pool.writeWithoutTransaction { $0.configuration.setupSQL }
-        #expect(readerSetup == ["PRAGMA cache_size = 100"])
-        #expect(writerSetup == ["PRAGMA cache_size = 100"])
-        #expect(connectionSetup == ["PRAGMA cache_size = 100"])
+        let readerSetup = try await pool.read { $0.configuration.setups.count }
+        let writerSetup = try await pool.write { $0.configuration.setups.count }
+        let connectionSetup = try await pool.writeWithoutTransaction {
+          $0.configuration.setups.count
+        }
+        #expect(readerSetup == 1)
+        #expect(writerSetup == 1)
+        #expect(connectionSetup == 1)
       }
     }
 
