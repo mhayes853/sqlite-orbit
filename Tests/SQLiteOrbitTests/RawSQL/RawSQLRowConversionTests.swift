@@ -100,7 +100,9 @@
             row.columnIndex(named: "id"), row.columnIndex(named: "ID"),
             row.columnIndex(named: "é"), row.columnIndex(named: "e\u{301}"),
             try row[column: "id", as: Int.self],
-            try row[column: "e\u{301}", as: Int.self]
+            try row[column: "e\u{301}", as: Int.self],
+            // Right after the first `id`, the column next in order is the second `id`.
+            (row.columnIndex(named: "id"), row.columnIndex(named: "id"))
           )
         }
       }
@@ -111,6 +113,7 @@
       #expect(result.3 == 4)
       #expect(result.4 == 1)
       #expect(result.5 == 5)
+      #expect(result.6 == (0, 0))
     }
 
     @Test
