@@ -4,6 +4,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Row-convertible types use their row initializer; scalar-only types read the first column.
   /// When a type supports both conversions, its row initializer takes precedence. Initialization
   /// and statement errors propagate.
+  @inlinable
   public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type

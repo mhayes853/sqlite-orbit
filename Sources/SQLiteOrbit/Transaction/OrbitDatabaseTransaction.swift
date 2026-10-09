@@ -164,6 +164,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write in
   ///   a read transaction.
+  @inlinable
   @_lifetime(borrow self)
   public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> RowCursor {
     try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
@@ -185,6 +186,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Returns: The values, in the order the rows were returned.
   /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails or may
   ///   write in a read transaction.
+  @inlinable
   public borrowing func fetchAll<Element>(
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
@@ -446,6 +448,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
 // The loops behind the raw fetches and `execute(_:cached:_:)`, which consume their cursor before
 // returning, so each lends its rows the same way.
 extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
+  @inlinable
   @_lifetime(self: copy self)
   mutating func collect<Element>(_ transform: (inout Row) throws -> Element) throws -> [Element] {
     var elements: [Element] = []
