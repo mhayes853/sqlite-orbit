@@ -307,7 +307,7 @@ let package = Package(
   dependencies: [
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "93ae64cd160b424b7c65736461ffa32cb59688ed"
+      revision: "95674796a23733fda5efaf8e5349e059df845a3f"
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two

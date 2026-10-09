@@ -125,6 +125,25 @@
       #expect(error?.reason == "Expected 12 vector bytes, found \(size)")
     }
 
+    // Float16 is unavailable on Intel macOS. Neither SQLiteVec nor Turso stores this format, but
+    // the shared scalar codec still gives raw SQL a lossless blob.
+    #if !(os(macOS) && arch(x86_64))
+      @Test
+      func float16VectorsUseLittleEndianBinary16Blobs() throws {
+        guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+          return
+        }
+        let vector = FixedEmbeddingVector<3, Float16>([1, -2, 0.5])
+        let bytes: [UInt8] = [0x00, 0x3c, 0x00, 0xc0, 0x00, 0x38]
+        #expect(vector.orbitDatabaseValue() == .blob(bytes))
+        #expect(try FixedEmbeddingVector<3, Float16>(orbitDatabaseValue: .blob(bytes)) == vector)
+        let error = #expect(throws: OrbitDatabaseValueConversionError.self) {
+          try FixedEmbeddingVector<3, Float16>(orbitDatabaseValue: .blob(Array(bytes.dropLast())))
+        }
+        #expect(error?.reason == "Expected 6 vector bytes, found 5")
+      }
+    #endif
+
     #if !Turso
       @Test(arguments: SQLiteTestDriver.allCases)
       func otherNumericPrecisionsBindAndFetchWithRawSQL(_ driver: SQLiteTestDriver) async throws {
@@ -208,6 +227,116 @@
             }
           }
         }
+
+        // Orbit decodes by storage class, so a helper's Swift type must match what SQLiteVec
+        // returns: integer lengths and elements, and real distances.
+        @Test
+        func numericHelpersDecodeWithTheirSQLiteStorageClasses() throws {
+          let database = try SQLiteQueue(path: ":memory:")
+          let floats: [Float].VectorBytesRepresentation = [1, -2, 3, -4, 5, -6, 7, -8]
+          let codes: [Int8].Int8BytesRepresentation = [1, -2, 3, -4, 5, -6, 7, -8]
+          let bits: [Bool].PackedBitsRepresentation = [
+            true, false, true, true, false, false, true, false
+          ]
+          let offset: [Int8].Int8BytesRepresentation = [0, 0, 0, 0, 0, 0, 0, 2]
+          try database.readBlocking { transaction in
+            let lengths = try #require(
+              try transaction.fetchOne(
+                #sql(
+                  "SELECT \(Vec.length(floats)), \(Vec.length(codes)), \(Vec.length(bits))",
+                  as: (Int, Int, Int).self
+                )
+              )
+            )
+            #expect([lengths.0, lengths.1, lengths.2] == [8, 8, 8])
+            let distances = try #require(
+              try transaction.fetchOne(
+                #sql(
+                  """
+                  SELECT \(Vec.distanceL1(codes, to: offset)), \(Vec.distanceL1(floats, to: floats)), \
+                  \(Vec.distanceHamming(bits, to: bits))
+                  """,
+                  as: (Double, Double, Double).self
+                )
+              )
+            )
+            #expect([distances.0, distances.1, distances.2] == [38, 0, 0])
+            #expect(
+              try transaction.fetchAll(Vec.each(floats).order(by: \.rowid).select(\.value))
+                == floats.queryOutput
+            )
+            #expect(
+              try transaction.fetchAll(Vec.each(codes).order(by: \.rowid).select(\.value))
+                == codes.queryOutput
+            )
+            // SQLiteVec reports the most significant bit of each packed byte first.
+            #expect(
+              try transaction.fetchAll(Vec.each(bits).order(by: \.rowid).select(\.value))
+                == bits.queryOutput.reversed()
+            )
+          }
+        }
+
+        @Test(arguments: SQLiteTestDriver.allCases)
+        func int8ColumnsQuantizeSearchAndBindThroughRawSQL(_ driver: SQLiteTestDriver) async throws
+        {
+          guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+            return
+          }
+          try await driver.withDatabase(
+            schema: "CREATE VIRTUAL TABLE int8_embeddings USING vec0(embedding int8[4], label text)"
+          ) { database in
+            typealias Codes = FixedEmbeddingVector<4, Int8>.Int8BytesRepresentation
+            let exact = Codes(queryOutput: FixedEmbeddingVector<4, Int8>([-128, 0, 64, 127]))
+            let floats = EmbeddingVector<4>([-1, 0, 0.5, 1])
+            try await database.write { transaction in
+              try transaction.execute(
+                SQLiteInt8Embedding.insert {
+                  ($0.embedding, $0.label)
+                } values: {
+                  (Vec.int8(exact, as: Codes.self), "exact")
+                  (Vec.quantizeInt8(floats, as: Codes.self), "quantized")
+                }
+              )
+              // Blob subtypes do not survive binding, so raw SQL tags the bound codes as well.
+              let raw: [Int8].Int8BytesRepresentation = [-128, 0, 64, 126]
+              try transaction.execute(
+                "INSERT INTO int8_embeddings(embedding, label) VALUES (vec_int8(\(raw)), 'raw')"
+              )
+            }
+            try await database.read { transaction in
+              let rows = try transaction.fetchAll(SQLiteInt8Embedding.order { $0.label })
+              #expect(rows.map(\.label) == ["exact", "quantized", "raw"])
+              #expect(
+                rows.map { Array($0.embedding) } == [
+                  [-128, 0, 64, 127], [-128, 0, 63, 126], [-128, 0, 64, 126]
+                ]
+              )
+              let nearest = try transaction.fetchAll(
+                SQLiteInt8Embedding.where { $0.embedding.match(exact) }
+                  .order { $0.distance }.limit(3).select { ($0.label, $0.distance) }
+              )
+              #expect(nearest.map(\.0) == ["exact", "raw", "quantized"])
+              let scalar = try transaction.fetchAll(
+                SQLiteInt8Embedding.order { $0.embedding.distanceL1(to: exact) }
+                  .select { $0.embedding.distanceL1(to: exact) }
+              )
+              #expect(scalar == [0, 1, 2])
+              let stored = try transaction.fetchOne(
+                "SELECT embedding FROM int8_embeddings WHERE label = 'raw'",
+                as: [Int8].Int8BytesRepresentation.self
+              )
+              #expect(stored?.queryOutput == [-128, 0, 64, 126])
+              // Fixed-size codes validate dimensions through Orbit's raw conversions too.
+              #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+                try transaction.fetchOne(
+                  "SELECT vec_slice(embedding, 0, 3) FROM int8_embeddings WHERE label = 'raw'",
+                  as: Codes.self
+                )
+              }
+            }
+          }
+        }
       #endif
 
       @Test(arguments: SQLiteTestDriver.allCases)
@@ -262,6 +391,14 @@
     private struct SQLiteBinaryEmbedding: Vec0 {
       @Column(as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self)
       var embedding: BinaryEmbeddingVector<16>
+      var label: String
+    }
+
+    @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+    @Table("int8_embeddings")
+    private struct SQLiteInt8Embedding: Vec0 {
+      @Column(as: FixedEmbeddingVector<4, Int8>.Int8BytesRepresentation.self)
+      var embedding: FixedEmbeddingVector<4, Int8>
       var label: String
     }
   #endif
