@@ -348,8 +348,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
   ///
   /// This is `sqlite3_changes64`, which counts the last statement rather than everything the
-  /// access has run, so reading it after a second ``execute(_:)`` reports only what that second
-  /// statement changed. A statement that changes nothing, such as a `SELECT` or a
+  /// access has run, so reading it after a second ``execute(_:cached:)`` reports only what that
+  /// second statement changed. A statement that changes nothing, such as a `SELECT` or a
   /// `CREATE TABLE`, leaves the previous count in place rather than resetting it to zero.
   ///
   /// ```swift
@@ -457,7 +457,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// Creates a cursor over the rows raw SQL returns.
   ///
   /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
-  /// Run a mutation through ``execute(_:)``, or create its cursor inside ``transaction(mode:observer:_:)``.
+  /// Run a mutation through ``execute(_:cached:)``, or create its cursor inside ``transaction(mode:observer:_:)``.
   ///
   /// ```swift
   /// var cursor = try connection.rowCursor("SELECT title FROM reminders")

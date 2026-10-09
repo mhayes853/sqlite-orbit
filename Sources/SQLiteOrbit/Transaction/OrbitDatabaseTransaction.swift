@@ -4,8 +4,8 @@
 
 /// Controls iteration over the rows returned by a query.
 ///
-/// Returned from the body of ``OrbitDatabaseWriteTransaction/execute(_:_:)`` to say whether the
-/// next row should be read.
+/// Returned from the body of ``OrbitDatabaseWriteTransaction/execute(_:cached:_:)`` to say whether
+/// the next row should be read.
 ///
 /// ```swift
 /// try await database.write { transaction in
@@ -443,7 +443,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   }
 }
 
-// The loops behind the raw fetches and `execute(_:_:)`, which consume their cursor before
+// The loops behind the raw fetches and `execute(_:cached:_:)`, which consume their cursor before
 // returning, so each lends its rows the same way.
 extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
   @_lifetime(self: copy self)
