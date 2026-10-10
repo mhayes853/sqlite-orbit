@@ -73,20 +73,19 @@ final class SQLiteWriteSuspension: Sendable {
     }
   }
 
-  /// Returns the step entry point for a writer connection opened through `library`, refusing the
-  /// statements a suspension forbids.
+  /// Returns the step wrapper for a writer connection opened through `library`, refusing the
+  /// statements a suspension forbids and stepping the rest through the entry point it wraps.
   func step(
     of library: SQLiteLibrary,
     on connection: OpaquePointer
-  ) -> @Sendable (OpaquePointer?) -> Int32 {
-    let step = library.statements.execution.step
+  ) -> @Sendable (OpaquePointer?, @convention(c) (OpaquePointer?) -> Int32) -> Int32 {
     let isReadOnly = library.statements.inspection.isReadOnly
     let sql = library.statements.inspection.sql
     let isAutocommit = library.connections.isAutocommit
     // An address rather than a pointer, so that the closure can be shared. The connection outlives
     // it, since the handle that owns this entry point closes the connection.
     let address = UInt(bitPattern: connection)
-    return { [self] statement in
+    return { [self] statement, next in
       let isRefused = state.withLock { state in
         guard state.isSuspended else { return false }
         let connection = OpaquePointer(bitPattern: address)
@@ -101,7 +100,7 @@ final class SQLiteWriteSuspension: Sendable {
         return !isAdmitted
       }
       if isRefused { return SQLiteResultCode.interrupt.rawValue }
-      let code = step(statement)
+      let code = next(statement)
       if code & 0xff == SQLiteResultCode.interrupt.rawValue {
         // The suspension may have interrupted a statement that was already running.
         state.withLock { state in

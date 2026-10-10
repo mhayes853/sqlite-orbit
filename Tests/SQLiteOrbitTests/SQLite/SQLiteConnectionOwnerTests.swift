@@ -254,12 +254,11 @@
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       let calls = TestRecorder<String>()
       try owner.withWriteConnection { connection in
-        let original = connection.sqlite.statements.execution.step
         #expect(throws: OwnerTestFailure.self) {
           try connection.withStatementExecution(
-            { statement in
+            { statement, next in
               calls.append("outer")
-              return original(statement)
+              return next(statement)
             }
           ) {
             _ = try connection.fetchOne("SELECT 1") { $0[0].integerValue ?? 0 }
@@ -267,12 +266,11 @@
             #expect(calls.values.allSatisfy { $0 == "outer" })
 
             calls.removeAll()
-            let outer = connection.sqlite.statements.execution.step
             do {
               try connection.withStatementExecution(
-                { statement in
+                { statement, next in
                   calls.append("inner")
-                  return outer(statement)
+                  return next(statement)
                 }
               ) {
                 _ = try connection.fetchOne("SELECT 2") { $0[0].integerValue ?? 0 }
@@ -310,19 +308,17 @@
       var second = try SQLiteConnection(path: ":memory:", configuration: .default)
       let calls = TestRecorder<String>()
       try first.withWriteConnection { outer in
-        let outerStep = outer.sqlite.statements.execution.step
         try outer.withStatementExecution(
-          { statement in
+          { statement, next in
             calls.append("first")
-            return outerStep(statement)
+            return next(statement)
           }
         ) {
           try second.withWriteConnection { inner in
-            let innerStep = inner.sqlite.statements.execution.step
             try inner.withStatementExecution(
-              { statement in
+              { statement, next in
                 calls.append("second")
-                return innerStep(statement)
+                return next(statement)
               }
             ) {
               _ = try inner.fetchOne("SELECT 1") { $0[0].integerValue ?? 0 }

@@ -13,13 +13,13 @@
 // kept on the installing thread instead, and the table gets a trampoline that finds it there. The
 // wrapper's operation is synchronous, so the statements it steps are stepped on that thread.
 //
-// Each depth of nesting on a thread has a trampoline of its own. A wrapper captures the step entry
+// Each depth of nesting on a thread has a trampoline of its own. A wrapper is handed the step entry
 // point that was installed before it, which for a nested wrapper is the trampoline of the depth
 // below, so calling it reaches the next wrapper out, while a statement stepped from inside a
 // wrapper still starts from the innermost one. Two connections wrapped on the same thread take
 // different depths, so each table reaches its own wrapper.
 enum SQLiteStepInterception {
-  typealias Step = @Sendable (OpaquePointer?) -> Int32
+  typealias Step = (OpaquePointer?) -> Int32
 
   private struct Frame {
     let depth: Int
@@ -27,8 +27,8 @@ enum SQLiteStepInterception {
     let previous: UnsafeMutablePointer<Frame>?
   }
 
-  /// Makes `step` the wrapper at the next depth of the current thread, returning the entry point
-  /// that reaches it.
+  /// Makes `step`, a wrapper already composed with the entry point it wraps, the wrapper at the
+  /// next depth of the current thread, returning the entry point that reaches it.
   ///
   /// Every call must be balanced by ``pop()`` on the same thread, innermost first.
   static func push(_ step: @escaping Step) -> @convention(c) (OpaquePointer?) -> Int32 {

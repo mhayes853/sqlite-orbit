@@ -161,16 +161,21 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
   /// Wraps statement stepping for this connection access while `operation` runs.
   ///
-  /// Capture the original `sqlite.statements.execution.step` before installing the wrapper.
-  /// The wrapper must call that function or return a SQLite result code. Statement pointers remain
-  /// valid only for their originating access and must not escape or be stepped concurrently.
-  /// Nested wrappers restore the previous implementation when their operation returns or throws.
+  /// The wrapper receives each statement along with `next`, the step entry point it wraps, and
+  /// must either step the statement through `next` or return a SQLite result code. Statement
+  /// pointers remain valid only for their originating access and must not escape or be stepped
+  /// concurrently. Nested wrappers restore the previous implementation when their operation
+  /// returns or throws.
   ///
   /// The library's step entry point is a C function pointer, so while `operation` runs it is one
   /// that finds the wrapper on the calling thread. Step statements synchronously within
   /// `operation`, on its thread. Up to eight wrappers can be nested on one thread.
   public borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+    _ step:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?,
+        _ next: @convention(c) (OpaquePointer?) -> Int32
+      ) -> Int32,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try handle.pointee.withStatementExecution(step, perform: operation)
@@ -553,16 +558,21 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
   /// Wraps statement stepping for this connection access while `operation` runs.
   ///
-  /// Capture the original `sqlite.statements.execution.step` before installing the wrapper.
-  /// The wrapper must call that function or return a SQLite result code. Statement pointers remain
-  /// valid only for their originating access and must not escape or be stepped concurrently.
-  /// Nested wrappers restore the previous implementation when their operation returns or throws.
+  /// The wrapper receives each statement along with `next`, the step entry point it wraps, and
+  /// must either step the statement through `next` or return a SQLite result code. Statement
+  /// pointers remain valid only for their originating access and must not escape or be stepped
+  /// concurrently. Nested wrappers restore the previous implementation when their operation
+  /// returns or throws.
   ///
   /// The library's step entry point is a C function pointer, so while `operation` runs it is one
   /// that finds the wrapper on the calling thread. Step statements synchronously within
   /// `operation`, on its thread. Up to eight wrappers can be nested on one thread.
   public borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+    _ step:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?,
+        _ next: @convention(c) (OpaquePointer?) -> Int32
+      ) -> Int32,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     try handle.pointee.withStatementExecution(step, perform: operation)

@@ -365,11 +365,14 @@ public struct SQLiteConnection: ~Copyable {
   }
 
   borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+    _ step:
+      @escaping @Sendable (OpaquePointer?, @convention(c) (OpaquePointer?) -> Int32) -> Int32,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     let previous = libraryStorage.pointee.statements.execution.step
-    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push(step)
+    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push {
+      step($0, previous)
+    }
     defer {
       libraryStorage.pointee.statements.execution.step = previous
       SQLiteStepInterception.pop()
