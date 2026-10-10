@@ -92,11 +92,21 @@ private func argumentsBenchmarks(named name: String, value: String) {
   }
 
   // Orbit binds interpolated values every time a statement runs. `Orbit` reuses the cached
-  // statement; `OrbitUncached` prepares each one anew.
+  // statement; `OrbitUncached` prepares each one anew; `OrbitPrepared` runs one prepared statement.
   Benchmark("\(name)/Orbit", configuration: .arguments) { benchmark in
     try measureOrbit(benchmark, value: value) { transaction in
       for _ in 0..<insertCount {
         try transaction.execute("INSERT INTO t(a) VALUES (\(value))")
+      }
+    }
+  }
+
+  // Prepared once and run with each row's argument, as SQLite and GRDB rebind theirs.
+  Benchmark("\(name)/OrbitPrepared", configuration: .arguments) { benchmark in
+    try measureOrbit(benchmark, value: value) { transaction in
+      var insert = try transaction.prepare("INSERT INTO t(a) VALUES (?)")
+      for _ in 0..<insertCount {
+        try insert.execute(value)
       }
     }
   }
