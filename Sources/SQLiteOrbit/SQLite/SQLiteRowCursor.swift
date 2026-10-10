@@ -27,19 +27,19 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let statements: SQLiteStatementCache
 
-  // Who the statement belongs to, which decides what becomes of it when the cursor ends.
-  enum StatementOwner {
-    // Lent by the cache, and given back under this loan.
-    case cache(SQLiteStatementLoan)
-    // Compiled for this cursor alone, and finalized with it.
-    case cursor
-    // Held by a prepared statement that runs it again, so the cursor only resets it, and only
-    // while `run` is still the statement's latest. Metadata the cursor refreshes on its first step
-    // is recorded in the state, where the next run finds it.
-    case prepared(SQLitePreparedStatementState, run: UInt64)
-  }
+  // What a statement lent by the cache is given back under, or `nil` for one the cache did not
+  // lend.
+  let loan: SQLiteStatementLoan?
 
-  let owner: StatementOwner
+  // The prepared statement whose statement this cursor runs, or `nil` for any other cursor. With
+  // neither a loan nor a prepared statement, the statement was compiled for this cursor alone and
+  // is finalized with it. Metadata the cursor refreshes on its first step is recorded in the
+  // prepared statement's state, where the next run finds it.
+  let prepared: SQLitePreparedStatementState?
+
+  // The prepared statement's run this cursor is over. The cursor only resets the statement while
+  // this is still the latest run.
+  let preparedRun: UInt64
 
   // What SQLite steps, or `nil` for SQL that holds no statement, such as an empty query, which
   // produces no rows. A statement recompiled on its first step keeps its pointer and has only its
@@ -78,14 +78,14 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   ) throws {
     let sql: String
     let compiledStatement: SQLiteCompiledStatement?
-    let owner: StatementOwner
+    let loan: SQLiteStatementLoan?
     if cached {
       let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
       compiledStatement = checkedOut.statement
-      owner = .cache(checkedOut.loan)
+      loan = checkedOut.loan
       sql = checkedOut.loan.sql
     } else {
-      owner = .cursor
+      loan = nil
       sql = query.text
       compiledStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
     }
@@ -94,7 +94,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
         try bind(query, to: compiledStatement.pointer, library: library)
       } catch {
         // The statement never reached a cursor, so nothing else will give it back.
-        if case .cache(let loan) = owner {
+        if let loan {
           statements.checkIn(compiledStatement, loan: loan)
         } else {
           _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
@@ -106,7 +106,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
-    self.owner = owner
+    self.loan = loan
+    self.prepared = nil
+    self.preparedRun = 0
     self.compiledStatement = compiledStatement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
@@ -134,7 +136,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
-    self.owner = state.map { .prepared($0, run: $0.run) } ?? .cursor
+    self.loan = nil
+    self.prepared = state
+    self.preparedRun = state?.run ?? 0
     self.compiledStatement = state?.statement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizationGeneration
@@ -143,21 +147,20 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     if compiledStatement != nil { authorizer.activeCursors += 1 }
   }
 
+  // Inlined where cursors end, as the optimizer chose to on its own before prepared statements
+  // added a case. Called instead, it kept the statement cache's check-in from being optimized
+  // together with the check-out, and every cached run of `execute` cost about 300 instructions
+  // more.
+  @inline(__always)
   deinit {
     guard let compiledStatement else { return }
     authorizer.activeCursors -= 1
-    switch owner {
-    case .cache(let loan):
+    if let loan {
       statements.checkIn(compiledStatement, loan: loan)
-    case .cursor:
+    } else if let prepared {
+      prepared.finishRun(preparedRun, library: library)
+    } else {
       _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
-    case .prepared(let state, let run):
-      // Swift ends a cursor's borrow of its prepared statement at the cursor's last use, but runs
-      // this at the end of its scope, by which time a later run may have begun. That run is left
-      // alone. The bindings stay either way, since every run rebinds every parameter.
-      guard state.run == run else { return }
-      _ = library.pointee.statements.execution.reset(compiledStatement.pointer)
-      state.needsReset = false
     }
   }
 
@@ -214,14 +217,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
               library: library
             )
         )
-      } else if let compiled = compiledStatement,
-        compiled.cacheGeneration != statements.generation,
-        let refreshed = statements.refreshedMetadata(for: statement, sql: sql)
-      {
-        // The schema changed since the statement was compiled, which is how a prepared statement
-        // run again after DDL earlier in its transaction finds itself, and SQLite did not need to
-        // recompile it. The regions it was compiled with may describe a schema that is gone.
-        refreshMetadata(refreshed)
+      } else if prepared != nil {
+        refreshMetadataIfSchemaChanged(of: statement)
       }
       publishAccesses()
       return try row(for: code, of: statement)
@@ -231,9 +228,20 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   private mutating func refreshMetadata(_ refreshed: SQLiteCompiledStatement) {
     compiledStatement = refreshed
-    if case .prepared(let state, _) = owner {
-      state.statement = refreshed
-    }
+    prepared?.statement = refreshed
+  }
+
+  // A prepared statement run again after the schema changed, by DDL earlier in its transaction,
+  // that SQLite did not need to recompile, was compiled with regions that may describe a schema
+  // that is gone. A cursor over a cached statement never gets here: the cache empties itself when
+  // the schema changes, so it only lends statements compiled under the current one.
+  @inline(never)
+  private mutating func refreshMetadataIfSchemaChanged(of statement: OpaquePointer) {
+    guard
+      compiledStatement?.cacheGeneration != statements.generation,
+      let refreshed = statements.refreshedMetadata(for: statement, sql: sql)
+    else { return }
+    refreshMetadata(refreshed)
   }
 
   private mutating func publishAccesses() {

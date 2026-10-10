@@ -225,6 +225,19 @@ final class SQLitePreparedStatementState {
   init(_ statement: SQLiteCompiledStatement) {
     self.statement = statement
   }
+
+  // Resets the statement when a run's cursor ends, unless a later run has begun. Swift ends a
+  // cursor's borrow of its prepared statement at the cursor's last use, but destroys the cursor
+  // at the end of its scope, by which time the next run may be under way. The bindings stay
+  // either way, since every run rebinds every parameter. Kept out of line, since the cursor's
+  // deinit is inlined wherever any cursor ends.
+  @inline(never)
+  func finishRun(_ run: UInt64, library: UnsafePointer<SQLiteLibrary>) {
+    guard run == self.run else { return }
+    _ = library.pointee.statements.execution.reset(statement.pointer)
+    needsReset = false
+  }
+
 }
 
 // MARK: - Preparing
