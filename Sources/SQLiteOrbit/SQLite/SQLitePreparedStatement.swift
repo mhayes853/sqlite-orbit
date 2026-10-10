@@ -82,14 +82,8 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
   ) throws {
     // Every run binds every parameter from its own arguments, so a value interpolated into the
     // SQL would be overwritten on the first run, or shift each run's arguments along.
-    for part in try query.validatedParts() {
-      switch part {
-      case .text: continue
-      case .binding: throw Self.interpolatedValueError(sql: query.text)
-      case .statement(_, let bindings):
-        guard bindings.isEmpty else { throw Self.interpolatedValueError(sql: query.text) }
-      }
-    }
+    _ = try query.validatedParts()
+    guard query.bindings.isEmpty else { throw Self.interpolatedValueError(sql: query.text) }
     let (statement, loan, sql) = try statements.statement(
       for: query,
       cached: cached,
@@ -153,7 +147,7 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
     return statement
   }
 
-  mutating func bindArguments<each Argument: ConvertibleToOrbitDatabaseValue>(
+  func bindArguments<each Argument: ConvertibleToOrbitDatabaseValue>(
     _ arguments: repeat each Argument
   ) throws {
     var count = 0
@@ -167,7 +161,7 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
     }
   }
 
-  mutating func bindArguments(_ bindings: [OrbitDatabaseValue]) throws {
+  func bindArguments(_ bindings: [OrbitDatabaseValue]) throws {
     try checkArgumentCount(bindings.count)
     guard let statement = beginRun() else { return }
     for (offset, value) in bindings.enumerated() {
@@ -225,7 +219,6 @@ final class SQLitePreparedStatementState {
     _ = library.pointee.statements.execution.reset(statement.pointer)
     needsReset = false
   }
-
 }
 
 // MARK: - Preparing

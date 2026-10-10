@@ -78,11 +78,14 @@ final class SQLiteStatementCache {
   ) throws -> (statement: SQLiteCompiledStatement?, loan: SQLiteStatementLoan) {
     // Taken out rather than copied, so a hit costs no retains, and put back on a miss.
     if let hot = hot.take() {
-      guard hot.key.matches(query) else {
-        self.hot = hot
-        return try checkOutFromIdle(query, requiresReadOnly: requiresReadOnly)
+      if hot.key.matches(query) {
+        return try lend(
+          hot.entry.statement,
+          filedUnder: hot.key,
+          requiresReadOnly: requiresReadOnly
+        )
       }
-      return try lend(hot.entry.statement, filedUnder: hot.key, requiresReadOnly: requiresReadOnly)
+      self.hot = hot
     }
     return try checkOutFromIdle(query, requiresReadOnly: requiresReadOnly)
   }

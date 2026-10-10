@@ -135,10 +135,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     if compiledStatement != nil { authorizer.activeCursors += 1 }
   }
 
-  // Inlined where cursors end, as the optimizer chose to on its own before prepared statements
-  // added a case. Called instead, it kept the statement cache's check-in from being optimized
-  // together with the check-out, and every cached run of `execute` cost about 300 instructions
-  // more.
+  // Inlined where cursors end. Called instead, it keeps the statement cache's check-in from being
+  // optimized together with the check-out, which costs every cached run of `execute` about 300
+  // instructions.
   @inline(__always)
   deinit {
     guard let compiledStatement else { return }
