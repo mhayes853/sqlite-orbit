@@ -33,7 +33,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   // What SQLite steps, or `nil` for SQL that holds no statement, such as an empty query, which
   // produces no rows. A statement recompiled on its first step keeps its pointer and has only its
   // metadata replaced.
-  var preparedStatement: SQLitePreparedStatement?
+  var compiledStatement: SQLiteCompiledStatement?
 
   let authorizer: SQLiteAuthorizerDispatcher
   let authorizationGeneration: UInt64
@@ -66,27 +66,27 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     connectionState: SQLiteConnectionState?
   ) throws {
     let sql: String
-    let preparedStatement: SQLitePreparedStatement?
+    let compiledStatement: SQLiteCompiledStatement?
     let loan: SQLiteStatementLoan?
     if cached {
       let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
-      preparedStatement = checkedOut.statement
+      compiledStatement = checkedOut.statement
       loan = checkedOut.loan
       sql = checkedOut.loan.sql
     } else {
       loan = nil
       sql = query.text
-      preparedStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
+      compiledStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
     }
-    if let preparedStatement {
+    if let compiledStatement {
       do {
-        try bind(query, to: preparedStatement.pointer, library: library)
+        try bind(query, to: compiledStatement.pointer, library: library)
       } catch {
         // The statement never reached a cursor, so nothing else will give it back.
         if let loan {
-          statements.checkIn(preparedStatement, loan: loan)
+          statements.checkIn(compiledStatement, loan: loan)
         } else {
-          _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
+          _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
         }
         throw error
       }
@@ -96,21 +96,21 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.sql = sql
     self.statements = copy statements
     self.loan = loan
-    self.preparedStatement = preparedStatement
+    self.compiledStatement = compiledStatement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
     self.connectionState = connectionState
     self.observations = observations
-    if preparedStatement != nil { authorizer.activeCursors += 1 }
+    if compiledStatement != nil { authorizer.activeCursors += 1 }
   }
 
   deinit {
-    guard let preparedStatement else { return }
+    guard let compiledStatement else { return }
     authorizer.activeCursors -= 1
     if let loan {
-      statements.checkIn(preparedStatement, loan: loan)
+      statements.checkIn(compiledStatement, loan: loan)
     } else {
-      _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
+      _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
     }
   }
 
@@ -123,7 +123,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
-    guard !isExhausted, let statement = preparedStatement?.pointer else { return nil }
+    guard !isExhausted, let statement = compiledStatement?.pointer else { return nil }
     guard authorizationGeneration == authorizer.generation else {
       isExhausted = true
       throw SQLiteError(
@@ -134,7 +134,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     }
     // Preparation-time authorization does not run again when a cached statement is reused.
     // Consult the live scope here, before any SQL executes or observations are published.
-    if preparedStatement?.controlsTransactions == true,
+    if compiledStatement?.controlsTransactions == true,
       connectionState?.isInTransaction == false
     {
       isExhausted = true
@@ -154,9 +154,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       }
       if !authorizations.isEmpty {
         statements.invalidate()
-        preparedStatement =
+        compiledStatement =
           statements.refreshedMetadata(for: statement, sql: sql)
-          ?? SQLitePreparedStatement(
+          ?? SQLiteCompiledStatement(
             pointer: statement,
             isReadOnly: library.pointee.statements.inspection.isReadOnly(statement) != 0,
             authorizations: authorizations,
@@ -174,10 +174,10 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   }
 
   private mutating func publishAccesses() {
-    guard let preparedStatement else { return }
-    observations.didRead(in: preparedStatement.readRegion)
-    observations.didChange(in: preparedStatement.changedRegion)
-    if preparedStatement.invalidatesStatementCache {
+    guard let compiledStatement else { return }
+    observations.didRead(in: compiledStatement.readRegion)
+    observations.didChange(in: compiledStatement.changedRegion)
+    if compiledStatement.invalidatesStatementCache {
       statements.invalidate()
     }
   }

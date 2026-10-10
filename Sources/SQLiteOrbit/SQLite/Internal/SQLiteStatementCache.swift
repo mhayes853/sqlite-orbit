@@ -26,7 +26,7 @@ final class SQLiteStatementCache {
   // An idle statement, stamped with when it was last given back. A full cache makes room by
   // finalizing the statement with the oldest stamp, the one least recently used.
   private struct IdleStatement {
-    let statement: SQLitePreparedStatement
+    let statement: SQLiteCompiledStatement
     let lastUse: UInt64
   }
 
@@ -65,7 +65,7 @@ final class SQLiteStatementCache {
   // as an empty query. A statement that may write is refused when `requiresReadOnly` is set, before
   // anything is derived from it.
 
-  func prepare(_ sql: String, requiresReadOnly: Bool) throws -> SQLitePreparedStatement? {
+  func prepare(_ sql: String, requiresReadOnly: Bool) throws -> SQLiteCompiledStatement? {
     try prepare(sql, flags: 0, requiresReadOnly: requiresReadOnly)
   }
 
@@ -75,7 +75,7 @@ final class SQLiteStatementCache {
   func checkOut(
     _ query: SQL,
     requiresReadOnly: Bool
-  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+  ) throws -> (statement: SQLiteCompiledStatement?, loan: SQLiteStatementLoan) {
     // Taken out rather than copied, so a hit costs no retains, and put back on a miss.
     if let hot = hot.take() {
       guard hot.key.matches(query) else {
@@ -90,7 +90,7 @@ final class SQLiteStatementCache {
   private func checkOutFromIdle(
     _ query: SQL,
     requiresReadOnly: Bool
-  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+  ) throws -> (statement: SQLiteCompiledStatement?, loan: SQLiteStatementLoan) {
     let lookup = SQLiteStatementCacheKey(query)
     if let index = idle.index(forKey: lookup) {
       let (key, entry) = idle.remove(at: index)
@@ -111,10 +111,10 @@ final class SQLiteStatementCache {
   }
 
   private func lend(
-    _ statement: SQLitePreparedStatement,
+    _ statement: SQLiteCompiledStatement,
     filedUnder key: SQLiteStatementCacheKey,
     requiresReadOnly: Bool
-  ) throws -> (statement: SQLitePreparedStatement?, loan: SQLiteStatementLoan) {
+  ) throws -> (statement: SQLiteCompiledStatement?, loan: SQLiteStatementLoan) {
     let loan = SQLiteStatementLoan(key: key, idleInsertionCount: idleInsertionCount)
     guard !requiresReadOnly || statement.isReadOnly else {
       checkIn(statement, loan: loan)
@@ -127,7 +127,7 @@ final class SQLiteStatementCache {
     _ sql: String,
     flags: UInt32,
     requiresReadOnly: Bool
-  ) throws -> SQLitePreparedStatement? {
+  ) throws -> SQLiteCompiledStatement? {
     let (statement, authorizations) = try authorizer.recordingAuthorizations {
       try library.pointee.prepareStatement(sql, on: connection, flags: flags)
     }
@@ -137,7 +137,7 @@ final class SQLiteStatementCache {
       _ = library.pointee.statements.execution.finalize(statement)
       throw Self.mayWriteError(sql: sql)
     }
-    return SQLitePreparedStatement(
+    return SQLiteCompiledStatement(
       pointer: statement,
       isReadOnly: isReadOnly,
       authorizations: authorizations,
@@ -159,13 +159,13 @@ final class SQLiteStatementCache {
     )
   }
 
-  func refreshedMetadata(for statement: OpaquePointer, sql: String) -> SQLitePreparedStatement? {
+  func refreshedMetadata(for statement: OpaquePointer, sql: String) -> SQLiteCompiledStatement? {
     guard let probe = try? prepare(sql, flags: 0, requiresReadOnly: false) else { return nil }
     defer { _ = library.pointee.statements.execution.finalize(probe.pointer) }
-    return SQLitePreparedStatement(pointer: statement, metadata: probe)
+    return SQLiteCompiledStatement(pointer: statement, metadata: probe)
   }
 
-  func checkIn(_ statement: SQLitePreparedStatement, loan: SQLiteStatementLoan) {
+  func checkIn(_ statement: SQLiteCompiledStatement, loan: SQLiteStatementLoan) {
     _ = library.pointee.statements.execution.reset(statement.pointer)
     _ = library.pointee.statements.execution.clearBindings(statement.pointer)
     // Another use of the same SQL at once was lent a statement of its own, and whichever comes back
@@ -499,7 +499,10 @@ struct SQLiteStatementCacheKey: Hashable {
   }
 }
 
-struct SQLitePreparedStatement {
+// A statement SQLite compiled, with what was learned about it while it compiled: the regions it
+// reads and changes, and whether it controls transactions or invalidates the cache. Named apart
+// from the public `SQLitePreparedStatement`, which holds one of these for a caller to run again.
+struct SQLiteCompiledStatement {
   let pointer: OpaquePointer
   let controlsTransactions: Bool
   let readRegion: OrbitDatabaseRegion

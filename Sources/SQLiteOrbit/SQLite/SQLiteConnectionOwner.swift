@@ -508,7 +508,7 @@ public struct SQLiteConnection: ~Copyable {
         }
 
         if let observations {
-          let preparedStatement = SQLitePreparedStatement(
+          let compiledStatement = SQLiteCompiledStatement(
             pointer: statement,
             isReadOnly: isReadOnly,
             authorizations: authorizations,
@@ -517,8 +517,8 @@ public struct SQLiteConnection: ~Copyable {
             authorizer: authorizer,
             library: library
           )
-          observations.didRead(in: preparedStatement.readRegion)
-          observations.didChange(in: preparedStatement.changedRegion)
+          observations.didRead(in: compiledStatement.readRegion)
+          observations.didChange(in: compiledStatement.changedRegion)
         }
 
         try stepToCompletion(statement, on: connection, library: library, sql: sql)

@@ -231,7 +231,7 @@
   extension SQLiteStatementCache {
     /// A statement checked out of the cache, with the loan it goes back in under.
     struct LentStatement {
-      let statement: SQLitePreparedStatement
+      let statement: SQLiteCompiledStatement
       let loan: SQLiteStatementLoan
       var pointer: OpaquePointer { statement.pointer }
     }
@@ -258,14 +258,14 @@
     }
 
     /// Compiles the statement `sql` holds, which must hold one, without holding it to reading.
-    func prepare(_ sql: String) throws -> SQLitePreparedStatement {
+    func prepare(_ sql: String) throws -> SQLiteCompiledStatement {
       try Self.requireStatement(prepare(sql, requiresReadOnly: false), sql: sql)
     }
 
     private static func requireStatement(
-      _ statement: SQLitePreparedStatement?,
+      _ statement: SQLiteCompiledStatement?,
       sql: String
-    ) throws -> SQLitePreparedStatement {
+    ) throws -> SQLiteCompiledStatement {
       guard let statement else {
         throw SQLiteError(code: .error, message: "SQL holds no statement", sql: sql)
       }
