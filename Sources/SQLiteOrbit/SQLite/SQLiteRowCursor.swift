@@ -3,7 +3,8 @@
 /// The cursor holds a statement lent by the connection's cache and gives it back when it goes out
 /// of scope. That is only safe because the cursor is nonescapable: it cannot outlive the
 /// transaction that created it, so a cached statement can never be lent twice or survive its
-/// connection.
+/// connection. A cursor over a run of a ``SQLitePreparedStatement`` holds that statement instead,
+/// and only resets it when it goes out of scope, so the statement is ready to run again.
 ///
 /// This is the ``OrbitDatabaseRowCursor`` the native drivers lend; it is created by
 /// ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)`` rather than directly.
@@ -26,12 +27,24 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 
   let statements: SQLiteStatementCache
 
-  let isCached: Bool
+  // What a statement lent by the cache is given back under, or `nil` for one the cache did not
+  // lend.
+  let loan: SQLiteStatementLoan?
+
+  // The prepared statement whose statement this cursor runs, or `nil` for any other cursor. With
+  // neither a loan nor a prepared statement, the statement was compiled for this cursor alone and
+  // is finalized with it. Metadata the cursor refreshes on its first step is recorded in the
+  // prepared statement's state, where the next run finds it.
+  let prepared: SQLitePreparedStatementState?
+
+  // The prepared statement's run this cursor is over. The cursor only resets the statement while
+  // this is still the latest run.
+  let preparedRun: UInt64
 
   // What SQLite steps, or `nil` for SQL that holds no statement, such as an empty query, which
   // produces no rows. A statement recompiled on its first step keeps its pointer and has only its
   // metadata replaced.
-  var preparedStatement: SQLitePreparedStatement?
+  var compiledStatement: SQLiteCompiledStatement?
 
   let authorizer: SQLiteAuthorizerDispatcher
   let authorizationGeneration: UInt64
@@ -64,22 +77,27 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     connectionState: SQLiteConnectionState?
   ) throws {
     let sql: String
-    let preparedStatement: SQLitePreparedStatement?
+    let compiledStatement: SQLiteCompiledStatement?
+    let loan: SQLiteStatementLoan?
     if cached {
-      (preparedStatement, sql) = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
+      let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
+      compiledStatement = checkedOut.statement
+      loan = checkedOut.loan
+      sql = checkedOut.loan.sql
     } else {
+      loan = nil
       sql = query.text
-      preparedStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
+      compiledStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
     }
-    if let preparedStatement {
+    if let compiledStatement {
       do {
-        try bind(query, to: preparedStatement.pointer, library: library)
+        try bind(query, to: compiledStatement.pointer, library: library)
       } catch {
         // The statement never reached a cursor, so nothing else will give it back.
-        if cached {
-          statements.checkIn(preparedStatement, sql: sql)
+        if let loan {
+          statements.checkIn(compiledStatement, loan: loan)
         } else {
-          _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
+          _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
         }
         throw error
       }
@@ -88,22 +106,61 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.connection = connection
     self.sql = sql
     self.statements = copy statements
-    self.isCached = cached
-    self.preparedStatement = preparedStatement
+    self.loan = loan
+    self.prepared = nil
+    self.preparedRun = 0
+    self.compiledStatement = compiledStatement
     self.authorizer = authorizer
     self.authorizationGeneration = authorizer.generation
     self.connectionState = connectionState
     self.observations = observations
-    if preparedStatement != nil { authorizer.activeCursors += 1 }
+    if compiledStatement != nil { authorizer.activeCursors += 1 }
   }
 
+  // A run of a prepared statement, whose values are already bound. The authorization generation
+  // is the one the statement was prepared under, so a run on the far side of an authorization
+  // scope boundary is refused just as a cursor carried across one is.
+  @_lifetime(borrow statements)
+  init(
+    running state: SQLitePreparedStatementState?,
+    sql: String,
+    authorizationGeneration: UInt64,
+    connection: OpaquePointer,
+    library: UnsafePointer<SQLiteLibrary>,
+    statements: borrowing SQLiteStatementCache,
+    authorizer: SQLiteAuthorizerDispatcher,
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState?
+  ) {
+    self.library = library
+    self.connection = connection
+    self.sql = sql
+    self.statements = copy statements
+    self.loan = nil
+    self.prepared = state
+    self.preparedRun = state?.run ?? 0
+    self.compiledStatement = state?.statement
+    self.authorizer = authorizer
+    self.authorizationGeneration = authorizationGeneration
+    self.connectionState = connectionState
+    self.observations = observations
+    if compiledStatement != nil { authorizer.activeCursors += 1 }
+  }
+
+  // Inlined where cursors end, as the optimizer chose to on its own before prepared statements
+  // added a case. Called instead, it kept the statement cache's check-in from being optimized
+  // together with the check-out, and every cached run of `execute` cost about 300 instructions
+  // more.
+  @inline(__always)
   deinit {
-    guard let preparedStatement else { return }
+    guard let compiledStatement else { return }
     authorizer.activeCursors -= 1
-    if isCached {
-      statements.checkIn(preparedStatement, sql: sql)
+    if let loan {
+      statements.checkIn(compiledStatement, loan: loan)
+    } else if let prepared {
+      prepared.finishRun(preparedRun, library: library)
     } else {
-      _ = library.pointee.statements.execution.finalize(preparedStatement.pointer)
+      _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
     }
   }
 
@@ -116,7 +173,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   /// - Throws: A ``SQLiteError`` carrying the code the statement failed with.
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
-    guard !isExhausted, let statement = preparedStatement?.pointer else { return nil }
+    guard !isExhausted, let statement = compiledStatement?.pointer else { return nil }
     guard authorizationGeneration == authorizer.generation else {
       isExhausted = true
       throw SQLiteError(
@@ -127,7 +184,7 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     }
     // Preparation-time authorization does not run again when a cached statement is reused.
     // Consult the live scope here, before any SQL executes or observations are published.
-    if preparedStatement?.controlsTransactions == true,
+    if compiledStatement?.controlsTransactions == true,
       connectionState?.isInTransaction == false
     {
       isExhausted = true
@@ -147,18 +204,21 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
       }
       if !authorizations.isEmpty {
         statements.invalidate()
-        preparedStatement =
+        refreshMetadata(
           statements.refreshedMetadata(for: statement, sql: sql)
-          ?? SQLitePreparedStatement(
-            pointer: statement,
-            isReadOnly: library.pointee.statements.inspection.isReadOnly(statement) != 0,
-            authorizations: authorizations,
-            cacheGeneration: statements.generation,
-            statements: statements,
-            connection: connection,
-            authorizer: authorizer,
-            library: library
-          )
+            ?? SQLiteCompiledStatement(
+              pointer: statement,
+              isReadOnly: library.pointee.statements.inspection.isReadOnly(statement) != 0,
+              authorizations: authorizations,
+              cacheGeneration: statements.generation,
+              statements: statements,
+              connection: connection,
+              authorizer: authorizer,
+              library: library
+            )
+        )
+      } else if prepared != nil {
+        refreshMetadataIfSchemaChanged(of: statement)
       }
       publishAccesses()
       return try row(for: code, of: statement)
@@ -166,11 +226,29 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     return try row(for: library.pointee.statements.execution.step(statement), of: statement)
   }
 
+  private mutating func refreshMetadata(_ refreshed: SQLiteCompiledStatement) {
+    compiledStatement = refreshed
+    prepared?.statement = refreshed
+  }
+
+  // A prepared statement run again after the schema changed, by DDL earlier in its transaction,
+  // that SQLite did not need to recompile, was compiled with regions that may describe a schema
+  // that is gone. A cursor over a cached statement never gets here: the cache empties itself when
+  // the schema changes, so it only lends statements compiled under the current one.
+  @inline(never)
+  private mutating func refreshMetadataIfSchemaChanged(of statement: OpaquePointer) {
+    guard
+      compiledStatement?.cacheGeneration != statements.generation,
+      let refreshed = statements.refreshedMetadata(for: statement, sql: sql)
+    else { return }
+    refreshMetadata(refreshed)
+  }
+
   private mutating func publishAccesses() {
-    guard let preparedStatement else { return }
-    observations.didRead(in: preparedStatement.readRegion)
-    observations.didChange(in: preparedStatement.changedRegion)
-    if preparedStatement.invalidatesStatementCache {
+    guard let compiledStatement else { return }
+    observations.didRead(in: compiledStatement.readRegion)
+    observations.didChange(in: compiledStatement.changedRegion)
+    if compiledStatement.invalidatesStatementCache {
       statements.invalidate()
     }
   }

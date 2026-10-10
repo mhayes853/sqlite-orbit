@@ -36,9 +36,10 @@ Benchmarks are named `<GRDB test>/<implementation>`, so a group's rows sit toget
 Implementations are `SQLite` (the C API), `GRDB`, `Orbit` (a synchronous `SQLiteConnection`), and
 `OrbitQueue`, `OrbitPool`, or `OrbitIPC` for the asynchronous drivers. Orbit's `execute` and
 cursors reuse statements from the connection's prepared statement cache, as they do by default;
-`OrbitUncached` runs the same SQL with `cached: false`, preparing each statement anew. Groups GRDB
-has and Orbit has no counterpart for, such as `FetchRecordClass` and `InsertNamedValues`, are kept
-for parity with GRDB's own numbers.
+`OrbitUncached` runs the same SQL with `cached: false`, preparing each statement anew, and
+`OrbitPrepared` prepares one `SQLitePreparedStatement` and runs it with each row's arguments, as the
+SQLite and GRDB rows reuse theirs. Groups GRDB has and Orbit has no counterpart for, such as
+`FetchRecordClass` and `InsertNamedValues`, are kept for parity with GRDB's own numbers.
 
 ## Fixture
 

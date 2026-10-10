@@ -46,6 +46,26 @@
     }
 
     @Test
+    func aFiledKeyMatchesQueriesByTheirText() {
+      func query(_ value: Int, _ table: String) -> SQL {
+        "SELECT * FROM \(raw: table) WHERE a = \(value)"
+      }
+      let filed = SQLiteStatementCacheKey(
+        filing: query(0, "t"),
+        joinedInto: "SELECT * FROM t WHERE a = ?",
+        lookedUpBy: SQLiteStatementCacheKey(query(0, "t"))
+      )
+      #expect(filed == SQLiteStatementCacheKey("SELECT * FROM t WHERE a = ?"))
+      #expect(filed.hashValue == SQLiteStatementCacheKey("SELECT * FROM t WHERE a = ?").hashValue)
+      // Built from the same strings, or from different strings holding the same text.
+      #expect(filed.matches(query(1, "t")))
+      #expect(filed.matches(query(1, String("tx".prefix(1)))))
+      #expect(filed.matches(SQL(text: "SELECT * FROM t WHERE a = ?", bindings: [.integer(1)])))
+      #expect(!filed.matches(query(1, "u")))
+      #expect(!filed.matches("SELECT * FROM t WHERE a = ? "))
+    }
+
+    @Test
     func executeOutsideATransactionReusesItsStatement() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in

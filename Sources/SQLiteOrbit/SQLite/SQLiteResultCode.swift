@@ -50,6 +50,9 @@ public struct SQLiteResultCode: RawRepresentable, Hashable, Sendable {
   /// `SQLITE_AUTH`: the connection refused to prepare the statement, as it does one that begins or
   /// ends a transaction outside a connection's `transaction` call.
   public static let auth = Self(rawValue: 23)
+  /// `SQLITE_RANGE`: a parameter index was out of range, or a prepared statement was run with
+  /// a different number of arguments than it has parameters.
+  public static let range = Self(rawValue: 25)
   /// `SQLITE_NOTADB`: the file is not a database.
   public static let notADatabase = Self(rawValue: 26)
   /// `SQLITE_ROW`: the statement produced a row.

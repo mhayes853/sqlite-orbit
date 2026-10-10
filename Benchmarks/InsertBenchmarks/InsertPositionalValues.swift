@@ -50,6 +50,19 @@ func insertPositionalValuesBenchmarks() {
     }
   }
 
+  Benchmark("InsertPositionalValues/OrbitPrepared") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          var insert = try transaction.prepare(SQL(text: Fixture.insertItemSQL))
+          for i in 0..<Fixture.insertedRowCount {
+            try insert.execute(i, i, i, i, i, i, i, i, i, i)
+          }
+        }
+      }
+    }
+  }
+
   Benchmark("InsertPositionalValues/OrbitUncached") { benchmark in
     try measureInsert(benchmark, open: openOrbitConnection) { owner in
       try owner.withWriteConnection { connection in

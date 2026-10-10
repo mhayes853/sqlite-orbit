@@ -196,6 +196,38 @@ let deletedIDs = try await database.write { transaction in
 }
 ```
 
+`execute` and the fetches reuse a compiled statement from the connection's cache, but still build
+the SQL and look its statement up every time. A loop that runs one statement many times can prepare
+it once instead, and pass each run's values as arguments in place of the parameters written in its
+SQL:
+
+```swift
+try await database.write { transaction in
+  var insert = try transaction.prepare("INSERT INTO items (a, b, c) VALUES (?, ?, ?)")
+  for item in items {
+    try insert.execute(item.a, item.b, item.c)
+  }
+}
+
+try await database.read { transaction in
+  var byList = try transaction.prepare("SELECT * FROM reminders WHERE list_id = ? ORDER BY title")
+  for list in lists {
+    groups[list.id] = try byList.fetchAll(list.id, as: Reminder.self)
+  }
+}
+```
+
+A `SQLitePreparedStatement` runs with `execute`, `fetchAll`, `fetchOne`, `rowCursor`, and
+`fetchCursor`, or with a `bindings:` array of `OrbitDatabaseValue`s built at runtime. Arguments bind
+by position, and a run must pass exactly one for each of the statement's `parameterCount`
+parameters: since every run rebinds every parameter, a missing one would otherwise silently keep
+the previous run's value, so the run is refused with `.range` instead. For the same reason
+`prepare` refuses SQL with values interpolated into it. A read transaction refuses a statement that
+may write, as it does any other. The statement lasts until its transaction ends, and dropping it
+returns it to the connection's cache, so preparing the same SQL in a later transaction compiles
+nothing. Each run reports what it reads and changes to observers, exactly like running the SQL
+through the transaction.
+
 `SQL` runs one statement. A script of several, such as a schema, runs with `executeScript`, which
 takes a plain `String` and binds nothing:
 
