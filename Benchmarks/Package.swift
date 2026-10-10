@@ -61,14 +61,6 @@ let package = Package(
       path: "InsertBenchmarks",
       swiftSettings: benchmarkSwiftSettings,
       plugins: [.plugin(name: "BenchmarkPlugin", package: "package-benchmark")]
-    ),
-    // Not a benchmark: fetches statements that fail to prepare through the inlinable generic
-    // fetch path, from outside the library, to see whether Swift 6.3.3 crashes there.
-    .executableTarget(
-      name: "FailedPrepareProbe",
-      dependencies: [.product(name: "SQLiteOrbit", package: "sqlite-orbit")],
-      path: "FailedPrepareProbe",
-      swiftSettings: benchmarkSwiftSettings
     )
   ],
   swiftLanguageModes: [.v6]
