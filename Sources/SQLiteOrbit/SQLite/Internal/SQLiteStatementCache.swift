@@ -87,6 +87,32 @@ final class SQLiteStatementCache {
     return try checkOutFromIdle(query, requiresReadOnly: requiresReadOnly)
   }
 
+  // A statement for a cursor or a prepared statement to run: lent by the cache when `cached` is
+  // set, with the loan it goes back in under, or else compiled for its user alone. Also returns
+  // the query's text, which a statement found in the cache brings along.
+  func statement(
+    for query: SQL,
+    cached: Bool,
+    requiresReadOnly: Bool
+  ) throws -> (statement: SQLiteCompiledStatement?, loan: SQLiteStatementLoan?, sql: String) {
+    guard cached else {
+      let sql = query.text
+      return (try prepare(sql, requiresReadOnly: requiresReadOnly), nil, sql)
+    }
+    let (statement, loan) = try checkOut(query, requiresReadOnly: requiresReadOnly)
+    return (statement, loan, loan.sql)
+  }
+
+  // Gives back a statement from `statement(for:cached:requiresReadOnly:)`: checks it back in when
+  // the cache lent it, and finalizes it otherwise.
+  func giveBack(_ statement: SQLiteCompiledStatement, loan: SQLiteStatementLoan?) {
+    if let loan {
+      checkIn(statement, loan: loan)
+    } else {
+      _ = library.pointee.statements.execution.finalize(statement.pointer)
+    }
+  }
+
   private func checkOutFromIdle(
     _ query: SQL,
     requiresReadOnly: Bool

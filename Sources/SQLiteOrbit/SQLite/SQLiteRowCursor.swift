@@ -76,29 +76,17 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     observations: SQLiteConnectionEvents,
     connectionState: SQLiteConnectionState?
   ) throws {
-    let sql: String
-    let compiledStatement: SQLiteCompiledStatement?
-    let loan: SQLiteStatementLoan?
-    if cached {
-      let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
-      compiledStatement = checkedOut.statement
-      loan = checkedOut.loan
-      sql = checkedOut.loan.sql
-    } else {
-      loan = nil
-      sql = query.text
-      compiledStatement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
-    }
+    let (compiledStatement, loan, sql) = try statements.statement(
+      for: query,
+      cached: cached,
+      requiresReadOnly: requiresReadOnly
+    )
     if let compiledStatement {
       do {
         try bind(query, to: compiledStatement.pointer, library: library)
       } catch {
         // The statement never reached a cursor, so nothing else will give it back.
-        if let loan {
-          statements.checkIn(compiledStatement, loan: loan)
-        } else {
-          _ = library.pointee.statements.execution.finalize(compiledStatement.pointer)
-        }
+        statements.giveBack(compiledStatement, loan: loan)
         throw error
       }
     }

@@ -90,19 +90,11 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
         guard bindings.isEmpty else { throw Self.interpolatedValueError(sql: query.text) }
       }
     }
-    let sql: String
-    let statement: SQLiteCompiledStatement?
-    let loan: SQLiteStatementLoan?
-    if cached {
-      let checkedOut = try statements.checkOut(query, requiresReadOnly: requiresReadOnly)
-      statement = checkedOut.statement
-      loan = checkedOut.loan
-      sql = checkedOut.loan.sql
-    } else {
-      loan = nil
-      sql = query.text
-      statement = try statements.prepare(sql, requiresReadOnly: requiresReadOnly)
-    }
+    let (statement, loan, sql) = try statements.statement(
+      for: query,
+      cached: cached,
+      requiresReadOnly: requiresReadOnly
+    )
     self.sql = sql
     self.loan = loan
     self.parameterCount =
@@ -121,11 +113,7 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
     guard let state else { return }
     // No run's cursor can still be open, since each borrows the statement exclusively, so the
     // statement is not partway through a run.
-    if let loan {
-      statements.checkIn(state.statement, loan: loan)
-    } else {
-      _ = library.pointee.statements.execution.finalize(state.statement.pointer)
-    }
+    statements.giveBack(state.statement, loan: loan)
   }
 
   private static func interpolatedValueError(sql: String) -> SQLiteError {
