@@ -7,7 +7,7 @@
 
     @testable import SQLiteOrbit
 
-    @Suite
+    @Suite(.libraryHooks)
     struct SQLiteConnectionSettingsTests {
       // MARK: - Busy timeout
 
@@ -65,7 +65,9 @@
       func busyTimeoutFailuresThrowAtTheSetterAndAtOpen(readOnly: Bool) throws {
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.connections.setBusyTimeout = { connection, milliseconds in
+        configuration.library.connections.setBusyTimeout = LibraryHooks.setBusyTimeout {
+          connection,
+          milliseconds in
           if milliseconds == 42_000 { return SQLiteResultCode.ioError.rawValue }
           return base.connections.setBusyTimeout(connection, milliseconds)
         }
@@ -470,7 +472,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { [self] statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { [self] statement in
           guard let text = base.statements.inspection.sql(statement) else {
             return base.statements.execution.step(statement)
           }

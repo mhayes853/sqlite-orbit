@@ -8,7 +8,7 @@
 
     @testable import SQLiteOrbit
 
-    @Suite
+    @Suite(.libraryHooks)
     struct SQLiteAccessWithoutTransactionTests {
       @Test(arguments: SQLiteTestDriver.allCases)
       func statementsOutsideATransactionCommitOneByOne(_ kind: SQLiteTestDriver) async throws {
@@ -342,7 +342,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if let sql = base.statements.inspection.sql(statement),
             String(cString: sql).contains("RECURSIVE counter")
           {

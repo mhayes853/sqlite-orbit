@@ -309,14 +309,13 @@
       }
     }
 
-    @Test
+    @Test(.libraryHooks)
     func anUncachedStatementIsFinalizedWhenDropped() throws {
       let finalized = Lock<[UInt]>([])
       var configuration = SQLiteConfiguration.default
-      let finalize = configuration.library.statements.execution.finalize
-      configuration.library.statements.execution.finalize = { statement in
+      configuration.library.statements.execution.finalize = LibraryHooks.finalize { statement in
         if let statement { finalized.withLock { $0.append(UInt(bitPattern: statement)) } }
-        return finalize(statement)
+        return builtInTestLibrary.statements.execution.finalize(statement)
       }
       var owner = try SQLiteConnection(path: ":memory:", configuration: configuration)
       try owner.write { transaction in

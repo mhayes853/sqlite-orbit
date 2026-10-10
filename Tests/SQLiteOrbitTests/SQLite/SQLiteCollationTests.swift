@@ -95,13 +95,19 @@
       var text: String
     }
 
-    @Test
+    @Test(.libraryHooks)
     func collationsAreRegisteredThroughTheSuppliedTable() async throws {
       // A comparator is handed its user data directly, so a collation needs nothing from the build
       // that called it. Registration is the one part that goes through the table.
       let registrations = Lock(0)
       var configuration = SQLiteConfiguration.default
-      configuration.library.collations!.create = { connection, name, flags, box, compare, destroy in
+      configuration.library.collations!.create = LibraryHooks.createCollation {
+        connection,
+        name,
+        flags,
+        box,
+        compare,
+        destroy in
         registrations.withLock { $0 += 1 }
         return builtInTestLibrary.collations!
           .create(
@@ -132,7 +138,7 @@
       #expect(registrations.withLock { $0 } == 1)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aCollationTheLibraryRefusesIsReleasedRatherThanLeaked() {
       // `sqlite3_create_collation_v2` only calls the destructor of a registration that succeeded,
       // unlike `sqlite3_create_function_v2`, which calls it either way.
@@ -145,7 +151,7 @@
     // whatever is alive once it returns is alive because SQLite's side of the handshake kept it.
     private func openRefusingCollations(_ probe: CollationReleaseProbe) {
       var configuration = SQLiteConfiguration.default
-      configuration.library.collations!.create = { _, _, _, _, _, _ in
+      configuration.library.collations!.create = LibraryHooks.createCollation { _, _, _, _, _, _ in
         SQLiteResultCode.error.rawValue
       }
       configuration.register(collation: ProbeCollation(probe: probe))

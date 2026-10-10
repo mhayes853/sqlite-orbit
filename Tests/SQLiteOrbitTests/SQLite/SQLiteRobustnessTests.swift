@@ -28,7 +28,7 @@
       func configuration(matching sqlPrefix: String) -> SQLiteConfiguration {
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.statements.preparation.prepare = {
+        configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
           [self]
           connection,
           sql,
@@ -54,7 +54,8 @@
           }
           return code
         }
-        configuration.library.statements.execution.finalize = { [self] statement in
+        configuration.library.statements.execution.finalize = LibraryHooks.finalize {
+          [self] statement in
           if let statement,
             cachedPointers.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
           {
@@ -113,7 +114,7 @@
       #expect(titles == ["yes"])
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aStatementIsReusableAfterTheQueryUsingItFails() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -142,7 +143,7 @@
       #expect(probe.finalized.value == probe.prepared.value)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aPartiallyReadCursorDoesNotResumeWhenItsStatementIsReused() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -238,7 +239,7 @@
       #expect(stored == extremes)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -308,14 +309,14 @@
       var library: SQLiteLibrary {
         let base = builtInTestLibrary
         var library = base
-        library.connections.open = { path, connection, flags, vfs in
+        library.connections.open = LibraryHooks.open { path, connection, flags, vfs in
           let code = base.connections.open(path, connection, flags, vfs)
           if code == SQLiteResultCode.ok.rawValue {
             self.state.withLock { $0.opened += 1 }
           }
           return code
         }
-        library.connections.close = { connection in
+        library.connections.close = LibraryHooks.close { connection in
           self.state.withLock { $0.closed += 1 }
           return base.connections.close(connection)
         }
@@ -323,7 +324,7 @@
       }
     }
 
-    @Test
+    @Test(.libraryHooks)
     func releasingAPoolClosesEveryConnectionItOpened() async throws {
       let counter = ConnectionCounter()
       var configuration = SQLiteConfiguration.default
@@ -518,12 +519,12 @@
       var title: String
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
       let base = builtInTestLibrary
       let isArmed = Lock(true)
       var configuration = SQLiteConfiguration.default
-      configuration.library.statements.execution.step = { statement in
+      configuration.library.statements.execution.step = LibraryHooks.step { statement in
         let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
         guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else {
           return base.statements.execution.step(statement)

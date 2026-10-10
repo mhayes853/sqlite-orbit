@@ -3,7 +3,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct RawSQLRowConversionTests {
     @Test
     func rowConversionWinsForTypesSupportingBothConversions() async throws {
@@ -59,7 +59,7 @@
       let names = TestCounter()
       var configuration = SQLiteConfiguration.default
       let name = configuration.library.columns.name
-      configuration.library.columns.name = { statement, index in
+      configuration.library.columns.name = LibraryHooks.columnName { statement, index in
         names.increment()
         return name(statement, index)
       }

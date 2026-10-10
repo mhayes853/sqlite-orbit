@@ -4,7 +4,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteBusyHandlerTests {
     // Turso's header does not declare `sqlite3_busy_handler`, so its library has no busy handler to
     // install and refuses the configuration, as the last test here checks for any such library.
@@ -102,7 +102,9 @@
             attempts.increment()
             return false
           }
-          configuration.library.connections.setBusyTimeout = { connection, milliseconds in
+          configuration.library.connections.setBusyTimeout = LibraryHooks.setBusyTimeout {
+            connection,
+            milliseconds in
             if milliseconds == 30, failRestore.withLock({ $0 }) {
               return SQLiteResultCode.ioError.rawValue
             }

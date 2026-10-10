@@ -9,7 +9,7 @@
   private func observedLibrary(steps: TestCounter, interrupts: TestCounter) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
-    library.statements.execution.step = { statement in
+    library.statements.execution.step = LibraryHooks.step { statement in
       if let sql = base.statements.inspection.sql(statement),
         String(cString: sql).contains(endlessMarker)
       {
@@ -17,7 +17,7 @@
       }
       return base.statements.execution.step(statement)
     }
-    library.connections.interrupt = { connection in
+    library.connections.interrupt = LibraryHooks.interrupt { connection in
       interrupts.increment()
       base.connections.interrupt(connection)
     }
@@ -40,7 +40,7 @@
     }
   }
 
-  @Test
+  @Test(.libraryHooks)
   func cancellingAQueuedAccessLeavesTheRunningOneAlone() async throws {
     let steps = TestCounter()
     let interrupts = TestCounter()
@@ -168,12 +168,12 @@
     }
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aDelayedCancellationCannotInterruptTheNextAccess() async throws {
     let probe = DelayedInterruptProbe()
     let base = builtInTestLibrary
     var library = base
-    library.statements.execution.step = { statement in
+    library.statements.execution.step = LibraryHooks.step { statement in
       let sql = base.statements.inspection.sql(statement).map(String.init(cString:)) ?? ""
       if sql.contains("first cancellation target") {
         probe.enterFirstStep()
@@ -185,7 +185,7 @@
       }
       return base.statements.execution.step(statement)
     }
-    library.connections.interrupt = { connection in
+    library.connections.interrupt = LibraryHooks.interrupt { connection in
       probe.delayInterrupt()
       base.connections.interrupt(connection)
     }
@@ -201,8 +201,10 @@
     try await waitUntil { probe.firstStepEntered }
 
     // `cancel()` runs the cancellation handler synchronously, so use a dedicated thread while the
-    // injected interrupt deliberately waits.
-    Thread.detachNewThread { first.cancel() }
+    // injected interrupt deliberately waits. A thread has no task to inherit the test's hooks
+    // from, so they are bound for it.
+    let hooks = LibraryHooks.scope
+    Thread.detachNewThread { LibraryHooks.$scope.withValue(hooks) { first.cancel() } }
     try await waitUntil { probe.interruptEntered }
 
     let second = Task {

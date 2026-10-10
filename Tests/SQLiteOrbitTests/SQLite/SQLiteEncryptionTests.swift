@@ -10,7 +10,7 @@
   ) -> SQLiteLibrary {
     var library = builtInTestLibrary
     library.encryption = SQLiteLibrary.Encryption(
-      key: { _, _, bytes, count in
+      key: LibraryHooks.key { _, _, bytes, count in
         record(bytes.map { Array(UnsafeRawBufferPointer(start: $0, count: Int(count))) } ?? [])
       },
       rekey: { _, _, _, _ in SQLiteResultCode.ok.rawValue }
@@ -18,7 +18,7 @@
     return library
   }
 
-  @Test
+  @Test(.libraryHooks)
   func theKeyIsAppliedBeforeAnythingElseTheConnectionDoes() throws {
     let events = Lock<[String]>([])
     var library = libraryWithFakeCodec { _ in
@@ -27,13 +27,13 @@
     }
 
     let resultCodes = library.connections.setExtendedResultCodes
-    library.connections.setExtendedResultCodes = {
+    library.connections.setExtendedResultCodes = LibraryHooks.setExtendedResultCodes {
       (connection: OpaquePointer?, on: Int32) -> Int32 in
       events.withLock { $0.append("extended_result_codes") }
       return resultCodes(connection, on)
     }
     let timeout = library.connections.setBusyTimeout
-    library.connections.setBusyTimeout = {
+    library.connections.setBusyTimeout = LibraryHooks.setBusyTimeout {
       (connection: OpaquePointer?, milliseconds: Int32) -> Int32 in
       events.withLock { $0.append("busy_timeout") }
       return timeout(connection, milliseconds)
@@ -47,7 +47,7 @@
     #expect(events.withLock { $0.first } == "key")
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aPassphraseReachesTheBuildAsItsUTF8() throws {
     let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
@@ -62,7 +62,7 @@
     #expect(keys.withLock { $0 } == [Array("öpen sesame".utf8)])
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aRawKeyReachesTheBuildUnchanged() throws {
     let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
@@ -78,7 +78,7 @@
     #expect(keys.withLock { $0 } == [[0x00, 0xFF, 0x10, 0x00, 0x7F]])
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aRefusedKeyReportsTheFailureWithoutCarryingTheKey() throws {
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { _ in SQLiteResultCode.notADatabase.rawValue }
@@ -107,7 +107,7 @@
     }
   }
 
-  @Test
+  @Test(.libraryHooks)
   func everyConnectionAPoolOpensIsKeyed() async throws {
     let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(

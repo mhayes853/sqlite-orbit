@@ -1,9 +1,9 @@
 /// A cursor's column reading, shared by its borrowed rows: the library's column operations and a
 /// lazily prepared mapping from names to positions.
 ///
-/// The operations are copied here once per cursor. A closure read from a class's `let` is called
-/// as it is, whereas one read through the library pointer is retained and released around every
-/// call, which for a row of integers costs more than reading them.
+/// The operations are copied here once per cursor. They are C function pointers, so the copy is
+/// eight words, and a row calls them from the reader it already holds rather than through the
+/// library pointer as well, which measures a fraction of a percent fewer instructions.
 ///
 /// The name mapping is prepared on the first named lookup, after SQLite has stepped and had the
 /// chance to recompile its statement. A new cursor always gets a new mapping, even for a cached

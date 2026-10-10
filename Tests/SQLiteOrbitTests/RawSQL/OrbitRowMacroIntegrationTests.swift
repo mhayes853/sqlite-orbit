@@ -4,14 +4,14 @@
   // Use the public import: generated witnesses must be accessible to library clients.
   import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct OrbitRowMacroIntegrationTests {
     @Test
     func generatedMappingsSupportTypedReadsAndReuseCachedLookup() async throws {
       let names = TestCounter()
       var configuration = SQLiteConfiguration.default
       let name = configuration.library.columns.name
-      configuration.library.columns.name = { statement, index in
+      configuration.library.columns.name = LibraryHooks.columnName { statement, index in
         names.increment()
         return name(statement, index)
       }

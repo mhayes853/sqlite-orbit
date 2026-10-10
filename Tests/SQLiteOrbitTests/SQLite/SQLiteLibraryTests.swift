@@ -190,12 +190,18 @@
     #expect(library.connections.lastInsertedRowID(connection) == 2)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func functionTableEntryPointsCanBeInterposedPerInstance() throws {
     let preparedSQL = Lock<[String]>([])
     var library = SQLiteLibrary.system
     let base = SQLiteLibrary.system
-    library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail in
+    library.statements.preparation.prepare = LibraryHooks.prepare {
+      connection,
+      sql,
+      byteCount,
+      flags,
+      statement,
+      tail in
       if let sql {
         preparedSQL.withLock { $0.append(String(cString: sql)) }
       }
@@ -205,7 +211,7 @@
     // A second table wrapping the same system library keeps its own state.
     let failingStep = Lock(0)
     var faulty = SQLiteLibrary.system
-    faulty.statements.execution.step = { statement in
+    faulty.statements.execution.step = LibraryHooks.step { statement in
       failingStep.withLock { $0 += 1 }
       return SQLiteResultCode.busy.rawValue
     }

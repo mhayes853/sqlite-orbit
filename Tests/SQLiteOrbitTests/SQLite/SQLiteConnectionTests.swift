@@ -18,7 +18,13 @@
   private func countingLibrary(_ counters: SQLiteCallCounters) -> SQLiteLibrary {
     let base = builtInTestLibrary
     var library = base
-    library.statements.preparation.prepare = { connection, sql, byteCount, flags, statement, tail in
+    library.statements.preparation.prepare = LibraryHooks.prepare {
+      connection,
+      sql,
+      byteCount,
+      flags,
+      statement,
+      tail in
       let code = base.statements.preparation.prepare(
         connection,
         sql,
@@ -35,7 +41,7 @@
       }
       return code
     }
-    library.statements.execution.finalize = { statement in
+    library.statements.execution.finalize = LibraryHooks.finalize { statement in
       if statement != nil {
         counters.finalized.increment()
       }
@@ -82,7 +88,7 @@
     #expect(try scalar(disabled, "PRAGMA application_id") == 42)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func statementCacheReusesACheckedInStatementAndLendsAnotherForOverlappingUse() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -109,7 +115,7 @@
     connection.statements.checkIn(second)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func statementCacheStaysWithinItsCapacity() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -136,7 +142,7 @@
     }
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aFullStatementCacheEvictsTheLeastRecentlyUsedStatement() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -160,7 +166,7 @@
     #expect(counters.preparedCount == prepared + 1)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aRecentlyUsedStatementOutlivesAnOlderOne() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -178,7 +184,7 @@
     #expect(counters.preparedCount == prepared + 1)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func statementCacheKeepsAtMostItsCapacityOfTheLatestStatements() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -205,7 +211,7 @@
     #expect(connection.statements.idleStatementCount == 64)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aStatementCacheWithoutCapacityKeepsNothing() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -224,7 +230,7 @@
     #expect(counters.preparedPersistentCount == persistent)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func alternatingBetweenTwoStatementsReusesBoth() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -242,7 +248,7 @@
     #expect(connection.statements.idleStatementCount == 2)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func theMostRecentStatementCountsTowardTheCapacity() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -262,7 +268,7 @@
     #expect(counters.preparedCount == prepared + 1)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aStatementLeavingTheMostRecentSlotIsEvictedInItsTurn() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -285,7 +291,7 @@
     #expect(counters.preparedCount == prepared + 2)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func invalidatingTheStatementCacheFinalizesTheMostRecentStatement() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -302,7 +308,7 @@
     #expect(counters.preparedCount == prepared + 1)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aStatementLentWhileTheSameSQLWasCheckedInIsFinalized() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -337,7 +343,7 @@
     #expect(counters.preparedCount == prepared)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func aQueryBuiltFromTheSameLiteralFindsTheMostRecentStatement() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
@@ -358,7 +364,7 @@
     #expect(counters.preparedCount == prepared + 1)
   }
 
-  @Test
+  @Test(.libraryHooks)
   func closingAConnectionFinalizesEveryStatementItPrepared() throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
