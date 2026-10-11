@@ -164,7 +164,7 @@
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.limit(1)).requiredFirstRowRequest(),
+        request: statement.limit(1).requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -218,7 +218,7 @@
     private static func firstRowRequest() -> some OrbitFetchKeyRequest<Value>
     where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
-      return (statement.limit(1)).firstRowRequest()
+      return statement.limit(1).firstRowRequest()
     }
 
     /// Creates a property observing the row the value it is declared with identifies.
@@ -243,7 +243,7 @@
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey)))
+        request: statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey))
           .requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -370,7 +370,7 @@
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.asSelect().limit(1)).firstRowRequest(),
+        request: statement.asSelect().limit(1).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -467,7 +467,7 @@
       scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput {
-      return try await fetch.load(
+      try await fetch.load(
         statement.requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -491,7 +491,7 @@
       scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput? {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -522,7 +522,7 @@
     {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       return try await fetch.load(
-        (statement.asSelect().limit(1)).firstRowRequest(),
+        statement.asSelect().limit(1).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -548,7 +548,7 @@
       S.QueryValue: QueryRepresentable & _OptionalProtocol,
       Value == S.QueryValue.QueryOutput
     {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -571,7 +571,7 @@
       scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler

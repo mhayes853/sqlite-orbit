@@ -118,7 +118,7 @@
     public func update<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) async throws -> Result {
-      return try await storage.write { database in
+      try await storage.write { database in
         try await database.write { transaction in
           try Value.update(in: transaction, mutation)
         }

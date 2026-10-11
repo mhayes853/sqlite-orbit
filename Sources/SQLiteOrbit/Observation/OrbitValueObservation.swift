@@ -526,7 +526,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: QueryValue.Type
     ) -> Self where Value == [QueryValue.QueryOutput] {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .automatic) { transaction in
+      return tracking { transaction in
         try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
           base: try transaction.rowCursor(sql, cached: true)
         )
@@ -539,7 +539,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: QueryValue.Type
     ) -> Self where Value == QueryValue.QueryOutput? {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .automatic) { transaction in
+      return tracking { transaction in
         try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
           base: try transaction.rowCursor(sql, cached: true)
         )
@@ -553,7 +553,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .automatic) { transaction in
+      return tracking { transaction in
         try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
           try cursor.collectTuples((repeat each QueryValue).self)
         }
@@ -566,7 +566,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .automatic) { transaction in
+      return tracking { transaction in
         try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
           try cursor.firstTuple((repeat each QueryValue).self)
         }

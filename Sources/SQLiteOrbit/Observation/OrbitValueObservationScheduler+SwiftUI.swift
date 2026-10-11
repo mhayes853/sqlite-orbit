@@ -101,6 +101,7 @@
       OrbitAnimatedValueObservationScheduler(base: self, animation: animation)
     }
   }
+
   extension OrbitValueObservationScheduler
   where Self == OrbitTransactionValueObservationScheduler<OrbitMainActorValueObservationScheduler> {
     /// Delivers callbacks on the main actor inside `transaction`.

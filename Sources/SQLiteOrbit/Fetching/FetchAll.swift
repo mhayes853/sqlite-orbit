@@ -328,7 +328,7 @@
       scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == V.QueryOutput {
-      return try await fetch.load(
+      try await fetch.load(
         OrbitFetchAllStatementRequest<V>(statement: statement),
         database: database,
         scheduler: scheduler
