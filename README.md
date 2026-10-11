@@ -1293,16 +1293,18 @@ let region = try await database.read { transaction in
 
 Compilation resolves tables, columns, views, and attached schemas without executing the statement
 or evaluating its bindings. Region derivation rejects statements that may write and treats
-read-only pragmas as full-database reads. Query-backed value observations use this region to avoid
-refetching after unrelated writes.
+read-only pragmas as full-database reads. Value observations track the same region without
+deriving it separately: each statement SQLite prepares records what it reads, and the connection's
+statement cache keeps that alongside the statement, so a refetch compiles nothing.
 
 ## Observation
 
 `SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitIPCDatabase` are observable databases. A value
 observation fetches an initial value, then fetches again after a committed write that may affect
 its region.
-With the `StructuredQueries` trait, `trackingAll` and `trackingOne` derive that region directly
-from a readable query:
+With the `StructuredQueries` trait, `trackingAll` and `trackingOne` observe a statement: a table
+query, a projection, a join, or typed SQL. The region is whatever the statement reads, resolved
+through views and subqueries down to their tables and columns:
 
 ```swift
 let reminders = OrbitValueObservation.trackingAll(
@@ -1311,6 +1313,14 @@ let reminders = OrbitValueObservation.trackingAll(
 
 let firstReminder = OrbitValueObservation.trackingOne(
   Reminder.order { $0.id }
+)
+
+let titles = OrbitValueObservation.trackingAll(
+  Reminder.where { !$0.isCompleted }.select(\.title)
+)
+
+let incompleteCount = OrbitValueObservation.trackingOne(
+  #sql("SELECT count(*) FROM reminders WHERE NOT isCompleted", as: Int.self)
 )
 
 for try await reminders in reminders.values(in: database) {
@@ -1327,7 +1337,7 @@ let incompleteCount = OrbitValueObservation.tracking { transaction in
 }
 ```
 
-`OrbitValueObservation.ExternalValue` is a thread-safe observable reference for simple external
+`OrbitExternalValue` is a thread-safe observable reference for simple external
 state. Dynamic member lookup tracks only the fields the fetch actually reads:
 
 ```swift
@@ -1336,7 +1346,7 @@ struct Filters: Sendable {
   var ordering = Ordering.date
 }
 
-let filters = OrbitValueObservation.ExternalValue(Filters())
+let filters = OrbitExternalValue(Filters())
 let reminders = OrbitValueObservation.tracking { transaction in
   if filters.showsCompleted {
     try Reminder.where(\.isCompleted).fetchAll(transaction)

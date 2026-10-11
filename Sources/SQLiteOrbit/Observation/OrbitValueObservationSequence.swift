@@ -71,20 +71,6 @@ public struct OrbitValueObservationSequence<Element: Sendable>: AsyncSequence, S
     self.subscribe = subscribe
   }
 
-  /// Returns this sequence with a different buffering policy.
-  ///
-  /// ```swift
-  /// for try await reminders in observation.values(in: database).buffering(.bufferingNewest(1)) {
-  ///   render(reminders)
-  /// }
-  /// ```
-  ///
-  /// - Parameter policy: How elements are buffered for a consumer that falls behind.
-  /// - Returns: A sequence that observes the same database with `policy`.
-  public func buffering(_ policy: OrbitValueObservationBufferingPolicy) -> Self {
-    Self(bufferingPolicy: policy, subscribe: self.subscribe)
-  }
-
   /// Starts the observation and returns an iterator over the elements it produces.
   ///
   /// Each call starts an independent observation; iterators do not share elements.

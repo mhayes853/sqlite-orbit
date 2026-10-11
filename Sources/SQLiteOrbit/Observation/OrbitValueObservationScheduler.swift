@@ -170,8 +170,8 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
 extension OrbitValueObservationScheduler where Self == OrbitAsyncValueObservationScheduler {
   /// Delivers callbacks asynchronously on Swift's cooperative executor.
   ///
-  /// This is the scheduler ``OrbitValueObservation/subscribe(to:isolation:onError:onChange:)``
-  /// uses.
+  /// This is the scheduler
+  /// ``OrbitValueObservation/subscribe(to:scheduling:isolation:onError:onChange:)`` uses by default.
   ///
   /// ```swift
   /// try observation.subscribe(

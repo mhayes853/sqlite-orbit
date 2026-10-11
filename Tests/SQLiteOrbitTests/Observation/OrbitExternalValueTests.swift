@@ -9,7 +9,7 @@
     @testable import SQLiteOrbit
 
     @Suite
-    struct OrbitValueObservationExternalValueTests {
+    struct OrbitExternalValueTests {
       struct Filters: Sendable {
         var usesPrimary = true
         var primary = 1
@@ -21,7 +21,7 @@
         case assignment, modify, keyPathUpdate
 
         @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-        func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        func apply(to filters: OrbitExternalValue<Filters>) {
           switch self {
           case .assignment: filters.primary = 2
           case .modify: filters.primary += 1
@@ -35,7 +35,7 @@
         case replacement, modify
 
         @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-        func apply(to filters: OrbitValueObservation<Never>.ExternalValue<Filters>) {
+        func apply(to filters: OrbitExternalValue<Filters>) {
           switch self {
           case .replacement: filters.value = Filters(primary: 2)
           case .modify: filters.value.primary += 1
@@ -68,7 +68,7 @@
       @Test(arguments: MemberMutation.allCases)
       func aMemberMutationInvalidatesOnlyThatMembersObservers(_ mutation: MemberMutation) {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-        let filters = OrbitValueObservation.ExternalValue(Filters())
+        let filters = OrbitExternalValue(Filters())
         let primaryChanges = TestCounter()
         let secondaryChanges = TestCounter()
 
@@ -93,7 +93,7 @@
       @Test(arguments: WholeValueMutation.allCases)
       func aWholeValueMutationInvalidatesEveryMembersObservers(_ mutation: WholeValueMutation) {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-        let filters = OrbitValueObservation.ExternalValue(Filters())
+        let filters = OrbitExternalValue(Filters())
         let changes = TestCounter()
 
         // The member it changes is not the one observed, so only a whole-value change reaches it.
@@ -112,7 +112,7 @@
       @Test
       func wholeValueObservationTracksEveryMemberMutation() {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-        let filters = OrbitValueObservation.ExternalValue(Filters())
+        let filters = OrbitExternalValue(Filters())
         let changes = TestCounter()
 
         withObservationTracking {
@@ -129,7 +129,7 @@
       func externalValueChangesRefetchAnObservation() async throws {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
         let driver = try SQLiteQueue(path: .memory)
-        let external = OrbitValueObservation.ExternalValue(false)
+        let external = OrbitExternalValue(false)
         let changes = TestRecorder<OrbitValueObservationChange<Bool>>()
         let subscription = try OrbitValueObservation<Bool>
           .tracking { _ in external.value }
@@ -174,7 +174,7 @@
       func anExternalChangeDuringAFetchDiscardsTheStaleResult() async throws {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
         let driver = try SQLiteQueue(path: .memory)
-        let external = OrbitValueObservation.ExternalValue(0)
+        let external = OrbitExternalValue(0)
         let fetchCount = TestCounter()
         let values = TestRecorder<Int>()
         let secondFetch = TestGate()
@@ -222,7 +222,7 @@
             """
           )
         }
-        let filters = OrbitValueObservation.ExternalValue(Filters())
+        let filters = OrbitExternalValue(Filters())
         let fetchCount = TestCounter()
         let values = TestRecorder<Int>()
         let subscription = try OrbitValueObservation<Int>
@@ -263,7 +263,7 @@
       func eachFetchReplacesItsExternalFieldDependencies() async throws {
         guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
         let driver = try SQLiteQueue(path: .memory)
-        let filters = OrbitValueObservation.ExternalValue(Filters())
+        let filters = OrbitExternalValue(Filters())
         let values = TestRecorder<Int>()
         let fetchCount = TestCounter()
         let subscription = try OrbitValueObservation<Int>

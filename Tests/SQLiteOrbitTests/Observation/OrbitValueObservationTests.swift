@@ -55,6 +55,72 @@
 
       @MainActor
       @Test
+      func everySubscribeCallShapeResolves() async throws {
+        let driver = try await itemsDatabase()
+        let observation = itemCountObservation()
+        let recorder = ObservationRecorder<Int>()
+        // Main-actor state, which only a callback isolated to the main actor may touch.
+        @MainActor final class MainActorValues { var values = [Int]() }
+        let mainActorValues = MainActorValues()
+        let updates = TestRecorder<OrbitValueObservationUpdate<Int>>()
+
+        // Without a scheduler, with labelled or trailing closures.
+        let defaulted = try observation.subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+        let trailing = try observation.subscribe(to: driver) { _ in } onChange: { change in
+          recorder.record(change: change)
+        }
+        let defaultedUpdates = try observation.subscribe(to: driver) { _ in } onUpdate: { update in
+          updates.append(update)
+        }
+
+        // An explicit scheduler; `.mainActor` from the main actor takes main-actor callbacks.
+        let immediate = try observation.subscribe(to: driver, scheduling: .immediate) { _ in
+        } onChange: { change in
+          recorder.record(change: change)
+        }
+        // Closures must be marked `@MainActor` to select the main-actor overload; unmarked ones
+        // select the generic overload, whose callbacks the scheduler still runs on the main actor.
+        let mainActor = try observation.subscribe(to: driver, scheduling: .mainActor) {
+          @MainActor _ in
+        } onChange: { @MainActor change in
+          mainActorValues.values.append(change.value)
+        }
+        let unmarkedMainActor = try observation.subscribe(to: driver, scheduling: .mainActor) {
+          _ in
+        } onChange: { change in
+          recorder.record(change: change)
+        }
+        let explicitUpdates = try observation.subscribe(
+          to: driver,
+          scheduling: .async(),
+          onError: { _ in },
+          onUpdate: { updates.append($0) }
+        )
+        #expect(mainActorValues.values == [0])
+
+        // The variant that observes for as long as its task runs.
+        let task = Task { @MainActor in
+          try await observation.subscribe(to: driver, scheduling: .mainActor) { change in
+            MainActor.assumeIsolated { mainActorValues.values.append(change.value) }
+          }
+        }
+
+        try await recorder.waitForChangeCount(4)
+        try await updates.waitForCount(2)
+        task.cancel()
+        try await task.value
+        #expect(recorder.changes.map(\.value) == [0, 0, 0, 0])
+        #expect(recorder.errors.isEmpty)
+        _ = (defaulted, trailing, defaultedUpdates, immediate, mainActor, unmarkedMainActor)
+        _ = explicitUpdates
+      }
+
+      @MainActor
+      @Test
       func cancelledSubscriberDoesNotReceiveAChangeAlreadyOnItsWay() async throws {
         let driver = try blockingItemsDatabase()
         let recorder = ObservationRecorder<Int>()
@@ -785,20 +851,31 @@
       }
 
       @Test
-      func bufferingModifierOverridesTheSequencePolicy() async throws {
+      func bufferingNewestKeepsOnlyTheLatestPendingValue() async throws {
         let driver = try await itemsDatabase()
-        let values = itemCountObservation()
+        let observation = itemCountObservation()
+        var iterator = observation
           .values(in: driver, bufferingPolicy: .bufferingNewest(1))
-          .buffering(.unbounded)
-        var iterator = values.makeAsyncIterator()
+          .makeAsyncIterator()
         #expect(try await iterator.next() == 0)
 
-        for id in 1...2 {
+        // A second subscriber shares the runtime, so once it has seen the last value the runtime
+        // has published every one of them; the pause lets the sequence's own delivery catch up.
+        let recorder = ObservationRecorder<Int>()
+        let subscription = try observation.subscribe(
+          to: driver,
+          onError: recorder.record(error:),
+          onChange: recorder.record(change:)
+        )
+        try await recorder.waitForChangeCount(1)
+        for id in 1...3 {
           try await insertItems(id, into: driver)
         }
+        try await recorder.waitForChangeCount(4)
+        try await Task.sleep(for: .milliseconds(100))
 
-        #expect(try await iterator.next() == 1)
-        #expect(try await iterator.next() == 2)
+        #expect(try await iterator.next() == 3)
+        _ = subscription
       }
 
       @Test
@@ -1441,14 +1518,166 @@
       }
 
       @Test
-      func queryFragmentTrackingOneObservesAnOptionalValue() throws {
+      func everyStatementShapeResolvesToATrackingFactory() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        try driver.executeBlocking(
+          sql: """
+            CREATE TABLE observed_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+            CREATE TABLE observed_items (
+              id INTEGER PRIMARY KEY,
+              groupID INTEGER NOT NULL,
+              title TEXT NOT NULL
+            );
+            INSERT INTO observed_groups VALUES (1, 'Group');
+            INSERT INTO observed_items VALUES (1, 1, 'One'), (2, 1, 'Two');
+            """
+        )
+        let fragment: QueryFragment = "SELECT title FROM observed_items ORDER BY id"
+
+        // Each declaration states the type the call must infer, so a shape that stops resolving,
+        // or resolves to another overload, fails to compile.
+        let table: OrbitValueObservation<[ObservedItem]> = .trackingAll(ObservedItem.all)
+        let firstRow: OrbitValueObservation<ObservedItem?> = .trackingOne(ObservedItem.all)
+        let filtered: OrbitValueObservation<[ObservedItem]> =
+          .trackingAll(ObservedItem.where { $0.id.eq(2) })
+        let titles: OrbitValueObservation<[String]> =
+          .trackingAll(ObservedItem.where { $0.id.gt(0) }.order(by: \.id).select(\.title))
+        let firstTitle: OrbitValueObservation<String?> =
+          .trackingOne(ObservedItem.order(by: \.id).select(\.title))
+        let count: OrbitValueObservation<Int?> = .trackingOne(ObservedItem.all.count())
+        let typedSQL: OrbitValueObservation<[String]> =
+          .trackingAll(#sql("SELECT title FROM observed_items ORDER BY id", as: String.self))
+        let wrappedFragment: OrbitValueObservation<String?> =
+          .trackingOne(SQLQueryExpression(fragment, as: String.self))
+        let tuples: OrbitValueObservation<[(Int, String)]> =
+          .trackingAll(ObservedItem.order(by: \.id).select { ($0.id, $0.title) })
+        let firstTuple: OrbitValueObservation<(Int, String)?> =
+          .trackingOne(ObservedItem.order(by: \.id).select { ($0.id, $0.title) })
+        let typedTuples: OrbitValueObservation<[(Int, String)]> = .trackingAll(
+          #sql("SELECT id, title FROM observed_items ORDER BY id", as: (Int, String).self)
+        )
+        // A joined table query infers its tuple of tables from the query rather than from a
+        // contextual type, which the parameter-pack overloads cannot be solved from.
+        let joined = OrbitValueObservation.trackingAll(
+          ObservedItem.join(ObservedGroup.all) { $0.groupID.eq($1.id) }.order { item, _ in item.id }
+        )
+        let firstJoined = OrbitValueObservation.trackingOne(
+          ObservedItem.join(ObservedGroup.all) { $0.groupID.eq($1.id) }.order { item, _ in item.id }
+        )
+        let joinedProjection: OrbitValueObservation<[(String, String)]> = .trackingAll(
+          ObservedItem.join(ObservedGroup.all) { $0.groupID.eq($1.id) }
+            .order { item, _ in item.id }
+            .select { ($0.title, $1.name) }
+        )
+
+        func first<Value: Sendable>(_ observation: OrbitValueObservation<Value>) throws -> Value {
+          let recorder = ObservationRecorder<Value>()
+          let subscription = try observation.subscribe(
+            to: driver,
+            scheduling: .immediate,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+          defer { subscription.cancel() }
+          #expect(recorder.errors.isEmpty)
+          return try #require(recorder.changes.first).value
+        }
+
+        #expect(try first(table).map(\.title) == ["One", "Two"])
+        #expect(try first(firstRow)?.title == "One")
+        #expect(try first(filtered).map(\.title) == ["Two"])
+        #expect(try first(titles) == ["One", "Two"])
+        #expect(try first(firstTitle) == "One")
+        #expect(try first(count) == 2)
+        #expect(try first(typedSQL) == ["One", "Two"])
+        #expect(try first(wrappedFragment) == "One")
+        #expect(try first(tuples).map(\.1) == ["One", "Two"])
+        #expect(try first(firstTuple)?.0 == 1)
+        #expect(try first(typedTuples).map(\.0) == [1, 2])
+        let joinedRows: [(ObservedItem, ObservedGroup)] = try first(joined)
+        let firstJoinedRow: (ObservedItem, ObservedGroup)? = try first(firstJoined)
+        #expect(joinedRows.map(\.1.name) == ["Group", "Group"])
+        #expect(firstJoinedRow?.0.title == "One")
+        #expect(try first(joinedProjection).map(\.1) == ["Group", "Group"])
+      }
+
+      @Test
+      func statementObservationsWatchWhatViewsJoinsAndSubqueriesRead() throws {
+        let driver = try SQLiteQueue(path: .memory)
+        try driver.executeBlocking(
+          sql: """
+            CREATE TABLE observed_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL, note TEXT);
+            CREATE TABLE observed_items (
+              id INTEGER PRIMARY KEY,
+              groupID INTEGER NOT NULL,
+              title TEXT NOT NULL,
+              note TEXT
+            );
+            CREATE TABLE unrelated (id INTEGER PRIMARY KEY);
+            CREATE VIEW item_titles AS SELECT id, title FROM observed_items;
+            INSERT INTO observed_groups VALUES (1, 'Group', NULL);
+            INSERT INTO observed_items VALUES (1, 1, 'One', NULL);
+            """
+        )
+        let statements: [SQLQueryExpression<String>] = [
+          #sql("SELECT title FROM item_titles ORDER BY id", as: String.self),
+          #sql(
+            """
+            SELECT observed_items.title || observed_groups.name FROM observed_items
+            JOIN observed_groups ON observed_groups.id = observed_items.groupID
+            """,
+            as: String.self
+          ),
+          #sql(
+            """
+            SELECT title FROM observed_items
+            WHERE groupID IN (SELECT id FROM observed_groups WHERE name = 'Group')
+            """,
+            as: String.self
+          ),
+        ]
+
+        for statement in statements {
+          // The region a fetch reports, from a freshly prepared statement and then from the cached
+          // one, is the region derived by compiling the statement on its own.
+          try driver.readBlocking { transaction in
+            let sql = SQL(fragment: statement.query)
+            let derived = try OrbitDatabaseRegion(sql, in: transaction)
+            for _ in 1...2 {
+              let recorder = OrbitDatabaseRegionRecorder()
+              _ = try transaction.withObservation(recorder) {
+                try statement.fetchAll(transaction)
+              }
+              #expect(recorder.readRegion == derived)
+            }
+          }
+
+          let fetchCount = TestCounter()
+          let subscription = try OrbitValueObservation.trackingAll(statement)
+            .handleEvents(willFetch: { fetchCount.increment() })
+            .subscribe(to: driver, scheduling: .immediate) { _ in } onChange: { _ in }
+          #expect(fetchCount.value == 1)
+
+          try driver.executeBlocking(sql: "INSERT INTO unrelated VALUES (NULL)")
+          try driver.executeBlocking(sql: "UPDATE observed_items SET note = 'x'")
+          try driver.executeBlocking(sql: "UPDATE observed_groups SET note = 'x'")
+          #expect(fetchCount.value == 1)
+
+          try driver.executeBlocking(sql: "UPDATE observed_items SET title = title || '!'")
+          #expect(fetchCount.value == 2)
+          subscription.cancel()
+        }
+      }
+
+      @Test
+      func wrappedQueryFragmentTrackingOneObservesAnOptionalValue() throws {
         let driver = try SQLiteQueue(path: .memory)
         try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
         let query: QueryFragment = "SELECT title FROM items ORDER BY id LIMIT 1"
         let recorder = ObservationRecorder<String?>()
         let subscription =
           try OrbitValueObservation
-          .trackingOne(query, as: String.self)
+          .trackingOne(SQLQueryExpression(query, as: String.self))
           .subscribe(
             to: driver,
             scheduling: .immediate,
