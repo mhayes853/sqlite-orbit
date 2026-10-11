@@ -25,7 +25,7 @@ public final class ReminderNotificationScheduler: Sendable {
 
   public func reconcile(
     reminderID: Reminder.ID,
-    in database: RemindersDatabase
+    in database: any OrbitObservableDatabaseWriter
   ) async throws {
     let reminder = try await database.read {
       try Reminder.find(reminderID).fetchOne($0)
@@ -43,7 +43,7 @@ public final class ReminderNotificationScheduler: Sendable {
     try await center.add(request)
   }
 
-  public func observe(in database: RemindersDatabase) async {
+  public func observe(in database: any OrbitObservableDatabaseWriter) async {
     let observation =
       OrbitValueObservation
       .trackingAll(Self.scheduledReminders)
@@ -134,7 +134,7 @@ extension Reminder {
   public static func setStatus(
     _ status: Status,
     id: ID,
-    in database: RemindersDatabase,
+    in database: any OrbitObservableDatabaseWriter,
     scheduler: ReminderNotificationScheduler
   ) async throws {
     try await setStatus(status, id: id, in: database)

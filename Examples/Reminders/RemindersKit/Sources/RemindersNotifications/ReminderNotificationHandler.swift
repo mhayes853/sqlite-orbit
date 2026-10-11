@@ -1,14 +1,15 @@
 import Foundation
 import RemindersData
+import SQLiteOrbit
 import UserNotifications
 
 public final class ReminderNotificationHandler: NSObject, UNUserNotificationCenterDelegate {
-  private let database: RemindersDatabase
+  private let database: any OrbitObservableDatabaseWriter
   private let openReminder: @MainActor @Sendable (Reminder.ID) async -> Void
   private let scheduler: ReminderNotificationScheduler
 
   public init(
-    database: RemindersDatabase,
+    database: any OrbitObservableDatabaseWriter,
     scheduler: ReminderNotificationScheduler = ReminderNotificationScheduler(),
     openReminder: @escaping @MainActor @Sendable (Reminder.ID) async -> Void = { _ in }
   ) {
@@ -85,7 +86,7 @@ public final class ReminderNotificationHandler: NSObject, UNUserNotificationCent
   private static func handle(
     actionIdentifier: String,
     reminderID: Reminder.ID,
-    database: RemindersDatabase,
+    database: any OrbitObservableDatabaseWriter,
     scheduler: ReminderNotificationScheduler,
     openReminder: @MainActor @Sendable (Reminder.ID) async -> Void
   ) async {
@@ -105,7 +106,7 @@ public final class ReminderNotificationHandler: NSObject, UNUserNotificationCent
 
   private static func complete(
     reminderID: Reminder.ID,
-    database: RemindersDatabase,
+    database: any OrbitObservableDatabaseWriter,
     scheduler: ReminderNotificationScheduler
   ) async throws {
     try await Reminder.setStatus(.completed, id: reminderID, in: database)

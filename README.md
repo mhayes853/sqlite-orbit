@@ -1515,14 +1515,14 @@ let subscription = try reminders.subscribe(
 )
 ```
 
-On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in a `Transaction` or
-an `Animation` without importing a second package product:
+On platforms with SwiftUI, `.animation(_:)` and `.transaction(_:)` deliver on the main actor inside
+an `Animation` or a `Transaction` without importing a second package product. Any other main-actor
+scheduler can be wrapped the same way, as in `.mainActor.animation(.default)`:
 
 ```swift
-let scheduler = OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
 let subscription = try reminders.subscribe(
   to: database,
-  scheduling: scheduler,
+  scheduling: .animation(.default),
   onError: { @MainActor error in report(error) },
   onChange: { @MainActor change in render(change.value) }
 )
@@ -1685,10 +1685,12 @@ struct RemindersApp: App {
 is how a test gives itself a database of its own without touching the process-wide one. Accessing
 `OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
 detailed setup instructions. `OrbitDefaultDatabase.currentIfConfigured` returns `nil` instead when
-no default is available. Read-only observable databases can provide defaults for fetches; `Row` and
-`SingleRow` writes require a writer and report a read-only error if their resolved database cannot
-write. A SwiftUI property waits until its environment has been resolved, so
-providing a database with `.orbitDatabase(...)` does not require a process-wide default.
+no default is available. The default and the SwiftUI environment value both hold an
+`any OrbitObservableDatabaseWriter` (an `OrbitDatabaseWriter` that is also an
+`OrbitObservableDatabase`), so `Row` and `SingleRow` can always save to the database they resolve.
+A read-only observable database can still be handed to a fetch property through its `database:`
+argument. A SwiftUI property waits until its environment has been resolved, so providing a database
+with `.orbitDatabase(...)` does not require a process-wide default.
 
 Enable the `Dependencies` trait to configure the same default with
 [swift-dependencies](https://github.com/pointfreeco/swift-dependencies):
@@ -1802,9 +1804,10 @@ a sort control drives:
 try await $reminders.load(Reminder.where { $0.title.contains(search) })
 ```
 
-It returns an `OrbitFetchSubscription`. Awaiting `waitUntilFinished()` ties the observation to the lifetime of
-a SwiftUI view's `task`, so drilling into a child screen stops the query and popping back restarts
-it:
+It returns an `OrbitFetchLoad`. Unlike an `OrbitSubscription`, a load is not an ownership token:
+the property owns its observation, so discarding the load leaves the query running. Awaiting
+`waitUntilFinished()` ties the observation to the lifetime of a SwiftUI view's `task`, so drilling
+into a child screen stops the query and popping back restarts it, and `cancel()` stops it early:
 
 ```swift
 .task { try? await $reminders.load(Reminder.order(by: \.title)).waitUntilFinished() }
@@ -1821,40 +1824,31 @@ stays current with the rest of the property.
 
 By default a property fetches its first value on the thread that first reads it, and delivers later
 ones as the observation produces them. Pass a `scheduler:` to move that elsewhere — any
-`OrbitValueObservationScheduler` that is also `Hashable`, including `.mainActor` — or, in SwiftUI,
-an `animation:`, which delivers every change on the main actor inside that animation:
+`OrbitValueObservationScheduler`, including `.mainActor` — or, in SwiftUI, `.animation(_:)` or
+`.transaction(_:)`, which deliver every change on the main actor inside that animation or
+transaction. `load(_:scheduler:)` takes the same argument:
 
 ```swift
-@FetchAll(Reminder.all, animation: .default) var reminders
+@FetchAll(Reminder.all, scheduler: .animation(.bouncy)) var reminders
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
+
+try await $reminders.load(query, scheduler: .transaction(Transaction(animation: .snappy)))
 ```
 
-Request-backed declaration identity includes the database instance, request type and value, and
-optional scheduler value. Equal requests share underlying observations independently of delivery
-scheduling. An observation-backed fetch uses the observation's
-definition identity, or the explicit `id:` supplied with it. Omitting a scheduler is distinct from
-explicitly supplying `.immediate`. SwiftUI remembers the declaration's identity separately from
-the currently loaded source, so a `load()` or projected-value assignment survives an unchanged
-declaration being rendered again. Changing the declaration's request, observation identity,
-database, or scheduler replaces the observation; a value-only declaration leaves it alone.
+Request-backed declaration identity includes the database instance and the request type and value.
+Equal requests share underlying observations independently of delivery scheduling. An
+observation-backed fetch uses the observation's definition identity, or the explicit `id:` supplied
+with it. SwiftUI remembers the declaration's identity separately from the currently loaded source,
+so a `load()` or projected-value assignment survives an unchanged declaration being rendered again.
+Changing the declaration's request, observation identity, or database replaces the observation; a
+value-only declaration leaves it alone.
 
-Animation and initial delivery can also be composed explicitly through public schedulers:
-
-```swift
-@FetchAll(
-  Reminder.all,
-  scheduler: .mainActor.animation(.default).deferringInitialValue()
-) var reminders
-```
-
-Animation preserves the base scheduler's initial timing. `deferringInitialValue()` prevents a
-blocking initial fetch, which is also the behavior selected by the fetch `animation:` conveniences.
-Both adapters preserve `Hashable` when their base supports it.
-
-Custom schedulers should base equality and hashing on stable configuration (or instance identity),
-not mutable callback queues. The built-in schedulers already provide these conformances. Direct
-value-observation subscriptions do not require a `Hashable` scheduler. Fetch `animation:` overloads
-require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashable` availability.
+The scheduler is not part of that identity, so schedulers need not be `Hashable`. A view rendered
+again with a different scheduler — a new animation, say — keeps its observation and delivers
+through the new scheduler from then on, unless a `load` or assignment has chosen a scheduler since.
+Whether the first value arrives before the property's first read returns is decided once, by the
+scheduler in effect when the observation starts. A main-actor scheduler never blocks a read for it:
+the property starts with its declared value and the first fetched value arrives on the main actor.
 
 ### Sections
 
