@@ -148,7 +148,7 @@ func accessOverheadBenchmarks() {
 
 private var orbit: SQLiteConfiguration {
   var configuration = SQLiteConfiguration.default
-  configuration.setupSQL.append(synchronousOff)
+  configuration.setups.append(.script(synchronousOff))
   return configuration
 }
 

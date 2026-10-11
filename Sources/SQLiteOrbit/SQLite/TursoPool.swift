@@ -47,11 +47,11 @@
       // Establish MVCC on writable connections before opening readers. The setup is prepended so
       // caller-supplied setup SQL always runs against the mode this driver promises.
       var writerConfiguration = configuration
-      writerConfiguration.setupSQL.insert("PRAGMA journal_mode = MVCC", at: 0)
+      writerConfiguration.setups.insert(.sql("PRAGMA journal_mode = MVCC"), at: 0)
       // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
       // through a read transaction an explicit error.
       var readerConfiguration = configuration
-      readerConfiguration.setupSQL.append("PRAGMA query_only = 1")
+      readerConfiguration.setups.append(.sql("PRAGMA query_only = 1"))
       let identifier = identifier ?? .forDatabase(path: path)
       self.defaultIdentifier = identifier
       self.pool = try SQLiteConnectionPool(

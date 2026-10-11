@@ -95,22 +95,31 @@
         }
       }
 
-      @Test
-      func bindingWritesToTheEnvironmentDatabaseItReads() async throws {
+      @Test(arguments: [false, true])
+      func bindingWritesRequireAWritableEnvironment(readerOnly: Bool) async throws {
         let previous = OrbitDefaultDatabase.currentIfConfigured
         let processDefault = try await bindingDatabase(settings: true)
         let environment = try await bindingDatabase(settings: true)
         OrbitDefaultDatabase.set(processDefault)
         defer { OrbitDefaultDatabase.set(previous) }
         let sut = EnvironmentSettingsToggle()
+        let source: any OrbitObservableDatabase =
+          readerOnly
+          ? ReaderOnlyObservationDatabase(environment) : environment
 
-        try await ViewHosting.host(sut.orbitDatabase(environment)) {
+        try await ViewHosting.host(sut.orbitDatabase(source)) {
           try await sut.inspection.inspect(after: settle) { view in
             try view.find(ViewType.Toggle.self).tap()
+            let error = try view.actualView().saveError as? SQLiteError
+            #expect(error?.primaryCode == (readerOnly ? .readOnly : nil))
           }
-          try await waitForSetting(false, in: environment)
+          if !readerOnly { try await waitForSetting(false, in: environment) }
         }
 
+        let environmentValue = try await environment.read { transaction in
+          try transaction.find(BindingSettings.all, key: 0)
+        }
+        #expect(environmentValue.isEnabled == readerOnly)
         let processValue = try await processDefault.read { transaction in
           try transaction.find(BindingSettings.all, key: 0)
         }
@@ -139,6 +148,7 @@
     private struct EnvironmentSettingsToggle: View {
       @SingleRow(BindingSettings.self) private var settings: BindingSettings
       let inspection = Inspection<Self>()
+      var saveError: (any Error)? { $settings.saveError }
 
       var body: some View {
         Toggle("Enabled", isOn: $settings.binding(\.isEnabled))

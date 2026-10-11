@@ -142,7 +142,7 @@ final class ReminderRowModel: ErrorReporting {
     await withErrorReporting {
       try await sleep(delay)
       try Task.checkCancellation()
-      try await defaultRemindersDatabase.write { transaction in
+      try await OrbitDefaultDatabase.current.write { transaction in
         try Reminder.find(reminder.id)
           .update { $0.status = Reminder.Status.completed }
           .execute(transaction)
@@ -155,7 +155,7 @@ final class ReminderRowModel: ErrorReporting {
   ) -> Task<Void, Never> {
     Task {
       await withErrorReporting {
-        try await defaultRemindersDatabase.write(operation)
+        try await OrbitDefaultDatabase.current.write(operation)
       }
     }
   }

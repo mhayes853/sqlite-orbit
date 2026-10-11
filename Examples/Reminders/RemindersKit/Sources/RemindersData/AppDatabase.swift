@@ -3,14 +3,6 @@ import SQLiteOrbit
 
 public typealias RemindersDatabase = any OrbitDatabaseWriter & OrbitObservableDatabase
 
-/// The configured default database, which the Reminders app requires to support writes.
-public var defaultRemindersDatabase: RemindersDatabase {
-  guard let database = OrbitDefaultDatabase.current as? RemindersDatabase else {
-    preconditionFailure("Reminders requires a writable default database.")
-  }
-  return database
-}
-
 public enum RemindersDatabaseConfiguration {
   public static let appGroupIdentifier = "group.co.sqlite-orbit.Reminders"
 }

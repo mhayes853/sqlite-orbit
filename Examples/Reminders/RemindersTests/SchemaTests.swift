@@ -8,7 +8,7 @@ import Testing
 struct SchemaTests {
   @Test
   func migratedDatabaseStartsEmpty() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let counts = try await database.read {
       try [
         RemindersList.count().fetchOne($0),
@@ -21,7 +21,7 @@ struct SchemaTests {
 
   @Test
   func searchSettingsReadTheirDefaultWithoutInsertingAndPersistOneRow() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
 
     let initial = try await database.read { try SearchSettings.find(in: $0) }
     #expect(initial == .defaultValue)
@@ -38,7 +38,7 @@ struct SchemaTests {
 
   @Test
   func deletingListCascadesRelatedRows() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let listID = UUID()
     let reminderID = UUID()
 

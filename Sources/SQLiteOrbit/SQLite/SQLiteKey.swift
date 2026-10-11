@@ -70,7 +70,7 @@ public struct SQLiteKey: Sendable {
   /// Calls `body` with the key's bytes.
   ///
   /// This is how a caller reaches the material for work the package does not model — calling a
-  /// build's `sqlite3_rekey_v2` from a ``SQLiteConnectionSetup``, or keying a database brought in
+  /// build's `sqlite3_rekey_v2` from a ``SQLiteSetup``, or keying a database brought in
   /// with `ATTACH`.
   ///
   /// The buffer is only valid for the call. Copying it out puts the key somewhere this type cannot

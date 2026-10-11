@@ -19,7 +19,7 @@ actor SQLiteSerialConnection {
     path: OrbitDatabasePath,
     flags: SQLiteOpenFlags,
     configuration: SQLiteConfiguration,
-    driverSetupSQL: [String] = [],
+    driverSetups: [SQLiteSetup] = [],
     idleTimeout: Duration? = nil,
     suspension: SQLiteWriteSuspension? = nil
   ) throws {
@@ -27,27 +27,13 @@ actor SQLiteSerialConnection {
     // Role-specific setup is driver policy, performed through the same public lending API.
     // The interrupt callback remains valid because this driver owns the connection for its lifetime.
     let authorizer = handle.authorizer
-    if handle.isReadOnly {
-      self.interrupt = try handle.withReadConnection { connection in
-        try authorizer.requiringExecution {
-          for sql in driverSetupSQL {
-            var cursor = try connection.rowCursor(SQL(text: sql), cached: false)
-            while try cursor.next() != nil {}
-          }
-        }
-        let address = UInt(bitPattern: connection.sqliteConnection)
-        let entryPoint = connection.sqlite.connections.interrupt
-        return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
+    self.interrupt = try handle.withConnectionAccess { connection in
+      try authorizer.requiringExecution {
+        for setup in driverSetups { try setup(connection) }
       }
-    } else {
-      self.interrupt = try handle.withWriteConnection { connection in
-        try authorizer.requiringExecution {
-          for sql in driverSetupSQL { try connection.executeScript(sql) }
-        }
-        let address = UInt(bitPattern: connection.sqliteConnection)
-        let entryPoint = connection.sqlite.connections.interrupt
-        return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
-      }
+      let address = UInt(bitPattern: connection.sqliteConnection)
+      let entryPoint = connection.sqlite.connections.interrupt
+      return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
     }
     self.suspension = suspension
     #if _runtime(_multithreaded)

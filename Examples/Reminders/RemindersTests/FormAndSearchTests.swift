@@ -9,7 +9,7 @@ import Testing
 struct FormAndSearchTests {
   @Test
   func listFormLoadsAndProcessesCoverImages() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     let imageData = try #require(
       Data(
@@ -49,7 +49,7 @@ struct FormAndSearchTests {
 
   @Test(.timeLimit(.minutes(1)))
   func detailCoverImageTracksDatabaseChanges() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     let imageData = try #require(
       Data(
@@ -84,7 +84,7 @@ struct FormAndSearchTests {
 
   @Test
   func listFormCreatesThenEditsAList() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let create = RemindersListFormModel(remindersList: nil)
     create.title = "Personal"
     #expect(await create.save())
@@ -108,7 +108,7 @@ struct FormAndSearchTests {
 
   @Test
   func newListsAppendAfterADeletion() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let lists = (0...2).map {
       RemindersList(id: UUID(), position: $0, title: "List \($0)")
     }
@@ -129,7 +129,7 @@ struct FormAndSearchTests {
 
   @Test
   func newRemindersAppendAfterADeletion() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminders = (0...2).map {
       Reminder(
@@ -157,7 +157,7 @@ struct FormAndSearchTests {
 
   @Test
   func reminderFormCreatesTagsAndSearchableText() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
       try RemindersList.insert { list }.execute($0)
@@ -195,7 +195,7 @@ struct FormAndSearchTests {
 
   @Test
   func reminderFormCompletesAndSuggestsTags() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write {
       try RemindersList.insert { list }.execute($0)
@@ -239,7 +239,7 @@ struct FormAndSearchTests {
 
   @Test(arguments: [false, true])
   func reminderFormPersistsDate(includeTime: Bool) async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await insertFixture(lists: [list])
     let dueDate = Date(timeIntervalSince1970: 1_800_000_000)
@@ -292,7 +292,7 @@ struct FormAndSearchTests {
 
   @Test
   func reminderFormEditsUsingADraftWithoutResettingOtherFields() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     let reminder = Reminder(
       id: UUID(),
@@ -333,7 +333,7 @@ struct FormAndSearchTests {
 
   @Test
   func persistedSearchSettingIncludesCompletedResults() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let list = RemindersList(id: UUID(), title: "Personal")
     try await database.write { transaction in
       try RemindersList.insert { list }.execute(transaction)
@@ -361,7 +361,7 @@ struct FormAndSearchTests {
 
   @Test(arguments: [false, true])
   func reminderCompletionHonorsGracePeriod(cancel: Bool) async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let (_, reminder) = try await reminderFixture()
     let gate = CompletionDelayGate()
     let model = ReminderRowModel(
@@ -389,7 +389,7 @@ struct FormAndSearchTests {
 
   @Test
   func reminderRowModelHandlesDetailsFlaggingAndDeletion() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let (list, reminder) = try await reminderFixture()
     let model = ReminderRowModel()
 
@@ -410,7 +410,7 @@ struct FormAndSearchTests {
 
   @Test
   func reminderRowContextMenuActionsPersistChanges() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let personal = RemindersList(id: UUID(), position: 0, title: "Personal")
     let work = RemindersList(id: UUID(), position: 1, title: "Work")
     let reminder = Reminder(id: UUID(), remindersListID: personal.id, title: "Call Blob")
@@ -455,7 +455,7 @@ struct FormAndSearchTests {
 
   @Test
   func sampleDataPopulatesOnlyABlankDatabase() async throws {
-    let database = defaultRemindersDatabase
+    let database = OrbitDefaultDatabase.current
     let model = RemindersListsModel()
     await model.load()
 

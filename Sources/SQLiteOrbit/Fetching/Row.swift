@@ -22,7 +22,7 @@
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
   /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
-  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment or default can supply
+  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment can supply
   /// the observed row, but saves throw a ``SQLiteError`` with code ``SQLiteResultCode/readOnly``.
   @propertyWrapper
   public struct Row<Value>: Sendable

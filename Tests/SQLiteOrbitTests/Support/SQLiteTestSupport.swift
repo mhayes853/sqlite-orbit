@@ -197,7 +197,7 @@
   /// Anything that reads the default while `body` runs, in any task, sees `database`, so a suite
   /// that calls this must be serialized.
   func withProcessDefaultDatabase<Result>(
-    _ database: (any OrbitObservableDatabase)?,
+    _ database: (any OrbitDatabaseWriter & OrbitObservableDatabase)?,
     isolation: isolated (any Actor)? = #isolation,
     _ body: () async throws -> Result
   ) async throws -> Result {

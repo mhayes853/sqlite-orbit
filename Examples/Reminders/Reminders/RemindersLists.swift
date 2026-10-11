@@ -192,7 +192,7 @@ final class RemindersListsModel: ErrorReporting {
     _ operation: @escaping @Sendable (borrowing SQLiteWriteTransaction) throws -> Void
   ) async {
     await withErrorReporting {
-      try await defaultRemindersDatabase.write(operation)
+      try await OrbitDefaultDatabase.current.write(operation)
     }
   }
 }

@@ -68,6 +68,8 @@
       var columnName: (@Sendable (OpaquePointer?, Int32) -> UnsafePointer<CChar>?)?
       var installAuthorizer:
         (@Sendable (OpaquePointer?, SQLiteAuthorizerCallback?, UnsafeMutableRawPointer?) -> Int32)?
+      var installBusyHandler:
+        (@Sendable (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32)?
       var createCollation:
         (
           @Sendable (
@@ -278,6 +280,19 @@
           return builtInTestLibrary.authorizer!.install(connection, callback, context)
         }
         return installAuthorizer(connection, callback, context)
+      }
+    }
+
+    static func installBusyHandler(
+      _ body:
+        @escaping @Sendable (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32
+    ) -> @convention(c) (OpaquePointer?, SQLiteBusyCallback?, UnsafeMutableRawPointer?) -> Int32 {
+      install(\.installBusyHandler, body)
+      return { connection, callback, context in
+        guard let installBusyHandler = LibraryHooks.current?.installBusyHandler else {
+          return builtInTestLibrary.busyHandler!.install(connection, callback, context)
+        }
+        return installBusyHandler(connection, callback, context)
       }
     }
 

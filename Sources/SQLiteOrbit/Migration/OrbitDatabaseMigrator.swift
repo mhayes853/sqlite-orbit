@@ -514,15 +514,9 @@ public struct OrbitDatabaseMigrator: Sendable {
     foreignKeysEnabled: Bool,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Void
   ) throws {
-    let previous = connection.isForeignKeysEnabled
-    try connection.setForeignKeysEnabled(foreignKeysEnabled)
-    do {
+    try connection.withForeignKeysEnabled(foreignKeysEnabled) {
       try connection.transaction(body)
-    } catch {
-      try? connection.setForeignKeysEnabled(previous)
-      throw error
     }
-    try connection.setForeignKeysEnabled(previous)
   }
 
   private func firstDroppableObject(

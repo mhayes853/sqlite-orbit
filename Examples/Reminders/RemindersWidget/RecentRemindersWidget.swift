@@ -209,7 +209,7 @@ struct RecentRemindersWidgetView: View {
 }
 
 struct RecentRemindersWidget: Widget {
-  private let database: RemindersDatabase = defaultRemindersDatabase
+  private let database: RemindersDatabase = OrbitDefaultDatabase.current
 
   var body: some WidgetConfiguration {
     StaticConfiguration(

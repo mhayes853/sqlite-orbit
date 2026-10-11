@@ -69,7 +69,7 @@ struct CreateReminderIntent: AppIntent {
   @Parameter(title: "Tags")
   var tags: [String]?
 
-  @Dependency(default: defaultRemindersDatabase)
+  @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
@@ -197,7 +197,7 @@ struct CompleteReminderIntent: AppIntent {
   @Parameter(title: "Reminder")
   var reminder: ReminderEntity
 
-  @Dependency(default: defaultRemindersDatabase)
+  @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
@@ -252,7 +252,7 @@ struct ReopenReminderIntent: AppIntent {
   @Parameter(title: "Reminder")
   var reminder: ReminderEntity
 
-  @Dependency(default: defaultRemindersDatabase)
+  @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
@@ -300,7 +300,7 @@ struct DeleteRemindersIntent: DeleteIntent {
   @Parameter(title: "Reminders")
   var entities: [ReminderEntity]
 
-  @Dependency(default: defaultRemindersDatabase)
+  @Dependency(default: OrbitDefaultDatabase.current)
   var database: RemindersDatabase
 
   @Dependency(default: ReminderNotificationScheduler())
