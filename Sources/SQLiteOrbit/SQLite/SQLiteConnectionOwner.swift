@@ -337,10 +337,7 @@ public struct SQLiteConnection: ~Copyable {
   }
 
   borrowing func withStatementStepInterceptor<Result: ~Copyable>(
-    _ intercept:
-      @escaping @Sendable (
-        _ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32
-      ) -> Int32,
+    _ intercept: @escaping SQLiteStatementStepInterceptor,
     perform operation: () throws -> Result
   ) rethrows -> Result {
     // Each interceptor wraps whatever step was in effect when it was installed, so nested ones
@@ -598,3 +595,8 @@ extension SQLiteLibrary {
     return false
   }
 }
+
+/// Steps `statement` in place of `sqlite3_step`, by calling `next` or not, and returns the result
+/// code, as the connections' `withStatementStepInterceptor(_:perform:)` takes it.
+typealias SQLiteStatementStepInterceptor =
+  @Sendable (_ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32) -> Int32

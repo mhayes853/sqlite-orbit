@@ -6,7 +6,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Empty results produce no sections; an optional key of `nil` names an ordinary section.
   ///
   /// - Parameters:
-  ///   - sql: The query to execute, which must only read in a read transaction.
+  ///   - sql: The query to run, which must only read.
   ///   - transform: Decodes an element and its section key from a row, valid only during the call.
   /// - Throws: Any statement or decoding error.
   public borrowing func fetchSections<Element, Key: Hashable>(

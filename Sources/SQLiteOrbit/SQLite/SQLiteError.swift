@@ -56,8 +56,8 @@ public struct SQLiteError: Error, Hashable, Sendable {
   /// }
   /// ```
   ///
-  /// A connection's busy timeout or busy handler has already waited before this is thrown, so a
-  /// retry that happens at once is unlikely to fare better.
+  /// A connection's ``SQLiteConfiguration/busyPolicy`` has already waited before this is thrown,
+  /// so a retry that happens at once is unlikely to fare better.
   public var isBusy: Bool {
     primaryCode == .busy || primaryCode == .locked
   }

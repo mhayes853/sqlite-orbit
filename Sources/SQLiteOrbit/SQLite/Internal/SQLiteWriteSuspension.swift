@@ -78,7 +78,7 @@ final class SQLiteWriteSuspension: Sendable {
   func interceptor(
     of library: SQLiteLibrary,
     on connection: OpaquePointer
-  ) -> @Sendable (_ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32) -> Int32 {
+  ) -> SQLiteStatementStepInterceptor {
     let isReadOnly = library.statements.inspection.isReadOnly
     let sql = library.statements.inspection.sql
     let isAutocommit = library.connections.isAutocommit

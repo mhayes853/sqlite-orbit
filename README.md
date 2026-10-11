@@ -1041,15 +1041,15 @@ directly, and a function's callbacks read their arguments and write their result
 `SQLiteLibrary` the connection was opened with, so a caller-supplied build drives them exactly as
 the linked one does.
 
-`OrbitIPCDatabase` is `Identifiable`. Its multiprocess writer supplies the default database
-identifier, and callers can override it when constructing the database. File databases derive a
+`OrbitIPCDatabase` is `Identifiable`. Its default identifier is derived from its multiprocess
+writer's `path`, and callers can override it when constructing the database. File databases derive a
 stable identifier from their resolved filesystem paths. Symbolic links in the file and its existing
 parent directories are resolved even before the database file is created, so IPC discovery and
 open locks agree across those aliases. `OrbitDatabasePath` keeps its original standardized spelling;
 explicit identifiers remain application-defined. Identity is path-based, so hard links with different
 names still need an explicit shared identifier. A database private to its connection receives a
-unique identifier. Process-local drivers use their own identifiers but cannot be passed to
-`OrbitIPCDatabase`.
+unique identifier. Process-local drivers, such as `SQLiteQueue` and `TursoPool`, cannot be passed
+to `OrbitIPCDatabase`.
 
 ## SQL authorization
 

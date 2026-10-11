@@ -171,6 +171,8 @@ actor SQLiteSerialConnectionActor {
   private nonisolated(unsafe) var handle: SQLiteConnection
   private let interrupt: @Sendable () -> Void
   private let suspension: SQLiteWriteSuspension?
+  // Made once rather than for every access, since it depends only on the connection.
+  private let suspensionInterceptor: SQLiteStatementStepInterceptor?
 
   #if _runtime(_multithreaded)
     private let executor: SQLiteConnectionExecutor
@@ -195,7 +197,7 @@ actor SQLiteSerialConnectionActor {
     // with the driver's privilege rather than the application's authorization. The interrupt
     // callback remains valid because this driver owns the connection for its lifetime.
     let authorizer = handle.authorizer
-    self.interrupt = try handle.withConnectionAccess { connection in
+    (self.interrupt, self.suspensionInterceptor) = try handle.withConnectionAccess { connection in
       try authorizer.withoutUserAuthorization {
         try authorizer.requiringExecution {
           for setup in driverSetups { try setup(connection) }
@@ -203,7 +205,10 @@ actor SQLiteSerialConnectionActor {
       }
       let address = UInt(bitPattern: connection.sqliteConnection)
       let entryPoint = connection.sqlite.connections.interrupt
-      return { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) }
+      return (
+        { @Sendable in entryPoint(OpaquePointer(bitPattern: address)) },
+        suspension?.interceptor(of: connection.sqlite, on: connection.sqliteConnection)
+      )
     }
     self.suspension = suspension
     #if _runtime(_multithreaded)
@@ -219,7 +224,7 @@ actor SQLiteSerialConnectionActor {
   ) async throws -> Result {
     try await perform { handle, cancellation in
       try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withSuspension(self.suspension) {
+        try connection.withSuspension(self.suspensionInterceptor) {
           try body(connection)
         }
       }
@@ -231,7 +236,7 @@ actor SQLiteSerialConnectionActor {
   ) async throws -> Result {
     try await perform { handle, cancellation in
       try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withSuspension(self.suspension) {
+        try connection.withSuspension(self.suspensionInterceptor) {
           try body(connection)
         }
       }
@@ -243,7 +248,7 @@ actor SQLiteSerialConnectionActor {
   ) throws -> Result {
     try performBlocking { handle, cancellation in
       try handle.withReadConnection(cancellation: cancellation) { connection in
-        try connection.withSuspension(self.suspension) {
+        try connection.withSuspension(self.suspensionInterceptor) {
           try body(connection)
         }
       }
@@ -255,7 +260,7 @@ actor SQLiteSerialConnectionActor {
   ) throws -> Result {
     try performBlocking { handle, cancellation in
       try handle.withWriteConnection(cancellation: cancellation) { connection in
-        try connection.withSuspension(self.suspension) {
+        try connection.withSuspension(self.suspensionInterceptor) {
           try body(connection)
         }
       }
@@ -322,31 +327,21 @@ actor SQLiteSerialConnectionActor {
 // Driver policy composes only public connection capabilities.
 extension SQLiteReadConnection {
   fileprivate borrowing func withSuspension<Result: ~Copyable>(
-    _ suspension: SQLiteWriteSuspension?,
+    _ interceptor: SQLiteStatementStepInterceptor?,
     _ body: () throws -> Result
   ) rethrows -> Result {
-    if let suspension {
-      return try withStatementStepInterceptor(
-        suspension.interceptor(of: sqlite, on: sqliteConnection),
-        perform: body
-      )
-    }
-    return try body()
+    guard let interceptor else { return try body() }
+    return try withStatementStepInterceptor(interceptor, perform: body)
   }
 }
 
 // Driver policy composes only public connection capabilities.
 extension SQLiteWriteConnection {
   fileprivate borrowing func withSuspension<Result: ~Copyable>(
-    _ suspension: SQLiteWriteSuspension?,
+    _ interceptor: SQLiteStatementStepInterceptor?,
     _ body: () throws -> Result
   ) rethrows -> Result {
-    if let suspension {
-      return try withStatementStepInterceptor(
-        suspension.interceptor(of: sqlite, on: sqliteConnection),
-        perform: body
-      )
-    }
-    return try body()
+    guard let interceptor else { return try body() }
+    return try withStatementStepInterceptor(interceptor, perform: body)
   }
 }

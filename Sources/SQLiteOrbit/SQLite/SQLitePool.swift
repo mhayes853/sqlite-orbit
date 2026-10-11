@@ -75,9 +75,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     readerCount: Int = 5
   ) throws {
     precondition(readerCount > 0, "SQLitePool requires at least one reader")
-    guard !path.isPrivateToConnection else {
-      throw SQLitePoolUnavailableError(path: path)
-    }
+    // The connection pool refuses a database private to its connection itself.
     var writerConfiguration = configuration
     writerConfiguration.journalMode = .wal
     self.pool = try SQLiteConnectionPool(

@@ -28,7 +28,7 @@ public protocol SQLiteTransaction: OrbitDatabaseReadTransaction, ~Copyable, ~Esc
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change an access makes to the connection's settings, such as its busy timeout.
+  /// change an access makes to the connection's settings, such as its busy policy.
   var configuration: SQLiteConfiguration { get }
 }
 
@@ -85,7 +85,7 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change an access makes to the connection's settings, such as its busy timeout.
+  /// change an access makes to the connection's settings, such as its busy policy.
   public var configuration: SQLiteConfiguration {
     access.configurationPointer.pointee
   }
@@ -222,7 +222,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change an access makes to the connection's settings, such as its busy timeout.
+  /// change an access makes to the connection's settings, such as its busy policy.
   public var configuration: SQLiteConfiguration {
     base.configuration
   }

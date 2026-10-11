@@ -48,9 +48,7 @@
     ) throws {
       precondition(readerCount > 0, "TursoPool requires at least one reader")
       precondition(writerCount > 0, "TursoPool requires at least one writer")
-      guard !path.isPrivateToConnection else {
-        throw SQLitePoolUnavailableError(path: path)
-      }
+      // The connection pool refuses a database private to its connection itself.
       // Writers establish MVCC before readers open, and before the caller's setups run, so they
       // always run against the mode this driver promises.
       var writerConfiguration = configuration

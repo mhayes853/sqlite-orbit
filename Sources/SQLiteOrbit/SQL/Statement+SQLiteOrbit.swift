@@ -86,10 +86,7 @@
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      try withOrbitCursor(try transaction.rowCursor(SQL(fragment: query), cached: false)) {
-        cursor in
-        while try cursor.next() != nil {}
-      }
+      try transaction.executeReadOnly(SQL(fragment: query))
     }
   }
 
@@ -116,10 +113,7 @@
       Transaction: ~Copyable,
       Transaction: ~Escapable
     {
-      try withOrbitCursor(try transaction.rowCursor(SQL(fragment: query), cached: false)) {
-        cursor in
-        while try cursor.next() != nil {}
-      }
+      try transaction.executeReadOnly(SQL(fragment: query))
     }
 
     /// Executes this raw SQL in a write transaction, discarding any rows it returns.
@@ -155,6 +149,15 @@
     /// - Throws: A ``SQLiteError`` when the statement fails.
     public func execute(_ connection: borrowing SQLiteWriteConnection) throws {
       try connection.execute(SQL(fragment: query))
+    }
+  }
+
+  extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
+    // Steps SQL that only reads to completion, discarding its rows.
+    fileprivate borrowing func executeReadOnly(_ sql: SQL) throws {
+      try withOrbitCursor(try rowCursor(sql, cached: false)) { cursor in
+        while try cursor.next() != nil {}
+      }
     }
   }
 
