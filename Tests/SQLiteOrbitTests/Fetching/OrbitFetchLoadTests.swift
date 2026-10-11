@@ -3,7 +3,7 @@
   import Testing
 
   @Suite
-  struct OrbitFetchSubscriptionTests {
+  struct OrbitFetchLoadTests {
     @Test(arguments: [false, true])
     func cancellationAndReplacementFinishCopiesAndLateWaiters(replacing: Bool) async throws {
       let database = try await itemsDatabase()

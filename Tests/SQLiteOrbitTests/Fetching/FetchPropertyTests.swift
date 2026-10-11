@@ -300,14 +300,13 @@
             .make(
               value: [],
               request: TitleSearch(term: "Milk"),
-              database: nil,
-              scheduler: nil
+              database: nil
             )
           // This is the same attachment SwiftUI performs when resolving its environment.
           storage.attachIfNeeded(database: attached)
           #expect(storage.value == ["Milk"])
 
-          let subscription: OrbitFetchSubscription
+          let subscription: OrbitFetchLoad
           if usesObservation {
             let observation = OrbitValueObservation.tracking { transaction in
               try TitleSearch(term: "Eggs").fetch(transaction)
@@ -315,14 +314,12 @@
             subscription = try await storage.load(
               observation: observation,
               identity: .intrinsic(observation.identity),
-              database: nil,
-              scheduler: nil
+              database: nil
             )
           } else {
             subscription = try await storage.load(
               request: TitleSearch(term: "Eggs"),
-              database: nil,
-              scheduler: nil
+              database: nil
             )
           }
           defer { subscription.cancel() }
@@ -341,21 +338,18 @@
             .make(
               value: [],
               request: TitleSearch(term: "Milk"),
-              database: explicit,
-              scheduler: nil
+              database: explicit
             )
           let first = try await storage.load(
             request: TitleSearch(term: "Eggs"),
-            database: nil,
-            scheduler: nil
+            database: nil
           )
           storage.attachIfNeeded(database: offered)
           #expect(storage.value == ["Eggs"])
 
           let second = try await storage.load(
             request: TitleSearch(term: "Eggs"),
-            database: offered,
-            scheduler: nil
+            database: offered
           )
           defer { second.cancel() }
           first.cancel()
@@ -372,11 +366,10 @@
       ) async throws {
         let database = try await remindersDatabase(titles: "Milk")
         let scheduler = HeldScheduler()
-        let storage = OrbitFetchStorage<[String]>(value: [])
+        let storage = OrbitFetchStorage<[String]>(value: [], scheduler: scheduler)
         let source = OrbitFetchSource(
           request: TitleSearch(term: "Milk"),
-          database: database,
-          scheduler: scheduler
+          database: .reader(database)
         )
         let completion = Lock<Result<Void, any Error>?>(nil)
 
@@ -402,8 +395,7 @@
               loadError: TestError(),
               sourceID: OrbitFetchSourceID(
                 request: TitleSearch(term: "Milk"),
-                database: nil,
-                scheduler: nil
+                database: nil
               )
             )
           )
@@ -434,62 +426,102 @@
       }
 
       @Test
-      func requestIdentityIncludesTheSchedulersConfiguration() async throws {
+      func requestIdentityExcludesTheScheduler() async throws {
         let database = try await remindersDatabase()
         let request = TitleSearch(term: "Milk")
         let firstActor = SchedulerActor()
-        let secondActor = SchedulerActor()
 
-        func id(
-          _ scheduler: (any OrbitValueObservationScheduler & Hashable)?
-        ) -> OrbitFetchSourceID {
-          OrbitFetchSourceID(request: request, database: database, scheduler: scheduler)
+        func storage(
+          _ scheduler: some OrbitValueObservationScheduler
+        ) -> OrbitFetchStorage<[String]> {
+          .make(value: [], request: request, database: database, scheduler: scheduler)
         }
 
-        #expect(id(nil) != id(.immediate))
-        #expect(id(OrbitImmediateValueObservationScheduler()) == id(.immediate))
-        #expect(id(.async(priority: .utility)) == id(.async(priority: .utility)))
-        #expect(Set([id(.async(priority: .utility)), id(.async(priority: .utility))]).count == 1)
-        #expect(id(.async(priority: .utility)) != id(.async(priority: .userInitiated)))
-        #expect(id(.async(on: firstActor)) == id(.async(on: firstActor)))
-        #expect(id(.async(on: firstActor)) != id(.async(on: secondActor)))
-        #expect(id(.async()) != id(.async(on: firstActor)))
-        #expect(Set([id(.mainActor), id(.mainActor)]).count == 1)
+        let ids = [
+          storage(.immediate).sourceID,
+          storage(.async(priority: .utility)).sourceID,
+          storage(.async(on: firstActor)).sourceID,
+          storage(.mainActor).sourceID,
+          storage(HeldScheduler()).sourceID
+        ]
+        #expect(Set(ids).count == 1)
+      }
+
+      @Test
+      func changingOnlyTheSchedulerKeepsTheObservationAndUsesTheNewScheduler() async throws {
+        let database = try await countingRemindersDatabase(titles: "Milk")
+        let request = TitleSearch(term: "Milk")
+        let first = RecordingScheduler()
+        let second = RecordingScheduler()
+        let original = OrbitFetchStorage<[String]>
+          .make(value: [], request: request, database: database, scheduler: first)
+        #expect(original.value == ["Milk"])
+        #expect(first.deliveries == 1)
+        #expect(database.subscriptionCount == 1)
+
+        // What a SwiftUI view does when it is rebuilt with the same query and a new scheduler.
+        original.adoptIfNeeded(
+          from: .make(value: ["rebuilt"], request: request, database: database, scheduler: second)
+        )
+        #expect(original.untrackedValue == ["Milk"])
+        #expect(original.currentScheduler as? RecordingScheduler === second)
+        #expect(database.subscriptionCount == 1)
+
+        try await insertReminders("Milk", into: database)
+        try await waitUntil { original.value == ["Milk", "Milk"] }
+        #expect(first.deliveries == 1)
+        #expect(second.deliveries == 1)
+        #expect(database.subscriptionCount == 1)
+      }
+
+      @Test
+      func anExplicitLoadsSchedulerSurvivesAnUnchangedDeclaration() async throws {
+        let database = try await remindersDatabase(titles: "Milk")
+        let declared = RecordingScheduler()
+        let loaded = RecordingScheduler()
+        func declaration() -> OrbitFetchStorage<[String]> {
+          .make(
+            value: [],
+            request: TitleSearch(term: "Milk"),
+            database: database,
+            scheduler: declared
+          )
+        }
+        let storage = declaration()
+        #expect(storage.value == ["Milk"])
+
+        let load = try await storage.load(
+          request: TitleSearch(term: "Milk"),
+          database: nil,
+          scheduler: loaded
+        )
+        defer { load.cancel() }
+        storage.adoptIfNeeded(from: declaration())
+        #expect(storage.currentScheduler as? RecordingScheduler === loaded)
+
+        // A changed declaration is a new read, and brings its scheduler with it.
+        let changed = RecordingScheduler()
+        storage.adoptIfNeeded(
+          from: .make(
+            value: [],
+            request: TitleSearch(term: "Eggs"),
+            database: database,
+            scheduler: changed
+          )
+        )
+        #expect(storage.currentScheduler as? RecordingScheduler === changed)
+      }
+
+      @Test
+      func aReplacedSchedulerCannotDeliverAStaleValueAfterANewerOne() async throws {
         let held = HeldScheduler()
-        #expect(id(held) == id(held))
-        #expect(id(held) != id(HeldScheduler()))
-
-        let original = OrbitFetchStorage(
-          value: ["original"],
-          source: OrbitFetchSource(
-            request: request,
-            database: database,
-            scheduler: OrbitAsyncValueObservationScheduler.async(priority: .utility)
-          )
-        )
-        let sameConfiguration = OrbitFetchStorage(
-          value: ["same configuration"],
-          source: OrbitFetchSource(
-            request: request,
-            database: database,
-            scheduler: OrbitAsyncValueObservationScheduler.async(priority: .utility)
-          )
-        )
-        let changedConfiguration = OrbitFetchStorage(
-          value: ["changed configuration"],
-          source: OrbitFetchSource(
-            request: request,
-            database: database,
-            scheduler: OrbitAsyncValueObservationScheduler.async(priority: .userInitiated)
-          )
-        )
-
-        original.adoptIfNeeded(from: sameConfiguration)
-        #expect(original.untrackedValue == ["original"])
-        #expect(original.sourceID != changedConfiguration.sourceID)
-        original.adoptIfNeeded(from: changedConfiguration)
-        #expect(original.untrackedValue == ["changed configuration"])
-        #expect(original.sourceID == changedConfiguration.sourceID)
+        let forwarding = OrbitFetchScheduler(held)
+        let delivered = Lock([Int]())
+        forwarding.schedule(from: nil) { delivered.withLock { $0.append(1) } }
+        forwarding.replace(with: OrbitImmediateValueObservationScheduler())
+        forwarding.schedule(from: nil) { delivered.withLock { $0.append(2) } }
+        held.release()
+        #expect(delivered.withLock { $0 } == [2])
       }
 
       @Test
@@ -507,8 +539,7 @@
             value: [],
             observation: observation,
             identity: identity,
-            database: database,
-            scheduler: nil
+            database: database
           )
         }
 
@@ -538,22 +569,19 @@
           value: ["original"],
           observation: first,
           identity: OrbitFetchObservationIdentity("stable"),
-          database: database,
-          scheduler: nil
+          database: database
         )
         let sameDeclaration = OrbitFetchStorage.make(
           value: ["rebuilt"],
           observation: second,
           identity: OrbitFetchObservationIdentity("stable"),
-          database: database,
-          scheduler: nil
+          database: database
         )
         let changedDeclaration = OrbitFetchStorage.make(
           value: ["changed"],
           observation: second,
           identity: OrbitFetchObservationIdentity("changed"),
-          database: database,
-          scheduler: nil
+          database: database
         )
 
         original.adoptIfNeeded(from: sameDeclaration)
@@ -569,7 +597,7 @@
       {
         let database = try await remindersDatabase(titles: "Milk", "Eggs")
         func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
-          .make(value: [], request: TitleSearch(term: term), database: database, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: term), database: database)
         }
         let storage = declaration("Milk")
         let declaredID = storage.sourceID
@@ -578,7 +606,7 @@
         switch change {
         case .load:
           try await storage.load(
-            OrbitFetchSource(request: TitleSearch(term: "Eggs"), database: database, scheduler: nil)
+            OrbitFetchSource(request: TitleSearch(term: "Eggs"), database: .reader(database))
           )
         case .assignment:
           storage.adopt(from: declaration("Eggs"))
@@ -606,7 +634,7 @@
       func missingDatabaseDeclarationsKeepTheirIdentityAndRecover() async throws {
         try await withProcessDefaultDatabase(nil) {
           func declaration(_ term: String) -> OrbitFetchStorage<[String]> {
-            .make(value: [], request: TitleSearch(term: term), database: nil, scheduler: nil)
+            .make(value: [], request: TitleSearch(term: term), database: nil)
           }
           let storage = declaration("Milk")
           let missingID = try #require(storage.sourceID)
@@ -633,7 +661,7 @@
       ) async throws {
         try await withProcessDefaultDatabase(nil) {
           let storage = OrbitFetchStorage<[String]>
-            .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+            .make(value: [], request: TitleSearch(term: "Milk"), database: nil)
 
           // Either attached to the storage, or set as the default after the storage was made.
           let database = try await remindersDatabase(titles: "Milk")
@@ -654,7 +682,7 @@
         let processDefault = try await remindersDatabase(titles: "Milk")
         try await withProcessDefaultDatabase(processDefault) {
           let storage = OrbitFetchStorage<[String]>
-            .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+            .make(value: [], request: TitleSearch(term: "Milk"), database: nil)
           #expect(storage.value == ["Milk"])
 
           let attached = try await remindersDatabase(titles: "Milk", "Milk")
@@ -678,7 +706,7 @@
       func anExplicitDatabaseIsNeverReplacedByAnAttachedOne() async throws {
         let explicit = try await remindersDatabase(titles: "Milk")
         let storage = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Milk"), database: explicit, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: "Milk"), database: explicit)
         #expect(storage.value == ["Milk"])
 
         let attached = try await remindersDatabase(titles: "Milk", "Milk")
@@ -691,7 +719,7 @@
       func aDetachedStorageIgnoresAnAttachedDatabase() async throws {
         let database = try await remindersDatabase(titles: "Milk")
         let storage = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Milk"), database: nil, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: "Milk"), database: nil)
         storage.detach()
 
         storage.attachIfNeeded(database: database)
@@ -703,7 +731,7 @@
       func identicalPropertiesShareOneSubscriptionUntilTheLastOneStopsReading() async throws {
         let database = try await countingRemindersDatabase(titles: "Milk")
         let first = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: "Milk"), database: database)
         let second = OrbitFetchStorage<[String]>
           .make(
             value: [],
@@ -715,7 +743,7 @@
 
         #expect(first.value == ["Milk"])
         try await waitUntil { second.value == ["Milk"] }
-        #expect(first.sourceID != second.sourceID)
+        #expect(first.sourceID == second.sourceID)
         #expect(database.subscriptionCount == 1)
 
         try await insertReminders("Milk", into: database)
@@ -736,9 +764,9 @@
       func propertiesDescribingDifferentReadsDoNotShare() async throws {
         let database = try await countingRemindersDatabase(titles: "Milk", "Eggs")
         let milk = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Milk"), database: database, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: "Milk"), database: database)
         let eggs = OrbitFetchStorage<[String]>
-          .make(value: [], request: TitleSearch(term: "Eggs"), database: database, scheduler: nil)
+          .make(value: [], request: TitleSearch(term: "Eggs"), database: database)
 
         #expect(milk.value == ["Milk"])
         #expect(eggs.value == ["Eggs"])
@@ -1298,21 +1326,13 @@
 
     /// A scheduler that holds everything it is given until a test lets it go, and passes
     /// everything after that straight through.
-    private final class HeldScheduler: OrbitValueObservationScheduler, Hashable {
+    private final class HeldScheduler: OrbitValueObservationScheduler {
       private struct State {
         var isHeld = true
         var held: [@Sendable () -> Void] = []
       }
 
       private let state = Lock(State())
-
-      static func == (lhs: HeldScheduler, rhs: HeldScheduler) -> Bool {
-        lhs === rhs
-      }
-
-      func hash(into hasher: inout Hasher) {
-        hasher.combine(ObjectIdentifier(self))
-      }
 
       func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
         false
@@ -1340,6 +1360,25 @@
         for action in held {
           action()
         }
+      }
+    }
+
+    /// A scheduler that runs everything inline and counts what it ran.
+    private final class RecordingScheduler: OrbitValueObservationScheduler {
+      private let count = Lock(0)
+
+      var deliveries: Int { count.withLock { $0 } }
+
+      func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+        true
+      }
+
+      func schedule(
+        from isolation: isolated (any Actor)?,
+        _ action: @escaping @Sendable () -> Void
+      ) {
+        count.withLock { $0 += 1 }
+        action()
       }
     }
 

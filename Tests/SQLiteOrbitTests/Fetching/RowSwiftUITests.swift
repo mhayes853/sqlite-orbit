@@ -95,31 +95,23 @@
         }
       }
 
-      @Test(arguments: [false, true])
-      func bindingWritesRequireAWritableEnvironment(readerOnly: Bool) async throws {
+      @Test
+      func bindingWritesGoToTheEnvironmentDatabase() async throws {
         let previous = OrbitDefaultDatabase.currentIfConfigured
         let processDefault = try await bindingDatabase(settings: true)
         let environment = try await bindingDatabase(settings: true)
         OrbitDefaultDatabase.set(processDefault)
         defer { OrbitDefaultDatabase.set(previous) }
         let sut = EnvironmentSettingsToggle()
-        let source: any OrbitObservableDatabase =
-          readerOnly
-          ? ReaderOnlyObservationDatabase(environment) : environment
 
-        try await ViewHosting.host(sut.orbitDatabase(source)) {
+        try await ViewHosting.host(sut.orbitDatabase(environment)) {
           try await sut.inspection.inspect(after: settle) { view in
             try view.find(ViewType.Toggle.self).tap()
-            let error = try view.actualView().saveError as? SQLiteError
-            #expect(error?.primaryCode == (readerOnly ? .readOnly : nil))
+            #expect(try view.actualView().saveError == nil)
           }
-          if !readerOnly { try await waitForSetting(false, in: environment) }
+          try await waitForSetting(false, in: environment)
         }
 
-        let environmentValue = try await environment.read { transaction in
-          try BindingSettings.all.find(transaction, key: 0)
-        }
-        #expect(environmentValue.isEnabled == readerOnly)
         let processValue = try await processDefault.read { transaction in
           try BindingSettings.all.find(transaction, key: 0)
         }
@@ -134,7 +126,7 @@
       @SingleRow private var settings: BindingSettings
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
+      init(database: any OrbitObservableDatabaseWriter) {
         _settings = SingleRow(BindingSettings.self, database: database)
       }
 
@@ -161,7 +153,7 @@
       @Row private var reminder: BindingReminder?
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
+      init(database: any OrbitObservableDatabaseWriter) {
         _reminder = Row(BindingReminder.self, id: 1, database: database)
       }
 

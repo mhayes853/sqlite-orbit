@@ -188,6 +188,18 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseReader {
   ) throws -> OrbitRegionSubscription
 }
 
+/// A database that can be both observed and written to.
+///
+/// This is what ``OrbitDefaultDatabase``, the SwiftUI `orbitDatabase` environment value, and the
+/// writable `Row` and `SingleRow` properties hold. ``OrbitIPCDatabase`` is one.
+///
+/// ```swift
+/// func makeModel(database: any OrbitObservableDatabaseWriter) -> RemindersModel {
+///   RemindersModel(database: database)
+/// }
+/// ```
+public typealias OrbitObservableDatabaseWriter = OrbitDatabaseWriter & OrbitObservableDatabase
+
 extension OrbitObservableDatabase {
   /// Returns no coordination snapshot for databases without concurrent writers.
   public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? { nil }

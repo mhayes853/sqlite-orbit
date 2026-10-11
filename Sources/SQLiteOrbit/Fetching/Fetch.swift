@@ -1,7 +1,6 @@
 #if canImport(SwiftUI)
   // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
   import protocol SwiftUI.DynamicProperty
-  import struct SwiftUI.Animation
 #endif
 
 /// A property that observes a request or value observation against a database.
@@ -55,8 +54,19 @@
 /// touches anything its source read.
 /// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
 /// argument first, then the SwiftUI environment, then the default.
-/// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
-/// rebuilt property keeps its existing observation.
+///
+/// The `scheduler` argument decides where values are delivered. By default they are delivered as
+/// they are produced; in SwiftUI, `.animation(_:)` and `.transaction(_:)` deliver them on the main
+/// actor inside an animation or transaction:
+///
+/// ```swift
+/// @Fetch(RemindersOverview(), scheduler: .animation(.bouncy)) var overview = .init()
+/// ```
+///
+/// The scheduler is not part of what the property observes. A view rebuilt with a different
+/// scheduler keeps its observation and delivers through the new scheduler from then on. Whether
+/// the first value arrives before the property's first read returns is decided once, by the
+/// scheduler in effect when the observation starts.
 @dynamicMemberLookup
 @propertyWrapper
 public struct Fetch<Value: Sendable>: Sendable {
@@ -140,7 +150,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
   ) {
     self.init(
       storage: .make(
@@ -169,7 +179,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ observation: OrbitValueObservation<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
   ) {
     self.init(
       storage: .make(
@@ -191,7 +201,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     _ observation: OrbitValueObservation<Value>,
     id: ID,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
   ) {
     self.init(
       storage: .make(
@@ -219,8 +229,8 @@ public struct Fetch<Value: Sendable>: Sendable {
   public func load(
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-  ) async throws -> OrbitFetchSubscription {
+    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+  ) async throws -> OrbitFetchLoad {
     try await storage.load(request: request, database: database, scheduler: scheduler)
   }
 
@@ -233,8 +243,8 @@ public struct Fetch<Value: Sendable>: Sendable {
   public func load(
     _ observation: OrbitValueObservation<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-  ) async throws -> OrbitFetchSubscription {
+    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+  ) async throws -> OrbitFetchLoad {
     try await storage.load(
       observation: observation,
       identity: .intrinsic(observation.identity),
@@ -263,107 +273,6 @@ extension Fetch: Equatable where Value: Equatable {
     /// Reconciles the property SwiftUI built for this render with the one that survived the last.
     public func update() {
       _storage.reconcile()
-    }
-
-    /// Creates a property observing a request, delivering changes with an animation.
-    ///
-    /// - Parameters:
-    ///   - wrappedValue: The value to hold until the first read finishes.
-    ///   - request: The request to observe.
-    ///   - database: The database to read from, or `nil` to resolve one the way
-    ///     ``OrbitDefaultDatabase`` describes.
-    ///   - animation: The animation applied to every change.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    public init(
-      wrappedValue: Value,
-      _ request: some OrbitFetchKeyRequest<Value>,
-      database: (any OrbitObservableDatabase)? = nil,
-      animation: Animation?
-    ) {
-      self.init(
-        wrappedValue: wrappedValue,
-        request,
-        database: database,
-        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-          .deferringInitialValue()
-      )
-    }
-
-    /// Creates a property subscribing to a value observation, delivering changes with an
-    /// animation.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    public init(
-      wrappedValue: Value,
-      _ observation: OrbitValueObservation<Value>,
-      database: (any OrbitObservableDatabase)? = nil,
-      animation: Animation?
-    ) {
-      self.init(
-        wrappedValue: wrappedValue,
-        observation,
-        database: database,
-        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-          .deferringInitialValue()
-      )
-    }
-
-    /// Creates a property subscribing to a value observation with a stable declaration identity,
-    /// delivering changes with an animation.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    public init<ID: Hashable & Sendable>(
-      wrappedValue: Value,
-      _ observation: OrbitValueObservation<Value>,
-      id: ID,
-      database: (any OrbitObservableDatabase)? = nil,
-      animation: Animation?
-    ) {
-      self.init(
-        wrappedValue: wrappedValue,
-        observation,
-        id: id,
-        database: database,
-        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-          .deferringInitialValue()
-      )
-    }
-
-    /// Observes a different request from now on, delivering changes with an animation.
-    ///
-    /// - Parameters:
-    ///   - request: The request to observe.
-    ///   - database: The database to read from, or `nil` to resolve one the way
-    ///     ``OrbitDefaultDatabase`` describes.
-    ///   - animation: The animation applied to every change.
-    /// - Returns: The observation this started.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @discardableResult
-    public func load(
-      _ request: some OrbitFetchKeyRequest<Value>,
-      database: (any OrbitObservableDatabase)? = nil,
-      animation: Animation?
-    ) async throws -> OrbitFetchSubscription {
-      try await load(
-        request,
-        database: database,
-        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-          .deferringInitialValue()
-      )
-    }
-
-    /// Subscribes to a value observation from now on, delivering changes with an animation.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @discardableResult
-    public func load(
-      _ observation: OrbitValueObservation<Value>,
-      database: (any OrbitObservableDatabase)? = nil,
-      animation: Animation?
-    ) async throws -> OrbitFetchSubscription {
-      try await load(
-        observation,
-        database: database,
-        scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-          .deferringInitialValue()
-      )
     }
   }
 #endif

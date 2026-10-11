@@ -1,17 +1,24 @@
-/// The observation a fetch property started when it was given a new request.
+/// The observation a fetch property started when `load(_:)` gave it a new request, query, or
+/// observation.
 ///
-/// The property owns its observation, so discarding this token leaves it running. Copies share
-/// cancellation and completion. Waiting ties that observation to the lifetime of the calling task:
+/// Unlike ``OrbitSubscription`` and ``OrbitRegionSubscription``, this is not an ownership token.
+/// The property owns its observation, so discarding a load leaves it running for as long as the
+/// property lives or until another load, assignment, or declaration replaces it. A load is a handle
+/// onto that observation: ``waitUntilFinished()`` waits for it to end, and ``cancel()`` ends it
+/// early. Copies share cancellation and completion.
+///
+/// Waiting ties the observation to the lifetime of the calling task, which is how a SwiftUI
+/// `.task` gives a load the lifetime of a view:
 ///
 /// ```swift
 /// .task {
 ///   try? await $reminders.load(Reminder.where { !$0.isCompleted }).waitUntilFinished()
 /// }
 /// ```
-public struct OrbitFetchSubscription: Sendable {
-  private let lifetime: OrbitFetchSubscriptionLifetime
+public struct OrbitFetchLoad: Sendable {
+  private let lifetime: OrbitFetchLoadLifetime
 
-  init(lifetime: OrbitFetchSubscriptionLifetime) {
+  init(lifetime: OrbitFetchLoadLifetime) {
     self.lifetime = lifetime
   }
 
@@ -37,8 +44,8 @@ public struct OrbitFetchSubscription: Sendable {
   }
 }
 
-/// Completion shared by a property's registration and every token returned for it.
-final class OrbitFetchSubscriptionLifetime: Sendable {
+/// Completion shared by a property's registration and every load returned for it.
+final class OrbitFetchLoadLifetime: Sendable {
   private struct State {
     var onCancel: (@Sendable () -> Void)?
     var result: Result<Void, any Error>?

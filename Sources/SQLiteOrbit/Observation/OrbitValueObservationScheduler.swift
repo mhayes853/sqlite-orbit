@@ -4,12 +4,17 @@
 /// ``OrbitValueObservationScheduler/async(priority:)``,
 /// ``OrbitValueObservationScheduler/async(on:priority:)``, or
 /// ``OrbitValueObservationScheduler/mainActor`` — unless you need delivery somewhere none of them
-/// reaches.
+/// reaches. Where SwiftUI is available, ``OrbitValueObservationScheduler/animation(_:)`` and
+/// ``OrbitValueObservationScheduler/transaction(_:)`` deliver on the main actor inside an animation
+/// or a transaction.
+///
+/// A scheduler does not need to be `Hashable`, including one passed to a fetch property: a property
+/// rebuilt with a different scheduler keeps observing and delivers through the new one.
 ///
 /// ```swift
 /// try OrbitValueObservation
 ///   .tracking { try Reminder.all.fetchCount($0) }
-///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { @MainActor change in
 ///     reminderCount = change.value
 ///   }
 /// ```
@@ -131,7 +136,7 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
     // A drain is mutable delivery machinery. Scheduler identity is only its destination and
-    // priority, so rebuilding the same fetch does not replace its observation.
+    // priority, so two schedulers built the same way compare equal.
     lhs.isolation === rhs.isolation && lhs.priority == rhs.priority
   }
 
@@ -214,7 +219,8 @@ extension OrbitValueObservationScheduler where Self == OrbitAsyncValueObservatio
 /// main-actor isolated.
 ///
 /// ```swift
-/// try observation.subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+/// try observation.subscribe(to: database, scheduling: .mainActor) { _ in
+/// } onChange: { @MainActor change in
 ///   reminderCount = change.value  // already on the main actor
 /// }
 /// ```
@@ -230,7 +236,7 @@ public protocol OrbitValueObservationMainActorScheduler: OrbitValueObservationSc
 ///
 /// try OrbitValueObservation
 ///   .tracking { try Reminder.all.fetchCount($0) }
-///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { @MainActor change in
 ///     reminderCount = change.value
 ///   }
 /// ```
