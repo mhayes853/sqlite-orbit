@@ -53,7 +53,7 @@
     public init(
       _ type: Value.Type,
       database: (any OrbitObservableDatabaseWriter)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) {
       let storage = OrbitRowStorage(
         fetch: .make(

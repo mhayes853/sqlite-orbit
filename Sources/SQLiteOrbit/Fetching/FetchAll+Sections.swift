@@ -45,7 +45,7 @@
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (Element.TableColumns) ->
         _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element: Table, Element.QueryOutput == Element {
       guard let sectioning = sectioning(Element.columns) else {
         self.init(wrappedValue: wrappedValue, database: database, scheduler: scheduler)
@@ -78,7 +78,7 @@
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (S.From.TableColumns) ->
         _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       guard let sectioning = sectioning(S.From.columns) else {
         self.init(wrappedValue: wrappedValue, statement, database: database, scheduler: scheduler)
@@ -109,7 +109,7 @@
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (From.TableColumns) ->
         _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element == V.QueryOutput {
       guard let sectioning = sectioning(From.columns) else {
         self.init(wrappedValue: wrappedValue, statement, database: database, scheduler: scheduler)
@@ -141,7 +141,7 @@
         From.TableColumns, J1.TableColumns, repeat (each J2).TableColumns
       ) -> _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element == V.QueryOutput {
       guard
         let sectioning = sectioning(From.columns, J1.columns, repeat (each J2).columns)
@@ -173,7 +173,7 @@
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (S.From.TableColumns) ->
         _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       guard let sectioning = sectioning(S.From.columns) else {
@@ -204,7 +204,7 @@
       @_OrbitFetchSectionBuilder<String?> sectionBy sectioning: (From.TableColumns) ->
         _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == V.QueryOutput {
       guard let sectioning = sectioning(From.columns) else {
@@ -236,7 +236,7 @@
         From.TableColumns, J1.TableColumns, repeat (each J2).TableColumns
       ) -> _OrbitFetchSectioning<String?>?,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == V.QueryOutput {
       guard
@@ -269,7 +269,7 @@
         Element.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
       >,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element: Table, Element.QueryOutput == Element {
       self.init(
         wrappedValue: wrappedValue,
@@ -299,7 +299,7 @@
         S.From.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
       >,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       self.init(
         wrappedValue: wrappedValue,
@@ -327,7 +327,7 @@
         S.From.TableColumns, some QueryExpression<some _OptionalPromotable<String?>>
       >,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       try await load(

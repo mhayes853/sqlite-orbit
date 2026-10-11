@@ -167,7 +167,7 @@
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: _Selection, Element.QueryOutput == Element {
       self.init(unobserved: wrappedValue)
@@ -190,7 +190,7 @@
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: Table, Element.QueryOutput == Element {
       // Spelled out rather than inferred: a statement of every column is a `Select` whose value is
@@ -221,7 +221,7 @@
       wrappedValue: [Element] = [],
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -250,7 +250,7 @@
       wrappedValue: [Element] = [],
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element == V.QueryOutput {
       self.init(
@@ -273,7 +273,7 @@
       wrappedValue: [Element] = [],
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: QueryRepresentable, Element == S.QueryValue.QueryOutput {
       self.init(
@@ -301,7 +301,7 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -325,7 +325,7 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Element == V.QueryOutput {
       return try await fetch.load(

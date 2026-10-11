@@ -150,7 +150,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+    scheduler: some OrbitValueObservationScheduler = .immediate
   ) {
     self.init(
       storage: .make(
@@ -179,7 +179,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     wrappedValue: Value,
     _ observation: OrbitValueObservation<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+    scheduler: some OrbitValueObservationScheduler = .immediate
   ) {
     self.init(
       storage: .make(
@@ -201,7 +201,7 @@ public struct Fetch<Value: Sendable>: Sendable {
     _ observation: OrbitValueObservation<Value>,
     id: ID,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+    scheduler: some OrbitValueObservationScheduler = .immediate
   ) {
     self.init(
       storage: .make(
@@ -229,7 +229,7 @@ public struct Fetch<Value: Sendable>: Sendable {
   public func load(
     _ request: some OrbitFetchKeyRequest<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+    scheduler: some OrbitValueObservationScheduler = .immediate
   ) async throws -> OrbitFetchLoad {
     try await storage.load(request: request, database: database, scheduler: scheduler)
   }
@@ -243,7 +243,7 @@ public struct Fetch<Value: Sendable>: Sendable {
   public func load(
     _ observation: OrbitValueObservation<Value>,
     database: (any OrbitObservableDatabase)? = nil,
-    scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+    scheduler: some OrbitValueObservationScheduler = .immediate
   ) async throws -> OrbitFetchLoad {
     try await storage.load(
       observation: observation,

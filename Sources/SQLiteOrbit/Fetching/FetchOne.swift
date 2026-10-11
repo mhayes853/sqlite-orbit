@@ -141,7 +141,7 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _Selection, Value.QueryOutput == Value {
       fetch = Fetch(wrappedValue: wrappedValue)
     }
@@ -159,7 +159,7 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
@@ -180,7 +180,7 @@
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -201,7 +201,7 @@
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -238,7 +238,7 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
@@ -264,7 +264,7 @@
       wrappedValue: Value,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       self.init(
@@ -291,7 +291,7 @@
       wrappedValue: Value,
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == V.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
@@ -314,7 +314,7 @@
       wrappedValue: Value = nil,
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == V.QueryOutput? {
       self.init(
         wrappedValue: wrappedValue,
@@ -336,7 +336,7 @@
       wrappedValue: Value,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
@@ -359,7 +359,7 @@
       wrappedValue: Value = ._none,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where
       Value: _OptionalProtocol,
@@ -388,7 +388,7 @@
       wrappedValue: Value = ._none,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where
       Value: _OptionalProtocol,
@@ -415,7 +415,7 @@
       wrappedValue: Value = ._none,
       _ statement: some Statement<Value>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -440,7 +440,7 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -464,7 +464,7 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput {
       return try await fetch.load(
@@ -488,7 +488,7 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput? {
       return try await fetch.load(
@@ -512,7 +512,7 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where
       Value: _OptionalProtocol,
@@ -541,7 +541,7 @@
     public func load<S: Statement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where
       Value: _OptionalProtocol,
@@ -568,7 +568,7 @@
     public func load(
       _ statement: some Statement<Value>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) async throws -> OrbitFetchLoad
     where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
       return try await fetch.load(

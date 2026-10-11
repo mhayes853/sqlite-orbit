@@ -58,7 +58,7 @@
       _ type: Value.Type,
       id primaryKey: Value.PrimaryKey.QueryOutput,
       database: (any OrbitObservableDatabaseWriter)? = nil,
-      scheduler: some OrbitValueObservationScheduler = OrbitImmediateValueObservationScheduler()
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) {
       self.primaryKey = primaryKey
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
