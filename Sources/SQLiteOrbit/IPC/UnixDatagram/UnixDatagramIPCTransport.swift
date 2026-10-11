@@ -141,6 +141,43 @@
       }
     }
 
+    /// A system call the transport depends on failed.
+    ///
+    /// Thrown when the coordination directory cannot be created, read or written, when a socket
+    /// cannot be created, bound or sent on, or when a message is too large for a datagram, which
+    /// is reported as `EMSGSIZE`. `operation` names what the transport was doing and `code` is the
+    /// `errno` it failed with.
+    ///
+    /// ```swift
+    /// do {
+    ///   let transport = try UnixDatagramIPCTransport(configuration: configuration)
+    /// } catch let error as UnixDatagramIPCTransport.SystemError where error.code == EACCES {
+    ///   logger.error("cannot use the coordination directory: \(error)")
+    /// }
+    /// ```
+    public struct SystemError: Error, Hashable, Sendable, CustomStringConvertible {
+      /// What the transport was doing, usually the name of the system call that failed.
+      public let operation: String
+
+      /// The `errno` the call failed with.
+      public let code: Int32
+
+      /// Creates an error for a failed system call.
+      ///
+      /// - Parameters:
+      ///   - operation: What was being done, usually the name of the system call.
+      ///   - code: The `errno` it failed with.
+      public init(operation: String, code: Int32) {
+        self.operation = operation
+        self.code = code
+      }
+
+      /// Names the operation and the `errno` it failed with.
+      public var description: String {
+        "\(operation) failed with errno \(code)"
+      }
+    }
+
     /// Describes a broadcast that some currently discoverable peers could not be sent at all.
     ///
     /// A peer whose receive queue is full has not failed: it is owed the message's region, and
@@ -212,15 +249,15 @@
     ///
     /// - Parameter configuration: Describes the coordination directory and buffer sizes for this
     ///   endpoint.
-    /// - Throws: A ``UnixSystemError`` if the configuration is invalid, the coordination directory
-    ///   cannot be created, or the socket cannot be created and bound.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the configuration is invalid, the
+    ///   coordination directory cannot be created, or the socket cannot be created and bound.
     public init(configuration: Configuration) throws {
       guard configuration.maximumDatagramByteCount > 0,
         configuration.maximumDatagramByteCount <= 65_535,
         configuration.receiveBufferByteCount >= configuration.maximumDatagramByteCount,
         configuration.refreshInterval >= .zero
       else {
-        throw UnixSystemError.invalidArgument("invalid transport configuration")
+        throw SystemError.invalidArgument("invalid transport configuration")
       }
 
       let endpointName = RandomUUID.lowercasedString().filter { $0 != "-" }.prefix(16)
@@ -299,7 +336,8 @@
     ///   - onMessage: Receives each message concerning that database and region.
     /// - Returns: A subscription that stops delivery when cancelled or released, and through which
     ///   its region can change.
-    /// - Throws: A ``UnixSystemError`` if the coordination directory cannot be written to.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the coordination directory cannot be
+    ///   written to.
     public func subscribe(
       to databaseIdentifier: OrbitDatabaseIdentifier,
       region: OrbitDatabaseRegion,
@@ -337,8 +375,8 @@
     ///
     /// - Parameter message: The message to broadcast.
     /// - Throws: ``PartialDeliveryError`` when the message could not be sent to a live peer at all,
-    ///   or a ``UnixSystemError`` if the message cannot be encoded or the coordination directory
-    ///   cannot be read.
+    ///   or a ``UnixDatagramIPCTransport/SystemError`` if the message cannot be encoded or the
+    ///   coordination directory cannot be read.
     public func send(_ message: OrbitIPCMessage) async throws {
       // Nothing here waits: this is `async` only because the protocol's requirement is.
       let entry: UnixDatagramWireEntry
@@ -348,7 +386,7 @@
           fittingIn: self.configuration.maximumDatagramByteCount
         )
       } catch UnixDatagramWireError.datagramTooLarge {
-        throw UnixSystemError.messageTooLong("datagram is too large")
+        throw UnixDatagramIPCTransport.SystemError.messageTooLong("datagram is too large")
       }
       let delivery = try self.registry.send(entry)
 
@@ -444,7 +482,8 @@
     /// - Parameter configuration: Describes the endpoint. Callers passing equal configurations
     ///   share one transport.
     /// - Returns: This process's transport for `configuration`.
-    /// - Throws: A ``UnixSystemError`` if a new transport is needed and cannot be created.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if a new transport is needed and cannot
+    ///   be created.
     public static func shared(
       configuration: Configuration = .default
     ) throws -> UnixDatagramIPCTransport {

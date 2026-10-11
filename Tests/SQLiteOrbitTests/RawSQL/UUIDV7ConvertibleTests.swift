@@ -182,13 +182,11 @@
               """
             )
             return (
-              try transaction.fetchOne(#sql("SELECT plain FROM ids", as: UUIDV7.self)),
-              try transaction.fetchOne(
-                #sql("SELECT binary FROM ids", as: UUIDV7.BytesRepresentation.self)
-              ),
-              try transaction.fetchOne(
-                #sql("SELECT uppercase FROM ids", as: UUIDV7.UppercaseRepresentation.self)
-              )
+              try #sql("SELECT plain FROM ids", as: UUIDV7.self).fetchOne(transaction),
+              try #sql("SELECT binary FROM ids", as: UUIDV7.BytesRepresentation.self)
+                .fetchOne(transaction),
+              try #sql("SELECT uppercase FROM ids", as: UUIDV7.UppercaseRepresentation.self)
+                .fetchOne(transaction)
             )
           }
           #expect(plain == id)
@@ -201,17 +199,16 @@
           let database = try inMemoryDatabase()
           let row = try await database.write { transaction in
             try transaction.execute("CREATE TABLE ids (plain, binary, uppercase)")
-            try transaction.execute(
-              #sql(
-                """
-                INSERT INTO ids VALUES (
-                  \(id), \(id, as: UUIDV7.BytesRepresentation.self), \
-                  \(id, as: UUIDV7.UppercaseRepresentation.self)
-                )
-                """,
-                as: Void.self
+            try #sql(
+              """
+              INSERT INTO ids VALUES (
+                \(id), \(id, as: UUIDV7.BytesRepresentation.self), \
+                \(id, as: UUIDV7.UppercaseRepresentation.self)
               )
+              """,
+              as: Void.self
             )
+            .execute(transaction)
             return try transaction.fetchOne("SELECT plain, binary, uppercase FROM ids") { row in
               (
                 try row[0, as: String.self],

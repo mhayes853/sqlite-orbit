@@ -103,7 +103,7 @@ struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendabl
   #endif
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  var database: RemindersDatabase
+  var database: any OrbitObservableDatabaseWriter
 
   init() {}
 
@@ -119,7 +119,7 @@ struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendabl
 
   private static func entities(
     for identifiers: [ReminderEntity.ID],
-    in database: RemindersDatabase
+    in database: any OrbitObservableDatabaseWriter
   ) async throws -> [ReminderEntity] {
     let entities = try await database.read { transaction in
       let records =
@@ -184,7 +184,7 @@ struct ReminderEntityQuery: EntityStringQuery, _SupportsAppDependencies, Sendabl
 
   static func entity(
     id: Reminder.ID,
-    database: RemindersDatabase
+    database: any OrbitObservableDatabaseWriter
   ) async throws -> ReminderEntity? {
     try await entities(for: [id], in: database).first
   }

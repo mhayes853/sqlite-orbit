@@ -6,7 +6,7 @@
   struct SQLiteVecTests {
     @Test
     func vectorTableObservationSeesCommittedChangesAndIgnoresRollback() throws {
-      let database = try SQLiteQueue(path: ":memory:")
+      let database = try SQLiteQueue(path: ":memory:", configuration: vecConfiguration())
       try database.writeBlocking {
         try $0.execute("CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])")
       }
@@ -37,8 +37,9 @@
     }
 
     @Test(arguments: SQLiteTestDriver.allCases)
-    func defaultConnectionsCanQueryVectorsAndRollBack(_ driver: SQLiteTestDriver) async throws {
+    func configuredConnectionsCanQueryVectorsAndRollBack(_ driver: SQLiteTestDriver) async throws {
       try await driver.withDatabase(
+        configuration: vecConfiguration(),
         schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
       ) { database in
         let version = try await database.read {
@@ -85,19 +86,17 @@
     @Test
     func everyPoolConnectionHasVecBeforeUserSetupAndAfterReopening() async throws {
       let setups = TestCounter()
-      var configuration = SQLiteConfiguration.default
-      configuration.readerCount = 3
-      configuration.connectionSetups.append(
-        SQLiteConnectionSetup { connection in
+      var configuration = try vecConfiguration()
+      configuration.setups.append(
+        SQLiteSetup { connection in
           // Vec must already be present in both the writer and each reader.
           try connection.execute("SELECT vec_version()")
           setups.increment()
-          return SQLiteResultCode.ok.rawValue
         }
       )
       try await withTestDatabaseFile { file in
         for _ in 0..<2 {
-          let pool = try file.pool(configuration: configuration)
+          let pool = try file.pool(configuration: configuration, readerCount: 3)
           #expect(
             try await pool.read {
               try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)
@@ -109,7 +108,7 @@
     }
 
     @Test
-    func unsupportedRuntimeFailsBeforeOpeningEvenWithASystemName() throws {
+    func unsupportedRuntimeFailsDuringRegistrationEvenWithASystemName() throws {
       let opens = TestCounter()
       var configuration = SQLiteConfiguration.default
       configuration.library.name = "system SQLite"
@@ -121,13 +120,13 @@
       #expect(
         throws: SQLiteFeatureUnavailableError(libraryName: "system SQLite", feature: .sqliteVec)
       ) {
-        _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+        try configuration.registerSQLiteVec()
       }
       #expect(opens.value == 0)
     }
 
     @Test
-    func failedRegistrationPreventsOpeningAndUsesTheCurrentLibrary() throws {
+    func registrationIsExplicitAndUsesTheSelectedLibrary() throws {
       let opens = TestCounter()
       let registrations = TestCounter()
       var configuration = SQLiteConfiguration.default
@@ -144,8 +143,11 @@
         opens.increment()
         return SQLiteResultCode.ok.rawValue
       }
+      configuration = SQLiteConfiguration(library: configuration.library)
+      #expect(configuration.setups.isEmpty)
+      #expect(registrations.value == 0)
       let error = #expect(throws: SQLiteError.self) {
-        _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+        try configuration.registerSQLiteVec()
       }
       #expect(error?.code == .busy)
       #expect(registrations.value == 1)
@@ -166,7 +168,7 @@
           )
         )
         let error = #expect(throws: SQLiteError.self) {
-          _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
+          try configuration.registerSQLiteVec()
         }
         #expect(error?.code == .error)
       }
@@ -179,6 +181,7 @@
         var configuration = SQLiteConfiguration.default
         configuration.library.name = "renamed system library"
         #expect(configuration.library.extensions?.autoExtensions == nil)
+        try configuration.registerSQLiteVec()
         let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
         #expect(
           try database.readBlocking {
@@ -187,5 +190,11 @@
         )
       }
     #endif
+  }
+
+  private func vecConfiguration() throws -> SQLiteConfiguration {
+    var configuration = SQLiteConfiguration.default
+    try configuration.registerSQLiteVec()
+    return configuration
   }
 #endif

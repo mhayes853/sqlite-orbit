@@ -74,7 +74,8 @@
     ///   - socketPath: Where to bind the socket, which is where peers send to.
     ///   - maximumDatagramByteCount: The longest datagram to send or accept.
     ///   - receiveBufferByteCount: The size of the socket's receive buffer.
-    /// - Throws: A ``UnixSystemError`` if the socket cannot be created and bound.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the socket cannot be created and
+    ///   bound.
     init(
       socketPath: String,
       maximumDatagramByteCount: Int,
@@ -125,8 +126,8 @@
     ///
     /// - Parameter descriptor: The descriptor to wait on, which must stay open until another one
     ///   replaces it, or `nil` to wait on none.
-    /// - Throws: A ``UnixSystemError`` if the thread cannot wait on `descriptor`, in which case it
-    ///   still waits on the one it waited on before.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the thread cannot wait on
+    ///   `descriptor`, in which case it still waits on the one it waited on before.
     func waitForChanges(on descriptor: Int32?) throws {
       if let descriptor {
         try self.queue.watchReadable(descriptor)
@@ -160,8 +161,8 @@
     /// one, which is still read for the peers connected to it until the next time this is called.
     /// The one it replaced before that closes once the thread has read what is queued on it.
     ///
-    /// - Throws: A ``UnixSystemError`` if the new socket cannot be created, bound or waited on, in
-    ///   which case the endpoint keeps receiving on the old one.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the new socket cannot be created,
+    ///   bound or waited on, in which case the endpoint keeps receiving on the old one.
     func rebind() throws {
       let socket = BoundSocket(
         try UnixDatagramSocket.bind(
@@ -370,7 +371,7 @@
         if peer.isWatched {
           peer.isWatched = self.queue.watchWritable(peer.socket.descriptor.rawValue)
         }
-      } catch let error as UnixSystemError {
+      } catch let error as UnixDatagramIPCTransport.SystemError {
         return .failed(error)
       } catch {
         return .failed(.last("connect"))

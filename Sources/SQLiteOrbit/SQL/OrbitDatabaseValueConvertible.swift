@@ -54,7 +54,29 @@ public protocol ConvertibleToOrbitDatabaseValue {
 ///
 /// let balance = try row[0, as: Money.self]
 /// ```
-public protocol ConvertibleFromOrbitDatabaseValue {
+///
+/// A value is also a ``ConvertibleFromOrbitDatabaseRow``, read from the first column of a row, so
+/// every API that initializes a type from a row reads a value type too.
+///
+/// ```swift
+/// let balances = try transaction.fetchAll("SELECT balance FROM accounts", as: Money.self)
+/// ```
+///
+/// A generic type that conforms conditionally states its row conformance under the same
+/// condition, since a conditional conformance does not imply the protocols it refines:
+///
+/// ```swift
+/// extension Box: ConvertibleFromOrbitDatabaseValue
+/// where Wrapped: ConvertibleFromOrbitDatabaseValue {
+///   init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+///     self.init(try Wrapped(orbitDatabaseValue: value))
+///   }
+/// }
+///
+/// extension Box: ConvertibleFromOrbitDatabaseRow
+/// where Wrapped: ConvertibleFromOrbitDatabaseValue {}
+/// ```
+public protocol ConvertibleFromOrbitDatabaseValue: ConvertibleFromOrbitDatabaseRow {
   /// Creates a value from a stored one.
   ///
   /// ```swift
@@ -65,6 +87,27 @@ public protocol ConvertibleFromOrbitDatabaseValue {
   /// - Throws: ``OrbitDatabaseValueConversionError`` when the value is in a storage class, or
   ///   holds contents, that cannot produce this type.
   init(orbitDatabaseValue: OrbitDatabaseValue) throws
+}
+
+extension ConvertibleFromOrbitDatabaseRow where Self: ConvertibleFromOrbitDatabaseValue {
+  /// Creates a value from a row's first column.
+  ///
+  /// This reads the column exactly as ``OrbitDatabaseRow/subscript(_:as:)`` does, so a value type
+  /// can be fetched from a row with any API that takes a ``ConvertibleFromOrbitDatabaseRow``. A
+  /// type that declares its own row initializer uses that one instead.
+  ///
+  /// ```swift
+  /// let count = try transaction.fetchOne("SELECT count(*) FROM reminders", as: Int.self)
+  /// ```
+  ///
+  /// - Parameter row: The row, valid only for this call.
+  /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the first column when its value cannot
+  ///   be converted.
+  public init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(
+    orbitDatabaseRow row: borrowing Row
+  ) throws {
+    self = try row[0, as: Self.self]
+  }
 }
 
 /// A type that can be both stored as and read from an ``OrbitDatabaseValue``.
@@ -326,6 +369,10 @@ extension [UInt8]: OrbitDatabaseValueConvertible {
   }
 }
 
+// Constraining `Element` makes the conformance above conditional, which does not imply the row
+// conformance the value one refines.
+extension [UInt8]: ConvertibleFromOrbitDatabaseRow {}
+
 extension OrbitDatabaseValue: OrbitDatabaseValueConvertible {
   public func orbitDatabaseValue() -> OrbitDatabaseValue {
     self
@@ -362,6 +409,14 @@ where Wrapped: ConvertibleFromOrbitDatabaseValue {
     self = try value == .null ? nil : Wrapped(orbitDatabaseValue: value)
   }
 }
+
+/// An optional value is read from a row's first column, `NULL` reading as `nil`.
+///
+/// ```swift
+/// let dueDates = try transaction.fetchAll("SELECT due_date FROM reminders", as: Int?.self)
+/// ```
+extension Optional: ConvertibleFromOrbitDatabaseRow
+where Wrapped: ConvertibleFromOrbitDatabaseValue {}
 
 // MARK: - Foundation
 

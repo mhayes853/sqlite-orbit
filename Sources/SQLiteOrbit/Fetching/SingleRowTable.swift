@@ -52,7 +52,7 @@
       guard primaryKey == Self.defaultValue.primaryKey else {
         throw OrbitRowIdentityMismatchError()
       }
-      try transaction.execute(Self.upsert { Self.Draft(self) })
+      try Self.upsert { Self.Draft(self) }.execute(transaction)
     }
 
     /// Mutates the latest singleton and saves it in the same write transaction.
@@ -77,9 +77,8 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       let statement: Select<Self, Self, ()> = all.selectStar()
-      return try transaction.fetchOne(
-        statement.find(PrimaryKey(queryOutput: defaultValue.primaryKey))
-      ) ?? defaultValue
+      return try statement.find(PrimaryKey(queryOutput: defaultValue.primaryKey))
+        .fetchOne(transaction) ?? defaultValue
     }
   }
 

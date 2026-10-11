@@ -40,3 +40,13 @@ public protocol OrbitFetchKeyRequest<Value>: Hashable, Sendable {
   /// - Throws: Whatever reading throws.
   func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value
 }
+
+extension OrbitFetchKeyRequest {
+  /// An observation of this request, sharing reads with every equal request of the same type.
+  ///
+  /// Observations returned for equal requests share one definition while it remains alive. Each
+  /// database has its own runtime, and each subscriber independently chooses its scheduler.
+  public func observation() -> OrbitValueObservation<Value> {
+    OrbitFetchObservationRegistry.shared.observation(for: self)
+  }
+}

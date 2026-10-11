@@ -27,7 +27,7 @@
           }
           #expect(region == currentTitlesRegion(over: "alternate_items"))
 
-          let titles = try await pool.read { try $0.fetchAll(currentTitles) }
+          let titles = try await pool.read { try currentTitles.fetchAll($0) }
           #expect(titles == ["Alternate"])
 
           // The writer is a connection of its own, whose cached statement was just as stale.
@@ -57,12 +57,12 @@
 
       @Test
       func connectionRefreshesACachedStatementAfterItsOwnSchemaChange() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.write { transaction in
             try transaction.executeScript(itemsSchema)
           }
           let region = try await database.write { transaction in
-            _ = try transaction.fetchAll(currentTitles)
+            _ = try currentTitles.fetchAll(transaction)
             try transaction.executeScript(
               """
               DROP VIEW current_items;
@@ -82,12 +82,12 @@
 
       @Test
       func unchangedSchemaKeepsCachedStatements() async throws {
-        try await withPooledDatabase(configuration: .default, maximumReaderCount: 1) { database in
+        try await withPooledDatabase(configuration: .default, readerCount: 1) { database in
           try await database.write { transaction in
             try transaction.executeScript(itemsSchema)
           }
           let generation = try await database.read { transaction in
-            _ = try transaction.fetchAll(currentTitles)
+            _ = try currentTitles.fetchAll(transaction)
             return transaction.statements.generation
           }
           try await database.write { transaction in
@@ -104,17 +104,15 @@
         _ body: (SQLitePool) async throws -> Void
       ) async throws {
         try await withTestDatabaseFile("cache") { file in
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 1
-          let pool = try file.pool(configuration: configuration)
+          let pool = try file.pool(readerCount: 1)
           try await pool.write { transaction in
             try transaction.executeScript(itemsSchema)
           }
           // Both of the pool's connections compile the query against the original view, so each has
           // a cached statement and a copy of the schema that the other connection makes stale.
-          let titles = try await pool.read { try $0.fetchAll(currentTitles) }
+          let titles = try await pool.read { try currentTitles.fetchAll($0) }
           #expect(titles == ["Original"])
-          _ = try await pool.write { try $0.fetchAll(currentTitles) }
+          _ = try await pool.write { try currentTitles.fetchAll($0) }
 
           // A second connection stands in for another process, which the pool hears nothing from.
           let peer = try file.queue()

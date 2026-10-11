@@ -83,7 +83,7 @@
     ) async throws {
       try await withTestDatabaseFile("checkpoint-reader") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.busyTimeout = .limit(.zero)
+        configuration.busyPolicy = .timeout(.zero)
         let writer = try file.pool(configuration: configuration)
         let reader = try file.queue(configuration: configuration)
         try await writer.write {

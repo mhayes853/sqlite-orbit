@@ -37,13 +37,29 @@ extension SQLiteConfiguration {
     _ compare:
       @escaping @Sendable (UnsafeRawBufferPointer, UnsafeRawBufferPointer) -> SQLiteCollationOrder
   ) {
-    register(.collations, providedBy: \.collations) { connection in
-      orbitInstallCollation(
-        name,
-        compare: compare,
-        on: connection.sqliteConnection,
-        library: connection.sqlite
-      )
+    register { connection in
+      try connection.registerCollation(name, compare)
+    }
+  }
+}
+
+extension SQLiteConnectionAccess {
+  /// Installs a collating sequence on this connection.
+  ///
+  /// The connection retains the comparator until replacement or close. Its arguments contain
+  /// UTF-8 bytes valid only during the call. The comparator must give a consistent ordering.
+  /// - Throws: A `SQLiteFeatureUnavailableError` if the library lacks collations, or a
+  ///   `SQLiteError` if registration fails.
+  public borrowing func registerCollation(
+    _ name: String,
+    _ compare:
+      @escaping @Sendable (UnsafeRawBufferPointer, UnsafeRawBufferPointer) -> SQLiteCollationOrder
+  ) throws {
+    guard !name.utf8.contains(0) else {
+      throw SQLiteError(code: .misuse, message: "Invalid collation name")
+    }
+    try install(.collations, providedBy: sqlite.collations) {
+      orbitInstallCollation(name, compare: compare, on: sqliteConnection, library: sqlite)
     }
   }
 }

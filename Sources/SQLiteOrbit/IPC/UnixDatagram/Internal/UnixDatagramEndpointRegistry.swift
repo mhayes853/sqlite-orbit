@@ -102,8 +102,8 @@
     ///     it changed, rather than reading it again on every send.
     ///   - refreshInterval: How long after this endpoint last touched its files a send or a
     ///     receive touches them again.
-    /// - Throws: A ``UnixSystemError`` if the directory cannot be created, or the socket cannot be
-    ///   created and bound.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the directory cannot be created, or
+    ///   the socket cannot be created and bound.
     init(
       directory: OrbitCoordinationDirectory,
       endpointName: String,
@@ -230,7 +230,7 @@
               atPath: temporary,
               toPath: self.marker(coordinationKey)
             )
-          else { throw UnixSystemError.last("rename") }
+          else { throw UnixDatagramIPCTransport.SystemError.last("rename") }
           return
         } catch let error
           where attempt < Self.maximumAdvertiseAttemptCount && Self.isMissingFile(error)
@@ -245,7 +245,7 @@
     private static let maximumAdvertiseAttemptCount = 3
 
     private static func isMissingFile(_ error: any Error) -> Bool {
-      (error as? UnixSystemError)?.code == UnixPlatform.ErrorCode.noSuchFile
+      (error as? UnixDatagramIPCTransport.SystemError)?.code == UnixPlatform.ErrorCode.noSuchFile
     }
 
     /// Removes this endpoint's marker for a database, if it has one.
@@ -577,7 +577,7 @@
       guard
         FileSystem.removeFile(atPath: self.marker(coordinationKey))
           || UnixPlatform.lastErrorCode == UnixPlatform.ErrorCode.noSuchFile
-      else { throw UnixSystemError.last("unlink") }
+      else { throw UnixDatagramIPCTransport.SystemError.last("unlink") }
       self.reclaimDatabaseDirectory(coordinationKey)
     }
 

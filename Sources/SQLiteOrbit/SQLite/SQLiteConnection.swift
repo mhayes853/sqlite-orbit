@@ -1,13 +1,9 @@
-#if StructuredQueries
-  public import StructuredQueriesSQLite
-#endif
-
 /// A connection lent by a native SQLite driver for reading outside a transaction.
 ///
 /// Each statement runs in its own implicit transaction, so two reads may see different states of
-/// the database if another connection commits in between. Call ``transaction(_:)`` for a
+/// the database if another connection commits in between. Call ``transaction(observer:_:)`` for a
 /// consistent snapshot. Statements that begin or end a transaction or a savepoint are refused
-/// outside ``transaction(_:)``, so the connection always knows whether it is inside one.
+/// outside ``transaction(observer:_:)``, so the connection always knows whether it is inside one.
 ///
 /// Like a transaction, the connection is a view onto a connection it borrows. It is noncopyable
 /// and nonescapable, so it cannot be captured, stored, or outlive the access that lent it.
@@ -31,17 +27,21 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   // A statement outside a transaction runs through the same view a read transaction lends, and
   // SQLite gives it an implicit transaction of its own.
   let base: SQLiteReadTransaction
-  let handle: UnsafePointer<SQLiteHandle>
+  let handle: UnsafePointer<SQLiteConnection>
   let state: SQLiteConnectionState
 
   @_lifetime(borrow handle)
   init(
-    handle: borrowing SQLiteHandle,
-    at address: UnsafePointer<SQLiteHandle>,
-    observations: OrbitDatabaseTransactionObservationContext,
+    handle: borrowing SQLiteConnection,
+    at address: UnsafePointer<SQLiteConnection>,
+    observations: SQLiteConnectionEvents,
     state: SQLiteConnectionState
   ) {
-    self.base = SQLiteReadTransaction(handle: handle, observations: observations)
+    self.base = SQLiteReadTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: state
+    )
     self.handle = address
     self.state = state
   }
@@ -63,71 +63,79 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change to ``busyTimeout``.
+  /// change to ``busyPolicy``.
   public var configuration: SQLiteConfiguration {
     base.configuration
   }
 
-  /// How long this connection waits for a lock another connection or process holds before
-  /// reporting `SQLITE_BUSY`.
+  /// How this connection waits for a lock another connection or process holds before reporting
+  /// `SQLITE_BUSY`.
   ///
-  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
-  /// access that lent this connection ends, when the configured timeout is put back.
+  /// It starts at the configuration's ``SQLiteConfiguration/busyPolicy``. A change lasts until the
+  /// access that lent this connection ends, when the configured policy is put back.
   ///
   /// ```swift
   /// try await database.readWithoutTransaction { connection in
-  ///   connection.busyTimeout = .limit(.seconds(30))
+  ///   try connection.setBusyPolicy(.timeout(.seconds(30)))
   ///   return try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
   /// }
   /// ```
   ///
-  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
-  /// handler and which therefore replaces whatever handler the connection had. A
-  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
-  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
-  public var busyTimeout: SQLiteBusyTimeout {
-    get { handle.pointee.settings.pointee.busyTimeout }
-    nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
+  /// SQLite keeps one busy handler per connection and implements its busy timeout as one, so
+  /// setting a policy replaces whatever handler the connection had. A handler a ``SQLiteSetup``
+  /// installed through the raw library is not known here and is not put back.
+  public var busyPolicy: SQLiteBusyPolicy {
+    handle.pointee.settings.pointee.busyPolicy
   }
 
-  /// Creates a cursor over the rows a read query returns.
+  /// Applies a busy policy immediately, restoring the configured policy when the access ends.
+  /// The policy in effect is unchanged if the native operation fails.
   ///
-  /// The statement runs in its own implicit transaction, which ends when the cursor does.
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, or a ``SQLiteError`` when the policy cannot be applied.
+  public borrowing func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
+    try handle.pointee.settings.pointee.setBusyPolicy(policy)
+  }
+
+  /// Creates a cursor over the rows SQL that only reads returns.
+  ///
+  /// The statement runs in its own implicit transaction, which ends when the cursor does. SQL that
+  /// SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("SELECT title FROM reminders", cached: true)
+  /// let titles = try cursor.collect(as: String.self)
+  /// ```
   ///
   /// - Parameters:
-  ///   - query: The query to run.
+  ///   - sql: The SQL to run, which must only read.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this connection's access ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
   ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(
-    _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
-    cached: Bool
-  ) throws -> SQLiteRowCursor {
-    try base.cursor(for: query.sql, cached: cached, requiresReadOnly: true)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool) throws -> SQLiteRowCursor {
+    try base.cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows raw SQL returns.
+  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
+  /// statement.
   ///
-  /// The SQL must only read, and is refused with ``SQLiteResultCode/readOnly`` when it may write.
+  /// SQL that SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
   ///
   /// ```swift
   /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
   /// ```
   ///
-  /// - Parameters:
-  ///   - sql: The SQL to run.
-  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Parameter sql: The SQL to run, which must only read.
   /// - Returns: A cursor valid until this connection's access ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+  public borrowing func rowCursor(_ sql: SQL) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
+    try base.cursor(for: sql, cached: false, requiresReadOnly: true)
   }
 
   /// Notifies transaction observers that this connection may have read a database region.
@@ -138,6 +146,52 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// - Parameter region: The region the connection may have read.
   public borrowing func notifyReads(in region: OrbitDatabaseRegion) {
     base.notifyReads(in: region)
+  }
+
+  /// Observes only the connection events produced while `operation` runs.
+  public borrowing func withObservation<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try base.withObservation(observer, perform: operation)
+  }
+
+  /// Intercepts every statement step this connection takes while `operation` runs.
+  ///
+  /// `intercept` is called in place of `sqlite3_step` for every statement the connection steps,
+  /// including those a transaction or the connection itself runs, with the statement and `next`,
+  /// the step that was in effect before it was installed. Call `next` to step the statement, or
+  /// return a SQLite result code without stepping it to refuse it.
+  ///
+  /// ```swift
+  /// let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
+  /// let titles = try connection.withStatementStepInterceptor({ statement, next in
+  ///   // Refuse every statement that would write.
+  ///   guard isReadOnly(statement) != 0 else { return SQLiteResultCode.readOnly.rawValue }
+  ///   return next(statement)
+  /// }) {
+  ///   try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  /// }
+  /// ```
+  ///
+  /// Interceptors nest: one installed inside another's `operation` runs first, and its `next`
+  /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
+  /// pointer is valid only for the access that lent this connection and must not escape it or be
+  /// stepped concurrently.
+  ///
+  /// - Parameters:
+  ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.
+  ///   - operation: The work during which steps are intercepted.
+  /// - Returns: Whatever `operation` returned.
+  /// - Throws: Whatever `operation` threw.
+  public borrowing func withStatementStepInterceptor<Result: ~Copyable>(
+    _ intercept:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32
+      ) -> Int32,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try handle.pointee.withStatementStepInterceptor(intercept, perform: operation)
   }
 
   /// Runs `body` in a read transaction, so that everything it reads comes from one snapshot.
@@ -153,14 +207,22 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// - Important: Transactions do not nest. Use a savepoint inside the transaction in hand instead.
   ///
-  /// - Parameter body: Receives the transaction. It cannot escape the call.
+  /// - Parameters:
+  ///   - observer: Observes reads for the entire transaction, when supplied.
+  ///   - body: Receives the transaction. It cannot escape the call.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened.
   public borrowing func transaction<Result: ~Copyable>(
+    observer: (any OrbitDatabaseTransactionObserver)? = nil,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
     try state.inTransaction {
-      try handle.pointee.runRead(observations: base.observations, body)
+      if let observer {
+        return try withObservation(observer) {
+          try handle.pointee.runRead(observations: base.observations, body)
+        }
+      }
+      return try handle.pointee.runRead(observations: base.observations, body)
     }
   }
 }
@@ -169,9 +231,9 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 ///
 /// Each statement commits on its own as it finishes, which is what a few statements need: a
 /// foreign keys change, for example, is ignored inside a transaction, and `VACUUM` cannot run
-/// inside one at all. Call ``transaction(_:)`` to group statements so that they commit or roll
+/// inside one at all. Call ``transaction(mode:observer:_:)`` to group statements so that they commit or roll
 /// back together. Statements that begin or end a transaction or a savepoint are refused outside
-/// ``transaction(_:)``, so the connection always knows whether it is inside one.
+/// ``transaction(mode:observer:_:)``, so the connection always knows whether it is inside one.
 ///
 /// Observers see a statement outside a transaction as a commit as soon as it finishes: its changed
 /// regions followed by ``OrbitDatabaseTransactionObserver/databaseDidCommit(_:)``, without
@@ -181,7 +243,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 ///
 /// ```swift
 /// try await database.writeWithoutTransaction { connection in
-///   connection.isForeignKeysEnabled = false
+///   try connection.setForeignKeysEnabled(false)
 ///   try connection.transaction { transaction in
 ///     try transaction.executeScript("ALTER TABLE reminders RENAME TO old_reminders")
 ///     // ...
@@ -189,7 +251,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 /// }
 /// ```
 ///
-/// The ``busyTimeout`` and ``isForeignKeysEnabled`` this connection changes are put back when the
+/// The ``busyPolicy`` and ``isForeignKeysEnabled`` this connection changes are put back when the
 /// access that lent it ends, even when it throws. Any other pragma it runs stays changed on the
 /// connection, so restore it before returning.
 public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
@@ -202,17 +264,21 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   // A statement outside a transaction runs through the same view a write transaction lends, and
   // SQLite commits it on its own as it finishes.
   let base: SQLiteWriteTransaction
-  let handle: UnsafePointer<SQLiteHandle>
+  let handle: UnsafePointer<SQLiteConnection>
   let state: SQLiteConnectionState
 
   @_lifetime(borrow handle)
   init(
-    handle: borrowing SQLiteHandle,
-    at address: UnsafePointer<SQLiteHandle>,
-    observations: OrbitDatabaseTransactionObservationContext,
+    handle: borrowing SQLiteConnection,
+    at address: UnsafePointer<SQLiteConnection>,
+    observations: SQLiteConnectionEvents,
     state: SQLiteConnectionState
   ) {
-    self.base = SQLiteWriteTransaction(handle: handle, observations: observations)
+    self.base = SQLiteWriteTransaction(
+      handle: handle,
+      observations: observations,
+      connectionState: state
+    )
     self.handle = address
     self.state = state
   }
@@ -235,32 +301,38 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change to ``busyTimeout`` or ``isForeignKeysEnabled``.
+  /// change to ``busyPolicy`` or ``isForeignKeysEnabled``.
   public var configuration: SQLiteConfiguration {
     base.configuration
   }
 
-  /// How long this connection waits for a lock another connection or process holds before
-  /// reporting `SQLITE_BUSY`.
+  /// How this connection waits for a lock another connection or process holds before reporting
+  /// `SQLITE_BUSY`.
   ///
-  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
-  /// access that lent this connection ends, when the configured timeout is put back.
+  /// It starts at the configuration's ``SQLiteConfiguration/busyPolicy``. A change lasts until the
+  /// access that lent this connection ends, when the configured policy is put back.
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.busyTimeout = .limit(.seconds(30))
+  ///   try connection.setBusyPolicy(.timeout(.seconds(30)))
   ///   try connection.executeScript("VACUUM")
   /// }
   /// ```
   ///
-  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
-  /// handler and which therefore replaces whatever handler the connection had. A
-  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
-  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteConnectionSetup`` installed itself is not known here and is not put back.
-  public var busyTimeout: SQLiteBusyTimeout {
-    get { handle.pointee.settings.pointee.busyTimeout }
-    nonmutating set { handle.pointee.settings.pointee.setBusyTimeout(newValue) }
+  /// SQLite keeps one busy handler per connection and implements its busy timeout as one, so
+  /// setting a policy replaces whatever handler the connection had. A handler a ``SQLiteSetup``
+  /// installed through the raw library is not known here and is not put back.
+  public var busyPolicy: SQLiteBusyPolicy {
+    handle.pointee.settings.pointee.busyPolicy
+  }
+
+  /// Applies a busy policy immediately, restoring the configured policy when the access ends.
+  /// The policy in effect is unchanged if the native operation fails.
+  ///
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, or a ``SQLiteError`` when the policy cannot be applied.
+  public borrowing func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
+    try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
   /// Whether this connection enforces foreign keys.
@@ -271,39 +343,27 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.isForeignKeysEnabled = false
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.executeScript("DROP TABLE reminders")
   ///   }
   /// }
   /// ```
   ///
-  /// SQLite changes foreign keys with a `PRAGMA foreign_keys` statement, which can fail, and a
-  /// setter cannot throw. So setting this only records the change. It takes effect just before
-  /// this connection's next statement or ``transaction(_:)``, outside any transaction, where
-  /// SQLite honors it, and a failure to apply it is thrown from that statement or transaction. The
-  /// change then stays pending for the next one to try again. Reading this returns the value last
-  /// set, whether or not it has taken effect.
-  ///
-  /// Work done through ``sqliteConnection`` does not apply a pending change first. A
-  /// `PRAGMA foreign_keys` statement run directly is not reflected here, and is not undone when the
-  /// access ends.
-  ///
-  /// - Important: Setting this inside this connection's own ``transaction(_:)`` is a programming
-  ///   error and stops the process, since SQLite would silently ignore it there.
+  /// Reports the value last successfully applied through ``setForeignKeysEnabled(_:)``. A raw
+  /// `PRAGMA foreign_keys` statement is not reflected here and is not undone when the access ends.
   public var isForeignKeysEnabled: Bool {
-    get { handle.pointee.settings.pointee.isForeignKeysEnabled }
-    nonmutating set {
-      precondition(
-        !state.isInTransaction,
-        """
-        Foreign keys cannot be turned on or off inside a connection's transaction: SQLite ignores \
-        PRAGMA foreign_keys while a transaction is open. Set isForeignKeysEnabled before the \
-        transaction begins.
-        """
-      )
-      handle.pointee.settings.pointee.isForeignKeysEnabled = newValue
-    }
+    handle.pointee.settings.pointee.isForeignKeysEnabled
+  }
+
+  /// Applies foreign-key enforcement immediately, restoring the configured value when the access
+  /// ends. If execution fails, restoring the previous value is attempted before rethrowing the
+  /// original error. Failed cleanup is retried before the next connection access.
+  ///
+  /// - Throws: A ``SQLiteError`` if the pragma fails, or with code ``SQLiteResultCode/misuse`` if
+  ///   a transaction is open. Call this before starting the transaction.
+  public borrowing func setForeignKeysEnabled(_ enabled: Bool) throws {
+    try handle.pointee.settings.pointee.setForeignKeysEnabled(enabled)
   }
 
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
@@ -359,7 +419,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// A database that is not in WAL mode has no log to move, so the checkpoint succeeds having done
   /// nothing and reports `-1` for both counts. Every mode but ``SQLiteWALCheckpointMode/passive``
-  /// waits for other connections by this connection's busy handler or ``busyTimeout``, and one
+  /// waits for other connections by this connection's ``busyPolicy``, and one
   /// that gives up before it could finish throws `SQLITE_BUSY` rather than report the part it
   /// did.
   ///
@@ -397,43 +457,46 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     )
   }
 
-  /// Creates a cursor over the rows a read query returns.
+  /// Creates a cursor over the rows SQL that only reads returns.
   ///
-  /// The statement runs in its own implicit transaction, which ends when the cursor does.
+  /// The statement runs in its own implicit transaction, which ends when the cursor does. SQL that
+  /// SQLite reports may write is refused with ``SQLiteResultCode/readOnly``: run a mutation through
+  /// ``execute(_:)``, or create its cursor inside ``transaction(mode:observer:_:)`` with
+  /// ``SQLiteWriteTransaction/executeRowCursor(_:cached:)``.
+  ///
+  /// ```swift
+  /// var cursor = try connection.rowCursor("PRAGMA foreign_key_check", cached: true)
+  /// ```
   ///
   /// - Parameters:
-  ///   - query: The query to run.
+  ///   - sql: The SQL to run, which must only read.
   ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Returns: A cursor valid until this connection's access ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
+  ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(
-    _ query: OrbitDatabaseQuery<OrbitDatabaseReadAccess>,
-    cached: Bool
-  ) throws -> SQLiteRowCursor {
-    try applyPendingSettings()
-    return try base.rowCursor(query, cached: cached)
+  public borrowing func rowCursor(_ sql: SQL, cached: Bool) throws -> SQLiteRowCursor {
+    try base.base.cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows raw SQL returns.
+  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
+  /// statement.
   ///
-  /// A write connection may write, so the SQL is not held to reading.
+  /// SQL that SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
   ///
   /// ```swift
   /// var cursor = try connection.rowCursor("SELECT title FROM reminders")
   /// ```
   ///
-  /// - Parameters:
-  ///   - sql: The SQL to run.
-  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Parameter sql: The SQL to run, which must only read.
   /// - Returns: A cursor valid until this connection's access ends.
-  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
+  /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
   @_lifetime(borrow self)
-  public borrowing func rowCursor(_ sql: SQL, cached: Bool = false) throws -> SQLiteRowCursor {
+  public borrowing func rowCursor(_ sql: SQL) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try rowCursor(OrbitDatabaseQuery<OrbitDatabaseReadAccess>(sql), cached: cached)
+    try base.base.cursor(for: sql, cached: false, requiresReadOnly: true)
   }
 
   /// Runs a statement to completion, committing it and discarding any rows it returns.
@@ -447,9 +510,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
   public borrowing func execute(_ sql: SQL) throws {
-    try applyPendingSettings()
     defer { commitPendingChanges() }
-    try base.execute(OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(sql))
+    try base.execute(sql)
   }
 
   /// Runs a script of one or more statements, such as a schema change or a pragma.
@@ -466,7 +528,6 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// - Parameter script: One or more statements.
   /// - Throws: A ``SQLiteError`` naming the SQL that failed.
   public borrowing func executeScript(_ script: String) throws {
-    try applyPendingSettings()
     defer { commitPendingChanges() }
     try base.executeScript(script)
   }
@@ -493,10 +554,62 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     base.notifyReads(in: region)
   }
 
+  /// Observes only the connection events produced while `operation` runs.
+  ///
+  /// Changes committed outside an explicit transaction are reported before the observer is
+  /// removed, even when the operation throws after committing an earlier statement.
+  public borrowing func withObservation<Result: ~Copyable>(
+    _ observer: any OrbitDatabaseTransactionObserver,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try base.withObservation(observer) {
+      defer { commitPendingChanges() }
+      return try operation()
+    }
+  }
+
+  /// Intercepts every statement step this connection takes while `operation` runs.
+  ///
+  /// `intercept` is called in place of `sqlite3_step` for every statement the connection steps,
+  /// including those a transaction or the connection itself runs, with the statement and `next`,
+  /// the step that was in effect before it was installed. Call `next` to step the statement, or
+  /// return a SQLite result code without stepping it to refuse it.
+  ///
+  /// ```swift
+  /// let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
+  /// let titles = try connection.withStatementStepInterceptor({ statement, next in
+  ///   // Refuse every statement that would write.
+  ///   guard isReadOnly(statement) != 0 else { return SQLiteResultCode.readOnly.rawValue }
+  ///   return next(statement)
+  /// }) {
+  ///   try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  /// }
+  /// ```
+  ///
+  /// Interceptors nest: one installed inside another's `operation` runs first, and its `next`
+  /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
+  /// pointer is valid only for the access that lent this connection and must not escape it or be
+  /// stepped concurrently.
+  ///
+  /// - Parameters:
+  ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.
+  ///   - operation: The work during which steps are intercepted.
+  /// - Returns: Whatever `operation` returned.
+  /// - Throws: Whatever `operation` threw.
+  public borrowing func withStatementStepInterceptor<Result: ~Copyable>(
+    _ intercept:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32
+      ) -> Int32,
+    perform operation: () throws -> Result
+  ) rethrows -> Result {
+    try handle.pointee.withStatementStepInterceptor(intercept, perform: operation)
+  }
+
   /// Runs `body` in a write transaction, committing it when `body` returns and rolling it back
   /// when `body` throws.
   ///
-  /// Observers see the same lifecycle as they do for ``OrbitDatabaseWriter/write(_:)``. Savepoints
+  /// Connection observers receive the transaction lifecycle. Savepoints
   /// may be used inside the transaction.
   ///
   /// ```swift
@@ -508,24 +621,26 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// - Important: Transactions do not nest. Use a savepoint inside the transaction in hand instead.
   ///
-  /// - Parameter body: Receives the transaction. It cannot escape the call.
+  /// - Parameters:
+  ///   - mode: How SQLite begins the write transaction.
+  ///   - observer: Observes the entire transaction, including commit or rollback, when supplied.
+  ///   - body: Receives the transaction. It cannot escape the call.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError`` when the transaction cannot be opened
   ///   or committed.
   public borrowing func transaction<Result: ~Copyable>(
+    mode: SQLiteWriteTransactionMode = .immediate,
+    observer: (any OrbitDatabaseTransactionObserver)? = nil,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    // Before `BEGIN`, since SQLite ignores a foreign keys change once the transaction is open.
-    try applyPendingSettings()
     return try state.inTransaction {
-      try handle.pointee.runWrite(observations: base.base.observations, body)
+      if let observer {
+        return try withObservation(observer) {
+          try handle.pointee.runWrite(mode: mode, observations: base.base.observations, body)
+        }
+      }
+      return try handle.pointee.runWrite(mode: mode, observations: base.base.observations, body)
     }
-  }
-
-  // Every statement and transaction this connection runs comes through here first, which is what
-  // puts a change the `isForeignKeysEnabled` setter could only record into effect.
-  private borrowing func applyPendingSettings() throws {
-    try handle.pointee.settings.pointee.applyForeignKeys()
   }
 
   private borrowing func commitPendingChanges() {
@@ -538,8 +653,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 
 /// Tracks whether a connection lent outside a transaction is inside its own `transaction` call.
 ///
-/// The handle's authorizer consults this to refuse statements that begin or end a transaction
-/// anywhere else.
+/// The handle's authorizer and cursors consult this to refuse statements that begin or end a
+/// transaction anywhere else, including cached statements.
 final class SQLiteConnectionState {
   private(set) var isInTransaction = false
 
@@ -557,22 +672,3 @@ final class SQLiteConnectionState {
     return try body()
   }
 }
-
-#if StructuredQueries
-  extension SQLiteWriteConnection {
-    /// Runs a statement to completion, committing it and discarding any rows it returns.
-    ///
-    /// ```swift
-    /// try connection.execute(Reminder.where(\.isCompleted).delete())
-    /// let deleted = connection.changesCount
-    /// ```
-    ///
-    /// - Parameter statement: The statement to run. Any rows it returns are stepped past and
-    ///   discarded.
-    /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever
-    ///   it had changed.
-    public borrowing func execute(_ statement: some Statement) throws {
-      try execute(SQL(fragment: statement.query))
-    }
-  }
-#endif

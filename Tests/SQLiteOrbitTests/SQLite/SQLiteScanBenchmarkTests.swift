@@ -24,9 +24,8 @@
             "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL, amount REAL NOT NULL)"
           )
           for id in 1...rowCount {
-            try transaction.execute(
-              Item.insert { Item(id: id, title: "row \(id)", amount: Double(id) / 3) }
-            )
+            try Item.insert { Item(id: id, title: "row \(id)", amount: Double(id) / 3) }
+              .execute(transaction)
           }
         }
 
@@ -47,12 +46,12 @@
 
         try await measure("pool") {
           try await pool.read { transaction in
-            try transaction.fetchAll(Item.all).count
+            try Item.all.fetchAll(transaction).count
           }
         }
         try await measure("queue") {
           try await queue.read { transaction in
-            try transaction.fetchAll(Item.all).count
+            try Item.all.fetchAll(transaction).count
           }
         }
       }

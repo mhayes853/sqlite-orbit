@@ -14,12 +14,14 @@
     /// Runs `body` holding the lock on the database `databaseIdentifier`, waiting for another
     /// process that holds it as `configuration` has SQLite wait for a lock.
     ///
-    /// A ``SQLiteConfiguration/busyHandler`` is asked each time the lock is found held, and does
+    /// A ``SQLiteBusyPolicy/handler(_:)`` is asked each time the lock is found held, and does
     /// whatever waiting there is itself, as it does for SQLite. Otherwise the wait backs off as
-    /// SQLite's own busy timeout does and ends at ``SQLiteConfiguration/busyTimeout``.
+    /// SQLite's own busy timeout does and ends when the ``SQLiteConfiguration/busyPolicy``'s
+    /// timeout runs out.
     ///
     /// - Throws: A ``SQLiteError`` with `SQLITE_BUSY` if the lock is still held when the wait
-    ///   ends, a ``UnixSystemError`` if the lock cannot be taken, or whatever `body` throws.
+    ///   ends, a ``UnixDatagramIPCTransport/SystemError`` if the lock cannot be taken, or whatever
+    ///   `body` throws.
     static func withLock<Result>(
       databaseIdentifier: OrbitDatabaseIdentifier,
       directory: OrbitCoordinationDirectory,
@@ -29,8 +31,16 @@
       let locksDirectory = directory.openLocksDirectory
       try FileSystem.createDirectory(atPath: locksDirectory)
       let path = locksDirectory.appending("\(databaseIdentifier.coordinationKey).lock")
-      let keepsWaiting =
-        configuration.busyHandler ?? Self.waiting(within: configuration.busyTimeout)
+      let keepsWaiting: (_ attempt: Int) -> Bool
+      let gaveUp: String
+      switch configuration.busyPolicy {
+      case .handler(let handler):
+        keepsWaiting = handler
+        gaveUp = "the busy handler gave up"
+      case .timeout, .waitIndefinitely:
+        keepsWaiting = Self.waiting(within: configuration.busyPolicy.timeoutMilliseconds ?? 0)
+        gaveUp = "the busy timeout ran out"
+      }
       if let result = try UnixFileLock.withExclusiveLock(
         atPath: path.string,
         waitingWhile: keepsWaiting,
@@ -38,8 +48,6 @@
       ) {
         return result
       }
-      let gaveUp =
-        configuration.busyHandler == nil ? "the busy timeout ran out" : "the busy handler gave up"
       throw SQLiteError(
         code: .busy,
         message: """
@@ -62,11 +70,11 @@
     }
 
     /// Waits before each try again as SQLite's own busy timeout waits between tries at its locks:
-    /// briefly at first, then 100 ms at a time, and never past `timeout`, counted from now.
-    private static func waiting(within timeout: SQLiteBusyTimeout) -> (_ attempt: Int) -> Bool {
+    /// briefly at first, then 100 ms at a time, and never past `milliseconds`, counted from now.
+    private static func waiting(within milliseconds: Int32) -> (_ attempt: Int) -> Bool {
       // The milliseconds SQLite sleeps before each try again, the last repeating from then on.
       let delays = [1, 2, 5, 10, 15, 20, 25, 25, 25, 50, 50, 100]
-      let deadline = ContinuousClock.now + .milliseconds(timeout.milliseconds)
+      let deadline = ContinuousClock.now + .milliseconds(milliseconds)
       return { attempt in
         let remaining = ContinuousClock.now.duration(to: deadline)
         guard remaining > .zero else { return false }

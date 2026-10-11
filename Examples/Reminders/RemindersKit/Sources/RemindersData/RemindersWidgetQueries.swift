@@ -41,7 +41,7 @@ extension Reminder {
   public static func setStatus(
     _ status: Status,
     id: ID,
-    in database: RemindersDatabase
+    in database: any OrbitObservableDatabaseWriter
   ) async throws {
     try await database.write {
       try setStatus(status, id: id).execute($0)

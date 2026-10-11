@@ -59,6 +59,27 @@ public struct OrbitFetchReader<Value: Sendable>: Sendable {
     storage.loadError
   }
 
+  /// Returns a reader that transforms the observed value when it is read or yielded.
+  ///
+  /// The reader shares this reader's observation, loading state, error, and reload behavior.
+  /// Reading its value registers the same Observation dependency; iterating its ``values``
+  /// applies the transform without registering a tracked read.
+  ///
+  /// ```swift
+  /// let titles = $reminders.reader.map { $0.map(\.title) }
+  /// ```
+  public func map<Mapped: Sendable>(
+    _ transform: @escaping @Sendable (Value) -> Mapped
+  ) -> OrbitFetchReader<Mapped> {
+    let tracked = self.tracked
+    let untracked = self.untracked
+    return OrbitFetchReader<Mapped>(
+      storage: storage,
+      tracked: { transform(tracked()) },
+      untracked: { transform(untracked()) }
+    )
+  }
+
   /// Returns a reader of one member of the observed value.
   ///
   /// You do not call this subscript. Swift calls it when a member of the value is reached through
@@ -67,13 +88,7 @@ public struct OrbitFetchReader<Value: Sendable>: Sendable {
     dynamicMember keyPath: KeyPath<Value, Member>
   ) -> OrbitFetchReader<Member> {
     let path = SendableKeyPath(keyPath)
-    let tracked = self.tracked
-    let untracked = self.untracked
-    return OrbitFetchReader<Member>(
-      storage: storage,
-      tracked: { tracked()[keyPath: path.value] },
-      untracked: { untracked()[keyPath: path.value] }
-    )
+    return map { $0[keyPath: path.value] }
   }
 
   /// Reads the observed request again.

@@ -27,8 +27,6 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   /// The database region changed by the transaction.
   public let region: OrbitDatabaseRegion
 
-  let activeWriterBarrier: SQLitePoolWriterBarrier?
-
   /// Creates a commit.
   ///
   /// - Parameters:
@@ -41,26 +39,6 @@ public struct OrbitDatabaseCommit: Hashable, Sendable {
   ) {
     self.origin = origin
     self.region = region
-    self.activeWriterBarrier = nil
-  }
-
-  init(
-    origin: OrbitDatabaseTransactionOrigin,
-    region: OrbitDatabaseRegion,
-    activeWriterBarrier: SQLitePoolWriterBarrier?
-  ) {
-    self.origin = origin
-    self.region = region
-    self.activeWriterBarrier = activeWriterBarrier
-  }
-
-  public static func == (lhs: Self, rhs: Self) -> Bool {
-    lhs.origin == rhs.origin && lhs.region == rhs.region
-  }
-
-  public func hash(into hasher: inout Hasher) {
-    hasher.combine(origin)
-    hasher.combine(region)
   }
 }
 
@@ -163,15 +141,24 @@ extension OrbitDatabaseTransactionObserver {
   public func databaseDidRollback() {}
 }
 
-/// A database whose reads and write transactions can be observed.
+/// A database that lends reads and reports observable transactions.
 ///
 /// This is what ``OrbitValueObservation`` needs from a database, and what ``OrbitIPCDatabase``
 /// provides.
+/// A read-only facade can conform without exposing write operations; mutable databases also
+/// conform to ``OrbitDatabaseWriter``.
 ///
 /// ```swift
 /// let subscription = try database.subscribe(transactionObserver: CommitLogger())
 /// ```
-public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
+public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseReader {
+  /// Captures the finite set of writers active now for observation coordination.
+  ///
+  /// The snapshot can include the writer currently reporting a commit. Its completion must be
+  /// reported only after all observers have received that commit. Writers that begin after this
+  /// call do not extend the snapshot. A database without concurrent writers may return `nil`.
+  func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)?
+
   /// Registers `transactionObserver` for commits concerning `region` until the returned
   /// subscription is cancelled.
   ///
@@ -201,7 +188,22 @@ public protocol OrbitObservableDatabase: AnyObject, OrbitDatabaseWriter {
   ) throws -> OrbitRegionSubscription
 }
 
+/// A database that can be both observed and written to.
+///
+/// This is what ``OrbitDefaultDatabase``, the SwiftUI `orbitDatabase` environment value, and the
+/// writable `Row` and `SingleRow` properties hold. ``OrbitIPCDatabase`` is one.
+///
+/// ```swift
+/// func makeModel(database: any OrbitObservableDatabaseWriter) -> RemindersModel {
+///   RemindersModel(database: database)
+/// }
+/// ```
+public typealias OrbitObservableDatabaseWriter = OrbitDatabaseWriter & OrbitObservableDatabase
+
 extension OrbitObservableDatabase {
+  /// Returns no coordination snapshot for databases without concurrent writers.
+  public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? { nil }
+
   /// Registers `transactionObserver` for every commit until the returned subscription is
   /// cancelled.
   ///
@@ -226,148 +228,9 @@ extension OrbitObservableDatabase {
 /// instance. ``OrbitIPCDatabase`` additionally requires the writer to conform to
 /// ``OrbitObservableDatabase`` so it can combine local transaction events with peer announcements.
 public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter, OrbitSuspendable {
-  /// The identifier an ``OrbitIPCDatabase`` uses when its caller does not supply one.
-  var defaultIdentifier: OrbitDatabaseIdentifier { get }
-}
-
-final class OrbitDatabaseTransactionObservers: Sendable {
-  private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
-
-  /// Registers `observer` on behalf of a database whose transactions all happen in this process,
-  /// which reports every one of them whatever the region.
-  func subscribe(
-    _ observer: any OrbitDatabaseTransactionObserver,
-    region: OrbitDatabaseRegion = .fullDatabase
-  ) -> OrbitRegionSubscription {
-    let identifier = observers.withLock { $0.insert(observer) }
-    return OrbitRegionSubscription(region: region) { [weak self] in
-      _ = self?.observers.withLock { $0.remove(identifier) }
-    }
-  }
-
-  func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    for observer in observers.withLock({ $0.all }) {
-      try observer.databaseWillCommit(transaction)
-    }
-  }
-
-  func didRead(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidRead(in: region)
-    }
-  }
-
-  func didChange(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidChange(in: region)
-    }
-  }
-
-  func didCommit(
-    origin: OrbitDatabaseTransactionOrigin,
-    region: OrbitDatabaseRegion,
-    activeWriterBarrier: SQLitePoolWriterBarrier? = nil
-  ) {
-    let commit = OrbitDatabaseCommit(
-      origin: origin,
-      region: region,
-      activeWriterBarrier: activeWriterBarrier
-    )
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidCommit(commit)
-    }
-  }
-
-  func didRollback() {
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidRollback()
-    }
-  }
-}
-
-/// Routes one database access to its database-wide observers and any observers scoped to it.
-///
-/// A context is confined to one serialized SQLite connection access. Keeping scoped observers here
-/// instead of in the database-wide registry prevents concurrent pool reads from seeing one
-/// another's events.
-///
-/// Every event goes to the database-wide observers first and then to the scoped observers
-/// registered at the moment it happens, so a scoped observer sees the commits and rollbacks of the
-/// transactions that end while it is registered, and nothing of those that end after it is gone.
-final class OrbitDatabaseTransactionObservationContext {
-  private let databaseObservers: OrbitDatabaseTransactionObservers?
-  private var scopedObservers: [any OrbitDatabaseTransactionObserver] = []
-
-  // Outside a transaction SQLite commits each statement on its own. The pending region tells both
-  // whether one left anything to report and precisely what it changed.
-  private var pendingRegion = OrbitDatabaseRegion.empty
-
-  init(databaseObservers: OrbitDatabaseTransactionObservers?) {
-    self.databaseObservers = databaseObservers
-  }
-
-  func withObserver<Result: ~Copyable>(
-    _ observer: any OrbitDatabaseTransactionObserver,
-    perform operation: () throws -> Result
-  ) rethrows -> Result {
-    scopedObservers.append(observer)
-    defer { scopedObservers.removeLast() }
-    return try operation()
-  }
-
-  func didRead(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    databaseObservers?.didRead(in: region)
-    for observer in scopedObservers {
-      observer.databaseDidRead(in: region)
-    }
-  }
-
-  func didChange(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    pendingRegion.formUnion(region)
-    databaseObservers?.didChange(in: region)
-    for observer in scopedObservers {
-      observer.databaseDidChange(in: region)
-    }
-  }
-
-  func willCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    try databaseObservers?.willCommit(transaction)
-    for observer in scopedObservers {
-      try observer.databaseWillCommit(transaction)
-    }
-  }
-
-  func didCommit(origin: OrbitDatabaseTransactionOrigin) {
-    let region = pendingRegion
-    pendingRegion = .empty
-    databaseObservers?.didCommit(origin: origin, region: region)
-    let commit = OrbitDatabaseCommit(origin: origin, region: region)
-    for observer in scopedObservers {
-      observer.databaseDidCommit(commit)
-    }
-  }
-
-  func didRollback() {
-    pendingRegion = .empty
-    databaseObservers?.didRollback()
-    for observer in scopedObservers {
-      observer.databaseDidRollback()
-    }
-  }
-
-  /// Reports the changes made since the last commit or rollback as committed, if there are any.
+  /// The database file the writer is open on.
   ///
-  /// This is for a statement run outside a transaction, which SQLite commits as it finishes. There
-  /// is no moment before that commit to call `databaseWillCommit` in, so the changes are reported
-  /// in the shape of a commit made by another handle. A statement that fails after its changes were
-  /// reported still counts as having committed them: an observer told about a change that did not
-  /// happen only fetches again, while one never told about a change that did misses it.
-  func didCommitPendingChanges() {
-    guard !pendingRegion.isEmpty else { return }
-    didCommit(origin: .local)
-  }
+  /// An ``OrbitIPCDatabase`` whose caller supplies no identifier identifies the database by this
+  /// path, through ``OrbitDatabaseIdentifier/forDatabase(path:)``.
+  var path: OrbitDatabasePath { get }
 }

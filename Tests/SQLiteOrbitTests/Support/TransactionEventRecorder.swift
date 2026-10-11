@@ -28,14 +28,17 @@ final class TransactionEventRecorder: OrbitDatabaseTransactionObserver, Sendable
 
   private let state = Lock(State())
   private let countOnWillCommit: SQL?
+  private let commitError: (any Error)?
 
   /// Makes a recorder.
   ///
-  /// - Parameter countOnWillCommit: A query each committing transaction runs, whose result is
-  ///   recorded as ``Event/willCommit(_:)``, so the recorder sees what the transaction is about
-  ///   to commit. Without one, the recorder records no ``Event/willCommit(_:)``.
-  init(countOnWillCommit: SQL? = nil) {
+  /// - Parameters:
+  ///   - countOnWillCommit: A query each committing transaction runs, whose result is recorded
+  ///     as ``Event/willCommit(_:)``. Without one, no will-commit event is recorded.
+  ///   - commitError: An error thrown to reject commit, after recording any requested count.
+  init(countOnWillCommit: SQL? = nil, commitError: (any Error)? = nil) {
     self.countOnWillCommit = countOnWillCommit
+    self.commitError = commitError
   }
 
   /// Every change, commit and rollback, in the order they came.
@@ -76,9 +79,11 @@ final class TransactionEventRecorder: OrbitDatabaseTransactionObserver, Sendable
   }
 
   func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    guard let query = self.countOnWillCommit else { return }
-    let count = try transaction.fetchOne(query) { Int($0[0].integerValue ?? 0) } ?? 0
-    self.state.withLock { $0.events.append(.willCommit(count)) }
+    if let query = self.countOnWillCommit {
+      let count = try transaction.fetchOne(query) { Int($0[0].integerValue ?? 0) } ?? 0
+      self.state.withLock { $0.events.append(.willCommit(count)) }
+    }
+    if let commitError { throw commitError }
   }
 
   func databaseDidCommit(_ commit: OrbitDatabaseCommit) {

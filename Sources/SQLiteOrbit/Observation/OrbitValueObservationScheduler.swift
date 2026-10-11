@@ -4,12 +4,17 @@
 /// ``OrbitValueObservationScheduler/async(priority:)``,
 /// ``OrbitValueObservationScheduler/async(on:priority:)``, or
 /// ``OrbitValueObservationScheduler/mainActor`` — unless you need delivery somewhere none of them
-/// reaches.
+/// reaches. Where SwiftUI is available, ``OrbitValueObservationScheduler/animation(_:)`` and
+/// ``OrbitValueObservationScheduler/transaction(_:)`` deliver on the main actor inside an animation
+/// or a transaction.
+///
+/// A scheduler does not need to be `Hashable`, including one passed to a fetch property: a property
+/// rebuilt with a different scheduler keeps observing and delivers through the new one.
 ///
 /// ```swift
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
-///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+///   .tracking { try Reminder.all.fetchCount($0) }
+///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { @MainActor change in
 ///     reminderCount = change.value
 ///   }
 /// ```
@@ -49,7 +54,7 @@ public protocol OrbitValueObservationScheduler: Sendable {
 /// ```swift
 /// let counts = Mutex([Int]())
 /// let subscription = try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .immediate) { _ in } onChange: { change in
 ///     counts.withLock { $0.append(change.value) }
 ///   }
@@ -107,7 +112,7 @@ extension OrbitValueObservationScheduler where Self == OrbitImmediateValueObserv
 ///
 /// let cache = RemindersCache()
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .async(on: cache)) { _ in } onChange: { change in
 ///     cache.assumeIsolated { $0.count = change.value }
 ///   }
@@ -131,7 +136,7 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
 
   public static func == (lhs: Self, rhs: Self) -> Bool {
     // A drain is mutable delivery machinery. Scheduler identity is only its destination and
-    // priority, so rebuilding the same fetch does not replace its observation.
+    // priority, so two schedulers built the same way compare equal.
     lhs.isolation === rhs.isolation && lhs.priority == rhs.priority
   }
 
@@ -163,19 +168,15 @@ public struct OrbitAsyncValueObservationScheduler: OrbitValueObservationSchedule
     from isolation: isolated (any Actor)?,
     _ action: @escaping @Sendable () -> Void
   ) {
-    if self.isolation != nil && self.isolation === isolation {
-      drain.drainInline(action, on: isolation)
-    } else {
-      drain.enqueue(action)
-    }
+    drain.schedule(from: isolation, action)
   }
 }
 
 extension OrbitValueObservationScheduler where Self == OrbitAsyncValueObservationScheduler {
   /// Delivers callbacks asynchronously on Swift's cooperative executor.
   ///
-  /// This is the scheduler ``OrbitValueObservation/subscribe(to:isolation:onError:onChange:)``
-  /// uses.
+  /// This is the scheduler
+  /// ``OrbitValueObservation/subscribe(to:scheduling:isolation:onError:onChange:)`` uses by default.
   ///
   /// ```swift
   /// try observation.subscribe(
@@ -218,7 +219,8 @@ extension OrbitValueObservationScheduler where Self == OrbitAsyncValueObservatio
 /// main-actor isolated.
 ///
 /// ```swift
-/// try observation.subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+/// try observation.subscribe(to: database, scheduling: .mainActor) { _ in
+/// } onChange: { @MainActor change in
 ///   reminderCount = change.value  // already on the main actor
 /// }
 /// ```
@@ -233,8 +235,8 @@ public protocol OrbitValueObservationMainActorScheduler: OrbitValueObservationSc
 /// @MainActor var reminderCount = 0
 ///
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
-///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
+///   .tracking { try Reminder.all.fetchCount($0) }
+///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { @MainActor change in
 ///     reminderCount = change.value
 ///   }
 /// ```
@@ -276,11 +278,7 @@ public struct OrbitMainActorValueObservationScheduler:
     from isolation: isolated (any Actor)?,
     _ action: @escaping @Sendable () -> Void
   ) {
-    if isolation === MainActor.shared {
-      drain.drainInline(action, on: isolation)
-    } else {
-      drain.enqueue(action)
-    }
+    drain.schedule(from: isolation, action)
   }
 }
 
@@ -310,7 +308,18 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     self.priority = priority
   }
 
-  func enqueue(_ action: @escaping @Sendable () -> Void) {
+  func schedule(
+    from isolation: isolated (any Actor)?,
+    _ action: @escaping @Sendable () -> Void
+  ) {
+    if self.isolation != nil && self.isolation === isolation {
+      drainInline(action, on: isolation)
+    } else {
+      enqueue(action)
+    }
+  }
+
+  private func enqueue(_ action: @escaping @Sendable () -> Void) {
     let shouldStart = state.withLock { state in
       state.actions.append(action)
       guard !state.isDraining else { return false }
@@ -326,7 +335,7 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
   /// Only the scheduler's own isolation may call this, so a drain started for an earlier callback
   /// is suspended waiting for it and cannot be running concurrently. Queueing first is what keeps
   /// an inline callback from overtaking the ones already waiting.
-  func drainInline(
+  private func drainInline(
     _ action: @escaping @Sendable () -> Void,
     on isolation: isolated (any Actor)?
   ) {
@@ -344,5 +353,39 @@ private final class OrbitValueObservationSchedulerDrain: Sendable {
     }) {
       action()
     }
+  }
+}
+
+/// A scheduler that preserves callback delivery while deferring the initial fetch.
+public struct OrbitDeferredInitialValueObservationScheduler<Base: OrbitValueObservationScheduler>:
+  OrbitValueObservationScheduler
+{
+  private let base: Base
+
+  /// Wraps a scheduler without changing where or in what order its callbacks run.
+  public init(base: Base) { self.base = base }
+
+  public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool { false }
+
+  public func schedule(
+    from isolation: isolated (any Actor)?,
+    _ action: @escaping @Sendable () -> Void
+  ) {
+    base.schedule(from: isolation, action)
+  }
+}
+
+extension OrbitDeferredInitialValueObservationScheduler: Equatable where Base: Equatable {}
+extension OrbitDeferredInitialValueObservationScheduler: Hashable where Base: Hashable {}
+extension OrbitDeferredInitialValueObservationScheduler: OrbitValueObservationMainActorScheduler
+where Base: OrbitValueObservationMainActorScheduler {}
+
+extension OrbitValueObservationScheduler {
+  /// Defers the initial fetch even when this scheduler could deliver it synchronously.
+  ///
+  /// Later callbacks retain this scheduler's destination and ordering. A hashable or main-actor
+  /// scheduler keeps those capabilities when wrapped.
+  public func deferringInitialValue() -> OrbitDeferredInitialValueObservationScheduler<Self> {
+    OrbitDeferredInitialValueObservationScheduler(base: self)
   }
 }

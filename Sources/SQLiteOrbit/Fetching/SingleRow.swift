@@ -21,7 +21,8 @@
   /// ```
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
-  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
+  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``. Each of them is an
+  /// ``OrbitObservableDatabaseWriter``, so saves always go to the database the row is read from.
   @propertyWrapper
   public struct SingleRow<Value>: Sendable
   where
@@ -42,16 +43,23 @@
     #endif
 
     /// Creates a property observing this table's singleton row.
+    ///
+    /// - Parameters:
+    ///   - type: The single-row table to observe.
+    ///   - database: The database to read from and save to, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
+    ///   - scheduler: Where values are delivered. By default they are delivered as they are
+    ///     produced, and the first read happens before the property is first read.
     public init(
       _ type: Value.Type,
-      database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      database: (any OrbitObservableDatabaseWriter)? = nil,
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) {
       let storage = OrbitRowStorage(
         fetch: .make(
           value: Value.defaultValue,
           request: OrbitFetchSingleRowRequest<Value>(),
-          database: database,
+          writableDatabase: database,
           scheduler: scheduler
         )
       )
@@ -110,15 +118,20 @@
     public func update<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) async throws -> Result {
-      return try await storage.write { database in
+      try await storage.write { database in
         try await database.write { transaction in
           try Value.update(in: transaction, mutation)
         }
       }
     }
 
+    /// Persists the singleton before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``save(_:)``. A failure is both thrown and
+    /// recorded in ``saveError``. This is intended for synchronous main-actor callbacks, such as
+    /// a binding setter; use ``save(_:)`` from asynchronous code.
     @MainActor
-    func saveBlocking(_ value: Value) throws {
+    public func saveBlocking(_ value: Value) throws {
       try storage.writeBlocking { database in
         try database.writeBlocking { transaction in
           try value.save(in: transaction)
@@ -126,8 +139,14 @@
       }
     }
 
+    /// Mutates the latest singleton and commits before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``update(_:)``, including the default value when
+    /// no row exists. A failure is both thrown and recorded in ``saveError``. This is intended for
+    /// synchronous main-actor callbacks; use ``update(_:)`` from asynchronous code.
     @MainActor
-    func updateBlocking<Result: Sendable>(
+    @discardableResult
+    public func updateBlocking<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) throws -> Result {
       try storage.writeBlocking { database in
@@ -160,23 +179,13 @@
 
   #if canImport(SwiftUI)
     extension SingleRow: DynamicProperty {
+      /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        storage.fetch.update(
-          declared: box.fetch,
+        storage.update(
+          declared: box,
           database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
-          generation: fetchGeneration
-        )
-        observeWritesForSwiftUI()
-      }
-
-      private func observeWritesForSwiftUI() {
-        guard #unavailable(iOS 17, macOS 14, tvOS 17, watchOS 10) else { return }
-        _ = writeGeneration.wrappedValue
-        nonisolated(unsafe) let generation = writeGeneration
-        storage.setSwiftUIObservation(
-          storage.addWriteObserver {
-            Task { @MainActor in generation.wrappedValue &+= 1 }
-          }
+          fetchGeneration: fetchGeneration,
+          writeGeneration: writeGeneration
         )
       }
     }

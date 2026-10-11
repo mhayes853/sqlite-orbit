@@ -33,8 +33,8 @@
     ///     rising across the whole wait.
     ///   - body: Runs once the lock is held.
     /// - Returns: What `body` returned, or `nil`, without running it, if `keepsWaiting` gave up.
-    /// - Throws: A ``UnixSystemError`` if the file cannot be opened or locked, or whatever `body`
-    ///   throws.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the file cannot be opened or locked,
+    ///   or whatever `body` throws.
     static func withExclusiveLock<Result>(
       atPath path: String,
       waitingWhile keepsWaiting: (_ attempt: Int) -> Bool,
@@ -69,8 +69,8 @@
     /// unless somebody else holds it already.
     ///
     /// - Returns: What `body` returned, or `nil`, without running it, if the lock is held.
-    /// - Throws: A ``UnixSystemError`` if the file cannot be opened or locked, or whatever `body`
-    ///   throws.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the file cannot be opened or locked,
+    ///   or whatever `body` throws.
     static func withExclusiveLockIfAvailable<Result>(
       atPath path: String,
       _ body: () throws -> Result
@@ -104,21 +104,22 @@
 
     /// Tries once, without waiting, for the lock on the file `descriptor` opened from `path`.
     ///
-    /// - Throws: A ``UnixSystemError`` if the lock cannot be tried, or the file looked up.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the lock cannot be tried, or the
+    ///   file looked up.
     private static func lock(_ descriptor: Int32, openedFrom path: String) throws -> Attempt {
       guard UnixPlatform.tryLockExclusively(descriptor) else {
         let code = UnixPlatform.lastErrorCode
         guard code == UnixPlatform.ErrorCode.wouldBlock else {
-          throw UnixSystemError(operation: "flock", code: code)
+          throw UnixDatagramIPCTransport.SystemError(operation: "flock", code: code)
         }
         return .held
       }
       guard let locked = UnixPlatform.fileIdentity(ofDescriptor: descriptor) else {
-        throw UnixSystemError.last("stat")
+        throw UnixDatagramIPCTransport.SystemError.last("stat")
       }
       guard let current = UnixPlatform.fileIdentity(atPath: path) else {
         guard UnixPlatform.lastErrorCode == UnixPlatform.ErrorCode.noSuchFile else {
-          throw UnixSystemError.last("stat")
+          throw UnixDatagramIPCTransport.SystemError.last("stat")
         }
         return .unlinked
       }

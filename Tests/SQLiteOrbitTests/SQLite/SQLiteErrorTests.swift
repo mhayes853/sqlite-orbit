@@ -56,7 +56,7 @@
         }
         return base.statements.execution.step(statement)
       }
-      let handle = try SQLiteHandle.open(
+      var handle = try SQLiteConnection.open(
         path: .memory,
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: configuration

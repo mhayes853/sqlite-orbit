@@ -27,7 +27,7 @@ public enum OrbitValueObservationSource: Hashable, Sendable {
 /// A value emitted by an observation, together with the event that prompted its fetch.
 ///
 /// ```swift
-/// let observation = OrbitValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+/// let observation = OrbitValueObservation.tracking { try Reminder.all.fetchAll($0) }
 /// try observation.subscribe(to: database, onError: { _ in }) { change in
 ///   print(change.value.count, "reminders after a", change.source, "fetch")
 /// }
@@ -82,7 +82,6 @@ private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
   case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
-  case query(SQL)
 
   var initialRegion: OrbitDatabaseRegion? {
     guard case .constant(let region) = self else { return nil }
@@ -105,8 +104,6 @@ private enum OrbitValueObservationRegionSource: Sendable {
       return output
     case .constant(let region):
       return (try fetch(transaction), region)
-    case .query(let query):
-      return (try fetch(transaction), try OrbitDatabaseRegion(query, in: transaction))
     }
   }
 
@@ -114,11 +111,11 @@ private enum OrbitValueObservationRegionSource: Sendable {
     _ fetch: OrbitValueObservationFetch,
     in transaction: borrowing SQLiteReadTransaction
   ) throws -> (payload: any Sendable, region: OrbitDatabaseRegion) {
-    let recorder = OrbitValueObservationReadRegionRecorder()
-    let payload = try transaction.withObserver(recorder) {
+    let recorder = OrbitDatabaseRegionRecorder()
+    let payload = try transaction.withObservation(recorder) {
       try fetch(transaction)
     }
-    return (payload, recorder.region)
+    return (payload, recorder.readRegion)
   }
 }
 
@@ -126,20 +123,6 @@ private struct OrbitValueObservationFetchOutput: Sendable {
   let payload: any Sendable
   let region: OrbitDatabaseRegion
   let externalDependencies: ExternalDependencies?
-}
-
-private final class OrbitValueObservationReadRegionRecorder:
-  OrbitDatabaseTransactionObserver
-{
-  private let recordedRegion = Lock(OrbitDatabaseRegion.empty)
-
-  var region: OrbitDatabaseRegion {
-    recordedRegion.withLock { $0 }
-  }
-
-  func databaseDidRead(in region: OrbitDatabaseRegion) {
-    recordedRegion.withLock { $0.formUnion(region) }
-  }
 }
 
 private typealias OrbitValueObservationFetch =
@@ -168,15 +151,33 @@ private final class OrbitValueObservationFirstFetchRegion: Sendable {
   }
 }
 
-private enum OrbitValueObservationReduction<Value: Sendable>: Sendable {
-  case emit(Value)
-  case skip
-}
-
-private struct OrbitValueObservationReducer<Value: Sendable>: Sendable {
-  let reduce: @Sendable (any Sendable) throws -> OrbitValueObservationReduction<Value>
+private struct OrbitValueObservationPipeline<Value: Sendable>: Sendable {
+  let reduce: @Sendable (any Sendable) throws -> Value?
   let transactionNeedsFetch: @Sendable (OrbitDatabaseCommit) -> Bool
   var events = OrbitValueObservationEvents()
+}
+
+private struct OrbitValueObservationClosureReducer<Input: Sendable, Output: Sendable>:
+  OrbitValueObservationReducer
+{
+  let transform: @Sendable (Input) throws -> Output?
+
+  func reduce(_ value: Input) throws -> Output? { try transform(value) }
+}
+
+private struct OrbitValueObservationDistinctReducer<Value: Sendable>: OrbitValueObservationReducer {
+  let predicate: @Sendable (Value, Value) -> Bool
+  private var previous: Value?
+
+  init(predicate: @escaping @Sendable (Value, Value) -> Bool) {
+    self.predicate = predicate
+  }
+
+  mutating func reduce(_ value: Value) -> Value? {
+    if let previous, predicate(previous, value) { return nil }
+    previous = .some(value)
+    return .some(value)
+  }
 }
 
 private struct OrbitValueObservationEventHandler: Sendable {
@@ -207,8 +208,8 @@ private struct OrbitValueObservationEvents: Sendable {
 /// have changed.
 ///
 /// An observation is a description, not a running process: nothing is read until you start it
-/// with ``subscribe(to:isolation:onError:onChange:)``,
-/// ``subscribe(to:isolation:onError:onUpdate:)``, ``updates(in:bufferingPolicy:)``,
+/// with ``subscribe(to:scheduling:isolation:onError:onChange:)``,
+/// ``subscribe(to:scheduling:isolation:onError:onUpdate:)``, ``updates(in:bufferingPolicy:)``,
 /// ``changes(in:bufferingPolicy:)``, or ``values(in:bufferingPolicy:)``. Every subscriber to the
 /// same observation value and database shares one runtime, so a chain built once and started twice
 /// fetches once and hands the same value to both.
@@ -228,21 +229,35 @@ private struct OrbitValueObservationEvents: Sendable {
 public struct OrbitValueObservation<Value: Sendable>: Sendable {
   private let definition: OrbitValueObservationDefinition<Value>
 
-  /// Identity shared by every copy of this observation, used by fetch properties to reconcile
-  /// declarations without trying to compare captured closures.
-  var identity: ObjectIdentifier { ObjectIdentifier(definition) }
+  /// The identity of this observation's definition, shared by every copy.
+  ///
+  /// Constructing or transforming an observation creates a new identity, even when its fetch
+  /// produces the same values. Subscribing to different databases or restarting a runtime does
+  /// not change this identity. Use it to reconcile declarations without comparing closures.
+  public var identity: OrbitValueObservationIdentity { definition.identity }
+
+  var weakCopy: @Sendable () -> Self? {
+    { [weak definition] in
+      guard let definition else { return nil }
+      return Self(definition: definition)
+    }
+  }
+
+  private init(definition: OrbitValueObservationDefinition<Value>) {
+    self.definition = definition
+  }
 
   private init(
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> any Sendable,
     refetchController: any OrbitValueObservationRefetchController = .immediate,
-    makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
+    makePipeline: @escaping @Sendable () -> OrbitValueObservationPipeline<Value>
   ) {
     self.definition = OrbitValueObservationDefinition(
       regionSource: regionSource,
       fetch: fetch,
       refetchController: refetchController,
-      makeReducer: makeReducer
+      makePipeline: makePipeline
     )
   }
 
@@ -252,7 +267,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// snapshot of the database. The observation automatically tracks the regions read by `fetch`
   /// and runs it again after a committed write that may affect them. On systems with Observation,
   /// it also tracks observable properties read by `fetch` and runs again when one changes.
-  /// ``ExternalValue`` provides thread-safe, field-sensitive observation for captured values.
+  /// ``OrbitExternalValue`` provides thread-safe, field-sensitive observation for captured values.
   /// If `fetch` reads through ``SQLiteReadTransaction/sqliteConnection``, it must call
   /// ``SQLiteReadTransaction/notifyReads(in:)`` for those reads to be tracked.
   /// A database that reports a commit without first reporting its changed region is treated
@@ -323,13 +338,13 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     Self(
       regionSource: regionSource,
       fetch: fetch,
-      makeReducer: {
-        OrbitValueObservationReducer(
+      makePipeline: {
+        OrbitValueObservationPipeline(
           reduce: { payload in
             guard let value = payload as? Value else {
               preconditionFailure("invalid value observation payload")
             }
-            return .emit(value)
+            return .some(value)
           },
           transactionNeedsFetch: { _ in true }
         )
@@ -338,65 +353,127 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   }
 
   #if StructuredQueries
-    /// Creates an observation that fetches every value produced by a query.
+    /// Creates an observation that fetches every value a Structured Queries statement selects.
     ///
-    /// The observed region is derived from the query against the database's schema.
+    /// Any statement whose values decode works: a projection such as
+    /// `Reminder.where { !$0.isCompleted }.select(\.title)`, typed SQL such as
+    /// `#sql("SELECT title FROM reminders", as: String.self)`, or a query fragment wrapped as
+    /// `SQLQueryExpression(fragment, as: String.self)`. The statement runs inside a read
+    /// transaction, so one that may write fails the observation with an error instead of
+    /// executing.
     ///
-    /// - Parameter query: The query to observe and fetch.
+    /// The observed region is whatever the statement reads, as SQLite resolves it against the
+    /// database's schema, so views, joins, and subqueries are tracked down to the tables and
+    /// columns they read. It comes from the statement SQLite prepared for the fetch, which the
+    /// connection caches together with its region, so refetching does not compile the query again.
+    ///
+    /// ```swift
+    /// let titles = OrbitValueObservation.trackingAll(
+    ///   Reminder.where { !$0.isCompleted }.order(by: \.title).select(\.title)
+    /// )
+    /// ```
+    ///
+    /// - Parameter query: The statement to observe and fetch.
     /// - Returns: An observation of all values produced by `query`.
     public static func trackingAll<QueryValue: QueryRepresentable>(
-      _ query: some PartialSelectStatement<QueryValue>
+      _ query: some Statement<QueryValue>
     ) -> Self where Value == [QueryValue.QueryOutput] {
       trackingAllValues(query.query, as: QueryValue.self)
     }
 
-    /// Creates an observation that fetches the first value produced by a query.
+    /// Creates an observation that fetches the first value a Structured Queries statement selects.
     ///
-    /// The observed region is derived from the query against the database's schema.
+    /// The statement runs as written, so add `limit(1)` to one that could produce many rows when
+    /// only the first is wanted. As with `trackingAll`, the observed region is whatever the
+    /// statement reads, and a statement that may write fails the observation.
     ///
-    /// - Parameter query: The query to observe and fetch.
+    /// ```swift
+    /// let newestTitle = OrbitValueObservation.trackingOne(
+    ///   Reminder.order { $0.id.desc() }.limit(1).select(\.title)
+    /// )
+    /// ```
+    ///
+    /// - Parameter query: The statement to observe and fetch.
     /// - Returns: An observation of the first value produced by `query`, or `nil`.
     public static func trackingOne<QueryValue: QueryRepresentable>(
-      _ query: some PartialSelectStatement<QueryValue>
+      _ query: some Statement<QueryValue>
     ) -> Self where Value == QueryValue.QueryOutput? {
       trackingOneValue(query.query, as: QueryValue.self)
     }
 
-    /// Creates an observation that fetches every tuple produced by a query.
+    /// Creates an observation that fetches every tuple a Structured Queries statement selects.
+    ///
+    /// ```swift
+    /// let rows = OrbitValueObservation.trackingAll(
+    ///   Reminder.order(by: \.id).select { ($0.id, $0.title) }
+    /// )
+    /// ```
+    ///
+    /// - Parameter query: The statement to observe and fetch.
+    /// - Returns: An observation of all tuples produced by `query`.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @_disfavoredOverload
     public static func trackingAll<each QueryValue: QueryRepresentable>(
-      _ query: some PartialSelectStatement<(repeat each QueryValue)>
+      _ query: some Statement<(repeat each QueryValue)>
     ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
       trackingAllTuples(query.query, as: (repeat each QueryValue).self)
     }
 
-    /// Creates an observation that fetches the first tuple produced by a query.
+    /// Creates an observation that fetches the first tuple a Structured Queries statement
+    /// selects.
+    ///
+    /// - Parameter query: The statement to observe and fetch.
+    /// - Returns: An observation of the first tuple produced by `query`, or `nil`.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     @_disfavoredOverload
     public static func trackingOne<each QueryValue: QueryRepresentable>(
-      _ query: some PartialSelectStatement<(repeat each QueryValue)>
+      _ query: some Statement<(repeat each QueryValue)>
     ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
       trackingOneTuple(query.query, as: (repeat each QueryValue).self)
     }
 
-    /// Creates an observation that fetches every row produced by a table query.
+    /// Creates an observation that fetches every row of a table query.
+    ///
+    /// ```swift
+    /// let incomplete = OrbitValueObservation.trackingAll(Reminder.where { !$0.isCompleted })
+    /// ```
+    ///
+    /// - Parameter query: The table query to observe and fetch.
+    /// - Returns: An observation of every row `query` selects.
     public static func trackingAll<S: SelectStatement>(
       _ query: S
     ) -> Self where S.QueryValue == (), S.Joins == (), Value == [S.From.QueryOutput] {
       trackingAllValues(query.query, as: S.From.self)
     }
 
-    /// Creates an observation that fetches the first row produced by a table query.
+    /// Creates an observation that fetches the first row of a table query.
+    ///
+    /// The query is limited to one row before it runs.
+    ///
+    /// ```swift
+    /// let first = OrbitValueObservation.trackingOne(Reminder.order(by: \.id))
+    /// ```
+    ///
+    /// - Parameter query: The table query to observe and fetch.
+    /// - Returns: An observation of the first row `query` selects, or `nil`.
     public static func trackingOne<S: SelectStatement>(
       _ query: S
     ) -> Self where S.QueryValue == (), S.Joins == (), Value == S.From.QueryOutput? {
       trackingOneValue(query.asSelect().limit(1).query, as: S.From.self)
     }
 
-    /// Creates an observation that fetches every row produced by a table query.
+    /// Creates an observation that fetches every row of a joined table query.
     ///
     /// Joined tables are decoded after the query's `FROM` table.
+    ///
+    /// ```swift
+    /// let remindersWithLists = OrbitValueObservation.trackingAll(
+    ///   Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }
+    /// )
+    /// ```
+    ///
+    /// - Parameter query: The joined table query to observe and fetch.
+    /// - Returns: An observation of every joined row `query` selects.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public static func trackingAll<
       S: SelectStatement,
@@ -414,9 +491,13 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       return trackingAllTuples(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
     }
 
-    /// Creates an observation that fetches the first row produced by a table query.
+    /// Creates an observation that fetches the first row of a joined table query.
     ///
-    /// Joined tables are decoded after the query's `FROM` table.
+    /// Joined tables are decoded after the query's `FROM` table. The query is limited to one row
+    /// before it runs.
+    ///
+    /// - Parameter query: The joined table query to observe and fetch.
+    /// - Returns: An observation of the first joined row `query` selects, or `nil`.
     @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public static func trackingOne<
       S: SelectStatement,
@@ -436,93 +517,16 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       return trackingOneTuple(query, as: (S.From, FirstJoin, repeat each AdditionalJoin).self)
     }
 
-    /// Creates an observation that fetches every value decoded from a query fragment.
-    ///
-    /// - Parameters:
-    ///   - query: The query fragment to observe and fetch.
-    ///   - type: The representation used to decode each row.
-    /// - Returns: An observation of all decoded values.
-    public static func trackingAll<QueryValue: QueryRepresentable>(
-      _ query: QueryFragment,
-      as type: QueryValue.Type
-    ) -> Self where Value == [QueryValue.QueryOutput] {
-      trackingAllValues(query, as: type)
-    }
-
-    /// Creates an observation that fetches the first value decoded from a query fragment.
-    ///
-    /// - Parameters:
-    ///   - query: The query fragment to observe and fetch.
-    ///   - type: The representation used to decode the row.
-    /// - Returns: An observation of the first decoded value, or `nil`.
-    public static func trackingOne<QueryValue: QueryRepresentable>(
-      _ query: QueryFragment,
-      as type: QueryValue.Type
-    ) -> Self where Value == QueryValue.QueryOutput? {
-      trackingOneValue(query, as: type)
-    }
-
-    /// Creates an observation that fetches every tuple decoded from a query fragment.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @_disfavoredOverload
-    public static func trackingAll<each QueryValue: QueryRepresentable>(
-      _ query: QueryFragment,
-      as type: (repeat each QueryValue).Type
-    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-      trackingAllTuples(query, as: type)
-    }
-
-    /// Creates an observation that fetches the first tuple decoded from a query fragment.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @_disfavoredOverload
-    public static func trackingOne<each QueryValue: QueryRepresentable>(
-      _ query: QueryFragment,
-      as type: (repeat each QueryValue).Type
-    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-      trackingOneTuple(query, as: type)
-    }
-
-    /// Creates an observation that fetches every value produced by typed SQL.
-    public static func trackingAll<QueryValue: QueryRepresentable>(
-      _ query: SQLQueryExpression<QueryValue>
-    ) -> Self where Value == [QueryValue.QueryOutput] {
-      trackingAllValues(query.query, as: QueryValue.self)
-    }
-
-    /// Creates an observation that fetches the first value produced by typed SQL.
-    public static func trackingOne<QueryValue: QueryRepresentable>(
-      _ query: SQLQueryExpression<QueryValue>
-    ) -> Self where Value == QueryValue.QueryOutput? {
-      trackingOneValue(query.query, as: QueryValue.self)
-    }
-
-    /// Creates an observation that fetches every tuple produced by typed SQL.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @_disfavoredOverload
-    public static func trackingAll<each QueryValue: QueryRepresentable>(
-      _ query: SQLQueryExpression<(repeat each QueryValue)>
-    ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
-      trackingAllTuples(query.query, as: (repeat each QueryValue).self)
-    }
-
-    /// Creates an observation that fetches the first tuple produced by typed SQL.
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-    @_disfavoredOverload
-    public static func trackingOne<each QueryValue: QueryRepresentable>(
-      _ query: SQLQueryExpression<(repeat each QueryValue)>
-    ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
-      trackingOneTuple(query.query, as: (repeat each QueryValue).self)
-    }
-
-    // The query is lowered to SQL once, and that SQL both derives the region and runs each fetch,
-    // rather than being lowered again every time the observation fetches.
+    // The query is lowered to SQL once, rather than every time the observation fetches. Its region
+    // is tracked automatically: the read-only row cursor reports the read region of the statement
+    // it runs, which a cached statement carries with it, so a refetch compiles nothing.
 
     private static func trackingAllValues<QueryValue: QueryRepresentable>(
       _ query: QueryFragment,
       as _: QueryValue.Type
     ) -> Self where Value == [QueryValue.QueryOutput] {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .query(sql)) { transaction in
+      return tracking { transaction in
         try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
           base: try transaction.rowCursor(sql, cached: true)
         )
@@ -535,7 +539,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: QueryValue.Type
     ) -> Self where Value == QueryValue.QueryOutput? {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .query(sql)) { transaction in
+      return tracking { transaction in
         try OrbitDatabaseQueryCursor<SQLiteRowCursor, QueryValue>(
           base: try transaction.rowCursor(sql, cached: true)
         )
@@ -549,7 +553,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == [(repeat (each QueryValue).QueryOutput)] {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .query(sql)) { transaction in
+      return tracking { transaction in
         try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
           try cursor.collectTuples((repeat each QueryValue).self)
         }
@@ -562,7 +566,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       as _: (repeat each QueryValue).Type
     ) -> Self where Value == (repeat (each QueryValue).QueryOutput)? {
       let sql = SQL(fragment: query)
-      return tracking(regionSource: .query(sql)) { transaction in
+      return tracking { transaction in
         try withOrbitCursor(try transaction.rowCursor(sql, cached: true)) { cursor in
           try cursor.firstTuple((repeat each QueryValue).self)
         }
@@ -570,9 +574,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     }
   #endif
 
-  private func mapReducer<Output: Sendable>(
+  private func mapPipeline<Output: Sendable>(
     _ derive:
-      @escaping @Sendable (OrbitValueObservationReducer<Value>) -> OrbitValueObservationReducer<
+      @escaping @Sendable (OrbitValueObservationPipeline<Value>) -> OrbitValueObservationPipeline<
         Output
       >
   ) -> OrbitValueObservation<Output> {
@@ -581,20 +585,35 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       regionSource: definition.regionSource,
       fetch: definition.fetch,
       refetchController: definition.refetchController,
-      makeReducer: { derive(definition.makeReducer()) }
+      makePipeline: { derive(definition.makePipeline()) }
     )
   }
 
-  private func mapReduction<Output: Sendable>(
-    _ makeTransform:
-      @escaping @Sendable () -> @Sendable (Value) throws -> OrbitValueObservationReduction<Output>
-  ) -> OrbitValueObservation<Output> {
-    mapReducer { upstream in
-      let transform = makeTransform()
-      return OrbitValueObservationReducer<Output>(
+  /// Applies a reducer with fresh state for each observation runtime.
+  ///
+  /// Subscribers sharing this observation and database share the same reducer. Another database,
+  /// or a new run after the last subscriber leaves, evaluates the reducer expression again.
+  /// The expression is deferred until a runtime is created and should construct independent
+  /// mutable state. It may also be evaluated for a candidate runtime discarded when subscriptions
+  /// start concurrently.
+  ///
+  /// Calls to a reducer are serialized and process accepted fetch results, so the reducer needs
+  /// no synchronization for its own state. It receives only values emitted by upstream operators.
+  /// Returning `nil` suppresses a value without replacing the value replayed to late subscribers;
+  /// `.some(nil)` emits `nil` when the output is optional. A thrown error ends the runtime and is
+  /// reported to every subscriber.
+  ///
+  /// - Parameter makeReducer: An expression that creates the reducer for a new runtime.
+  /// - Returns: An observation producing the reducer's outputs with the original fetch sources.
+  public func applying<Reducer: OrbitValueObservationReducer>(
+    _ makeReducer: @autoclosure @escaping @Sendable () -> Reducer
+  ) -> OrbitValueObservation<Reducer.Output> where Reducer.Input == Value {
+    mapPipeline { upstream in
+      let reducer = Lock(makeReducer())
+      return OrbitValueObservationPipeline<Reducer.Output>(
         reduce: { payload in
-          guard case .emit(let value) = try upstream.reduce(payload) else { return .skip }
-          return try transform(value)
+          guard let value = try upstream.reduce(payload) else { return nil }
+          return try reducer.withLock { try $0.reduce(value) }
         },
         transactionNeedsFetch: upstream.transactionNeedsFetch,
         events: upstream.events
@@ -609,7 +628,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let titles = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .map { reminders in reminders.map(\.title) }
   /// ```
   ///
@@ -618,7 +637,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func map<Output: Sendable>(
     _ transform: @escaping @Sendable (Value) throws -> Output
   ) -> OrbitValueObservation<Output> {
-    mapReduction { { .emit(try transform($0)) } }
+    compactMap { .some(try transform($0)) }
   }
 
   /// Produces only the values that satisfy `predicate`.
@@ -629,7 +648,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let nonEmpty = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .filter { !$0.isEmpty }
   /// ```
   ///
@@ -638,7 +657,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func filter(
     _ predicate: @escaping @Sendable (Value) throws -> Bool
   ) -> Self {
-    mapReduction { { try predicate($0) ? .emit($0) : .skip } }
+    compactMap { try predicate($0) ? .some($0) : nil }
   }
 
   /// Transforms each value and suppresses `nil` results.
@@ -647,7 +666,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let nextTitle = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.where { !$0.isCompleted }) }
+  ///   .tracking { try Reminder.where { !$0.isCompleted }.fetchAll($0) }
   ///   .compactMap { $0.first?.title }
   /// ```
   ///
@@ -656,7 +675,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func compactMap<Output: Sendable>(
     _ transform: @escaping @Sendable (Value) throws -> Output?
   ) -> OrbitValueObservation<Output> {
-    mapReduction { { try transform($0).map(OrbitValueObservationReduction.emit) ?? .skip } }
+    applying(OrbitValueObservationClosureReducer(transform: transform))
   }
 
   /// Suppresses a value when `predicate` considers it equal to the preceding emitted value.
@@ -665,7 +684,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let reminders = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .removeDuplicates { $0.map(\.id) == $1.map(\.id) }
   /// ```
   ///
@@ -674,16 +693,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   public func removeDuplicates(
     by predicate: @escaping @Sendable (Value, Value) -> Bool
   ) -> Self {
-    mapReduction {
-      let previous = Lock<Value?>(nil)
-      return { value in
-        previous.withLock { previous in
-          if let previousValue = previous, predicate(previousValue, value) { return .skip }
-          previous = value
-          return .emit(value)
-        }
-      }
-    }
+    applying(OrbitValueObservationDistinctReducer(predicate: predicate))
   }
 
   /// Skips fetching after committed transactions for which `predicate` returns `false`.
@@ -694,7 +704,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let localOnly = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .filterTransactions { $0.origin == .local }
   /// ```
   ///
@@ -714,7 +724,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let observation = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .refetching(.coalesced)
   /// ```
   public func refetching<Controller: OrbitValueObservationRefetchController>(
@@ -725,7 +735,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
       regionSource: definition.regionSource,
       fetch: definition.fetch,
       refetchController: controller,
-      makeReducer: definition.makeReducer
+      makePipeline: definition.makePipeline
     )
   }
 
@@ -739,7 +749,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// ```swift
   /// // Stop refetching once every reminder is done, until a local write says otherwise.
   /// let untilFinished = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .filterTransactions { commit, reminders in
   ///     commit.origin == .local || !(reminders?.allSatisfy(\.isCompleted) ?? false)
   ///   }
@@ -755,12 +765,12 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
         _ previousValue: Value?
       ) -> Bool
   ) -> Self {
-    mapReducer { upstream in
+    mapPipeline { upstream in
       let previous = Lock<Value?>(nil)
-      return OrbitValueObservationReducer(
+      return OrbitValueObservationPipeline(
         reduce: { payload in
           let reduction = try upstream.reduce(payload)
-          if case .emit(let value) = reduction { previous.withLock { $0 = value } }
+          if let value = reduction { previous.withLock { $0 = .some(value) } }
           return reduction
         },
         transactionNeedsFetch: { commit in
@@ -792,7 +802,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let traced = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .handleEvents(
   ///     willStart: { logger.debug("observing reminders") },
   ///     didReceiveValue: { count in logger.debug("\(count) reminders") },
@@ -816,11 +826,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     didFail: (@Sendable (any Error) -> Void)? = nil,
     didCancel: (@Sendable () -> Void)? = nil
   ) -> Self {
-    mapReducer { upstream in
-      OrbitValueObservationReducer(
+    mapPipeline { upstream in
+      OrbitValueObservationPipeline(
         reduce: { payload in
           let reduction = try upstream.reduce(payload)
-          if case .emit(let value) = reduction { didReceiveValue?(value) }
+          if let value = reduction { didReceiveValue?(value) }
           return reduction
         },
         transactionNeedsFetch: upstream.transactionNeedsFetch,
@@ -837,75 +847,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     }
   }
 
-  /// Starts this observation and delivers its changes through callbacks on Swift's cooperative
-  /// executor.
+  /// Starts this observation and delivers its changes through `scheduler`.
   ///
   /// The observation runs until the returned subscription is cancelled or released, so store it
-  /// for as long as you want the callbacks.
-  ///
-  /// ```swift
-  /// let subscription = try OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
-  ///   .subscribe(to: database) { error in
-  ///     logger.error("reminder observation failed: \(error)")
-  ///   } onChange: { change in
-  ///     logger.info("\(change.value) reminders")
-  ///   }
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - database: The database to observe.
-  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
-  ///     without an extra hop. Defaults to the caller's isolation.
-  ///   - onError: Receives the error that ends the observation.
-  ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
-  /// - Throws: Whatever registering a transaction observer on `database` throws.
-  public func subscribe<Database: OrbitObservableDatabase>(
-    to database: Database,
-    isolation: isolated (any Actor)? = #isolation,
-    onError: @escaping @Sendable (any Error) -> Void,
-    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
-  ) throws -> OrbitSubscription {
-    try subscribe(
-      to: database,
-      scheduling: OrbitAsyncValueObservationScheduler.async(),
-      isolation: isolation,
-      onError: onError,
-      onChange: onChange
-    )
-  }
-
-  /// Starts this observation and delivers every accepted fetch through callbacks on Swift's
-  /// cooperative executor.
-  ///
-  /// Unlike the `onChange` overload, `onUpdate` also runs when an operator suppresses a fetch's
-  /// output. Store the returned subscription for as long as updates should be delivered.
-  ///
-  /// - Parameters:
-  ///   - database: The database to observe.
-  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
-  ///     without an extra hop. Defaults to the caller's isolation.
-  ///   - onError: Receives the error that ends the observation.
-  ///   - onUpdate: Receives the outcome of each accepted fetch.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
-  /// - Throws: Whatever registering a transaction observer on `database` throws.
-  public func subscribe<Database: OrbitObservableDatabase>(
-    to database: Database,
-    isolation: isolated (any Actor)? = #isolation,
-    onError: @escaping @Sendable (any Error) -> Void,
-    onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
-  ) throws -> OrbitSubscription {
-    try subscribe(
-      to: database,
-      scheduling: OrbitAsyncValueObservationScheduler.async(),
-      isolation: isolation,
-      onError: onError,
-      onUpdate: onUpdate
-    )
-  }
-
-  /// Starts this observation and delivers its changes through `scheduler`.
+  /// for as long as you want the callbacks. Without a `scheduler`, callbacks run asynchronously on
+  /// Swift's cooperative executor, as with ``OrbitValueObservationScheduler/async(priority:)``.
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
   /// a gap between fetching and listening. A fetch error calls `onError` and ends the subscription.
@@ -914,7 +860,16 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let subscription = try OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
+  ///   .subscribe(to: database) { error in
+  ///     logger.error("reminder observation failed: \(error)")
+  ///   } onChange: { change in
+  ///     logger.info("\(change.value) reminders")
+  ///   }
+  ///
+  /// // `.immediate` has delivered the initial count by the time `subscribe` returns.
+  /// let immediate = try OrbitValueObservation
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .subscribe(to: database, scheduling: .immediate) { error in
   ///     logger.error("\(error)")
   ///   } onChange: { change in
@@ -924,8 +879,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// - Parameters:
   ///   - database: The database to observe.
-  ///   - scheduler: Decides where and when callbacks run.
-  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - scheduler: Decides where and when callbacks run. Defaults to delivering them
+  ///     asynchronously on Swift's cooperative executor.
+  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
+  ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
   /// - Returns: A subscription that ends the observation when cancelled or released.
@@ -935,31 +892,45 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     Scheduler: OrbitValueObservationScheduler
   >(
     to database: Database,
-    scheduling scheduler: Scheduler,
+    scheduling scheduler: Scheduler = OrbitAsyncValueObservationScheduler.async(),
     isolation: isolated (any Actor)? = #isolation,
     onError: @escaping @Sendable (any Error) -> Void,
     onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
-    try subscribeIncludingNoEmissions(
+    try subscribe(
       to: database,
       scheduling: scheduler,
       isolation: isolation,
-      onNoEmission: nil,
       onError: onError,
-      onChange: onChange
+      onUpdate: { update in
+        if case .emitted(let change) = update { onChange(change) }
+      }
     )
   }
 
   /// Starts this observation and delivers every accepted fetch through `scheduler`.
   ///
-  /// Unlike the `onChange` overload, `onUpdate` also receives ``OrbitValueObservationUpdate/noEmission(source:)``.
-  /// A scheduler that requests an immediate initial value makes this method perform a blocking
-  /// read, so `onUpdate` has run once by the time it returns.
+  /// Unlike the `onChange` overload, `onUpdate` also receives
+  /// ``OrbitValueObservationUpdate/noEmission(source:)`` when an operator suppresses a fetch's
+  /// output. Store the returned subscription for as long as updates should be delivered. Without a
+  /// `scheduler`, callbacks run asynchronously on Swift's cooperative executor. A scheduler that
+  /// requests an immediate initial value makes this method perform a blocking read, so `onUpdate`
+  /// has run once by the time it returns.
+  ///
+  /// ```swift
+  /// let subscription = try observation.subscribe(to: database) { error in
+  ///   logger.error("\(error)")
+  /// } onUpdate: { update in
+  ///   if case .noEmission(let source) = update { logger.debug("nothing new after \(source)") }
+  /// }
+  /// ```
   ///
   /// - Parameters:
   ///   - database: The database to observe.
-  ///   - scheduler: Decides where and when callbacks run.
-  ///   - isolation: The actor the caller is isolated to. Defaults to the caller's isolation.
+  ///   - scheduler: Decides where and when callbacks run. Defaults to delivering them
+  ///     asynchronously on Swift's cooperative executor.
+  ///   - isolation: The actor the caller is isolated to, used to decide whether a callback can run
+  ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onUpdate: Receives the outcome of each accepted fetch.
   /// - Returns: A subscription that ends the observation when cancelled or released.
@@ -969,39 +940,17 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     Scheduler: OrbitValueObservationScheduler
   >(
     to database: Database,
-    scheduling scheduler: Scheduler,
+    scheduling scheduler: Scheduler = OrbitAsyncValueObservationScheduler.async(),
     isolation: isolated (any Actor)? = #isolation,
     onError: @escaping @Sendable (any Error) -> Void,
     onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
-  ) throws -> OrbitSubscription {
-    try subscribeIncludingNoEmissions(
-      to: database,
-      scheduling: scheduler,
-      isolation: isolation,
-      onNoEmission: { onUpdate(.noEmission(source: $0)) },
-      onError: onError,
-      onChange: { onUpdate(.emitted($0)) }
-    )
-  }
-
-  private func subscribeIncludingNoEmissions<
-    Database: OrbitObservableDatabase,
-    Scheduler: OrbitValueObservationScheduler
-  >(
-    to database: Database,
-    scheduling scheduler: Scheduler,
-    isolation: isolated (any Actor)?,
-    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
-    onError: @escaping @Sendable (any Error) -> Void,
-    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
   ) throws -> OrbitSubscription {
     let runtime = try definition.runtime(for: database)
     let subscription = runtime.addSubscriber(
       scheduling: scheduler,
       isolation: isolation,
-      onNoEmission: onNoEmission,
       onError: onError,
-      onChange: onChange
+      onUpdate: onUpdate
     )
     if scheduler.immediateInitialValue(from: isolation) {
       runtime.fetchInitialValueImmediatelyIfNeeded(isolation: isolation)
@@ -1016,6 +965,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// With ``OrbitValueObservationScheduler/mainActor``, the initial value is delivered before this
   /// method returns, which is what lets a view start with real data rather than a placeholder.
   ///
+  /// Mark the callbacks `@MainActor` to call this overload. Unmarked closures are not inferred to
+  /// be main-actor isolated, so they select
+  /// ``subscribe(to:scheduling:isolation:onError:onChange:)`` instead, which runs them on the main
+  /// actor all the same but cannot let them touch main-actor state.
+  ///
   /// ```swift
   /// @MainActor final class RemindersModel {
   ///   private(set) var count = 0
@@ -1023,9 +977,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   ///   func start(observing database: OrbitIPCDatabase) throws {
   ///     subscription = try OrbitValueObservation
-  ///       .tracking { try $0.fetchCount(Reminder.all) }
-  ///       .subscribe(to: database, scheduling: .mainActor) { _ in
-  ///       } onChange: { [self] change in count = change.value }
+  ///       .tracking { try Reminder.all.fetchCount($0) }
+  ///       .subscribe(to: database, scheduling: .mainActor) { @MainActor _ in
+  ///       } onChange: { @MainActor [self] change in count = change.value }
   ///   }
   /// }
   /// ```
@@ -1188,7 +1142,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// than the sequence is consumed; by default every one of them is kept.
   ///
   /// ```swift
-  /// let reminders = OrbitValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+  /// let reminders = OrbitValueObservation.tracking { try Reminder.all.fetchAll($0) }
   /// for try await reminders in reminders.values(in: database, bufferingPolicy: .bufferingNewest(1)) {
   ///   render(reminders)
   /// }
@@ -1218,7 +1172,7 @@ extension OrbitValueObservation where Value: Equatable {
   ///
   /// ```swift
   /// let count = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .removeDuplicates()
   /// ```
   ///
@@ -1265,10 +1219,11 @@ final class OrbitOneShotSignal: Sendable {
 }
 
 private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
+  let identity = OrbitValueObservationIdentity()
   let regionSource: OrbitValueObservationRegionSource
   let fetch: OrbitValueObservationFetch
   let refetchController: any OrbitValueObservationRefetchController
-  let makeReducer: @Sendable () -> OrbitValueObservationReducer<Value>
+  let makePipeline: @Sendable () -> OrbitValueObservationPipeline<Value>
 
   private struct WeakRuntime: Sendable {
     let value: @Sendable () -> OrbitValueObservationRuntime<Value>?
@@ -1284,12 +1239,12 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
     refetchController: any OrbitValueObservationRefetchController,
-    makeReducer: @escaping @Sendable () -> OrbitValueObservationReducer<Value>
+    makePipeline: @escaping @Sendable () -> OrbitValueObservationPipeline<Value>
   ) {
     self.regionSource = regionSource
     self.fetch = fetch
     self.refetchController = refetchController
-    self.makeReducer = makeReducer
+    self.makePipeline = makePipeline
   }
 
   func runtime<Database: OrbitObservableDatabase>(
@@ -1303,7 +1258,7 @@ private final class OrbitValueObservationDefinition<Value: Sendable>: Sendable {
       regionSource: regionSource,
       fetch: fetch,
       refetchController: refetchController,
-      reducer: makeReducer()
+      pipeline: makePipeline()
     )
     try candidate.install(on: database)
 
@@ -1368,7 +1323,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     var refetchReasons: Set<OrbitValueObservationRefetchReason> = []
     var refetchCommits: [OrbitDatabaseCommit] = []
     var affectedRegion: OrbitDatabaseRegion?
-    var activeWriterBarriers: [SQLitePoolWriterBarrier] = []
+    var activeWriterBarriers: [any OrbitDatabaseWriterBarrier] = []
     var subscribers = OrbitValueObservationSubscriberRegistry<Value>()
     var deliveries = OrbitValueObservationDeliveryQueue<Value>()
 
@@ -1393,9 +1348,10 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   private let fetch: OrbitValueObservationRuntimeFetch
   private let read: @Sendable () async -> Result<OrbitValueObservationFetchOutput, any Error>
   private let readBlocking: @Sendable () -> Result<OrbitValueObservationFetchOutput, any Error>
+  private let captureActiveWriters: @Sendable () -> (any OrbitDatabaseWriterBarrier)?
   private let refetchController: any OrbitValueObservationRefetchController
-  private let reducer: OrbitValueObservationReducer<Value>
-  private var events: OrbitValueObservationEvents { reducer.events }
+  private let pipeline: OrbitValueObservationPipeline<Value>
+  private var events: OrbitValueObservationEvents { pipeline.events }
   private let state: Lock<State>
   private let transactionSubscription = Lock<OrbitRegionSubscription?>(nil)
   // Held across a region update so that updates reach the database in the order they are decided
@@ -1408,14 +1364,15 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     regionSource: OrbitValueObservationRegionSource,
     fetch: @escaping OrbitValueObservationFetch,
     refetchController: any OrbitValueObservationRefetchController,
-    reducer: OrbitValueObservationReducer<Value>
+    pipeline: OrbitValueObservationPipeline<Value>
   ) {
     let externalTracking = ExternalTracking()
     let firstFetchRegion = OrbitValueObservationFirstFetchRegion()
-    self.reducer = reducer
+    self.pipeline = pipeline
     self.refetchController = refetchController
     self.state = Lock(State(observedRegion: regionSource.initialRegion))
     self.externalTracking = externalTracking
+    self.captureActiveWriters = { database.captureActiveWriters() }
     let resolveAndFetch: OrbitValueObservationRuntimeFetch = { transaction in
       let capture = try externalTracking.capture {
         try regionSource.fetch(fetch, in: transaction, firstFetchRegion: firstFetchRegion)
@@ -1467,15 +1424,13 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
   func addSubscriber<Scheduler: OrbitValueObservationScheduler>(
     scheduling scheduler: Scheduler,
     isolation: isolated (any Actor)?,
-    onNoEmission: (@Sendable (OrbitValueObservationSource) -> Void)?,
     onError: @escaping @Sendable (any Error) -> Void,
-    onChange: @escaping @Sendable (OrbitValueObservationChange<Value>) -> Void
+    onUpdate: @escaping @Sendable (OrbitValueObservationUpdate<Value>) -> Void
   ) -> OrbitSubscription {
     let subscriber = OrbitValueObservationSubscriber(
       scheduler: scheduler,
-      onNoEmission: onNoEmission,
       onError: onError,
-      onChange: onChange
+      onUpdate: onUpdate
     )
     let registration = state.withLock { $0.subscribers.add(subscriber) }
     switch registration {
@@ -1557,7 +1512,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     }
     guard let affectedRegion else { return }
     let commit = OrbitDatabaseCommit(origin: .local, region: affectedRegion)
-    guard reducer.transactionNeedsFetch(commit) else { return }
+    guard pipeline.transactionNeedsFetch(commit) else { return }
     // Another process can commit as soon as this transaction does, so what this fetch reads has
     // to be covered from here on, as for a fetch that reads a snapshot of its own.
     guard
@@ -1600,7 +1555,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       source: .transaction(commit.origin),
       reason: commit.origin == .local ? .databaseChange : .externalProcessChange,
       affectedRegion: affectedRegion,
-      activeWriterBarrier: commit.activeWriterBarrier
+      activeWriterBarrier: commit.origin == .local ? captureActiveWriters() : nil
     )
   }
 
@@ -1627,7 +1582,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.transactionRegion = nil
       return (state.observedRegion ?? .fullDatabase).overlaps(region) ? region : nil
     }
-    guard let affectedRegion, reducer.transactionNeedsFetch(commit) else { return nil }
+    guard let affectedRegion, pipeline.transactionNeedsFetch(commit) else { return nil }
     return affectedRegion
   }
 
@@ -1666,7 +1621,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
     source: OrbitValueObservationSource,
     reason: OrbitValueObservationRefetchReason,
     affectedRegion: OrbitDatabaseRegion?,
-    activeWriterBarrier: SQLitePoolWriterBarrier?
+    activeWriterBarrier: (any OrbitDatabaseWriterBarrier)?
   ) {
     let action = state.withLock {
       state -> (
@@ -1908,7 +1863,7 @@ private final class OrbitValueObservationRuntime<Value: Sendable>: OrbitDatabase
       state.observedRegion = output.region
       state.owesCoveringFetch = !isCovered
       do {
-        guard case .emit(let value) = try reducer.reduce(output.payload) else {
+        guard let value = try pipeline.reduce(output.payload) else {
           let subscribers = state.subscribers.publishNoEmission(source: source)
           let publication = OrbitValueObservationPublication<Value>(
             event: .noEmission(source: source),

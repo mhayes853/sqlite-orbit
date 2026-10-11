@@ -75,9 +75,8 @@
         let stored = try await database.write { transaction in
           try transaction.execute("CREATE TABLE t (source TEXT, date, id)")
           try transaction.execute("INSERT INTO t VALUES ('raw', \(date), \(uuid))")
-          try transaction.execute(
-            #sql("INSERT INTO t VALUES ('structured', \(date), \(uuid))", as: Void.self)
-          )
+          try #sql("INSERT INTO t VALUES ('structured', \(date), \(uuid))", as: Void.self)
+            .execute(transaction)
           return try transaction.fetchAll("SELECT hex(date), hex(id) FROM t ORDER BY source") {
             ($0[0].textValue ?? "", $0[1].textValue ?? "")
           }
@@ -93,9 +92,13 @@
         let sql = SQL(fragment: fragment)
         #expect(sql.text == "VALUES (?, ?, ?, ?)")
         #expect(sql.bindings == [.integer(1), .real(1.5), .text("a"), .blob([1])])
+        let parts = try sql.validatedParts()
+        #expect(parts.contains(.binding(.text("a"))))
+        #expect(SQL(parts: parts) == sql)
 
         // An unsigned integer past `Int64.max` cannot be stored, which binding reports.
         let overflowing = SQL(fragment: "SELECT \(QueryBinding.uint(.max))")
+        #expect(throws: (any Error).self) { try overflowing.validatedParts() }
         let database = try inMemoryDatabase()
         await #expect(throws: (any Error).self) {
           try await database.read { transaction in
@@ -111,7 +114,7 @@
           try transaction.execute(
             "CREATE TABLE rawSQLItems (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
           )
-          try transaction.execute(RawSQLItem.insert { RawSQLItem.Draft(title: "Milk") })
+          try RawSQLItem.insert { RawSQLItem.Draft(title: "Milk") }.execute(transaction)
           let isMilk = RawSQLItem.columns.title.eq("Milk")
           return try transaction.fetchAll(
             "SELECT title FROM rawSQLItems WHERE \(isMilk) AND id = \(1)"
