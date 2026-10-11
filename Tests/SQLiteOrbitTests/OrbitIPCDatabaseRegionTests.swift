@@ -40,7 +40,7 @@
         let database = OrbitIPCDatabase(writer: writer, transport: transport)
         let sibling = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: database.id,
+          identifier: database.id,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -88,12 +88,12 @@
         let peerTransport = InMemoryIPCTransport(network: network)
         let observingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: receivingTransport
         )
         let siblingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -327,7 +327,7 @@
           let (observingTransport, writingTransport) = try transport.makePair(directory: directory)
           let observing = OrbitIPCDatabase(
             writer: try SQLiteQueue(path: path),
-            id: identifier,
+            identifier: identifier,
             transport: observingTransport
           )
           try await observing.write { transaction in
@@ -341,7 +341,7 @@
           }
           let writing = OrbitIPCDatabase(
             writer: try SQLiteQueue(path: path),
-            id: identifier,
+            identifier: identifier,
             transport: writingTransport
           )
           try await body(

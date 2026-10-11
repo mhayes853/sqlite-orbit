@@ -48,7 +48,7 @@
       let path = directory.appending(path: "a.sock", directoryHint: .isDirectory)
       try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
 
-      #expect(throws: UnixSystemError.self) {
+      #expect(throws: UnixDatagramIPCTransport.SystemError.self) {
         _ = try Self.bind(path.path)
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
@@ -128,11 +128,15 @@
 
       let file = directory.appending(path: "file").path
       #expect(FileManager.default.createFile(atPath: file, contents: nil))
-      #expect(throws: UnixSystemError(operation: "mkdir", code: UnixPlatform.ErrorCode.fileExists))
-      {
+      #expect(
+        throws: UnixDatagramIPCTransport.SystemError(
+          operation: "mkdir",
+          code: UnixPlatform.ErrorCode.fileExists
+        )
+      ) {
         try FileSystem.createDirectory(atPath: FilePath(file))
       }
-      #expect(throws: UnixSystemError.self) {
+      #expect(throws: UnixDatagramIPCTransport.SystemError.self) {
         try FileSystem.createDirectory(atPath: FilePath(file + "/below"))
       }
     }
@@ -159,7 +163,10 @@
           == (try FileManager.default.contentsOfDirectory(atPath: directory.path)).sorted()
       )
       #expect(
-        throws: UnixSystemError(operation: "opendir", code: UnixPlatform.ErrorCode.noSuchFile)
+        throws: UnixDatagramIPCTransport.SystemError(
+          operation: "opendir",
+          code: UnixPlatform.ErrorCode.noSuchFile
+        )
       ) {
         try FileSystem.contentsOfDirectory(
           atPath: FilePath(directory.appending(path: "missing").path)
@@ -171,7 +178,10 @@
     func writesAndReadsAFileWhole() throws {
       let path = directory.appending(path: "file").path
       #expect(
-        throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
+        throws: UnixDatagramIPCTransport.SystemError(
+          operation: "open",
+          code: UnixPlatform.ErrorCode.noSuchFile
+        )
       ) {
         try FileSystem.contentsOfFile(atPath: FilePath(path))
       }
@@ -188,7 +198,10 @@
       #expect(try FileSystem.contentsOfFile(atPath: FilePath(path)) == [])
 
       #expect(
-        throws: UnixSystemError(operation: "open", code: UnixPlatform.ErrorCode.noSuchFile)
+        throws: UnixDatagramIPCTransport.SystemError(
+          operation: "open",
+          code: UnixPlatform.ErrorCode.noSuchFile
+        )
       ) {
         try FileSystem.writeFile(
           [1],

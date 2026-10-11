@@ -238,7 +238,7 @@
         let identifier = OrbitDatabaseIdentifier(rawValue: "external-region")
         let database = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: receivingTransport
         )
         let observer = TransactionEventRecorder()
@@ -258,12 +258,12 @@
         let identifier = OrbitDatabaseIdentifier.unique()
         let database = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: RecordingDatabaseIPCTransport(rejectsSubscriptions: true)
         )
         let sibling = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -286,12 +286,12 @@
         let identifier = OrbitDatabaseIdentifier.unique()
         let writingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport()
         )
         let observingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -401,7 +401,7 @@
         let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-peer")
         let database = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport(network: network)
         )
         try await createAnnouncementTables(in: database)
@@ -444,7 +444,7 @@
       func recorderKeepsCommittedRegionsApartFromAllProvisionalChanges() {
         let context = SQLiteConnectionEvents()
         let recorder = OrbitDatabaseRegionRecorder()
-        let observers = OrbitDatabaseTransactionObservers()
+        let observers = OrbitCompositeDatabaseTransactionObserver()
         let subscription = observers.subscribe(recorder)
         let committed = OrbitDatabaseRegion(table: "committed")
         let rolledBack = OrbitDatabaseRegion(table: "rolled_back")
@@ -472,7 +472,7 @@
       func recorderMissesTheEventsOfTransactionsEndingAfterItsScope() {
         let context = SQLiteConnectionEvents()
         let recorder = OrbitDatabaseRegionRecorder()
-        let observers = OrbitDatabaseTransactionObservers()
+        let observers = OrbitCompositeDatabaseTransactionObserver()
         let subscription = observers.subscribe(recorder)
         let region = OrbitDatabaseRegion(table: "items")
 
@@ -496,7 +496,7 @@
       let transport = RecordingDatabaseIPCTransport(failure: failure, delay: delay)
       let database = OrbitIPCDatabase(
         writer: try SQLiteQueue(path: ":memory:"),
-        id: id,
+        identifier: id,
         transport: transport,
         delegate: delegate
       )

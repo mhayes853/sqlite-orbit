@@ -43,7 +43,6 @@
       // No file names it, so a second driver opens a different, empty database of its own.
       #expect(OrbitDatabasePath.temporary.fileURL == nil)
       let other = try SQLiteQueue(path: .temporary)
-      #expect(other.defaultIdentifier != driver.defaultIdentifier)
       await #expect(throws: SQLiteError.self) {
         try await other.read { try $0.fetchCount(Item.all) }
       }

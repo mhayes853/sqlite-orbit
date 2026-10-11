@@ -1,30 +1,54 @@
 extension SQLiteReadConnection {
-  /// Uses a busy timeout for `body`, then restores the previous timeout and configured handler.
+  /// Uses a busy policy for `body`, then restores the policy in effect before it.
+  ///
+  /// ```swift
+  /// try await database.readWithoutTransaction { connection in
+  ///   try connection.withBusyPolicy(.waitIndefinitely) {
+  ///     try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  ///   }
+  /// }
+  /// ```
   ///
   /// Scopes may nest. Restoration is attempted even when `body` throws; its error takes precedence
   /// over a restoration error. After a successful body, a restoration error is thrown. Connection
   /// access cleanup retries restoring the configured settings if necessary. Handlers installed
   /// through raw SQLite APIs cannot be restored.
-  public borrowing func withBusyTimeout<Result: ~Copyable>(
-    _ timeout: SQLiteBusyTimeout,
+  ///
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, a ``SQLiteError`` when the policy cannot be applied or restored, or
+  ///   whatever `body` throws.
+  public borrowing func withBusyPolicy<Result: ~Copyable>(
+    _ policy: SQLiteBusyPolicy,
     perform body: () throws -> Result
   ) throws -> Result {
-    try handle.pointee.withBusyTimeout(timeout, perform: body)
+    try handle.pointee.withBusyPolicy(policy, perform: body)
   }
 }
 
 extension SQLiteWriteConnection {
-  /// Uses a busy timeout for `body`, then restores the previous timeout and configured handler.
+  /// Uses a busy policy for `body`, then restores the policy in effect before it.
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   try connection.withBusyPolicy(.waitIndefinitely) {
+  ///     try connection.executeScript("VACUUM")
+  ///   }
+  /// }
+  /// ```
   ///
   /// Scopes may nest. Restoration is attempted even when `body` throws; its error takes precedence
   /// over a restoration error. After a successful body, a restoration error is thrown. Connection
   /// access cleanup retries restoring the configured settings if necessary. Handlers installed
   /// through raw SQLite APIs cannot be restored.
-  public borrowing func withBusyTimeout<Result: ~Copyable>(
-    _ timeout: SQLiteBusyTimeout,
+  ///
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, a ``SQLiteError`` when the policy cannot be applied or restored, or
+  ///   whatever `body` throws.
+  public borrowing func withBusyPolicy<Result: ~Copyable>(
+    _ policy: SQLiteBusyPolicy,
     perform body: () throws -> Result
   ) throws -> Result {
-    try handle.pointee.withBusyTimeout(timeout, perform: body)
+    try handle.pointee.withBusyPolicy(policy, perform: body)
   }
 
   /// Uses foreign-key enforcement for `body`, then restores its previous setting.
@@ -52,15 +76,15 @@ extension SQLiteWriteConnection {
 }
 
 extension SQLiteConnection {
-  fileprivate borrowing func withBusyTimeout<Result: ~Copyable>(
-    _ timeout: SQLiteBusyTimeout,
+  fileprivate borrowing func withBusyPolicy<Result: ~Copyable>(
+    _ policy: SQLiteBusyPolicy,
     perform body: () throws -> Result
   ) throws -> Result {
-    let previous = settings.pointee.busyTimeout
-    let handlerIsReplaced = settings.pointee.isBusyHandlerReplaced
-    try settings.pointee.setBusyTimeout(timeout)
+    let previous = settings.pointee.busyPolicy
+    let isConfigured = settings.pointee.isBusyPolicyConfigured
+    try settings.pointee.setBusyPolicy(policy)
     return try withRestoredSQLiteSetting {
-      try settings.pointee.restoreBusyTimeout(previous, handlerIsReplaced: handlerIsReplaced)
+      try settings.pointee.restoreBusyPolicy(previous, isConfigured: isConfigured)
     } perform: {
       try body()
     }

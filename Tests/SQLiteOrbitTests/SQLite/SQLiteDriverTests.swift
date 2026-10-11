@@ -88,7 +88,7 @@
         try await withTestDatabaseFile { file in
           do {
             let database = try file.open(driver)
-            #expect(database.defaultIdentifier == .forDatabase(path: file.path))
+            #expect(database.path == file.path)
             try await database.execute(sql: itemsSchema)
             try await database.write { transaction in
               try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
@@ -96,7 +96,7 @@
           }
 
           let reopened = try file.open(driver)
-          #expect(reopened.defaultIdentifier == .forDatabase(path: file.path))
+          #expect(reopened.path == file.path)
           let items = try await reopened.read { try $0.fetchAll(Item.all) }
           #expect(items == [Item(id: 1, title: "persisted")])
         }

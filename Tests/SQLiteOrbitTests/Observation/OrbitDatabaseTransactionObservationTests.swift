@@ -366,11 +366,11 @@
             INSERT INTO items VALUES (1);
             """
         )
-        let databaseObservers = OrbitDatabaseTransactionObservers()
+        let databaseObservers = OrbitCompositeDatabaseTransactionObserver()
         let databaseObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
         let subscription = databaseObservers.subscribe(databaseObserver)
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
-        let scopedObservers = OrbitDatabaseTransactionObservers()
+        let scopedObservers = OrbitCompositeDatabaseTransactionObserver()
         let scopedSubscription = scopedObservers.subscribe(scopedObserver)
         let region = OrbitDatabaseRegion(table: "items")
 
@@ -414,11 +414,11 @@
 
       @Test
       func contextCommitsPendingChangesOnlyWhenThereAreSome() {
-        let databaseObservers = OrbitDatabaseTransactionObservers()
+        let databaseObservers = OrbitCompositeDatabaseTransactionObserver()
         let databaseObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
         let subscription = databaseObservers.subscribe(databaseObserver)
         let scopedObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
-        let scopedObservers = OrbitDatabaseTransactionObservers()
+        let scopedObservers = OrbitCompositeDatabaseTransactionObserver()
         let scopedSubscription = scopedObservers.subscribe(scopedObserver)
         let context = SQLiteConnectionEvents()
         let region = OrbitDatabaseRegion(table: "items")

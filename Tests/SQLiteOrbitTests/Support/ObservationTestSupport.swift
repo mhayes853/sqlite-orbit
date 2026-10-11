@@ -88,7 +88,7 @@
   final class AnnouncingTestDatabase: OrbitMultiprocessDatabaseWriter, OrbitObservableDatabase,
     @unchecked Sendable
   {
-    let defaultIdentifier: OrbitDatabaseIdentifier
+    let path: OrbitDatabasePath
 
     private let base: SQLiteQueue
     private let lock = NSLock()
@@ -105,7 +105,7 @@
       onUpdateRegion: (@Sendable (OrbitDatabaseRegion) throws -> Void)? = nil
     ) {
       self.base = base
-      self.defaultIdentifier = base.defaultIdentifier
+      self.path = base.path
       self.onUpdateRegion = onUpdateRegion
     }
 

@@ -464,13 +464,13 @@
           let identifier = OrbitDatabaseIdentifier(rawValue: "same-process-observation")
           let writingDatabase = OrbitIPCDatabase(
             writer: try file.queue(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport()
           )
           try await writingDatabase.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
           let observingDatabase = OrbitIPCDatabase(
             writer: try file.queue(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport()
           )
           let fetchCount = TestCounter()
@@ -1205,14 +1205,14 @@
           let identifier = OrbitDatabaseIdentifier(rawValue: "view-redefined-by-sibling-handle")
           let observingDatabase = OrbitIPCDatabase(
             writer: try file.pool(readerCount: 1),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport()
           )
           try await observingDatabase.execute(sql: currentItemsViewSchema)
           // The schema changes through a connection outside the pool, as another process's would.
           let writingDatabase = OrbitIPCDatabase(
             writer: try file.queue(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport()
           )
 
@@ -1670,7 +1670,7 @@
       let identifier = OrbitDatabaseIdentifier(rawValue: name)
       let database = OrbitIPCDatabase(
         writer: try await itemsDatabase(),
-        id: identifier,
+        identifier: identifier,
         transport: InMemoryIPCTransport(network: network)
       )
       return (database, InMemoryIPCTransport(network: network), identifier)

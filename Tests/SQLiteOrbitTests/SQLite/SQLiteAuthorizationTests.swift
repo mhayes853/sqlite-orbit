@@ -169,15 +169,28 @@
       }
 
       @Test(arguments: ["journal_mode", "query_only"])
-      func ignoredPoolSetupFailsToOpen(pragma: String) throws {
+      func aPoolsOwnSetupIsExemptFromTheConfigurationsAuthorization(pragma: String) async throws {
         var configuration = SQLiteConfiguration.default
         configuration.authorization = { event in
-          if case .pragma(name: pragma, value: _) = event.action { return .ignore }
+          if case .pragma(name: pragma, value: .some) = event.action { return .deny }
           return .allow
         }
-        try withTestDatabaseFile { file in
-          let error = #expect(throws: SQLiteError.self) {
-            try file.open(.pool, configuration: configuration, readerCount: 1)
+        try await withTestDatabaseFile { file in
+          let pool = try SQLitePool(path: file.path, configuration: configuration, readerCount: 1)
+          let (mode, isQueryOnly) = try await pool.readWithoutTransaction { connection in
+            (
+              try connection.fetchOne("SELECT * FROM pragma_journal_mode") { $0[0].textValue },
+              try connection.fetchOne("PRAGMA query_only") { $0[0].integerValue }
+            )
+          }
+          #expect(mode == "wal")
+          #expect(isQueryOnly == 1)
+
+          // The application's own pragma is still subject to its policy.
+          let error = await #expect(throws: SQLiteError.self) {
+            try await pool.writeWithoutTransaction { connection in
+              try connection.execute(SQL(text: "PRAGMA \(pragma) = 0"))
+            }
           }
           #expect(error?.primaryCode == .auth)
         }

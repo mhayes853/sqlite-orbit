@@ -1214,12 +1214,12 @@
 
           let reader = OrbitIPCDatabase(
             writer: try file.pool(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport(network: network)
           )
           let writer = OrbitIPCDatabase(
             writer: try file.pool(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport(network: network)
           )
           try await writer.write { transaction in

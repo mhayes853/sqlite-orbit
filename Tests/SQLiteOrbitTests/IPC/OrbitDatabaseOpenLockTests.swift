@@ -25,7 +25,7 @@
       // Waits as long as it takes, not the default five seconds, which a loaded machine can spend
       // before the holder lets go.
       var patient = SQLiteConfiguration.default
-      patient.busyTimeout = .maximum
+      patient.busyPolicy = .waitIndefinitely
       Thread.detachNewThread { [patient] in
         try? OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: databaseIdentifier,
@@ -65,7 +65,7 @@
     let held = try HeldOpenLock()
     defer { held.release() }
     var configuration = SQLiteConfiguration.default
-    configuration.busyTimeout = .limit(busyTimeout)
+    configuration.busyPolicy = .timeout(busyTimeout)
 
     let (error, elapsed) = try await held.take(configuration: configuration)
 
@@ -74,14 +74,12 @@
   }
 
   @Test
-  func openLockWaitsByTheBusyHandlerRatherThanTheTimeout() async throws {
+  func openLockWaitsByTheBusyHandler() async throws {
     let held = try HeldOpenLock()
     defer { held.release() }
     let attempts = TestRecorder<Int>()
     var configuration = SQLiteConfiguration.default
-    // Would give up at once, were the handler not asked instead.
-    configuration.busyTimeout = .limit(.zero)
-    configuration.busyHandler = { attempt in
+    configuration.busyPolicy = .handler { attempt in
       attempts.append(attempt)
       Thread.sleep(forTimeInterval: 0.005)
       return attempt < 3
@@ -155,17 +153,17 @@
     }
   }
 
-  /// What becomes of a pool opening a database while another process that is opening it, and so
-  /// holds its open lock, freezes or dies.
+  /// What becomes of an ``OrbitIPCDatabase`` opening a database while another process that is
+  /// opening it, and so holds its open lock, freezes or dies.
   ///
-  /// The pool waits for it only as long as its busy timeout or busy handler says, as SQLite waits
-  /// for its own locks. Every open runs with a deadline, so a change that makes it wait for good
+  /// The database waits for it only as long as its busy policy says, as SQLite waits for its own
+  /// locks. Every open runs with a deadline, so a change that makes it wait for good
   /// fails these tests rather than hanging them, and the helper is killed as each test ends,
   /// stopped or not.
   @Suite(.serialized)
   struct OrbitDatabaseOpenLockProcessTests {
     @Test
-    func aPoolGivesUpWithBusyOnAFrozenOpenerOnceItsBusyTimeoutRunsOut() async throws {
+    func anIPCDatabaseGivesUpWithBusyOnAFrozenOpenerOnceItsBusyTimeoutRunsOut() async throws {
       let peer = try OpenLockPeer("frozen")
       defer { peer.cleanup() }
       let holder = try peer.spawnHolder()
@@ -181,7 +179,7 @@
     }
 
     @Test(arguments: [OpenLockHolderFate.resumed, .killed])
-    func aPoolOpensOnceAFrozenOpenerIsResumedOrKilledWithinItsBusyTimeout(
+    func anIPCDatabaseOpensOnceAFrozenOpenerIsResumedOrKilledWithinItsBusyTimeout(
       _ fate: OpenLockHolderFate
     ) async throws {
       let peer = try OpenLockPeer("thawed")
@@ -215,7 +213,7 @@
     }
 
     @Test
-    func aPoolOpensAtOnceAfterAnOpenerIsKilledAndRemovesTheLockFileItLeft() async throws {
+    func anIPCDatabaseOpensAtOnceAfterAnOpenerIsKilledAndRemovesTheLockFileItLeft() async throws {
       let peer = try OpenLockPeer("killed")
       defer { peer.cleanup() }
       let holder = try peer.spawnHolder()
@@ -233,7 +231,7 @@
     }
 
     @Test
-    func aPoolGivesUpWithBusyAtOnceWhenItsBusyHandlerDoes() async throws {
+    func anIPCDatabaseGivesUpWithBusyAtOnceWhenItsBusyHandlerDoes() async throws {
       let peer = try OpenLockPeer("handler")
       defer { peer.cleanup() }
       let holder = try peer.spawnHolder()
@@ -241,9 +239,7 @@
       peer.suspend(holder)
       let attempts = TestRecorder<Int>()
       var configuration = SQLiteConfiguration.default
-      // The handler is asked instead of waiting this out.
-      configuration.busyTimeout = .maximum
-      configuration.busyHandler = { attempt in
+      configuration.busyPolicy = .handler { attempt in
         attempts.append(attempt)
         return false
       }
@@ -284,7 +280,7 @@
     }
   }
 
-  /// A database, the coordination directory its pools open it through, and the one helper
+  /// A database, the coordination directory it is opened through, and the one helper
   /// process a test runs holding its open lock.
   private final class OpenLockPeer: ProcessTestHarness {
     static let helper = "openLockProcessPeer"
@@ -307,7 +303,7 @@
     }
   }
 
-  /// A database and the coordination directory its pools open it through.
+  /// A database and the coordination directory it is opened through.
   private struct OpenLockDatabase: Sendable {
     let path: String
     let directory: URL
@@ -318,30 +314,30 @@
       return self.directory.appending(path: "open-locks/\(identifier.coordinationKey).lock")
     }
 
-    /// Opens a pool on the database with `busyTimeout`, as ``open(configuration:deadline:onStart:)``
-    /// does.
+    /// Opens the database with a busy timeout of `busyTimeout`, as
+    /// ``open(configuration:deadline:onStart:)`` does.
     func open(
       busyTimeout: Duration,
       deadline: Duration = .seconds(5),
       onStart: @escaping @Sendable () -> Void = {}
     ) async throws -> (error: SQLiteError?, elapsed: Duration) {
       var configuration = SQLiteConfiguration.default
-      configuration.busyTimeout = .limit(busyTimeout)
+      configuration.busyPolicy = .timeout(busyTimeout)
       return try await self.open(configuration: configuration, deadline: deadline, onStart: onStart)
     }
 
-    /// Opens a pool on the database with `configuration`, and waits at most `deadline` for it, as
-    /// ``timeSQLiteError(deadline:onStart:_:)`` does.
+    /// Opens the database through an ``OrbitIPCDatabase`` with `configuration`, and waits at
+    /// most `deadline` for it, as ``timeSQLiteError(deadline:onStart:_:)`` does.
     func open(
       configuration: SQLiteConfiguration,
       deadline: Duration = .seconds(5),
       onStart: @escaping @Sendable () -> Void = {}
     ) async throws -> (error: SQLiteError?, elapsed: Duration) {
       try await timeSQLiteError(deadline: deadline, onStart: onStart) {
-        _ = try SQLitePool(
+        _ = try OrbitIPCDatabase(
           path: OrbitDatabasePath(self.path),
           configuration: configuration,
-          coordinationDirectoryPath: self.directory.path
+          coordination: UnixDatagramIPCTransport.Configuration(directoryPath: self.directory.path)
         )
       }
     }

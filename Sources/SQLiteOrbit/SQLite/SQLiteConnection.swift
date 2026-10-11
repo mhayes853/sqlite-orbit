@@ -67,39 +67,38 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change to ``busyTimeout``.
+  /// change to ``busyPolicy``.
   public var configuration: SQLiteConfiguration {
     base.configuration
   }
 
-  /// How long this connection waits for a lock another connection or process holds before
-  /// reporting `SQLITE_BUSY`.
+  /// How this connection waits for a lock another connection or process holds before reporting
+  /// `SQLITE_BUSY`.
   ///
-  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
-  /// access that lent this connection ends, when the configured timeout is put back.
+  /// It starts at the configuration's ``SQLiteConfiguration/busyPolicy``. A change lasts until the
+  /// access that lent this connection ends, when the configured policy is put back.
   ///
   /// ```swift
   /// try await database.readWithoutTransaction { connection in
-  ///   try connection.setBusyTimeout(.limit(.seconds(30)))
+  ///   try connection.setBusyPolicy(.timeout(.seconds(30)))
   ///   return try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
   /// }
   /// ```
   ///
-  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
-  /// handler and which therefore replaces whatever handler the connection had. A
-  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
-  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteSetup`` installed itself is not known here and is not put back.
-  public var busyTimeout: SQLiteBusyTimeout {
-    handle.pointee.settings.pointee.busyTimeout
+  /// SQLite keeps one busy handler per connection and implements its busy timeout as one, so
+  /// setting a policy replaces whatever handler the connection had. A handler a ``SQLiteSetup``
+  /// installed through the raw library is not known here and is not put back.
+  public var busyPolicy: SQLiteBusyPolicy {
+    handle.pointee.settings.pointee.busyPolicy
   }
 
-  /// Applies a busy timeout immediately, restoring the configured timeout and handler when the
-  /// access ends. The current timeout is unchanged if the native operation fails.
+  /// Applies a busy policy immediately, restoring the configured policy when the access ends.
+  /// The policy in effect is unchanged if the native operation fails.
   ///
-  /// - Throws: A ``SQLiteError`` when the timeout cannot be applied.
-  public borrowing func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
-    try handle.pointee.settings.pointee.setBusyTimeout(timeout)
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, or a ``SQLiteError`` when the policy cannot be applied.
+  public borrowing func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
+    try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
   /// Creates a cursor over the rows a read query returns.
@@ -159,17 +158,42 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try base.withObservation(observer, perform: operation)
   }
 
-  /// Wraps statement stepping for this connection access while `operation` runs.
+  /// Intercepts every statement step this connection takes while `operation` runs.
   ///
-  /// Capture the original `sqlite.statements.execution.step` before installing the wrapper.
-  /// The wrapper must call that function or return a SQLite result code. Statement pointers remain
-  /// valid only for their originating access and must not escape or be stepped concurrently.
-  /// Nested wrappers restore the previous implementation when their operation returns or throws.
-  public borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+  /// `intercept` is called in place of `sqlite3_step` for every statement the connection steps,
+  /// including those a transaction or the connection itself runs, with the statement and `next`,
+  /// the step that was in effect before it was installed. Call `next` to step the statement, or
+  /// return a SQLite result code without stepping it to refuse it.
+  ///
+  /// ```swift
+  /// let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
+  /// let titles = try connection.withStatementStepInterceptor({ statement, next in
+  ///   // Refuse every statement that would write.
+  ///   guard isReadOnly(statement) != 0 else { return SQLiteResultCode.readOnly.rawValue }
+  ///   return next(statement)
+  /// }) {
+  ///   try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  /// }
+  /// ```
+  ///
+  /// Interceptors nest: one installed inside another's `operation` runs first, and its `next`
+  /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
+  /// pointer is valid only for the access that lent this connection and must not escape it or be
+  /// stepped concurrently.
+  ///
+  /// - Parameters:
+  ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.
+  ///   - operation: The work during which steps are intercepted.
+  /// - Returns: Whatever `operation` returned.
+  /// - Throws: Whatever `operation` threw.
+  public borrowing func withStatementStepInterceptor<Result: ~Copyable>(
+    _ intercept:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32
+      ) -> Int32,
     perform operation: () throws -> Result
   ) rethrows -> Result {
-    try handle.pointee.withStatementExecution(step, perform: operation)
+    try handle.pointee.withStatementStepInterceptor(intercept, perform: operation)
   }
 
   /// Runs `body` in a read transaction, so that everything it reads comes from one snapshot.
@@ -229,7 +253,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
 /// }
 /// ```
 ///
-/// The ``busyTimeout`` and ``isForeignKeysEnabled`` this connection changes are put back when the
+/// The ``busyPolicy`` and ``isForeignKeysEnabled`` this connection changes are put back when the
 /// access that lent it ends, even when it throws. Any other pragma it runs stays changed on the
 /// connection, so restore it before returning.
 public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
@@ -279,39 +303,38 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the configuration the driver was given. What a driver adds for a connection's role,
   /// such as the `PRAGMA query_only` a pool's readers run, is not part of it, and neither is a
-  /// change to ``busyTimeout`` or ``isForeignKeysEnabled``.
+  /// change to ``busyPolicy`` or ``isForeignKeysEnabled``.
   public var configuration: SQLiteConfiguration {
     base.configuration
   }
 
-  /// How long this connection waits for a lock another connection or process holds before
-  /// reporting `SQLITE_BUSY`.
+  /// How this connection waits for a lock another connection or process holds before reporting
+  /// `SQLITE_BUSY`.
   ///
-  /// It starts at the configuration's ``SQLiteConfiguration/busyTimeout``. A change lasts until the
-  /// access that lent this connection ends, when the configured timeout is put back.
+  /// It starts at the configuration's ``SQLiteConfiguration/busyPolicy``. A change lasts until the
+  /// access that lent this connection ends, when the configured policy is put back.
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.setBusyTimeout(.limit(.seconds(30)))
+  ///   try connection.setBusyPolicy(.timeout(.seconds(30)))
   ///   try connection.executeScript("VACUUM")
   /// }
   /// ```
   ///
-  /// Setting the timeout goes through `sqlite3_busy_timeout`, which SQLite implements as a busy
-  /// handler and which therefore replaces whatever handler the connection had. A
-  /// ``SQLiteConfiguration/busyHandler`` is reinstalled along with the configured timeout when the
-  /// access ends, so the replacement lasts no longer than the access that made it. A handler a
-  /// ``SQLiteSetup`` installed itself is not known here and is not put back.
-  public var busyTimeout: SQLiteBusyTimeout {
-    handle.pointee.settings.pointee.busyTimeout
+  /// SQLite keeps one busy handler per connection and implements its busy timeout as one, so
+  /// setting a policy replaces whatever handler the connection had. A handler a ``SQLiteSetup``
+  /// installed through the raw library is not known here and is not put back.
+  public var busyPolicy: SQLiteBusyPolicy {
+    handle.pointee.settings.pointee.busyPolicy
   }
 
-  /// Applies a busy timeout immediately, restoring the configured timeout and handler when the
-  /// access ends. The current timeout is unchanged if the native operation fails.
+  /// Applies a busy policy immediately, restoring the configured policy when the access ends.
+  /// The policy in effect is unchanged if the native operation fails.
   ///
-  /// - Throws: A ``SQLiteError`` when the timeout cannot be applied.
-  public borrowing func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
-    try handle.pointee.settings.pointee.setBusyTimeout(timeout)
+  /// - Throws: A ``SQLiteFeatureUnavailableError`` for a ``SQLiteBusyPolicy/handler(_:)`` the
+  ///   library cannot install, or a ``SQLiteError`` when the policy cannot be applied.
+  public borrowing func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
+    try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
   /// Whether this connection enforces foreign keys.
@@ -398,7 +421,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// A database that is not in WAL mode has no log to move, so the checkpoint succeeds having done
   /// nothing and reports `-1` for both counts. Every mode but ``SQLiteWALCheckpointMode/passive``
-  /// waits for other connections by this connection's busy handler or ``busyTimeout``, and one
+  /// waits for other connections by this connection's ``busyPolicy``, and one
   /// that gives up before it could finish throws `SQLITE_BUSY` rather than report the part it
   /// did.
   ///
@@ -545,17 +568,42 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     }
   }
 
-  /// Wraps statement stepping for this connection access while `operation` runs.
+  /// Intercepts every statement step this connection takes while `operation` runs.
   ///
-  /// Capture the original `sqlite.statements.execution.step` before installing the wrapper.
-  /// The wrapper must call that function or return a SQLite result code. Statement pointers remain
-  /// valid only for their originating access and must not escape or be stepped concurrently.
-  /// Nested wrappers restore the previous implementation when their operation returns or throws.
-  public borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step: @escaping @Sendable (OpaquePointer?) -> Int32,
+  /// `intercept` is called in place of `sqlite3_step` for every statement the connection steps,
+  /// including those a transaction or the connection itself runs, with the statement and `next`,
+  /// the step that was in effect before it was installed. Call `next` to step the statement, or
+  /// return a SQLite result code without stepping it to refuse it.
+  ///
+  /// ```swift
+  /// let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
+  /// let titles = try connection.withStatementStepInterceptor({ statement, next in
+  ///   // Refuse every statement that would write.
+  ///   guard isReadOnly(statement) != 0 else { return SQLiteResultCode.readOnly.rawValue }
+  ///   return next(statement)
+  /// }) {
+  ///   try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  /// }
+  /// ```
+  ///
+  /// Interceptors nest: one installed inside another's `operation` runs first, and its `next`
+  /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
+  /// pointer is valid only for the access that lent this connection and must not escape it or be
+  /// stepped concurrently.
+  ///
+  /// - Parameters:
+  ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.
+  ///   - operation: The work during which steps are intercepted.
+  /// - Returns: Whatever `operation` returned.
+  /// - Throws: Whatever `operation` threw.
+  public borrowing func withStatementStepInterceptor<Result: ~Copyable>(
+    _ intercept:
+      @escaping @Sendable (
+        _ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32
+      ) -> Int32,
     perform operation: () throws -> Result
   ) rethrows -> Result {
-    try handle.pointee.withStatementExecution(step, perform: operation)
+    try handle.pointee.withStatementStepInterceptor(intercept, perform: operation)
   }
 
   /// Runs `body` in a write transaction, committing it when `body` returns and rolling it back

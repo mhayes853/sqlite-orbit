@@ -18,7 +18,7 @@
       case peerGone
 
       /// The send failed for some other reason.
-      case failed(UnixSystemError)
+      case failed(UnixDatagramIPCTransport.SystemError)
     }
 
     /// Whether an endpoint is still there, as ``probe(_:)`` finds it.
@@ -49,26 +49,26 @@
     /// - Parameters:
     ///   - path: Where to bind the socket, replacing whatever is there.
     ///   - receiveBufferByteCount: The size of the socket's receive buffer.
-    /// - Throws: A ``UnixSystemError`` if the socket cannot be created, bound or renamed into
-    ///   place, after which nothing it made is left behind.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the socket cannot be created, bound
+    ///   or renamed into place, after which nothing it made is left behind.
     static func bind(path: String, receiveBufferByteCount: Int) throws -> Self {
       let temporaryPath = Self.temporaryPath(binding: path)
       let address = try UnixSocketAddress(path: temporaryPath)
       let descriptor = try UnixPlatform.makeDatagramSocket()
       guard UnixPlatform.setReceiveBufferByteCount(receiveBufferByteCount, of: descriptor.rawValue)
-      else { throw UnixSystemError.last("setsockopt") }
+      else { throw UnixDatagramIPCTransport.SystemError.last("setsockopt") }
       // Left behind if a bind by this endpoint, the only one that binds under this name, died
       // before renaming its socket into place. Binding fails while anything is at the path.
       FileSystem.removeFile(atPath: FilePath(temporaryPath))
       guard UnixPlatform.bindSocket(descriptor.rawValue, to: address) else {
-        throw UnixSystemError.last("bind")
+        throw UnixDatagramIPCTransport.SystemError.last("bind")
       }
       do {
         guard let boundFile = UnixPlatform.fileIdentity(atPath: temporaryPath) else {
-          throw UnixSystemError.last("stat")
+          throw UnixDatagramIPCTransport.SystemError.last("stat")
         }
         guard FileSystem.renameFile(atPath: FilePath(temporaryPath), toPath: FilePath(path)) else {
-          throw UnixSystemError.last("rename")
+          throw UnixDatagramIPCTransport.SystemError.last("rename")
         }
         return Self(descriptor: descriptor, boundFile: boundFile)
       } catch {
@@ -111,15 +111,15 @@
     /// receive queue is full, which ``UnixEventQueue/watchWritable(_:)`` rests on.
     ///
     /// - Returns: The socket, or `nil` if nothing is bound at `path` any more.
-    /// - Throws: A ``UnixSystemError`` if the socket cannot be created or connected for any other
-    ///   reason.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the socket cannot be created or
+    ///   connected for any other reason.
     static func connect(to path: String) throws -> Self? {
       let address = try UnixSocketAddress(path: path)
       let descriptor = try UnixPlatform.makeDatagramSocket()
       guard UnixPlatform.connectSocket(descriptor.rawValue, to: address) else {
         let code = UnixPlatform.lastErrorCode
         if Self.peerGoneCodes.contains(code) { return nil }
-        throw UnixSystemError(operation: "connect", code: code)
+        throw UnixDatagramIPCTransport.SystemError(operation: "connect", code: code)
       }
       return Self(descriptor: descriptor, boundFile: nil)
     }
@@ -134,7 +134,7 @@
       let code = UnixPlatform.lastErrorCode
       if Self.fullCodes.contains(code) { return .full }
       if Self.peerGoneCodes.contains(code) { return .peerGone }
-      return .failed(UnixSystemError(operation: "send", code: code))
+      return .failed(UnixDatagramIPCTransport.SystemError(operation: "send", code: code))
     }
 
     /// Receives one datagram into `buffer`, on a socket made by ``bind(path:receiveBufferByteCount:)``.

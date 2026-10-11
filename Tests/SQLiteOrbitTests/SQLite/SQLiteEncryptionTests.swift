@@ -102,9 +102,10 @@
     var configuration = SQLiteConfiguration(library: library)
     configuration.key = SQLiteKey.passphrase("open sesame")
 
-    #expect(throws: SQLiteEncryptionUnavailableError.self) {
+    let error = #expect(throws: SQLiteFeatureUnavailableError.self) {
       _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
     }
+    #expect(error?.feature == .encryption)
   }
 
   @Test

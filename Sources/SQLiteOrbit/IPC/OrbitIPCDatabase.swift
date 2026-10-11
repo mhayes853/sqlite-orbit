@@ -92,8 +92,8 @@ public final class OrbitIPCDatabase:
   ///
   /// - Parameters:
   ///   - writer: The driver that lends read and write transactions.
-  ///   - id: The identity shared by every process that opens this database. Defaults to the
-  ///     writer's own identifier.
+  ///   - identifier: The identity shared by every process that opens this database. Defaults to
+  ///     the identifier of the writer's ``OrbitMultiprocessDatabaseWriter/path``.
   ///   - transport: The transport used to announce committed writes.
   ///   - delegate: Receives important events that cannot be surfaced through an operation. The
   ///     database holds it weakly.
@@ -101,18 +101,18 @@ public final class OrbitIPCDatabase:
   /// ```swift
   /// let database = OrbitIPCDatabase(
   ///   writer: try SQLitePool(path: .file(url)),
-  ///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
+  ///   identifier: OrbitDatabaseIdentifier(rawValue: "reminders"),
   ///   transport: InMemoryIPCTransport(network: network)
   /// )
   /// ```
   public init(
     writer: some OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase,
-    id: OrbitDatabaseIdentifier? = nil,
+    identifier: OrbitDatabaseIdentifier? = nil,
     transport: some OrbitIPCTransport,
     delegate: (any Delegate)? = nil
   ) {
     self.writer = writer
-    self.id = id ?? writer.defaultIdentifier
+    self.id = identifier ?? .forDatabase(path: writer.path)
     self.transport = transport
     self.delegateStorage = Lock(WeakDelegate(value: delegate))
   }

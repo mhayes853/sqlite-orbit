@@ -124,7 +124,7 @@
         try await harness.waitUntilMarked("held")
 
         var configuration = SQLiteConfiguration.default
-        configuration.busyTimeout = .limit(.milliseconds(100))
+        configuration.busyPolicy = .timeout(.milliseconds(100))
         let database = try harness.database(configuration: configuration)
         let clock = ContinuousClock()
         let started = clock.now
@@ -264,7 +264,7 @@
           // Waits for the test's hold on the open lock as long as it takes, not the default five
           // seconds, which a loaded machine can spend before the test lets go.
           var configuration = SQLiteConfiguration.default
-          configuration.busyTimeout = .maximum
+          configuration.busyPolicy = .waitIndefinitely
           _ = try OrbitIPCDatabase(
             path: path,
             configuration: configuration,

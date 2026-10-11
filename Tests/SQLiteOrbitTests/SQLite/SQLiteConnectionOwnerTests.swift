@@ -250,40 +250,34 @@
     }
 
     @Test
-    func nestedStatementExecutionScopesRestoreThePreviousWrapperAfterThrowing() throws {
+    func nestedStepInterceptorsComposeAndAreRemovedAfterThrowing() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       let calls = TestRecorder<String>()
       try owner.withWriteConnection { connection in
-        let original = connection.sqlite.statements.execution.step
         #expect(throws: OwnerTestFailure.self) {
-          try connection.withStatementExecution(
-            { statement in
-              calls.append("outer")
-              return original(statement)
-            }
-          ) {
+          try connection.withStatementStepInterceptor({ statement, next in
+            calls.append("outer")
+            return next(statement)
+          }) {
             _ = try connection.fetchOne("SELECT 1") { $0[0].integerValue ?? 0 }
             #expect(!calls.values.isEmpty)
             #expect(calls.values.allSatisfy { $0 == "outer" })
 
             calls.removeAll()
-            let outer = connection.sqlite.statements.execution.step
             do {
-              try connection.withStatementExecution(
-                { statement in
-                  calls.append("inner")
-                  return outer(statement)
-                }
-              ) {
+              try connection.withStatementStepInterceptor({ statement, next in
+                calls.append("inner")
+                return next(statement)
+              }) {
                 _ = try connection.fetchOne("SELECT 2") { $0[0].integerValue ?? 0 }
                 throw OwnerTestFailure()
               }
-              Issue.record("The inner statement execution scope did not throw")
+              Issue.record("The inner interceptor's operation did not throw")
             } catch {
               #expect(error is OwnerTestFailure)
             }
-            #expect(calls.values.contains("inner"))
-            #expect(calls.values.contains("outer"))
+            // The inner interceptor runs first, and its `next` reaches the outer one.
+            #expect(calls.values.prefix(2) == ["inner", "outer"])
 
             calls.removeAll()
             _ = try connection.fetchOne("SELECT 3") { $0[0].integerValue ?? 0 }
@@ -300,6 +294,26 @@
         try connection.fetchOne("SELECT 5") { $0[0].integerValue ?? 0 }
       }
       #expect(calls.values.isEmpty)
+    }
+
+    @Test
+    func aStepInterceptorCanRefuseAStatementWithoutSteppingIt() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
+        let error = #expect(throws: SQLiteError.self) {
+          try connection.withStatementStepInterceptor({ statement, next in
+            guard isReadOnly(statement) != 0 else { return SQLiteResultCode.readOnly.rawValue }
+            return next(statement)
+          }) {
+            #expect(try connection.fetchOne("SELECT count(*) FROM items", as: Int.self) == 0)
+            try connection.execute("INSERT INTO items DEFAULT VALUES")
+          }
+        }
+        #expect(error?.primaryCode == .readOnly)
+        #expect(try connection.fetchOne("SELECT count(*) FROM items", as: Int.self) == 0)
+      }
     }
 
     @Test

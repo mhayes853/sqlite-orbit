@@ -9,23 +9,23 @@
 
     @Suite
     struct SQLiteConnectionSettingsTests {
-      // MARK: - Busy timeout
+      // MARK: - Busy policy
 
       @Test(arguments: SQLiteTestDriver.allCases)
-      func busyTimeoutChangedByAWriteConnectionIsRestoredWhenTheAccessEnds(
+      func busyPolicyChangedByAWriteConnectionIsRestoredWhenTheAccessEnds(
         _ kind: SQLiteTestDriver
       ) async throws {
         try await kind.withDatabase(readerCount: 1) { driver in
           let during = try await driver.writeWithoutTransaction { connection in
-            #expect(connection.busyTimeout == .limit(.seconds(5)))
-            try connection.setBusyTimeout(.limit(.seconds(42)))
-            #expect(connection.busyTimeout == .limit(.seconds(42)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
+            try connection.setBusyPolicy(.timeout(.seconds(42)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(42)))
             return try connection.fetchOne(busyTimeout)
           }
           #expect(during == 42_000)
 
           let after = try await driver.writeWithoutTransaction { connection in
-            #expect(connection.busyTimeout == .limit(.seconds(5)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             return try connection.fetchOne(busyTimeout)
           }
           #expect(after == 5000)
@@ -33,14 +33,14 @@
       }
 
       @Test(arguments: SQLiteTestDriver.allCases)
-      func busyTimeoutChangedByAReadConnectionIsRestoredWhenTheAccessEnds(
+      func busyPolicyChangedByAReadConnectionIsRestoredWhenTheAccessEnds(
         _ kind: SQLiteTestDriver
       ) async throws {
         // One reader, so that every read lands on the connection the first one changed.
         try await kind.withDatabase(readerCount: 1) { driver in
           let during = try await driver.readWithoutTransaction { connection in
-            try connection.setBusyTimeout(.maximum)
-            #expect(connection.busyTimeout == .maximum)
+            try connection.setBusyPolicy(.waitIndefinitely)
+            #expect(connection.busyPolicy.kind == .waitIndefinitely)
             return try connection.fetchOne(busyTimeout)
           }
           #expect(during == Int(Int32.max))
@@ -49,12 +49,12 @@
           // A body that throws has its change put back all the same.
           await #expect(throws: TestError()) {
             try await driver.readWithoutTransaction { connection in
-              try connection.setBusyTimeout(.limit(.milliseconds(1)))
+              try connection.setBusyPolicy(.timeout(.milliseconds(1)))
               throw TestError()
             }
           }
           let after = try await driver.readWithoutTransaction { connection in
-            #expect(connection.busyTimeout == .limit(.seconds(5)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             return try connection.fetchOne(busyTimeout)
           }
           #expect(after == 5000)
@@ -62,38 +62,38 @@
       }
 
       @Test(arguments: [false, true])
-      func busyTimeoutFailuresThrowAtTheSetterAndAtOpen(readOnly: Bool) throws {
+      func busyPolicyFailuresThrowAtTheSetterAndAtOpen(readOnly: Bool) throws {
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library.connections.setBusyTimeout = { connection, milliseconds in
           if milliseconds == 42_000 { return SQLiteResultCode.ioError.rawValue }
           return base.connections.setBusyTimeout(connection, milliseconds)
         }
-        configuration.busyTimeout = .limit(.seconds(42))
+        configuration.busyPolicy = .timeout(.seconds(42))
         let openingError = #expect(throws: SQLiteError.self) {
           try SQLiteQueue(path: .memory, configuration: configuration)
         }
         #expect(openingError?.primaryCode == .ioError)
 
-        configuration.busyTimeout = .limit(.seconds(5))
+        configuration.busyPolicy = .timeout(.seconds(5))
         let driver = try SQLiteQueue(path: .memory, configuration: configuration)
         if readOnly {
           try driver.readWithoutTransactionBlocking { connection in
             let error = #expect(throws: SQLiteError.self) {
-              try connection.setBusyTimeout(.limit(.seconds(42)))
+              try connection.setBusyPolicy(.timeout(.seconds(42)))
             }
             #expect(error?.primaryCode == .ioError)
-            #expect(connection.busyTimeout == .limit(.seconds(5)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             let current = try connection.fetchOne(busyTimeout)
             #expect(current == 5000)
           }
         } else {
           try driver.writeWithoutTransactionBlocking { connection in
             let error = #expect(throws: SQLiteError.self) {
-              try connection.setBusyTimeout(.limit(.seconds(42)))
+              try connection.setBusyPolicy(.timeout(.seconds(42)))
             }
             #expect(error?.primaryCode == .ioError)
-            #expect(connection.busyTimeout == .limit(.seconds(5)))
+            #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             let current = try connection.fetchOne(busyTimeout)
             #expect(current == 5000)
           }
@@ -101,11 +101,11 @@
       }
 
       @Test(arguments: [false, true])
-      func scopedTimeoutsRestoreNestedValuesAndTheConfiguredHandler(throwBody: Bool) throws {
+      func scopedPoliciesRestoreNestedValuesAndTheConfiguredHandler(throwBody: Bool) throws {
         var configuration = SQLiteConfiguration.default
         let installations = TestCounter()
         if let install = configuration.library.busyHandler?.install {
-          configuration.busyHandler = { _ in false }
+          configuration.busyPolicy = .handler { _ in false }
           configuration.library.busyHandler?.install = { connection, callback, context in
             installations.increment()
             return install(connection, callback, context)
@@ -115,14 +115,14 @@
         let initialInstallations = installations.value
         try driver.writeWithoutTransactionBlocking { connection throws in
           do {
-            let value = try connection.withBusyTimeout(.limit(.seconds(9))) { () throws in
+            let value = try connection.withBusyPolicy(.timeout(.seconds(9))) { () throws in
               #expect(try connection.fetchOne(busyTimeout) == 9000)
               #expect(throws: TestError.self) {
-                try connection.withBusyTimeout(.limit(.seconds(2))) {
+                try connection.withBusyPolicy(.timeout(.seconds(2))) {
                   throw TestError()
                 }
               }
-              #expect(connection.busyTimeout == .limit(.seconds(9)))
+              #expect(connection.busyPolicy.kind == .timeout(.seconds(9)))
               #expect(try connection.fetchOne(busyTimeout) == 9000)
               #expect(installations.value == initialInstallations)
               if throwBody { throw TestError() }
@@ -133,15 +133,16 @@
           } catch is TestError {
             #expect(throwBody)
           }
-          #expect(connection.busyTimeout == configuration.busyTimeout)
+          #expect(connection.busyPolicy.kind == configuration.busyPolicy.kind)
           #expect(installations.value == initialInstallations * 2)
         }
         try driver.readWithoutTransactionBlocking { connection throws in
-          // Even an unchanged timeout replaces a configured handler, which must be restored.
-          try connection.withBusyTimeout(connection.busyTimeout) {
-            #expect(connection.busyTimeout == configuration.busyTimeout)
+          // Even the policy already in effect is applied and then restored, installing a configured
+          // handler once on the way in and once on the way out.
+          try connection.withBusyPolicy(connection.busyPolicy) {
+            #expect(connection.busyPolicy.kind == configuration.busyPolicy.kind)
           }
-          #expect(installations.value == initialInstallations * 3)
+          #expect(installations.value == initialInstallations * 4)
         }
       }
 
@@ -583,6 +584,23 @@
       CREATE TABLE entries (id INTEGER PRIMARY KEY, listID INTEGER REFERENCES lists (id));
       """
     private let busyTimeout = #sql("PRAGMA busy_timeout", as: Int.self)
+
+    /// A busy policy with its handler reduced to the fact of having one, so policies compare.
+    enum BusyPolicyKind: Equatable {
+      case timeout(Duration)
+      case waitIndefinitely
+      case handler
+    }
+
+    extension SQLiteBusyPolicy {
+      var kind: BusyPolicyKind {
+        switch self {
+        case .timeout(let duration): .timeout(duration)
+        case .waitIndefinitely: .waitIndefinitely
+        case .handler: .handler
+        }
+      }
+    }
     private let foreignKeys = #sql("PRAGMA foreign_keys", as: Int.self)
     private let orphan = #sql("INSERT INTO entries (id, listID) VALUES (1, 1)", as: Void.self)
     private let secondOrphan = #sql("INSERT INTO entries (id, listID) VALUES (2, 2)", as: Void.self)

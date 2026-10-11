@@ -216,54 +216,9 @@ extension OrbitObservableDatabase {
 /// instance. ``OrbitIPCDatabase`` additionally requires the writer to conform to
 /// ``OrbitObservableDatabase`` so it can combine local transaction events with peer announcements.
 public protocol OrbitMultiprocessDatabaseWriter: OrbitDatabaseWriter, OrbitSuspendable {
-  /// The identifier an ``OrbitIPCDatabase`` uses when its caller does not supply one.
-  var defaultIdentifier: OrbitDatabaseIdentifier { get }
-}
-
-final class OrbitDatabaseTransactionObservers: OrbitDatabaseTransactionObserver {
-  private let observers = Lock(IdentifiedRegistry<any OrbitDatabaseTransactionObserver>())
-
-  /// Registers `observer` on behalf of a database whose transactions all happen in this process,
-  /// which reports every one of them whatever the region.
-  func subscribe(
-    _ observer: any OrbitDatabaseTransactionObserver,
-    region: OrbitDatabaseRegion = .fullDatabase
-  ) -> OrbitRegionSubscription {
-    let identifier = observers.withLock { $0.insert(observer) }
-    return OrbitRegionSubscription(region: region) { [weak self] in
-      _ = self?.observers.withLock { $0.remove(identifier) }
-    }
-  }
-
-  func databaseWillCommit(_ transaction: borrowing SQLiteReadTransaction) throws {
-    for observer in observers.withLock({ $0.all }) {
-      try observer.databaseWillCommit(transaction)
-    }
-  }
-
-  func databaseDidRead(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidRead(in: region)
-    }
-  }
-
-  func databaseDidChange(in region: OrbitDatabaseRegion) {
-    guard !region.isEmpty else { return }
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidChange(in: region)
-    }
-  }
-
-  func databaseDidCommit(_ commit: OrbitDatabaseCommit) {
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidCommit(commit)
-    }
-  }
-
-  func databaseDidRollback() {
-    for observer in observers.withLock({ $0.all }) {
-      observer.databaseDidRollback()
-    }
-  }
+  /// The database file the writer is open on.
+  ///
+  /// An ``OrbitIPCDatabase`` whose caller supplies no identifier identifies the database by this
+  /// path, through ``OrbitDatabaseIdentifier/forDatabase(path:)``.
+  var path: OrbitDatabasePath { get }
 }

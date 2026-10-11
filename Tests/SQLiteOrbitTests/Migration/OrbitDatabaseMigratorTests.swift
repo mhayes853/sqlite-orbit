@@ -56,7 +56,7 @@
         let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-\(UUID().uuidString)")
         let database = OrbitIPCDatabase(
           writer: writer,
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport(network: network)
         )
         let peerTransport = InMemoryIPCTransport(network: network)
@@ -651,7 +651,7 @@
 
           let error = await #expect(throws: TestError.self) {
             try await driver.writeWithoutTransaction { connection in
-              try connection.setBusyTimeout(.limit(.seconds(42)))
+              try connection.setBusyPolicy(.timeout(.seconds(42)))
               try migrator.migrate(connection)
             }
           }
@@ -769,7 +769,7 @@
 
         let running = Task { [migrator] in
           try await driver.writeWithoutTransaction { connection in
-            try connection.setBusyTimeout(.maximum)
+            try connection.setBusyPolicy(.waitIndefinitely)
             try migrator.migrate(connection)
           }
         }
@@ -838,7 +838,7 @@
             }
             return base.statements.execution.step(statement)
           }
-          configuration.busyTimeout = .limit(.milliseconds(100))
+          configuration.busyPolicy = .timeout(.milliseconds(100))
           let driver = try file.queue(configuration: configuration)
           let migrator = loggingMigrator(["one"])
 
@@ -864,7 +864,7 @@
           let previousBeginCount = beginCount.value
           let migration = Task {
             try await driver.writeWithoutTransaction { connection in
-              try connection.setBusyTimeout(.limit(.seconds(30)))
+              try connection.setBusyPolicy(.timeout(.seconds(30)))
               try migrator.migrate(connection)
             }
           }
@@ -988,12 +988,12 @@
           let identifier = OrbitDatabaseIdentifier(rawValue: "migrator-peer-\(UUID().uuidString)")
           let migratingDatabase = OrbitIPCDatabase(
             writer: try file.queue(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport(network: network)
           )
           let observingDatabase = OrbitIPCDatabase(
             writer: try file.queue(),
-            id: identifier,
+            identifier: identifier,
             transport: InMemoryIPCTransport(network: network)
           )
           let migrator = loggingMigrator(["one", "two"])

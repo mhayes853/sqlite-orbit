@@ -85,12 +85,12 @@ struct RemindersWidgetQueriesTests {
     let identifier = OrbitDatabaseIdentifier(rawValue: "reminders-widget-test")
     let appDatabase = OrbitIPCDatabase(
       writer: try SQLitePool(path: path),
-      id: identifier,
+      identifier: identifier,
       transport: InMemoryIPCTransport(network: network)
     )
     let widgetDatabase = OrbitIPCDatabase(
       writer: try SQLitePool(path: path),
-      id: identifier,
+      identifier: identifier,
       transport: InMemoryIPCTransport(network: network)
     )
     try remindersMigrator().migrateBlocking(appDatabase)

@@ -2,11 +2,10 @@
 /// configuration gave it.
 ///
 /// A setting counts as changed for as long as the value in effect on the connection differs from
-/// its configured one. The configuration's busy handler counts too, since setting the busy timeout
-/// is what SQLite replaces it with. The handle restores every changed setting when an access ends
-/// and again, for whatever could not be restored then, before the next access begins, so no access
-/// runs under a setting an earlier one left behind. Only changes made through here are known: a
-/// raw `PRAGMA` is not tracked.
+/// its configured one. The handle restores every changed setting when an access ends and again,
+/// for whatever could not be restored then, before the next access begins, so no access runs
+/// under a setting an earlier one left behind. Only changes made through here are known: a raw
+/// `PRAGMA` or a busy handler installed through the raw library is not tracked.
 ///
 /// The handle keeps this in storage of its own rather than inline, since the handle is only ever
 /// borrowed and the settings still have to change.
@@ -15,17 +14,18 @@ struct SQLiteConnectionSettings: ~Copyable {
   private let connection: OpaquePointer
   private let authorizer: SQLiteAuthorizerDispatcher
   private let statements: SQLiteStatementCache
-  private let configuration: UnsafeMutablePointer<SQLiteConfiguration>
+  private let busyHandler = SQLiteBusyHandlerInstallation()
 
-  private let configuredBusyTimeout: SQLiteBusyTimeout
+  private let configuredBusyPolicy: SQLiteBusyPolicy
   private let configuredForeignKeys: Bool
 
-  // Setting the busy timeout replaces the configured busy handler, since SQLite keeps only one of
-  // the two. Restoring the timeout is not enough to undo that, and a timeout set to the configured
-  // value is not a change to restore at all, so the replacement is tracked on its own.
-  private(set) var isBusyHandlerReplaced = false
+  /// The busy policy in effect on the connection.
+  private(set) var busyPolicy: SQLiteBusyPolicy
 
-  private(set) var busyTimeout: SQLiteBusyTimeout
+  // A policy holds a closure, so whether the one in effect is the configured one is tracked rather
+  // than compared. Reapplying the configured policy when it is already in effect would replace a
+  // busy handler a connection setup installed, so it is only reapplied after a change.
+  private(set) var isBusyPolicyConfigured = true
 
   private(set) var isForeignKeysEnabled: Bool
   // A pragma can change the native flag during preparation even if stepping later fails. If
@@ -40,26 +40,49 @@ struct SQLiteConnectionSettings: ~Copyable {
     connection: OpaquePointer,
     authorizer: SQLiteAuthorizerDispatcher,
     statements: SQLiteStatementCache,
-    configuration: UnsafeMutablePointer<SQLiteConfiguration>
+    configuration: SQLiteConfiguration
   ) {
     self.library = library
     self.connection = connection
     self.authorizer = authorizer
     self.statements = statements
-    self.configuration = configuration
-    self.configuredBusyTimeout = configuration.pointee.busyTimeout
-    self.configuredForeignKeys = configuration.pointee.isForeignKeysEnabled
-    self.busyTimeout = configuration.pointee.busyTimeout
-    self.isForeignKeysEnabled = configuration.pointee.isForeignKeysEnabled
+    self.configuredBusyPolicy = configuration.busyPolicy
+    self.configuredForeignKeys = configuration.isForeignKeysEnabled
+    self.busyPolicy = configuration.busyPolicy
+    self.isForeignKeysEnabled = configuration.isForeignKeysEnabled
   }
 
-  mutating func setBusyTimeout(_ timeout: SQLiteBusyTimeout) throws {
-    let code = library.pointee.connections.setBusyTimeout(connection, timeout.milliseconds)
-    guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+  /// Applies the configured busy policy, as a connection does once when it is opened.
+  mutating func applyConfiguredBusyPolicy() throws {
+    try apply(configuredBusyPolicy)
+    isBusyPolicyConfigured = true
+  }
+
+  /// Applies `policy` until the access ends. The policy in effect is unchanged if applying fails.
+  mutating func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
+    try apply(policy)
+    isBusyPolicyConfigured = false
+  }
+
+  /// Puts back a policy saved before a scoped change, along with whether it was the configured
+  /// one.
+  mutating func restoreBusyPolicy(_ policy: SQLiteBusyPolicy, isConfigured: Bool) throws {
+    try apply(policy)
+    isBusyPolicyConfigured = isConfigured
+  }
+
+  private mutating func apply(_ policy: SQLiteBusyPolicy) throws {
+    switch policy {
+    case .handler(let handler):
+      try busyHandler.install(handler, on: connection, library: library)
+    case .timeout, .waitIndefinitely:
+      let milliseconds = policy.timeoutMilliseconds ?? 0
+      let code = library.pointee.connections.setBusyTimeout(connection, milliseconds)
+      guard code == SQLiteResultCode.ok.rawValue else {
+        throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
+      }
     }
-    busyTimeout = timeout
-    if configuration.pointee.busyHandler != nil { isBusyHandlerReplaced = true }
+    busyPolicy = policy
   }
 
   mutating func setForeignKeysEnabled(_ isEnabled: Bool) throws {
@@ -109,40 +132,6 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Restores the timeout and whether it had replaced the configured busy handler.
-  mutating func restoreBusyTimeout(
-    _ timeout: SQLiteBusyTimeout,
-    handlerIsReplaced: Bool
-  ) throws {
-    var failure: (any Error)?
-    if busyTimeout != timeout {
-      // Reapplying the timeout replaces any busy handler a connection setup installed, which is
-      // why it is only reapplied once it has actually changed.
-      do {
-        try setBusyTimeout(timeout)
-      } catch {
-        failure = error
-      }
-    }
-    if isBusyHandlerReplaced && !handlerIsReplaced {
-      // Installed after the timeout, exactly as the open did it, so the connection waits by the
-      // configured handler again rather than by the timeout underneath it.
-      let code = SQLiteBusyHandlerInstallation.install(
-        on: connection,
-        library: library,
-        configuration: configuration
-      )
-      if code == SQLiteResultCode.ok.rawValue {
-        isBusyHandlerReplaced = false
-      } else {
-        failure =
-          failure
-          ?? SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
-      }
-    }
-    if let failure { throw failure }
-  }
-
   /// Puts every changed setting back to its configured value.
   ///
   /// Every changed setting is attempted even after one fails, so one failure leaves no more
@@ -151,10 +140,12 @@ struct SQLiteConnectionSettings: ~Copyable {
   /// - Throws: The first failure.
   mutating func restore() throws {
     var failure: (any Error)?
-    do {
-      try restoreBusyTimeout(configuredBusyTimeout, handlerIsReplaced: false)
-    } catch {
-      failure = error
+    if !isBusyPolicyConfigured {
+      do {
+        try applyConfiguredBusyPolicy()
+      } catch {
+        failure = error
+      }
     }
     if isForeignKeysEnabled != configuredForeignKeys || needsForeignKeysRestore {
       do {

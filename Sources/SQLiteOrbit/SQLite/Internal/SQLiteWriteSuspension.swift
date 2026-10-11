@@ -18,11 +18,11 @@ final class SQLiteWriteSuspension: Sendable {
     var hasRefusedAccess = false
   }
 
-  let databaseIdentifier: OrbitDatabaseIdentifier
+  let path: OrbitDatabasePath
   private let state = Lock(State())
 
-  init(databaseIdentifier: OrbitDatabaseIdentifier) {
-    self.databaseIdentifier = databaseIdentifier
+  init(path: OrbitDatabasePath) {
+    self.path = path
   }
 
   var isSuspended: Bool {
@@ -67,26 +67,25 @@ final class SQLiteWriteSuspension: Sendable {
         return state.hasRefusedAccess
       }
       if hasRefusedAccess, let error = error as? SQLiteError, error.isInterruption {
-        throw OrbitDatabaseSuspendedError(databaseIdentifier: databaseIdentifier)
+        throw OrbitDatabaseSuspendedError(path: path)
       }
       throw error
     }
   }
 
-  /// Returns the step entry point for a writer connection opened through `library`, refusing the
-  /// statements a suspension forbids.
-  func step(
+  /// Returns a statement-step interceptor for a writer connection opened through `library`, which
+  /// refuses the statements a suspension forbids.
+  func interceptor(
     of library: SQLiteLibrary,
     on connection: OpaquePointer
-  ) -> @Sendable (OpaquePointer?) -> Int32 {
-    let step = library.statements.execution.step
+  ) -> @Sendable (_ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32) -> Int32 {
     let isReadOnly = library.statements.inspection.isReadOnly
     let sql = library.statements.inspection.sql
     let isAutocommit = library.connections.isAutocommit
     // An address rather than a pointer, so that the closure can be shared. The connection outlives
     // it, since the handle that owns this entry point closes the connection.
     let address = UInt(bitPattern: connection)
-    return { [self] statement in
+    return { [self] statement, step in
       let isRefused = state.withLock { state in
         guard state.isSuspended else { return false }
         let connection = OpaquePointer(bitPattern: address)

@@ -386,7 +386,7 @@ try await database.writeWithoutTransaction { connection in
 }
 ```
 
-`setForeignKeysEnabled(_:)` and `setBusyTimeout(_:)` apply changes immediately and throw if they
+`setForeignKeysEnabled(_:)` and `setBusyPolicy(_:)` apply changes immediately and throw if they
 fail. Their read-only properties report the successfully applied values. Changing foreign keys
 during a transaction throws. Both settings are put back to their configured values when the access
 ends, even when it throws. Any other pragma stays changed on the connection, so restore it before
@@ -438,20 +438,40 @@ changes made before registration.
 regions come from commit events. Keep the recorder outside the operation to inspect partial commits
 after an error. `hasCommitted` also distinguishes an empty commit from no observed commit.
 
+`SQLiteSerialConnection` wraps one owner on a serial executor of its own, and lends it
+asynchronously or by blocking the calling thread, one access at a time. `SQLiteQueue` is one of
+these with an observer registry on top. Cancelling the task awaiting an access interrupts it, and
+the access throws `CancellationError`. Setups passed to its initializer are the driver's own: they
+run after the configuration's setups and are exempt from its authorization.
+
+```swift
+let connection = try SQLiteSerialConnection(path: path, configuration: .default)
+let count = try await connection.withReadConnection { connection in
+  try connection.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+}
+```
+
+`OrbitCompositeDatabaseTransactionObserver` is the registry the built-in drivers use: it forwards
+every callback to the observers subscribed to it, so a custom driver installs it on each access and
+implements `subscribe(transactionObserver:region:)` with `subscribe(_:region:)`. It reports every
+transaction whatever region an observer was subscribed with.
+
 `SQLiteConnectionPool` provides asynchronous and blocking connection loans without an observer
 registry. Its callers choose transactions and install observers using these same public APIs.
 Ordinary writer loans form a barrier; explicit concurrent writer loans can overlap readers and
-other concurrent writers. `SQLitePool` and `TursoPool` compose this primitive with their journal
-setup and database-wide subscriptions. A custom driver can use it directly:
+other concurrent writers. Readers are opened read-only and run `PRAGMA query_only = 1`. `SQLitePool`
+and `TursoPool` compose this primitive with their journal mode and database-wide subscriptions. A
+custom driver can use it directly, choosing the journal mode through the writers' configuration:
 
 ```swift
+var writerConfiguration = SQLiteConfiguration.default
+writerConfiguration.journalMode = .wal
 let pool = try SQLiteConnectionPool(
   path: path,
   readerConfiguration: .default,
-  writerConfiguration: .default,
+  writerConfiguration: writerConfiguration,
   readerCount: 4,
-  writerCount: 1,
-  writerSetups: [.sql("PRAGMA journal_mode = WAL"), .sql("SELECT count(*) FROM sqlite_schema")]
+  writerCount: 1
 )
 try await pool.withWriteConnection { connection in
   try connection.transaction(observer: recorder) { transaction in
@@ -797,9 +817,9 @@ configuration.setups.append(
 )
 ```
 
-Setting a key on a library with no `encryption` fails the open with
-`SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no
-codec, so that is a fact about the build rather than a claim about it.
+Setting a key on a library with no `encryption` fails the open with a
+`SQLiteFeatureUnavailableError` for `.encryption` rather than opening an unencrypted database.
+Stock SQLite has no codec, so that is a fact about the build rather than a claim about it.
 
 A codec accepts any key and only reports a wrong one once something reads the file, so a keyed
 connection reads the schema while it is being configured. A wrong key fails the open rather than
@@ -808,8 +828,20 @@ the first query the caller happens to run.
 ## Connection setup
 
 `SQLiteConfiguration.setups` is one ordered collection of SQL and callbacks. Each step runs after
-standard settings and authorization have been applied, before the connection is lent to callers.
-A thrown error stops setup and closes the connection.
+standard settings, the journal mode, and authorization have been applied, before the connection is
+lent to callers. A thrown error stops setup and closes the connection.
+
+`busyPolicy` decides how a connection waits for a lock another connection or process holds:
+`.timeout(_:)`, five seconds by default, `.waitIndefinitely`, or a `.handler` asked on each attempt.
+`journalMode` switches the database to a mode, such as `.wal`, on every writable connection before
+the setups run, with the driver's own privilege rather than subject to `authorization`; `nil`, the
+default, leaves the database's mode alone.
+
+```swift
+var configuration = SQLiteConfiguration.default
+configuration.busyPolicy = .timeout(.seconds(10))
+configuration.journalMode = .wal
+```
 
 ```swift
 configuration.setups = [
@@ -1172,13 +1204,13 @@ methods remain available and derive their answers from this same snapshot.
 
 Processes that share a database may all migrate it as they launch. Each migration's transaction
 checks again, under the write lock, whether another process applied it in the meantime, so every
-migration runs once. It waits for the lock as long as the connection's busy timeout allows, and
-fails with `SQLITE_BUSY` once that runs out. To wait longer, migrate on a connection whose timeout
+migration runs once. It waits for the lock as long as the connection's busy policy allows, and
+fails with `SQLITE_BUSY` once that gives up. To wait longer, migrate on a connection whose timeout
 you raise, which is put back when the access ends:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  try connection.setBusyTimeout(.limit(.seconds(30)))
+  try connection.setBusyPolicy(.timeout(.seconds(30)))
   try migrator.migrate(connection)
 }
 ```
@@ -1945,14 +1977,15 @@ let database = try OrbitIPCDatabase(path: databasePath)
 ```
 
 The database is opened by `SQLitePool`, so it runs in WAL mode with concurrent readers and a
-single writer, and every connection gets a busy timeout. Without one, a write that overlaps another
-process's write fails outright rather than waiting its turn.
+single writer, and every connection waits by its configuration's `busyPolicy`, a five-second
+timeout by default. Without one, a write that overlaps another process's write fails outright
+rather than waiting its turn.
 
 Opening is serialized across every process sharing a coordination directory by an exclusive advisory
 lock, held only while the database is being opened. Moving a new database into WAL mode briefly
 needs an exclusive lock of SQLite's own, so processes that first open the same database at the same
 moment would otherwise contend for it. The lock removes that contention between opens; it does not
-replace the busy timeout, since closing a WAL database checkpoints it under an exclusive lock too,
+replace the busy policy, since closing a WAL database checkpoints it under an exclusive lock too,
 and closing is not something a database can hold the open lock across.
 
 Processes coordinate only when they share a coordination directory. The default lives in the
@@ -1968,6 +2001,10 @@ let database = try OrbitIPCDatabase(
 
 A database private to its connection cannot be shared between processes, or pooled, so
 `SQLitePool` rejects one; use `SQLiteQueue` for those.
+
+A bare `SQLitePool` does not take the open lock. Several processes opening the same new database
+with bare pools at the same moment may get `SQLITE_BUSY` while it switches to WAL, so open a
+database shared between processes through `OrbitIPCDatabase`.
 
 Constructing an `OrbitMultiprocessDatabaseWriter` yourself remains available for a database you
 configure and open on your own. That cannot coordinate opening, so pass a transport explicitly if

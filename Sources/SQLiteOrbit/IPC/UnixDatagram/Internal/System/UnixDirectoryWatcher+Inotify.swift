@@ -29,11 +29,11 @@
 
     /// Starts watching the directory at `path`.
     ///
-    /// - Throws: A ``UnixSystemError`` if the directory cannot be watched, which includes the
-    ///   system running out of watches.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the directory cannot be watched,
+    ///   which includes the system running out of watches.
     func watch(_ path: String) throws {
       guard inotify_add_watch(self.inotify.rawValue, path, orbit_in_entries_changed) >= 0
-      else { throw UnixSystemError.last("inotify_add_watch") }
+      else { throw UnixDatagramIPCTransport.SystemError.last("inotify_add_watch") }
     }
 
     /// Takes every change the kernel has queued, without waiting for more.

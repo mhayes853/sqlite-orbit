@@ -125,7 +125,7 @@
           fcntl(descriptor.rawValue, F_SETFD, FD_CLOEXEC) == 0,
           setsockopt(descriptor.rawValue, SOL_SOCKET, SO_NOSIGPIPE, &enabled, size) == 0,
           setsockopt(descriptor.rawValue, SOL_SOCKET, SO_SNDBUF, &sendBufferByteCount, size) == 0
-        else { throw UnixSystemError.last("socket") }
+        else { throw UnixDatagramIPCTransport.SystemError.last("socket") }
         return descriptor
       #else
         return try UnixDescriptor(socket(AF_UNIX, socketType, 0), from: "socket")
@@ -205,15 +205,19 @@
     private var storage = sockaddr_un()
     private let length: socklen_t
 
-    /// - Throws: A ``UnixSystemError`` if `path` contains a NUL or is longer than the platform's
-    ///   `sun_path`, which holds 104 bytes on Darwin and 108 on Linux and Android.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if `path` contains a NUL or is longer
+    ///   than the platform's `sun_path`, which holds 104 bytes on Darwin and 108 on Linux and
+    ///   Android.
     init(path: String) throws {
       let bytes = Array(path.utf8) + [0]
       guard !path.utf8.contains(0) else {
-        throw UnixSystemError.invalidArgument("socket path contains NUL")
+        throw UnixDatagramIPCTransport.SystemError.invalidArgument("socket path contains NUL")
       }
       guard bytes.count <= MemoryLayout.size(ofValue: self.storage.sun_path) else {
-        throw UnixSystemError(operation: "socket path is too long", code: ENAMETOOLONG)
+        throw UnixDatagramIPCTransport.SystemError(
+          operation: "socket path is too long",
+          code: ENAMETOOLONG
+        )
       }
       self.storage.sun_family = sa_family_t(AF_UNIX)
       withUnsafeMutableBytes(of: &self.storage.sun_path) { $0.copyBytes(from: bytes) }

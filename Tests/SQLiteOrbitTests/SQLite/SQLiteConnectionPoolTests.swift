@@ -42,11 +42,7 @@
         let readerSetups = try await pool.withReadConnection { $0.configuration.setups.count }
         let writerSetups = try await pool.withWriteConnection { $0.configuration.setups.count }
         #expect(readerSetups == 1)
-        #if Turso
-          #expect(writerSetups == 2)
-        #else
-          #expect(writerSetups == 1)
-        #endif
+        #expect(writerSetups == 1)
 
         let blockingIDs = try await withDeadline {
           try pool.withReadConnectionBlocking { connection in
@@ -261,20 +257,17 @@
       var writerConfiguration = SQLiteConfiguration.default
       writerConfiguration.setups = [.sql("PRAGMA cache_size = 202")]
       #if Turso
-        writerConfiguration.setups.insert(.sql("PRAGMA journal_mode = MVCC"), at: 0)
-        let writerSetups: [SQLiteSetup] = [.script(poolItemsSchema), .script(poolListsSchema)]
+        writerConfiguration.journalMode = .mvcc
       #else
-        let writerSetups: [SQLiteSetup] = [
-          .sql("PRAGMA journal_mode = WAL"), .script(poolItemsSchema), .script(poolListsSchema)
-        ]
+        writerConfiguration.journalMode = .wal
       #endif
+      let writerSetups: [SQLiteSetup] = [.script(poolItemsSchema), .script(poolListsSchema)]
       let pool = try SQLiteConnectionPool(
         path: OrbitDatabasePath(directory.appendingPathComponent("database.sqlite").path),
         readerConfiguration: readerConfiguration,
         writerConfiguration: writerConfiguration,
         readerCount: 2,
         writerCount: writerCount,
-        readerSetups: [.sql("PRAGMA query_only = 1")],
         writerSetups: writerSetups
       )
       try await body(pool)
