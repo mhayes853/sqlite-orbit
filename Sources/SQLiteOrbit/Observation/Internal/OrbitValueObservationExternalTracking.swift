@@ -76,8 +76,9 @@ final class ExternalTracking: Sendable {
         dependencies?.didChange()
       }
 
-      // `ExternalValue` revisions close the race between registering a property access and reading
-      // its locked storage. A raced mutation makes this fetch stale even if Observation missed it.
+      // `OrbitExternalValue` revisions close the race between registering a property access and
+      // reading its locked storage. A raced mutation makes this fetch stale even if Observation
+      // missed it.
       if !accesses.areCurrent { dependencies.didChange() }
 
       switch result {
@@ -150,7 +151,7 @@ final class ExternalDependencies: Sendable {
   deinit { cancel() }
 }
 
-// MARK: - Detecting mutations during ExternalValue reads
+// MARK: - Detecting mutations during OrbitExternalValue reads
 
 struct ExternalAccess: Sendable {
   struct Version: Equatable, Sendable {

@@ -82,7 +82,8 @@ nonisolated struct ReminderDetailRow: Identifiable, Sendable {
 @Observable
 final class RemindersDetailModel: ErrorReporting, HashableObject {
   @ObservationIgnored @FetchAll var reminderRows: [ReminderDetailRow]
-  @ObservationIgnored @FetchAll(RemindersList.order(by: \.position), animation: .default)
+  @ObservationIgnored
+  @FetchAll(RemindersList.order(by: \.position), scheduler: .animation(.default))
   var remindersLists: [RemindersList]
 
   let detailType: RemindersDetailType
@@ -118,7 +119,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
         ordering: ordering,
         showCompleted: showCompleted
       ),
-      animation: .default
+      scheduler: .animation(.default)
     )
   }
 
@@ -170,7 +171,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
           ordering: ordering,
           showCompleted: showCompleted
         ),
-        animation: .default
+        scheduler: .animation(.default)
       )
     }
   }
@@ -237,7 +238,7 @@ final class RemindersDetailModel: ErrorReporting, HashableObject {
       }
       async let reloadReminders = $reminderRows.load(
         query,
-        animation: .default
+        scheduler: .animation(.default)
       )
       _ = try await (persistSettings, reloadReminders)
     }

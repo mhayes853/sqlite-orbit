@@ -26,11 +26,16 @@
 /// statement exclusively, which is why every run is `mutating`: running the statement again while
 /// one of its cursors is open, or from inside its own `fetchAll` transform, does not compile.
 ///
+/// Reading runs, the `rowCursor`, `fetchCursor`, `fetchAll` and `fetchOne` families, refuse a
+/// statement that may write with ``SQLiteResultCode/readOnly``, as a transaction's own reads do.
+/// What may write is run with `execute` or `executeRowCursor`, and only a write transaction
+/// prepares it.
+///
 /// Each run reports what it reads and changes to observers, as running the same SQL through the
 /// transaction would. A statement prepared before an authorization scope boundary, entered or
 /// left with ``SQLiteReadTransaction/withAuthorization(_:perform:)``, refuses to run on the other
 /// side of it, as a cursor carried across one does.
-public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~Escapable {
+public struct SQLitePreparedStatement: ~Copyable, ~Escapable {
   /// The SQL the statement was compiled from.
   ///
   /// ```swift
@@ -119,6 +124,12 @@ public struct SQLitePreparedStatement<Access: OrbitDatabaseAccess>: ~Copyable, ~
         """,
       sql: sql
     )
+  }
+
+  // Refuses a reading run of a statement that may write, as a transaction's reads refuse it.
+  private func checkReadOnly() throws {
+    guard let state, !state.statement.isReadOnly else { return }
+    throw SQLiteStatementCache.mayWriteError(sql: sql)
   }
 
   // Refuses a run with the wrong number of arguments before anything is bound. A run rebinds
@@ -252,7 +263,7 @@ extension SQLiteReadTransaction {
   public borrowing func prepare(
     _ sql: SQL,
     cached: Bool = true
-  ) throws -> SQLitePreparedStatement<OrbitDatabaseReadAccess> {
+  ) throws -> SQLitePreparedStatement {
     try SQLitePreparedStatement(
       sql,
       cached: cached,
@@ -271,7 +282,8 @@ extension SQLiteWriteTransaction {
   /// Compiles a statement once, to run many times with different values.
   ///
   /// Write a parameter in the SQL, such as `?`, for each value a run supplies. A write
-  /// transaction may write, so the statement is not held to reading.
+  /// transaction may write, so the statement is not held to reading, but only `execute` and
+  /// `executeRowCursor` run a statement that may write: its reading runs refuse it.
   ///
   /// ```swift
   /// try await database.write { transaction in
@@ -294,7 +306,7 @@ extension SQLiteWriteTransaction {
   public borrowing func prepare(
     _ sql: SQL,
     cached: Bool = true
-  ) throws -> SQLitePreparedStatement<OrbitDatabaseWriteAccess> {
+  ) throws -> SQLitePreparedStatement {
     try SQLitePreparedStatement(
       sql,
       cached: cached,
@@ -333,6 +345,7 @@ extension SQLitePreparedStatement {
   public mutating func rowCursor<each Argument: ConvertibleToOrbitDatabaseValue>(
     _ arguments: repeat each Argument
   ) throws -> SQLiteRowCursor {
+    try checkReadOnly()
     try bindArguments(repeat each arguments)
     return runCursor()
   }
@@ -351,6 +364,7 @@ extension SQLitePreparedStatement {
   public mutating func rowCursor() throws -> SQLiteRowCursor {
     // Spelled out, rather than left to the variadic overload, because Swift 6.3 crashes compiling
     // a call that passes an empty pack to a method whose result depends on `self`.
+    try checkReadOnly()
     try bindArguments()
     return runCursor()
   }
@@ -368,6 +382,7 @@ extension SQLitePreparedStatement {
   ///   match ``parameterCount``.
   @_lifetime(&self)
   public mutating func rowCursor(bindings: [OrbitDatabaseValue]) throws -> SQLiteRowCursor {
+    try checkReadOnly()
     try bindArguments(bindings)
     return runCursor()
   }
@@ -397,6 +412,7 @@ extension SQLitePreparedStatement {
     _ arguments: repeat each Argument,
     as type: Value.Type
   ) throws -> OrbitDatabaseRowDecodingCursor<SQLiteRowCursor, Value> {
+    try checkReadOnly()
     try bindArguments(repeat each arguments)
     return OrbitDatabaseRowDecodingCursor(base: runCursor())
   }
@@ -418,6 +434,7 @@ extension SQLitePreparedStatement {
     as type: Value.Type
   ) throws -> OrbitDatabaseRowDecodingCursor<SQLiteRowCursor, Value> {
     // Spelled out for the same reason as `rowCursor()`.
+    try checkReadOnly()
     try bindArguments()
     return OrbitDatabaseRowDecodingCursor(base: runCursor())
   }
@@ -440,6 +457,7 @@ extension SQLitePreparedStatement {
     bindings: [OrbitDatabaseValue],
     as type: Value.Type
   ) throws -> OrbitDatabaseRowDecodingCursor<SQLiteRowCursor, Value> {
+    try checkReadOnly()
     try bindArguments(bindings)
     return OrbitDatabaseRowDecodingCursor(base: runCursor())
   }
@@ -464,6 +482,7 @@ extension SQLitePreparedStatement {
     _ arguments: repeat each Argument,
     transform: (inout SQLiteRow) throws -> Element
   ) throws -> [Element] {
+    try checkReadOnly()
     try bindArguments(repeat each arguments)
     return try withOrbitCursor(runCursor()) { try $0.collect(transform) }
   }
@@ -484,6 +503,7 @@ extension SQLitePreparedStatement {
     bindings: [OrbitDatabaseValue],
     _ transform: (inout SQLiteRow) throws -> Element
   ) throws -> [Element] {
+    try checkReadOnly()
     try bindArguments(bindings)
     return try withOrbitCursor(runCursor()) { try $0.collect(transform) }
   }
@@ -510,6 +530,7 @@ extension SQLitePreparedStatement {
     _ arguments: repeat each Argument,
     transform: (inout SQLiteRow) throws -> Element
   ) throws -> Element? {
+    try checkReadOnly()
     try bindArguments(repeat each arguments)
     return try withOrbitCursor(runCursor()) { try $0.first(transform) }
   }
@@ -531,40 +552,16 @@ extension SQLitePreparedStatement {
     bindings: [OrbitDatabaseValue],
     _ transform: (inout SQLiteRow) throws -> Element
   ) throws -> Element? {
+    try checkReadOnly()
     try bindArguments(bindings)
     return try withOrbitCursor(runCursor()) { try $0.first(transform) }
   }
 }
 
-// The `as:` fetches, which convert rows as the transaction's do: a row-convertible type uses its
-// row initializer, a type convertible only from a value reads the first column, and a type that
-// is both uses its row initializer.
+// The `as:` fetches, which convert rows as the transaction's do: a value type reads the first
+// column, unless it declares its own row initializer, and any other type reads the row through its
+// own initializer.
 extension SQLitePreparedStatement {
-  /// Runs the statement with the given arguments and returns the first column of each row,
-  /// converted to a type.
-  ///
-  /// ```swift
-  /// var ids = try transaction.prepare("SELECT id FROM reminders WHERE list_id = ?")
-  /// let reminderIDs = try ids.fetchAll(listID, as: Int.self)
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - arguments: One value for each of the statement's parameters, in order.
-  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
-  /// - Returns: The values, in the order the rows were returned.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or the arguments do not match
-  ///   ``parameterCount``.
-  public mutating func fetchAll<
-    each Argument: ConvertibleToOrbitDatabaseValue,
-    Value: ConvertibleFromOrbitDatabaseValue
-  >(
-    _ arguments: repeat each Argument,
-    as type: Value.Type
-  ) throws -> [Value] {
-    try fetchAll(repeat each arguments) { row in try row[0, as: Value.self] }
-  }
-
   /// Runs the statement with the given arguments and initializes a value from each row.
   ///
   /// ```swift
@@ -586,46 +583,6 @@ extension SQLitePreparedStatement {
     as type: Value.Type
   ) throws -> [Value] {
     try fetchAll(repeat each arguments) { row in try Value(orbitDatabaseRow: row) }
-  }
-
-  /// Uses row decoding for a type that also supports scalar conversion.
-  ///
-  /// ```swift
-  /// let reminders = try byList.fetchAll(listID, as: Reminder.self)
-  /// ```
-  public mutating func fetchAll<
-    each Argument: ConvertibleToOrbitDatabaseValue,
-    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
-  >(
-    _ arguments: repeat each Argument,
-    as type: Value.Type
-  ) throws -> [Value] {
-    try fetchAll(repeat each arguments) { row in try Value(orbitDatabaseRow: row) }
-  }
-
-  /// Runs the statement with the given arguments and returns the first column of the first row,
-  /// converted to a type, or `nil` when it returns none.
-  ///
-  /// ```swift
-  /// var count = try transaction.prepare("SELECT count(*) FROM reminders WHERE list_id = ?")
-  /// let total = try count.fetchOne(listID, as: Int.self)
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - arguments: One value for each of the statement's parameters, in order.
-  ///   - type: The type to convert the value to.
-  /// - Returns: The value, or `nil` when the run returned no rows.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or the arguments do not match
-  ///   ``parameterCount``.
-  public mutating func fetchOne<
-    each Argument: ConvertibleToOrbitDatabaseValue,
-    Value: ConvertibleFromOrbitDatabaseValue
-  >(
-    _ arguments: repeat each Argument,
-    as type: Value.Type
-  ) throws -> Value? {
-    try fetchOne(repeat each arguments) { row in try row[0, as: Value.self] }
   }
 
   /// Runs the statement with the given arguments and initializes a value from the first row, or
@@ -652,41 +609,6 @@ extension SQLitePreparedStatement {
     try fetchOne(repeat each arguments) { row in try Value(orbitDatabaseRow: row) }
   }
 
-  /// Uses row decoding for a type that also supports scalar conversion.
-  ///
-  /// ```swift
-  /// let reminder = try byID.fetchOne(id, as: Reminder.self)
-  /// ```
-  public mutating func fetchOne<
-    each Argument: ConvertibleToOrbitDatabaseValue,
-    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
-  >(
-    _ arguments: repeat each Argument,
-    as type: Value.Type
-  ) throws -> Value? {
-    try fetchOne(repeat each arguments) { row in try Value(orbitDatabaseRow: row) }
-  }
-
-  /// Runs the statement with values gathered at runtime and returns the first column of each
-  /// row, converted to a type.
-  ///
-  /// ```swift
-  /// let reminderIDs = try ids.fetchAll(bindings: [.integer(listID)], as: Int.self)
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - bindings: One value for each of the statement's parameters, in order.
-  ///   - type: The type to convert each value to. Make it optional to read `NULL`.
-  /// - Returns: The values, in the order the rows were returned.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when a value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or the values do not match ``parameterCount``.
-  public mutating func fetchAll<Value: ConvertibleFromOrbitDatabaseValue>(
-    bindings: [OrbitDatabaseValue],
-    as type: Value.Type
-  ) throws -> [Value] {
-    try fetchAll(bindings: bindings) { row in try row[0, as: Value.self] }
-  }
-
   /// Runs the statement with values gathered at runtime and initializes a value from each row.
   ///
   /// ```swift
@@ -704,40 +626,6 @@ extension SQLitePreparedStatement {
     as type: Value.Type
   ) throws -> [Value] {
     try fetchAll(bindings: bindings) { row in try Value(orbitDatabaseRow: row) }
-  }
-
-  /// Uses row decoding for a type that also supports scalar conversion.
-  ///
-  /// ```swift
-  /// let reminders = try byList.fetchAll(bindings: [.integer(listID)], as: Reminder.self)
-  /// ```
-  public mutating func fetchAll<
-    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
-  >(
-    bindings: [OrbitDatabaseValue],
-    as type: Value.Type
-  ) throws -> [Value] {
-    try fetchAll(bindings: bindings) { row in try Value(orbitDatabaseRow: row) }
-  }
-
-  /// Runs the statement with values gathered at runtime and returns the first column of the
-  /// first row, converted to a type, or `nil` when it returns none.
-  ///
-  /// ```swift
-  /// let total = try count.fetchOne(bindings: [.integer(listID)], as: Int.self)
-  /// ```
-  ///
-  /// - Parameters:
-  ///   - bindings: One value for each of the statement's parameters, in order.
-  ///   - type: The type to convert the value to.
-  /// - Returns: The value, or `nil` when the run returned no rows.
-  /// - Throws: ``OrbitDatabaseColumnDecodingError`` when the value cannot be converted, or a
-  ///   ``SQLiteError`` when the statement fails or the values do not match ``parameterCount``.
-  public mutating func fetchOne<Value: ConvertibleFromOrbitDatabaseValue>(
-    bindings: [OrbitDatabaseValue],
-    as type: Value.Type
-  ) throws -> Value? {
-    try fetchOne(bindings: bindings) { row in try row[0, as: Value.self] }
   }
 
   /// Runs the statement with values gathered at runtime and initializes a value from the first
@@ -759,23 +647,67 @@ extension SQLitePreparedStatement {
   ) throws -> Value? {
     try fetchOne(bindings: bindings) { row in try Value(orbitDatabaseRow: row) }
   }
-
-  /// Uses row decoding for a type that also supports scalar conversion.
-  ///
-  /// ```swift
-  /// let reminder = try byID.fetchOne(bindings: [.integer(id)], as: Reminder.self)
-  /// ```
-  public mutating func fetchOne<
-    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue
-  >(
-    bindings: [OrbitDatabaseValue],
-    as type: Value.Type
-  ) throws -> Value? {
-    try fetchOne(bindings: bindings) { row in try Value(orbitDatabaseRow: row) }
-  }
 }
 
-extension SQLitePreparedStatement where Access == OrbitDatabaseWriteAccess {
+extension SQLitePreparedStatement {
+  /// Runs a statement that may write with the given arguments and lends a cursor over the rows it
+  /// returns, such as from a `RETURNING` clause.
+  ///
+  /// SQLite makes every change a `RETURNING` statement reports on its first step, so the rows the
+  /// cursor leaves unread are written all the same.
+  ///
+  /// ```swift
+  /// var insert = try transaction.prepare("INSERT INTO items (a) VALUES (?) RETURNING id")
+  /// var cursor = try insert.executeRowCursor(item.a)
+  /// let id = try cursor.first(as: Int64.self)
+  /// ```
+  ///
+  /// - Parameter arguments: One value for each of the statement's parameters, in order.
+  /// - Returns: A cursor over the run's rows.
+  /// - Throws: A ``SQLiteError`` with the code ``SQLiteResultCode/range`` when the arguments do
+  ///   not match ``parameterCount``, or whatever an argument throws converting to a value.
+  @_lifetime(&self)
+  public mutating func executeRowCursor<each Argument: ConvertibleToOrbitDatabaseValue>(
+    _ arguments: repeat each Argument
+  ) throws -> SQLiteRowCursor {
+    try bindArguments(repeat each arguments)
+    return runCursor()
+  }
+
+  /// Runs a statement that may write and has no parameters, and lends a cursor over the rows it
+  /// returns.
+  ///
+  /// ```swift
+  /// var purge = try transaction.prepare("DELETE FROM items WHERE done RETURNING id")
+  /// var cursor = try purge.executeRowCursor()
+  /// ```
+  ///
+  /// - Returns: A cursor over the run's rows.
+  /// - Throws: A ``SQLiteError`` with the code ``SQLiteResultCode/range`` when the statement has
+  ///   parameters.
+  @_lifetime(&self)
+  public mutating func executeRowCursor() throws -> SQLiteRowCursor {
+    try bindArguments()
+    return runCursor()
+  }
+
+  /// Runs a statement that may write with values gathered at runtime, and lends a cursor over the
+  /// rows it returns.
+  ///
+  /// ```swift
+  /// var cursor = try insert.executeRowCursor(bindings: [.text("Milk")])
+  /// ```
+  ///
+  /// - Parameter bindings: One value for each of the statement's parameters, in order.
+  /// - Returns: A cursor over the run's rows.
+  /// - Throws: A ``SQLiteError`` with the code ``SQLiteResultCode/range`` when the values do not
+  ///   match ``parameterCount``.
+  @_lifetime(&self)
+  public mutating func executeRowCursor(bindings: [OrbitDatabaseValue]) throws -> SQLiteRowCursor {
+    try bindArguments(bindings)
+    return runCursor()
+  }
+
   /// Runs the statement with the given arguments to completion, discarding any rows it returns.
   ///
   /// Read the transaction's ``SQLiteWriteTransaction/changesCount`` afterwards for how many rows

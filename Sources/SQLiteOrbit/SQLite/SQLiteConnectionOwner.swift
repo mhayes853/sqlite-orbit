@@ -59,7 +59,7 @@ public struct SQLiteConnection: ~Copyable {
         connection: pointer,
         authorizer: authorizer,
         statements: statements,
-        configuration: configurationStorage
+        configuration: configurationStorage.pointee
       )
     )
     self.settings = settings
@@ -132,21 +132,7 @@ public struct SQLiteConnection: ~Copyable {
     // thing the connection does rather than merely before the first statement.
     try unlock(with: configuration.key)
     _ = libraryStorage.pointee.connections.setExtendedResultCodes(pointer, 1)
-    let timeoutCode = libraryStorage.pointee.connections.setBusyTimeout(
-      pointer,
-      configuration.busyTimeout.milliseconds
-    )
-    guard timeoutCode == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(
-        by: libraryStorage.pointee,
-        on: pointer,
-        code: timeoutCode,
-        sql: nil
-      )
-    }
-    // Last of the two, since SQLite keeps one busy handler and the timeout is one: a configuration
-    // that sets both waits by the handler.
-    try installBusyHandler()
+    try settings.pointee.applyConfiguredBusyPolicy()
     try execute("PRAGMA foreign_keys = \(configuration.isForeignKeysEnabled ? "ON" : "OFF")")
     let connection = SQLiteConnectionAccess(handle: self)
     if let trustedSchema = libraryStorage.pointee.trustedSchema {
@@ -156,6 +142,15 @@ public struct SQLiteConnection: ~Copyable {
         libraryName: libraryStorage.pointee.name,
         feature: .trustedSchema
       )
+    }
+    // The journal mode is the driver's to choose, so it is set with the driver's own privilege
+    // before the application's policy is installed, and before any setup can run against a mode
+    // other than the one it asked for. A connection opened read-only cannot change it, and reads
+    // whatever mode the writers chose.
+    if let journalMode = configuration.journalMode, !isReadOnly {
+      try authorizer.requiringExecution {
+        try execute("PRAGMA journal_mode = \(try journalMode.pragmaValue())")
+      }
     }
     // A setup is handed the library this connection was opened through, so whether it can run
     // against that build is its own question to answer rather than one asked on its behalf here.
@@ -167,28 +162,13 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func installBusyHandler() throws {
-    guard configurationStorage.pointee.busyHandler != nil else { return }
-    guard libraryStorage.pointee.busyHandler != nil else {
-      throw SQLiteFeatureUnavailableError(
-        libraryName: libraryStorage.pointee.name,
-        feature: .busyHandler
-      )
-    }
-    let code = SQLiteBusyHandlerInstallation.install(
-      on: pointer,
-      library: library,
-      configuration: configurationStorage
-    )
-    guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(by: libraryStorage.pointee, on: pointer, code: code, sql: nil)
-    }
-  }
-
   private borrowing func unlock(with key: SQLiteKey?) throws {
     guard let key else { return }
     guard let encryption = libraryStorage.pointee.encryption else {
-      throw SQLiteEncryptionUnavailableError()
+      throw SQLiteFeatureUnavailableError(
+        libraryName: libraryStorage.pointee.name,
+        feature: .encryption
+      )
     }
     // The key is passed as bytes, so it never reaches a statement and never lands in the `sql` of
     // the error a wrong key produces.
@@ -356,14 +336,15 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  borrowing func withStatementExecution<Result: ~Copyable>(
-    _ step:
-      @escaping @Sendable (OpaquePointer?, @convention(c) (OpaquePointer?) -> Int32) -> Int32,
+  borrowing func withStatementStepInterceptor<Result: ~Copyable>(
+    _ intercept: @escaping SQLiteStatementStepInterceptor,
     perform operation: () throws -> Result
   ) rethrows -> Result {
+    // Each interceptor wraps whatever step was in effect when it was installed, so nested ones
+    // compose, the innermost running first, and each is taken off again in reverse order.
     let previous = libraryStorage.pointee.statements.execution.step
-    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push {
-      step($0, previous)
+    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push { statement in
+      intercept(statement, previous)
     }
     defer {
       libraryStorage.pointee.statements.execution.step = previous
@@ -617,3 +598,8 @@ extension SQLiteLibrary {
     return false
   }
 }
+
+/// Steps `statement` in place of `sqlite3_step`, by calling `next` or not, and returns the result
+/// code, as the connections' `withStatementStepInterceptor(_:perform:)` takes it.
+typealias SQLiteStatementStepInterceptor =
+  @Sendable (_ statement: OpaquePointer?, _ next: (OpaquePointer?) -> Int32) -> Int32

@@ -2,7 +2,7 @@
   import StructuredQueriesSQLite
 
   // The SwiftUI half of the fetch properties: the `DynamicProperty` conformances, the storage a
-  // view keeps across its own re-creation, and the `animation:` scheduler. None of it can be
+  // view keeps across its own re-creation, and the `.animation(_:)` scheduler. None of it can be
   // exercised by reading a property in a test, because all of it is about what SwiftUI does with a
   // property between renders — so these tests render the views and read what came out.
   #if canImport(ViewInspector) && BuiltInSQLite
@@ -21,20 +21,13 @@
     @Suite(.serialized, .timeLimit(.minutes(1)))
     struct FetchSwiftUITests {
       @Test
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      func animationSchedulerIdentityIncludesTheAnimation() {
-        #expect(
-          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
-            .deferringInitialValue()
-            == OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
-            .deferringInitialValue()
-        )
-        #expect(
-          OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
-            .deferringInitialValue()
-            != OrbitMainActorValueObservationScheduler.mainActor.animation(.linear)
-            .deferringInitialValue()
-        )
+      func theLeadingDotAnimationSchedulerAnimatesOnTheMainActor() {
+        let scheduler:
+          OrbitAnimatedValueObservationScheduler<
+            OrbitMainActorValueObservationScheduler
+          > = .animation(.linear)
+        #expect(scheduler == OrbitMainActorValueObservationScheduler.mainActor.animation(.linear))
+        #expect(scheduler != OrbitMainActorValueObservationScheduler.mainActor.animation(.default))
       }
 
       @Test
@@ -100,13 +93,12 @@
       func viewRendersSectionsInOrder() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "Milk", priority: "low")
-              Reminder.Draft(title: "Eggs", priority: "high")
-              Reminder.Draft(title: "Bread", priority: "low")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "Milk", priority: "low")
+            Reminder.Draft(title: "Eggs", priority: "high")
+            Reminder.Draft(title: "Bread", priority: "low")
+          }
+          .execute(transaction)
         }
         let sut = SectionedRemindersList(database: database)
 
@@ -137,7 +129,6 @@
       }
 
       @Test
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
       func animatedPropertyDeliversItsRowsToTheView() async throws {
         let database = try await remindersDatabase(titles: "Milk", "Eggs")
         let sut = AnimatedRemindersList(database: database)
@@ -351,13 +342,16 @@
 
     /// Every reminder, delivered with an animation rather than as the read produces them.
     @MainActor
-    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     private struct AnimatedRemindersList: View {
       @FetchAll var reminders: [Reminder]
       let inspection = Inspection<Self>()
 
       init(database: any OrbitObservableDatabase) {
-        _reminders = FetchAll(Reminder.order(by: \.id), database: database, animation: .default)
+        _reminders = FetchAll(
+          Reminder.order(by: \.id),
+          database: database,
+          scheduler: .animation(.default)
+        )
       }
 
       var body: some View {

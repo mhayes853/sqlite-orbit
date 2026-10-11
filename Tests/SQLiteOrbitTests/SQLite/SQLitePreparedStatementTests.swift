@@ -461,20 +461,52 @@
     }
 
     @Test
-    func aWriteCanCollectItsReturnedRows() throws {
+    func aWriteCollectsItsReturnedRowsThroughExecuteRowCursor() throws {
       var owner = try itemsConnection()
       try owner.write { transaction in
         var insert = try transaction.prepare(
           "INSERT INTO items (a, grp, label) VALUES (?, ?, ?) RETURNING a, label"
         )
-        #expect(try insert.fetchOne(7, "z", "seven", as: Item.self) == Item(a: 7, label: "seven"))
-        #expect(try insert.fetchAll(8, "z", "eight") { $0[1].textValue } == ["eight"])
+        do {
+          var cursor = try insert.executeRowCursor(7, "z", "seven")
+          #expect(try cursor.first(as: Item.self) == Item(a: 7, label: "seven"))
+        }
+        do {
+          var cursor = try insert.executeRowCursor(bindings: [8, "z", "eight"])
+          #expect(try cursor.collect { $0[1].textValue } == ["eight"])
+        }
         // The same SQL run through the transaction while the statement is held gets its own.
         try transaction.execute(
-          "INSERT INTO items (a, grp, label) VALUES (?, ?, ?) RETURNING a, label",
-          cached: true
+          "INSERT INTO items (a, grp, label) VALUES (?, ?, ?) RETURNING a, label"
         ) { _ in .next }
       }
+      let inserted = try owner.read {
+        try $0.fetchAll("SELECT a FROM items WHERE grp = 'z'", as: Int.self)
+      }
+      #expect(inserted == [7, 8])
+    }
+
+    @Test
+    func readingRunsRefuseAStatementThatMayWrite() throws {
+      var owner = try itemsConnection()
+      try owner.write { transaction in
+        var insert = try transaction.prepare(
+          "INSERT INTO items (a, grp, label) VALUES (?, ?, ?) RETURNING a"
+        )
+        let fetchAll = #expect(throws: SQLiteError.self) {
+          try insert.fetchAll(1, "z", "one", as: Int.self)
+        }
+        #expect(fetchAll?.primaryCode == .readOnly)
+        let fetchOne = #expect(throws: SQLiteError.self) {
+          try insert.fetchOne(bindings: [1, "z", "one"], as: Int.self)
+        }
+        #expect(fetchOne?.primaryCode == .readOnly)
+        try insert.execute(2, "z", "two")
+      }
+      let inserted = try owner.read {
+        try $0.fetchAll("SELECT a FROM items WHERE grp = 'z'", as: Int.self)
+      }
+      #expect(inserted == [2])
     }
 
     #if !Turso

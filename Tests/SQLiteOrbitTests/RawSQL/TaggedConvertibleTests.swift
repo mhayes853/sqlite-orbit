@@ -138,11 +138,10 @@
           let (decoded, read) = try await database.write { transaction in
             try transaction.execute("CREATE TABLE reminders (id INTEGER)")
             try transaction.execute("INSERT INTO reminders VALUES (\(ReminderID(1)))")
-            try transaction.execute(
-              #sql("INSERT INTO reminders VALUES (\(ReminderID(2)))", as: Void.self)
-            )
+            try #sql("INSERT INTO reminders VALUES (\(ReminderID(2)))", as: Void.self)
+              .execute(transaction)
             return (
-              try transaction.fetchAll(#sql("SELECT id FROM reminders", as: ReminderID.self)),
+              try #sql("SELECT id FROM reminders", as: ReminderID.self).fetchAll(transaction),
               try transaction.fetchAll("SELECT id FROM reminders", as: ReminderID.self)
             )
           }

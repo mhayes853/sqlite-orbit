@@ -21,9 +21,8 @@
   /// ```
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
-  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
-  /// Saving requires an ``OrbitDatabaseWriter``. A reader-only environment can supply
-  /// the observed row, but saves throw a ``SQLiteError`` with code ``SQLiteResultCode/readOnly``.
+  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``. Each of them is an
+  /// ``OrbitObservableDatabaseWriter``, so saves always go to the database the row is read from.
   @propertyWrapper
   public struct SingleRow<Value>: Sendable
   where
@@ -44,16 +43,23 @@
     #endif
 
     /// Creates a property observing this table's singleton row.
+    ///
+    /// - Parameters:
+    ///   - type: The single-row table to observe.
+    ///   - database: The database to read from and save to, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
+    ///   - scheduler: Where values are delivered. By default they are delivered as they are
+    ///     produced, and the first read happens before the property is first read.
     public init(
       _ type: Value.Type,
-      database: (any OrbitObservableDatabase & OrbitDatabaseWriter)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      database: (any OrbitObservableDatabaseWriter)? = nil,
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) {
       let storage = OrbitRowStorage(
         fetch: .make(
           value: Value.defaultValue,
           request: OrbitFetchSingleRowRequest<Value>(),
-          database: database,
+          writableDatabase: database,
           scheduler: scheduler
         )
       )
@@ -112,7 +118,7 @@
     public func update<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) async throws -> Result {
-      return try await storage.write { database in
+      try await storage.write { database in
         try await database.write { transaction in
           try Value.update(in: transaction, mutation)
         }
@@ -173,23 +179,13 @@
 
   #if canImport(SwiftUI)
     extension SingleRow: DynamicProperty {
+      /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        storage.fetch.update(
-          declared: box.fetch,
+        storage.update(
+          declared: box,
           database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
-          generation: fetchGeneration
-        )
-        observeWritesForSwiftUI()
-      }
-
-      private func observeWritesForSwiftUI() {
-        guard #unavailable(iOS 17, macOS 14, tvOS 17, watchOS 10) else { return }
-        _ = writeGeneration.wrappedValue
-        nonisolated(unsafe) let generation = writeGeneration
-        storage.setSwiftUIObservation(
-          storage.addWriteObserver {
-            Task { @MainActor in generation.wrappedValue &+= 1 }
-          }
+          fetchGeneration: fetchGeneration,
+          writeGeneration: writeGeneration
         )
       }
     }

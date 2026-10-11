@@ -21,20 +21,18 @@
 
       try await withPooledDatabase(configuration: configuration) { database in
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)
-          )
-          try transaction.execute(
-            Word.insert {
-              Word(id: 1, text: "ab")
-              Word(id: 2, text: "ba")
-              Word(id: 3, text: "cc")
-            }
-          )
+          try #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)
+            .execute(transaction)
+          try Word.insert {
+            Word(id: 1, text: "ab")
+            Word(id: 2, text: "ba")
+            Word(id: 3, text: "cc")
+          }
+          .execute(transaction)
         }
 
         let natural = try await database.read { transaction in
-          try transaction.fetchAll(Word.order(by: \.text).select(\.text))
+          try Word.order(by: \.text).select(\.text).fetchAll(transaction)
         }
         #expect(natural == ["ab", "ba", "cc"])
 
@@ -42,7 +40,7 @@
         // concurrent reads that the pool must open readers beyond the first: a collation installed
         // on only one connection would fail here with "no such collation sequence".
         let reversed = try await concurrentReads(8, of: database) { transaction in
-          try transaction.fetchAll(Word.order { $0.text.collate(.reversedText) }.select(\.text))
+          try Word.order { $0.text.collate(.reversedText) }.select(\.text).fetchAll(transaction)
         }
         #expect(reversed.allSatisfy { $0 == ["ba", "ab", "cc"] })
       }
@@ -60,31 +58,27 @@
       let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
       try await database.write { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)
-        )
-        try transaction.execute(
-          Word.insert {
-            Word(id: 1, text: "日本語")
-            Word(id: 2, text: "ab")
-            Word(id: 3, text: "é")
-          }
-        )
+        try #sql("CREATE TABLE words (id INTEGER PRIMARY KEY, text TEXT NOT NULL)", as: Void.self)
+          .execute(transaction)
+        try Word.insert {
+          Word(id: 1, text: "日本語")
+          Word(id: 2, text: "ab")
+          Word(id: 3, text: "é")
+        }
+        .execute(transaction)
       }
 
       // "日本語" is nine bytes but three characters, and "é" is two bytes but one.
       let byCharacterCount = try await database.read { transaction in
-        try transaction.fetchAll(
-          Word.order { $0.text.collate(NamedCollation($characterCount)) }.select(\.text)
-        )
+        try Word.order { $0.text.collate(NamedCollation($characterCount)) }.select(\.text)
+          .fetchAll(transaction)
       }
       #expect(byCharacterCount == ["é", "ab", "日本語"])
 
       // Equal under the collation, so a `WHERE` comparison through it matches both.
       let sameLength = try await database.read { transaction in
-        try transaction.fetchCount(
-          Word.where { $0.text.collate(NamedCollation($characterCount)).eq("xx") }
-        )
+        try Word.where { $0.text.collate(NamedCollation($characterCount)).eq("xx") }
+          .fetchCount(transaction)
       }
       #expect(sameLength == 1)
     }
@@ -123,15 +117,14 @@
 
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
       let ordered = try await driver.read { transaction in
-        try transaction.fetchAll(
-          #sql(
-            """
-            SELECT text FROM (SELECT 'ab' AS text UNION SELECT 'ba')
-            ORDER BY text COLLATE reversedText
-            """,
-            as: String.self
-          )
+        try #sql(
+          """
+          SELECT text FROM (SELECT 'ab' AS text UNION SELECT 'ba')
+          ORDER BY text COLLATE reversedText
+          """,
+          as: String.self
         )
+        .fetchAll(transaction)
       }
 
       #expect(ordered == ["ba", "ab"])

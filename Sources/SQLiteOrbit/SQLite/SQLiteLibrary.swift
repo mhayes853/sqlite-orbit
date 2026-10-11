@@ -145,8 +145,8 @@ public struct SQLiteLibrary: Sendable {
   public var authorizer: Authorizer?
   /// Busy-handler installation, when the library implements it faithfully.
   ///
-  /// A library without this can still wait for a lock by the connection's busy timeout, so only a
-  /// ``SQLiteConfiguration/busyHandler`` is refused for want of it.
+  /// A library without this can still wait for a lock by a busy timeout, so only a
+  /// ``SQLiteBusyPolicy/handler(_:)`` policy is refused for want of it.
   public var busyHandler: BusyHandler?
   /// Trusted-schema control, when the library implements it faithfully.
   public var trustedSchema: SQLiteTrustedSchemaControl?

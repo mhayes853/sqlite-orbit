@@ -71,7 +71,7 @@ func withOrbitCursor<Cursor: OrbitDatabaseRowCursor & ~Copyable & ~Escapable, Re
 ///
 /// ```swift
 /// try await database.read { transaction in
-///   var cursor = try transaction.fetchCursor(Reminder.all)
+///   var cursor = try Reminder.all.fetchCursor(transaction)
 ///     .filter { !$0.isCompleted }
 ///     .map(\.title)
 ///   return try cursor.collect()
@@ -115,7 +115,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/map(_:)``.
 ///
 /// ```swift
-/// var titles = try transaction.fetchCursor(Reminder.all).map(\.title)
+/// var titles = try Reminder.all.fetchCursor(transaction).map(\.title)
 /// ```
 public struct OrbitDatabaseMapCursor<Base: OrbitDatabaseCursor, Output>:
   OrbitDatabaseCursor, ~Copyable, ~Escapable
@@ -151,7 +151,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/filter(_:)``.
 ///
 /// ```swift
-/// var pending = try transaction.fetchCursor(Reminder.all).filter { !$0.isCompleted }
+/// var pending = try Reminder.all.fetchCursor(transaction).filter { !$0.isCompleted }
 /// ```
 public struct OrbitDatabaseFilterCursor<Base: OrbitDatabaseCursor>:
   OrbitDatabaseCursor, ~Copyable, ~Escapable
@@ -191,7 +191,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/compactMap(_:)``.
 ///
 /// ```swift
-/// var ids = try transaction.fetchCursor(Reminder.all).compactMap { Int($0.title) }
+/// var ids = try Reminder.all.fetchCursor(transaction).compactMap { Int($0.title) }
 /// ```
 public struct OrbitDatabaseCompactMapCursor<Base: OrbitDatabaseCursor, Output>:
   OrbitDatabaseCursor, ~Copyable, ~Escapable
@@ -231,7 +231,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/dropFirst(_:)``.
 ///
 /// ```swift
-/// var afterTheFirstTen = try transaction.fetchCursor(Reminder.all).dropFirst(10)
+/// var afterTheFirstTen = try Reminder.all.fetchCursor(transaction).dropFirst(10)
 /// ```
 public struct OrbitDatabaseDropFirstCursor<Base: OrbitDatabaseCursor>:
   OrbitDatabaseCursor, ~Copyable, ~Escapable
@@ -271,7 +271,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/drop(while:)``.
 ///
 /// ```swift
-/// var fromTheFirstPending = try transaction.fetchCursor(Reminder.all)
+/// var fromTheFirstPending = try Reminder.all.fetchCursor(transaction)
 ///   .drop(while: \.isCompleted)
 /// ```
 public struct OrbitDatabaseDropWhileCursor<Base: OrbitDatabaseCursor>:
@@ -320,7 +320,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/prefix(_:)``.
 ///
 /// ```swift
-/// var firstTen = try transaction.fetchCursor(Reminder.all).prefix(10)
+/// var firstTen = try Reminder.all.fetchCursor(transaction).prefix(10)
 /// ```
 public struct OrbitDatabasePrefixCursor<Base: OrbitDatabaseCursor>:
   OrbitDatabaseCursor, ~Copyable, ~Escapable
@@ -359,7 +359,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/prefix(while:)``.
 ///
 /// ```swift
-/// var leadingCompleted = try transaction.fetchCursor(Reminder.all)
+/// var leadingCompleted = try Reminder.all.fetchCursor(transaction)
 ///   .prefix(while: \.isCompleted)
 /// ```
 public struct OrbitDatabasePrefixWhileCursor<Base: OrbitDatabaseCursor>:
@@ -405,7 +405,7 @@ where Base: ~Copyable, Base: ~Escapable {
 /// Created by ``OrbitDatabaseCursor/enumerated()``.
 ///
 /// ```swift
-/// var numbered = try transaction.fetchCursor(Reminder.all).enumerated()
+/// var numbered = try Reminder.all.fetchCursor(transaction).enumerated()
 /// while let (offset, reminder) = try numbered.next() {
 ///   print(offset, reminder.title)
 /// }
@@ -442,7 +442,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Nothing is read from the database until the returned cursor is advanced.
   ///
   /// ```swift
-  /// var titles = try transaction.fetchCursor(Reminder.all).map(\.title)
+  /// var titles = try Reminder.all.fetchCursor(transaction).map(\.title)
   /// let uppercased = try titles.map { $0.uppercased() }.collect()
   /// ```
   ///
@@ -460,7 +460,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Lazily filters values in this cursor.
   ///
   /// ```swift
-  /// var pending = try transaction.fetchCursor(Reminder.all).filter { !$0.isCompleted }
+  /// var pending = try Reminder.all.fetchCursor(transaction).filter { !$0.isCompleted }
   /// ```
   ///
   /// - Parameter predicate: Answers whether a value is kept.
@@ -476,7 +476,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Lazily transforms values in this cursor and drops `nil` results.
   ///
   /// ```swift
-  /// var dueDates = try transaction.fetchCursor(Reminder.all).compactMap(\.dueDate)
+  /// var dueDates = try Reminder.all.fetchCursor(transaction).compactMap(\.dueDate)
   /// ```
   ///
   /// - Parameter transform: Produces a value to yield, or `nil` to skip this one.
@@ -505,7 +505,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// not they would have passed.
   ///
   /// ```swift
-  /// var fromTheFirstPending = try transaction.fetchCursor(Reminder.all)
+  /// var fromTheFirstPending = try Reminder.all.fetchCursor(transaction)
   ///   .drop(while: \.isCompleted)
   /// ```
   ///
@@ -546,7 +546,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Lazily pairs each value with its zero-based offset.
   ///
   /// ```swift
-  /// var numbered = try transaction.fetchCursor(Reminder.all).enumerated()
+  /// var numbered = try Reminder.all.fetchCursor(transaction).enumerated()
   /// while let (offset, reminder) = try numbered.next() {
   ///   print(offset, reminder.title)
   /// }
@@ -563,7 +563,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   ///
   /// ```swift
   /// let titles = try await database.read { transaction in
-  ///   var cursor = try transaction.fetchCursor(Reminder.select(\.title))
+  ///   var cursor = try Reminder.select(\.title).fetchCursor(transaction)
   ///   return try cursor.collect()
   /// }
   /// ```
@@ -681,7 +681,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// Returns the number of remaining values.
   ///
   /// Every row is stepped and decoded. `SELECT count(*)` is the cheaper question to ask the
-  /// database when only the count is wanted; see ``OrbitDatabaseReadTransaction/fetchCount(_:)``.
+  /// database when only the count is wanted; see `SelectStatement.fetchCount(_:)`.
   ///
   /// - Returns: How many values remained.
   /// - Throws: Whatever ``next()`` throws.
@@ -813,7 +813,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// One pass answers both, which is the point: a cursor cannot be walked twice.
   ///
   /// ```swift
-  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// var cursor = try Reminder.select(\.id).fetchCursor(transaction)
   /// let bounds = try cursor.minMax()
   /// ```
   ///
@@ -860,7 +860,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// values are ever held at once, so this scales to a result set that would not fit in memory.
   ///
   /// ```swift
-  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// var cursor = try Reminder.select(\.id).fetchCursor(transaction)
   /// let highestIDs = try cursor.topK(3)
   /// ```
   ///
@@ -905,7 +905,7 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
   /// than `2 * k` values.
   ///
   /// ```swift
-  /// var cursor = try transaction.fetchCursor(Reminder.select(\.id))
+  /// var cursor = try Reminder.select(\.id).fetchCursor(transaction)
   /// let (lowest, highest) = try cursor.minMaxK(3)
   /// ```
   ///
@@ -959,12 +959,12 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 #if StructuredQueries
   /// A cursor that decodes each raw row into one Structured Queries value.
   ///
-  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-  /// that projects a single value, so it is rarely named directly.
+  /// This is what a statement's `fetchCursor(_:)` returns when it projects a single value, so it
+  /// is rarely named directly.
   ///
   /// ```swift
   /// try await database.read { transaction in
-  ///   var cursor: OrbitDatabaseQueryCursor = try transaction.fetchCursor(Reminder.all)
+  ///   var cursor: OrbitDatabaseQueryCursor = try Reminder.all.fetchCursor(transaction)
   ///   while let reminder = try cursor.next() {
   ///     print(reminder.title)
   ///   }
@@ -995,12 +995,12 @@ extension OrbitDatabaseCursor where Self: ~Copyable, Self: ~Escapable {
 
   /// A cursor that decodes each raw row into a tuple of Structured Queries values.
   ///
-  /// This is what ``OrbitDatabaseReadTransaction/fetchCursor(_:cached:)`` returns for a statement
-  /// that projects several values, so it is rarely named directly.
+  /// This is what a statement's `fetchCursor(_:)` returns when it projects several values, so it
+  /// is rarely named directly.
   ///
   /// ```swift
   /// try await database.read { transaction in
-  ///   var cursor = try transaction.fetchCursor(Reminder.select { ($0.id, $0.title) })
+  ///   var cursor = try Reminder.select { ($0.id, $0.title) }.fetchCursor(transaction)
   ///   while let (id, title) = try cursor.next() {
   ///     print(id, title)
   ///   }

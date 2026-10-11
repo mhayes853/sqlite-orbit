@@ -22,7 +22,7 @@
         row.binding.wrappedValue = BindingSettings(id: 0, isEnabled: false)
 
         let persisted = try database.readBlocking { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
+          try BindingSettings.all.find(transaction, key: 0)
         }
         #expect(!persisted.isEnabled)
       }
@@ -39,7 +39,7 @@
             #expect(isOn)
             try toggle.tap()
             let persisted = try database.readBlocking { transaction in
-              try transaction.find(BindingSettings.all, key: 0)
+              try BindingSettings.all.find(transaction, key: 0)
             }
             #expect(!persisted.isEnabled)
           }
@@ -63,7 +63,7 @@
             #expect(!isOn)
             try toggle.tap()
             let persisted = try database.readBlocking { transaction in
-              try transaction.find(BindingReminder.all, key: 1)
+              try BindingReminder.all.find(transaction, key: 1)
             }
             #expect(persisted.isCompleted)
           }
@@ -86,7 +86,7 @@
             #expect(!isOn)
           }
           try await database.write { transaction in
-            try transaction.execute(BindingReminder.find(1).delete())
+            try BindingReminder.find(1).delete().execute(transaction)
           }
           try await sut.inspection.inspect(after: settle) { view in
             let text = try view.text().string()
@@ -95,33 +95,25 @@
         }
       }
 
-      @Test(arguments: [false, true])
-      func bindingWritesRequireAWritableEnvironment(readerOnly: Bool) async throws {
+      @Test
+      func bindingWritesGoToTheEnvironmentDatabase() async throws {
         let previous = OrbitDefaultDatabase.currentIfConfigured
         let processDefault = try await bindingDatabase(settings: true)
         let environment = try await bindingDatabase(settings: true)
         OrbitDefaultDatabase.set(processDefault)
         defer { OrbitDefaultDatabase.set(previous) }
         let sut = EnvironmentSettingsToggle()
-        let source: any OrbitObservableDatabase =
-          readerOnly
-          ? ReaderOnlyObservationDatabase(environment) : environment
 
-        try await ViewHosting.host(sut.orbitDatabase(source)) {
+        try await ViewHosting.host(sut.orbitDatabase(environment)) {
           try await sut.inspection.inspect(after: settle) { view in
             try view.find(ViewType.Toggle.self).tap()
-            let error = try view.actualView().saveError as? SQLiteError
-            #expect(error?.primaryCode == (readerOnly ? .readOnly : nil))
+            #expect(try view.actualView().saveError == nil)
           }
-          if !readerOnly { try await waitForSetting(false, in: environment) }
+          try await waitForSetting(false, in: environment)
         }
 
-        let environmentValue = try await environment.read { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
-        }
-        #expect(environmentValue.isEnabled == readerOnly)
         let processValue = try await processDefault.read { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
+          try BindingSettings.all.find(transaction, key: 0)
         }
         #expect(processValue.isEnabled)
       }
@@ -134,7 +126,7 @@
       @SingleRow private var settings: BindingSettings
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
+      init(database: any OrbitObservableDatabaseWriter) {
         _settings = SingleRow(BindingSettings.self, database: database)
       }
 
@@ -161,7 +153,7 @@
       @Row private var reminder: BindingReminder?
       let inspection = Inspection<Self>()
 
-      init(database: any OrbitObservableDatabase & OrbitDatabaseWriter) {
+      init(database: any OrbitObservableDatabaseWriter) {
         _reminder = Row(BindingReminder.self, id: 1, database: database)
       }
 
@@ -216,14 +208,12 @@
           """
         )
         if let isEnabled {
-          try transaction.execute(
-            BindingSettings.insert { BindingSettings(id: 0, isEnabled: isEnabled) }
-          )
+          try BindingSettings.insert { BindingSettings(id: 0, isEnabled: isEnabled) }
+            .execute(transaction)
         }
         if let isCompleted {
-          try transaction.execute(
-            BindingReminder.insert { BindingReminder(id: 1, isCompleted: isCompleted) }
-          )
+          try BindingReminder.insert { BindingReminder(id: 1, isCompleted: isCompleted) }
+            .execute(transaction)
         }
       }
       return database
@@ -234,7 +224,7 @@
       in database: some OrbitDatabaseReader
     ) async throws {
       while try await database.read({ transaction in
-        try transaction.find(BindingSettings.all, key: 0).isEnabled
+        try BindingSettings.all.find(transaction, key: 0).isEnabled
       }) != expected {
         try await Task.sleep(for: .milliseconds(2))
       }
@@ -245,7 +235,7 @@
       in database: some OrbitDatabaseReader
     ) async throws {
       while try await database.read({ transaction in
-        try transaction.find(BindingReminder.all, key: 1).isCompleted
+        try BindingReminder.all.find(transaction, key: 1).isCompleted
       }) != expected {
         try await Task.sleep(for: .milliseconds(2))
       }

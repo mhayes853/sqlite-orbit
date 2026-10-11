@@ -26,12 +26,12 @@
       in transaction: borrowing SQLiteWriteTransaction,
       _ mutation: (inout Self) throws -> Result
     ) throws -> Result {
-      var value = try transaction.find(Self.all, key: PrimaryKey(queryOutput: primaryKey))
+      var value = try Self.all.find(transaction, key: PrimaryKey(queryOutput: primaryKey))
       let result = try mutation(&value)
       guard value.primaryKey == primaryKey else {
         throw OrbitRowIdentityMismatchError()
       }
-      try transaction.execute(Self.update(value))
+      try Self.update(value).execute(transaction)
       guard transaction.changesCount == 1 else {
         throw OrbitDatabaseRecordNotFoundError()
       }

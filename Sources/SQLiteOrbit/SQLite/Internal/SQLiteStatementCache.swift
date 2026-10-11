@@ -180,7 +180,7 @@ final class SQLiteStatementCache {
 
   // Raw SQL cannot show through its type that it only reads, so a read-only access holds each
   // statement to it when it is compiled, before anything has run.
-  private static func mayWriteError(sql: String) -> SQLiteError {
+  static func mayWriteError(sql: String) -> SQLiteError {
     SQLiteError(
       code: .readOnly,
       message: "a read-only query may write; run it in a write transaction instead",

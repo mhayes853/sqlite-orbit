@@ -115,7 +115,7 @@
       event.events = events
       event.data.u64 = registration.rawValue << 32 | UInt64(UInt32(bitPattern: descriptor))
       guard epoll_ctl(self.descriptor.rawValue, orbit_epoll_ctl_add, descriptor, &event) == 0 else {
-        throw UnixSystemError.last("epoll_ctl")
+        throw UnixDatagramIPCTransport.SystemError.last("epoll_ctl")
       }
     }
   }

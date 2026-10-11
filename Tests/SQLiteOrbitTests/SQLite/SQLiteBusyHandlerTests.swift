@@ -13,11 +13,13 @@
       func theHandlerIsAskedAgainWithARisingAttemptUntilItGivesUp() async throws {
         try await withContendedDatabases { holder, open in
           let attempts = TestRecorder<Int>()
-          let waiter = try open(.limit(.seconds(30))) { attempt in
-            attempts.append(attempt)
-            // Giving up is what turns the wait into the `SQLITE_BUSY` the caller sees.
-            return attempt < 3
-          }
+          let waiter = try open(
+            .handler { attempt in
+              attempts.append(attempt)
+              // Giving up is what turns the wait into the `SQLITE_BUSY` the caller sees.
+              return attempt < 3
+            }
+          )
 
           let error = try await holder.holdingTheWriteLock {
             await #expect(throws: SQLiteError.self) {
@@ -33,28 +35,38 @@
       }
 
       @Test
-      func theHandlerIsConsultedInsteadOfTheConfiguredBusyTimeout() async throws {
+      func aHandlerSetForOneAccessGivesWayToTheConfiguredPolicyAfterwards() async throws {
         try await withContendedDatabases { holder, open in
           let attempts = TestCounter()
-          // A timeout long enough that waiting by it rather than the handler would hang the test.
-          let waiter = try open(.limit(.seconds(30))) { _ in
-            attempts.increment()
-            return false
-          }
+          let waiter = try open(.timeout(.zero))
 
-          let clock = ContinuousClock()
-          let started = clock.now
-          let error = try await holder.holdingTheWriteLock {
+          try await holder.holdingTheWriteLock {
+            let error = await #expect(throws: SQLiteError.self) {
+              try await waiter.writeWithoutTransaction { connection in
+                try connection.setBusyPolicy(
+                  .handler { _ in
+                    attempts.increment()
+                    return false
+                  }
+                )
+                guard case .handler = connection.busyPolicy else {
+                  Issue.record("The handler is not the policy in effect")
+                  return
+                }
+                try connection.execute("INSERT INTO items (id) VALUES (2)")
+              }
+            }
+            #expect(error?.isBusy == true)
+            #expect(attempts.value == 1)
+
+            // The configured timeout of zero is back, so nothing asks the handler again.
             await #expect(throws: SQLiteError.self) {
               try await waiter.write { transaction in
                 try transaction.execute("INSERT INTO items (id) VALUES (2)")
               }
             }
+            #expect(attempts.value == 1)
           }
-
-          #expect(error?.isBusy == true)
-          #expect(attempts.value == 1)
-          #expect(clock.now - started < .seconds(5))
         }
       }
 
@@ -62,14 +74,16 @@
       func theHandlerIsBackAfterAnAccessThatChangedTheBusyTimeout() async throws {
         try await withContendedDatabases { holder, open in
           let attempts = TestCounter()
-          let waiter = try open(.limit(.seconds(30))) { _ in
-            attempts.increment()
-            return false
-          }
+          let waiter = try open(
+            .handler { _ in
+              attempts.increment()
+              return false
+            }
+          )
 
           // Setting the timeout is how SQLite replaces the handler, since it keeps only one.
           try await waiter.writeWithoutTransaction { connection in
-            try connection.setBusyTimeout(.limit(.seconds(42)))
+            try connection.setBusyPolicy(.timeout(.seconds(42)))
             let inEffect = try connection.fetchOne(busyTimeoutPragma, as: Int.self)
             #expect(inEffect == 42_000)
           }
@@ -84,36 +98,33 @@
             }
           }
 
-          // Had the handler not come back, the restored 30 second timeout would have waited.
+          // Had the handler not come back, the 42 second timeout would have waited.
           #expect(error?.isBusy == true)
           #expect(attempts.value == 1)
           #expect(clock.now - started < .seconds(5))
         }
       }
       @Test
-      func theHandlerSurvivesRetryingAFailedTimeoutRestore() throws {
+      func theHandlerSurvivesRetryingAFailedRestore() throws {
         try withTestDatabaseFile { file in
           let failRestore = Lock(false)
           let attempts = TestCounter()
-          let base = builtInTestLibrary
+          let install = builtInTestLibrary.busyHandler!.install
           var configuration = SQLiteConfiguration.default
-          configuration.busyTimeout = .limit(.milliseconds(30))
-          configuration.busyHandler = { _ in
+          configuration.busyPolicy = .handler { _ in
             attempts.increment()
             return false
           }
-          configuration.library.connections.setBusyTimeout = LibraryHooks.setBusyTimeout {
-            connection,
-            milliseconds in
-            if milliseconds == 30, failRestore.withLock({ $0 }) {
-              return SQLiteResultCode.ioError.rawValue
+          configuration.library.busyHandler = SQLiteLibrary.BusyHandler(
+            install: LibraryHooks.installBusyHandler { connection, callback, data in
+              if failRestore.withLock({ $0 }) { return SQLiteResultCode.ioError.rawValue }
+              return install(connection, callback, data)
             }
-            return base.connections.setBusyTimeout(connection, milliseconds)
-          }
+          )
           let waiter = try file.queue(configuration: configuration)
           let error = #expect(throws: SQLiteError.self) {
             try waiter.writeWithoutTransactionBlocking { connection in
-              try connection.setBusyTimeout(.limit(.milliseconds(42)))
+              try connection.setBusyPolicy(.timeout(.milliseconds(42)))
               failRestore.withLock { $0 = true }
             }
           }
@@ -135,33 +146,46 @@
     #endif
 
     @Test
-    func aHandlerIsRefusedByALibraryThatCannotInstallOne() throws {
+    func aHandlerIsRefusedByALibraryThatCannotInstallOne() async throws {
       var configuration = SQLiteConfiguration.default
       configuration.library.busyHandler = nil
-      configuration.busyHandler = { _ in false }
+      configuration.busyPolicy = .handler { _ in false }
 
-      #expect(throws: SQLiteFeatureUnavailableError.self) {
+      let error = #expect(throws: SQLiteFeatureUnavailableError.self) {
         _ = try SQLiteQueue(path: .memory, configuration: configuration)
       }
+      #expect(error?.feature == .busyHandler)
+
+      configuration.busyPolicy = .timeout(.seconds(1))
+      let queue = try SQLiteQueue(path: .memory, configuration: configuration)
+      let scoped = await #expect(throws: SQLiteFeatureUnavailableError.self) {
+        try await queue.writeWithoutTransaction { connection in
+          try connection.withBusyPolicy(.handler { _ in false }) {}
+        }
+      }
+      #expect(scoped?.feature == .busyHandler)
+      let isTimeout = try await queue.readWithoutTransaction { connection in
+        if case .timeout(.seconds(1)) = connection.busyPolicy { true } else { false }
+      }
+      #expect(isTimeout)
     }
   }
 
   /// Runs `body` with a database holding the write lock on demand, and a way to open a second
-  /// database on the same file whose busy handler is the one under test.
+  /// database on the same file whose busy policy is the one under test.
   private func withContendedDatabases(
     _ body: (
       _ holder: WriteLockHolder,
-      _ open: (SQLiteBusyTimeout, @escaping @Sendable (Int) -> Bool) throws -> SQLiteQueue
+      _ open: (SQLiteBusyPolicy) throws -> SQLiteQueue
     ) async throws -> Void
   ) async throws {
     try await withTestDatabaseFile("busy") { file in
       let holder = try file.queue()
       try await holder.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
 
-      try await body(WriteLockHolder(database: holder)) { busyTimeout, handler in
+      try await body(WriteLockHolder(database: holder)) { busyPolicy in
         var configuration = SQLiteConfiguration.default
-        configuration.busyTimeout = busyTimeout
-        configuration.busyHandler = handler
+        configuration.busyPolicy = busyPolicy
         return try file.queue(configuration: configuration)
       }
     }

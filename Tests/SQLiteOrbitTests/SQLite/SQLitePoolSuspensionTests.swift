@@ -13,7 +13,7 @@
         pool.suspend()
         #expect(pool.isSuspended)
 
-        let refusal = OrbitDatabaseSuspendedError(databaseIdentifier: pool.defaultIdentifier)
+        let refusal = OrbitDatabaseSuspendedError(path: pool.path)
         await #expect(throws: refusal) {
           try await pool.write { try $0.execute("INSERT INTO items DEFAULT VALUES") }
         }

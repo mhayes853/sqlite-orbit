@@ -4,7 +4,6 @@
   #if canImport(SwiftUI)
     // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
     import protocol SwiftUI.DynamicProperty
-    import struct SwiftUI.Animation
   #endif
 
   /// A property that observes a single value a query produces.
@@ -32,8 +31,19 @@
   ///
   /// The database it reads from is resolved as ``OrbitDefaultDatabase`` describes: the `database`
   /// argument first, then the SwiftUI environment, then the default.
-  /// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
-  /// rebuilt property keeps its existing observation.
+  ///
+  /// The `scheduler` argument decides where values are delivered. By default they are delivered as
+  /// they are produced; in SwiftUI, `.animation(_:)` and `.transaction(_:)` deliver them on the main
+  /// actor inside an animation or transaction:
+  ///
+  /// ```swift
+  /// @FetchOne(Reminder.count(), scheduler: .animation(.bouncy)) var count = 0
+  /// ```
+  ///
+  /// The scheduler is not part of what the property observes. A view rebuilt with a different
+  /// scheduler keeps its observation and delivers through the new scheduler from then on. Whether
+  /// the first value arrives before the property's first read returns is decided once, by the
+  /// scheduler in effect when the observation starts.
   @dynamicMemberLookup
   @propertyWrapper
   public struct FetchOne<Value: Sendable>: Sendable {
@@ -42,7 +52,7 @@
       wrappedValue: Value,
       request: some OrbitFetchKeyRequest<Value>,
       database: (any OrbitObservableDatabase)?,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)?
+      scheduler: some OrbitValueObservationScheduler
     ) {
       fetch = Fetch(wrappedValue: wrappedValue, request, database: database, scheduler: scheduler)
     }
@@ -131,7 +141,7 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _Selection, Value.QueryOutput == Value {
       fetch = Fetch(wrappedValue: wrappedValue)
     }
@@ -149,12 +159,12 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.limit(1)).requiredFirstRowRequest(),
+        request: statement.limit(1).requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -170,7 +180,7 @@
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -191,7 +201,7 @@
     public init(
       wrappedValue: Value = ._none,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -208,7 +218,7 @@
     private static func firstRowRequest() -> some OrbitFetchKeyRequest<Value>
     where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
-      return (statement.limit(1)).firstRowRequest()
+      return statement.limit(1).firstRowRequest()
     }
 
     /// Creates a property observing the row the value it is declared with identifies.
@@ -228,12 +238,12 @@
     public init(
       wrappedValue: Value,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey)))
+        request: statement.find(Value.PrimaryKey(queryOutput: wrappedValue.primaryKey))
           .requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -254,7 +264,7 @@
       wrappedValue: Value,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       self.init(
@@ -281,7 +291,7 @@
       wrappedValue: Value,
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == V.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
@@ -304,7 +314,7 @@
       wrappedValue: Value = nil,
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value == V.QueryOutput? {
       self.init(
         wrappedValue: wrappedValue,
@@ -326,7 +336,7 @@
       wrappedValue: Value,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
       self.init(
         wrappedValue: wrappedValue,
@@ -349,7 +359,7 @@
       wrappedValue: Value = ._none,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where
       Value: _OptionalProtocol,
@@ -360,7 +370,7 @@
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       self.init(
         wrappedValue: wrappedValue,
-        request: (statement.asSelect().limit(1)).firstRowRequest(),
+        request: statement.asSelect().limit(1).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -378,7 +388,7 @@
       wrappedValue: Value = ._none,
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where
       Value: _OptionalProtocol,
@@ -405,7 +415,7 @@
       wrappedValue: Value = ._none,
       _ statement: some Statement<Value>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
       self.init(
         wrappedValue: wrappedValue,
@@ -430,8 +440,8 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       return try await load(
@@ -454,10 +464,10 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput {
-      return try await fetch.load(
+      try await fetch.load(
         statement.requiredFirstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -478,10 +488,10 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Value == V.QueryOutput? {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -502,8 +512,8 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where
       Value: _OptionalProtocol,
       Value == S.From.QueryOutput?,
@@ -512,7 +522,7 @@
     {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       return try await fetch.load(
-        (statement.asSelect().limit(1)).firstRowRequest(),
+        statement.asSelect().limit(1).firstRowRequest(),
         database: database,
         scheduler: scheduler
       )
@@ -531,14 +541,14 @@
     public func load<S: Statement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where
       Value: _OptionalProtocol,
       S.QueryValue: QueryRepresentable & _OptionalProtocol,
       Value == S.QueryValue.QueryOutput
     {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -558,10 +568,10 @@
     public func load(
       _ statement: some Statement<Value>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
-      return try await fetch.load(
+      try await fetch.load(
         statement.firstRowRequest(),
         database: database,
         scheduler: scheduler
@@ -588,315 +598,6 @@
       /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
         fetch.update()
-      }
-
-      /// Creates a property observing the first row of a table, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: Value,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: Table & QueryRepresentable, Value.QueryOutput == Value {
-        self.init(
-          wrappedValue: wrappedValue,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing the row the value it is declared with identifies, delivering
-      /// changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: Value,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: PrimaryKeyedTable & QueryRepresentable, Value.QueryOutput == Value {
-        self.init(
-          wrappedValue: wrappedValue,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing the first row of a table, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: Value = ._none,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: _OptionalProtocol & Table, Value.QueryOutput == Value {
-        self.init(
-          wrappedValue: wrappedValue,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing the first row of a primary keyed table, delivering changes
-      /// with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: Value = ._none,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: _OptionalProtocol & PrimaryKeyedTable, Value.QueryOutput == Value {
-        self.init(
-          wrappedValue: wrappedValue,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a select statement, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: SelectStatement>(
-        wrappedValue: Value,
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a statement, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<V: QueryRepresentable>(
-        wrappedValue: Value,
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value == V.QueryOutput {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a statement, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<V: QueryRepresentable>(
-        wrappedValue: Value = nil,
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value == V.QueryOutput? {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a statement, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: Statement<Value>>(
-        wrappedValue: Value,
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: QueryRepresentable, Value == S.QueryValue.QueryOutput {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a select statement, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: SelectStatement>(
-        wrappedValue: Value = ._none,
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where
-        Value: _OptionalProtocol,
-        Value == S.From.QueryOutput?,
-        S.QueryValue == (),
-        S.Joins == ()
-      {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a statement of an optional, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: Statement>(
-        wrappedValue: Value = ._none,
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where
-        Value: _OptionalProtocol,
-        S.QueryValue: QueryRepresentable & _OptionalProtocol,
-        Value == S.QueryValue.QueryOutput
-      {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Creates a property observing a statement of an optional, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: Value = ._none,
-        _ statement: some Statement<Value>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different select statement from now on, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<S: SelectStatement>(
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Value == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different statement from now on, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<V: QueryRepresentable>(
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Value == V.QueryOutput {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different statement from now on, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<V: QueryRepresentable>(
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Value == V.QueryOutput? {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different select statement from now on, delivering changes with an animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<S: SelectStatement>(
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where
-        Value: _OptionalProtocol,
-        Value == S.From.QueryOutput?,
-        S.QueryValue == (),
-        S.Joins == ()
-      {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different statement of an optional from now on, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<S: Statement>(
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where
-        Value: _OptionalProtocol,
-        S.QueryValue: QueryRepresentable & _OptionalProtocol,
-        Value == S.QueryValue.QueryOutput
-      {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
-      }
-
-      /// Observes a different statement of an optional from now on, delivering changes with an
-      /// animation.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load(
-        _ statement: some Statement<Value>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Value: QueryRepresentable & _OptionalProtocol, Value.QueryOutput == Value {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
-            .deferringInitialValue()
-        )
       }
     }
   #endif

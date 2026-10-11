@@ -1,6 +1,10 @@
 #if StructuredQueries
   import StructuredQueriesSQLite
 
+  #if canImport(SwiftUI)
+    import struct SwiftUI.State
+  #endif
+
   /// The observed value and write state shared by every copy of a mutable row property.
   ///
   /// Fetching remains in `OrbitFetchStorage`, so mutable rows have exactly the same lazy observation,
@@ -54,12 +58,12 @@
     func write<Result: Sendable>(
       _ operation:
         sending @escaping @Sendable (
-          any OrbitObservableDatabase & OrbitDatabaseWriter
+          any OrbitObservableDatabaseWriter
         ) async throws -> sending Result
     ) async throws -> Result {
       beginWrite()
       do {
-        let database = try fetch.databaseForWriting()
+        let database = fetch.databaseForWriting()
         let result = try await operation(database)
         finishWrite()
         return result
@@ -74,11 +78,11 @@
     /// This exists for synchronous interfaces such as a SwiftUI `Binding` setter. Callers must obey
     /// ``OrbitDatabaseWriter/writeBlocking(_:)``'s requirement not to invoke it from a task.
     func writeBlocking<Result: Sendable>(
-      _ operation: (any OrbitObservableDatabase & OrbitDatabaseWriter) throws -> Result
+      _ operation: (any OrbitObservableDatabaseWriter) throws -> Result
     ) throws -> Result {
       beginWrite()
       do {
-        let database = try fetch.databaseForWriting()
+        let database = fetch.databaseForWriting()
         let result = try operation(database)
         finishWrite()
         return result
@@ -131,4 +135,42 @@
       }
     }
   }
+
+  #if canImport(SwiftUI)
+    extension OrbitRowStorage {
+      /// Reconciles the storage a SwiftUI view kept with the row property it was rebuilt with.
+      ///
+      /// This is the whole of `Row` and `SingleRow`'s `DynamicProperty.update()`, because the two
+      /// differ only in the row they read and write, never in how SwiftUI keeps them alive.
+      ///
+      /// - Parameters:
+      ///   - declared: The storage of the property SwiftUI built for this render.
+      ///   - database: The database the environment offers this render, if it offers one.
+      ///   - fetchGeneration: A counter stored in the view, bumped once per change to the row.
+      ///   - writeGeneration: A counter stored in the view, bumped once per change to the saving
+      ///     state.
+      func update(
+        declared: OrbitRowStorage<Value>,
+        database: (any OrbitObservableDatabaseWriter)?,
+        fetchGeneration: SwiftUI.State<Int>,
+        writeGeneration: SwiftUI.State<Int>
+      ) {
+        fetch.update(declared: declared.fetch, database: database, generation: fetchGeneration)
+        observeWritesForSwiftUI(generation: writeGeneration)
+      }
+
+      /// Redraws a SwiftUI view whose platform has no Observation framework to do it when the
+      /// saving state changes.
+      private func observeWritesForSwiftUI(generation: SwiftUI.State<Int>) {
+        guard #unavailable(iOS 17, macOS 14, tvOS 17, watchOS 10) else { return }
+        _ = generation.wrappedValue
+        nonisolated(unsafe) let generation = generation
+        setSwiftUIObservation(
+          addWriteObserver {
+            Task { @MainActor in generation.wrappedValue &+= 1 }
+          }
+        )
+      }
+    }
+  #endif
 #endif

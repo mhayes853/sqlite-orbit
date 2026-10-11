@@ -128,14 +128,16 @@ let titles = try await database.read { transaction in
 }
 ```
 
-`as:` uses the row initializer for row-convertible types and reads the first column for scalar-only
-types. When a type supports both conversions, its row initializer takes precedence. Named
+`as:` takes any `ConvertibleFromOrbitDatabaseRow`. Every `ConvertibleFromOrbitDatabaseValue` is one
+too, reading the first column, so `as: Int.self` and `as: ReminderSummary.self` are the same
+overload. A value type that declares its own row initializer uses that instead. Named
 reads match UTF-8 bytes exactly, including case, and choose the first duplicate name. Missing
 columns throw even for optional properties; SQL `NULL` can produce `nil`. The native cursor
 prepares its column-name mapping on the first named read and shares it across subsequent rows.
 Reordered and extra columns are supported. Initialized values own their data, while cursors must
-be consumed inside their transaction. Write transactions support `as:` on `fetchAll`,
-`fetchOne`, and `executeCursor` for `RETURNING` results.
+be consumed inside their transaction. For `RETURNING` results, a write transaction's
+`executeCursor(_:as:)` initializes values lazily, and any row cursor collects them with
+`collect(as:)` or `first(as:)`.
 
 The row protocol and macros are available without `StructuredQueries` or `Foundation`. Stored
 instance properties must have explicit types conforming to `ConvertibleFromOrbitDatabaseValue`.
@@ -181,18 +183,21 @@ implement `OrbitDatabaseRowColumns` independently of `ConvertibleFromOrbitDataba
 
 `@OrbitRow` maps SQL result columns into values, including projections, joins, aggregates, and
 `RETURNING` results. For typed inserts, updates, and upserts, use Structured Queries' `@Table`
-models and write builders with `transaction.execute(Table.insert { ... })` or
-`transaction.execute(Table.upsert { ... })`.
+models and write builders with `try Table.insert { ... }.execute(transaction)` or
+`try Table.upsert { ... }.execute(transaction)`.
 
-`rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
-its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
-read:
+`rowCursor` lends the rows lazily. `rowCursor`, `fetchAll`, and `fetchOne` only ever read, in a
+write transaction as much as in a read one. What may write is spelled `execute`: a write
+transaction runs `execute`, `execute(_:_:)`, which lends each returned row to a closure,
+`executeRowCursor`, and `executeScript`. A cursor's `collect`, `first`, and `forEach` read its rows,
+so a `RETURNING` clause can be read:
 
 ```swift
 let deletedIDs = try await database.write { transaction in
-  try transaction.fetchAll("DELETE FROM reminders WHERE is_completed RETURNING id") {
-    $0[0].integerValue ?? 0
-  }
+  var cursor = try transaction.executeRowCursor(
+    "DELETE FROM reminders WHERE is_completed RETURNING id"
+  )
+  return try cursor.collect(as: Int.self)
 }
 ```
 
@@ -217,8 +222,10 @@ try await database.read { transaction in
 }
 ```
 
-A `SQLitePreparedStatement` runs with `execute`, `fetchAll`, `fetchOne`, `rowCursor`, and
-`fetchCursor`, or with a `bindings:` array of `OrbitDatabaseValue`s built at runtime. Arguments bind
+A `SQLitePreparedStatement` runs with `execute`, `executeRowCursor`, `fetchAll`, `fetchOne`,
+`rowCursor`, and `fetchCursor`, or with a `bindings:` array of `OrbitDatabaseValue`s built at
+runtime. As with a transaction, only `execute` and `executeRowCursor` run a statement that may
+write; the reading runs refuse it with `.readOnly`. Arguments bind
 by position, and a run must pass exactly one for each of the statement's `parameterCount`
 parameters: since every run rebinds every parameter, a missing one would otherwise silently keep
 the previous run's value, so the run is refused with `.range` instead. For the same reason
@@ -242,13 +249,12 @@ try await database.write { transaction in
 }
 ```
 
-An `OrbitDatabaseQuery<Access>` pairs SQL with the capability it requires, and a read transaction
-only accepts `OrbitDatabaseQuery<OrbitDatabaseReadAccess>`. Raw SQL cannot show that it only reads
-through its type, so a read query is checked with `sqlite3_stmt_readonly` when it is prepared, and
-one that may write is refused with a `SQLiteError` whose code is `.readOnly` before it runs. That
-includes pragmas that can change state as well as report it, such as `PRAGMA journal_mode`; read
-those through their table-valued form, `SELECT * FROM pragma_journal_mode`, or in a write
-transaction.
+Raw SQL cannot show that it only reads through its type, so SQL handed to `rowCursor`, `fetchAll`,
+or `fetchOne` is checked with `sqlite3_stmt_readonly` when it is prepared, and SQL that may write is
+refused with a `SQLiteError` whose code is `.readOnly` before it runs, on every transaction and
+connection. That includes pragmas that can change state as well as report it, such as
+`PRAGMA journal_mode`; read those through their table-valued form,
+`SELECT * FROM pragma_journal_mode`, or with a write transaction's `executeRowCursor`.
 
 ## Traits
 
@@ -288,16 +294,16 @@ import SQLiteOrbit
 }
 
 let pending = try await database.read { transaction in
-  try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+  try Reminder.where { !$0.isCompleted }.fetchAll(transaction)
 }
 ```
 
 A statement converts to raw SQL with `SQL(fragment: statement.query)`, and a query expression can
 be interpolated into `SQL` directly. Whether a statement needs a write transaction is read off its
-type: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
-write query, so a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
-definition at compile time. Statements the query library keeps private, such as the one behind
-`union`, are classified too.
+type: every `SELECT`-shaped statement fetches in any transaction, and every other statement only
+executes or fetches in a write transaction, so a read transaction cannot be handed an `INSERT`,
+`UPDATE`, `DELETE`, or trigger definition at compile time. Statements the query library keeps
+private, such as the one behind `union`, are classified too.
 
 ## Reminders demo
 
@@ -413,12 +419,12 @@ must commit together:
 try await database.writeWithoutTransaction { connection in
   try connection.setForeignKeysEnabled(false)
   try connection.transaction { transaction in
-    try transaction.execute(Reminder.delete())
+    try Reminder.delete().execute(transaction)
   }
 }
 ```
 
-`setForeignKeysEnabled(_:)` and `setBusyTimeout(_:)` apply changes immediately and throw if they
+`setForeignKeysEnabled(_:)` and `setBusyPolicy(_:)` apply changes immediately and throw if they
 fail. Their read-only properties report the successfully applied values. Changing foreign keys
 during a transaction throws. Both settings are put back to their configured values when the access
 ends, even when it throws. Any other pragma stays changed on the connection, so restore it before
@@ -470,20 +476,40 @@ changes made before registration.
 regions come from commit events. Keep the recorder outside the operation to inspect partial commits
 after an error. `hasCommitted` also distinguishes an empty commit from no observed commit.
 
+`SQLiteSerialConnection` wraps one owner on a serial executor of its own, and lends it
+asynchronously or by blocking the calling thread, one access at a time. `SQLiteQueue` is one of
+these with an observer registry on top. Cancelling the task awaiting an access interrupts it, and
+the access throws `CancellationError`. Setups passed to its initializer are the driver's own: they
+run after the configuration's setups and are exempt from its authorization.
+
+```swift
+let connection = try SQLiteSerialConnection(path: path, configuration: .default)
+let count = try await connection.withReadConnection { connection in
+  try connection.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+}
+```
+
+`OrbitCompositeDatabaseTransactionObserver` is the registry the built-in drivers use: it forwards
+every callback to the observers subscribed to it, so a custom driver installs it on each access and
+implements `subscribe(transactionObserver:region:)` with `subscribe(_:region:)`. It reports every
+transaction whatever region an observer was subscribed with.
+
 `SQLiteConnectionPool` provides asynchronous and blocking connection loans without an observer
 registry. Its callers choose transactions and install observers using these same public APIs.
 Ordinary writer loans form a barrier; explicit concurrent writer loans can overlap readers and
-other concurrent writers. `SQLitePool` and `TursoPool` compose this primitive with their journal
-setup and database-wide subscriptions. A custom driver can use it directly:
+other concurrent writers. Readers are opened read-only and run `PRAGMA query_only = 1`. `SQLitePool`
+and `TursoPool` compose this primitive with their journal mode and database-wide subscriptions. A
+custom driver can use it directly, choosing the journal mode through the writers' configuration:
 
 ```swift
+var writerConfiguration = SQLiteConfiguration.default
+writerConfiguration.journalMode = .wal
 let pool = try SQLiteConnectionPool(
   path: path,
   readerConfiguration: .default,
-  writerConfiguration: .default,
+  writerConfiguration: writerConfiguration,
   readerCount: 4,
-  writerCount: 1,
-  writerSetups: [.sql("PRAGMA journal_mode = WAL"), .sql("SELECT count(*) FROM sqlite_schema")]
+  writerCount: 1
 )
 try await pool.withWriteConnection { connection in
   try connection.transaction(observer: recorder) { transaction in
@@ -590,7 +616,7 @@ for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for sc
 let driver = try TursoPool(path: databasePath, readerCount: 5, writerCount: 4)
 
 try await driver.concurrentWrite { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try Reminder.insert { reminder }.execute(transaction)
 }
 
 try await driver.write { transaction in
@@ -655,36 +681,34 @@ try await database.read { transaction in
 }
 ```
 
-With the `StructuredQueries` trait, statements come in four shapes, and `fetchAll`, `fetchOne`, and
-`fetchCursor` cover all of them: a
-single projected value, a tuple of projected values, an unprojected select decoding to its table,
-and a select with joins decoding to a tuple of every table in the row.
+With the `StructuredQueries` trait, a statement runs itself in the transaction it is handed, as
+SQLiteData spells it. Statements come in four shapes, and `fetchAll`, `fetchOne`, and `fetchCursor`
+cover all of them: a single projected value, a tuple of projected values, an unprojected select
+decoding to its table, and a select with joins decoding to a tuple of every table in the row.
 
 ```swift
 try await database.read { transaction in
-  try transaction.fetchAll(Reminder.select(\.title))                  // [String]
-  try transaction.fetchAll(Reminder.select { ($0.id, $0.title) })      // [(Int, String)]
-  try transaction.fetchAll(Reminder.all)                               // [Reminder]
+  try Reminder.select(\.title).fetchAll(transaction)                  // [String]
+  try Reminder.select { ($0.id, $0.title) }.fetchAll(transaction)      // [(Int, String)]
+  try Reminder.all.fetchAll(transaction)                               // [Reminder]
 
-  try transaction.fetchAll(                                            // [(Reminder, RemindersList)]
-    Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }
-  )
+  try Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }        // [(Reminder, RemindersList)]
+    .fetchAll(transaction)
 
-  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
-  try transaction.find(Reminder.all, key: 42)  // throws OrbitDatabaseRecordNotFoundError
+  try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
+  try Reminder.all.find(transaction, key: 42)  // throws OrbitDatabaseRecordNotFoundError
 }
 ```
 
-Write transactions perform every read operation in addition to mutations, and can fetch the rows a
-statement returns:
+A select only reads, so it runs in any transaction. Every other statement may write, so only a
+write transaction runs it, and one with a `RETURNING` clause fetches the rows it returns:
 
 ```swift
 let titles = try await database.write { transaction in
-  try transaction.fetchAll(
-    Reminder.update { $0.isCompleted = true }
-      .where { $0.listID.eq(listID) }
-      .returning(\.title)
-  )
+  try Reminder.update { $0.isCompleted = true }
+    .where { $0.listID.eq(listID) }
+    .returning(\.title)
+    .fetchAll(transaction)
 }
 ```
 
@@ -702,9 +726,8 @@ struct ReminderSummary: Sendable {
 }
 
 let summaries = try await database.read { transaction in
-  try transaction.fetchAll(
-    #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
-  )
+  try #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
+    .fetchAll(transaction)
 }
 ```
 
@@ -713,12 +736,13 @@ Structured Queries decodes columns positionally using the declared representatio
 representations. Results have type `Value.QueryOutput`, allowing a table alias to decode to its
 underlying model. The same typed statements work with lazy cursors and write `RETURNING` results.
 
-For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
-`fetchCursor` decodes the statement's statically known output while advancing:
+For lazy reads, a statement's `fetchCursor` decodes its statically known output while advancing.
+The low-level `rowCursor` API lends raw rows of any SQL, including a statement's own, through
+`SQL(fragment: statement.query)`:
 
 ```swift
 let reminders = try await database.read { transaction in
-  var cursor = try transaction.fetchCursor(Reminder.all)
+  var cursor = try Reminder.all.fetchCursor(transaction)
   var reminders: [Reminder] = []
 
   while let reminder = try cursor.next() {
@@ -729,14 +753,15 @@ let reminders = try await database.read { transaction in
 }
 ```
 
-Cursors must be consumed inside the transaction that created them. Write transactions also expose
-`executeCursor` for statements that return rows, such as SQLite `RETURNING` statements.
+Cursors must be consumed inside the transaction that created them. A statement that returns rows
+from a write, such as one with a SQLite `RETURNING` clause, has a `fetchCursor` that takes a write
+transaction.
 
 Typed cursors can be transformed lazily. Transformations consume their source cursor, so bind the
 result when it will be advanced or passed to `forEach`:
 
 ```swift
-let source = try transaction.fetchCursor(Reminder.all)
+let source = try Reminder.all.fetchCursor(transaction)
 var titles = source
   .filter { !$0.isCompleted }
   .compactMap(\.title)
@@ -750,21 +775,21 @@ try titles.forEach { title in
 To eagerly materialize a cursor, collect it into an array or another known collection type:
 
 ```swift
-let titles = try transaction.fetchCursor(Reminder.all)
+let titles = try Reminder.all.fetchCursor(transaction)
   .filter { !$0.isCompleted }
   .collect()
 
-let uniqueTitles = try transaction.fetchCursor(Reminder.all)
+let uniqueTitles = try Reminder.all.fetchCursor(transaction)
   .map(\.title)
   .collect(as: Set<String>.self)
 
-let incompleteCount = try transaction.fetchCursor(Reminder.all)
+let incompleteCount = try Reminder.all.fetchCursor(transaction)
   .count { !$0.isCompleted }
 
-let nextReminder = try transaction.fetchCursor(Reminder.all)
+let nextReminder = try Reminder.all.fetchCursor(transaction)
   .first { !$0.isCompleted }
 
-let bounds = try transaction.fetchCursor(Reminder.all)
+let bounds = try Reminder.all.fetchCursor(transaction)
   .map(\.priority)
   .minMax()
 ```
@@ -834,9 +859,9 @@ configuration.setups.append(
 )
 ```
 
-Setting a key on a library with no `encryption` fails the open with
-`SQLiteEncryptionUnavailableError` rather than opening an unencrypted database. Stock SQLite has no
-codec, so that is a fact about the build rather than a claim about it.
+Setting a key on a library with no `encryption` fails the open with a
+`SQLiteFeatureUnavailableError` for `.encryption` rather than opening an unencrypted database.
+Stock SQLite has no codec, so that is a fact about the build rather than a claim about it.
 
 A codec accepts any key and only reports a wrong one once something reads the file, so a keyed
 connection reads the schema while it is being configured. A wrong key fails the open rather than
@@ -845,8 +870,20 @@ the first query the caller happens to run.
 ## Connection setup
 
 `SQLiteConfiguration.setups` is one ordered collection of SQL and callbacks. Each step runs after
-standard settings and authorization have been applied, before the connection is lent to callers.
-A thrown error stops setup and closes the connection.
+standard settings, the journal mode, and authorization have been applied, before the connection is
+lent to callers. A thrown error stops setup and closes the connection.
+
+`busyPolicy` decides how a connection waits for a lock another connection or process holds:
+`.timeout(_:)`, five seconds by default, `.waitIndefinitely`, or a `.handler` asked on each attempt.
+`journalMode` switches the database to a mode, such as `.wal`, on every writable connection before
+the setups run, with the driver's own privilege rather than subject to `authorization`; `nil`, the
+default, leaves the database's mode alone.
+
+```swift
+var configuration = SQLiteConfiguration.default
+configuration.busyPolicy = .timeout(.seconds(10))
+configuration.journalMode = .wal
+```
 
 ```swift
 configuration.setups = [
@@ -1029,7 +1066,7 @@ let database = try OrbitIPCDatabase(
 )
 
 let reminders = try await database.read { transaction in
-  try transaction.fetchAll(Reminder.order { $0.title.collate(.localized) })
+  try Reminder.order { $0.title.collate(.localized) }.fetchAll(transaction)
 }
 ```
 
@@ -1043,15 +1080,15 @@ directly, and a function's callbacks read their arguments and write their result
 `SQLiteLibrary` the connection was opened with, so a caller-supplied build drives them exactly as
 the linked one does.
 
-`OrbitIPCDatabase` is `Identifiable`. Its multiprocess writer supplies the default database
-identifier, and callers can override it when constructing the database. File databases derive a
+`OrbitIPCDatabase` is `Identifiable`. Its default identifier is derived from its multiprocess
+writer's `path`, and callers can override it when constructing the database. File databases derive a
 stable identifier from their resolved filesystem paths. Symbolic links in the file and its existing
 parent directories are resolved even before the database file is created, so IPC discovery and
 open locks agree across those aliases. `OrbitDatabasePath` keeps its original standardized spelling;
 explicit identifiers remain application-defined. Identity is path-based, so hard links with different
 names still need an explicit shared identifier. A database private to its connection receives a
-unique identifier. Process-local drivers use their own identifiers but cannot be passed to
-`OrbitIPCDatabase`.
+unique identifier. Process-local drivers, such as `SQLiteQueue` and `TursoPool`, cannot be passed
+to `OrbitIPCDatabase`.
 
 ## SQL authorization
 
@@ -1209,13 +1246,13 @@ methods remain available and derive their answers from this same snapshot.
 
 Processes that share a database may all migrate it as they launch. Each migration's transaction
 checks again, under the write lock, whether another process applied it in the meantime, so every
-migration runs once. It waits for the lock as long as the connection's busy timeout allows, and
-fails with `SQLITE_BUSY` once that runs out. To wait longer, migrate on a connection whose timeout
+migration runs once. It waits for the lock as long as the connection's busy policy allows, and
+fails with `SQLITE_BUSY` once that gives up. To wait longer, migrate on a connection whose timeout
 you raise, which is put back when the access ends:
 
 ```swift
 try await database.writeWithoutTransaction { connection in
-  try connection.setBusyTimeout(.limit(.seconds(30)))
+  try connection.setBusyPolicy(.timeout(.seconds(30)))
   try migrator.migrate(connection)
 }
 ```
@@ -1295,16 +1332,18 @@ let region = try await database.read { transaction in
 
 Compilation resolves tables, columns, views, and attached schemas without executing the statement
 or evaluating its bindings. Region derivation rejects statements that may write and treats
-read-only pragmas as full-database reads. Query-backed value observations use this region to avoid
-refetching after unrelated writes.
+read-only pragmas as full-database reads. Value observations track the same region without
+deriving it separately: each statement SQLite prepares records what it reads, and the connection's
+statement cache keeps that alongside the statement, so a refetch compiles nothing.
 
 ## Observation
 
 `SQLiteQueue`, `SQLitePool`, `TursoPool`, and `OrbitIPCDatabase` are observable databases. A value
 observation fetches an initial value, then fetches again after a committed write that may affect
 its region.
-With the `StructuredQueries` trait, `trackingAll` and `trackingOne` derive that region directly
-from a readable query:
+With the `StructuredQueries` trait, `trackingAll` and `trackingOne` observe a statement: a table
+query, a projection, a join, or typed SQL. The region is whatever the statement reads, resolved
+through views and subqueries down to their tables and columns:
 
 ```swift
 let reminders = OrbitValueObservation.trackingAll(
@@ -1313,6 +1352,14 @@ let reminders = OrbitValueObservation.trackingAll(
 
 let firstReminder = OrbitValueObservation.trackingOne(
   Reminder.order { $0.id }
+)
+
+let titles = OrbitValueObservation.trackingAll(
+  Reminder.where { !$0.isCompleted }.select(\.title)
+)
+
+let incompleteCount = OrbitValueObservation.trackingOne(
+  #sql("SELECT count(*) FROM reminders WHERE NOT isCompleted", as: Int.self)
 )
 
 for try await reminders in reminders.values(in: database) {
@@ -1325,11 +1372,11 @@ after each successful fetch. It also tracks properties read from Swift `Observab
 
 ```swift
 let incompleteCount = OrbitValueObservation.tracking { transaction in
-  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
+  try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
 }
 ```
 
-`OrbitValueObservation.ExternalValue` is a thread-safe observable reference for simple external
+`OrbitExternalValue` is a thread-safe observable reference for simple external
 state. Dynamic member lookup tracks only the fields the fetch actually reads:
 
 ```swift
@@ -1338,12 +1385,12 @@ struct Filters: Sendable {
   var ordering = Ordering.date
 }
 
-let filters = OrbitValueObservation.ExternalValue(Filters())
+let filters = OrbitExternalValue(Filters())
 let reminders = OrbitValueObservation.tracking { transaction in
   if filters.showsCompleted {
-    try transaction.fetchAll(Reminder.where(\.isCompleted))
+    try Reminder.where(\.isCompleted).fetchAll(transaction)
   } else {
-    try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+    try Reminder.where { !$0.isCompleted }.fetchAll(transaction)
   }
 }
 
@@ -1507,14 +1554,14 @@ let subscription = try reminders.subscribe(
 )
 ```
 
-On platforms with SwiftUI, main-actor schedulers can wrap deferred callbacks in a `Transaction` or
-an `Animation` without importing a second package product:
+On platforms with SwiftUI, `.animation(_:)` and `.transaction(_:)` deliver on the main actor inside
+an `Animation` or a `Transaction` without importing a second package product. Any other main-actor
+scheduler can be wrapped the same way, as in `.mainActor.animation(.default)`:
 
 ```swift
-let scheduler = OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
 let subscription = try reminders.subscribe(
   to: database,
-  scheduling: scheduler,
+  scheduling: .animation(.default),
   onError: { @MainActor error in report(error) },
   onChange: { @MainActor change in render(change.value) }
 )
@@ -1628,8 +1675,8 @@ struct RemindersOverview: OrbitFetchKeyRequest {
 
   func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
     try Value(
-      incompleteCount: transaction.fetchCount(Reminder.where { !$0.isCompleted }),
-      newest: transaction.fetchAll(Reminder.order { $0.createdAt.desc() }.limit(10))
+      incompleteCount: Reminder.where { !$0.isCompleted }.fetchCount(transaction),
+      newest: Reminder.order { $0.createdAt.desc() }.limit(10).fetchAll(transaction)
     )
   }
 }
@@ -1677,10 +1724,12 @@ struct RemindersApp: App {
 is how a test gives itself a database of its own without touching the process-wide one. Accessing
 `OrbitDefaultDatabase.current`, or reading a property that cannot find a database, terminates with
 detailed setup instructions. `OrbitDefaultDatabase.currentIfConfigured` returns `nil` instead when
-no default is available. Read-only observable databases can provide defaults for fetches; `Row` and
-`SingleRow` writes require a writer and report a read-only error if their resolved database cannot
-write. A SwiftUI property waits until its environment has been resolved, so
-providing a database with `.orbitDatabase(...)` does not require a process-wide default.
+no default is available. The default and the SwiftUI environment value both hold an
+`any OrbitObservableDatabaseWriter` (an `OrbitDatabaseWriter` that is also an
+`OrbitObservableDatabase`), so `Row` and `SingleRow` can always save to the database they resolve.
+A read-only observable database can still be handed to a fetch property through its `database:`
+argument. A SwiftUI property waits until its environment has been resolved, so providing a database
+with `.orbitDatabase(...)` does not require a process-wide default.
 
 Enable the `Dependencies` trait to configure the same default with
 [swift-dependencies](https://github.com/pointfreeco/swift-dependencies):
@@ -1794,9 +1843,10 @@ a sort control drives:
 try await $reminders.load(Reminder.where { $0.title.contains(search) })
 ```
 
-It returns an `OrbitFetchSubscription`. Awaiting `waitUntilFinished()` ties the observation to the lifetime of
-a SwiftUI view's `task`, so drilling into a child screen stops the query and popping back restarts
-it:
+It returns an `OrbitFetchLoad`. Unlike an `OrbitSubscription`, a load is not an ownership token:
+the property owns its observation, so discarding the load leaves the query running. Awaiting
+`waitUntilFinished()` ties the observation to the lifetime of a SwiftUI view's `task`, so drilling
+into a child screen stops the query and popping back restarts it, and `cancel()` stops it early:
 
 ```swift
 .task { try? await $reminders.load(Reminder.order(by: \.title)).waitUntilFinished() }
@@ -1813,40 +1863,31 @@ stays current with the rest of the property.
 
 By default a property fetches its first value on the thread that first reads it, and delivers later
 ones as the observation produces them. Pass a `scheduler:` to move that elsewhere — any
-`OrbitValueObservationScheduler` that is also `Hashable`, including `.mainActor` — or, in SwiftUI,
-an `animation:`, which delivers every change on the main actor inside that animation:
+`OrbitValueObservationScheduler`, including `.mainActor` — or, in SwiftUI, `.animation(_:)` or
+`.transaction(_:)`, which deliver every change on the main actor inside that animation or
+transaction. `load(_:scheduler:)` takes the same argument:
 
 ```swift
-@FetchAll(Reminder.all, animation: .default) var reminders
+@FetchAll(Reminder.all, scheduler: .animation(.bouncy)) var reminders
 @FetchAll(Reminder.all, scheduler: .mainActor) var reminders
+
+try await $reminders.load(query, scheduler: .transaction(Transaction(animation: .snappy)))
 ```
 
-Request-backed declaration identity includes the database instance, request type and value, and
-optional scheduler value. Equal requests share underlying observations independently of delivery
-scheduling. An observation-backed fetch uses the observation's
-definition identity, or the explicit `id:` supplied with it. Omitting a scheduler is distinct from
-explicitly supplying `.immediate`. SwiftUI remembers the declaration's identity separately from
-the currently loaded source, so a `load()` or projected-value assignment survives an unchanged
-declaration being rendered again. Changing the declaration's request, observation identity,
-database, or scheduler replaces the observation; a value-only declaration leaves it alone.
+Request-backed declaration identity includes the database instance and the request type and value.
+Equal requests share underlying observations independently of delivery scheduling. An
+observation-backed fetch uses the observation's definition identity, or the explicit `id:` supplied
+with it. SwiftUI remembers the declaration's identity separately from the currently loaded source,
+so a `load()` or projected-value assignment survives an unchanged declaration being rendered again.
+Changing the declaration's request, observation identity, or database replaces the observation; a
+value-only declaration leaves it alone.
 
-Animation and initial delivery can also be composed explicitly through public schedulers:
-
-```swift
-@FetchAll(
-  Reminder.all,
-  scheduler: .mainActor.animation(.default).deferringInitialValue()
-) var reminders
-```
-
-Animation preserves the base scheduler's initial timing. `deferringInitialValue()` prevents a
-blocking initial fetch, which is also the behavior selected by the fetch `animation:` conveniences.
-Both adapters preserve `Hashable` when their base supports it.
-
-Custom schedulers should base equality and hashing on stable configuration (or instance identity),
-not mutable callback queues. The built-in schedulers already provide these conformances. Direct
-value-observation subscriptions do not require a `Hashable` scheduler. Fetch `animation:` overloads
-require iOS 17, macOS 14, tvOS 17, or watchOS 10, matching `Animation`'s `Hashable` availability.
+The scheduler is not part of that identity, so schedulers need not be `Hashable`. A view rendered
+again with a different scheduler — a new animation, say — keeps its observation and delivers
+through the new scheduler from then on, unless a `load` or assignment has chosen a scheduler since.
+Whether the first value arrives before the property's first read returns is decided once, by the
+scheduler in effect when the observation starts. A main-actor scheduler never blocks a read for it:
+the property starts with its declared value and the first fetched value arrives on the main actor.
 
 ### Sections
 
@@ -1982,14 +2023,15 @@ let database = try OrbitIPCDatabase(path: databasePath)
 ```
 
 The database is opened by `SQLitePool`, so it runs in WAL mode with concurrent readers and a
-single writer, and every connection gets a busy timeout. Without one, a write that overlaps another
-process's write fails outright rather than waiting its turn.
+single writer, and every connection waits by its configuration's `busyPolicy`, a five-second
+timeout by default. Without one, a write that overlaps another process's write fails outright
+rather than waiting its turn.
 
 Opening is serialized across every process sharing a coordination directory by an exclusive advisory
 lock, held only while the database is being opened. Moving a new database into WAL mode briefly
 needs an exclusive lock of SQLite's own, so processes that first open the same database at the same
 moment would otherwise contend for it. The lock removes that contention between opens; it does not
-replace the busy timeout, since closing a WAL database checkpoints it under an exclusive lock too,
+replace the busy policy, since closing a WAL database checkpoints it under an exclusive lock too,
 and closing is not something a database can hold the open lock across.
 
 Processes coordinate only when they share a coordination directory. The default lives in the
@@ -2006,6 +2048,10 @@ let database = try OrbitIPCDatabase(
 A database private to its connection cannot be shared between processes, or pooled, so
 `SQLitePool` rejects one; use `SQLiteQueue` for those.
 
+A bare `SQLitePool` does not take the open lock. Several processes opening the same new database
+with bare pools at the same moment may get `SQLITE_BUSY` while it switches to WAL, so open a
+database shared between processes through `OrbitIPCDatabase`.
+
 Constructing an `OrbitMultiprocessDatabaseWriter` yourself remains available for a database you
 configure and open on your own. That cannot coordinate opening, so pass a transport explicitly if
 the database is also opened elsewhere. Process-local writers such as `SQLiteQueue` and `TursoPool`
@@ -2017,7 +2063,7 @@ A database announces every write transaction it commits:
 
 ```swift
 try await database.write { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try Reminder.insert { reminder }.execute(transaction)
 }
 // Peers have now been sent .transactionDidCommit with the transaction's aggregate region.
 ```

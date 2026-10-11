@@ -29,7 +29,7 @@ func registerFetchRecordStructuredQueries() {
     measure: { connection in
       let items = try connection.owner.withReadConnection { connection in
         try connection.transaction { transaction in
-          try transaction.fetchAll(Item.all)
+          try Item.all.fetchAll(transaction)
         }
       }
       try expectFetchedRecords(items, i0: \.i0, i1: \.i1, i9: \.i9)

@@ -19,18 +19,18 @@
         try await driver.withDatabase(schema: itemsSchema) { database in
           await #expect(throws: TestError()) {
             try await database.write { transaction in
-              try transaction.execute(Item.insert { Item(id: 1, title: "doomed") })
+              try Item.insert { Item(id: 1, title: "doomed") }.execute(transaction)
               throw TestError()
             }
           }
-          #expect(try await database.read { try $0.fetchAll(Item.all) }.isEmpty)
+          #expect(try await database.read { try Item.all.fetchAll($0) }.isEmpty)
 
           // The rolled-back transaction did not leave one open behind it.
           try await database.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 2, title: "after") })
+            try Item.insert { Item(id: 2, title: "after") }.execute(transaction)
           }
           #expect(
-            try await database.read { try $0.fetchAll(Item.all) } == [Item(id: 2, title: "after")]
+            try await database.read { try Item.all.fetchAll($0) } == [Item(id: 2, title: "after")]
           )
         }
       }
@@ -56,10 +56,10 @@
           _ = try await concurrently(2 * count) { index in
             if index.isMultiple(of: 2) {
               try await database.write { transaction in
-                try transaction.execute(Item.insert { Item(id: index, title: "contended") })
+                try Item.insert { Item(id: index, title: "contended") }.execute(transaction)
               }
             } else {
-              _ = try await database.read { try $0.fetchAll(Item.all).count }
+              _ = try await database.read { try Item.all.fetchAll($0).count }
             }
           }
           #expect(try await database.rowCount(of: "items") == count)
@@ -71,11 +71,11 @@
         try await driver.withDatabase(schema: itemsSchema) { database in
           for id in 1...20 {
             try await database.write { transaction in
-              try transaction.execute(Item.insert { Item(id: id, title: "ordered") })
+              try Item.insert { Item(id: id, title: "ordered") }.execute(transaction)
             }
             #expect(try await database.rowCount(of: "items") == id)
             // A blocking read, on whichever connection it is lent, sees the write too.
-            let blocking = try database.readBlocking { try $0.fetchAll(Item.all).count }
+            let blocking = try database.readBlocking { try Item.all.fetchAll($0).count }
             #expect(blocking == id)
           }
         }
@@ -88,16 +88,16 @@
         try await withTestDatabaseFile { file in
           do {
             let database = try file.open(driver)
-            #expect(database.defaultIdentifier == .forDatabase(path: file.path))
+            #expect(database.path == file.path)
             try await database.execute(sql: itemsSchema)
             try await database.write { transaction in
-              try transaction.execute(Item.insert { Item(id: 1, title: "persisted") })
+              try Item.insert { Item(id: 1, title: "persisted") }.execute(transaction)
             }
           }
 
           let reopened = try file.open(driver)
-          #expect(reopened.defaultIdentifier == .forDatabase(path: file.path))
-          let items = try await reopened.read { try $0.fetchAll(Item.all) }
+          #expect(reopened.path == file.path)
+          let items = try await reopened.read { try Item.all.fetchAll($0) }
           #expect(items == [Item(id: 1, title: "persisted")])
         }
       }
@@ -115,18 +115,18 @@
           async let blocking = concurrentlyOnThreads(writers) { _ in
             for _ in 0..<bumpsEach {
               try database.writeBlocking { try $0.executeScript(bump) }
-              _ = try database.readBlocking { try $0.fetchOne(read) }
+              _ = try database.readBlocking { try read.fetchOne($0) }
             }
           }
           _ = try await concurrently(writers) { _ in
             for _ in 0..<bumpsEach {
               try await database.write { try $0.executeScript(bump) }
-              _ = try await database.read { try $0.fetchOne(read) }
+              _ = try await database.read { try read.fetchOne($0) }
             }
           }
           _ = try await blocking
 
-          let total = try database.readBlocking { try $0.fetchOne(read) }
+          let total = try database.readBlocking { try read.fetchOne($0) }
           #expect(total == 2 * writers * bumpsEach)
         }
       }

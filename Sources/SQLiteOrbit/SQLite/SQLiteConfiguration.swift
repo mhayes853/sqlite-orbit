@@ -24,58 +24,50 @@ public struct SQLiteConfiguration: Sendable {
   ///
   /// Applied before anything else a connection does, so no statement and no read of the file can
   /// precede it. Setting it for a ``SQLiteLibrary`` without ``SQLiteLibrary/encryption`` fails the
-  /// open with ``SQLiteEncryptionUnavailableError``.
+  /// open with a ``SQLiteFeatureUnavailableError`` for ``SQLiteLibraryFeature/encryption``.
   public var key: SQLiteKey?
 
-  /// How long SQLite waits for a lock another connection or process holds before reporting
+  /// How a connection waits for a lock another connection or process holds before reporting
   /// `SQLITE_BUSY`.
   ///
-  /// A database shared between processes needs this: without it an overlapping write fails
-  /// outright rather than queueing. An access may change it for its own duration through
-  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` or ``SQLiteReadConnection/setBusyTimeout(_:)``.
-  ///
-  /// A ``busyHandler`` takes precedence over this. SQLite implements the timeout as a busy handler
-  /// of its own and keeps only one per connection, so a configuration that sets both waits by the
-  /// handler and never by the timeout.
-  ///
-  /// A ``SQLitePool`` waits by it too, before opening any connection, for another process that is
-  /// opening the same database, and fails with `SQLITE_BUSY` if that process is still at it when
-  /// the timeout runs out, as one that is stopped or suspended would be.
-  public var busyTimeout: SQLiteBusyTimeout
-
-  /// Decides, each time a lock is still held, whether to keep waiting for it.
-  ///
-  /// This is the general form of ``busyTimeout``: rather than a fixed deadline, the handler is
-  /// asked again on every attempt and answers `true` to wait and try once more or `false` to give
-  /// up, which is what surfaces `SQLITE_BUSY` to the statement. It is the hook for backing off,
-  /// for giving up on a deadline of the caller's own, and for reporting contention.
+  /// A database shared between processes needs this: without a wait an overlapping write fails
+  /// outright rather than queueing. Defaults to ``SQLiteBusyPolicy/timeout(_:)`` of five seconds.
+  /// An access may change it for its own duration through
+  /// ``SQLiteWriteConnection/setBusyPolicy(_:)`` or
+  /// ``SQLiteWriteConnection/withBusyPolicy(_:perform:)``, and the configured policy is put back
+  /// when the access ends.
   ///
   /// ```swift
   /// var configuration = SQLiteConfiguration.default
-  /// configuration.busyHandler = { attempt in
-  ///   guard attempt <= 50 else { return false }
-  ///   Thread.sleep(forTimeInterval: 0.01)
-  ///   return true
-  /// }
+  /// configuration.busyPolicy = .timeout(.seconds(10))
   /// ```
   ///
-  /// The handler is invoked on the thread that is running the blocked statement, with `attempt`
-  /// counting from `1` and rising for as long as that one statement keeps waiting. It must not
-  /// touch the connection it was blocked on.
+  /// An ``OrbitIPCDatabase`` opened by path waits by it too, before opening any connection, for
+  /// another process that is opening the same database, and fails with `SQLITE_BUSY` if that
+  /// process is still at it when the policy gives up, as one that is stopped or suspended would
+  /// be. A ``SQLiteBusyPolicy/handler(_:)`` is asked on each try of that wait, with `attempt`
+  /// counting the tries of that one wait.
   ///
-  /// Since SQLite keeps a single busy handler per connection and implements `busyTimeout` as one,
-  /// setting this takes precedence: a connection opened with both installs the handler last, so
-  /// the timeout never applies. An access that changes
-  /// ``SQLiteWriteConnection/setBusyTimeout(_:)`` replaces the handler for its own duration, and the
-  /// handler is reinstalled when the access ends along with the configured timeout.
+  /// A ``SQLiteBusyPolicy/handler(_:)`` for a ``SQLiteLibrary`` without
+  /// ``SQLiteLibrary/busyHandler`` fails the open with ``SQLiteFeatureUnavailableError``.
+  public var busyPolicy: SQLiteBusyPolicy
+
+  /// The journal mode every writable connection switches the database to as it opens, or `nil`
+  /// to leave the database in whatever mode it is in.
   ///
-  /// A ``SQLitePool`` asks it too, in place of ``busyTimeout``, while another process that is
-  /// opening the same database holds up its own open, with `attempt` counting the tries of that
-  /// one wait, and fails with `SQLITE_BUSY` when it answers `false`.
+  /// The mode is set with the driver's own privilege, so ``authorization`` does not apply to it,
+  /// and before ``setups`` run, so they run against it. A connection opened read-only, such as a
+  /// pool's reader, cannot change the mode and does not try.
   ///
-  /// Setting this for a ``SQLiteLibrary`` without ``SQLiteLibrary/busyHandler`` fails the open with
-  /// ``SQLiteFeatureUnavailableError``.
-  public var busyHandler: (@Sendable (_ attempt: Int) -> Bool)?
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.journalMode = .wal
+  /// ```
+  ///
+  /// SQLite does not report a mode it cannot switch to as an error. An in-memory database, for
+  /// one, stays in ``SQLiteJournalMode/memory`` whatever is asked for. ``SQLitePool`` and
+  /// ``TursoPool`` set this on their writers themselves.
+  public var journalMode: SQLiteJournalMode?
 
   /// The authorization policy installed on every connection this configuration opens.
   ///
@@ -85,9 +77,9 @@ public struct SQLiteConfiguration: Sendable {
   /// not every execution of a cached statement. Replace a policy through `setAuthorization(_:)`
   /// to invalidate prepared statements. A library without authorizer support fails to open.
   ///
-  /// Applied after standard connection settings and before ``setups``.
-  /// Ignoring required transaction control or driver settings is treated as denial. Library recovery
-  /// (rollback and restoring temporary settings) bypasses application policies.
+  /// Applied after standard connection settings and ``journalMode``, and before ``setups``.
+  /// Ignoring required transaction control or driver settings is treated as denial. Library
+  /// recovery (rollback and restoring temporary settings) bypasses application policies.
   public var authorization: SQLiteAuthorizationHandler?
 
   /// Whether foreign key enforcement is turned on.
@@ -106,7 +98,8 @@ public struct SQLiteConfiguration: Sendable {
   /// statement is prepared anew.
   public var maximumCachedStatements: Int
 
-  /// Setups run in order on every connection after its standard settings and authorization policy.
+  /// Setups run in order on every connection after its standard settings, ``journalMode``, and
+  /// authorization policy.
   /// A thrown error stops setup and closes the connection.
   public var setups: [SQLiteSetup]
 
@@ -114,31 +107,32 @@ public struct SQLiteConfiguration: Sendable {
   ///
   /// - Parameters:
   ///   - library: The SQLite build the driver runs against.
-  ///   - busyTimeout: How long SQLite waits for a lock before reporting `SQLITE_BUSY`.
+  ///   - busyPolicy: How a connection waits for a lock before reporting `SQLITE_BUSY`.
+  ///   - journalMode: The journal mode writable connections switch the database to, or `nil` to
+  ///     leave it alone.
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
   ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse, the
   ///     least recently used making way for new ones.
   ///   - setups: SQL and callbacks run in order on every configured connection.
   ///   - key: The key an encrypted database is unlocked with.
-  ///   - busyHandler: Decides on each attempt whether to keep waiting for a lock, in place of
-  ///     `busyTimeout`.
-  ///   - authorization: The policy installed on each connection, or `nil` for no application policy.
+  ///   - authorization: The policy installed on each connection, or `nil` for no application
+  ///     policy.
   public init(
     library: SQLiteLibrary,
-    busyTimeout: SQLiteBusyTimeout = .limit(.seconds(5)),
+    busyPolicy: SQLiteBusyPolicy = .timeout(.seconds(5)),
+    journalMode: SQLiteJournalMode? = nil,
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
     maximumCachedStatements: Int = 64,
     setups: [SQLiteSetup] = [],
     key: SQLiteKey? = nil,
-    busyHandler: (@Sendable (_ attempt: Int) -> Bool)? = nil,
     authorization: SQLiteAuthorizationHandler? = nil
   ) {
     self.library = library
     self.key = key
-    self.busyTimeout = busyTimeout
-    self.busyHandler = busyHandler
+    self.busyPolicy = busyPolicy
+    self.journalMode = journalMode
     self.authorization = authorization
     self.isForeignKeysEnabled = isForeignKeysEnabled
     self.isTrustedSchemaEnabled = isTrustedSchemaEnabled

@@ -8,16 +8,17 @@
   import WASILibc
 #endif
 
-// A library's step entry point is a C function pointer, which captures nothing, so a wrapper
-// installed with `withStatementExecution` cannot be stored in the table as it is. The wrapper is
-// kept on the installing thread instead, and the table gets a trampoline that finds it there. The
-// wrapper's operation is synchronous, so the statements it steps are stepped on that thread.
+// A library's step entry point is a C function pointer, which captures nothing, so an interceptor
+// installed with `withStatementStepInterceptor` cannot be stored in the table as it is. The
+// interceptor is kept on the installing thread instead, and the table gets a trampoline that finds
+// it there. The interceptor's operation is synchronous, so the statements it steps are stepped on
+// that thread.
 //
-// Each depth of nesting on a thread has a trampoline of its own. A wrapper is handed the step entry
-// point that was installed before it, which for a nested wrapper is the trampoline of the depth
-// below, so calling it reaches the next wrapper out, while a statement stepped from inside a
-// wrapper still starts from the innermost one. Two connections wrapped on the same thread take
-// different depths, so each table reaches its own wrapper.
+// Each depth of nesting on a thread has a trampoline of its own. An interceptor is handed the step
+// entry point that was installed before it, which for a nested interceptor is the trampoline of the
+// depth below, so calling it reaches the next interceptor out, while a statement stepped from inside
+// an interceptor still starts from the innermost one. Two connections intercepted on the same
+// thread take different depths, so each table reaches its own interceptor.
 enum SQLiteStepInterception {
   typealias Step = (OpaquePointer?) -> Int32
 
@@ -27,7 +28,7 @@ enum SQLiteStepInterception {
     let previous: UnsafeMutablePointer<Frame>?
   }
 
-  /// Makes `step`, a wrapper already composed with the entry point it wraps, the wrapper at the
+  /// Makes `step`, an interceptor already composed with the entry point it wraps, the one at the
   /// next depth of the current thread, returning the entry point that reaches it.
   ///
   /// Every call must be balanced by ``pop()`` on the same thread, innermost first.
@@ -36,7 +37,7 @@ enum SQLiteStepInterception {
     let depth = previous.map { $0.pointee.depth + 1 } ?? 0
     precondition(
       depth < trampolines.count,
-      "Statement execution wrappers are nested more than \(trampolines.count) deep on one thread."
+      "Statement step interceptors are nested more than \(trampolines.count) deep on one thread."
     )
     let frame = UnsafeMutablePointer<Frame>.allocate(capacity: 1)
     frame.initialize(to: Frame(depth: depth, step: step, previous: previous))
@@ -44,7 +45,7 @@ enum SQLiteStepInterception {
     return trampolines[depth]
   }
 
-  /// Removes the innermost wrapper of the current thread.
+  /// Removes the innermost interceptor of the current thread.
   static func pop() {
     guard let frame = top else { return }
     top = frame.pointee.previous
@@ -60,8 +61,8 @@ enum SQLiteStepInterception {
     }
     fatalError(
       """
-      A statement was stepped on a thread other than the one that wrapped its connection's \
-      stepping. Statements must be stepped synchronously within withStatementExecution.
+      A statement was stepped on a thread other than the one that intercepted its connection's \
+      steps. Statements must be stepped synchronously within withStatementStepInterceptor.
       """
     )
   }
@@ -84,7 +85,7 @@ enum SQLiteStepInterception {
     private static let key: pthread_key_t = {
       var key = pthread_key_t()
       let code = pthread_key_create(&key, nil)
-      precondition(code == 0, "Could not create the thread key statement wrappers are found by.")
+      precondition(code == 0, "Could not create the thread key statement step interceptors are found by.")
       return key
     }()
 

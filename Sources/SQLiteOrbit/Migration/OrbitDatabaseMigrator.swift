@@ -26,8 +26,8 @@
 ///
 /// Several processes may migrate the same database at once. Each migration's transaction checks
 /// again whether another process has applied it in the meantime, and waits for the write lock as
-/// long as the connection's busy timeout allows. To wait longer, migrate on a connection whose
-/// ``SQLiteWriteConnection/busyTimeout`` has been raised, with
+/// long as the connection's busy policy allows. To wait longer, migrate on a connection whose
+/// ``SQLiteWriteConnection/busyPolicy`` waits longer, with
 /// ``migrate(_:upTo:)-(SQLiteWriteConnection,_)``. An applied migration this migrator does not
 /// register, which is what an older build of the application sees after a newer one has migrated
 /// the database, is tolerated unless ``eraseDatabaseOnSchemaChange`` is on;
@@ -340,13 +340,13 @@ public struct OrbitDatabaseMigrator: Sendable {
   ///
   /// This is what the other `migrate` methods run, for when the connection needs setting up
   /// first. Each migration's transaction waits for the write lock as long as the connection's
-  /// ``SQLiteWriteConnection/busyTimeout`` allows, and fails with `SQLITE_BUSY` once it runs out,
-  /// so raising the timeout is how a launch waits out another process that holds the lock for
-  /// long:
+  /// ``SQLiteWriteConnection/busyPolicy`` allows, and fails with `SQLITE_BUSY` once it gives up,
+  /// so a longer-waiting policy is how a launch waits out another process that holds the lock
+  /// for long:
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   try connection.setBusyTimeout(.maximum)
+  ///   try connection.setBusyPolicy(.waitIndefinitely)
   ///   try migrator.migrate(connection)
   /// }
   /// ```

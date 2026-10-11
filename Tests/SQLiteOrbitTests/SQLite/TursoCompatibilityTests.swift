@@ -20,16 +20,14 @@
 
       let database = try inMemoryDatabase()
       try await database.write { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-        )
-        try transaction.execute(
-          #sql("INSERT INTO notes (id, title) VALUES (1, 'hello')", as: Void.self)
-        )
+        try #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          .execute(transaction)
+        try #sql("INSERT INTO notes (id, title) VALUES (1, 'hello')", as: Void.self)
+          .execute(transaction)
       }
 
       let titles = try await database.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+        try #sql("SELECT title FROM notes", as: String.self).fetchAll(transaction)
       }
       #expect(titles == ["hello"])
     }
@@ -39,15 +37,16 @@
       try await withTestDatabaseFile("turso") { file in
         let database = try file.tursoPool()
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          try #sql(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+            as: Void.self
           )
-          try transaction.execute(
-            #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
-          )
+          .execute(transaction)
+          try #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
+            .execute(transaction)
         }
         let titles = try await database.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+          try #sql("SELECT title FROM notes", as: String.self).fetchAll(transaction)
         }
         #expect(titles == ["pooled"])
       }
@@ -59,7 +58,7 @@
         let driver = try TursoPool(path: file.path)
 
         let mode = try await driver.readWithoutTransaction { connection in
-          try connection.fetchOne(#sql("SELECT * FROM pragma_journal_mode", as: String.self))
+          try #sql("SELECT * FROM pragma_journal_mode", as: String.self).fetchOne(connection)
         }
 
         #expect(mode?.lowercased() == "mvcc")
@@ -80,7 +79,7 @@
         }
 
         let count = try await driver.readWithoutTransaction { connection in
-          try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(connection)
         }
         #expect(count == 2)
       }
@@ -110,7 +109,7 @@
         for write in writes { try await write.value }
 
         let count = try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 2)
       }
@@ -197,7 +196,7 @@
         let observation = OrbitValueObservation<Int>
           .tracking { transaction in
             fetchCount.withLock { $0 += 1 }
-            return try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+            return try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction) ?? 0
           }
           .refetching(.coalesced)
         let recorder = TestRecorder<Int>()
@@ -278,9 +277,8 @@
             Task { () -> SQLiteError? in
               do {
                 try await driver.concurrentWrite { transaction in
-                  _ = try transaction.fetchOne(
-                    #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
-                  )
+                  _ = try #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
+                    .fetchOne(transaction)
                   try gate.enter()
                   try transaction.executeScript("UPDATE counter SET value = \(value) WHERE id = 1")
                 }
@@ -410,7 +408,7 @@
           try connection.execute("INSERT INTO items (id) VALUES (1)")
         }
         let count = try driver.readWithoutTransactionBlocking { connection in
-          try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(connection)
         }
 
         #expect(count == 1)
@@ -438,7 +436,7 @@
         _ = try await writes
 
         let count = try driver.readBlocking { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 2)
       }
@@ -481,9 +479,8 @@
 
       #expect(throws: SQLiteError.self) {
         try handle.read { transaction in
-          try transaction.fetchAll(
-            #sql("INSERT INTO notes DEFAULT VALUES RETURNING id", as: Int.self)
-          )
+          try #sql("INSERT INTO notes DEFAULT VALUES RETURNING id", as: Int.self)
+            .fetchAll(transaction)
         }
       }
     }

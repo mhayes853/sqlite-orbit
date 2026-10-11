@@ -334,7 +334,7 @@ enum FileSystem {
 #if canImport(Darwin) || os(Linux) || os(Android)
   // What the coordination directory is kept with, where there are processes to coordinate. Each
   // call returns what the C call returned and leaves `errno` as the C call left it, or throws a
-  // ``UnixSystemError`` carrying it.
+  // ``UnixDatagramIPCTransport/SystemError`` carrying it.
   extension FileSystem {
     /// Renames the file at `source` over the one at `destination`, in one step, so a reader finds
     /// one file or the other and never neither.
@@ -360,8 +360,8 @@ enum FileSystem {
     /// `FileManager.createDirectory(atPath:withIntermediateDirectories:)` does. A directory
     /// already there, including one another process creates meanwhile, is left as it is.
     ///
-    /// - Throws: A ``UnixSystemError`` if a directory cannot be created, or if something other
-    ///   than a directory is in the way, with `EEXIST`.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if a directory cannot be created, or if
+    ///   something other than a directory is in the way, with `EEXIST`.
     static func createDirectory(atPath path: FilePath) throws {
       if mkdir(path.string, 0o777) == 0 { return }
       switch errno {
@@ -370,35 +370,37 @@ enum FileSystem {
       case ENOENT:
         let parent = path.removingLastComponent()
         guard parent != path.removingTrailingSlashes(), !parent.isEmpty else {
-          throw UnixSystemError.last("mkdir")
+          throw UnixDatagramIPCTransport.SystemError.last("mkdir")
         }
         try Self.createDirectory(atPath: parent)
         if mkdir(path.string, 0o777) == 0 { return }
-        guard errno == EEXIST else { throw UnixSystemError.last("mkdir") }
+        guard errno == EEXIST else { throw UnixDatagramIPCTransport.SystemError.last("mkdir") }
       default:
-        throw UnixSystemError.last("mkdir")
+        throw UnixDatagramIPCTransport.SystemError.last("mkdir")
       }
       guard let status = status(atPath: path, followingSymbolicLink: true) else {
-        throw UnixSystemError.last("stat")
+        throw UnixDatagramIPCTransport.SystemError.last("stat")
       }
       guard mode_t(status.st_mode) & S_IFMT == S_IFDIR else {
-        throw UnixSystemError(operation: "mkdir", code: EEXIST)
+        throw UnixDatagramIPCTransport.SystemError(operation: "mkdir", code: EEXIST)
       }
     }
 
     /// The names of what is in the directory at `path`, in no particular order, leaving out `.`
     /// and `..`.
     ///
-    /// - Throws: A ``UnixSystemError`` if the directory cannot be read, with `ENOENT` if it is
-    ///   not there.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the directory cannot be read, with
+    ///   `ENOENT` if it is not there.
     static func contentsOfDirectory(atPath path: FilePath) throws -> [String] {
-      guard let directory = opendir(path.string) else { throw UnixSystemError.last("opendir") }
+      guard let directory = opendir(path.string) else {
+        throw UnixDatagramIPCTransport.SystemError.last("opendir")
+      }
       defer { closedir(directory) }
       var names: [String] = []
       while true {
         errno = 0
         guard let entry = readdir(directory) else {
-          guard errno == 0 else { throw UnixSystemError.last("readdir") }
+          guard errno == 0 else { throw UnixDatagramIPCTransport.SystemError.last("readdir") }
           return names
         }
         let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
@@ -418,7 +420,8 @@ enum FileSystem {
 
     /// Everything in the file at `path`.
     ///
-    /// - Throws: A ``UnixSystemError`` if it cannot be read, with `ENOENT` if nothing is there.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if it cannot be read, with `ENOENT` if
+    ///   nothing is there.
     static func contentsOfFile(atPath path: FilePath) throws -> [UInt8] {
       let descriptor = try UnixDescriptor(
         UnixPlatform.openExistingFile(atPath: path.string),
@@ -430,7 +433,7 @@ enum FileSystem {
         let count = buffer.withUnsafeMutableBytes {
           UnixPlatform.readBytes(from: descriptor.rawValue, into: $0)
         }
-        guard count >= 0 else { throw UnixSystemError.last("read") }
+        guard count >= 0 else { throw UnixDatagramIPCTransport.SystemError.last("read") }
         guard count > 0 else { return contents }
         contents.append(contentsOf: buffer[..<count])
       }
@@ -439,8 +442,8 @@ enum FileSystem {
     /// Writes `bytes` to the file at `path`, creating it if it is not there and replacing what it
     /// held if it is, in place, as `Data.write(to:)` does without `.atomic`.
     ///
-    /// - Throws: A ``UnixSystemError`` if it cannot be written, with `ENOENT` if its directory is
-    ///   not there.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if it cannot be written, with `ENOENT`
+    ///   if its directory is not there.
     static func writeFile(_ bytes: [UInt8], atPath path: FilePath) throws {
       let descriptor = try UnixDescriptor(
         open(path.string, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o666),
@@ -455,7 +458,7 @@ enum FileSystem {
           )
         }
         if count < 0 {
-          guard errno == EINTR else { throw UnixSystemError.last("write") }
+          guard errno == EINTR else { throw UnixDatagramIPCTransport.SystemError.last("write") }
           continue
         }
         written += count

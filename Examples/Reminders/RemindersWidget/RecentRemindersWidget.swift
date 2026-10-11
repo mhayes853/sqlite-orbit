@@ -40,9 +40,9 @@ struct RecentRemindersEntry: TimelineEntry {
 }
 
 struct RecentRemindersProvider: TimelineProvider {
-  private let database: RemindersDatabase
+  private let database: any OrbitObservableDatabaseWriter
 
-  init(database: RemindersDatabase) {
+  init(database: any OrbitObservableDatabaseWriter) {
     self.database = database
   }
 
@@ -74,11 +74,10 @@ struct RecentRemindersProvider: TimelineProvider {
   func entry() async -> RecentRemindersEntry {
     let reminders =
       (try? await database.read { transaction in
-        try transaction.fetchAll(
-          WidgetReminder.recent(
-            limit: RemindersWidgetConfiguration.maximumReminderCount
-          )
+        try WidgetReminder.recent(
+          limit: RemindersWidgetConfiguration.maximumReminderCount
         )
+        .fetchAll(transaction)
       }) ?? []
     return RecentRemindersEntry(date: .now, reminders: reminders)
   }
@@ -209,7 +208,7 @@ struct RecentRemindersWidgetView: View {
 }
 
 struct RecentRemindersWidget: Widget {
-  private let database: RemindersDatabase = OrbitDefaultDatabase.current
+  private let database: any OrbitObservableDatabaseWriter = OrbitDefaultDatabase.current
 
   var body: some WidgetConfiguration {
     StaticConfiguration(

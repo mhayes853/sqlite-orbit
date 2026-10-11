@@ -170,14 +170,14 @@
       {
         let connection = try SQLiteSerialConnection(
           path: .memory,
-          flags: [.readWrite, .create, .noMutex],
           configuration: .default,
-          idleTimeout: .microseconds(50)
+          idleTimeout: .microseconds(50),
+          suspension: nil
         )
-        try await connection.writeWithoutTransaction {
+        try await connection.withWriteConnection {
           try $0.transaction { try $0.execute("CREATE TABLE counter (n INTEGER NOT NULL)") }
         }
-        try await connection.writeWithoutTransaction {
+        try await connection.withWriteConnection {
           try $0.transaction { try $0.execute("INSERT INTO counter (n) VALUES (0)") }
         }
 
@@ -188,10 +188,10 @@
           .map { _ in
             onNewThread {
               for bump in 0..<bumpsEach {
-                try! connection.writeWithoutTransactionBlocking {
+                try! connection.withWriteConnectionBlocking {
                   try $0.transaction { try $0.execute("UPDATE counter SET n = n + 1") }
                 }
-                _ = try! connection.readWithoutTransactionBlocking {
+                _ = try! connection.withReadConnectionBlocking {
                   try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
@@ -202,10 +202,10 @@
           for _ in 0..<writers {
             group.addTask {
               for bump in 0..<bumpsEach {
-                try! await connection.writeWithoutTransaction {
+                try! await connection.withWriteConnection {
                   try $0.transaction { try $0.execute("UPDATE counter SET n = n + 1") }
                 }
-                _ = try! await connection.readWithoutTransaction {
+                _ = try! await connection.withReadConnection {
                   try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
                 }
                 if bump.isMultiple(of: 16) { pauseBriefly() }
@@ -215,7 +215,7 @@
         }
         for thread in threads { await thread.value }
 
-        let total: Int? = try connection.readWithoutTransactionBlocking {
+        let total: Int? = try connection.withReadConnectionBlocking {
           try $0.transaction { try $0.fetchOne("SELECT n FROM counter", as: Int.self) }
         }
         #expect(total == 2 * writers * bumpsEach)

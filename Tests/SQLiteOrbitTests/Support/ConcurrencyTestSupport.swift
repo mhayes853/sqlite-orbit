@@ -174,7 +174,7 @@ final class OverlapTracker: Sendable {
 ///
 /// ```swift
 /// let counts = try await concurrently(8) { index in
-///   try await database.read { try $0.fetchCount(Item.all) }
+///   try await database.read { try Item.all.fetchCount($0) }
 /// }
 /// ```
 ///

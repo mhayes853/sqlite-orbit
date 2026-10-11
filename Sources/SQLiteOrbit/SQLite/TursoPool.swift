@@ -16,52 +16,51 @@
   /// }
   /// ```
   public final class TursoPool: OrbitConcurrentDatabaseWriter, OrbitObservableDatabase {
-    /// The identity this driver's database is known by within the process.
-    public let defaultIdentifier: OrbitDatabaseIdentifier
+    /// The database this pool's connections are open on.
+    public let path: OrbitDatabasePath
 
     private let pool: SQLiteConnectionPool
-    private let transactionObservers = OrbitDatabaseTransactionObservers()
+    private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
     /// Opens `path` in Turso's MVCC mode.
+    ///
+    /// ```swift
+    /// let driver = try TursoPool(path: .file(url), readerCount: 4, writerCount: 8)
+    /// ```
+    ///
+    /// The writers switch the database to ``SQLiteJournalMode/mvcc`` whatever `configuration`'s
+    /// ``SQLiteConfiguration/journalMode`` says, before any of `configuration`'s setups run.
     ///
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
     ///   - configuration: Settings applied to every connection. Its library should be Turso.
-    ///   - readerCount: The number of read connections to open. Values below one are treated as one.
-    ///   - writerCount: The number of concurrent write connections to open. Values below one are
-    ///     treated as one.
-    ///   - identifier: An identity applications can associate with this process-local database.
+    ///   - readerCount: The number of read connections to open. Must be greater than zero.
+    ///   - writerCount: The number of concurrent write connections to open. Must be greater than
+    ///     zero.
+    /// - Precondition: `readerCount` and `writerCount` must be greater than zero.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened or configured for MVCC.
     public init(
       path: OrbitDatabasePath,
       configuration: SQLiteConfiguration = .turso,
       readerCount: Int = 5,
-      writerCount: Int = 4,
-      identifier: OrbitDatabaseIdentifier? = nil
+      writerCount: Int = 4
     ) throws {
-      guard !path.isPrivateToConnection else {
-        throw SQLitePoolUnavailableError(path: path)
-      }
-
-      // Establish MVCC on writable connections before opening readers. The setup is prepended so
-      // caller-supplied setup SQL always runs against the mode this driver promises.
+      precondition(readerCount > 0, "TursoPool requires at least one reader")
+      precondition(writerCount > 0, "TursoPool requires at least one writer")
+      // The connection pool refuses a database private to its connection itself.
+      // Writers establish MVCC before readers open, and before the caller's setups run, so they
+      // always run against the mode this driver promises.
       var writerConfiguration = configuration
-      writerConfiguration.setups.insert(.sql("PRAGMA journal_mode = MVCC"), at: 0)
-      // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
-      // through a read transaction an explicit error.
-      var readerConfiguration = configuration
-      readerConfiguration.setups.append(.sql("PRAGMA query_only = 1"))
-      let identifier = identifier ?? .forDatabase(path: path)
-      self.defaultIdentifier = identifier
+      writerConfiguration.journalMode = .mvcc
       self.pool = try SQLiteConnectionPool(
         path: path,
-        readerConfiguration: readerConfiguration,
+        readerConfiguration: configuration,
         writerConfiguration: writerConfiguration,
-        readerCount: max(1, readerCount),
-        writerCount: max(1, writerCount),
-        identifier: identifier
+        readerCount: readerCount,
+        writerCount: writerCount
       )
+      self.path = path
     }
 
     /// Runs `body` in a read transaction on one of the pool's reader connections.

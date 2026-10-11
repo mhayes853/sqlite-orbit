@@ -223,15 +223,13 @@ struct FileSystemTests {
 
     #if BuiltInSQLite && (canImport(Darwin) || os(Linux) || os(Android))
       @Test
-      func aPoolTakesItsOpenLockInACoordinationDirectoryURL() throws {
+      func anIPCDatabaseTakesItsOpenLockInACoordinationDirectoryURL() throws {
         try withTemporaryDirectory("pool-url") { directory in
           let coordination = directory.appending(path: "c", directoryHint: .isDirectory)
           let path = OrbitDatabasePath(directory.appending(path: "db.sqlite").path)
-          _ = try SQLitePool(path: path, coordinationDirectory: coordination)
-          _ = try SQLitePool(
+          _ = try OrbitIPCDatabase(
             path: path,
-            configuration: .default,
-            coordinationDirectory: nil
+            coordination: UnixDatagramIPCTransport.Configuration(directory: coordination)
           )
           var isDirectory: ObjCBool = false
           #expect(

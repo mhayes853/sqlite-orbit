@@ -209,7 +209,8 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
   ///
   /// ```swift
   /// try await database.read { transaction in
-  ///   var cursor = try transaction.rowCursor(Reminder.select { ($0.id, $0.title) })
+  ///   let statement = Reminder.select { ($0.id, $0.title) }
+  ///   var cursor = try transaction.rowCursor(SQL(fragment: statement.query))
   ///   while var row = try cursor.next() {
   ///     let id = try row.decode(Int.self)
   ///     let title = try row.decode(String.self)

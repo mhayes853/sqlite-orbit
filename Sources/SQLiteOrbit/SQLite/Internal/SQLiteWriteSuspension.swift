@@ -18,11 +18,11 @@ final class SQLiteWriteSuspension: Sendable {
     var hasRefusedAccess = false
   }
 
-  let databaseIdentifier: OrbitDatabaseIdentifier
+  let path: OrbitDatabasePath
   private let state = Lock(State())
 
-  init(databaseIdentifier: OrbitDatabaseIdentifier) {
-    self.databaseIdentifier = databaseIdentifier
+  init(path: OrbitDatabasePath) {
+    self.path = path
   }
 
   var isSuspended: Bool {
@@ -67,25 +67,25 @@ final class SQLiteWriteSuspension: Sendable {
         return state.hasRefusedAccess
       }
       if hasRefusedAccess, let error = error as? SQLiteError, error.isInterruption {
-        throw OrbitDatabaseSuspendedError(databaseIdentifier: databaseIdentifier)
+        throw OrbitDatabaseSuspendedError(path: path)
       }
       throw error
     }
   }
 
-  /// Returns the step wrapper for a writer connection opened through `library`, refusing the
-  /// statements a suspension forbids and stepping the rest through the entry point it wraps.
-  func step(
+  /// Returns a statement-step interceptor for a writer connection opened through `library`, which
+  /// refuses the statements a suspension forbids.
+  func interceptor(
     of library: SQLiteLibrary,
     on connection: OpaquePointer
-  ) -> @Sendable (OpaquePointer?, @convention(c) (OpaquePointer?) -> Int32) -> Int32 {
+  ) -> SQLiteStatementStepInterceptor {
     let isReadOnly = library.statements.inspection.isReadOnly
     let sql = library.statements.inspection.sql
     let isAutocommit = library.connections.isAutocommit
     // An address rather than a pointer, so that the closure can be shared. The connection outlives
     // it, since the handle that owns this entry point closes the connection.
     let address = UInt(bitPattern: connection)
-    return { [self] statement, next in
+    return { [self] statement, step in
       let isRefused = state.withLock { state in
         guard state.isSuspended else { return false }
         let connection = OpaquePointer(bitPattern: address)
@@ -100,7 +100,7 @@ final class SQLiteWriteSuspension: Sendable {
         return !isAdmitted
       }
       if isRefused { return SQLiteResultCode.interrupt.rawValue }
-      let code = next(statement)
+      let code = step(statement)
       if code & 0xff == SQLiteResultCode.interrupt.rawValue {
         // The suspension may have interrupted a statement that was already running.
         state.withLock { state in

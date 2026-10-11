@@ -33,7 +33,7 @@ func insertRecordStructuredQueriesBenchmarks() {
       try owner.withWriteConnection { connection in
         try connection.transaction { transaction in
           for i in 0..<Fixture.insertedRowCount {
-            try transaction.execute(TableItem.insert { TableItem(i) })
+            try TableItem.insert { TableItem(i) }.execute(transaction)
           }
         }
       }
@@ -46,7 +46,10 @@ func insertRecordStructuredQueriesBenchmarks() {
       try owner.withWriteConnection { connection in
         try connection.transaction { transaction in
           for i in 0..<Fixture.insertedRowCount {
-            try transaction.execute(TableItem.insert { TableItem(i) }, cached: false)
+            try transaction.execute(
+              SQLiteOrbit.SQL(fragment: TableItem.insert { TableItem(i) }.query),
+              cached: false
+            )
           }
         }
       }
@@ -61,7 +64,7 @@ func insertRecordStructuredQueriesBenchmarks() {
           for start in stride(from: 0, to: Fixture.insertedRowCount, by: batchRowCount) {
             let end = min(start + batchRowCount, Fixture.insertedRowCount)
             let items = (start..<end).map(TableItem.init)
-            try transaction.execute(TableItem.insert { items })
+            try TableItem.insert { items }.execute(transaction)
           }
         }
       }

@@ -28,7 +28,7 @@
             }
           }
         }
-        let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+        let persisted = try await database.read { try EditableReminder.all.find($0, key: 1) }
         #expect(persisted == EditableReminder(id: 1, title: "Eggs", notes: "cold"))
         await #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
           try await database.write { transaction in
@@ -67,7 +67,7 @@
         try await update.value
         #expect(!property.isSaving)
         if !overlappingFailure { #expect(property.saveError == nil) }
-        let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+        let persisted = try await database.read { try EditableReminder.all.find($0, key: 1) }
         var expected = EditableReminder(id: 1, title: "Milk", notes: "")
         expected.title = "Eggs"
         #expect(persisted == expected)
@@ -114,7 +114,7 @@
         }
         #expect(!$reminder.isSaving)
         #expect($reminder.saveError != nil)
-        let unchanged = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+        let unchanged = try await database.read { try EditableReminder.all.find($0, key: 1) }
         #expect(unchanged == EditableReminder(id: 1, title: "Milk", notes: ""))
         if failure == "constraint" {
           try await database.write { try $0.execute("DROP TRIGGER reject_update") }
@@ -124,7 +124,7 @@
         try await $reminder.save(replacement)
         #expect(!$reminder.isSaving)
         #expect($reminder.saveError == nil)
-        let persisted = try await database.read { try $0.find(EditableReminder.all, key: 1) }
+        let persisted = try await database.read { try EditableReminder.all.find($0, key: 1) }
         #expect(persisted == replacement)
       }
 
@@ -136,11 +136,10 @@
 
         #expect(reminder == nil)
         try await database.write { transaction in
-          try transaction.execute(
-            EditableReminder.insert {
-              EditableReminder(id: 1, title: "Milk", notes: "")
-            }
-          )
+          try EditableReminder.insert {
+            EditableReminder(id: 1, title: "Milk", notes: "")
+          }
+          .execute(transaction)
         }
         try await waitUntil { reminder?.title == "Milk" }
       }
@@ -186,11 +185,10 @@
         @Row(EditableReminder.self, id: 1, database: database) var reminder
         _ = reminder
         try await database.write { transaction in
-          try transaction.execute(
-            EditableReminder.update(
-              EditableReminder(id: 1, title: "Milk", notes: "from another writer")
-            )
+          try EditableReminder.update(
+            EditableReminder(id: 1, title: "Milk", notes: "from another writer")
           )
+          .execute(transaction)
         }
 
         let mutation: @Sendable (inout EditableReminder) -> String = { reminder in
@@ -205,7 +203,7 @@
           }
         #expect(oldTitle == "Milk")
         let persisted = try await database.read { transaction in
-          try transaction.find(EditableReminder.all, key: 1)
+          try EditableReminder.all.find(transaction, key: 1)
         }
         #expect(
           persisted == EditableReminder(id: 1, title: "Eggs", notes: "from another writer")
@@ -259,7 +257,7 @@
           """
         )
         for row in rows {
-          try transaction.execute(EditableReminder.insert { row })
+          try EditableReminder.insert { row }.execute(transaction)
         }
       }
       return database

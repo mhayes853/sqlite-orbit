@@ -105,9 +105,8 @@
         #if StructuredQueries
           #expect(
             try await database.read {
-              try $0.fetchOne(
-                #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
-              )
+              try #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                .fetchOne($0)
             } == 1
           )
         #endif

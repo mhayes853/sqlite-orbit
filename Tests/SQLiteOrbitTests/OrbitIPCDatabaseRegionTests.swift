@@ -40,7 +40,7 @@
         let database = OrbitIPCDatabase(writer: writer, transport: transport)
         let sibling = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: database.id,
+          identifier: database.id,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -88,12 +88,12 @@
         let peerTransport = InMemoryIPCTransport(network: network)
         let observingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: receivingTransport
         )
         let siblingDatabase = OrbitIPCDatabase(
           writer: try SQLiteQueue(path: .memory),
-          id: identifier,
+          identifier: identifier,
           transport: InMemoryIPCTransport()
         )
         let observer = TransactionEventRecorder()
@@ -261,9 +261,9 @@
       private func flaggedCountObservation() -> OrbitValueObservation<Int?> {
         OrbitValueObservation<Int?>
           .tracking { transaction in
-            let flag = try transaction.fetchOne(#sql("SELECT flag FROM a", as: Int.self)) ?? 0
+            let flag = try #sql("SELECT flag FROM a", as: Int.self).fetchOne(transaction) ?? 0
             guard flag != 0 else { return nil }
-            return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM b", as: Int.self)) ?? 0
+            return try #sql("SELECT COUNT(*) FROM b", as: Int.self).fetchOne(transaction) ?? 0
           }
           .removeDuplicates()
       }
@@ -327,7 +327,7 @@
           let (observingTransport, writingTransport) = try transport.makePair(directory: directory)
           let observing = OrbitIPCDatabase(
             writer: try SQLiteQueue(path: path),
-            id: identifier,
+            identifier: identifier,
             transport: observingTransport
           )
           try await observing.write { transaction in
@@ -341,7 +341,7 @@
           }
           let writing = OrbitIPCDatabase(
             writer: try SQLiteQueue(path: path),
-            id: identifier,
+            identifier: identifier,
             transport: writingTransport
           )
           try await body(

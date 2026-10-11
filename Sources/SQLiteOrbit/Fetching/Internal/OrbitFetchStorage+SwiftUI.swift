@@ -13,7 +13,7 @@
     ///   - generation: A counter stored in the view, bumped once per change.
     func update(
       declared: OrbitFetchStorage<Value>,
-      database: (any OrbitObservableDatabase)?,
+      database: (any OrbitObservableDatabaseWriter)?,
       generation: SwiftUI.State<Int>
     ) {
       if self !== declared {

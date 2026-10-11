@@ -472,22 +472,22 @@
 
   @Test(
     arguments: [
-      (SQLiteBusyTimeout.limit(.seconds(5)), Int32(5000)),
-      (.limit(.milliseconds(250)), 250),
-      (.limit(.zero), 0),
-      (.limit(.seconds(-1)), 0),
-      (.limit(.seconds(2_147_483)), 2_147_483_000),
-      (.limit(.milliseconds(2_147_483_646)), 2_147_483_646),
-      (.limit(.milliseconds(2_147_483_647)), .max),
-      (.limit(.milliseconds(2_147_483_648)), .max),
-      (.limit(.seconds(Int64.max)), .max),
-      (.maximum, .max)
+      (SQLiteBusyPolicy.timeout(.seconds(5)), Int32(5000)),
+      (.timeout(.milliseconds(250)), 250),
+      (.timeout(.zero), 0),
+      (.timeout(.seconds(-1)), 0),
+      (.timeout(.seconds(2_147_483)), 2_147_483_000),
+      (.timeout(.milliseconds(2_147_483_646)), 2_147_483_646),
+      (.timeout(.milliseconds(2_147_483_647)), .max),
+      (.timeout(.milliseconds(2_147_483_648)), .max),
+      (.timeout(.seconds(Int64.max)), .max),
+      (.waitIndefinitely, .max)
     ]
   )
   func aBusyTimeoutSaturatesRatherThanOverflowing(
-    timeout: SQLiteBusyTimeout,
+    timeout: SQLiteBusyPolicy,
     milliseconds: Int32
   ) {
-    #expect(timeout.milliseconds == milliseconds)
+    #expect(timeout.timeoutMilliseconds == milliseconds)
   }
 #endif
