@@ -153,10 +153,11 @@ struct OrbitFetchSourceID: Hashable, Sendable {
   }
 }
 
-/// A request of any type, compared and hashed as itself.
+/// A value of any type — a request, or a caller's explicit observation identity — compared and
+/// hashed as itself.
 ///
 /// `AnyHashable` would say this in one word, but it erases `Sendable` along with the type. Holding
-/// the existential instead keeps the guarantee the requests came with.
+/// the existential instead keeps the guarantee the values came with.
 struct OrbitAnyHashableSendable: Hashable, Sendable {
   private let base: any Hashable & Sendable
 
@@ -406,8 +407,6 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
     /// describes a different read, and the scheduler whenever no explicit load or assignment has
     /// chosen one since.
     case declaration
-    /// A newly resolved database, which replaces the source and leaves the scheduler alone.
-    case attachment
   }
 
   /// Takes over another storage's value and source.
@@ -426,41 +425,50 @@ final class OrbitFetchStorage<Value: Sendable>: Sendable {
       ($0.value, $0.source, $0.binding, $0.loadError, $0.sourceID)
     }
     let otherScheduler = other.scheduler.current
-    let adopted = state.withLock {
-      state -> (invalidated: State.InvalidatedObservation, wasObserving: Bool)? in
+    replaceObservation { state in
       switch adoption {
       case .assignment:
         state.schedulerFollowsDeclaration = false
         scheduler.replace(with: otherScheduler)
       case .declaration:
-        guard let sourceID else { return nil }
+        guard let sourceID else { return false }
         guard state.sourceID != sourceID else {
           // The same read: the observation continues, and only where it delivers may change.
           if state.schedulerFollowsDeclaration { scheduler.replace(with: otherScheduler) }
-          return nil
+          return false
         }
         state.sourceID = sourceID
         state.schedulerFollowsDeclaration = true
         scheduler.replace(with: otherScheduler)
-      case .attachment:
-        break
       }
-      let invalidated = state.invalidateObservation()
       state.value = value
       state.source = source
       state.binding = binding
       state.loadError = loadError
+      return true
+    }
+  }
+
+  // MARK: - Observing
+
+  /// Ends the current observation and lets the next read start another, if `replace` changes what
+  /// the storage observes.
+  ///
+  /// - Parameter replace: Updates the state under the lock, returning whether it replaced anything.
+  private func replaceObservation(_ replace: (inout State) -> Bool) {
+    let replaced = state.withLock {
+      state -> (invalidated: State.InvalidatedObservation, wasObserving: Bool)? in
+      guard replace(&state) else { return nil }
+      let invalidated = state.invalidateObservation()
       state.hasStarted = false
       return (invalidated, !state.observers.isEmpty)
     }
-    guard let (invalidated, wasObserving) = adopted else { return }
+    guard let (invalidated, wasObserving) = replaced else { return }
     finish(invalidated)
     // Something is already watching this storage, so its observation cannot wait for the next
     // read to restart it.
     if wasObserving { startIfNeeded() }
   }
-
-  // MARK: - Observing
 
   /// Ends a replaced observation, outside the lock that replaced it.
   private func finish(_ invalidated: State.InvalidatedObservation) {
@@ -667,22 +675,14 @@ extension OrbitFetchStorage {
     scheduler: any OrbitValueObservationScheduler
   ) -> OrbitFetchStorage<Value> {
     let defaultDatabase = OrbitDefaultDatabaseSource()
-    guard
-      let database = database ?? defaultDatabase.currentIfConfigured.map({ .writer($0) })
-    else {
-      return OrbitFetchStorage(
-        value: value,
-        binding: binding,
-        defaultDatabase: defaultDatabase,
-        sourceID: binding.makeID(nil),
-        scheduler: scheduler
-      )
-    }
+    let source = (database ?? defaultDatabase.currentIfConfigured.map { .writer($0) })
+      .map(binding.makeSource)
     return OrbitFetchStorage(
       value: value,
-      source: binding.makeSource(database),
+      source: source,
       binding: binding,
       defaultDatabase: defaultDatabase,
+      sourceID: source?.id ?? binding.makeID(nil),
       scheduler: scheduler
     )
   }
@@ -770,15 +770,14 @@ extension OrbitFetchStorage {
     }
     guard let attachment else { return }
     // Building a request-backed source may render its statement, which is work the lock has no
-    // reason to hold, and adopting takes the lock again for itself.
-    adopt(
-      from: OrbitFetchStorage(
-        value: untrackedValue,
-        source: attachment.binding.makeSource(.writer(attachment.database)),
-        binding: attachment.binding
-      ),
-      as: .attachment
-    )
+    // reason to hold. The value, the declaration, and the scheduler all stay as they are.
+    let source = attachment.binding.makeSource(.writer(attachment.database))
+    replaceObservation { state in
+      state.source = source
+      state.binding = attachment.binding
+      state.loadError = nil
+      return true
+    }
   }
 
   /// Takes over `other`'s source when it describes a different read from this one's, and its
