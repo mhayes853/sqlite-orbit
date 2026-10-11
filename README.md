@@ -836,7 +836,7 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `c824b14` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `4fa2928` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and

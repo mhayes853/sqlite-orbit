@@ -219,11 +219,73 @@
                 )
               )
               #expect(sliced?.packedBytes == [0x01])
+              let columnSlices = try #require(
+                try transaction.fetchOne(
+                  SQLiteBinaryEmbedding.where { $0.label.eq("near") }
+                    .select {
+                      (
+                        $0.embedding.slice(start: 0, end: 8),
+                        $0.embedding.slice(
+                          0...7,
+                          as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
+                        )
+                      )
+                    }
+                )
+              )
+              let nearPrefix = try BinaryEmbeddingVector<8>(packedBytes: [0x85])
+              #expect(columnSlices.0 == Array(nearPrefix))
+              #expect(columnSlices.1 == nearPrefix)
               #expect(
                 try transaction.fetchOne(
                   #sql("SELECT \(Vec.type(vector))", as: String.self)
                 ) == "bit"
               )
+            }
+          }
+        }
+
+        @Test(arguments: SQLiteTestDriver.allCases)
+        func columnSlicesAndComputedOperandsDecodeThroughOrbit(_ driver: SQLiteTestDriver)
+          async throws
+        {
+          guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
+            return
+          }
+          // Scalar helpers also apply to ordinary tables that store vector blobs.
+          try await driver.withDatabase(
+            schema: "CREATE TABLE plain_embeddings (embedding BLOB NOT NULL, label TEXT NOT NULL)"
+          ) { database in
+            try await database.write { transaction in
+              try transaction.execute(
+                SQLitePlainEmbedding.insert {
+                  SQLitePlainEmbedding(embedding: EmbeddingVector<3>([2, 0, 1]), label: "plain")
+                }
+              )
+            }
+            try await database.read { transaction in
+              let result = try #require(
+                try transaction.fetchOne(
+                  SQLitePlainEmbedding.select {
+                    (
+                      $0.embedding.slice(0..<2),
+                      $0.embedding.slice(0..<2, as: EmbeddingVector<2>.self),
+                      $0.embedding.distanceL2(to: $0.embedding.normalize())
+                    )
+                  }
+                )
+              )
+              #expect(result.0 == [2, 0])
+              #expect(result.1 == EmbeddingVector<2>([2, 0]))
+              #expect(abs(result.2 - (Double(5).squareRoot() - 1)) < 0.000001)
+              // Structured queries surface the vector's own error, unlike raw-SQL conversions.
+              #expect(throws: VectorDecodingError.dimensionMismatch(expected: 3, actual: 2)) {
+                try transaction.fetchOne(
+                  SQLitePlainEmbedding.select {
+                    $0.embedding.slice(start: 0, length: 2, as: EmbeddingVector<3>.self)
+                  }
+                )
+              }
             }
           }
         }
@@ -391,6 +453,13 @@
     private struct SQLiteBinaryEmbedding: Vec0 {
       @Column(as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self)
       var embedding: BinaryEmbeddingVector<16>
+      var label: String
+    }
+
+    @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+    @Table("plain_embeddings")
+    private struct SQLitePlainEmbedding {
+      var embedding: EmbeddingVector<3>
       var label: String
     }
 
