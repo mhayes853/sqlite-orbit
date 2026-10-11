@@ -20,11 +20,11 @@
 
         let createItems = #sql("CREATE TABLE items (id INTEGER)", as: Void.self)
         if blocking {
-          try database.writeBlocking { try $0.execute(createItems) }
+          try database.writeBlocking { try createItems.execute($0) }
           // A blocking write announces on a task of its own, once it has returned.
           try await waitUntil { delegate.events.count == 2 }
         } else {
-          try await database.write { try $0.execute(createItems) }
+          try await database.write { try createItems.execute($0) }
         }
 
         let message = OrbitIPCMessage.transactionDidCommit(
@@ -67,7 +67,7 @@
         let (database, transport) = try makeAnnouncingDatabase(id: identifier)
 
         _ = try await database.write { transaction in
-          try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+          try #sql("SELECT 1", as: Int.self).fetchAll(transaction)
         }
 
         #expect(
@@ -112,7 +112,7 @@
         let (database, transport) = try makeAnnouncingDatabase()
 
         _ = try await database.read { transaction in
-          try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+          try #sql("SELECT 1", as: Int.self).fetchAll(transaction)
         }
         await #expect(throws: WriteFailure.self) {
           try await database.write { _ in throw WriteFailure() }
@@ -127,7 +127,7 @@
         let announcementsDuringWrite = Lock(-1)
 
         try await database.write { transaction in
-          try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+          try #sql("CREATE TABLE items (id INTEGER)", as: Void.self).execute(transaction)
           announcementsDuringWrite.withLock { $0 = transport.messages.count }
         }
 
@@ -144,7 +144,7 @@
         )
 
         let value = try await database.write { transaction in
-          try transaction.fetchAll(#sql("SELECT 1", as: Int.self))
+          try #sql("SELECT 1", as: Int.self).fetchAll(transaction)
         }
 
         #expect(value == [1])
@@ -173,7 +173,7 @@
 
         let write = Task {
           try await database.write { transaction in
-            try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+            try #sql("CREATE TABLE items (id INTEGER)", as: Void.self).execute(transaction)
           }
         }
         try await waitUntil { transport.didBeginSending }
@@ -200,7 +200,7 @@
 
         let write = Task {
           try await database.write { transaction in
-            try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+            try #sql("CREATE TABLE items (id INTEGER)", as: Void.self).execute(transaction)
           }
         }
         try await waitUntil { transport.didBeginSending }
@@ -316,12 +316,12 @@
         transport.removeAllMessages()
 
         try await database.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
           try connection.transaction { transaction in
-            try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO lists (id) VALUES (1)", as: Void.self).execute(transaction)
           }
           try? connection.transaction { transaction in
-            try transaction.execute(#sql("INSERT INTO archive (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO archive (id) VALUES (1)", as: Void.self).execute(transaction)
             throw WriteFailure()
           }
         }
@@ -344,9 +344,9 @@
         try await createAnnouncementTables(in: database)
         transport.removeAllMessages()
         let body: @Sendable (borrowing SQLiteWriteConnection) throws -> Void = { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
           try connection.transaction { transaction in
-            try transaction.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO lists (id) VALUES (1)", as: Void.self).execute(transaction)
           }
           throw WriteFailure()
         }
@@ -378,9 +378,9 @@
         try await database.writeWithoutTransaction { connection in
           try connection.execute("PRAGMA foreign_keys = OFF")
           try connection.execute("PRAGMA foreign_keys = ON")
-          _ = try connection.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+          _ = try #sql("SELECT id FROM items", as: Int.self).fetchAll(connection)
           try? connection.transaction { transaction in
-            try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
             throw WriteFailure()
           }
         }
@@ -389,7 +389,7 @@
         }
         try database.writeWithoutTransactionBlocking { _ in }
         _ = try await database.readWithoutTransaction { connection in
-          try connection.fetchAll(#sql("SELECT id FROM items", as: Int.self))
+          try #sql("SELECT id FROM items", as: Int.self).fetchAll(connection)
         }
 
         #expect(transport.messages.isEmpty)
@@ -410,8 +410,8 @@
         let subscription = try peerTransport.subscribe(to: identifier, onMessage: received.append)
 
         try await database.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
-          try connection.execute(#sql("INSERT INTO lists (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
+          try #sql("INSERT INTO lists (id) VALUES (1)", as: Void.self).execute(connection)
         }
 
         let committed = OrbitDatabaseRegion(table: "items")

@@ -21,11 +21,11 @@
           "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)"
         )
         for title in titles {
-          try transaction.execute(
-            RemindersTestFixture.Reminder.insert {
+          try RemindersTestFixture.Reminder
+            .insert {
               RemindersTestFixture.Reminder.Draft(title: title)
             }
-          )
+            .execute(transaction)
         }
       }
       return database
@@ -37,11 +37,11 @@
     ) async throws {
       try await database.write { transaction in
         for title in titles {
-          try transaction.execute(
-            RemindersTestFixture.Reminder.insert {
+          try RemindersTestFixture.Reminder
+            .insert {
               RemindersTestFixture.Reminder.Draft(title: title)
             }
-          )
+            .execute(transaction)
         }
       }
     }

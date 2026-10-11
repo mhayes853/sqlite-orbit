@@ -32,9 +32,9 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// ```swift
 /// let driver = try SQLitePool(path: .file(url))
 /// try await driver.write { transaction in
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///   try Reminder.insert { Reminder(id: 1, title: "Get milk") }.execute(transaction)
 /// }
-/// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
+/// let reminders = try await driver.read { try Reminder.all.fetchAll($0) }
 /// ```
 ///
 /// A pool does not coordinate with other processes. Switching a new database to WAL briefly needs
@@ -165,7 +165,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///
   /// ```swift
   /// let mode = try await driver.readWithoutTransaction { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try #sql("PRAGMA journal_mode", as: String.self).fetchOne(connection)
   /// }
   /// ```
   ///
@@ -191,7 +191,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///
   /// ```swift
   /// let mode = try driver.readWithoutTransactionBlocking { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try #sql("PRAGMA journal_mode", as: String.self).fetchOne(connection)
   /// }
   /// ```
   ///

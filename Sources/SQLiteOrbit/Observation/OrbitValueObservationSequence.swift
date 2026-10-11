@@ -43,7 +43,7 @@ extension OrbitValueObservationBufferingPolicy {
 /// ```swift
 /// @Table struct Reminder { let id: Int; var title: String; var isCompleted = false }
 ///
-/// let observation = OrbitValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+/// let observation = OrbitValueObservation.tracking { try Reminder.all.fetchAll($0) }
 /// for try await reminders in observation.values(in: database) {
 ///   print("\(reminders.count) reminders")
 /// }

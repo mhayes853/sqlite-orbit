@@ -261,9 +261,9 @@
       private func flaggedCountObservation() -> OrbitValueObservation<Int?> {
         OrbitValueObservation<Int?>
           .tracking { transaction in
-            let flag = try transaction.fetchOne(#sql("SELECT flag FROM a", as: Int.self)) ?? 0
+            let flag = try #sql("SELECT flag FROM a", as: Int.self).fetchOne(transaction) ?? 0
             guard flag != 0 else { return nil }
-            return try transaction.fetchOne(#sql("SELECT COUNT(*) FROM b", as: Int.self)) ?? 0
+            return try #sql("SELECT COUNT(*) FROM b", as: Int.self).fetchOne(transaction) ?? 0
           }
           .removeDuplicates()
       }

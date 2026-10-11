@@ -229,9 +229,8 @@
           .tracking { transaction in
             fetchCount.increment()
             let usesSecondary =
-              try transaction.fetchOne(
-                #sql("SELECT usesSecondary FROM settings", as: Bool.self)
-              ) ?? false
+              try #sql("SELECT usesSecondary FROM settings", as: Bool.self).fetchOne(transaction)
+              ?? false
             return usesSecondary ? filters.secondary : filters.primary
           }
           .subscribe(

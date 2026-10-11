@@ -95,16 +95,14 @@
       configuration.register(function: FailingTotalFunction())
       let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
       try await database.write { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-        )
-        try transaction.execute(
-          Note.insert {
-            Note(id: 1, title: "ab")
-            Note(id: 2, title: "abcd")
-            Note(id: 3, title: "abc")
-          }
-        )
+        try #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          .execute(transaction)
+        try Note.insert {
+          Note(id: 1, title: "ab")
+          Note(id: 2, title: "abcd")
+          Note(id: 3, title: "abc")
+        }
+        .execute(transaction)
       }
       return database
     }
@@ -117,27 +115,28 @@
 
       try await withPooledDatabase(configuration: configuration) { database in
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          try #sql(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+            as: Void.self
           )
-          try transaction.execute(
-            Note.insert {
-              Note(id: 1, title: "ab")
-              Note(id: 2, title: "abcd")
-              Note(id: 3, title: "abc")
-            }
-          )
+          .execute(transaction)
+          try Note.insert {
+            Note(id: 1, title: "ab")
+            Note(id: 2, title: "abcd")
+            Note(id: 3, title: "abc")
+          }
+          .execute(transaction)
         }
 
         let scalar = try await database.read { transaction in
-          try transaction.fetchAll(Note.where { $0.id.eq(1) }.select { $repeated($0.title, 3) })
+          try Note.where { $0.id.eq(1) }.select { $repeated($0.title, 3) }.fetchAll(transaction)
         }
         #expect(scalar == ["ababab"])
 
         // Force the pool past its first reader. A function installed on one connection only would
         // fail here with "no such function".
         let aggregates = try await concurrentReads(8, of: database) { transaction in
-          try transaction.fetchOne(Note.select { $longestTitle($0.title) }) ?? nil
+          try Note.select { $longestTitle($0.title) }.fetchOne(transaction) ?? nil
         }
         #expect(aggregates.allSatisfy { $0 == "abcd" })
       }
@@ -151,9 +150,9 @@
 
       let described = try await database.read { transaction in
         [
-          try transaction.fetchOne(Select($describe(1.5, [1, 2, 3], true, date, id, Int?.none))),
+          try Select($describe(1.5, [1, 2, 3], true, date, id, Int?.none)).fetchOne(transaction),
           // A zero-length blob has no buffer behind it, and must still decode.
-          try transaction.fetchOne(Select($describe(-0.25, [], false, date, id, Int?.some(7))))
+          try Select($describe(-0.25, [], false, date, id, Int?.some(7))).fetchOne(transaction)
         ]
       }
 
@@ -169,7 +168,7 @@
     func functionTextRoundTripsExactly(_ text: String) async throws {
       let database = try await seededNotes()
       let value = try await database.read { transaction in
-        try transaction.fetchOne(Select($repeated(text, 2)))
+        try Select($repeated(text, 2)).fetchOne(transaction)
       }
       #expect(value == text + text)
     }
@@ -178,7 +177,7 @@
     func emptyBlobFunctionResultsStayBlobs() async throws {
       let database = try await seededNotes()
       let value = try await database.read { transaction in
-        try transaction.fetchOne(Select($echoedBlob([])))
+        try Select($echoedBlob([])).fetchOne(transaction)
       }
       #expect(value == [])
     }
@@ -188,13 +187,13 @@
       let database = try await seededNotes()
 
       let sum = try await database.read { transaction in
-        try transaction.fetchOne(#sql("SELECT variadicSum(2, 3)", as: Int.self))
+        try #sql("SELECT variadicSum(2, 3)", as: Int.self).fetchOne(transaction)
       }
       #expect(sum == 5)
 
       let error = await #expect(throws: SQLiteError.self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT variadicSum(2)", as: Int.self))
+          try #sql("SELECT variadicSum(2)", as: Int.self).fetchOne(transaction)
         }
       }
       #expect(error?.message?.contains("without an argument at index 1") == true)
@@ -207,14 +206,14 @@
       // The body threw.
       let scalar = await #expect(throws: SQLiteError.self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT failing(1)", as: Int.self))
+          try #sql("SELECT failing(1)", as: Int.self).fetchOne(transaction)
         }
       }
       #expect(scalar?.message?.contains("FunctionFailure") == true)
 
       let aggregate = await #expect(throws: SQLiteError.self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT failingTotal(id) FROM notes", as: Int.self))
+          try #sql("SELECT failingTotal(id) FROM notes", as: Int.self).fetchOne(transaction)
         }
       }
       #expect(aggregate?.message?.contains("FunctionFailure") == true)
@@ -223,17 +222,16 @@
       // the aggregate's per-row step.
       await #expect(throws: SQLiteError.self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT \(quote: "repeated")('x', 'y')", as: String.self))
+          try #sql("SELECT \(quote: "repeated")('x', 'y')", as: String.self).fetchOne(transaction)
         }
       }
       await #expect(throws: SQLiteError.self) {
         try await database.read { transaction in
-          try transaction.fetchOne(
-            #sql(
-              "SELECT \(quote: "rowCount")(\(Note.columns.title)) FROM \(Note.self)",
-              as: Int.self
-            )
+          try #sql(
+            "SELECT \(quote: "rowCount")(\(Note.columns.title)) FROM \(Note.self)",
+            as: Int.self
           )
+          .fetchOne(transaction)
         }
       }
     }
@@ -245,45 +243,41 @@
       let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
       try await database.write { transaction in
-        try transaction.execute(
-          #sql(
-            """
-            CREATE TABLE samples (
-              id INTEGER PRIMARY KEY,
-              bucket INTEGER NOT NULL,
-              title TEXT NOT NULL
-            )
-            """,
-            as: Void.self
+        try #sql(
+          """
+          CREATE TABLE samples (
+            id INTEGER PRIMARY KEY,
+            bucket INTEGER NOT NULL,
+            title TEXT NOT NULL
           )
+          """,
+          as: Void.self
         )
+        .execute(transaction)
         // A large group, so the aggregation holds many rows before its body runs.
-        try transaction.execute(
-          Sample.insert {
-            for index in 1...500 {
-              Sample(
-                id: index,
-                bucket: index % 3,
-                title: String(repeating: "x", count: index % 40 + 1)
-              )
-            }
+        try Sample.insert {
+          for index in 1...500 {
+            Sample(
+              id: index,
+              bucket: index % 3,
+              title: String(repeating: "x", count: index % 40 + 1)
+            )
           }
-        )
+        }
+        .execute(transaction)
       }
 
       let longest = try await database.read { transaction in
-        try transaction.fetchOne(Sample.select { $longestTitle($0.title) }) ?? nil
+        try Sample.select { $longestTitle($0.title) }.fetchOne(transaction) ?? nil
       }
       #expect(longest?.count == 40)
 
       // A separate aggregation per group exercises SQLite's per-aggregation context slot.
       let perGroup: [(Int, String?)] = try await database.read { transaction in
-        try transaction.fetchAll(
-          Sample
-            .group(by: \.bucket)
-            .order(by: \.bucket)
-            .select { ($0.bucket, $longestTitle($0.title)) }
-        )
+        try Sample
+          .group(by: \.bucket)
+          .order(by: \.bucket)
+          .select { ($0.bucket, $longestTitle($0.title)) }.fetchAll(transaction)
       }
       #expect(perGroup.map(\.0) == [0, 1, 2])
       #expect(perGroup.allSatisfy { $0.1?.isEmpty == false })
@@ -296,12 +290,12 @@
       // With no rows to step through, SQLite calls only the finalizer, which has to create the
       // aggregation state it would otherwise have found.
       let count = try await database.read { transaction in
-        try transaction.fetchOne(Note.where { $0.id.eq(-1) }.select { $rowCount($0.id) })
+        try Note.where { $0.id.eq(-1) }.select { $rowCount($0.id) }.fetchOne(transaction)
       }
       #expect(count == 0)
 
       let longest = try await database.read { transaction in
-        try transaction.fetchOne(Note.where { $0.id.eq(-1) }.select { $longestTitle($0.title) })
+        try Note.where { $0.id.eq(-1) }.select { $longestTitle($0.title) }.fetchOne(transaction)
       }
       #expect(longest == .some(nil))
     }
@@ -320,20 +314,22 @@
         )
 
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          try #sql(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+            as: Void.self
           )
-          try transaction.execute(Note.insert { Note(id: 1, title: "ab") })
+          .execute(transaction)
+          try Note.insert { Note(id: 1, title: "ab") }.execute(transaction)
         }
 
         let repeatedTitle = try await database.read { transaction in
-          try transaction.fetchOne(Note.select { $repeated($0.title, 2) })
+          try Note.select { $repeated($0.title, 2) }.fetchOne(transaction)
         }
         #expect(repeatedTitle == "abab")
 
         // The native defaults must have survived registration.
         let trustedSchema = try await database.read { transaction in
-          try transaction.fetchOne(#sql("PRAGMA trusted_schema", as: Int.self))
+          try #sql("PRAGMA trusted_schema", as: Int.self).fetchOne(transaction)
         }
         #expect(trustedSchema == 0)
       }
@@ -347,22 +343,23 @@
       try await withPooledDatabase(configuration: configuration, readerCount: 16) {
         database in
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          try #sql(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+            as: Void.self
           )
-          try transaction.execute(
-            Note.insert {
-              for index in 1...2000 {
-                Note(id: index, title: String(repeating: "x", count: index % 40 + 1))
-              }
+          .execute(transaction)
+          try Note.insert {
+            for index in 1...2000 {
+              Note(id: index, title: String(repeating: "x", count: index % 40 + 1))
             }
-          )
+          }
+          .execute(transaction)
         }
 
         // Every aggregation runs on the reader thread SQLite called it from, and keeps its rows in
         // its own aggregate context. Run many at once to hold that separation down.
         let lengths = try await concurrentReads(128, of: database) { transaction in
-          try transaction.fetchOne(Note.select { $longestTitle($0.title) })??.count
+          try Note.select { $longestTitle($0.title) }.fetchOne(transaction)??.count
         }
         #expect(lengths.count == 128)
         #expect(lengths.allSatisfy { $0 == 40 })
@@ -395,7 +392,7 @@
 
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
       let value = try await driver.read { transaction in
-        try transaction.fetchOne(#sql("SELECT repeated('ab', 2)", as: String.self))
+        try #sql("SELECT repeated('ab', 2)", as: String.self).fetchOne(transaction)
       }
 
       #expect(value == "abab")
@@ -416,12 +413,11 @@
 
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
       let longest = try await driver.read { transaction in
-        try transaction.fetchOne(
-          #sql(
-            "SELECT longestTitle(x) FROM (SELECT 'ab' AS x UNION SELECT 'abcd')",
-            as: String?.self
-          )
+        try #sql(
+          "SELECT longestTitle(x) FROM (SELECT 'ab' AS x UNION SELECT 'abcd')",
+          as: String?.self
         )
+        .fetchOne(transaction)
       }
 
       #expect(longest == "abcd")
@@ -440,7 +436,7 @@
       let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
       let values = try await driver.read { transaction in
-        try transaction.fetchAll(#sql("SELECT value FROM configured", as: String.self))
+        try #sql("SELECT value FROM configured", as: String.self).fetchAll(transaction)
       }
       #expect(values == ["abab"])
     }
@@ -455,19 +451,17 @@
       }
       let (repeated, longest, sorted) = try owner.withReadConnection { connection in
         (
-          try connection.fetchOne(#sql("SELECT repeated('ab', 2)", as: String.self)),
-          try connection.fetchOne(
-            #sql(
-              "SELECT longestTitle(column1) FROM (VALUES ('a'), ('abcd'))",
-              as: String?.self
-            )
-          ),
-          try connection.fetchAll(
-            #sql(
-              "SELECT column1 FROM (VALUES ('ab'), ('ba')) ORDER BY column1 COLLATE reversedText",
-              as: String.self
-            )
+          try #sql("SELECT repeated('ab', 2)", as: String.self).fetchOne(connection),
+          try #sql(
+            "SELECT longestTitle(column1) FROM (VALUES ('a'), ('abcd'))",
+            as: String?.self
           )
+          .fetchOne(connection),
+          try #sql(
+            "SELECT column1 FROM (VALUES ('ab'), ('ba')) ORDER BY column1 COLLATE reversedText",
+            as: String.self
+          )
+          .fetchAll(connection)
         )
       }
       #expect(repeated == "abab")

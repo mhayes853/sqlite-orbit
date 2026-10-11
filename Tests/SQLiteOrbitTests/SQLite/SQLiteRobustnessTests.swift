@@ -73,7 +73,7 @@
         "INSERT INTO items (id, title) VALUES (1, 'a');\u{0}INSERT INTO items (id, title) VALUES (2, 'b')"
       )
       let count = try handle.read { transaction in
-        try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+        try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
       }
       // SQLite reads SQL text up to the first NUL whatever length it is given, so the second
       // statement here is not run. Values are a different matter: those keep their NULs, which is
@@ -89,12 +89,11 @@
       // merely rolled back at the end of the read would look like it had worked.
       #expect(throws: SQLiteError.self) {
         try handle.read { transaction in
-          try transaction.fetchAll(
-            #sql(
-              "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id",
-              as: Int.self
-            )
+          try #sql(
+            "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id",
+            as: Int.self
           )
+          .fetchAll(transaction)
         }
       }
 
@@ -105,10 +104,10 @@
 
       // And the connection is writable again afterwards.
       try handle.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "yes") })
+        try Item.insert { Item(id: 1, title: "yes") }.execute(transaction)
       }
       let titles = try handle.read { transaction in
-        try transaction.fetchAll(Item.select(\.title))
+        try Item.select(\.title).fetchAll(transaction)
       }
       #expect(titles == ["yes"])
     }
@@ -121,19 +120,19 @@
           configuration: probe.configuration(matching: "SELECT title FROM items")
         )
         try handle.write { transaction in
-          try transaction.execute(Item.insert { Item(id: 1, title: "kept") })
+          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
         }
 
         // Decoding the title as an integer fails partway through the cursor's life.
         try handle.read { transaction in
           _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
-            _ = try transaction.fetchAll(#sql("SELECT title FROM items", as: Int.self))
+            _ = try #sql("SELECT title FROM items", as: Int.self).fetchAll(transaction)
           }
         }
 
         // The statement went back to the cache in a usable state rather than mid-scan.
         let titles = try handle.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM items", as: String.self))
+          try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
         }
         #expect(titles == ["kept"])
         #expect(probe.prepared.value == 1)
@@ -151,21 +150,22 @@
         )
         try handle.write { transaction in
           for id in 1...3 {
-            try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+            try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
           }
         }
 
         try handle.read { transaction in
           // Abandon the cursor after one row, so its statement goes back to the cache mid-scan.
           var cursor = try transaction.fetchCursor(
-            #sql("SELECT title FROM items ORDER BY id", as: String.self),
+            "SELECT title FROM items ORDER BY id",
+            as: String.self,
             cached: true
           )
           #expect(try cursor.next() == "item 1")
         }
 
         let titles = try handle.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+          try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll(transaction)
         }
         // A statement that was not reset would start from the second row.
         #expect(titles == ["item 1", "item 2", "item 3"])
@@ -180,21 +180,19 @@
       var handle = try openConnection()
       try handle.write { transaction in
         for id in 1...4 {
-          try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+          try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
         }
       }
 
       // `fetchOne` caches its statement and abandons the cursor after a single row, so the very same
       // statement comes back for the next call, which binds a different value to it.
       let first = try handle.read { transaction in
-        try transaction.fetchOne(
-          #sql("SELECT title FROM items WHERE id > \(bind: 1) ORDER BY id", as: String.self)
-        )
+        try #sql("SELECT title FROM items WHERE id > \(bind: 1) ORDER BY id", as: String.self)
+          .fetchOne(transaction)
       }
       let second = try handle.read { transaction in
-        try transaction.fetchOne(
-          #sql("SELECT title FROM items WHERE id > \(bind: 3) ORDER BY id", as: String.self)
-        )
+        try #sql("SELECT title FROM items WHERE id > \(bind: 3) ORDER BY id", as: String.self)
+          .fetchOne(transaction)
       }
 
       #expect(first == "item 2")
@@ -210,10 +208,10 @@
       var handle = try openConnection(configuration: configuration)
 
       try handle.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "uncached") })
+        try Item.insert { Item(id: 1, title: "uncached") }.execute(transaction)
       }
       let titles = try handle.read { transaction in
-        try transaction.fetchAll(Item.select(\.title))
+        try Item.select(\.title).fetchAll(transaction)
       }
       #expect(titles == ["uncached"])
     }
@@ -226,14 +224,13 @@
       let extremes: [Int64] = [.min, -1, 0, 1, .max]
       for value in extremes {
         try handle.write { transaction in
-          try transaction.execute(
-            #sql("INSERT INTO numbers (value) VALUES (\(value, as: Int64.self))", as: Void.self)
-          )
+          try #sql("INSERT INTO numbers (value) VALUES (\(value, as: Int64.self))", as: Void.self)
+            .execute(transaction)
         }
       }
 
       let stored = try handle.read { transaction in
-        try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int64.self))
+        try #sql("SELECT value FROM numbers", as: Int64.self).fetchAll(transaction)
       }
       #expect(stored == extremes)
     }
@@ -252,27 +249,25 @@
         for _ in 0..<3 {
           #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
             try handle.write { transaction in
-              _ = try transaction.fetchAll(
-                #sql(
-                  "INSERT INTO numbers (value) VALUES (\(UInt64.max)) RETURNING value",
-                  as: UInt64.self
-                )
+              _ = try #sql(
+                "INSERT INTO numbers (value) VALUES (\(UInt64.max)) RETURNING value",
+                as: UInt64.self
               )
+              .fetchAll(transaction)
             }
           }
         }
 
         // The statement that failed to bind was given back, so the cache did not leak it.
         try handle.write { transaction in
-          _ = try transaction.fetchAll(
-            #sql(
-              "INSERT INTO numbers (value) VALUES (\(UInt64(1))) RETURNING value",
-              as: UInt64.self
-            )
+          _ = try #sql(
+            "INSERT INTO numbers (value) VALUES (\(UInt64(1))) RETURNING value",
+            as: UInt64.self
           )
+          .fetchAll(transaction)
         }
         let stored = try handle.read { transaction in
-          try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
+          try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction)
         }
         #expect(stored == [1])
         #expect(probe.prepared.value == 1)
@@ -290,11 +285,11 @@
 
       try handle.write { transaction in
         for (id, title) in titles.enumerated() {
-          try transaction.execute(Item.insert { Item(id: id + 1, title: title) })
+          try Item.insert { Item(id: id + 1, title: title) }.execute(transaction)
         }
       }
       let stored = try handle.read { transaction in
-        try transaction.fetchAll(Item.all.order { $0.id }).map(\.title)
+        try Item.all.order { $0.id }.fetchAll(transaction).map(\.title)
       }
       #expect(stored == titles)
     }
@@ -362,7 +357,7 @@
               let task = Task {
                 if index.isMultiple(of: 2) {
                   _ = try await driver.read { transaction in
-                    try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+                    try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
                   }
                 } else {
                   try await driver.write { transaction in
@@ -387,7 +382,7 @@
 
         // Every reader and the writer came back, so the pool still works.
         let count = try await driver.read { transaction in
-          try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
         }
         #expect(count.count == 1)
         try await driver.write { transaction in
@@ -429,7 +424,7 @@
         }
         #expect(Set(successfulIDs).isSuperset(of: stride(from: 2, through: 300, by: 2)))
         let storedIDs = try await driver.read { transaction in
-          try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
+          try #sql("SELECT id FROM items ORDER BY id", as: Int.self).fetchAll(transaction)
         }
 
         // Cancellation may win or lose a race with a fast write, but a committed transaction must
@@ -454,7 +449,7 @@
           }
           // Each read takes a fresh snapshot, so it must see everything committed before it.
           let count = try await reader.read { transaction in
-            try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
           }
           #expect(count == [id])
         }
@@ -485,7 +480,7 @@
         }
 
         let count = try await first.read { transaction in
-          try transaction.fetchAll(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
         }
         #expect(count == [60])
       }
@@ -501,13 +496,13 @@
 
       #expect(throws: (any Error).self) {
         try handle.read { transaction in
-          _ = try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self))
+          _ = try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction)
         }
       }
 
       // The failed decode did not leave the connection unusable.
       let values = try handle.read { transaction in
-        try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int?.self))
+        try #sql("SELECT value FROM numbers", as: Int?.self).fetchAll(transaction)
       }
       #expect(values == [Int?.none])
     }
@@ -544,7 +539,7 @@
         try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'after')")
       }
       let titles = try handle.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM items", as: String.self))
+        try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
       }
       #expect(titles == ["after"])
     }
@@ -554,18 +549,17 @@
       var handle = try openConnection()
       try handle.execute("CREATE TABLE numbers (value INTEGER)")
       try handle.write { transaction in
-        try transaction.execute(
-          #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
-        )
+        try #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
+          .execute(transaction)
       }
 
       let asInt64 = try handle.read { transaction in
-        try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int64.self))
+        try #sql("SELECT value FROM numbers", as: Int64.self).fetchAll(transaction)
       }
       #expect(asInt64 == [Int64.max])
 
       let asInt = try handle.read { transaction in
-        Result { try transaction.fetchAll(#sql("SELECT value FROM numbers", as: Int.self)) }
+        Result { try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction) }
       }
       if Int.bitWidth == 64 {
         #expect(try asInt.get() == [Int(Int64.max)])

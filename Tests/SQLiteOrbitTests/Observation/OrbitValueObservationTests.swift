@@ -139,7 +139,7 @@
 
         await #expect(throws: TestError.self) {
           try await driver.write { transaction in
-            try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
             throw TestError()
           }
         }
@@ -161,9 +161,9 @@
         let observation = OrbitValueObservation<Int>
           .trackingConstantRegion { transaction in
             let labelCount = #sql("SELECT COUNT(*) FROM labels", as: Int.self)
-            let items = try transaction.fetchOne(itemCountQuery) ?? 0
+            let items = try itemCountQuery.fetchOne(transaction) ?? 0
             guard items > 0 else { return 0 }
-            return try items + (transaction.fetchOne(labelCount) ?? 0)
+            return try items + (labelCount.fetchOne(transaction) ?? 0)
           }
         let recorder = ObservationRecorder<Int>()
         let subscription = try observation.subscribe(
@@ -176,7 +176,7 @@
         try await recorder.waitForChangeCount(2)
 
         try await driver.write { transaction in
-          try transaction.execute(#sql("INSERT INTO labels (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO labels (id) VALUES (1)", as: Void.self).execute(transaction)
         }
         try await Task.sleep(for: .milliseconds(100))
 
@@ -261,7 +261,7 @@
         )
         let observation = OrbitValueObservation<Int>
           .tracking { transaction in
-            try transaction.fetchOne(#sql("SELECT COUNT(*) FROM children", as: Int.self)) ?? 0
+            try #sql("SELECT COUNT(*) FROM children", as: Int.self).fetchOne(transaction) ?? 0
           }
         let recorder = ObservationRecorder<Int>()
         let subscription = try observation.subscribe(
@@ -273,16 +273,14 @@
 
         await #expect(throws: (any Error).self) {
           try await driver.write { transaction in
-            try transaction.execute(
-              #sql("INSERT INTO children (parent_id) VALUES (1)", as: Void.self)
-            )
+            try #sql("INSERT INTO children (parent_id) VALUES (1)", as: Void.self)
+              .execute(transaction)
           }
         }
         try await driver.write { transaction in
-          try transaction.execute(#sql("INSERT INTO parents (id) VALUES (1)", as: Void.self))
-          try transaction.execute(
-            #sql("INSERT INTO children (parent_id) VALUES (1)", as: Void.self)
-          )
+          try #sql("INSERT INTO parents (id) VALUES (1)", as: Void.self).execute(transaction)
+          try #sql("INSERT INTO children (parent_id) VALUES (1)", as: Void.self)
+            .execute(transaction)
         }
         try await recorder.waitForChangeCount(2)
 
@@ -352,7 +350,7 @@
         )
 
         try await driver.write { transaction in
-          try transaction.execute(#sql("DELETE FROM items", as: Void.self))
+          try #sql("DELETE FROM items", as: Void.self).execute(transaction)
         }
         #expect(try await first.next() == .noEmission(source: .transaction(.local)))
 
@@ -516,7 +514,7 @@
         // Outside a transaction there is no `databaseWillCommit` to fetch in, so the observation
         // learns of the statement only once it has committed, and fetches again.
         try await driver.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
         }
         try await recorder.waitForChangeCount(2)
 
@@ -586,7 +584,7 @@
         #expect(try await iterator.next()?.value == 0)
 
         try await driver.write { transaction in
-          try transaction.execute(#sql("DELETE FROM items", as: Void.self))
+          try #sql("DELETE FROM items", as: Void.self).execute(transaction)
         }
         try await insertItems(1, into: driver)
 
@@ -695,7 +693,7 @@
         let recorder = ObservationRecorder<String>()
         let subscription = try OrbitValueObservation<Int?>
           .tracking { transaction in
-            let count = try transaction.fetchOne(itemCountQuery)
+            let count = try itemCountQuery.fetchOne(transaction)
             return count == 0 ? nil : count
           }
           .compactMap { $0.map { "count=\($0)" } }
@@ -761,7 +759,7 @@
         try insertItemsBlocking(1, into: driver)
         try insertItemsBlocking(2, into: driver)
         let count = try driver.readBlocking { transaction in
-          try transaction.fetchOne(itemCountQuery)
+          try itemCountQuery.fetchOne(transaction)
         }
 
         #expect(count == 2)
@@ -900,7 +898,7 @@
         let subscription = try await subscribeTrackingItems(to: database, refetching: controller)
 
         try await database.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
         }
         try await peer.send(
           commit(identifier, region: itemsRegion)
@@ -930,7 +928,7 @@
         try await waitUntil { controller.fetchCount == 1 }
         controller.reset()
         try await database.writeWithoutTransaction { connection in
-          try connection.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
         }
         let snapshot = try await controller.snapshot()
 
@@ -1177,9 +1175,7 @@
           let recorder = ObservationRecorder<String?>()
           let subscription = try OrbitValueObservation<String?>
             .tracking { transaction in
-              try transaction.fetchOne(
-                #sql("SELECT title FROM current_items", as: String.self)
-              )
+              try #sql("SELECT title FROM current_items", as: String.self).fetchOne(transaction)
             }
             .subscribe(
               to: database,
@@ -1219,7 +1215,7 @@
           let recorder = ObservationRecorder<String?>()
           let subscription = try OrbitValueObservation<String?>
             .tracking { transaction in
-              try transaction.fetchOne(#sql("SELECT title FROM current_items", as: String.self))
+              try #sql("SELECT title FROM current_items", as: String.self).fetchOne(transaction)
             }
             .subscribe(
               to: observingDatabase,
@@ -1257,13 +1253,11 @@
           .tracking { transaction in
             fetchCount.increment()
             let useNotes =
-              try transaction.fetchOne(
-                #sql("SELECT useNotes FROM settings", as: Bool.self)
-              ) ?? false
+              try #sql("SELECT useNotes FROM settings", as: Bool.self).fetchOne(transaction)
+              ?? false
             let table = useNotes ? "notes" : "items"
-            return try transaction.fetchOne(
-              #sql("SELECT COUNT(*) FROM \(raw: table)", as: Int.self)
-            ) ?? 0
+            return try #sql("SELECT COUNT(*) FROM \(raw: table)", as: Int.self)
+              .fetchOne(transaction) ?? 0
           }
           .subscribe(
             to: driver,
@@ -1523,7 +1517,7 @@
           )
 
         let count = try driver.readBlocking { transaction in
-          try transaction.fetchOne(itemCountQuery)
+          try itemCountQuery.fetchOne(transaction)
         }
         #expect(count == 1)
         #expect(recorder.changes.isEmpty)
@@ -1567,7 +1561,7 @@
 
     private func itemCountObservation() -> OrbitValueObservation<Int> {
       OrbitValueObservation.tracking { transaction in
-        try transaction.fetchOne(itemCountQuery) ?? 0
+        try itemCountQuery.fetchOne(transaction) ?? 0
       }
     }
 
@@ -1579,7 +1573,7 @@
     ) -> OrbitValueObservation<Int> {
       let fetch: @Sendable (borrowing SQLiteReadTransaction) throws -> Int = { transaction in
         fetchCount.increment()
-        return try transaction.fetchOne(itemCountQuery) ?? 0
+        return try itemCountQuery.fetchOne(transaction) ?? 0
       }
       guard let region else { return .tracking(fetch) }
       return .tracking(region: region, fetch)

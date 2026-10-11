@@ -36,7 +36,7 @@ struct RemindersWidgetQueriesTests {
     }
 
     let reminders = try await database.read {
-      try $0.fetchAll(WidgetReminder.recent(limit: 2))
+      try WidgetReminder.recent(limit: 2).fetchAll($0)
     }
 
     #expect(reminders.map(\.reminder.title) == ["Newest", "Older"])
@@ -66,7 +66,7 @@ struct RemindersWidgetQueriesTests {
     }
     #expect(persisted?.status == .completed)
     let recentReminders = try await database.read {
-      try $0.fetchAll(WidgetReminder.recent(limit: 8))
+      try WidgetReminder.recent(limit: 8).fetchAll($0)
     }
     #expect(recentReminders.isEmpty)
   }
@@ -106,9 +106,10 @@ struct RemindersWidgetQueriesTests {
       try Reminder.insert { reminder }.execute(transaction)
     }
 
-    let observation = OrbitValueObservation<[WidgetReminder]>.trackingAll(
-      WidgetReminder.recent(limit: RemindersWidgetConfiguration.maximumReminderCount)
-    )
+    let observation = OrbitValueObservation<[WidgetReminder]>
+      .trackingAll(
+        WidgetReminder.recent(limit: RemindersWidgetConfiguration.maximumReminderCount)
+      )
     var values = observation.values(in: appDatabase).makeAsyncIterator()
     #expect(try await values.next()?.map(\.reminder.title) == ["Buy milk"])
 

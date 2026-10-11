@@ -20,13 +20,13 @@
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             try connection.setBusyPolicy(.timeout(.seconds(42)))
             #expect(connection.busyPolicy.kind == .timeout(.seconds(42)))
-            return try connection.fetchOne(busyTimeout)
+            return try busyTimeout.fetchOne(connection)
           }
           #expect(during == 42_000)
 
           let after = try await driver.writeWithoutTransaction { connection in
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
-            return try connection.fetchOne(busyTimeout)
+            return try busyTimeout.fetchOne(connection)
           }
           #expect(after == 5000)
         }
@@ -41,10 +41,10 @@
           let during = try await driver.readWithoutTransaction { connection in
             try connection.setBusyPolicy(.waitIndefinitely)
             #expect(connection.busyPolicy.kind == .waitIndefinitely)
-            return try connection.fetchOne(busyTimeout)
+            return try busyTimeout.fetchOne(connection)
           }
           #expect(during == Int(Int32.max))
-          #expect(try await driver.read { try $0.fetchOne(busyTimeout) } == 5000)
+          #expect(try await driver.read { try busyTimeout.fetchOne($0) } == 5000)
 
           // A body that throws has its change put back all the same.
           await #expect(throws: TestError()) {
@@ -55,7 +55,7 @@
           }
           let after = try await driver.readWithoutTransaction { connection in
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
-            return try connection.fetchOne(busyTimeout)
+            return try busyTimeout.fetchOne(connection)
           }
           #expect(after == 5000)
         }
@@ -84,7 +84,7 @@
             }
             #expect(error?.primaryCode == .ioError)
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
-            let current = try connection.fetchOne(busyTimeout)
+            let current = try busyTimeout.fetchOne(connection)
             #expect(current == 5000)
           }
         } else {
@@ -94,7 +94,7 @@
             }
             #expect(error?.primaryCode == .ioError)
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
-            let current = try connection.fetchOne(busyTimeout)
+            let current = try busyTimeout.fetchOne(connection)
             #expect(current == 5000)
           }
         }
@@ -116,14 +116,14 @@
         try driver.writeWithoutTransactionBlocking { connection throws in
           do {
             let value = try connection.withBusyPolicy(.timeout(.seconds(9))) { () throws in
-              #expect(try connection.fetchOne(busyTimeout) == 9000)
+              #expect(try busyTimeout.fetchOne(connection) == 9000)
               #expect(throws: TestError.self) {
                 try connection.withBusyPolicy(.timeout(.seconds(2))) {
                   throw TestError()
                 }
               }
               #expect(connection.busyPolicy.kind == .timeout(.seconds(9)))
-              #expect(try connection.fetchOne(busyTimeout) == 9000)
+              #expect(try busyTimeout.fetchOne(connection) == 9000)
               #expect(installations.value == initialInstallations)
               if throwBody { throw TestError() }
               return 42
@@ -153,19 +153,19 @@
         let driver = try SQLiteQueue(path: .memory)
         try driver.writeWithoutTransactionBlocking { connection throws in
           let value = try connection.withForeignKeysEnabled(false) { () throws in
-            #expect(try connection.transaction { try $0.fetchOne(foreignKeys) } == 0)
+            #expect(try connection.transaction { try foreignKeys.fetchOne($0) } == 0)
             #expect(throws: TestError.self) {
               try connection.withForeignKeysEnabled(true) {
                 throw TestError()
               }
             }
             #expect(connection.isForeignKeysEnabled == false)
-            #expect(try connection.fetchOne(foreignKeys) == 0)
+            #expect(try foreignKeys.fetchOne(connection) == 0)
             return 42
           }
           #expect(value == 42)
           #expect(connection.isForeignKeysEnabled == true)
-          #expect(try connection.fetchOne(foreignKeys) == 1)
+          #expect(try foreignKeys.fetchOne(connection) == 1)
         }
       }
 
@@ -201,18 +201,18 @@
             try connection.setForeignKeysEnabled(false)
             #expect(wasEnabled && !connection.isForeignKeysEnabled)
             // With enforcement off the orphan is accepted, which the pragma alone would not show.
-            try connection.transaction { transaction in try transaction.execute(orphan) }
-            return try connection.fetchOne(foreignKeys)
+            try connection.transaction { transaction in try orphan.execute(transaction) }
+            return try foreignKeys.fetchOne(connection)
           }
           #expect(during == 0)
 
           let (isEnabled, after) = try await driver.writeWithoutTransaction { connection in
-            (connection.isForeignKeysEnabled, try connection.fetchOne(foreignKeys))
+            (connection.isForeignKeysEnabled, try foreignKeys.fetchOne(connection))
           }
           #expect(isEnabled)
           #expect(after == 1)
           await #expect(throws: SQLiteError.self) {
-            try await driver.write { try $0.execute(secondOrphan) }
+            try await driver.write { try secondOrphan.execute($0) }
           }
         }
       }
@@ -235,18 +235,18 @@
             #expect(!isEnabled)
 
             // A cursor, and so every fetch built on one.
-            #expect(try connection.fetchOne(foreignKeys) == 0)
+            #expect(try foreignKeys.fetchOne(connection) == 0)
             #expect(probe.foreignKeysChanges == ["PRAGMA foreign_keys = 0"])
 
             // A transaction, before it begins: the pragma would be ignored once it had.
             try connection.setForeignKeysEnabled(true)
-            #expect(try connection.transaction { try $0.fetchOne(foreignKeys) } == 1)
+            #expect(try connection.transaction { try foreignKeys.fetchOne($0) } == 1)
 
             // Both kinds of `execute`, which the orphan is refused or accepted by.
             try connection.setForeignKeysEnabled(false)
             try connection.execute("INSERT INTO entries (id, listID) VALUES (1, 1)")
             try connection.setForeignKeysEnabled(true)
-            #expect(throws: SQLiteError.self) { try connection.execute(secondOrphan) }
+            #expect(throws: SQLiteError.self) { try secondOrphan.execute(connection) }
           }
 
           #expect(
@@ -281,7 +281,7 @@
           #expect(
             probe.foreignKeysChanges == ["PRAGMA foreign_keys = 0", "PRAGMA foreign_keys = 1"]
           )
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -304,9 +304,9 @@
             }
             #expect(error?.sql == "PRAGMA foreign_keys = 0")
             #expect(connection.isForeignKeysEnabled == true)
-            let current = try connection.fetchOne(foreignKeys)
+            let current = try foreignKeys.fetchOne(connection)
             #expect(current == 1)
-            let transactional = try connection.transaction { try $0.fetchOne(foreignKeys) }
+            let transactional = try connection.transaction { try foreignKeys.fetchOne($0) }
             #expect(transactional == 1)
             #expect(
               probe.foreignKeysChanges == ["PRAGMA foreign_keys = 0", "PRAGMA foreign_keys = 1"]
@@ -315,9 +315,9 @@
             probe.isFailing = false
             try connection.setForeignKeysEnabled(false)
             #expect(connection.isForeignKeysEnabled == false)
-            #expect(try connection.fetchOne(foreignKeys) == 0)
+            #expect(try foreignKeys.fetchOne(connection) == 0)
           }
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -327,12 +327,12 @@
           await #expect(throws: TestError()) {
             try await driver.writeWithoutTransaction { connection in
               try connection.setForeignKeysEnabled(false)
-              _ = try connection.fetchOne(foreignKeys)
+              _ = try foreignKeys.fetchOne(connection)
               throw TestError()
             }
           }
 
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -361,7 +361,7 @@
             #expect(connection.sqlite.connections.isAutocommit(connection.sqliteConnection) == 0)
           }
 
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -373,12 +373,12 @@
           let (wasEnabled, during) = try await driver.writeWithoutTransaction { connection in
             let wasEnabled = connection.isForeignKeysEnabled
             try connection.setForeignKeysEnabled(true)
-            return (wasEnabled, try connection.fetchOne(foreignKeys))
+            return (wasEnabled, try foreignKeys.fetchOne(connection))
           }
 
           #expect(!wasEnabled)
           #expect(during == 1)
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 0)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 0)
         }
       }
 
@@ -393,7 +393,7 @@
               }
               #expect(error?.primaryCode == .misuse)
             }
-            let current = try transaction.fetchOne(foreignKeys)
+            let current = try foreignKeys.fetchOne(transaction)
             #expect(current == 1)
             #expect(connection.isForeignKeysEnabled == true)
             try transaction.execute("CREATE TABLE kept (id INTEGER)")
@@ -421,7 +421,7 @@
         }
         #expect(held?.sql == "PRAGMA foreign_keys = 1")
         probe.isFailing = false
-        let current = try await driver.write { try $0.fetchOne(foreignKeys) }
+        let current = try await driver.write { try foreignKeys.fetchOne($0) }
         #expect(current == 1)
       }
 
@@ -442,7 +442,7 @@
           let error = await #expect(throws: SQLiteError.self) {
             try await driver.writeWithoutTransaction { connection in
               try connection.setForeignKeysEnabled(false)
-              _ = try connection.fetchOne(foreignKeys)
+              _ = try foreignKeys.fetchOne(connection)
             }
           }
           #expect(error?.primaryCode == .ioError)
@@ -467,7 +467,7 @@
 
           probe.isFailing = false
           let (isEnabled, restored) = try await driver.writeWithoutTransaction { connection in
-            (connection.isForeignKeysEnabled, try connection.fetchOne(foreignKeys))
+            (connection.isForeignKeysEnabled, try foreignKeys.fetchOne(connection))
           }
           #expect(isEnabled)
           #expect(restored == 1)
@@ -488,18 +488,18 @@
           await #expect(throws: TestError()) {
             try await driver.writeWithoutTransaction { connection in
               try connection.setForeignKeysEnabled(false)
-              _ = try connection.fetchOne(foreignKeys)
+              _ = try foreignKeys.fetchOne(connection)
               throw TestError()
             }
           }
 
           // The setting stayed marked as changed, so the next access restores it before it begins.
           let held = await #expect(throws: SQLiteError.self) {
-            try await driver.write { try $0.fetchOne(foreignKeys) }
+            try await driver.write { try foreignKeys.fetchOne($0) }
           }
           #expect(held?.sql == "PRAGMA foreign_keys = 1")
           probe.isFailing = false
-          #expect(try await driver.write { try $0.fetchOne(foreignKeys) } == 1)
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -514,7 +514,7 @@
 
         let error = await #expect(throws: SQLiteError.self) {
           try await driver.read { transaction in
-            try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
           }
         }
         #expect(error?.sql == "PRAGMA query_only = 0")
@@ -522,17 +522,17 @@
         // Left read-only, the connection refuses to write until it has been made writable again.
         let held = await #expect(throws: SQLiteError.self) {
           try await driver.write { transaction in
-            try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
           }
         }
         #expect(held?.sql == "PRAGMA query_only = 0")
 
         probe.isFailing = false
         try await driver.write { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
         }
         let count = try await driver.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 1)
       }

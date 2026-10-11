@@ -22,7 +22,7 @@
         row.binding.wrappedValue = BindingSettings(id: 0, isEnabled: false)
 
         let persisted = try database.readBlocking { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
+          try BindingSettings.all.find(transaction, key: 0)
         }
         #expect(!persisted.isEnabled)
       }
@@ -39,7 +39,7 @@
             #expect(isOn)
             try toggle.tap()
             let persisted = try database.readBlocking { transaction in
-              try transaction.find(BindingSettings.all, key: 0)
+              try BindingSettings.all.find(transaction, key: 0)
             }
             #expect(!persisted.isEnabled)
           }
@@ -63,7 +63,7 @@
             #expect(!isOn)
             try toggle.tap()
             let persisted = try database.readBlocking { transaction in
-              try transaction.find(BindingReminder.all, key: 1)
+              try BindingReminder.all.find(transaction, key: 1)
             }
             #expect(persisted.isCompleted)
           }
@@ -86,7 +86,7 @@
             #expect(!isOn)
           }
           try await database.write { transaction in
-            try transaction.execute(BindingReminder.find(1).delete())
+            try BindingReminder.find(1).delete().execute(transaction)
           }
           try await sut.inspection.inspect(after: settle) { view in
             let text = try view.text().string()
@@ -117,11 +117,11 @@
         }
 
         let environmentValue = try await environment.read { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
+          try BindingSettings.all.find(transaction, key: 0)
         }
         #expect(environmentValue.isEnabled == readerOnly)
         let processValue = try await processDefault.read { transaction in
-          try transaction.find(BindingSettings.all, key: 0)
+          try BindingSettings.all.find(transaction, key: 0)
         }
         #expect(processValue.isEnabled)
       }
@@ -216,14 +216,12 @@
           """
         )
         if let isEnabled {
-          try transaction.execute(
-            BindingSettings.insert { BindingSettings(id: 0, isEnabled: isEnabled) }
-          )
+          try BindingSettings.insert { BindingSettings(id: 0, isEnabled: isEnabled) }
+            .execute(transaction)
         }
         if let isCompleted {
-          try transaction.execute(
-            BindingReminder.insert { BindingReminder(id: 1, isCompleted: isCompleted) }
-          )
+          try BindingReminder.insert { BindingReminder(id: 1, isCompleted: isCompleted) }
+            .execute(transaction)
         }
       }
       return database
@@ -234,7 +232,7 @@
       in database: some OrbitDatabaseReader
     ) async throws {
       while try await database.read({ transaction in
-        try transaction.find(BindingSettings.all, key: 0).isEnabled
+        try BindingSettings.all.find(transaction, key: 0).isEnabled
       }) != expected {
         try await Task.sleep(for: .milliseconds(2))
       }
@@ -245,7 +243,7 @@
       in database: some OrbitDatabaseReader
     ) async throws {
       while try await database.read({ transaction in
-        try transaction.find(BindingReminder.all, key: 1).isCompleted
+        try BindingReminder.all.find(transaction, key: 1).isCompleted
       }) != expected {
         try await Task.sleep(for: .milliseconds(2))
       }

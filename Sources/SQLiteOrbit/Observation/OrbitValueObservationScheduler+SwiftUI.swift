@@ -6,7 +6,7 @@
   ///
   /// ```swift
   /// try OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .subscribe(to: database, scheduling: .mainActor.animation(.default)) { _ in
   ///   } onChange: { change in reminders = change.value }
   /// ```

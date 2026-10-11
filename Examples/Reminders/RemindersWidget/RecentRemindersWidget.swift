@@ -74,11 +74,10 @@ struct RecentRemindersProvider: TimelineProvider {
   func entry() async -> RecentRemindersEntry {
     let reminders =
       (try? await database.read { transaction in
-        try transaction.fetchAll(
-          WidgetReminder.recent(
-            limit: RemindersWidgetConfiguration.maximumReminderCount
-          )
+        try WidgetReminder.recent(
+          limit: RemindersWidgetConfiguration.maximumReminderCount
         )
+        .fetchAll(transaction)
       }) ?? []
     return RecentRemindersEntry(date: .now, reminders: reminders)
   }

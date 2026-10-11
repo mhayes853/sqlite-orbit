@@ -94,18 +94,18 @@
     }
 
     @Test
-    func writeTransactionsFetchWhatReturningReportsAsAType() async throws {
+    func writeTransactionsReadWhatReturningReportsAsAType() async throws {
       let database = try inMemoryDatabase()
       let (inserted, deleted) = try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        let inserted = try transaction.fetchAll(
-          "INSERT INTO items (title) VALUES ('a'), (NULL) RETURNING id",
-          as: Int.self
+        var insertedCursor = try transaction.executeRowCursor(
+          "INSERT INTO items (title) VALUES ('a'), (NULL) RETURNING id"
         )
-        let deleted = try transaction.fetchOne(
-          "DELETE FROM items WHERE id = \(2) RETURNING title",
-          as: String?.self
+        let inserted = try insertedCursor.collect(as: Int.self)
+        var deletedCursor = try transaction.executeRowCursor(
+          "DELETE FROM items WHERE id = \(2) RETURNING title"
         )
+        let deleted = try deletedCursor.first(as: String?.self)
         return (inserted, deleted)
       }
       #expect(inserted == [1, 2])

@@ -100,13 +100,12 @@
       func viewRendersSectionsInOrder() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "Milk", priority: "low")
-              Reminder.Draft(title: "Eggs", priority: "high")
-              Reminder.Draft(title: "Bread", priority: "low")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "Milk", priority: "low")
+            Reminder.Draft(title: "Eggs", priority: "high")
+            Reminder.Draft(title: "Bread", priority: "low")
+          }
+          .execute(transaction)
         }
         let sut = SectionedRemindersList(database: database)
 

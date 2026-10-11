@@ -27,7 +27,7 @@
           }
           #expect(region == currentTitlesRegion(over: "alternate_items"))
 
-          let titles = try await pool.read { try $0.fetchAll(currentTitles) }
+          let titles = try await pool.read { try currentTitles.fetchAll($0) }
           #expect(titles == ["Alternate"])
 
           // The writer is a connection of its own, whose cached statement was just as stale.
@@ -62,7 +62,7 @@
             try transaction.executeScript(itemsSchema)
           }
           let region = try await database.write { transaction in
-            _ = try transaction.fetchAll(currentTitles)
+            _ = try currentTitles.fetchAll(transaction)
             try transaction.executeScript(
               """
               DROP VIEW current_items;
@@ -87,7 +87,7 @@
             try transaction.executeScript(itemsSchema)
           }
           let generation = try await database.read { transaction in
-            _ = try transaction.fetchAll(currentTitles)
+            _ = try currentTitles.fetchAll(transaction)
             return transaction.statements.generation
           }
           try await database.write { transaction in
@@ -110,9 +110,9 @@
           }
           // Both of the pool's connections compile the query against the original view, so each has
           // a cached statement and a copy of the schema that the other connection makes stale.
-          let titles = try await pool.read { try $0.fetchAll(currentTitles) }
+          let titles = try await pool.read { try currentTitles.fetchAll($0) }
           #expect(titles == ["Original"])
-          _ = try await pool.write { try $0.fetchAll(currentTitles) }
+          _ = try await pool.write { try currentTitles.fetchAll($0) }
 
           // A second connection stands in for another process, which the pool hears nothing from.
           let peer = try file.queue()

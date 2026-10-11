@@ -8,7 +8,7 @@
 ///
 /// ```swift
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
 ///     reminderCount = change.value
 ///   }
@@ -49,7 +49,7 @@ public protocol OrbitValueObservationScheduler: Sendable {
 /// ```swift
 /// let counts = Mutex([Int]())
 /// let subscription = try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .immediate) { _ in } onChange: { change in
 ///     counts.withLock { $0.append(change.value) }
 ///   }
@@ -107,7 +107,7 @@ extension OrbitValueObservationScheduler where Self == OrbitImmediateValueObserv
 ///
 /// let cache = RemindersCache()
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .async(on: cache)) { _ in } onChange: { change in
 ///     cache.assumeIsolated { $0.count = change.value }
 ///   }
@@ -229,7 +229,7 @@ public protocol OrbitValueObservationMainActorScheduler: OrbitValueObservationSc
 /// @MainActor var reminderCount = 0
 ///
 /// try OrbitValueObservation
-///   .tracking { try $0.fetchCount(Reminder.all) }
+///   .tracking { try Reminder.all.fetchCount($0) }
 ///   .subscribe(to: database, scheduling: .mainActor) { _ in } onChange: { change in
 ///     reminderCount = change.value
 ///   }

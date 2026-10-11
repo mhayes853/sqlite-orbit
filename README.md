@@ -128,14 +128,16 @@ let titles = try await database.read { transaction in
 }
 ```
 
-`as:` uses the row initializer for row-convertible types and reads the first column for scalar-only
-types. When a type supports both conversions, its row initializer takes precedence. Named
+`as:` takes any `ConvertibleFromOrbitDatabaseRow`. Every `ConvertibleFromOrbitDatabaseValue` is one
+too, reading the first column, so `as: Int.self` and `as: ReminderSummary.self` are the same
+overload. A value type that declares its own row initializer uses that instead. Named
 reads match UTF-8 bytes exactly, including case, and choose the first duplicate name. Missing
 columns throw even for optional properties; SQL `NULL` can produce `nil`. The native cursor
 prepares its column-name mapping on the first named read and shares it across subsequent rows.
 Reordered and extra columns are supported. Initialized values own their data, while cursors must
-be consumed inside their transaction. Write transactions support `as:` on `fetchAll`,
-`fetchOne`, and `executeCursor` for `RETURNING` results.
+be consumed inside their transaction. For `RETURNING` results, a write transaction's
+`executeCursor(_:as:)` initializes values lazily, and any row cursor collects them with
+`collect(as:)` or `first(as:)`.
 
 The row protocol and macros are available without `StructuredQueries` or `Foundation`. Stored
 instance properties must have explicit types conforming to `ConvertibleFromOrbitDatabaseValue`.
@@ -181,18 +183,21 @@ implement `OrbitDatabaseRowColumns` independently of `ConvertibleFromOrbitDataba
 
 `@OrbitRow` maps SQL result columns into values, including projections, joins, aggregates, and
 `RETURNING` results. For typed inserts, updates, and upserts, use Structured Queries' `@Table`
-models and write builders with `transaction.execute(Table.insert { ... })` or
-`transaction.execute(Table.upsert { ... })`.
+models and write builders with `try Table.insert { ... }.execute(transaction)` or
+`try Table.upsert { ... }.execute(transaction)`.
 
-`rowCursor` lends the rows lazily. A write transaction also runs `execute`, `executeRowCursor`, and
-its own `fetchAll` and `fetchOne`, which accept SQL that writes, so a `RETURNING` clause can be
-read:
+`rowCursor` lends the rows lazily. `rowCursor`, `fetchAll`, and `fetchOne` only ever read, in a
+write transaction as much as in a read one. What may write is spelled `execute`: a write
+transaction runs `execute`, `execute(_:_:)`, which lends each returned row to a closure,
+`executeRowCursor`, and `executeScript`. A cursor's `collect`, `first`, and `forEach` read its rows,
+so a `RETURNING` clause can be read:
 
 ```swift
 let deletedIDs = try await database.write { transaction in
-  try transaction.fetchAll("DELETE FROM reminders WHERE is_completed RETURNING id") {
-    $0[0].integerValue ?? 0
-  }
+  var cursor = try transaction.executeRowCursor(
+    "DELETE FROM reminders WHERE is_completed RETURNING id"
+  )
+  return try cursor.collect(as: Int.self)
 }
 ```
 
@@ -210,13 +215,12 @@ try await database.write { transaction in
 }
 ```
 
-An `OrbitDatabaseQuery<Access>` pairs SQL with the capability it requires, and a read transaction
-only accepts `OrbitDatabaseQuery<OrbitDatabaseReadAccess>`. Raw SQL cannot show that it only reads
-through its type, so a read query is checked with `sqlite3_stmt_readonly` when it is prepared, and
-one that may write is refused with a `SQLiteError` whose code is `.readOnly` before it runs. That
-includes pragmas that can change state as well as report it, such as `PRAGMA journal_mode`; read
-those through their table-valued form, `SELECT * FROM pragma_journal_mode`, or in a write
-transaction.
+Raw SQL cannot show that it only reads through its type, so SQL handed to `rowCursor`, `fetchAll`,
+or `fetchOne` is checked with `sqlite3_stmt_readonly` when it is prepared, and SQL that may write is
+refused with a `SQLiteError` whose code is `.readOnly` before it runs, on every transaction and
+connection. That includes pragmas that can change state as well as report it, such as
+`PRAGMA journal_mode`; read those through their table-valued form,
+`SELECT * FROM pragma_journal_mode`, or with a write transaction's `executeRowCursor`.
 
 ## Traits
 
@@ -256,16 +260,16 @@ import SQLiteOrbit
 }
 
 let pending = try await database.read { transaction in
-  try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+  try Reminder.where { !$0.isCompleted }.fetchAll(transaction)
 }
 ```
 
 A statement converts to raw SQL with `SQL(fragment: statement.query)`, and a query expression can
 be interpolated into `SQL` directly. Whether a statement needs a write transaction is read off its
-type: every `SELECT`-shaped statement can become a read query, and any statement at all can become a
-write query, so a read transaction cannot be handed an `INSERT`, `UPDATE`, `DELETE`, or trigger
-definition at compile time. Statements the query library keeps private, such as the one behind
-`union`, are classified too.
+type: every `SELECT`-shaped statement fetches in any transaction, and every other statement only
+executes or fetches in a write transaction, so a read transaction cannot be handed an `INSERT`,
+`UPDATE`, `DELETE`, or trigger definition at compile time. Statements the query library keeps
+private, such as the one behind `union`, are classified too.
 
 ## Reminders demo
 
@@ -381,7 +385,7 @@ must commit together:
 try await database.writeWithoutTransaction { connection in
   try connection.setForeignKeysEnabled(false)
   try connection.transaction { transaction in
-    try transaction.execute(Reminder.delete())
+    try Reminder.delete().execute(transaction)
   }
 }
 ```
@@ -573,7 +577,7 @@ for every pool access ahead of it and uses `BEGIN IMMEDIATE` as a barrier for sc
 let driver = try TursoPool(path: databasePath, readerCount: 5, writerCount: 4)
 
 try await driver.concurrentWrite { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try Reminder.insert { reminder }.execute(transaction)
 }
 
 try await driver.write { transaction in
@@ -638,36 +642,34 @@ try await database.read { transaction in
 }
 ```
 
-With the `StructuredQueries` trait, statements come in four shapes, and `fetchAll`, `fetchOne`, and
-`fetchCursor` cover all of them: a
-single projected value, a tuple of projected values, an unprojected select decoding to its table,
-and a select with joins decoding to a tuple of every table in the row.
+With the `StructuredQueries` trait, a statement runs itself in the transaction it is handed, as
+SQLiteData spells it. Statements come in four shapes, and `fetchAll`, `fetchOne`, and `fetchCursor`
+cover all of them: a single projected value, a tuple of projected values, an unprojected select
+decoding to its table, and a select with joins decoding to a tuple of every table in the row.
 
 ```swift
 try await database.read { transaction in
-  try transaction.fetchAll(Reminder.select(\.title))                  // [String]
-  try transaction.fetchAll(Reminder.select { ($0.id, $0.title) })      // [(Int, String)]
-  try transaction.fetchAll(Reminder.all)                               // [Reminder]
+  try Reminder.select(\.title).fetchAll(transaction)                  // [String]
+  try Reminder.select { ($0.id, $0.title) }.fetchAll(transaction)      // [(Int, String)]
+  try Reminder.all.fetchAll(transaction)                               // [Reminder]
 
-  try transaction.fetchAll(                                            // [(Reminder, RemindersList)]
-    Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }
-  )
+  try Reminder.join(RemindersList.all) { $0.listID.eq($1.id) }        // [(Reminder, RemindersList)]
+    .fetchAll(transaction)
 
-  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
-  try transaction.find(Reminder.all, key: 42)  // throws OrbitDatabaseRecordNotFoundError
+  try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
+  try Reminder.all.find(transaction, key: 42)  // throws OrbitDatabaseRecordNotFoundError
 }
 ```
 
-Write transactions perform every read operation in addition to mutations, and can fetch the rows a
-statement returns:
+A select only reads, so it runs in any transaction. Every other statement may write, so only a
+write transaction runs it, and one with a `RETURNING` clause fetches the rows it returns:
 
 ```swift
 let titles = try await database.write { transaction in
-  try transaction.fetchAll(
-    Reminder.update { $0.isCompleted = true }
-      .where { $0.listID.eq(listID) }
-      .returning(\.title)
-  )
+  try Reminder.update { $0.isCompleted = true }
+    .where { $0.listID.eq(listID) }
+    .returning(\.title)
+    .fetchAll(transaction)
 }
 ```
 
@@ -685,9 +687,8 @@ struct ReminderSummary: Sendable {
 }
 
 let summaries = try await database.read { transaction in
-  try transaction.fetchAll(
-    #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
-  )
+  try #sql("SELECT id, title FROM reminders ORDER BY id", as: ReminderSummary.self)
+    .fetchAll(transaction)
 }
 ```
 
@@ -696,12 +697,13 @@ Structured Queries decodes columns positionally using the declared representatio
 representations. Results have type `Value.QueryOutput`, allowing a table alias to decode to its
 underlying model. The same typed statements work with lazy cursors and write `RETURNING` results.
 
-For lazy reads, transactions expose a scoped cursor. The low-level `rowCursor` API lends raw rows;
-`fetchCursor` decodes the statement's statically known output while advancing:
+For lazy reads, a statement's `fetchCursor` decodes its statically known output while advancing.
+The low-level `rowCursor` API lends raw rows of any SQL, including a statement's own, through
+`SQL(fragment: statement.query)`:
 
 ```swift
 let reminders = try await database.read { transaction in
-  var cursor = try transaction.fetchCursor(Reminder.all)
+  var cursor = try Reminder.all.fetchCursor(transaction)
   var reminders: [Reminder] = []
 
   while let reminder = try cursor.next() {
@@ -712,14 +714,15 @@ let reminders = try await database.read { transaction in
 }
 ```
 
-Cursors must be consumed inside the transaction that created them. Write transactions also expose
-`executeCursor` for statements that return rows, such as SQLite `RETURNING` statements.
+Cursors must be consumed inside the transaction that created them. A statement that returns rows
+from a write, such as one with a SQLite `RETURNING` clause, has a `fetchCursor` that takes a write
+transaction.
 
 Typed cursors can be transformed lazily. Transformations consume their source cursor, so bind the
 result when it will be advanced or passed to `forEach`:
 
 ```swift
-let source = try transaction.fetchCursor(Reminder.all)
+let source = try Reminder.all.fetchCursor(transaction)
 var titles = source
   .filter { !$0.isCompleted }
   .compactMap(\.title)
@@ -733,21 +736,21 @@ try titles.forEach { title in
 To eagerly materialize a cursor, collect it into an array or another known collection type:
 
 ```swift
-let titles = try transaction.fetchCursor(Reminder.all)
+let titles = try Reminder.all.fetchCursor(transaction)
   .filter { !$0.isCompleted }
   .collect()
 
-let uniqueTitles = try transaction.fetchCursor(Reminder.all)
+let uniqueTitles = try Reminder.all.fetchCursor(transaction)
   .map(\.title)
   .collect(as: Set<String>.self)
 
-let incompleteCount = try transaction.fetchCursor(Reminder.all)
+let incompleteCount = try Reminder.all.fetchCursor(transaction)
   .count { !$0.isCompleted }
 
-let nextReminder = try transaction.fetchCursor(Reminder.all)
+let nextReminder = try Reminder.all.fetchCursor(transaction)
   .first { !$0.isCompleted }
 
-let bounds = try transaction.fetchCursor(Reminder.all)
+let bounds = try Reminder.all.fetchCursor(transaction)
   .map(\.priority)
   .minMax()
 ```
@@ -1024,7 +1027,7 @@ let database = try OrbitIPCDatabase(
 )
 
 let reminders = try await database.read { transaction in
-  try transaction.fetchAll(Reminder.order { $0.title.collate(.localized) })
+  try Reminder.order { $0.title.collate(.localized) }.fetchAll(transaction)
 }
 ```
 
@@ -1320,7 +1323,7 @@ after each successful fetch. It also tracks properties read from Swift `Observab
 
 ```swift
 let incompleteCount = OrbitValueObservation.tracking { transaction in
-  try transaction.fetchCount(Reminder.where { !$0.isCompleted })
+  try Reminder.where { !$0.isCompleted }.fetchCount(transaction)
 }
 ```
 
@@ -1336,9 +1339,9 @@ struct Filters: Sendable {
 let filters = OrbitValueObservation.ExternalValue(Filters())
 let reminders = OrbitValueObservation.tracking { transaction in
   if filters.showsCompleted {
-    try transaction.fetchAll(Reminder.where(\.isCompleted))
+    try Reminder.where(\.isCompleted).fetchAll(transaction)
   } else {
-    try transaction.fetchAll(Reminder.where { !$0.isCompleted })
+    try Reminder.where { !$0.isCompleted }.fetchAll(transaction)
   }
 }
 
@@ -1623,8 +1626,8 @@ struct RemindersOverview: OrbitFetchKeyRequest {
 
   func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
     try Value(
-      incompleteCount: transaction.fetchCount(Reminder.where { !$0.isCompleted }),
-      newest: transaction.fetchAll(Reminder.order { $0.createdAt.desc() }.limit(10))
+      incompleteCount: Reminder.where { !$0.isCompleted }.fetchCount(transaction),
+      newest: Reminder.order { $0.createdAt.desc() }.limit(10).fetchAll(transaction)
     )
   }
 }
@@ -2017,7 +2020,7 @@ A database announces every write transaction it commits:
 
 ```swift
 try await database.write { transaction in
-  try transaction.execute(Reminder.insert { reminder })
+  try Reminder.insert { reminder }.execute(transaction)
 }
 // Peers have now been sent .transactionDidCommit with the transaction's aggregate region.
 ```

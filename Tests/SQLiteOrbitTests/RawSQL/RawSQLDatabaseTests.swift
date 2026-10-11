@@ -163,16 +163,18 @@
     }
 
     @Test
-    func writeTransactionsFetchWhatReturningReports() async throws {
+    func writeTransactionsReadWhatReturningReports() async throws {
       let database = try inMemoryDatabase()
       let (inserted, deleted, stopped) = try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        let inserted = try transaction.fetchAll(
+        var insertedCursor = try transaction.executeRowCursor(
           "INSERT INTO items (title) VALUES ('a'), ('b'), ('c') RETURNING id"
-        ) { $0[0].integerValue ?? 0 }
-        let deleted = try transaction.fetchOne(
+        )
+        let inserted = try insertedCursor.collect { $0[0].integerValue ?? 0 }
+        var deletedCursor = try transaction.executeRowCursor(
           "DELETE FROM items WHERE id = \(2) RETURNING title"
-        ) { $0[0].textValue }
+        )
+        let deleted = try deletedCursor.first { $0[0].textValue }
         var stopped: [Int64] = []
         try transaction.execute("UPDATE items SET title = upper(title) RETURNING id") { row in
           stopped.append(row[0].integerValue ?? 0)
@@ -326,16 +328,44 @@
     }
 
     @Test
-    func aWriteTransactionRunsAReadQueryThatWrites() async throws {
+    func aWriteTransactionReadsOnlyThroughRowCursorAndWritesThroughExecuteRowCursor()
+      async throws
+    {
       let database = try inMemoryDatabase()
       try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        // Only a read transaction holds a statement to reading; a write transaction may write.
-        var cursor = try transaction.rowCursor(
-          OrbitDatabaseQuery<OrbitDatabaseReadAccess>("INSERT INTO items (id) VALUES (1)"),
-          cached: false
+        // A write transaction reads the way a read transaction does: `rowCursor` and the `fetch`
+        // operations refuse SQL that may write, before it runs.
+        let refused = #expect(throws: SQLiteError.self) {
+          var cursor = try transaction.rowCursor(
+            "INSERT INTO items (id) VALUES (1) RETURNING id",
+            cached: false
+          )
+          _ = try cursor.next()
+        }
+        #expect(refused?.primaryCode == .readOnly)
+        let refusedFetch = #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchAll(
+            "INSERT INTO items (id) VALUES (2) RETURNING id",
+            as: Int.self
+          )
+        }
+        #expect(refusedFetch?.primaryCode == .readOnly)
+        let refusedFetchOne = #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchOne("DELETE FROM items RETURNING id") { $0[0].integerValue }
+        }
+        #expect(refusedFetchOne?.primaryCode == .readOnly)
+
+        // What may write is spelled `execute`.
+        var cursor = try transaction.executeRowCursor(
+          "INSERT INTO items (id) VALUES (1), (2), (3) RETURNING id"
         )
-        _ = try cursor.next()
+        #expect(try cursor.collect(as: Int.self) == [1, 2, 3])
+        var deleted = try transaction.executeRowCursor(
+          "DELETE FROM items WHERE id > 1 RETURNING id",
+          cached: true
+        )
+        #expect(try deleted.first(as: Int.self) != nil)
       }
       #expect(try await database.rowCount(of: "items") == 1)
     }

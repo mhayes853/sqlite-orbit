@@ -127,12 +127,12 @@
         for _ in 0..<2 {
           #expect(
             try await pool.read {
-              try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
             } == ["One"]
           )
           #expect(
             try await pool.write {
-              try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
             } == ["One"]
           )
         }
@@ -148,7 +148,7 @@
         let observedErrors = TestRecorder<String>()
         let observation = OrbitValueObservation<Int>
           .tracking { transaction in
-            try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction) ?? 0
           }
         let subscription = try observation.subscribe(
           to: pool,
@@ -163,7 +163,7 @@
           for id in 1...24 {
             group.addTask {
               try await pool.write { transaction in
-                try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+                try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
               }
             }
           }
@@ -185,9 +185,8 @@
 
         await #expect(throws: SQLiteError.self) {
           try await pool.read { transaction in
-            try transaction.fetchAll(
-              #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
-            )
+            try #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
+              .fetchAll(transaction)
           }
         }
       }
@@ -227,13 +226,13 @@
 
         let write = Task {
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "in flight") })
+            try Item.insert { Item(id: 1, title: "in flight") }.execute(transaction)
             try gate.enter()
           }
         }
         try await gate.waitUntilEntered()
 
-        let read = Task { try await pool.read { try $0.fetchAll(Item.all).count } }
+        let read = Task { try await pool.read { try Item.all.fetchAll($0).count } }
         // The read is queued behind the write, so it cannot have run yet.
         await Task.yield()
         gate.open()
@@ -256,7 +255,7 @@
         let write = Task {
           try await pool.write { transaction in
             wrote.withLock { $0 = true }
-            try transaction.execute(Item.insert { Item(id: 1, title: "after read") })
+            try Item.insert { Item(id: 1, title: "after read") }.execute(transaction)
           }
         }
         for _ in 0..<100 { await Task.yield() }
@@ -282,7 +281,7 @@
         let writer = Task {
           writerRequested.increment()
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
+            try Item.insert { Item(id: 1, title: "writer") }.execute(transaction)
           }
         }
         try await writerRequested.waitForCount(1)
@@ -296,7 +295,7 @@
           .map { _ in
             Task {
               trailingRequested.increment()
-              return try await pool.read { try $0.fetchAll(Item.all).count }
+              return try await pool.read { try Item.all.fetchAll($0).count }
             }
           }
         try await trailingRequested.waitForCount(trailingReads.count)
@@ -321,10 +320,10 @@
 
         let write = Task {
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "never") })
+            try Item.insert { Item(id: 1, title: "never") }.execute(transaction)
           }
         }
-        let trailingRead = Task { try await pool.read { try $0.fetchAll(Item.all).count } }
+        let trailingRead = Task { try await pool.read { try Item.all.fetchAll($0).count } }
         for _ in 0..<100 { await Task.yield() }
         write.cancel()
         await #expect(throws: CancellationError.self) {

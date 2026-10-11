@@ -52,7 +52,7 @@
     }
 
     @Test
-    func rowConversionWinsForTypesSupportingBothConversions() async throws {
+    func aValueTypesOwnRowInitializerWinsOverItsFirstColumn() async throws {
       let database = try inMemoryDatabase()
       let sql: SQL = "SELECT 7 AS scalar, 42 AS id"
       let (all, first, generic, cursor, scalar) = try await database.read { transaction in
@@ -71,21 +71,15 @@
       #expect(scalar?.id == 7)
       try await database.write { transaction in
         try transaction.execute("CREATE TABLE dual_records (id INTEGER)")
-        #expect(
-          try transaction
-            .fetchAll(
-              "INSERT INTO dual_records VALUES (42) RETURNING 7 AS scalar, id",
-              as: DualRecord.self
-            )
-            .map(\.id) == [42]
+        var inserted = try transaction.executeRowCursor(
+          "INSERT INTO dual_records VALUES (42) RETURNING 7 AS scalar, id"
         )
-        #expect(
-          try transaction.fetchOne(
-            "UPDATE dual_records SET id = 43 RETURNING 7 AS scalar, id",
-            as: DualRecord.self
-          )?
-          .id == 43
+        #expect(try inserted.collect(as: DualRecord.self).map(\.id) == [42])
+        var updated = try transaction.executeRowCursor(
+          "UPDATE dual_records SET id = 43 RETURNING 7 AS scalar, id",
+          cached: true
         )
+        #expect(try updated.first(as: DualRecord.self)?.id == 43)
         #expect(
           try fetchDual(DualRecord.self, sql: sql, in: transaction).map(\.id) == [42]
         )
@@ -241,20 +235,20 @@
     }
 
     @Test
-    func writerFetchesAndExecuteCursorDecodeReturningRows() async throws {
+    func writerCursorsAndExecuteCursorDecodeReturningRows() async throws {
       let database = try inMemoryDatabase()
       let (inserted, updated, deleted) = try await database.write { transaction in
         try transaction.execute(
           "CREATE TABLE records (id INTEGER PRIMARY KEY, title TEXT, priority INTEGER)"
         )
-        let inserted = try transaction.fetchAll(
-          "INSERT INTO records VALUES (1, 'Milk', NULL), (2, 'Tea', 3) RETURNING *",
-          as: Record.self
+        var insertedCursor = try transaction.executeRowCursor(
+          "INSERT INTO records VALUES (1, 'Milk', NULL), (2, 'Tea', 3) RETURNING *"
         )
-        let updated = try transaction.fetchOne(
-          "UPDATE records SET title = 'Coffee' WHERE id = 2 RETURNING *",
-          as: Record.self
+        let inserted = try insertedCursor.collect(as: Record.self)
+        var updatedCursor = try transaction.executeRowCursor(
+          "UPDATE records SET title = 'Coffee' WHERE id = 2 RETURNING *"
         )
+        let updated = try updatedCursor.first(as: Record.self)
         let deleted =
           try transaction.executeCursor("DELETE FROM records RETURNING *", as: Record.self)
           .collect()
@@ -267,6 +261,75 @@
         try $0.fetchOne("SELECT count(*) FROM records", as: Int.self)
       }
       #expect(count == 0)
+    }
+
+    @Test
+    func valueTypesReadTheFirstColumnThroughEveryRowAPI() async throws {
+      let database = try inMemoryDatabase()
+      let sql: SQL = "SELECT 1 AS id, 'Milk' AS title UNION ALL SELECT NULL, 'Tea'"
+      let (all, first, cursor, terminal, bytes) = try await database.read { transaction in
+        var rows = try transaction.rowCursor(sql)
+        let terminal = try rows.collect(as: Int?.self)
+        return (
+          try transaction.fetchAll(sql, as: Int?.self),
+          try transaction.fetchOne(sql, as: Int.self),
+          try transaction.fetchCursor(sql, as: Int?.self).collect(),
+          terminal,
+          try transaction.fetchOne("SELECT x'0102'", as: [UInt8].self)
+        )
+      }
+      #expect(all == [1, nil])
+      #expect(first == 1)
+      #expect(cursor == [1, nil])
+      #expect(terminal == [1, nil])
+      #expect(bytes == [1, 2])
+      // The first column reads exactly as the row subscript does, so `NULL` read as a type that is
+      // not optional names the column.
+      await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+        try await database.read { try $0.fetchAll(sql, as: Int.self) }
+      }
+      #expect(Int?.self is any ConvertibleFromOrbitDatabaseRow.Type)
+    }
+
+    @Test
+    func rowCursorTerminalsReadReturningRows() async throws {
+      let database = try inMemoryDatabase()
+      let (ids, titles, firstID, visited, deleted) = try await database.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
+        )
+        var inserted = try transaction.executeRowCursor(
+          """
+          INSERT INTO reminders (title, isCompleted)
+          VALUES ('Milk', 1), ('Tea', 0), ('Coffee', 1)
+          RETURNING id
+          """
+        )
+        let ids = try inserted.collect(as: Int.self)
+        var selected = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        let titles = try selected.collect { row in row[0].textValue ?? "" }
+        var firstCursor = try transaction.rowCursor("SELECT id FROM reminders ORDER BY id DESC")
+        let firstID = try firstCursor.first { row in row[0].integerValue }
+        var visited: [String] = []
+        var iterated = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        try iterated.forEach { row in
+          visited.append(row[0].textValue ?? "")
+          return visited.count == 2 ? .stop : .next
+        }
+        var cursor = try transaction.executeRowCursor(
+          "DELETE FROM reminders WHERE isCompleted RETURNING id"
+        )
+        let deleted = try cursor.collect(as: Int.self)
+        return (ids, titles, firstID, visited, deleted)
+      }
+      #expect(ids == [1, 2, 3])
+      #expect(titles == ["Milk", "Tea", "Coffee"])
+      #expect(firstID == 3)
+      #expect(visited == ["Milk", "Tea"])
+      #expect(deleted.sorted() == [1, 3])
+      #expect(
+        try await database.read { try $0.fetchAll("SELECT id FROM reminders", as: Int.self) } == [2]
+      )
     }
 
     @Test

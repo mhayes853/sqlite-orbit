@@ -27,7 +27,7 @@ public enum OrbitValueObservationSource: Hashable, Sendable {
 /// A value emitted by an observation, together with the event that prompted its fetch.
 ///
 /// ```swift
-/// let observation = OrbitValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+/// let observation = OrbitValueObservation.tracking { try Reminder.all.fetchAll($0) }
 /// try observation.subscribe(to: database, onError: { _ in }) { change in
 ///   print(change.value.count, "reminders after a", change.source, "fetch")
 /// }
@@ -642,7 +642,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let titles = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .map { reminders in reminders.map(\.title) }
   /// ```
   ///
@@ -662,7 +662,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let nonEmpty = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .filter { !$0.isEmpty }
   /// ```
   ///
@@ -680,7 +680,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let nextTitle = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.where { !$0.isCompleted }) }
+  ///   .tracking { try Reminder.where { !$0.isCompleted }.fetchAll($0) }
   ///   .compactMap { $0.first?.title }
   /// ```
   ///
@@ -698,7 +698,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let reminders = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .removeDuplicates { $0.map(\.id) == $1.map(\.id) }
   /// ```
   ///
@@ -718,7 +718,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let localOnly = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .filterTransactions { $0.origin == .local }
   /// ```
   ///
@@ -738,7 +738,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let observation = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .refetching(.coalesced)
   /// ```
   public func refetching<Controller: OrbitValueObservationRefetchController>(
@@ -763,7 +763,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// ```swift
   /// // Stop refetching once every reminder is done, until a local write says otherwise.
   /// let untilFinished = OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
   ///   .filterTransactions { commit, reminders in
   ///     commit.origin == .local || !(reminders?.allSatisfy(\.isCompleted) ?? false)
   ///   }
@@ -816,7 +816,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let traced = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .handleEvents(
   ///     willStart: { logger.debug("observing reminders") },
   ///     didReceiveValue: { count in logger.debug("\(count) reminders") },
@@ -869,7 +869,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let subscription = try OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .subscribe(to: database) { error in
   ///     logger.error("reminder observation failed: \(error)")
   ///   } onChange: { change in
@@ -938,7 +938,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   /// ```swift
   /// let subscription = try OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .subscribe(to: database, scheduling: .immediate) { error in
   ///     logger.error("\(error)")
   ///   } onChange: { change in
@@ -1026,7 +1026,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///
   ///   func start(observing database: OrbitIPCDatabase) throws {
   ///     subscription = try OrbitValueObservation
-  ///       .tracking { try $0.fetchCount(Reminder.all) }
+  ///       .tracking { try Reminder.all.fetchCount($0) }
   ///       .subscribe(to: database, scheduling: .mainActor) { _ in
   ///       } onChange: { [self] change in count = change.value }
   ///   }
@@ -1191,7 +1191,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// than the sequence is consumed; by default every one of them is kept.
   ///
   /// ```swift
-  /// let reminders = OrbitValueObservation.tracking { try $0.fetchAll(Reminder.all) }
+  /// let reminders = OrbitValueObservation.tracking { try Reminder.all.fetchAll($0) }
   /// for try await reminders in reminders.values(in: database, bufferingPolicy: .bufferingNewest(1)) {
   ///   render(reminders)
   /// }
@@ -1221,7 +1221,7 @@ extension OrbitValueObservation where Value: Equatable {
   ///
   /// ```swift
   /// let count = OrbitValueObservation
-  ///   .tracking { try $0.fetchCount(Reminder.all) }
+  ///   .tracking { try Reminder.all.fetchCount($0) }
   ///   .removeDuplicates()
   /// ```
   ///

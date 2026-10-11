@@ -23,11 +23,11 @@
 
           if write == .blocking {
             try driver.writeBlocking { transaction in
-              try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+              try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
             }
           } else {
             try await driver.write { transaction in
-              try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+              try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
             }
           }
 
@@ -78,7 +78,7 @@
 
         await #expect(throws: TestError.self) {
           try await driver.write { transaction in
-            try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
           }
         }
 
@@ -95,7 +95,7 @@
         subscription.cancel()
 
         try await driver.write { transaction in
-          try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
         }
 
         #expect(observer.events.isEmpty)
@@ -117,14 +117,12 @@
 
         try await driver.read { transaction in
           for _ in 0..<2 {
-            _ = try transaction.fetchOne(
-              #sql("SELECT title FROM items WHERE id = 1", as: String.self)
-            )
+            _ = try #sql("SELECT title FROM items WHERE id = 1", as: String.self)
+              .fetchOne(transaction)
           }
-          _ = try transaction.fetchAll(
-            #sql("SELECT title FROM items WHERE id = 1", as: String.self)
-          )
-          _ = try transaction.fetchOne(#sql("PRAGMA user_version", as: Int.self))
+          _ = try #sql("SELECT title FROM items WHERE id = 1", as: String.self)
+            .fetchAll(transaction)
+          _ = try #sql("PRAGMA user_version", as: Int.self).fetchOne(transaction)
           transaction.notifyReads(in: manual)
         }
 
@@ -155,7 +153,7 @@
           #expect(code == SQLiteResultCode.ok.rawValue)
 
           let region = try OrbitDatabaseRegion("SELECT 1", in: transaction)
-          _ = try transaction.fetchOne(#sql("SELECT title FROM items", as: String.self))
+          _ = try #sql("SELECT title FROM items", as: String.self).fetchOne(transaction)
           return region
         }
 
@@ -200,7 +198,7 @@
         let subscription = try driver.subscribe(transactionObserver: observer)
 
         try await driver.write { transaction in
-          _ = try transaction.fetchOne(#sql("SELECT title FROM items", as: String.self))
+          _ = try #sql("SELECT title FROM items", as: String.self).fetchOne(transaction)
           try transaction.execute(
             "UPDATE items SET title = 'After', isCompleted = 1 WHERE id = 1"
           )
@@ -292,7 +290,7 @@
           try await writer.execute(sql: currentItemsViewSchema)
           let query = #sql("SELECT title FROM current_items", as: String.self)
           _ = try await reader.read { transaction in
-            try transaction.fetchOne(query)
+            try query.fetchOne(transaction)
           }
 
           let observer = TransactionEventRecorder()
@@ -300,7 +298,7 @@
           try await writer.execute(sql: currentItemsViewRedefinition)
 
           let value = try await reader.read { transaction in
-            try transaction.fetchOne(query)
+            try query.fetchOne(transaction)
           }
           #expect(value == "Alternate")
           #expect(
@@ -337,10 +335,10 @@
 
         try await driver.write { transaction in
           for id in 1...2 {
-            let query = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
-              #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self)
+            let query = SQL(
+              fragment: #sql("INSERT INTO items (id) VALUES (\(bind: id))", as: Void.self).query
             )
-            var cursor = try transaction.rowCursor(query, cached: true)
+            var cursor = try transaction.executeRowCursor(query, cached: true)
             while try cursor.next() != nil {}
           }
         }
@@ -544,7 +542,7 @@
 
         try await driver.write { transaction in
           _ = try transaction.withObservation(scopedObserver) {
-            try transaction.execute(#sql("INSERT INTO items (id) VALUES (1)", as: Void.self))
+            try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
           }
         }
 

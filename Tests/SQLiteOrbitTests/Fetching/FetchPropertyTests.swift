@@ -41,7 +41,7 @@
 
         // Writing to a table the query never read must not produce a value.
         try await database.write { transaction in
-          try transaction.execute(Tag.insert { Tag.Draft(name: "home") })
+          try Tag.insert { Tag.Draft(name: "home") }.execute(transaction)
         }
         try await insertReminders("Bread", into: database)
 
@@ -961,17 +961,13 @@
         #expect(reminder.title == "Eggs")
 
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.where { $0.id.eq(2) }.update { $0.title = "Bagels" }
-          )
+          try Reminder.where { $0.id.eq(2) }.update { $0.title = "Bagels" }.execute(transaction)
         }
         try await waitUntil { reminder.title == "Bagels" }
 
         // A write to another row leaves it alone.
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.where { $0.id.eq(1) }.update { $0.title = "Oat milk" }
-          )
+          try Reminder.where { $0.id.eq(1) }.update { $0.title = "Oat milk" }.execute(transaction)
         }
         try await Task.sleep(for: .milliseconds(20))
         #expect(reminder.title == "Bagels")
@@ -1037,7 +1033,7 @@
           try transaction.execute(
             "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL)"
           )
-          try transaction.execute(Note.insert { Note.Draft(title: "First") })
+          try Note.insert { Note.Draft(title: "First") }.execute(transaction)
         }
 
         try await count.load()
@@ -1047,7 +1043,7 @@
 
         // The retry resumed the observation, so later writes still arrive.
         try await database.write { transaction in
-          try transaction.execute(Note.insert { Note.Draft(title: "Second") })
+          try Note.insert { Note.Draft(title: "Second") }.execute(transaction)
         }
         try await waitUntil { titles == ["First", "Second"] && count.wrappedValue == 2 }
       }
@@ -1058,13 +1054,12 @@
       func sectionsGroupRowsByAnExpression() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "Milk", priority: "low")
-              Reminder.Draft(title: "Eggs", priority: "high")
-              Reminder.Draft(title: "Bread", priority: "low")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "Milk", priority: "low")
+            Reminder.Draft(title: "Eggs", priority: "high")
+            Reminder.Draft(title: "Bread", priority: "low")
+          }
+          .execute(transaction)
         }
 
         @FetchAll(Reminder.order(by: \.title), sectionBy: \.priority, database: database)
@@ -1106,9 +1101,8 @@
       func sectionsAreRegroupedAfterAWrite() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert { Reminder.Draft(title: "Milk", priority: "low") }
-          )
+          try Reminder.insert { Reminder.Draft(title: "Milk", priority: "low") }
+            .execute(transaction)
         }
 
         @FetchAll(
@@ -1120,9 +1114,8 @@
         #expect($reminders.sections.sectionNames == ["low"])
 
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert { Reminder.Draft(title: "Eggs", priority: "high") }
-          )
+          try Reminder.insert { Reminder.Draft(title: "Eggs", priority: "high") }
+            .execute(transaction)
         }
 
         try await waitUntil { $reminders.sections.sectionNames == ["high", "low"] }
@@ -1132,12 +1125,11 @@
       func sectioningByAnOrderingTermOrdersTheSections() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "Milk", priority: "low")
-              Reminder.Draft(title: "Eggs", priority: "high")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "Milk", priority: "low")
+            Reminder.Draft(title: "Eggs", priority: "high")
+          }
+          .execute(transaction)
         }
 
         @FetchAll(
@@ -1154,12 +1146,11 @@
       func loadingASectionedQueryReplacesTheSections() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "Milk", priority: "low")
-              Reminder.Draft(title: "Eggs", priority: "high")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "Milk", priority: "low")
+            Reminder.Draft(title: "Eggs", priority: "high")
+          }
+          .execute(transaction)
         }
 
         @FetchAll(Reminder.order(by: \.id), database: database) var reminders
@@ -1182,13 +1173,12 @@
       func aSectionKeepsRowsThatComeBackToIt() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
-          try transaction.execute(
-            Reminder.insert {
-              Reminder.Draft(title: "A", priority: "low")
-              Reminder.Draft(title: "B", priority: "high")
-              Reminder.Draft(title: "C", priority: "low")
-            }
-          )
+          try Reminder.insert {
+            Reminder.Draft(title: "A", priority: "low")
+            Reminder.Draft(title: "B", priority: "high")
+            Reminder.Draft(title: "C", priority: "low")
+          }
+          .execute(transaction)
         }
 
         // Ordering by title fights the section order, so "low" is left and returned to.
@@ -1300,7 +1290,7 @@
       try await database.write { transaction in
         try transaction.executeScript(remindersSchema)
         for title in titles {
-          try transaction.execute(Reminder.insert { Reminder.Draft(title: title) })
+          try Reminder.insert { Reminder.Draft(title: title) }.execute(transaction)
         }
       }
       return database
@@ -1356,20 +1346,18 @@
     private func taggedRemindersDatabase() async throws -> SQLiteQueue {
       let database = try await remindersDatabase()
       try await database.write { transaction in
-        try transaction.execute(
-          Reminder.insert {
-            Reminder.Draft(title: "Milk", priority: "low")
-            Reminder.Draft(title: "Eggs", priority: "high")
-            Reminder.Draft(title: "Bread", priority: "low")
-          }
-        )
-        try transaction.execute(
-          Tag.insert {
-            Tag.Draft(name: "home")
-            Tag.Draft(name: "errands")
-            Tag.Draft(name: "work")
-          }
-        )
+        try Reminder.insert {
+          Reminder.Draft(title: "Milk", priority: "low")
+          Reminder.Draft(title: "Eggs", priority: "high")
+          Reminder.Draft(title: "Bread", priority: "low")
+        }
+        .execute(transaction)
+        try Tag.insert {
+          Tag.Draft(name: "home")
+          Tag.Draft(name: "errands")
+          Tag.Draft(name: "work")
+        }
+        .execute(transaction)
       }
       return database
     }
@@ -1400,8 +1388,8 @@
 
       func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> Value {
         try Value(
-          count: transaction.fetchCount(Reminder.all),
-          titles: transaction.fetchAll(Reminder.order(by: \.id).select(\.title))
+          count: Reminder.all.fetchCount(transaction),
+          titles: Reminder.order(by: \.id).select(\.title).fetchAll(transaction)
         )
       }
     }
@@ -1410,9 +1398,7 @@
       let term: String
 
       func fetch(_ transaction: borrowing SQLiteReadTransaction) throws -> [String] {
-        try transaction.fetchAll(
-          Reminder.where { $0.title.eq(term) }.select(\.title)
-        )
+        try Reminder.where { $0.title.eq(term) }.select(\.title).fetchAll(transaction)
       }
     }
   #endif

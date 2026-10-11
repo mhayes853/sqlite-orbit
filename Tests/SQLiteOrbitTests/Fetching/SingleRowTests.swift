@@ -127,7 +127,7 @@
         #expect(settings == .defaultValue)
         #expect(!$settings.isLoading)
         #expect($settings.loadError == nil)
-        let count = try await database.read { try $0.fetchCount(Settings.all) }
+        let count = try await database.read { try Settings.all.fetchCount($0) }
         #expect(count == 0)
       }
 
@@ -152,7 +152,7 @@
         #expect(previousTheme == "system")
         try await waitUntil { settings.theme == "dark" && settings.launchCount == 1 }
         let persisted = try await database.read { transaction in
-          try transaction.find(Settings.all, key: 0)
+          try Settings.all.find(transaction, key: 0)
         }
         #expect(persisted == Settings(id: 0, theme: "dark", launchCount: 1))
         #expect(!$settings.isSaving)
@@ -168,7 +168,7 @@
         try await waitUntil { settings.theme == "dark" && settings.launchCount == 4 }
 
         try await database.write { transaction in
-          try transaction.execute(Settings.find(0).delete())
+          try Settings.find(0).delete().execute(transaction)
         }
 
         try await waitUntil { settings == .defaultValue }
@@ -190,7 +190,7 @@
             try Settings(id: 1, theme: "dark", launchCount: 0).save(in: transaction)
           }
         }
-        let count = try await database.read { try $0.fetchCount(Settings.all) }
+        let count = try await database.read { try Settings.all.fetchCount($0) }
         #expect(count == 0)
       }
 
@@ -201,15 +201,14 @@
         @SingleRow(Settings.self, database: database) var settings
         _ = settings
         try await database.write { transaction in
-          try transaction.execute(
-            Settings.upsert { Settings.Draft(Settings(id: 0, theme: "dark", launchCount: 7)) }
-          )
+          try Settings.upsert { Settings.Draft(Settings(id: 0, theme: "dark", launchCount: 7)) }
+            .execute(transaction)
         }
 
         try await $settings.update { $0.launchCount += 1 }
 
         let persisted = try await database.read { transaction in
-          try transaction.find(Settings.all, key: 0)
+          try Settings.all.find(transaction, key: 0)
         }
         #expect(persisted == Settings(id: 0, theme: "dark", launchCount: 8))
       }

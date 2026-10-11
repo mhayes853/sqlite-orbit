@@ -112,7 +112,7 @@
       }
       try await storage.write { database in
         try await database.write { transaction in
-          try transaction.execute(Value.update(value))
+          try Value.update(value).execute(transaction)
           guard transaction.changesCount == 1 else {
             throw OrbitDatabaseRecordNotFoundError()
           }
@@ -144,9 +144,7 @@
       let primaryKey = self.primaryKey
       try await storage.write { database in
         try await database.write { transaction in
-          try transaction.execute(
-            Value.find(Value.PrimaryKey(queryOutput: primaryKey)).delete()
-          )
+          try Value.find(Value.PrimaryKey(queryOutput: primaryKey)).delete().execute(transaction)
           guard transaction.changesCount == 1 else {
             throw OrbitDatabaseRecordNotFoundError()
           }
