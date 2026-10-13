@@ -68,7 +68,7 @@ func sqliteDatabaseRegion(
   // The tables read so far, with the columns read from each. The region is made from them once,
   // at the end, rather than by a union for every column, which builds a whole region each time.
   var tables: [OrbitDatabaseRegion.TableIdentifier: OrbitDatabaseRegion.TableRegion] = [:]
-  for authorization in authorizations {
+  for (index, authorization) in authorizations.enumerated() {
     // SQLite reports pragma access without the tables or schema state it may inspect.
     if authorization.action == .pragma { return .fullDatabase }
     guard authorization.action == .read else { continue }
@@ -82,12 +82,35 @@ func sqliteDatabaseRegion(
 
     let identifier = OrbitDatabaseRegion.TableIdentifier(schema: schema, name: table)
     if let column = authorization.secondArgument, !column.isEmpty {
-      tables[identifier, default: .empty].insert(column: column.asciiLowercased)
+      let column = column.asciiLowercased
+      if let entry = tables.index(forKey: identifier) {
+        tables.values[entry].insert(column: column)
+      } else {
+        // The set is made big enough for every column the statement reads from the table, rather
+        // than grown one column at a time.
+        var columns = OrbitDatabaseRegion.TableRegion.columns(
+          capacity: readCount(of: table, in: authorizations[index...])
+        )
+        columns.insert(column: column)
+        tables[identifier] = columns
+      }
     } else {
       tables[identifier] = .full
     }
   }
   return OrbitDatabaseRegion(includesUnspecifiedTables: false, tableRegions: tables)
+}
+
+private func readCount(
+  of table: String,
+  in authorizations: ArraySlice<SQLiteRawAuthorization>
+) -> Int {
+  var count = 0
+  for authorization in authorizations
+  where authorization.action == .read && authorization.firstArgument == table {
+    count += 1
+  }
+  return count
 }
 
 func sqliteResolvedSchema(

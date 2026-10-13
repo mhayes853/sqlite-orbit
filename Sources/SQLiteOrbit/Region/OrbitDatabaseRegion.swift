@@ -43,6 +43,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
       Self(includesUnspecifiedColumns: false, exceptions: columns)
     }
 
+    /// No columns yet, with room for `capacity` to be inserted without growing.
+    static func columns(capacity: Int) -> Self {
+      .columns(Set(minimumCapacity: capacity))
+    }
+
     func contains(column: String) -> Bool {
       includesUnspecifiedColumns != exceptions.contains(column)
     }
