@@ -180,7 +180,9 @@ final class SQLiteAuthorizerDispatcher {
     }
     for index in recordings.indices { recordings[index].append(authorization) }
     for handler in handlers { combine(handler(authorization)) }
-    if !isUserAuthorizationSuspended {
+    // The request is only made for a policy to see, since making one copies every argument into
+    // an action.
+    if !isUserAuthorizationSuspended, policy != nil || !scopedPolicies.isEmpty {
       let request = SQLiteAuthorization(authorization)
       if let policy { combine(policy(request)) }
       for policy in scopedPolicies { combine(policy(request)) }
