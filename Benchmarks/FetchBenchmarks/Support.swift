@@ -10,11 +10,13 @@ import SQLiteOrbit
 ///
 /// - Parameters:
 ///   - name: The benchmark's name, as `<GRDB test>/<implementation>`.
+///   - configuration: The benchmark's configuration, the suite's default unless given.
 ///   - open: Opens the resource, outside the measured region.
 ///   - cleanUp: Runs after the resource is released, to remove anything `open` created.
 ///   - body: The measured work.
 func registerBenchmark<Resource>(
   _ name: String,
+  configuration: Benchmark.Configuration = Benchmark.defaultConfiguration,
   opening open: @escaping () async throws -> Resource,
   cleanUp: @escaping () -> Void = {},
   measure body: @escaping (Resource) throws -> Void
@@ -22,6 +24,7 @@ func registerBenchmark<Resource>(
   let holder = ResourceHolder<Resource>()
   Benchmark(
     name,
+    configuration: configuration,
     closure: { benchmark in
       let resource = try holder.resource(for: name)
       for _ in benchmark.scaledIterations {
@@ -40,6 +43,7 @@ func registerBenchmark<Resource>(
 /// iterations.
 func registerBenchmark<Resource>(
   _ name: String,
+  configuration: Benchmark.Configuration = Benchmark.defaultConfiguration,
   opening open: @escaping () async throws -> Resource,
   cleanUp: @escaping () -> Void = {},
   measure body: @escaping (Resource) async throws -> Void
@@ -47,6 +51,7 @@ func registerBenchmark<Resource>(
   let holder = ResourceHolder<Resource>()
   Benchmark(
     name,
+    configuration: configuration,
     closure: { benchmark in
       let resource = try holder.resource(for: name)
       for _ in benchmark.scaledIterations {

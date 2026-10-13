@@ -21,6 +21,16 @@ import SQLiteOrbit
 
 private let lookupCount = 100_000
 
+extension Benchmark.Configuration {
+  /// The suite's configuration with 20 iterations rather than 50, since the implementations that
+  /// prepare every lookup take seconds an iteration.
+  fileprivate static var lookups: Self {
+    var configuration = Self.comparison
+    configuration.maxIterations = 20
+    return configuration
+  }
+}
+
 private let lookupSQL = "SELECT i1 FROM item WHERE rowid = ?"
 
 // Lookup `k` reads value `k * stride % rowCount`, from row `value + 1`. The stride is prime, so
@@ -55,6 +65,7 @@ private struct OrbitItem {
 func registerFetchOneByRowID() {
   registerBenchmark(
     "FetchOneByRowID/SQLite",
+    configuration: .lookups,
     opening: { try RawSQLiteConnection(path: Fixture.fetchDatabasePath()) },
     measure: { connection in
       try connection.execute("BEGIN")
@@ -73,6 +84,7 @@ func registerFetchOneByRowID() {
 
   registerBenchmark(
     "FetchOneByRowID/SQLiteUncached",
+    configuration: .lookups,
     opening: { try RawSQLiteConnection(path: Fixture.fetchDatabasePath()) },
     measure: { connection in
       try connection.execute("BEGIN")
@@ -104,6 +116,7 @@ func registerFetchOneByRowID() {
 
   registerBenchmark(
     "FetchOneByRowID/GRDBPrepared",
+    configuration: .lookups,
     opening: { try DatabaseQueue(path: Fixture.fetchDatabasePath()) },
     measure: { dbQueue in
       let sum = try dbQueue.read { db in
@@ -140,6 +153,7 @@ func registerFetchOneByRowID() {
 
   registerBenchmark(
     "FetchOneByRowID/OrbitPrepared",
+    configuration: .lookups,
     opening: { try OrbitConnection(path: Fixture.fetchDatabasePath()) },
     measure: { connection in
       let sum = try connection.owner.withReadConnection { connection in
@@ -171,6 +185,7 @@ private func registerGRDBLookups(
 ) {
   registerBenchmark(
     "FetchOneByRowID/\(implementation)",
+    configuration: .lookups,
     opening: { try DatabaseQueue(path: Fixture.fetchDatabasePath()) },
     measure: { dbQueue in
       let sum = try dbQueue.read { db in
@@ -195,6 +210,7 @@ private func registerOrbitLookups(
 ) {
   registerBenchmark(
     "FetchOneByRowID/\(implementation)",
+    configuration: .lookups,
     opening: { try OrbitConnection(path: Fixture.fetchDatabasePath()) },
     measure: { connection in
       let sum = try connection.owner.withReadConnection { connection in
