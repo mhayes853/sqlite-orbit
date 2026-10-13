@@ -34,7 +34,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     /// Whether a column not listed in `exceptions` belongs to the region.
     let includesUnspecifiedColumns: Bool
     /// Columns whose membership is the inverse of `includesUnspecifiedColumns`.
-    let exceptions: Set<String>
+    private(set) var exceptions: Set<String>
 
     static let empty = Self(includesUnspecifiedColumns: false, exceptions: [])
     static let full = Self(includesUnspecifiedColumns: true, exceptions: [])
@@ -45,6 +45,12 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
 
     func contains(column: String) -> Bool {
       includesUnspecifiedColumns != exceptions.contains(column)
+    }
+
+    /// Adds a column, already lowercased, to the region, for building one a column at a time.
+    mutating func insert(column: String) {
+      guard !includesUnspecifiedColumns else { return }
+      exceptions.insert(column)
     }
 
     func combining(
@@ -81,7 +87,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ) {
     let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
     self.includesUnspecifiedTables = includesUnspecifiedTables
-    self.tableRegions = tableRegions.filter { $0.value != defaultTableRegion }
+    // Checked first, since filtering copies the dictionary even when it keeps every table.
+    self.tableRegions =
+      tableRegions.values.contains(defaultTableRegion)
+      ? tableRegions.filter { $0.value != defaultTableRegion }
+      : tableRegions
   }
 
   /// The empty database region.

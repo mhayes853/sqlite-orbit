@@ -65,7 +65,9 @@ func sqliteDatabaseRegion(
   // unavailable, so an empty region would be unsafe.
   guard !authorizations.isEmpty else { return .fullDatabase }
 
-  var region = OrbitDatabaseRegion.empty
+  // The tables read so far, with the columns read from each. The region is made from them once,
+  // at the end, rather than by a union for every column, which builds a whole region each time.
+  var tables: [OrbitDatabaseRegion.TableIdentifier: OrbitDatabaseRegion.TableRegion] = [:]
   for authorization in authorizations {
     // SQLite reports pragma access without the tables or schema state it may inspect.
     if authorization.action == .pragma { return .fullDatabase }
@@ -78,13 +80,14 @@ func sqliteDatabaseRegion(
       return .fullDatabase
     }
 
+    let identifier = OrbitDatabaseRegion.TableIdentifier(schema: schema, name: table)
     if let column = authorization.secondArgument, !column.isEmpty {
-      region.formUnion(OrbitDatabaseRegion(column: column, in: table, schema: schema))
+      tables[identifier, default: .empty].insert(column: column.asciiLowercased)
     } else {
-      region.formUnion(OrbitDatabaseRegion(table: table, schema: schema))
+      tables[identifier] = .full
     }
   }
-  return region
+  return OrbitDatabaseRegion(includesUnspecifiedTables: false, tableRegions: tables)
 }
 
 func sqliteResolvedSchema(
