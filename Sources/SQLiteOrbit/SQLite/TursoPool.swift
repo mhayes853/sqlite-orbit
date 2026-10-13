@@ -19,6 +19,8 @@
     /// The identity this driver's database is known by within the process.
     public let defaultIdentifier: OrbitDatabaseIdentifier
 
+    @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
+
     private let scheduler: SQLitePoolScheduler
     private let transactionObservers = OrbitDatabaseTransactionObservers()
 
@@ -68,6 +70,7 @@
           )
         }
 
+      self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(path: path, configuration: configuration)
       self.defaultIdentifier = identifier ?? .forDatabase(path: path)
       self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)
     }
@@ -201,4 +204,8 @@
       release.finishPublishing()
     }
   }
+#endif
+
+#if Turso
+  @_spi(GRDB) extension TursoPool: SQLiteGRDBDatabaseMetadata {}
 #endif

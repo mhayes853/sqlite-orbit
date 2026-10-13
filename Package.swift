@@ -95,7 +95,7 @@ let packageTarget1: Target = .target(
       name: "Dependencies",
       package: "swift-dependencies",
       condition: .when(traits: ["Dependencies"])
-    ),
+    )
   ] + tursoDependencies,
   cSettings: [
     // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
@@ -190,7 +190,7 @@ let packageTarget5: Target = .testTarget(
       name: "SQLCipher",
       package: "swift-sqlcipher",
       condition: .when(traits: ["SQLCipher"])
-    ),
+    )
   ] + swiftUITestDependencies + tursoDependencies,
   cSettings: [
     // SQLCipher declares `sqlite3_key_v2` and `sqlite3_rekey_v2` behind this, and a
@@ -213,17 +213,38 @@ let packageTarget5: Target = .testTarget(
   ]
 )
 
-let packageTargets: [Target] = [
-  packageTarget0,
-  linuxEventsTarget,
-  foundationTarget,
-  sqliteVecTarget,
-  packageTarget1,
-  packageTarget2,
-  packageTarget3,
-  packageTarget4,
-  packageTarget5,
-] + tursoTargets
+let packageTargets: [Target] =
+  [
+    packageTarget0,
+    linuxEventsTarget,
+    foundationTarget,
+    sqliteVecTarget,
+    packageTarget1,
+    packageTarget2,
+    packageTarget3,
+    packageTarget4,
+    packageTarget5,
+    .target(
+      name: "SQLiteOrbitGRDB",
+      dependencies: ["SQLiteOrbit"],
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
+        .define("Turso", .when(traits: ["Turso"])),
+        .define("BuiltInSQLite", .when(traits: ["SystemSQLite"])),
+        .define("BuiltInSQLite", .when(traits: ["SQLCipher"])),
+        .define("BuiltInSQLite", .when(traits: ["Turso"]))
+      ]
+    ),
+    .testTarget(
+      name: "SQLiteOrbitGRDBTests",
+      dependencies: ["SQLiteOrbitGRDB"],
+      exclude: ["Upstream/LICENSE", "Upstream/provenance.md"],
+      swiftSettings: [
+        .enableExperimentalFeature("Lifetimes"),
+        .define("Turso", .when(traits: ["Turso"]))
+      ]
+    )
+  ] + tursoTargets
 
 let package = Package(
   name: "sqlite-orbit",
@@ -236,6 +257,7 @@ let package = Package(
   ],
   products: [
     .library(name: "SQLiteOrbit", targets: ["SQLiteOrbit"]),
+    .library(name: "SQLiteOrbitGRDB", targets: ["SQLiteOrbitGRDB"]),
     .library(name: "SQLiteOrbitTestSupport", targets: ["SQLiteOrbitTestSupport"])
   ],
   traits: [

@@ -733,6 +733,13 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     self.configurationPointer = handle.configuration
   }
 
+  @_lifetime(borrow grdbAccess)
+  init(grdbAccess: borrowing SQLiteGRDBAccess) {
+    connection = grdbAccess.connection
+    libraryPointer = grdbAccess.library
+    configurationPointer = grdbAccess.configuration
+  }
+
   /// The underlying `sqlite3 *`.
   public var sqliteConnection: OpaquePointer { connection }
 

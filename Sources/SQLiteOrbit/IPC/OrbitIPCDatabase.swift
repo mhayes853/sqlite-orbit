@@ -566,3 +566,9 @@ extension SQLiteWriteConnection {
     }
   }
 }
+
+@_spi(GRDB) extension OrbitIPCDatabase: SQLiteGRDBDatabaseMetadata {
+  @_spi(GRDB) public var grdbDatabaseInfo: SQLiteGRDBDatabaseInfo? {
+    (writer as? any SQLiteGRDBDatabaseMetadata)?.grdbDatabaseInfo
+  }
+}

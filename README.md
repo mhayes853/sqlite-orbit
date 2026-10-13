@@ -38,6 +38,14 @@ Queries are written as raw `SQL`, and
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) adds a type-safe
 query builder on top of it behind the `StructuredQueries` trait, which is on by default.
 
+## GRDB compatibility
+
+The experimental `SQLiteOrbitGRDB` product provides common GRDB application APIs through
+`import SQLiteOrbitGRDB`, including records, SQL requests, migrations, and value observation.
+Native queues, pools, and `OrbitIPCDatabase` conform directly to its reader/writer protocols.
+See [the compatibility surface and verification guide](Documentation/GRDBCompatibility.md) for
+examples and current behavior differences.
+
 ## Raw SQL
 
 `SQL` is a string literal whose interpolated values are bound as parameters rather than spliced into

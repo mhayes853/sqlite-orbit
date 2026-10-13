@@ -40,6 +40,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
+  @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
+
   private let scheduler: SQLitePoolScheduler
   private let suspension: SQLiteWriteSuspension
   private let transactionObservers = OrbitDatabaseTransactionObservers()
@@ -84,6 +86,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       try Self.openConnections(path: path, configuration: configuration, suspension: suspension)
     }
 
+    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(path: path, configuration: configuration)
     self.defaultIdentifier = identifier
     self.suspension = suspension
     self.scheduler = SQLitePoolScheduler(readers: readers, writers: [writer])
@@ -434,3 +437,5 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     }
   #endif
 #endif
+
+@_spi(GRDB) extension SQLitePool: SQLiteGRDBDatabaseMetadata {}

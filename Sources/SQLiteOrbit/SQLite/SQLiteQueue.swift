@@ -25,6 +25,8 @@ public final class SQLiteQueue: OrbitObservableDatabase {
   /// The identity this driver's database is known by across processes.
   public let defaultIdentifier: OrbitDatabaseIdentifier
 
+  @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
+
   private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitDatabaseTransactionObservers()
 
@@ -46,6 +48,7 @@ public final class SQLiteQueue: OrbitObservableDatabase {
       flags: [.readWrite, .create, .noMutex],
       configuration: configuration
     )
+    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(path: path, configuration: configuration)
     self.defaultIdentifier = identifier ?? .forDatabase(path: path)
   }
 
@@ -226,3 +229,5 @@ public final class SQLiteQueue: OrbitObservableDatabase {
     }
   }
 #endif
+
+@_spi(GRDB) extension SQLiteQueue: SQLiteGRDBDatabaseMetadata {}

@@ -89,6 +89,24 @@ jobs:
           swift test --disable-default-traits --traits Turso,StructuredQueries \
             --filter OrbitDatabaseMigratorTests
 
+      - name: Test GRDB overlay with Turso
+        run: |
+          swift test --disable-default-traits --traits Turso,StructuredQueries \
+            --filter GRDBTursoDriverTests
+
+  test-grdb-reference:
+    name: GRDB reference fixtures
+    runs-on: ubuntu-latest
+    container: swift:6.3.3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SQLite
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libsqlite3-dev pkg-config
+      - name: Verify fixtures against GRDB 7.11.1
+        run: Tests/GRDBReference/run.sh
+
   test-swiftui:
     name: macOS (SwiftUI)
     # EmbeddingVector uses the OS 26 InlineArray/Span runtime.

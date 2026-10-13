@@ -83,6 +83,7 @@ private enum OrbitValueObservationRegionSource: Sendable {
   case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
   case query(SQL)
+  case computed(@Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion)
 
   var initialRegion: OrbitDatabaseRegion? {
     guard case .constant(let region) = self else { return nil }
@@ -107,6 +108,15 @@ private enum OrbitValueObservationRegionSource: Sendable {
       return (try fetch(transaction), region)
     case .query(let query):
       return (try fetch(transaction), try OrbitDatabaseRegion(query, in: transaction))
+    case .computed(let resolve):
+      let region: OrbitDatabaseRegion
+      if let recorded = firstFetchRegion.region {
+        region = recorded
+      } else {
+        region = try resolve(transaction)
+        firstFetchRegion.record(region)
+      }
+      return (try fetch(transaction), region)
     }
   }
 
@@ -300,6 +310,16 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .constantOnFirstFetch, fetch)
+  }
+
+  /// Resolves an explicit constant region on the first observation read, without blocking the
+  /// task that constructs an asynchronous observation. Used by the GRDB compatibility target.
+  @_spi(GRDB)
+  public static func trackingConstantRegion(
+    region: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion,
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .computed(region), fetch)
   }
 
   /// Creates an observation whose value is produced by `fetch` and whose region is supplied by
