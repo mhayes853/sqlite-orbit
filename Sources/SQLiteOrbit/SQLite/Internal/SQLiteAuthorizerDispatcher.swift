@@ -55,9 +55,8 @@ final class SQLiteAuthorizerDispatcher {
   // What SQLite has authorized since the outermost `recordingAuthorizations` call in progress
   // began. Each call takes what was added while it ran, so nested calls share the one log rather
   // than each appending to a list of its own. These are kept here rather than captured by a
-  // handler, and the log keeps its storage from one recording to the next, so that recording a
-  // step, which a cached statement does on every first step, allocates nothing when SQLite
-  // authorizes nothing, and recording a compilation allocates only the list it returns.
+  // handler, and the log keeps its storage from one recording to the next, so that recording,
+  // which a cached statement does on every first step, usually allocates nothing at all.
   private var recorded: [SQLiteRawAuthorization] = []
   private var recordingDepth = 0
   private var policy: SQLiteAuthorizationHandler?
@@ -163,17 +162,18 @@ final class SQLiteAuthorizerDispatcher {
   func recordingAuthorizations<Result>(
     during operation: () throws -> Result
   ) rethrows -> (result: Result, authorizations: [SQLiteRawAuthorization]) {
+    // The log is emptied when the outermost recording begins rather than when it ends. The list
+    // a recording returns shares the log's storage when it covers all of it, as it usually does,
+    // and has usually been let go by the time the next recording begins, so the storage is
+    // reused rather than copied. Emptying a log that is already empty is skipped, since keeping
+    // the storage of a log that never had any allocates some. A log grown by an unusually large
+    // statement gives its storage back rather than keep it.
+    if recordingDepth == 0, !recorded.isEmpty {
+      recorded.removeAll(keepingCapacity: recorded.count <= 64)
+    }
     let start = recorded.count
     recordingDepth += 1
-    defer {
-      recordingDepth -= 1
-      // Emptying a log that is already empty is skipped, since keeping the storage of a log that
-      // never had any allocates some. A log grown by an unusually large statement gives its
-      // storage back rather than keep it.
-      if recordingDepth == 0, !recorded.isEmpty {
-        recorded.removeAll(keepingCapacity: recorded.count <= 64)
-      }
-    }
+    defer { recordingDepth -= 1 }
     let result = try operation()
     return (result, Array(recorded[start...]))
   }
