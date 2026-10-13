@@ -72,7 +72,10 @@
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
         return
       }
+      var configuration = SQLiteConfiguration.default
+      try configuration.registerSQLiteVec()
       try await driver.withDatabase(
+        configuration: configuration,
         schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
       ) { database in
         let origin = EmbeddingVector<3>(repeating: 0)
@@ -102,9 +105,8 @@
         #if StructuredQueries
           #expect(
             try await database.read {
-              try $0.fetchOne(
-                #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
-              )
+              try #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                .fetchOne($0)
             } == 1
           )
         #endif

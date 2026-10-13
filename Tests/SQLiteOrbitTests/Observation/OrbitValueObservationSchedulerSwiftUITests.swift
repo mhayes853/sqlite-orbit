@@ -23,6 +23,40 @@
 
       #expect(transactionIsImmediate)
       #expect(animationIsImmediate)
+      if #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) {
+        #expect(
+          Set([
+            animationScheduler,
+            OrbitMainActorValueObservationScheduler.mainActor.animation(.default)
+          ])
+          .count == 1
+        )
+      }
+      let deferred = animationScheduler.deferringInitialValue()
+      let deferredIsImmediate = deferred.immediateInitialValue(from: MainActor.shared)
+      #expect(!deferredIsImmediate)
+    }
+
+    @MainActor
+    @Test
+    func leadingDotSchedulersDeliverOnTheMainActor() {
+      let transactionScheduler:
+        OrbitTransactionValueObservationScheduler<
+          OrbitMainActorValueObservationScheduler
+        > = .transaction(Transaction(animation: .linear))
+      let animationScheduler:
+        OrbitAnimatedValueObservationScheduler<
+          OrbitMainActorValueObservationScheduler
+        > = .animation()
+
+      let transactionIsImmediate =
+        transactionScheduler.immediateInitialValue(from: MainActor.shared)
+      let animationIsImmediate =
+        animationScheduler.immediateInitialValue(from: MainActor.shared)
+
+      #expect(transactionIsImmediate)
+      #expect(animationIsImmediate)
+      #expect(animationScheduler == OrbitMainActorValueObservationScheduler.mainActor.animation())
     }
   }
 #endif

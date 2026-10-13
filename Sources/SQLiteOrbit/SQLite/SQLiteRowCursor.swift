@@ -34,12 +34,16 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   var preparedStatement: SQLitePreparedStatement?
 
   let authorizer: SQLiteAuthorizerDispatcher
+  let authorizationGeneration: UInt64
+  let connectionState: SQLiteConnectionState?
 
-  let observations: OrbitDatabaseTransactionObservationContext
+  let observations: SQLiteConnectionEvents
 
   var isExhausted = false
 
   var didPublishAccesses = false
+
+  let columnLookup = SQLiteRowColumnLookup()
 
   @_lifetime(borrow statements)
   init(
@@ -50,7 +54,8 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     library: UnsafePointer<SQLiteLibrary>,
     statements: borrowing SQLiteStatementCache,
     authorizer: SQLiteAuthorizerDispatcher,
-    observations: OrbitDatabaseTransactionObservationContext
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState?
   ) throws {
     let sql = query.text
     let preparedStatement =
@@ -77,11 +82,15 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     self.isCached = cached
     self.preparedStatement = preparedStatement
     self.authorizer = authorizer
+    self.authorizationGeneration = authorizer.generation
+    self.connectionState = connectionState
     self.observations = observations
+    if preparedStatement != nil { authorizer.activeCursors += 1 }
   }
 
   deinit {
     guard let preparedStatement else { return }
+    authorizer.activeCursors -= 1
     if isCached {
       statements.checkIn(preparedStatement, sql: sql)
     } else {
@@ -99,6 +108,26 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
   @_lifetime(&self)
   public mutating func next() throws -> SQLiteRow? {
     guard !isExhausted, let statement = preparedStatement?.pointer else { return nil }
+    guard authorizationGeneration == authorizer.generation else {
+      isExhausted = true
+      throw SQLiteError(
+        code: .misuse,
+        message: "A cursor cannot cross an authorization scope boundary",
+        sql: sql
+      )
+    }
+    // Preparation-time authorization does not run again when a cached statement is reused.
+    // Consult the live scope here, before any SQL executes or observations are published.
+    if preparedStatement?.controlsTransactions == true,
+      connectionState?.isInTransaction == false
+    {
+      isExhausted = true
+      throw SQLiteError(
+        code: .auth,
+        message: "Transaction control requires connection.transaction",
+        sql: sql
+      )
+    }
     if !didPublishAccesses {
       didPublishAccesses = true
       // SQLite may recompile a cached statement on its first step after another connection changed
@@ -166,6 +195,9 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
 /// }
 /// ```
 public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
+  @usableFromInline
+  let columnLookup: SQLiteRowColumnLookup
+
   #if StructuredQueries
     @usableFromInline
     var decoder: SQLiteRowDecoder
@@ -180,6 +212,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     @_lifetime(borrow cursor)
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.decoder = SQLiteRowDecoder(library: cursor.library, statement: statement)
+      self.columnLookup = cursor.columnLookup
     }
   #else
     @usableFromInline
@@ -193,6 +226,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
       self.library = cursor.library
       self.statement = statement
+      self.columnLookup = cursor.columnLookup
     }
   #endif
 
@@ -222,18 +256,9 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     return library.pointee.columns.value(statement, at: Int32(index))
   }
 
-  /// The value of the first column with a name, or `nil` when the row has no such column.
-  ///
-  /// Names are compared byte for byte against the ones SQLite holds, from left to right, so
-  /// finding a column allocates nothing.
-  ///
-  /// - Parameter name: The column's name.
-  public subscript(column name: String) -> OrbitDatabaseValue? {
-    for column in 0..<library.pointee.columns.count(statement)
-    where library.pointee.columns.hasName(name, statement, at: column) {
-      return library.pointee.columns.value(statement, at: column)
-    }
-    return nil
+  /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.
+  public func columnIndex(named name: String) -> Int? {
+    columnLookup.index(named: name, library: library, statement: statement)
   }
 
   private func precondition(index: Int) {

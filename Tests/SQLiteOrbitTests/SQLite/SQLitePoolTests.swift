@@ -10,13 +10,11 @@
 
     /// Runs `body` with a pool on a database file of its own, holding the table `items`.
     private func withPool(
-      readerCount: Int? = nil,
+      readerCount: Int = 5,
       _ body: (SQLitePool) async throws -> Void
     ) async throws {
       try await withTestDatabaseFile("pool") { file in
-        var configuration = SQLiteConfiguration.default
-        if let readerCount { configuration.readerCount = readerCount }
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(readerCount: readerCount)
         try await pool.execute(
           sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
         )
@@ -42,16 +40,18 @@
     func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.setupSQL = ["PRAGMA cache_size = 100"]
+        configuration.setups = [.sql("PRAGMA cache_size = 100")]
         let pool = try file.pool(configuration: configuration)
 
         // The pool's own setup for each role stays out of what its transactions report.
-        let readerSetup = try await pool.read { $0.configuration.setupSQL }
-        let writerSetup = try await pool.write { $0.configuration.setupSQL }
-        let connectionSetup = try await pool.writeWithoutTransaction { $0.configuration.setupSQL }
-        #expect(readerSetup == ["PRAGMA cache_size = 100"])
-        #expect(writerSetup == ["PRAGMA cache_size = 100"])
-        #expect(connectionSetup == ["PRAGMA cache_size = 100"])
+        let readerSetup = try await pool.read { $0.configuration.setups.count }
+        let writerSetup = try await pool.write { $0.configuration.setups.count }
+        let connectionSetup = try await pool.writeWithoutTransaction {
+          $0.configuration.setups.count
+        }
+        #expect(readerSetup == 1)
+        #expect(writerSetup == 1)
+        #expect(connectionSetup == 1)
       }
     }
 
@@ -59,22 +59,18 @@
       @Test
       func aZeroReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = 0
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: 0)
         }
       }
 
       @Test
       func aNegativeReaderCountFailsAPrecondition() async {
         await #expect(processExitsWith: .failure) {
-          var configuration = SQLiteConfiguration.default
-          configuration.readerCount = -1
           // The precondition runs before opening any connections. Swallow ordinary opening
           // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, configuration: configuration)
+          _ = try? SQLitePool(path: .memory, readerCount: -1)
         }
       }
     #endif
@@ -122,22 +118,21 @@
 
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
-        configuration.readerCount = 1
         configuration.maximumCachedStatements = 0
         configuration.library = library
-        let pool = try file.pool(configuration: configuration)
+        let pool = try file.pool(configuration: configuration, readerCount: 1)
         try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
         try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
 
         for _ in 0..<2 {
           #expect(
             try await pool.read {
-              try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
             } == ["One"]
           )
           #expect(
             try await pool.write {
-              try $0.fetchAll(#sql("SELECT title FROM items ORDER BY id", as: String.self))
+              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
             } == ["One"]
           )
         }
@@ -153,7 +148,7 @@
         let observedErrors = TestRecorder<String>()
         let observation = OrbitValueObservation<Int>
           .tracking { transaction in
-            try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction) ?? 0
           }
         let subscription = try observation.subscribe(
           to: pool,
@@ -168,7 +163,7 @@
           for id in 1...24 {
             group.addTask {
               try await pool.write { transaction in
-                try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+                try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
               }
             }
           }
@@ -190,9 +185,8 @@
 
         await #expect(throws: SQLiteError.self) {
           try await pool.read { transaction in
-            try transaction.fetchAll(
-              #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
-            )
+            try #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
+              .fetchAll(transaction)
           }
         }
       }
@@ -232,13 +226,13 @@
 
         let write = Task {
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "in flight") })
+            try Item.insert { Item(id: 1, title: "in flight") }.execute(transaction)
             try gate.enter()
           }
         }
         try await gate.waitUntilEntered()
 
-        let read = Task { try await pool.read { try $0.fetchAll(Item.all).count } }
+        let read = Task { try await pool.read { try Item.all.fetchAll($0).count } }
         // The read is queued behind the write, so it cannot have run yet.
         await Task.yield()
         gate.open()
@@ -261,7 +255,7 @@
         let write = Task {
           try await pool.write { transaction in
             wrote.withLock { $0 = true }
-            try transaction.execute(Item.insert { Item(id: 1, title: "after read") })
+            try Item.insert { Item(id: 1, title: "after read") }.execute(transaction)
           }
         }
         for _ in 0..<100 { await Task.yield() }
@@ -287,7 +281,7 @@
         let writer = Task {
           writerRequested.increment()
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "writer") })
+            try Item.insert { Item(id: 1, title: "writer") }.execute(transaction)
           }
         }
         try await writerRequested.waitForCount(1)
@@ -301,7 +295,7 @@
           .map { _ in
             Task {
               trailingRequested.increment()
-              return try await pool.read { try $0.fetchAll(Item.all).count }
+              return try await pool.read { try Item.all.fetchAll($0).count }
             }
           }
         try await trailingRequested.waitForCount(trailingReads.count)
@@ -326,10 +320,10 @@
 
         let write = Task {
           try await pool.write { transaction in
-            try transaction.execute(Item.insert { Item(id: 1, title: "never") })
+            try Item.insert { Item(id: 1, title: "never") }.execute(transaction)
           }
         }
-        let trailingRead = Task { try await pool.read { try $0.fetchAll(Item.all).count } }
+        let trailingRead = Task { try await pool.read { try Item.all.fetchAll($0).count } }
         for _ in 0..<100 { await Task.yield() }
         write.cancel()
         await #expect(throws: CancellationError.self) {

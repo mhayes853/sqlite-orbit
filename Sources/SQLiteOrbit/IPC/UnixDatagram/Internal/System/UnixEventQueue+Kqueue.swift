@@ -91,7 +91,7 @@
         udata: nil
       )
       guard systemKevent(self.descriptor.rawValue, &change, 1, nil, 0, nil) == 0 else {
-        throw UnixSystemError.last("kevent")
+        throw UnixDatagramIPCTransport.SystemError.last("kevent")
       }
     }
   }

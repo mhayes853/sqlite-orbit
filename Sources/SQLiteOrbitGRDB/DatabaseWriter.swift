@@ -20,7 +20,7 @@
     var path: String { get }
     var configuration: Configuration { get }
     /// The native handle used for access, migrations, and observation. Wrappers preserve its identity.
-    var orbitDatabase: any OrbitObservableDatabase { get }
+    var orbitDatabase: any OrbitObservableDatabaseWriter { get }
     @_disfavoredOverload
     func read<T>(_ value: (Database) throws -> T) throws -> T
     func read<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T
@@ -52,7 +52,7 @@
       guard let info = (orbitDatabase as? any SQLiteGRDBDatabaseMetadata)?.grdbDatabaseInfo else {
         preconditionFailure("the custom Orbit driver does not expose database metadata")
       }
-      return Configuration(native: info.configuration)
+      return Configuration(native: info.configuration, readerCount: info.readerCount)
     }
     @_disfavoredOverload
     public func read<T>(_ value: (Database) throws -> T) throws -> T {
@@ -160,68 +160,66 @@
   }
 
   extension SQLiteOrbit.SQLiteQueue: DatabaseWriter {
-    public var orbitDatabase: any OrbitObservableDatabase { self }
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { self }
   }
   extension SQLiteOrbit.SQLitePool: DatabaseWriter {
-    public var orbitDatabase: any OrbitObservableDatabase { self }
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { self }
   }
   extension SQLiteOrbit.OrbitIPCDatabase: DatabaseWriter {
-    public var orbitDatabase: any OrbitObservableDatabase { self }
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { self }
   }
   #if Turso
     extension SQLiteOrbit.TursoPool: DatabaseWriter {
-      public var orbitDatabase: any OrbitObservableDatabase { self }
+      public var orbitDatabase: any OrbitObservableDatabaseWriter { self }
     }
   #endif
 
   public struct Configuration: Sendable {
-    public var foreignKeysEnabled = true
+    private(set) var native: SQLiteConfiguration
     public var maximumReaderCount = 5
-    public var busyMode: Database.BusyMode = .immediateError
-    public var library: SQLiteLibrary
-    private var base: SQLiteConfiguration?
-    var preparations: [@Sendable (Database) throws -> Void] = []
-    public init(library: SQLiteLibrary) { self.library = library }
+    public var foreignKeysEnabled: Bool {
+      get { native.isForeignKeysEnabled }
+      set { native.isForeignKeysEnabled = newValue }
+    }
+    public var library: SQLiteLibrary {
+      get { native.library }
+      set { native.library = newValue }
+    }
+    public var busyMode: Database.BusyMode {
+      get {
+        switch native.busyPolicy {
+        case .handler(let callback): return .callback(callback)
+        case .waitIndefinitely: return .timeout(Double(Int32.max) / 1000)
+        case .timeout(let duration):
+          if duration == .zero { return .immediateError }
+          let parts = duration.components
+          return .timeout(Double(parts.seconds) + Double(parts.attoseconds) / 1e18)
+        }
+      }
+      set {
+        switch newValue {
+        case .immediateError: native.busyPolicy = .timeout(.zero)
+        case .timeout(let seconds): native.busyPolicy = .timeout(.seconds(seconds))
+        case .callback(let callback): native.busyPolicy = .handler(callback)
+        }
+      }
+    }
+    public init(library: SQLiteLibrary) {
+      native = SQLiteConfiguration(library: library, busyPolicy: .timeout(.zero))
+    }
     #if BuiltInSQLite
-      public init() { library = SQLiteConfiguration.default.library }
+      public init() { self.init(library: SQLiteConfiguration.default.library) }
     #endif
     public mutating func prepareDatabase(_ setup: @escaping @Sendable (Database) throws -> Void) {
-      preparations.append(setup)
-    }
-    init(native: SQLiteConfiguration) {
-      base = native
-      library = native.library
-      foreignKeysEnabled = native.isForeignKeysEnabled
-      maximumReaderCount = native.readerCount
-      if let callback = native.busyHandler {
-        busyMode = .callback(callback)
-      } else {
-        switch native.busyTimeout {
-        case .maximum: busyMode = .timeout(Double(Int32.max) / 1000)
-        case .limit(let duration):
-          let parts = duration.components
-          busyMode = .timeout(Double(parts.seconds) + Double(parts.attoseconds) / 1e18)
+      native.setups.append(
+        SQLiteSetup { connection in
+          try connection.withGRDBAccess { try setup(Database($0)) }
         }
-      }
+      )
     }
-    var native: SQLiteConfiguration {
-      var result = base ?? SQLiteConfiguration(library: library)
-      result.library = library
-      result.readerCount = maximumReaderCount
-      result.isForeignKeysEnabled = foreignKeysEnabled
-      result.busyHandler = nil
-      switch busyMode {
-      case .immediateError: result.busyTimeout = .limit(.zero)
-      case .timeout(let seconds): result.busyTimeout = .limit(.seconds(seconds))
-      case .callback(let callback): result.busyHandler = callback
-      }
-      result.connectionSetups += preparations.map { preparation in
-        SQLiteOrbit.SQLiteConnectionSetup { connection in
-          try connection.withGRDBAccess { try preparation(Database($0)) }
-          return 0
-        }
-      }
-      return result
+    init(native: SQLiteConfiguration, readerCount: Int) {
+      self.native = native
+      maximumReaderCount = readerCount
     }
   }
   extension Database {
@@ -232,7 +230,7 @@
     }
   }
   public final class DatabaseQueue: DatabaseWriter {
-    public let orbitDatabase: any OrbitObservableDatabase
+    public let orbitDatabase: any OrbitObservableDatabaseWriter
     public let path: String
     public let configuration: Configuration
     public convenience init(configuration: Configuration) throws {
@@ -250,23 +248,27 @@
     }
   }
   public final class DatabasePool: DatabaseWriter {
-    public let orbitDatabase: any OrbitObservableDatabase
+    public let orbitDatabase: any OrbitObservableDatabaseWriter
     public let path: String
     public let configuration: Configuration
     public init(path: String, configuration: Configuration) throws {
       self.path = path
       self.configuration = configuration
       orbitDatabase = try translate {
-        try SQLitePool(path: OrbitDatabasePath(path), configuration: configuration.native)
+        try SQLitePool(
+          path: OrbitDatabasePath(path),
+          configuration: configuration.native,
+          readerCount: configuration.maximumReaderCount
+        )
       }
     }
   }
   public final class AnyDatabaseReader: DatabaseReader {
-    public let orbitDatabase: any OrbitObservableDatabase
+    public let orbitDatabase: any OrbitObservableDatabaseWriter
     public init(_ reader: any DatabaseReader) { orbitDatabase = reader.orbitDatabase }
   }
   public final class AnyDatabaseWriter: DatabaseWriter {
-    public let orbitDatabase: any OrbitObservableDatabase
+    public let orbitDatabase: any OrbitObservableDatabaseWriter
     public init(_ writer: any DatabaseWriter) { orbitDatabase = writer.orbitDatabase }
   }
 

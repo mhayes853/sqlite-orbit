@@ -70,7 +70,7 @@ public struct SQLiteKey: Sendable {
   /// Calls `body` with the key's bytes.
   ///
   /// This is how a caller reaches the material for work the package does not model — calling a
-  /// build's `sqlite3_rekey_v2` from a ``SQLiteConnectionSetup``, or keying a database brought in
+  /// build's `sqlite3_rekey_v2` from a ``SQLiteSetup``, or keying a database brought in
   /// with `ATTACH`.
   ///
   /// The buffer is only valid for the call. Copying it out puts the key somewhere this type cannot
@@ -110,22 +110,4 @@ extension SQLiteKey: CustomStringConvertible, CustomDebugStringConvertible {
 
   /// Redacted, so that logging a configuration cannot spill the key.
   public var debugDescription: String { description }
-}
-
-/// A key was set for a SQLite build that has no codec to unlock a database with.
-///
-/// Thrown when a connection is opened with a ``SQLiteConfiguration/key`` but a
-/// ``SQLiteLibrary`` whose ``SQLiteLibrary/encryption`` is `nil`. Stock SQLite has no
-/// `sqlite3_key_v2`, so this is a fact about the build rather than a claim about it.
-public struct SQLiteEncryptionUnavailableError: Error, CustomStringConvertible, Sendable {
-  /// Creates the error.
-  public init() {}
-
-  /// Explains that the build has no codec.
-  public var description: String {
-    """
-    A key was set for a SQLite build with no codec. Supply a SQLiteLibrary whose `encryption` \
-    entry points come from a build that has one, such as SQLCipher.
-    """
-  }
 }

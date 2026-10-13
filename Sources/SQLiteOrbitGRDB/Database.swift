@@ -29,14 +29,10 @@
           guard let text = part.statement else { break }
           let bound = try bindArguments(arguments, sql: text, allowRemaining: true)
           let cursor = try access.cursor(
-            SQLiteOrbit.SQL(text: bound.sql, bindings: bound.values.map(\.orbitValue))
+            SQLiteOrbit.SQL(text: text, bindings: bound.values.map(\.orbitValue))
           )
           while try cursor.next() != nil {}
-          arguments =
-            StatementArguments(Array(arguments.values.dropFirst(bound.consumed)))
-            + StatementArguments(
-              arguments.namedValues.mapValues { $0 as (any DatabaseValueConvertible)? }
-            )
+          arguments.consume(bound.consumed)
           remaining = part.remainder
         }
         if !arguments.values.isEmpty {
@@ -105,7 +101,7 @@
         )
         return RowCursor(
           try access.cursor(
-            SQLiteOrbit.SQL(text: bound.sql, bindings: bound.values.map(\.orbitValue)),
+            SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
             cached: cached
           ),
           sql: sql,

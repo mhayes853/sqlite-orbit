@@ -37,8 +37,8 @@ public protocol OrbitDatabaseReader: Sendable {
   /// Runs `body` with a connection that reads outside a transaction.
   ///
   /// Each statement runs in its own implicit transaction, so consecutive statements may see
-  /// different states of the database. Call ``SQLiteReadConnection/transaction(_:)`` for a
-  /// consistent snapshot. A ``SQLiteReadConnection/busyTimeout`` that `body` changes is restored
+  /// different states of the database. Call ``SQLiteReadConnection/transaction(observer:_:)`` for a
+  /// consistent snapshot. A ``SQLiteReadConnection/busyPolicy`` that `body` changes is restored
   /// when the access ends, even when `body` throws. Any other pragma that `body` changes stays
   /// changed on the connection, so restore it before returning.
   ///
@@ -116,17 +116,17 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   ///
   /// Each statement commits on its own as it finishes, so a `body` that throws leaves every
   /// statement before the failing one committed. Group statements that must commit together with
-  /// ``SQLiteWriteConnection/transaction(_:)``. This is for the work a transaction gets in the way
+  /// ``SQLiteWriteConnection/transaction(mode:observer:_:)``. This is for the work a transaction gets in the way
   /// of, such as turning foreign keys off, which has no effect inside one.
   /// The access is a barrier like ``write(_:)``.
   ///
-  /// The ``SQLiteWriteConnection/busyTimeout`` and foreign key enforcement that `body` changes
+  /// The ``SQLiteWriteConnection/busyPolicy`` and foreign key enforcement that `body` changes
   /// through the connection are restored when the access ends, even when `body` throws. Any other
   /// pragma that `body` changes stays changed on the connection, so restore it before returning.
   ///
   /// ```swift
   /// try await database.writeWithoutTransaction { connection in
-  ///   connection.isForeignKeysEnabled = false
+  ///   try connection.setForeignKeysEnabled(false)
   ///   try connection.transaction { transaction in
   ///     try transaction.execute("DROP TABLE reminders")
   ///   }
@@ -143,7 +143,7 @@ public protocol OrbitDatabaseWriter: OrbitDatabaseReader {
   /// Runs `body` with a connection that writes outside a transaction, blocking the calling thread
   /// until it finishes.
   ///
-  /// Each statement commits on its own as it finishes. The busy timeout and foreign key
+  /// Each statement commits on its own as it finishes. The busy policy and foreign key
   /// enforcement that `body` changes through the connection are restored when the access ends;
   /// any other pragma that `body` changes stays changed on the connection, so restore it before
   /// returning. The access is a barrier like ``writeBlocking(_:)``.

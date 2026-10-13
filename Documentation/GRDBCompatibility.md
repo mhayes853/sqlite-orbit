@@ -95,6 +95,8 @@ Observation uses native authorizer/cache metadata. Native writes and overlay wri
 tracked regions. Explicit constant regions resolve inside the first observation read, avoiding a
 blocking read when an async sequence is constructed. An observation can coalesce intermediate
 changes; use `removeDuplicates` when equal fetched values should be suppressed.
+Each subscription or async iterator starts its own observation runtime, with independent reducer
+state and lifecycle callbacks, matching GRDB even though native Orbit observations share runtimes.
 
 ## Compatibility boundaries
 

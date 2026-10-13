@@ -6,9 +6,11 @@
 public struct SQLiteGRDBDatabaseInfo: Sendable {
   public let path: OrbitDatabasePath
   public let configuration: SQLiteConfiguration
-  public init(path: OrbitDatabasePath, configuration: SQLiteConfiguration) {
+  public let readerCount: Int
+  public init(path: OrbitDatabasePath, configuration: SQLiteConfiguration, readerCount: Int = 1) {
     self.path = path
     self.configuration = configuration
+    self.readerCount = readerCount
   }
 }
 
@@ -23,9 +25,10 @@ public final class SQLiteGRDBAccess {
   let library: UnsafePointer<SQLiteLibrary>
   let statements: SQLiteStatementCache
   let authorizer: SQLiteAuthorizerDispatcher
-  let observations: OrbitDatabaseTransactionObservationContext
+  let observations: SQLiteConnectionEvents
   let readOnly: Bool
   let configuration: UnsafePointer<SQLiteConfiguration>
+  let connectionState: SQLiteConnectionState?
   private let thread = ThreadID.current
   private var active = true
   private var cursors: [SQLiteGRDBCursor] = []
@@ -38,6 +41,7 @@ public final class SQLiteGRDBAccess {
     statements = transaction.statements
     authorizer = transaction.authorizer
     observations = transaction.observations
+    connectionState = transaction.connectionState
     self.readOnly = readOnly
     configuration = transaction.access.configurationPointer
     transactionWasOpen = transaction.sqlite.connections.isAutocommit(transaction.connection) == 0
@@ -46,14 +50,10 @@ public final class SQLiteGRDBAccess {
   init(setup access: borrowing SQLiteConnectionAccess) {
     connection = access.sqliteConnection
     library = access.libraryPointer
-    authorizer = SQLiteAuthorizerDispatcher()
-    statements = SQLiteStatementCache(
-      library: access.libraryPointer,
-      connection: access.sqliteConnection,
-      authorizer: authorizer,
-      capacity: 0
-    )
-    observations = OrbitDatabaseTransactionObservationContext(databaseObservers: nil)
+    authorizer = access.authorizer
+    statements = access.statements
+    observations = SQLiteConnectionEvents()
+    connectionState = nil
     readOnly = false
     configuration = access.configurationPointer
     transactionWasOpen = access.sqlite.connections.isAutocommit(access.sqliteConnection) == 0
@@ -75,7 +75,6 @@ public final class SQLiteGRDBAccess {
   }
 
   public var sqliteConnection: OpaquePointer { connection }
-  public var sqlite: SQLiteLibrary { library.pointee }
   public var changesCount: Int64 { library.pointee.connections.changes(connection) }
   public var lastInsertedRowID: Int64 { library.pointee.connections.lastInsertedRowID(connection) }
   public var isInsideTransaction: Bool { library.pointee.connections.isAutocommit(connection) == 0 }
@@ -171,9 +170,11 @@ public final class SQLiteGRDBAccess {
     return (names, prepared.readRegion)
   }
 
-  public func install(_ setup: SQLiteConnectionSetup) throws {
+  public func withConnectionAccess<Result>(
+    _ body: (borrowing SQLiteConnectionAccess) throws -> Result
+  ) throws -> Result {
     try checkAccess()
-    try setup(SQLiteConnectionAccess(grdbAccess: self))
+    return try body(SQLiteConnectionAccess(grdbAccess: self))
   }
 }
 
@@ -182,6 +183,7 @@ public final class SQLiteGRDBCursor {
   private let access: SQLiteGRDBAccess
   private let sql: String
   private let cached: Bool
+  private let authorizationGeneration: UInt64
   var prepared: SQLitePreparedStatement?
   private var published = false
   private var exhausted = false
@@ -192,6 +194,7 @@ public final class SQLiteGRDBCursor {
     self.access = access
     self.sql = sql.text
     self.cached = cached
+    authorizationGeneration = access.authorizer.generation
     prepared =
       cached
       ? try access.statements.checkOut(sql.text, requiresReadOnly: access.readOnly)
@@ -202,6 +205,7 @@ public final class SQLiteGRDBCursor {
         .map {
           access.library.pointee.columns.name(prepared.pointer, $0).map(String.init(cString:)) ?? ""
         }
+      access.authorizer.activeCursors += 1
       do {
         guard access.library.pointee.bindings.parameterCount(prepared.pointer) == sql.bindings.count
         else {
@@ -222,6 +226,7 @@ public final class SQLiteGRDBCursor {
   // The access retains a cursor until it is closed, so destruction never touches an expired handle.
   func close() {
     guard let prepared else { return }
+    access.authorizer.activeCursors -= 1
     if cached {
       access.statements.checkIn(prepared, sql: sql)
     } else {
@@ -241,6 +246,22 @@ public final class SQLiteGRDBCursor {
   public func next() throws -> [(String, OrbitDatabaseValue)]? {
     try access.checkAccess()
     guard !exhausted, let statement = prepared?.pointer else { return nil }
+    guard authorizationGeneration == access.authorizer.generation else {
+      close()
+      throw SQLiteError(
+        code: .misuse,
+        message: "A cursor cannot cross an authorization scope boundary",
+        sql: sql
+      )
+    }
+    if prepared?.controlsTransactions == true, access.connectionState?.isInTransaction == false {
+      close()
+      throw SQLiteError(
+        code: .auth,
+        message: "Transaction control requires connection.transaction",
+        sql: sql
+      )
+    }
     let code: Int32
     if !published {
       published = true
@@ -338,7 +359,7 @@ extension SQLiteWriteConnection {
     access.runTransaction = { operation in
       do {
         try state.inTransaction {
-          try handle.pointee.runWrite(observations: observations) { transaction in
+          try handle.pointee.runWrite(mode: .immediate, observations: observations) { transaction in
             try transaction.withGRDBAccess { nestedAccess in
               if try !operation(nestedAccess) { throw SQLiteGRDBRollback() }
             }

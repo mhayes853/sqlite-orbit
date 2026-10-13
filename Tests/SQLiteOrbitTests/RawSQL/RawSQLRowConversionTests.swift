@@ -1,0 +1,432 @@
+#if BuiltInSQLite
+  import Testing
+
+  @testable import SQLiteOrbit
+
+  @Suite
+  struct RawSQLRowConversionTests {
+    @Test
+    func rawRequestsPreserveBindingsIdentityAndRowDecoding() async throws {
+      let database = try inMemoryDatabase()
+      let id = 42
+      let sql: SQL = "SELECT 7 AS scalar, \(id) AS id"
+      let request = sql.allRowsRequest(as: DualRecord.self)
+      let equal = sql.allRowsRequest(as: DualRecord.self)
+      let different: SQL = "SELECT 7 AS scalar, \(43) AS id"
+      #expect(Set([request, equal, different.allRowsRequest(as: DualRecord.self)]).count == 2)
+      #expect(request.sql.bindings == [.integer(42)])
+      let observation = request.observation()
+      #expect(observation.identity == equal.observation().identity)
+      try await database.read { transaction throws in
+        #expect(try request.fetch(transaction).map(\.id) == [42])
+        #expect(try sql.firstRowRequest(as: DualRecord.self).fetch(transaction)?.id == 42)
+        #expect(try sql.requiredFirstRowRequest(as: DualRecord.self).fetch(transaction).id == 42)
+        let empty: SQL = "SELECT 1 AS id WHERE 0"
+        #expect(try empty.allRowsRequest(as: DualRecord.self).fetch(transaction).isEmpty)
+        #expect(try empty.firstRowRequest(as: DualRecord.self).fetch(transaction) == nil)
+        #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try empty.requiredFirstRowRequest(as: DualRecord.self).fetch(transaction)
+        }
+        #expect(throws: Rejection.self) {
+          try sql.requiredFirstRowRequest(as: RejectedRecord.self).fetch(transaction)
+        }
+      }
+      // Borrowed connections already support lazy row decoding outside a transaction.
+      let ids = try await database.readWithoutTransaction {
+        try $0.fetchCursor(sql, as: DualRecord.self).map(\.id).collect()
+      }
+      #expect(ids == [42])
+    }
+
+    @Test
+    func rawRequestsDriveFetchPropertiesAndObserveChanges() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write { try $0.execute("CREATE TABLE records (id INTEGER)") }
+      let sql: SQL = "SELECT id FROM records ORDER BY id"
+      @Fetch(sql.allRowsRequest(as: DualRecord.self), database: database)
+      var records = [DualRecord]()
+      var values = $records.values.makeAsyncIterator()
+      #expect(await values.next()?.isEmpty == true)
+      try await database.write { try $0.execute("INSERT INTO records VALUES (42)") }
+      #expect(await values.next()?.map(\.id) == [42])
+    }
+
+    @Test
+    func aValueTypesOwnRowInitializerWinsOverItsFirstColumn() async throws {
+      let database = try inMemoryDatabase()
+      let sql: SQL = "SELECT 7 AS scalar, 42 AS id"
+      let (all, first, generic, cursor, scalar) = try await database.read { transaction in
+        (
+          try transaction.fetchAll(sql, as: DualRecord.self),
+          try transaction.fetchOne(sql, as: DualRecord.self),
+          try fetchDual(DualRecord.self, sql: sql, in: transaction),
+          try transaction.fetchCursor(sql, as: DualRecord.self).collect(),
+          try transaction.fetchOne(sql) { try $0[0, as: DualRecord.self] }
+        )
+      }
+      #expect(all.map(\.id) == [42])
+      #expect(first?.id == 42)
+      #expect(generic.map(\.id) == [42])
+      #expect(cursor.map(\.id) == [42])
+      #expect(scalar?.id == 7)
+      try await database.write { transaction in
+        try transaction.execute("CREATE TABLE dual_records (id INTEGER)")
+        var inserted = try transaction.executeRowCursor(
+          "INSERT INTO dual_records VALUES (42) RETURNING 7 AS scalar, id"
+        )
+        #expect(try inserted.collect(as: DualRecord.self).map(\.id) == [42])
+        var updated = try transaction.executeRowCursor(
+          "UPDATE dual_records SET id = 43 RETURNING 7 AS scalar, id",
+          cached: true
+        )
+        #expect(try updated.first(as: DualRecord.self)?.id == 43)
+        #expect(
+          try fetchDual(DualRecord.self, sql: sql, in: transaction).map(\.id) == [42]
+        )
+        #expect(
+          try transaction
+            .executeCursor(
+              "DELETE FROM dual_records RETURNING 7 AS scalar, id",
+              as: DualRecord.self
+            )
+            .collect().map(\.id) == [43]
+        )
+      }
+    }
+
+    @Test
+    func namedLookupIsPreparedOnceAndSharedAcrossRows() async throws {
+      let names = TestCounter()
+      var configuration = SQLiteConfiguration.default
+      let name = configuration.library.columns.name
+      configuration.library.columns.name = { statement, index in
+        names.increment()
+        return name(statement, index)
+      }
+      let database = try inMemoryDatabase(configuration: configuration)
+      try await database.read { transaction in
+        var cursor = try transaction.rowCursor(
+          "SELECT 1 AS id, 'Milk' AS title UNION ALL SELECT 2, 'Tea'"
+        )
+        let baseline = names.value
+        if let row = try cursor.next() {
+          #expect(names.value == baseline)
+          #expect(row.columnIndex(named: "title") == 1)
+          #expect(names.value == baseline + 2)
+          #expect(try row[column: "id", as: Int.self] == 1)
+          #expect(row[column: "title"] == .text("Milk"))
+          #expect(row.columnIndex(named: "missing") == nil)
+          #expect(names.value == baseline + 2)
+        } else {
+          Issue.record("Expected a first row")
+        }
+        if let row = try cursor.next() {
+          #expect(try row[column: "title", as: String.self] == "Tea")
+          #expect(names.value == baseline + 2)
+        } else {
+          Issue.record("Expected a second row")
+        }
+      }
+    }
+
+    @Test
+    func lookupsMatchExactBytesAndKeepTheFirstDuplicate() async throws {
+      let database = try inMemoryDatabase()
+      let indices = try await database.read { transaction in
+        try transaction.fetchOne(
+          "SELECT 1 AS id, 2 AS id, 3 AS ID, 4 AS \(quote: "é"), 5 AS \(quote: "e\u{301}")"
+        ) { row in
+          (
+            row.columnIndex(named: "id"), row.columnIndex(named: "ID"),
+            row.columnIndex(named: "é"), row.columnIndex(named: "e\u{301}"),
+            try row[column: "id", as: Int.self],
+            try row[column: "e\u{301}", as: Int.self]
+          )
+        }
+      }
+      let result = try #require(indices)
+      #expect(result.0 == 0)
+      #expect(result.1 == 2)
+      #expect(result.2 == 3)
+      #expect(result.3 == 4)
+      #expect(result.4 == 1)
+      #expect(result.5 == 5)
+    }
+
+    @Test
+    func defaultLookupAndTypedReadsUseTheProtocolRequirement() throws {
+      let fallback = ArrayRow(names: ["id", "title", "id"], values: [1, "Milk", 2])
+      #expect(fallback.columnIndex(named: "id") == 0)
+      #expect(fallback.columnIndex(named: "ID") == nil)
+      #expect(try fallback[column: "title", as: String.self] == "Milk")
+      let indexed = IndexedRow()
+      #expect(try indexed[column: "id", as: Int.self] == 7)
+      #expect(indexed[column: "id"] == .integer(7))
+    }
+
+    @Test
+    func readFetchesAndLazyAlgorithmsInitializeOwnedValues() async throws {
+      let database = try inMemoryDatabase()
+      let (all, first, none, titles) = try await database.read { transaction in
+        (
+          try transaction.fetchAll(recordsSQL, as: Record.self),
+          try transaction.fetchOne(recordsSQL, as: Record.self),
+          try transaction.fetchOne("SELECT 1 WHERE 0", as: Record.self),
+          try transaction.fetchCursor(recordsSQL, as: Record.self)
+            .filter { $0.id > 1 }
+            .map(\.title)
+            .collect()
+        )
+      }
+      #expect(
+        all == [.init(id: 1, title: "Milk", priority: nil), .init(id: 2, title: "Tea", priority: 3)]
+      )
+      #expect(first == all.first)
+      #expect(none == nil)
+      #expect(titles == ["Tea"])
+    }
+
+    @Test
+    func emptyQueriesAndFailedPreparationDoNotInitializeValues() async throws {
+      let database = try inMemoryDatabase()
+      let empty = try await database.read { try $0.fetchAll("", as: Record.self) }
+      #expect(empty.isEmpty)
+      await #expect(throws: SQLiteError.self) {
+        try await database.read { try $0.fetchAll("SELECT FROM", as: Record.self) }
+      }
+    }
+
+    @Test
+    func missingOptionalColumnsAndInvalidValuesPropagateColumnErrors() async throws {
+      let database = try inMemoryDatabase()
+      let missing = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+        try await database.read {
+          try $0.fetchAll("SELECT 1 AS id, 'Milk' AS title", as: Record.self)
+        }
+      }
+      #expect(missing?.columnName == "priority")
+      #expect(missing?.columnIndex == nil)
+      let invalid = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+        try await database.read {
+          try $0.fetchCursor(
+            "SELECT 'bad' AS id, 'Milk' AS title, NULL AS priority",
+            as: Record.self
+          )
+          .collect()
+        }
+      }
+      #expect(invalid?.columnName == "id")
+      #expect(invalid?.columnIndex == 0)
+    }
+
+    @Test
+    func fetchOneDoesNotInitializeLaterRowsAndCustomErrorsPropagate() async throws {
+      let database = try inMemoryDatabase()
+      let first = try await database.read {
+        try $0.fetchOne(
+          "SELECT 1 AS id, 'Milk' AS title, NULL AS priority UNION ALL SELECT 'bad', 'Tea', 3",
+          as: Record.self
+        )
+      }
+      #expect(first?.id == 1)
+      await #expect(throws: Rejection.self) {
+        try await database.read { try $0.fetchAll("SELECT 1", as: RejectedRecord.self) }
+      }
+    }
+
+    @Test
+    func writerCursorsAndExecuteCursorDecodeReturningRows() async throws {
+      let database = try inMemoryDatabase()
+      let (inserted, updated, deleted) = try await database.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE records (id INTEGER PRIMARY KEY, title TEXT, priority INTEGER)"
+        )
+        var insertedCursor = try transaction.executeRowCursor(
+          "INSERT INTO records VALUES (1, 'Milk', NULL), (2, 'Tea', 3) RETURNING *"
+        )
+        let inserted = try insertedCursor.collect(as: Record.self)
+        var updatedCursor = try transaction.executeRowCursor(
+          "UPDATE records SET title = 'Coffee' WHERE id = 2 RETURNING *"
+        )
+        let updated = try updatedCursor.first(as: Record.self)
+        let deleted =
+          try transaction.executeCursor("DELETE FROM records RETURNING *", as: Record.self)
+          .collect()
+        return (inserted, updated, deleted)
+      }
+      #expect(inserted.count == 2)
+      #expect(updated == .init(id: 2, title: "Coffee", priority: 3))
+      #expect(deleted.count == 2)
+      let count = try await database.read {
+        try $0.fetchOne("SELECT count(*) FROM records", as: Int.self)
+      }
+      #expect(count == 0)
+    }
+
+    @Test
+    func valueTypesReadTheFirstColumnThroughEveryRowAPI() async throws {
+      let database = try inMemoryDatabase()
+      let sql: SQL = "SELECT 1 AS id, 'Milk' AS title UNION ALL SELECT NULL, 'Tea'"
+      let (all, first, cursor, terminal, bytes) = try await database.read { transaction in
+        var rows = try transaction.rowCursor(sql)
+        let terminal = try rows.collect(as: Int?.self)
+        return (
+          try transaction.fetchAll(sql, as: Int?.self),
+          try transaction.fetchOne(sql, as: Int.self),
+          try transaction.fetchCursor(sql, as: Int?.self).collect(),
+          terminal,
+          try transaction.fetchOne("SELECT x'0102'", as: [UInt8].self)
+        )
+      }
+      #expect(all == [1, nil])
+      #expect(first == 1)
+      #expect(cursor == [1, nil])
+      #expect(terminal == [1, nil])
+      #expect(bytes == [1, 2])
+      // The first column reads exactly as the row subscript does, so `NULL` read as a type that is
+      // not optional names the column.
+      await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+        try await database.read { try $0.fetchAll(sql, as: Int.self) }
+      }
+      #expect(Int?.self is any ConvertibleFromOrbitDatabaseRow.Type)
+    }
+
+    @Test
+    func rowCursorTerminalsReadReturningRows() async throws {
+      let database = try inMemoryDatabase()
+      let (ids, titles, firstID, visited, deleted) = try await database.write { transaction in
+        try transaction.execute(
+          "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
+        )
+        var inserted = try transaction.executeRowCursor(
+          """
+          INSERT INTO reminders (title, isCompleted)
+          VALUES ('Milk', 1), ('Tea', 0), ('Coffee', 1)
+          RETURNING id
+          """
+        )
+        let ids = try inserted.collect(as: Int.self)
+        var selected = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        let titles = try selected.collect { row in row[0].textValue ?? "" }
+        var firstCursor = try transaction.rowCursor("SELECT id FROM reminders ORDER BY id DESC")
+        let firstID = try firstCursor.first { row in row[0].integerValue }
+        var visited: [String] = []
+        var iterated = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        try iterated.forEach { row in
+          visited.append(row[0].textValue ?? "")
+          return visited.count == 2 ? .stop : .next
+        }
+        var cursor = try transaction.executeRowCursor(
+          "DELETE FROM reminders WHERE isCompleted RETURNING id"
+        )
+        let deleted = try cursor.collect(as: Int.self)
+        return (ids, titles, firstID, visited, deleted)
+      }
+      #expect(ids == [1, 2, 3])
+      #expect(titles == ["Milk", "Tea", "Coffee"])
+      #expect(firstID == 3)
+      #expect(visited == ["Milk", "Tea"])
+      #expect(deleted.sorted() == [1, 3])
+      #expect(
+        try await database.read { try $0.fetchAll("SELECT id FROM reminders", as: Int.self) } == [2]
+      )
+    }
+
+    @Test
+    func readTransactionsRejectWritesAndMappingsFollowNewQueryLayouts() async throws {
+      let database = try inMemoryDatabase()
+      await #expect(throws: SQLiteError.self) {
+        try await database.read {
+          try $0.fetchAll("CREATE TABLE forbidden (id INTEGER)", as: Record.self)
+        }
+      }
+      try await database.write {
+        try $0.execute(
+          "CREATE VIEW projection AS SELECT 1 AS id, 'Milk' AS title, NULL AS priority"
+        )
+      }
+      let before = try await database.read {
+        try $0.fetchAll("SELECT * FROM projection", as: Record.self)
+      }
+      try await database.write { transaction in
+        try transaction.execute("DROP VIEW projection")
+        try transaction.execute(
+          "CREATE VIEW projection AS SELECT NULL AS priority, 'Milk' AS title, 1 AS id"
+        )
+      }
+      let after = try await database.read {
+        try $0.fetchAll("SELECT * FROM projection", as: Record.self)
+      }
+      #expect(before == after)
+    }
+  }
+
+  private let recordsSQL: SQL =
+    "SELECT NULL AS priority, 'Milk' AS title, 1 AS id UNION ALL SELECT 3, 'Tea', 2"
+
+  private struct Record: ConvertibleFromOrbitDatabaseRow, Equatable, Sendable {
+    let id: Int
+    let title: String
+    let priority: Int?
+
+    init(id: Int, title: String, priority: Int?) {
+      self.id = id
+      self.title = title
+      self.priority = priority
+    }
+
+    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(orbitDatabaseRow row: borrowing Row) throws
+    {
+      id = try row[column: "id", as: Int.self]
+      title = try row[column: "title", as: String.self]
+      priority = try row[column: "priority", as: Int?.self]
+    }
+  }
+
+  private struct ArrayRow: OrbitDatabaseRow {
+    let names: [String]
+    let values: [OrbitDatabaseValue]
+    var columnCount: Int { names.count }
+    func columnName(at index: Int) -> String { names[index] }
+    subscript(index: Int) -> OrbitDatabaseValue { values[index] }
+  }
+
+  private struct IndexedRow: OrbitDatabaseRow {
+    var columnCount: Int { 1 }
+    func columnName(at index: Int) -> String {
+      fatalError("Successful typed reads must use columnIndex")
+    }
+    func columnIndex(named name: String) -> Int? { name == "id" ? 0 : nil }
+    subscript(index: Int) -> OrbitDatabaseValue { .integer(7) }
+  }
+
+  private struct Rejection: Error {}
+  private struct DualRecord:
+    ConvertibleFromOrbitDatabaseRow, ConvertibleFromOrbitDatabaseValue, Sendable
+  {
+    let id: Int
+
+    init(orbitDatabaseValue value: OrbitDatabaseValue) throws {
+      id = try Int(orbitDatabaseValue: value)
+    }
+
+    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(orbitDatabaseRow row: borrowing Row) throws
+    {
+      id = try row[column: "id", as: Int.self]
+    }
+  }
+
+  private func fetchDual<
+    Value: ConvertibleFromOrbitDatabaseRow & ConvertibleFromOrbitDatabaseValue,
+    Transaction: OrbitDatabaseReadTransaction & ~Copyable & ~Escapable
+  >(_ type: Value.Type, sql: SQL, in transaction: borrowing Transaction) throws -> [Value] {
+    try transaction.fetchAll(sql, as: type)
+  }
+
+  private struct RejectedRecord: ConvertibleFromOrbitDatabaseRow, Sendable {
+    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(orbitDatabaseRow row: borrowing Row) throws
+    {
+      throw Rejection()
+    }
+  }
+#endif

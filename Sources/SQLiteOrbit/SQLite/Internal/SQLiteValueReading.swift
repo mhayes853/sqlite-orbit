@@ -34,18 +34,6 @@ extension SQLiteLibrary.Columns {
     guard byteCount > 0 else { return [] }
     return [UInt8](UnsafeRawBufferPointer(start: bytes, count: byteCount))
   }
-
-  // Whether a column's name is `name`, compared byte for byte against the name SQLite holds, so
-  // nothing is allocated to find a column by its name.
-  func hasName(_ name: String, _ statement: OpaquePointer, at column: Int32) -> Bool {
-    guard let columnName = self.name(statement, column) else { return name.isEmpty }
-    var character = columnName
-    for byte in name.utf8 {
-      guard UInt8(bitPattern: character.pointee) == byte, byte != 0 else { return false }
-      character += 1
-    }
-    return character.pointee == 0
-  }
 }
 
 extension SQLiteLibrary.FunctionCallbacks.Argument {

@@ -34,6 +34,7 @@
       }
       return replaced
     }
+    mutating func consume(_ count: Int) { values.removeFirst(count) }
     public static func + (lhs: Self, rhs: Self) -> Self {
       precondition(
         Set(lhs.namedValues.keys).isDisjoint(with: rhs.namedValues.keys),
@@ -98,7 +99,7 @@
     sql: String,
     allowRemaining: Bool = false,
     allowMissing: Bool = false
-  ) throws -> (sql: String, values: [DatabaseValue], consumed: Int) {
+  ) throws -> (values: [DatabaseValue], consumed: Int) {
     let bytes = Array(sql.utf8)
     var i = 0
     var highest = 0
@@ -200,7 +201,7 @@
         arguments: arguments
       )
     }
-    return (sql, bindings, consumed)
+    return (bindings, consumed)
   }
 
   func quoted(_ identifier: String) -> String {

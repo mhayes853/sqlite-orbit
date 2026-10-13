@@ -49,7 +49,8 @@ public struct OrbitRegionSubscription: Sendable {
   ///   - onUpdateRegion: Applies a new region, returning only once announcements that start
   ///     afterwards honor it, or `nil` if the registration reports every commit whatever its
   ///     region. Calls are serialized, and none is made once cancellation begins, although one
-  ///     already running may race with cancellation.
+  ///     already running may race with cancellation. If it throws, the registration must still
+  ///     report every commit overlapping its previous region; extra commits may also be reported.
   ///   - onCancel: Runs once, when the subscription is cancelled or fully released.
   public init(
     region: OrbitDatabaseRegion,
@@ -64,8 +65,11 @@ public struct OrbitRegionSubscription: Sendable {
     self.storage.region
   }
 
-  /// Whether commits outside ``region`` may be skipped, rather than reported like every other.
-  var filtersByRegion: Bool {
+  /// Whether commits outside ``region`` may be skipped.
+  ///
+  /// When `false`, every commit is reported regardless of the region. When `true`, commits
+  /// overlapping the region are reported, and commits outside it may also be reported.
+  public var filtersByRegion: Bool {
     self.storage.onUpdateRegion != nil
   }
 

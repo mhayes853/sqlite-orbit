@@ -3,5 +3,9 @@ import SwiftSyntaxMacros
 
 @main
 struct SQLiteOrbitPlugin: CompilerPlugin {
-  let providingMacros: [Macro.Type] = [SQLiteLibraryMacro.self]
+  let providingMacros: [Macro.Type] = [
+    SQLiteLibraryMacro.self,
+    OrbitRowMacro.self,
+    OrbitColumnMacro.self
+  ]
 }

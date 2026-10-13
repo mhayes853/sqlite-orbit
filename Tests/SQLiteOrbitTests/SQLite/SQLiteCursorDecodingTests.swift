@@ -13,21 +13,20 @@
       let title = "Blob's reminder"
 
       try await database.write { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-        )
-        try transaction.execute(Item.insert { Item(id: 1, title: title) })
+        try #sql("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          .execute(transaction)
+        try Item.insert { Item(id: 1, title: title) }.execute(transaction)
       }
 
       let uppercased = try await database.read { transaction in
-        let cursor = try transaction.fetchCursor(Item.select { ($0.id, $0.title) })
+        let cursor = try Item.select { ($0.id, $0.title) }.fetchCursor(transaction)
         let uppercased = cursor.filter { $0.0 == 1 }.map { $0.1.uppercased() }
         return try uppercased.collect()
       }
       #expect(uppercased == [title.uppercased()])
 
       let tupleValues: [(Int, String)] = try await database.read { transaction in
-        let cursor = try transaction.fetchCursor(Item.select { ($0.id, $0.title) })
+        let cursor = try Item.select { ($0.id, $0.title) }.fetchCursor(transaction)
         return try cursor.collect()
       }
       #expect(tupleValues.count == 1)
@@ -39,9 +38,8 @@
       let database = try inMemoryDatabase()
 
       let readValues = try await database.read { transaction in
-        var cursor = try transaction.fetchCursor(
-          #sql("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", as: Int.self)
-        )
+        var cursor = try #sql("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", as: Int.self)
+          .fetchCursor(transaction)
         var values: [Int] = []
         while let value = try cursor.next() {
           values.append(value)
@@ -50,9 +48,7 @@
       }
 
       let writeValues = try await database.write { transaction in
-        var cursor = try transaction.executeCursor(
-          #sql("SELECT 4 UNION ALL SELECT 5", as: Int.self)
-        )
+        var cursor = try #sql("SELECT 4 UNION ALL SELECT 5", as: Int.self).fetchCursor(transaction)
         var values: [Int] = []
         while let value = try cursor.next() {
           values.append(value)
@@ -74,23 +70,22 @@
       )
 
       try await database.write { transaction in
-        try transaction.execute(
-          #sql(
-            """
-            CREATE TABLE special_values (
-              id INTEGER PRIMARY KEY,
-              occurredAt TEXT NOT NULL,
-              token TEXT NOT NULL
-            )
-            """,
-            as: Void.self
+        try #sql(
+          """
+          CREATE TABLE special_values (
+            id INTEGER PRIMARY KEY,
+            occurredAt TEXT NOT NULL,
+            token TEXT NOT NULL
           )
+          """,
+          as: Void.self
         )
-        try transaction.execute(SpecialValue.insert { value })
+        .execute(transaction)
+        try SpecialValue.insert { value }.execute(transaction)
       }
 
       let decoded = try await database.read { transaction in
-        try transaction.fetchOne(SpecialValue.all)
+        try SpecialValue.all.fetchOne(transaction)
       }
       #expect(decoded == value)
     }
@@ -102,12 +97,11 @@
       let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
 
       let decoded: (Date, UUID)? = try await database.read { transaction in
-        try transaction.fetchOne(
-          #sql(
-            "SELECT \(timestamp, as: String.self), \(uuid, as: String.self)",
-            as: (Date, UUID).self
-          )
+        try #sql(
+          "SELECT \(timestamp, as: String.self), \(uuid, as: String.self)",
+          as: (Date, UUID).self
         )
+        .fetchOne(transaction)
       }
 
       #expect(decoded?.0.timeIntervalSince1970 == 1_704_164_645)
@@ -120,7 +114,7 @@
 
       let decoded: [(Int, String)] = try await database.read { transaction in
         var cursor = try transaction.rowCursor(
-          #sql("SELECT 1, 'one' UNION ALL SELECT 2, 'two'", as: Void.self)
+          SQL(fragment: #sql("SELECT 1, 'one' UNION ALL SELECT 2, 'two'", as: Void.self).query)
         )
         var decoded: [(Int, String)] = []
         while var row = try cursor.next() {

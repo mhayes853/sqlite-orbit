@@ -343,17 +343,14 @@
     let encoder: RecordEncoder
     var codingPath: [any CodingKey] { [] }
     var count: Int { 0 }
+    private func unsupported(_ value: Any) -> EncodingError {
+      .invalidValue(value, .init(codingPath: [], debugDescription: "records require keyed columns"))
+    }
     mutating func encodeNil() throws {
-      throw EncodingError.invalidValue(
-        NSNull(),
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(NSNull())
     }
     mutating func encode<T: Encodable>(_ value: T) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func nestedContainer<NestedKey: CodingKey>(keyedBy type: NestedKey.Type)
       -> KeyedEncodingContainer<NestedKey>
@@ -492,6 +489,10 @@
       guard let convertible = type as? any DatabaseValueConvertible.Type,
         let decoded = convertible.fromDatabaseValue(value) as? T
       else { throw mismatch(type) }
+      return decoded
+    }
+    private func decodeValue<T: DatabaseValueConvertible>(_ type: T.Type) throws -> T {
+      guard let decoded = T.fromDatabaseValue(value) else { throw mismatch(type) }
       return decoded
     }
     func mismatch(_ type: Any.Type) -> DecodingError {
@@ -634,146 +635,90 @@
   }
   extension UnsupportedEncodingContainer {
     mutating func encode(_ value: Bool) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: String) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Double) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Float) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Int) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Int8) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Int16) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Int32) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: Int64) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: UInt) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: UInt8) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: UInt16) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: UInt32) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
     mutating func encode(_ value: UInt64) throws {
-      throw EncodingError.invalidValue(
-        value,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
-      )
+      throw unsupported(value)
     }
   }
   extension ColumnDecoder {
     func decode(_ type: Bool.Type) throws -> Bool {
-      guard let decoded = Bool.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: String.Type) throws -> String {
-      guard let decoded = String.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Double.Type) throws -> Double {
-      guard let decoded = Double.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Float.Type) throws -> Float {
-      guard let decoded = Float.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Int.Type) throws -> Int {
-      guard let decoded = Int.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Int8.Type) throws -> Int8 {
-      guard let decoded = Int8.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Int16.Type) throws -> Int16 {
-      guard let decoded = Int16.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Int32.Type) throws -> Int32 {
-      guard let decoded = Int32.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: Int64.Type) throws -> Int64 {
-      guard let decoded = Int64.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: UInt.Type) throws -> UInt {
-      guard let decoded = UInt.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: UInt8.Type) throws -> UInt8 {
-      guard let decoded = UInt8.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: UInt16.Type) throws -> UInt16 {
-      guard let decoded = UInt16.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: UInt32.Type) throws -> UInt32 {
-      guard let decoded = UInt32.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
     func decode(_ type: UInt64.Type) throws -> UInt64 {
-      guard let decoded = UInt64.fromDatabaseValue(value) else { throw mismatch(type) }
-      return decoded
+      return try decodeValue(type)
     }
   }
 

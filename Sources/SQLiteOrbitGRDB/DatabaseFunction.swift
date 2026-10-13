@@ -32,36 +32,34 @@
     public func add(function: DatabaseFunction) {
       do {
         try translate {
-          try access.checkAccess()
-          var configuration = SQLiteConfiguration(library: access.sqlite)
-          configuration.registerFunction(
-            function.name,
-            argumentCount: function.argumentCount,
-            isDeterministic: function.isPure
-          ) { arguments in
-            let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
-            return try function.body(values)?.databaseValue.orbitValue ?? .null
+          try access.withConnectionAccess { connection in
+            try connection.registerFunction(
+              function.name,
+              argumentCount: function.argumentCount,
+              flags: function.isPure ? [.deterministic] : []
+            ) { arguments in
+              let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
+              return try function.body(values)?.databaseValue.orbitValue ?? .null
+            }
           }
-          for setup in configuration.connectionSetups { try access.install(setup) }
         }
       } catch { preconditionFailure(String(describing: error)) }
     }
     public func add(collation: DatabaseCollation) {
       do {
         try translate {
-          try access.checkAccess()
-          var configuration = SQLiteConfiguration(library: access.sqlite)
-          configuration.registerCollation(collation.name) { lhs, rhs in
-            switch collation.compare(
-              String(decoding: lhs, as: UTF8.self),
-              String(decoding: rhs, as: UTF8.self)
-            ) {
-            case .orderedAscending: .ascending
-            case .orderedSame: .same
-            case .orderedDescending: .descending
+          try access.withConnectionAccess { connection in
+            try connection.registerCollation(collation.name) { lhs, rhs in
+              switch collation.compare(
+                String(decoding: lhs, as: UTF8.self),
+                String(decoding: rhs, as: UTF8.self)
+              ) {
+              case .orderedAscending: .ascending
+              case .orderedSame: .same
+              case .orderedDescending: .descending
+              }
             }
           }
-          for setup in configuration.connectionSetups { try access.install(setup) }
         }
       } catch { preconditionFailure(String(describing: error)) }
     }

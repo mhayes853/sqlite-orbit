@@ -41,7 +41,7 @@ final class SearchRemindersModel: ErrorReporting {
           text: text,
           showCompleted: showCompleted
         ),
-        animation: .default
+        scheduler: .animation(.default)
       )
     }
   }

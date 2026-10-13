@@ -468,12 +468,12 @@ struct RemindersModelTests {
     let identifier = OrbitDatabaseIdentifier(rawValue: "widget-reload-test")
     let appDatabase = OrbitIPCDatabase(
       writer: try SQLitePool(path: path),
-      id: identifier,
+      identifier: identifier,
       transport: InMemoryIPCTransport(network: network)
     )
     let peerDatabase = OrbitIPCDatabase(
       writer: try SQLitePool(path: path),
-      id: identifier,
+      identifier: identifier,
       transport: InMemoryIPCTransport(network: network)
     )
     // Migrated asynchronously, so the migration's own announcement is over before the reloader

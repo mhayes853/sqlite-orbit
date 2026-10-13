@@ -12,9 +12,9 @@
     /// - Parameters:
     ///   - rawValue: What the call returned, which is negative if it failed.
     ///   - operation: What the call was doing, to name in the error if it failed.
-    /// - Throws: A ``UnixSystemError`` if the call failed.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the call failed.
     init(_ rawValue: Int32, from operation: String) throws {
-      guard rawValue >= 0 else { throw UnixSystemError.last(operation) }
+      guard rawValue >= 0 else { throw UnixDatagramIPCTransport.SystemError.last(operation) }
       self.rawValue = rawValue
     }
 

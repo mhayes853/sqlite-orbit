@@ -32,117 +32,70 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// ```swift
 /// let driver = try SQLitePool(path: .file(url))
 /// try await driver.write { transaction in
-///   try transaction.execute(Reminder.insert { Reminder(id: 1, title: "Get milk") })
+///   try Reminder.insert { Reminder(id: 1, title: "Get milk") }.execute(transaction)
 /// }
-/// let reminders = try await driver.read { try $0.fetchAll(Reminder.all) }
+/// let reminders = try await driver.read { try Reminder.all.fetchAll($0) }
 /// ```
+///
+/// A pool does not coordinate with other processes. Switching a new database to WAL briefly needs
+/// an exclusive lock, so several processes opening the same database with bare pools at the same
+/// moment may fail with `SQLITE_BUSY`, and none of them hears about the others' writes. To share a
+/// database between processes, open it with ``OrbitIPCDatabase``, which serializes opening across
+/// processes and announces each commit to the others.
 public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableDatabase {
-  /// The identity this driver's database is known by across processes.
-  public let defaultIdentifier: OrbitDatabaseIdentifier
+  /// The database this pool's connections are open on.
+  public let path: OrbitDatabasePath
 
   @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
 
-  private let scheduler: SQLitePoolScheduler
-  private let suspension: SQLiteWriteSuspension
-  private let transactionObservers = OrbitDatabaseTransactionObservers()
+  private let pool: SQLiteConnectionPool
+  private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
-  /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers.
+  /// Opens `path` as a WAL database with one writer and `readerCount` readers.
+  ///
+  /// ```swift
+  /// var configuration = SQLiteConfiguration.default
+  /// configuration.busyPolicy = .timeout(.seconds(10))
+  /// let driver = try SQLitePool(path: .file(url), configuration: configuration, readerCount: 8)
+  /// ```
+  ///
+  /// The writer switches the database to WAL whatever `configuration`'s
+  /// ``SQLiteConfiguration/journalMode`` says, before any of `configuration`'s setups run.
   ///
   /// - Parameters:
   ///   - path: The database file. A database private to its connection cannot be pooled.
   ///   - configuration: The settings applied to every connection.
-  ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
-  ///   - coordinationDirectoryPath: The path of the directory the advisory lock that serializes
-  ///     opening lives in, or `nil` for
-  ///     ``UnixDatagramIPCTransport/Configuration/defaultDirectoryPath``. Processes coordinate
-  ///     only when they share it. Another process opening the same database holds this one up for
-  ///     as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a lock,
-  ///     and no longer, so one frozen partway through its open cannot hold it up for good.
-  /// - Precondition: `configuration.readerCount` must be greater than zero.
+  ///   - readerCount: The number of reader connections to open. Must be greater than zero.
+  /// - Precondition: `readerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
   ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
-  ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy timeout
-  ///   or busy handler waits.
+  ///   `SQLITE_BUSY` when another process holds a lock on the database for longer than
+  ///   `configuration`'s busy policy waits.
   public init(
     path: OrbitDatabasePath,
     configuration: SQLiteConfiguration,
-    identifier: OrbitDatabaseIdentifier? = nil,
-    coordinationDirectoryPath: String? = nil
+    readerCount: Int = 5
   ) throws {
-    precondition(configuration.readerCount > 0, "SQLitePool requires at least one reader")
-    guard !path.isPrivateToConnection else {
-      throw SQLitePoolUnavailableError(path: path)
-    }
-    let identifier = identifier ?? .forDatabase(path: path)
-    let suspension = SQLiteWriteSuspension(databaseIdentifier: identifier)
-
-    // Moving a new database into WAL briefly needs an exclusive lock of SQLite's own, so processes
-    // opening it at the same moment would otherwise contend for it.
-    let (writer, readers) = try Self.withOpenLock(
-      identifier: identifier,
-      directoryPath: coordinationDirectoryPath,
-      configuration: configuration
-    ) {
-      try Self.openConnections(path: path, configuration: configuration, suspension: suspension)
-    }
-
-    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(path: path, configuration: configuration)
-    self.defaultIdentifier = identifier
-    self.suspension = suspension
-    self.scheduler = SQLitePoolScheduler(readers: readers, writers: [writer])
-  }
-
-  private static func openConnections(
-    path: OrbitDatabasePath,
-    configuration: SQLiteConfiguration,
-    suspension: SQLiteWriteSuspension
-  ) throws -> (writer: SQLiteSerialConnection, readers: [SQLiteSerialConnection]) {
-    // Each connection's role is set up apart from the caller's configuration, which is what its
-    // transactions report having been opened with.
-    //
-    // Switching to WAL does not create the `-wal` and `-shm` files; the next transaction does. A
-    // read-only connection cannot create them itself, and Apple's SQLite then fails to open a new
-    // database at all, so the writer reads once to leave them in place for the readers.
-    let writer = try SQLiteSerialConnection(
+    precondition(readerCount > 0, "SQLitePool requires at least one reader")
+    // The connection pool refuses a database private to its connection itself.
+    var writerConfiguration = configuration
+    writerConfiguration.journalMode = .wal
+    self.pool = try SQLiteConnectionPool(
       path: path,
-      flags: [.readWrite, .create, .noMutex],
-      configuration: configuration,
-      driverSetupSQL: ["PRAGMA journal_mode = WAL", "SELECT count(*) FROM sqlite_schema"],
-      suspension: suspension
+      readerConfiguration: configuration,
+      writerConfiguration: writerConfiguration,
+      readerCount: readerCount,
+      // Switching to WAL does not create the `-wal` and `-shm` files; the next transaction does. A
+      // read-only connection cannot create them itself, and Apple's SQLite then fails to open a
+      // new database at all, so the writer reads once to leave them in place for the readers.
+      writerSetups: [.sql("SELECT count(*) FROM sqlite_schema")]
     )
-
-    // `query_only` is belt and braces over the read-only flag: it turns a write attempted through
-    // the raw connection into an error rather than a surprise.
-    let readers = try (0..<configuration.readerCount)
-      .map { _ in
-        try SQLiteSerialConnection(
-          path: path,
-          flags: [.readOnly, .noMutex],
-          configuration: configuration,
-          driverSetupSQL: ["PRAGMA query_only = 1"]
-        )
-      }
-    return (writer, readers)
-  }
-
-  private static func withOpenLock<Result>(
-    identifier: OrbitDatabaseIdentifier,
-    directoryPath: String?,
-    configuration: SQLiteConfiguration,
-    _ body: () throws -> Result
-  ) throws -> Result {
-    #if canImport(Darwin) || os(Linux) || os(Android)
-      return try OrbitDatabaseOpenLock.withLock(
-        databaseIdentifier: identifier,
-        directory: OrbitCoordinationDirectory(
-          path: directoryPath ?? UnixDatagramIPCTransport.Configuration.defaultDirectoryPath
-        ),
-        configuration: configuration,
-        body
-      )
-    #else
-      return try body()
-    #endif
+    self.path = path
+    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(
+      path: path,
+      configuration: configuration,
+      readerCount: readerCount
+    )
   }
 
   /// Runs `body` in a read transaction on one of the pool's readers.
@@ -157,7 +110,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func read<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) async throws -> Result {
-    try await scheduler.read(observers: transactionObservers, body)
+    try await pool.withReadConnection { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a read transaction, blocking the calling thread until it finishes.
@@ -171,7 +126,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func readBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try scheduler.readBlocking(observers: transactionObservers, body)
+    try pool.withReadConnectionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction on the pool's single writer.
@@ -186,7 +143,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func write<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) async throws -> Result {
-    try await scheduler.write(observers: transactionObservers, body)
+    try await pool.withWriteConnection { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` in a write transaction, blocking the calling thread until it finishes.
@@ -200,7 +159,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try scheduler.writeBlocking(observers: transactionObservers, body)
+    try pool.withWriteConnectionBlocking { connection in
+      try connection.transaction(observer: transactionObservers, body)
+    }
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction.
@@ -209,12 +170,12 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///
   /// ```swift
   /// let mode = try await driver.readWithoutTransaction { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try #sql("PRAGMA journal_mode", as: String.self).fetchOne(connection)
   /// }
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
-  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   transaction. A busy policy it changes through the connection is restored when the access
   ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
@@ -222,7 +183,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func readWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.readWithoutTransaction(observers: transactionObservers, body)
+    try await pool.withReadConnection { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with one of the pool's readers, reading outside a transaction and blocking the
@@ -233,19 +196,21 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   ///
   /// ```swift
   /// let mode = try driver.readWithoutTransactionBlocking { connection in
-  ///   try connection.fetchOne(#sql("PRAGMA journal_mode", as: String.self))
+  ///   try #sql("PRAGMA journal_mode", as: String.self).fetchOne(connection)
   /// }
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
-  ///   transaction. A busy timeout it changes through the connection is restored when the access
+  ///   transaction. A busy policy it changes through the connection is restored when the access
   ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError``.
   public func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    try scheduler.readWithoutTransactionBlocking(observers: transactionObservers, body)
+    try pool.withReadConnectionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction.
@@ -261,7 +226,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
-  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   policy and foreign keys it changes through the connection are restored when the access
   ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, a ``SQLiteError``, or `CancellationError` when the task was
@@ -270,7 +235,9 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeWithoutTransaction<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) async throws -> Result {
-    try await scheduler.writeWithoutTransaction(observers: transactionObservers, body)
+    try await pool.withWriteConnection { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Runs `body` with the pool's single writer, writing outside a transaction and blocking the
@@ -286,7 +253,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// ```
   ///
   /// - Parameter body: Receives the connection. Each statement commits on its own. The busy
-  ///   timeout and foreign keys it changes through the connection are restored when the access
+  ///   policy and foreign keys it changes through the connection are restored when the access
   ///   ends; any other pragma it changes must be restored before it returns.
   /// - Returns: Whatever `body` returned.
   /// - Throws: Whatever `body` threw, or a ``SQLiteError``. Statements that finished before the
@@ -294,21 +261,23 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   public func writeWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    try scheduler.writeWithoutTransactionBlocking(observers: transactionObservers, body)
+    try pool.withWriteConnectionBlocking { connection in
+      try connection.withObservation(transactionObservers) { try body(connection) }
+    }
   }
 
   /// Whether this pool currently refuses statements that could retain its writer's lock.
-  public var isSuspended: Bool { suspension.isSuspended }
+  public var isSuspended: Bool { pool.isSuspended }
 
   /// Interrupts an active writer and refuses statements that could acquire or retain its lock.
   /// Reads on the pool's read-only connections continue to work. An interrupted write rolls back
   /// and throws ``OrbitDatabaseSuspendedError``. A transactional write rolls back; earlier
   /// statements in `writeWithoutTransaction` may already have committed. This method does not
   /// wait for an active transaction to roll back.
-  public func suspend() { suspension.suspend() }
+  public func suspend() { pool.suspend() }
 
   /// Allows writes to acquire the lock again. Calling this when active has no effect.
-  public func resume() { suspension.resume() }
+  public func resume() { pool.resume() }
 
   /// Registers an observer of the transactions this driver commits.
   ///
@@ -337,105 +306,14 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     ///
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
-    ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
-    ///   - coordinationDirectoryPath: The path of the directory the advisory lock that
-    ///     serializes opening lives in, or `nil` for
-    ///     ``UnixDatagramIPCTransport/Configuration/defaultDirectoryPath``.
+    ///   - readerCount: The number of reader connections to open. Must be greater than zero.
+    /// - Precondition: `readerCount` must be greater than zero.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
     ///   ``SQLiteError`` when a connection cannot be opened.
-    public convenience init(
-      path: OrbitDatabasePath,
-      identifier: OrbitDatabaseIdentifier? = nil,
-      coordinationDirectoryPath: String? = nil
-    ) throws {
-      try self.init(
-        path: path,
-        configuration: .default,
-        identifier: identifier,
-        coordinationDirectoryPath: coordinationDirectoryPath
-      )
+    public convenience init(path: OrbitDatabasePath, readerCount: Int = 5) throws {
+      try self.init(path: path, configuration: .default, readerCount: readerCount)
     }
   }
-#endif
-
-#if Foundation
-  import _SQLiteOrbitFoundation
-
-  extension SQLitePool {
-    /// Opens `path` as a WAL database with one writer and `configuration.readerCount` readers,
-    /// coordinating its open with other processes in a directory at a file URL.
-    ///
-    /// ```swift
-    /// let driver = try SQLitePool(
-    ///   path: .file(url),
-    ///   configuration: configuration,
-    ///   coordinationDirectory: appGroupDirectory.appending(path: "coordination")
-    /// )
-    /// ```
-    ///
-    /// - Parameters:
-    ///   - path: The database file. A database private to its connection cannot be pooled.
-    ///   - configuration: The settings applied to every connection.
-    ///   - identifier: The identity shared with other processes. Defaults to the standardized path.
-    ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or `nil`
-    ///     for ``UnixDatagramIPCTransport/Configuration/defaultDirectory``. Processes coordinate
-    ///     only when they share it. Another process opening the same database holds this one up
-    ///     for as long as `configuration`'s busy timeout or busy handler lets SQLite wait for a
-    ///     lock, and no longer, so one frozen partway through its open cannot hold it up for good.
-    /// - Precondition: `configuration.readerCount` must be greater than zero.
-    /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-    ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
-    ///   `SQLITE_BUSY` when another process has held the open lock for longer than the busy
-    ///   timeout or busy handler waits.
-    public convenience init(
-      path: OrbitDatabasePath,
-      configuration: SQLiteConfiguration,
-      identifier: OrbitDatabaseIdentifier? = nil,
-      coordinationDirectory: URL?
-    ) throws {
-      try self.init(
-        path: path,
-        configuration: configuration,
-        identifier: identifier,
-        coordinationDirectoryPath: coordinationDirectory?.path
-      )
-    }
-  }
-
-  #if BuiltInSQLite
-    extension SQLitePool {
-      /// Opens a pooled database using the SQLite this package was linked against, coordinating
-      /// its open with other processes in a directory at a file URL.
-      ///
-      /// ```swift
-      /// let driver = try SQLitePool(
-      ///   path: .file(url),
-      ///   coordinationDirectory: appGroupDirectory.appending(path: "coordination")
-      /// )
-      /// ```
-      ///
-      /// - Parameters:
-      ///   - path: The database file. A database private to its connection cannot be pooled.
-      ///   - identifier: The identity shared with other processes. Defaults to the standardized
-      ///     path.
-      ///   - coordinationDirectory: Where the advisory lock that serializes opening lives, or
-      ///     `nil` for ``UnixDatagramIPCTransport/Configuration/defaultDirectory``.
-      /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-      ///   ``SQLiteError`` when a connection cannot be opened.
-      public convenience init(
-        path: OrbitDatabasePath,
-        identifier: OrbitDatabaseIdentifier? = nil,
-        coordinationDirectory: URL?
-      ) throws {
-        try self.init(
-          path: path,
-          configuration: .default,
-          identifier: identifier,
-          coordinationDirectoryPath: coordinationDirectory?.path
-        )
-      }
-    }
-  #endif
 #endif
 
 @_spi(GRDB) extension SQLitePool: SQLiteGRDBDatabaseMetadata {}

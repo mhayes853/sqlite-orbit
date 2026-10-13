@@ -96,12 +96,8 @@
   }
 
   public struct ValueObservation<Reducer: ValueReducer>: Sendable {
-    let makeNative: @Sendable (any DatabaseReader) throws -> OrbitValueObservation<Reducer.Value>
-    init(_ native: OrbitValueObservation<Reducer.Value>) { makeNative = { _ in native } }
-    init(
-      makeNative:
-        @escaping @Sendable (any DatabaseReader) throws -> OrbitValueObservation<Reducer.Value>
-    ) { self.makeNative = makeNative }
+    let native: OrbitValueObservation<Reducer.Value>
+    init(_ native: OrbitValueObservation<Reducer.Value>) { self.native = native }
     public static func tracking<Value: Sendable>(
       _ fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
@@ -177,16 +173,17 @@
       onChange: @escaping @Sendable (Reducer.Value) -> Void
     ) -> AnyDatabaseCancellable {
       do {
-        let native = try makeNative(reader)
         return AnyDatabaseCancellable(
-          try native.subscribe(
-            to: reader.orbitDatabase,
-            scheduling: scheduler,
-            isolation: isolation,
-            onError: { error in onError((error as? SQLiteError).map { DatabaseError($0) } ?? error)
-            },
-            onChange: { onChange($0.value) }
-          )
+          try native.independent()
+            .subscribe(
+              to: reader.orbitDatabase,
+              scheduling: scheduler,
+              isolation: isolation,
+              onError: { error in
+                onError((error as? SQLiteError).map { DatabaseError($0) } ?? error)
+              },
+              onChange: { onChange($0.value) }
+            )
         )
       } catch {
         scheduler.schedule(from: isolation) { onError(error) }
@@ -196,19 +193,17 @@
     public func values(in reader: any DatabaseReader) -> DatabaseValueObservationValues<
       Reducer.Value
     > {
-      DatabaseValueObservationValues {
-        try makeNative(reader).values(in: reader.orbitDatabase)
-      }
+      DatabaseValueObservationValues(observation: native, database: reader.orbitDatabase)
     }
     public func map<T: Sendable>(_ transform: @escaping @Sendable (Reducer.Value) throws -> T)
       -> ValueObservation<ValueReducers.Map<Reducer, T>>
     {
-      .init(makeNative: { try makeNative($0).map(transform) })
+      .init(native.map(transform))
     }
     public func removeDuplicates(
       by predicate: @escaping @Sendable (Reducer.Value, Reducer.Value) -> Bool
     ) -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
-      .init(makeNative: { try makeNative($0).removeDuplicates(by: predicate) })
+      .init(native.removeDuplicates(by: predicate))
     }
     public func handleEvents(
       willStart: (@Sendable () -> Void)? = nil,
@@ -218,17 +213,16 @@
       didFail: (@Sendable (Error) -> Void)? = nil,
       didCancel: (@Sendable () -> Void)? = nil
     ) -> ValueObservation<ValueReducers.Trace<Reducer>> {
-      .init(makeNative: {
-        try makeNative($0)
-          .handleEvents(
-            willStart: willStart,
-            willFetch: willFetch,
-            databaseDidChange: databaseDidChange,
-            didReceiveValue: didReceiveValue,
-            didFail: didFail,
-            didCancel: didCancel
-          )
-      })
+      .init(
+        native.handleEvents(
+          willStart: willStart,
+          willFetch: willFetch,
+          databaseDidChange: databaseDidChange,
+          didReceiveValue: didReceiveValue,
+          didFail: didFail,
+          didCancel: didCancel
+        )
+      )
     }
   }
   extension ValueObservation where Reducer.Value: Equatable {
@@ -238,28 +232,18 @@
   }
 
   public struct DatabaseValueObservationValues<Element: Sendable>: AsyncSequence, Sendable {
-    let makeSequence: @Sendable () throws -> OrbitValueObservationSequence<Element>
+    let observation: OrbitValueObservation<Element>
+    let database: any OrbitObservableDatabase
     public struct AsyncIterator: AsyncIteratorProtocol {
-      private var iterator: OrbitValueObservationSequence<Element>.AsyncIterator?
-      private let error: Error?
+      fileprivate var iterator: OrbitValueObservationSequence<Element>.AsyncIterator
       private var finished = false
-      fileprivate init(_ makeSequence: () throws -> OrbitValueObservationSequence<Element>) {
-        do {
-          iterator = try makeSequence().makeAsyncIterator()
-          error = nil
-        } catch {
-          iterator = nil
-          self.error = error
-        }
+      fileprivate init(iterator: OrbitValueObservationSequence<Element>.AsyncIterator) {
+        self.iterator = iterator
       }
       public mutating func next() async throws -> Element? {
         guard !finished else { return nil }
-        if let error {
-          finished = true
-          throw error
-        }
         do {
-          let value = try await iterator?.next()
+          let value = try await iterator.next()
           if value == nil { finished = true }
           return value
         } catch {
@@ -269,7 +253,9 @@
         }
       }
     }
-    public func makeAsyncIterator() -> AsyncIterator { AsyncIterator(makeSequence) }
+    public func makeAsyncIterator() -> AsyncIterator {
+      AsyncIterator(iterator: observation.independent().values(in: database).makeAsyncIterator())
+    }
   }
 
 #endif

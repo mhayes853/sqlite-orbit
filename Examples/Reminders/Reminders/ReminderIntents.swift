@@ -70,7 +70,7 @@ struct CreateReminderIntent: AppIntent {
   var tags: [String]?
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  var database: RemindersDatabase
+  var database: any OrbitObservableDatabaseWriter
 
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
@@ -198,7 +198,7 @@ struct CompleteReminderIntent: AppIntent {
   var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  var database: RemindersDatabase
+  var database: any OrbitObservableDatabaseWriter
 
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
@@ -253,7 +253,7 @@ struct ReopenReminderIntent: AppIntent {
   var reminder: ReminderEntity
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  var database: RemindersDatabase
+  var database: any OrbitObservableDatabaseWriter
 
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
@@ -301,7 +301,7 @@ struct DeleteRemindersIntent: DeleteIntent {
   var entities: [ReminderEntity]
 
   @Dependency(default: OrbitDefaultDatabase.current)
-  var database: RemindersDatabase
+  var database: any OrbitObservableDatabaseWriter
 
   @Dependency(default: ReminderNotificationScheduler())
   var notificationScheduler: ReminderNotificationScheduler
@@ -334,7 +334,7 @@ struct DeleteRemindersIntent: DeleteIntent {
 extension ReminderEntity {
   fileprivate func settingStatus(
     _ status: Reminder.Status,
-    in database: RemindersDatabase,
+    in database: any OrbitObservableDatabaseWriter,
     scheduler: ReminderNotificationScheduler
   ) async throws -> Self {
     try await Reminder.setStatus(

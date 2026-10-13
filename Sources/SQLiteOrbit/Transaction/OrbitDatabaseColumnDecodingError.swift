@@ -19,7 +19,7 @@ public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
   /// with the name it was read by.
   public let columnIndex: Int?
 
-  /// The column's name, or `"?"` when SQLite had none for it.
+  /// The column's SQL name, or `"?"` when it is unknown, including for an unmapped property.
   public let columnName: String
 
   /// What the decoder expected, phrased to follow "Expected column N (name) ".

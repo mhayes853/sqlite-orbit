@@ -81,9 +81,10 @@ struct OrbitValueObservationSubscriberRegistryTests {
   ) -> OrbitValueObservationSubscriber<Int> {
     OrbitValueObservationSubscriber(
       scheduler: OrbitImmediateValueObservationScheduler(),
-      onNoEmission: nil,
       onError: { _ in },
-      onChange: onChange
+      onUpdate: { update in
+        if case .emitted(let change) = update { onChange(change) }
+      }
     )
   }
 

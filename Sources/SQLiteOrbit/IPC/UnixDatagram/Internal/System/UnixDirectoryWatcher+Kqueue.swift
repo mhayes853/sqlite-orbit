@@ -39,13 +39,13 @@
 
     /// Starts watching the directory at `path`.
     ///
-    /// - Throws: A ``UnixSystemError`` if the directory cannot be watched, which includes the
-    ///   system running out of watches.
+    /// - Throws: A ``UnixDatagramIPCTransport/SystemError`` if the directory cannot be watched,
+    ///   which includes the system running out of watches.
     func watch(_ path: String) throws {
       // `O_EVTONLY` opens the directory only to hear about it, so the watch does not keep the
       // volume it is on from being unmounted.
       let directory = open(path, O_EVTONLY | O_DIRECTORY | O_CLOEXEC)
-      guard directory >= 0 else { throw UnixSystemError.last("open") }
+      guard directory >= 0 else { throw UnixDatagramIPCTransport.SystemError.last("open") }
       var change = kevent(
         ident: UInt(directory),
         filter: Int16(EVFILT_VNODE),
@@ -55,7 +55,7 @@
         udata: nil
       )
       guard systemKevent(self.queue.rawValue, &change, 1, nil, 0, nil) == 0 else {
-        let error = UnixSystemError.last("kevent")
+        let error = UnixDatagramIPCTransport.SystemError.last("kevent")
         UnixPlatform.closeDescriptor(directory)
         throw error
       }

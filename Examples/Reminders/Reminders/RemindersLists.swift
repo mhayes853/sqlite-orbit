@@ -34,11 +34,11 @@ final class RemindersListsModel: ErrorReporting {
           remindersList: $0
         )
       },
-    animation: .default
+    scheduler: .animation(.default)
   )
   var remindersLists: [RemindersListSummary]
 
-  @ObservationIgnored @FetchAll(Tag.order(by: \.title), animation: .default)
+  @ObservationIgnored @FetchAll(Tag.order(by: \.title), scheduler: .animation(.default))
   var tags: [Tag]
   @ObservationIgnored @FetchOne var stats = RemindersStats()
 
@@ -56,7 +56,7 @@ final class RemindersListsModel: ErrorReporting {
     _stats = FetchOne(
       wrappedValue: RemindersStats(),
       Self.statsQuery,
-      animation: .default
+      scheduler: .animation(.default)
     )
   }
 
@@ -71,7 +71,7 @@ final class RemindersListsModel: ErrorReporting {
 
   func refreshForCurrentDate() async {
     await withErrorReporting {
-      try await $stats.load(Self.statsQuery, animation: .default)
+      try await $stats.load(Self.statsQuery, scheduler: .animation(.default))
     }
   }
 

@@ -1,7 +1,7 @@
 #if StructuredQueries
   import StructuredQueriesSQLite
 
-  /// The expression a ``FetchAll`` property groups its rows by.
+  /// The expression a sectioned query or ``FetchAll`` property groups its rows by.
   ///
   /// You do not build one. Swift builds it from the `sectionBy:` closure, which is why that closure
   /// can be written as a column, an ordering of one, or a branch between them:
@@ -16,8 +16,9 @@
     let order: QueryFragment
 
     init(_ expression: some QueryExpression) {
-      self.select = expression.queryFragment
-      self.order = expression.queryFragment
+      let fragment = expression.queryFragment
+      self.select = fragment
+      self.order = fragment
     }
 
     init<Value>(_ orderingTerm: _OrderingTerm<Value>) {
@@ -26,10 +27,16 @@
     }
   }
 
-  /// Builds the expression a ``FetchAll`` property groups its rows by.
+  /// Builds the expression a sectioned query or ``FetchAll`` property groups its rows by.
   @_documentation(visibility: private)
   @resultBuilder
   public enum _OrbitFetchSectionBuilder<Key> {
+    public static func buildExpression(
+      _ sectioning: _OrbitFetchSectioning<Key>
+    ) -> _OrbitFetchSectioning<Key> {
+      sectioning
+    }
+
     public static func buildExpression(
       _ expression: some QueryExpression<Key>
     ) -> _OrbitFetchSectioning<Key> {

@@ -157,9 +157,9 @@ final class ReminderFormModel: ErrorReporting, Identifiable {
 }
 
 struct ReminderFormView: View {
-  @FetchAll(Tag.order(by: \.title), animation: .default)
+  @FetchAll(Tag.order(by: \.title), scheduler: .animation(.default))
   private var availableTags: [Tag]
-  @FetchAll(RemindersList.order(by: \.title), animation: .default)
+  @FetchAll(RemindersList.order(by: \.title), scheduler: .animation(.default))
   private var remindersLists: [RemindersList]
   @Bindable var model: ReminderFormModel
   @FocusState private var focusedField: Field?

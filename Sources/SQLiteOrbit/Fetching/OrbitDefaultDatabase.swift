@@ -14,6 +14,11 @@
 /// it finds one, so a database that arrives after the property was created — from the environment,
 /// or from a ``set(_:)`` the app had not reached yet — still starts it reading. A property that
 /// named its own database is never re-sourced.
+/// Replacing a property's request or observation with `load` keeps its resolved database unless
+/// that call supplies a new `database:`. A property with no resolved database uses this default.
+/// The default, like the environment value, is an ``OrbitObservableDatabaseWriter``: it supports
+/// reading, writing, and observation. A read-only database can instead be handed to an individual
+/// read-only fetch property through its `database:` argument.
 ///
 /// A property wrapper is created wherever the property it wraps lives — inside a view, a model, or
 /// a controller — and those places rarely have a database to hand. Setting the default once, as
@@ -42,7 +47,7 @@
 /// }
 /// ```
 public enum OrbitDefaultDatabase {
-  /// The database property wrappers use when none is supplied.
+  /// The writable, observable database property wrappers use when none is supplied.
   ///
   /// This is the innermost ``withValue(_:operation:)-1nrqd`` override in effect, or the database
   /// in `DependencyValues.orbitDefaultDatabase` when the `Dependencies` trait is enabled, or the
@@ -50,14 +55,24 @@ public enum OrbitDefaultDatabase {
   ///
   /// Accessing this property without first configuring a database is a programmer error and
   /// terminates the process with setup instructions.
-  public static var current: any OrbitObservableDatabase {
+  public static var current: any OrbitObservableDatabaseWriter {
     OrbitDefaultDatabaseSource().current
+  }
+
+  /// The configured default database, or `nil` when none is available.
+  ///
+  /// This follows the same precedence as ``current``: the innermost task-local override,
+  /// the `Dependencies` override when that trait is enabled, then the process-wide fallback.
+  /// Use this lookup when a default is optional; it returns `nil` instead of terminating the
+  /// process when no source has been configured.
+  public static var currentIfConfigured: (any OrbitObservableDatabaseWriter)? {
+    OrbitDefaultDatabaseSource().currentIfConfigured
   }
 
   /// Sets the process-wide fallback database property wrappers use when none is supplied.
   ///
   /// - Parameter database: The database to use, or `nil` to leave the process without a default.
-  public static func set(_ database: (any OrbitObservableDatabase)?) {
+  public static func set(_ database: (any OrbitObservableDatabaseWriter)?) {
     storage.database = database
   }
 
@@ -72,7 +87,7 @@ public enum OrbitDefaultDatabase {
   /// - Returns: Whatever `operation` returns.
   /// - Throws: Whatever `operation` throws.
   public static func withValue<Result>(
-    _ database: any OrbitObservableDatabase,
+    _ database: any OrbitObservableDatabaseWriter,
     operation: () throws -> Result
   ) rethrows -> Result {
     try $scoped.withValue(database, operation: operation)
@@ -87,30 +102,26 @@ public enum OrbitDefaultDatabase {
   /// - Returns: Whatever `operation` returns.
   /// - Throws: Whatever `operation` throws.
   public static func withValue<Result>(
-    _ database: any OrbitObservableDatabase,
+    _ database: any OrbitObservableDatabaseWriter,
     isolation: isolated (any Actor)? = #isolation,
     operation: () async throws -> Result
   ) async rethrows -> Result {
     try await $scoped.withValue(database, operation: operation, isolation: isolation)
   }
 
-  @TaskLocal private static var scoped: (any OrbitObservableDatabase)?
+  @TaskLocal private static var scoped: (any OrbitObservableDatabaseWriter)?
 
   private static let storage = Storage()
 
-  static var currentIfConfigured: (any OrbitObservableDatabase)? {
-    OrbitDefaultDatabaseSource().currentIfConfigured
-  }
-
   fileprivate static func resolve(
-    dependency: (any OrbitObservableDatabase)?
-  ) -> (any OrbitObservableDatabase)? {
+    dependency: (any OrbitObservableDatabaseWriter)?
+  ) -> (any OrbitObservableDatabaseWriter)? {
     scoped ?? dependency ?? storage.database
   }
 
   fileprivate static func require(
-    dependency: (any OrbitObservableDatabase)?
-  ) -> any OrbitObservableDatabase {
+    dependency: (any OrbitObservableDatabaseWriter)?
+  ) -> any OrbitObservableDatabaseWriter {
     guard let database = resolve(dependency: dependency) else {
       fatalError(missingDatabaseMessage)
     }
@@ -141,9 +152,9 @@ public enum OrbitDefaultDatabase {
     """
 
   private final class Storage: Sendable {
-    private let value = Lock<(any OrbitObservableDatabase)?>(nil)
+    private let value = Lock<(any OrbitObservableDatabaseWriter)?>(nil)
 
-    var database: (any OrbitObservableDatabase)? {
+    var database: (any OrbitObservableDatabaseWriter)? {
       get { value.withLock { $0 } }
       set { value.withLock { $0 = newValue } }
     }
@@ -159,14 +170,14 @@ struct OrbitDefaultDatabaseSource: Sendable {
   #if Dependencies
     @Dependency(OrbitDefaultDatabaseKey.self) private var dependency
   #else
-    private let dependency: (any OrbitObservableDatabase)? = nil
+    private let dependency: (any OrbitObservableDatabaseWriter)? = nil
   #endif
 
-  var currentIfConfigured: (any OrbitObservableDatabase)? {
+  var currentIfConfigured: (any OrbitObservableDatabaseWriter)? {
     OrbitDefaultDatabase.resolve(dependency: dependency)
   }
 
-  var current: any OrbitObservableDatabase {
+  var current: any OrbitObservableDatabaseWriter {
     OrbitDefaultDatabase.require(dependency: dependency)
   }
 }
@@ -177,8 +188,8 @@ struct OrbitDefaultDatabaseSource: Sendable {
   #endif
 
   private enum OrbitDefaultDatabaseKey: DependencyKey {
-    static let liveValue: (any OrbitObservableDatabase)? = nil
-    static let testValue: (any OrbitObservableDatabase)? = nil
+    static let liveValue: (any OrbitObservableDatabaseWriter)? = nil
+    static let testValue: (any OrbitObservableDatabaseWriter)? = nil
   }
 
   extension DependencyValues {
@@ -189,7 +200,7 @@ struct OrbitDefaultDatabaseSource: Sendable {
     /// dependency override, while the process default set by ``OrbitDefaultDatabase/set(_:)`` is
     /// used when the dependency has not been overridden. Accessing this value without configuring
     /// any of those sources terminates the process with setup instructions.
-    public var orbitDefaultDatabase: any OrbitObservableDatabase {
+    public var orbitDefaultDatabase: any OrbitObservableDatabaseWriter {
       get {
         OrbitDefaultDatabase.require(dependency: self[OrbitDefaultDatabaseKey.self])
       }

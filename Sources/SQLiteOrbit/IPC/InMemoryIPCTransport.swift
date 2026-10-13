@@ -14,7 +14,7 @@
 /// let network = InMemoryIPCTransport.Network()
 /// let database = OrbitIPCDatabase(
 ///   writer: try SQLitePool(path: .file(url)),
-///   id: OrbitDatabaseIdentifier(rawValue: "reminders"),
+///   identifier: OrbitDatabaseIdentifier(rawValue: "reminders"),
 ///   transport: InMemoryIPCTransport(network: network)
 /// )
 /// let peer = InMemoryIPCTransport(network: network)
