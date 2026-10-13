@@ -310,7 +310,7 @@ let package = Package(
     // opened the connection, and Turso does not export every function it references.
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "4fa2928e54168e82c4b5626e02394fd8e90ac14e",
+      revision: "3625c9aebe3953fe6cfcd0f375b8886bbd553aa6",
       traits: ["SQLiteVecNEON"]
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),

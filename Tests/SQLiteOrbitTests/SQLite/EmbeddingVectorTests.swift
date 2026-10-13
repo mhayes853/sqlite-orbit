@@ -43,7 +43,7 @@
     }
 
     @Test
-    func otherNumericPrecisionsUseTaggedLittleEndianBlobs() throws {
+    func float64VectorsUseRawLittleEndianBlobsUnlessTursoTagged() throws {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
         return
       }
@@ -51,8 +51,7 @@
       let doubleBytes: [UInt8] = [
         0, 0, 0, 0, 0, 0, 240, 63,
         0, 0, 0, 0, 0, 0, 0, 192,
-        0, 0, 0, 0, 0, 0, 224, 63,
-        2
+        0, 0, 0, 0, 0, 0, 224, 63
       ]
       #expect(double.orbitDatabaseValue() == .blob(doubleBytes))
       #expect(
@@ -60,6 +59,16 @@
           == .blob(doubleBytes)
       )
       #expect(try EmbeddingVector64<3>(orbitDatabaseValue: .blob(doubleBytes)) == double)
+
+      let tagged = EmbeddingVector64<3>.TursoFloat64BytesRepresentation(queryOutput: double)
+      #expect(tagged.orbitDatabaseValue() == .blob(doubleBytes + [2]))
+      #expect(tagged.queryBinding == .blob(doubleBytes + [2]))
+      #expect(
+        try EmbeddingVector64<3>
+          .TursoFloat64BytesRepresentation(
+            orbitDatabaseValue: .blob(doubleBytes + [2])
+          ) == tagged
+      )
 
       #expect(try EmbeddingVector64<3>?(orbitDatabaseValue: .null) == nil)
     }
@@ -76,28 +85,58 @@
       let double = EmbeddingVector64<4> { Double(bitPattern: doubleBits[$0]) }
       let decodedDouble = try EmbeddingVector64<4>(orbitDatabaseValue: double.orbitDatabaseValue())
       #expect(decodedDouble.map(\.bitPattern) == doubleBits)
-      #expect(EmbeddingVector64<0>(repeating: 0).orbitDatabaseValue() == .blob([2]))
-      #expect(try EmbeddingVector64<0>(orbitDatabaseValue: .blob([2])).isEmpty)
+      #expect(EmbeddingVector64<0>(repeating: 0).orbitDatabaseValue() == .blob([]))
+      #expect(try EmbeddingVector64<0>(orbitDatabaseValue: .blob([])).isEmpty)
+      let tagged = EmbeddingVector64<0>
+        .TursoFloat64BytesRepresentation(
+          queryOutput: EmbeddingVector64<0>(repeating: 0)
+        )
+      #expect(tagged.orbitDatabaseValue() == .blob([2]))
     }
 
     @Test
-    func numericPrecisionDecodingRejectsWrongTagsAndDimensions() throws {
+    func numericPrecisionDecodingRejectsWrongFormatsAndDimensions() throws {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
         return
       }
+      let tagged = Array(repeating: UInt8(0), count: 24) + [2]
       for value in [
-        OrbitDatabaseValue.blob([2]), .blob(Array(repeating: 0, count: 25)),
-        .blob(Array(repeating: 0, count: 24) + [5]), .text("[1,2,3]")
+        OrbitDatabaseValue.blob([2]), .blob(Array(repeating: 0, count: 16)), .blob(tagged),
+        .text("[1,2,3]")
       ] {
         #expect(throws: OrbitDatabaseValueConversionError.self) {
           try EmbeddingVector64<3>(orbitDatabaseValue: value)
         }
       }
-      // Float32 blobs may carry Turso's optional format tag; use the same acceptance rules as
-      // the structured query representation, while still validating the fixed dimension.
+      for value in [
+        OrbitDatabaseValue.blob(Array(tagged.dropLast())), .blob(Array(tagged.dropLast()) + [5]),
+        .blob(Array(repeating: 0, count: 16) + [2])
+      ] {
+        #expect(throws: OrbitDatabaseValueConversionError.self) {
+          try EmbeddingVector64<3>.TursoFloat64BytesRepresentation(orbitDatabaseValue: value)
+        }
+      }
+
+      // Only the Turso representation accepts Turso's optional Float32 tag. Both still validate
+      // the fixed dimension.
       let float = EmbeddingVector<3>(repeating: 1)
       let bytes = try #require(float.orbitDatabaseValue().blobValue)
-      #expect(try EmbeddingVector<3>(orbitDatabaseValue: .blob(bytes + [1])) == float)
+      #expect(throws: OrbitDatabaseValueConversionError.self) {
+        try EmbeddingVector<3>(orbitDatabaseValue: .blob(bytes + [1]))
+      }
+      #expect(
+        try EmbeddingVector<3>
+          .TursoFloat32BytesRepresentation(
+            orbitDatabaseValue: .blob(bytes + [1])
+          )
+          .queryOutput == float
+      )
+      #expect(throws: OrbitDatabaseValueConversionError.self) {
+        try EmbeddingVector<3>
+          .TursoFloat32BytesRepresentation(
+            orbitDatabaseValue: .blob(Array(bytes.dropLast(4)) + [1])
+          )
+      }
     }
 
     @Test(arguments: [OrbitDatabaseValue.null, .integer(1), .real(1), .text("[1,2,3]")])

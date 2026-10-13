@@ -26,6 +26,11 @@
     }
   }
 
+  // Turso tags Float64 blobs and may tag Float32 blobs. The default vector conversions use raw
+  // components, so these representations carry Turso's format through raw SQL.
+  extension TursoFloat32BytesRepresentation: OrbitDatabaseValueConvertible {}
+  extension TursoFloat64BytesRepresentation: OrbitDatabaseValueConvertible {}
+
   extension Quantized8Vector: OrbitDatabaseValueConvertible {}
   extension SparseFloat32Vector: OrbitDatabaseValueConvertible {}
 

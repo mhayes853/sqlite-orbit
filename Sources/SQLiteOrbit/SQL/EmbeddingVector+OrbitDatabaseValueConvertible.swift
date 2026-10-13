@@ -5,8 +5,10 @@
   extension FixedEmbeddingVector: OrbitDatabaseValueConvertible where Scalar: VectorScalar {
     /// Stores the vector using SQLite-Vec-data's default representation for its scalar type.
     ///
-    /// Float32 uses little-endian bytes shared with SQLite Vec and Turso. Float64 includes
-    /// Turso's format tag, matching the structured query representations.
+    /// Every scalar type uses raw little-endian bytes, matching the structured query
+    /// representations. Float32 bytes are shared with SQLite Vec and Turso. Turso's tagged
+    /// Float64 format and optional Float32 tag need `.TursoFloat64BytesRepresentation` and
+    /// `.TursoFloat32BytesRepresentation`.
     public func orbitDatabaseValue() -> OrbitDatabaseValue {
       .blob(vectorBytes)
     }

@@ -792,12 +792,23 @@ let stored = try await database.read {
 }
 ```
 
-Numeric vectors use SQLite-Vec-data's public `vectorBytes` and `init(vectorBytes:)` APIs:
-little-endian float32 bytes for `EmbeddingVector` and tagged little-endian float64 bytes for
-`EmbeddingVector64`. Raw SQL and structured query representations use the same formats, including
-accepting Turso's optional float32 tag when decoding. Decoding rejects other storage classes,
-invalid format tags, and mismatched dimensions. The vector types follow upstream's availability
-on Apple platforms: iOS, macOS, tvOS, and visionOS 26 or later, and watchOS 26 or later.
+Numeric vectors use SQLite-Vec-data's public `vectorBytes` and `init(vectorBytes:)` APIs: raw
+little-endian float32 bytes for `EmbeddingVector` and raw little-endian float64 bytes for
+`EmbeddingVector64`. Raw SQL and structured query representations use the same formats. Turso
+appends a type byte to float64 vectors and accepts one on float32 vectors, so use
+`.TursoFloat64BytesRepresentation` or `.TursoFloat32BytesRepresentation` for those blobs. Both also
+conform to `OrbitDatabaseValueConvertible`:
+
+```swift
+let tagged = EmbeddingVector64<3>.TursoFloat64BytesRepresentation(queryOutput: vector64)
+try await database.write {
+  try $0.execute("INSERT INTO embeddings64 VALUES (\(tagged))")
+}
+```
+
+Decoding rejects other storage classes, invalid format tags, and mismatched dimensions. The vector
+types follow upstream's availability on Apple platforms: iOS, macOS, tvOS, and visionOS 26 or
+later, and watchOS 26 or later.
 
 SQLiteVec's signed Int8 vectors use `[Int8].Int8BytesRepresentation`, or
 `FixedEmbeddingVector<N, Int8>.Int8BytesRepresentation` to validate dimensions. Both conform to
@@ -836,7 +847,7 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `4fa2928` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `3625c9a` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and
@@ -927,10 +938,10 @@ for diagnostics. Malformed serialized bytes throw `VectorDecodingError`.
 use `.TursoBytesRepresentation` for Turso or `.PackedBitsRepresentation` for SQLiteVec, which
 requires dimensions divisible by eight. `TursoVec.distanceHamming` returns the number of differing
 bits as a `Double`, agreeing with the local vector's `hammingDistance(to:)` integer result.
-Binary cosine distance uses the same native SQL function. Structured queries use explicit
-representations for
-`EmbeddingVector64` and binary vectors to select their blob format. Raw SQL binds and fetches
-the numeric vector types directly. Upstream now focuses on SQLiteVec and Rust Turso: libSQL
+Binary cosine distance uses the same native SQL function. `TursoVec` helpers only accept Turso's
+encodings, so structured queries use `.TursoFloat64BytesRepresentation` for `EmbeddingVector64`
+and `.TursoBytesRepresentation` for binary vectors; raw float64, Float16, and packed-bit
+representations do not compile with them. Upstream now focuses on SQLiteVec and Rust Turso: libSQL
 helpers and the bfloat16 vector type have been removed, and Float16 vectors only serialize.
 
 `TursoVec.concat` accepts two dense float32 or float64 vectors. `TursoVec.slice` also supports

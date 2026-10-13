@@ -38,7 +38,7 @@
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
         let float32: [Float].VectorBytesRepresentation = [1, -2, 0.5]
-        let float64: [Double].VectorBytesRepresentation = [1, -2, 0.5]
+        let float64: [Double].TursoFloat64BytesRepresentation = [1, -2, 0.5]
         try await database.read { transaction in
           #expect(
             try transaction.fetchOne(
@@ -62,7 +62,7 @@
             try transaction.fetchOne(
               #sql(
                 "SELECT \(TursoVec.vector64("[1,-2,0.5]"))",
-                as: [Double].VectorBytesRepresentation.self
+                as: [Double].TursoFloat64BytesRepresentation.self
               )
             )
               == float64.queryOutput
@@ -80,7 +80,7 @@
             try transaction.fetchOne(
               #sql(
                 "SELECT \(TursoVec.vector64(float32))",
-                as: [Double].VectorBytesRepresentation.self
+                as: [Double].TursoFloat64BytesRepresentation.self
               )
             )
               == float64.queryOutput
@@ -182,7 +182,7 @@
         let distances: [QueryFragment]
         switch format {
         case "float64":
-          let left: [Double].VectorBytesRepresentation = [1, 0, 0]
+          let left: [Double].TursoFloat64BytesRepresentation = [1, 0, 0]
           let right = TursoVec.vector64("[1,1,0]")
           distances = [
             TursoVec.distanceCosine(left, to: right).queryFragment,
@@ -293,7 +293,7 @@
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
         let left: [Float].VectorBytesRepresentation = [1, -2]
-        let double: [Double].VectorBytesRepresentation = [Double.pi, -2]
+        let double: [Double].TursoFloat64BytesRepresentation = [Double.pi, -2]
         try await database.read { transaction throws -> Void in
           let joined = TursoVec.concat(left, TursoVec.vector32("[0,4]"))
           let joinedDouble = TursoVec.concat(double, TursoVec.vector64("[0,4]"))
@@ -304,7 +304,7 @@
           )
           #expect(
             try transaction.fetchOne(
-              #sql("SELECT \(joinedDouble)", as: [Double].VectorBytesRepresentation.self)
+              #sql("SELECT \(joinedDouble)", as: [Double].TursoFloat64BytesRepresentation.self)
             ) == [Double.pi, -2, 0, 4]
           )
           #expect(
@@ -319,7 +319,7 @@
             try transaction.fetchOne(
               #sql(
                 "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3))",
-                as: [Double].VectorBytesRepresentation.self
+                as: [Double].TursoFloat64BytesRepresentation.self
               )
             ) == [-2, 0]
           )
@@ -335,8 +335,8 @@
             #expect(
               try transaction.fetchOne(
                 #sql(
-                  "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3, as: EmbeddingVector64<2>.VectorBytesRepresentation.self))",
-                  as: EmbeddingVector64<2>.VectorBytesRepresentation.self
+                  "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3, as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self))",
+                  as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self
                 )
               ) == EmbeddingVector64<2> { [Double(-2), 0][$0] }
             )
@@ -482,7 +482,7 @@
               )
             ]
           )
-          let double = [Double].VectorBytesRepresentation(queryOutput: row.float64)
+          let double = [Double].TursoFloat64BytesRepresentation(queryOutput: row.float64)
           let float8 = row.float8
           let binary = [Bool].TursoBytesRepresentation(queryOutput: row.bits)
           let distances = try transaction.fetchAll(
@@ -608,12 +608,14 @@
         let database = try file.tursoPool()
         let vector = EmbeddingVector<3> { [Float(1), -2, 0.5][$0] }
         let double = EmbeddingVector64<3> { Double(vector[$0]) }
+        // Turso tags Float64 blobs, while EmbeddingVector64's own conversion stores raw components.
+        let taggedDouble = EmbeddingVector64<3>.TursoFloat64BytesRepresentation(queryOutput: double)
         let binary = BinaryEmbeddingVector<3> { $0 != 1 }
         try await database.write { transaction in
           try transaction.execute(
             "CREATE TABLE vectors (embedding F32_BLOB(3), float64 F64_BLOB(3))"
           )
-          try transaction.execute("INSERT INTO vectors VALUES (\(vector), \(double))")
+          try transaction.execute("INSERT INTO vectors VALUES (\(vector), \(taggedDouble))")
         }
         try await database.read { transaction in
           let stored = try transaction.fetchOne(
@@ -622,12 +624,18 @@
           )
           let storedDouble = try transaction.fetchOne(
             "SELECT float64 FROM vectors",
-            as: EmbeddingVector64<3>.self
+            as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self
           )
           let nativeDouble = try transaction.fetchOne(
             "SELECT vector64('[1,-2,0.5]')",
-            as: EmbeddingVector64<3>.self
+            as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self
           )
+          #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+            try transaction.fetchOne(
+              "SELECT vector64('[1,-2,0.5]')",
+              as: EmbeddingVector64<3>.self
+            )
+          }
           let float32 = try transaction.fetchOne(
             #sql(
               "SELECT \(TursoVec.vector32(vector, as: EmbeddingVector<3>.self))",
@@ -636,8 +644,8 @@
           )
           let float64 = try transaction.fetchOne(
             #sql(
-              "SELECT \(TursoVec.vector64(vector, as: EmbeddingVector64<3>.VectorBytesRepresentation.self))",
-              as: EmbeddingVector64<3>.VectorBytesRepresentation.self
+              "SELECT \(TursoVec.vector64(vector, as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self))",
+              as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self
             )
           )
           let bits = try transaction.fetchOne(
@@ -647,8 +655,8 @@
             )
           )
           #expect(stored == vector)
-          #expect(storedDouble == double)
-          #expect(nativeDouble == double)
+          #expect(storedDouble == taggedDouble)
+          #expect(nativeDouble == taggedDouble)
           #expect(float32 == vector)
           #expect(float64 == double)
           #expect(bits == binary)
@@ -852,7 +860,7 @@
   private struct TursoEncodedEmbedding: Equatable {
     @Column(primaryKey: true)
     var key: Int
-    @Column(as: [Double].VectorBytesRepresentation.self)
+    @Column(as: [Double].TursoFloat64BytesRepresentation.self)
     var float64: [Double]
     var float8: Quantized8Vector
     @Column(as: [Bool].TursoBytesRepresentation.self)
