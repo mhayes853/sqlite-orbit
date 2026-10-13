@@ -625,7 +625,6 @@ extension SQLiteRawAuthorization {
   func changedRegion(
     additionalColumnsAffectedByUpdate: (String, SQLiteSchemaName) -> Set<String>?
   ) -> OrbitDatabaseRegion {
-    let schema = schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
     // Schema changes may have changed anything. Attaching and detaching a database are the two
     // that do not: they bring a schema along or take it away rather than rewrite one.
     if invalidatesStatementCache, action != .attach, action != .detach { return .fullDatabase }
@@ -646,5 +645,10 @@ extension SQLiteRawAuthorization {
     default:
       return .empty
     }
+  }
+
+  // Worked out only for the actions that change a table, rather than for every read.
+  private var schema: SQLiteSchemaName {
+    schemaName.map(SQLiteSchemaName.init(rawValue:)) ?? .main
   }
 }

@@ -185,8 +185,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The other region.
   public func union(_ other: Self) -> Self {
-    if self == other || other.isEmpty || isFullDatabase { return self }
+    // Comparing the regions is left until last, since it is the one check that reads their
+    // tables, and a union with nothing, the most common, needs none of it.
+    if other.isEmpty || isFullDatabase { return self }
     if isEmpty || other.isFullDatabase { return other }
+    if self == other { return self }
     return combining(other, with: { $0 || $1 })
   }
 
