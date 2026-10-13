@@ -21,7 +21,8 @@
   /// ```
   ///
   /// The database is resolved exactly as it is for the fetch properties: an explicit `database`
-  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``.
+  /// argument first, then the SwiftUI environment, then ``OrbitDefaultDatabase``. Each of them is an
+  /// ``OrbitObservableDatabaseWriter``, so saves always go to the database the row is read from.
   @propertyWrapper
   public struct Row<Value>: Sendable
   where
@@ -45,21 +46,27 @@
     #endif
 
     /// Creates a property observing the row with `primaryKey`.
+    ///
+    /// - Parameters:
+    ///   - type: The table the row belongs to.
+    ///   - primaryKey: The primary key of the row, fixed for the property's lifetime.
+    ///   - database: The database to read from and save to, or `nil` to resolve one the way
+    ///     ``OrbitDefaultDatabase`` describes.
+    ///   - scheduler: Where values are delivered. By default they are delivered as they are
+    ///     produced, and the first read happens before the property is first read.
     public init(
       _ type: Value.Type,
       id primaryKey: Value.PrimaryKey.QueryOutput,
-      database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      database: (any OrbitObservableDatabaseWriter)? = nil,
+      scheduler: some OrbitValueObservationScheduler = .immediate
     ) {
       self.primaryKey = primaryKey
       let statement: Select<Value, Value, ()> = Value.all.selectStar()
       let storage = OrbitRowStorage(
         fetch: .make(
           value: nil,
-          request: OrbitFetchOptionalStatementRequest<Value>(
-            statement: statement.find(Value.PrimaryKey(queryOutput: primaryKey))
-          ),
-          database: database,
+          request: statement.find(Value.PrimaryKey(queryOutput: primaryKey)).firstRowRequest(),
+          writableDatabase: database,
           scheduler: scheduler
         )
       )
@@ -112,7 +119,7 @@
       }
       try await storage.write { database in
         try await database.write { transaction in
-          try transaction.execute(Value.update(value))
+          try Value.update(value).execute(transaction)
           guard transaction.changesCount == 1 else {
             throw OrbitDatabaseRecordNotFoundError()
           }
@@ -131,7 +138,7 @@
       let primaryKey = self.primaryKey
       return try await storage.write { database in
         try await database.write { transaction in
-          try Self.update(in: transaction, primaryKey: primaryKey, mutation)
+          try Value.update(id: primaryKey, in: transaction, mutation)
         }
       }
     }
@@ -144,9 +151,7 @@
       let primaryKey = self.primaryKey
       try await storage.write { database in
         try await database.write { transaction in
-          try transaction.execute(
-            Value.find(Value.PrimaryKey(queryOutput: primaryKey)).delete()
-          )
+          try Value.find(Value.PrimaryKey(queryOutput: primaryKey)).delete().execute(transaction)
           guard transaction.changesCount == 1 else {
             throw OrbitDatabaseRecordNotFoundError()
           }
@@ -154,55 +159,35 @@
       }
     }
 
+    /// Mutates the latest row and commits before returning, blocking the calling thread.
+    ///
+    /// Uses the same database and saving state as ``update(_:)``. A failure is both thrown and
+    /// recorded in ``saveError``. This is intended for synchronous main-actor callbacks, such as
+    /// a binding setter; use ``update(_:)`` from asynchronous code.
     @MainActor
-    func updateBlocking<Result: Sendable>(
+    @discardableResult
+    public func updateBlocking<Result: Sendable>(
       _ mutation: @escaping @Sendable (inout Value) throws -> Result
     ) throws -> Result {
       let primaryKey = self.primaryKey
       return try storage.writeBlocking { database in
         try database.writeBlocking { transaction in
-          try Self.update(in: transaction, primaryKey: primaryKey, mutation)
+          try Value.update(id: primaryKey, in: transaction, mutation)
         }
       }
     }
 
-    private static func update<Result>(
-      in transaction: borrowing SQLiteWriteTransaction,
-      primaryKey: Value.PrimaryKey.QueryOutput,
-      _ mutation: (inout Value) throws -> Result
-    ) throws -> Result {
-      var value = try transaction.find(Value.all, key: Value.PrimaryKey(queryOutput: primaryKey))
-      let result = try mutation(&value)
-      guard value.primaryKey == primaryKey else {
-        throw OrbitRowIdentityMismatchError()
-      }
-      try transaction.execute(Value.update(value))
-      guard transaction.changesCount == 1 else {
-        throw OrbitDatabaseRecordNotFoundError()
-      }
-      return result
-    }
   }
 
   #if canImport(SwiftUI)
     extension Row: DynamicProperty {
+      /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        storage.fetch.update(
-          declared: box.fetch,
+        storage.update(
+          declared: box,
           database: environmentDatabase ?? defaultDatabase.currentIfConfigured,
-          generation: fetchGeneration
-        )
-        observeWritesForSwiftUI()
-      }
-
-      private func observeWritesForSwiftUI() {
-        guard #unavailable(iOS 17, macOS 14, tvOS 17, watchOS 10) else { return }
-        _ = writeGeneration.wrappedValue
-        nonisolated(unsafe) let generation = writeGeneration
-        storage.setSwiftUIObservation(
-          storage.addWriteObserver {
-            Task { @MainActor in generation.wrappedValue &+= 1 }
-          }
+          fetchGeneration: fetchGeneration,
+          writeGeneration: writeGeneration
         )
       }
     }

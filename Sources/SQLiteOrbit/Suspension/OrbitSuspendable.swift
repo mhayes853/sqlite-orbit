@@ -29,13 +29,13 @@ public protocol OrbitSuspendable: Sendable {
 /// }
 /// ```
 public struct OrbitDatabaseSuspendedError: Error, Hashable, Sendable {
-  /// The database that refused the write.
-  public let databaseIdentifier: OrbitDatabaseIdentifier
+  /// The path of the database that refused the write.
+  public let path: OrbitDatabasePath
 
-  /// Creates an error for a write that `databaseIdentifier` refused while suspended.
+  /// Creates an error for a write that the database at `path` refused while suspended.
   ///
-  /// - Parameter databaseIdentifier: The database that refused the write.
-  public init(databaseIdentifier: OrbitDatabaseIdentifier) {
-    self.databaseIdentifier = databaseIdentifier
+  /// - Parameter path: The path of the database that refused the write.
+  public init(path: OrbitDatabasePath) {
+    self.path = path
   }
 }

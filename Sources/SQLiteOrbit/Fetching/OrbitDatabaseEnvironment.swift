@@ -2,18 +2,22 @@
   import SwiftUI
 
   private struct OrbitDatabaseEnvironmentKey: EnvironmentKey {
-    static var defaultValue: (any OrbitObservableDatabase)? { nil }
+    static var defaultValue: (any OrbitObservableDatabaseWriter)? { nil }
   }
 
   extension EnvironmentValues {
-    /// The database ``Fetch``, ``FetchAll``, and ``FetchOne`` read from when they are declared
-    /// without one.
+    /// The database ``Fetch``, ``FetchAll``, ``FetchOne``, ``Row``, and ``SingleRow`` use when they
+    /// are declared without one.
     ///
     /// A view hierarchy is the natural scope for "which database is this screen about", and it is
     /// the one scope ``OrbitDefaultDatabase`` cannot express: a preview, a sheet, or a test host
     /// wants its own database without disturbing the rest of the process. Reading this value in a
     /// view body is how a view that is not a fetch property reaches the same database its fetch
     /// properties are using.
+    /// It has the same type as ``OrbitDefaultDatabase/current``, so anything that can be the default
+    /// can be offered here, and ``Row`` and ``SingleRow`` can always save to it. A read-only
+    /// database can still be handed to an individual fetch property through its `database:`
+    /// argument.
     ///
     /// ```swift
     /// struct RemindersView: View {
@@ -25,7 +29,7 @@
     ///   }
     /// }
     /// ```
-    public var orbitDatabase: (any OrbitObservableDatabase)? {
+    public var orbitDatabase: (any OrbitObservableDatabaseWriter)? {
       get { self[OrbitDatabaseEnvironmentKey.self] }
       set { self[OrbitDatabaseEnvironmentKey.self] = newValue }
     }
@@ -50,7 +54,7 @@
     /// - Parameter database: The database descendants read from, or `nil` to leave them with
     ///   ``OrbitDefaultDatabase/current``.
     /// - Returns: A view that offers `database` to its descendants.
-    public func orbitDatabase(_ database: (any OrbitObservableDatabase)?) -> some View {
+    public func orbitDatabase(_ database: (any OrbitObservableDatabaseWriter)?) -> some View {
       environment(\.orbitDatabase, database)
     }
   }

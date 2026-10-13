@@ -212,6 +212,7 @@
             return
           }
           try await driver.withDatabase(
+            configuration: vecConfiguration(),
             schema:
               "CREATE VIRTUAL TABLE binary_embeddings USING vec0(embedding bit[16], label text)"
           ) { database in
@@ -219,66 +220,61 @@
             let near = try BinaryEmbeddingVector<16>(packedBytes: [0x85, 0x02])
             let vector = BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: exact)
             try await database.write { transaction in
-              try transaction.execute(
-                SQLiteBinaryEmbedding.insert {
-                  ($0.embedding, $0.label)
-                } values: {
-                  (
-                    Vec.bit(
-                      BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: near),
-                      as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self
-                    ),
-                    "near"
-                  )
-                  (
-                    Vec.bit(vector, as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self),
-                    "exact"
-                  )
-                }
-              )
+              try SQLiteBinaryEmbedding.insert {
+                ($0.embedding, $0.label)
+              } values: {
+                (
+                  Vec.bit(
+                    BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: near),
+                    as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self
+                  ),
+                  "near"
+                )
+                (
+                  Vec.bit(vector, as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self),
+                  "exact"
+                )
+              }
+              .execute(transaction)
             }
             try await database.read { transaction in
-              let rows = try transaction.fetchAll(SQLiteBinaryEmbedding.order { $0.label })
+              let rows = try SQLiteBinaryEmbedding.order { $0.label }.fetchAll(transaction)
               #expect(rows.map(\.embedding) == [exact, near])
-              let nearest = try transaction.fetchAll(
-                SQLiteBinaryEmbedding.where { $0.embedding.match(vector) }
-                  .order { $0.distance }.limit(2).select { ($0.label, $0.distance) }
-              )
+              let nearest = try SQLiteBinaryEmbedding.where { $0.embedding.match(vector) }
+                .order { $0.distance }.limit(2).select { ($0.label, $0.distance) }
+                .fetchAll(transaction)
               #expect(nearest.map(\.0) == ["exact", "near"])
               #expect(nearest.map(\.1) == [0, Double(exact.hammingDistance(to: near))])
-              let scalar = try transaction.fetchAll(
-                SQLiteBinaryEmbedding.order { $0.embedding.distanceHamming(to: vector) }
-                  .select { $0.embedding.distanceHamming(to: vector) }
-              )
+              let scalar =
+                try SQLiteBinaryEmbedding.order { $0.embedding.distanceHamming(to: vector) }
+                .select { $0.embedding.distanceHamming(to: vector) }
+                .fetchAll(transaction)
               #expect(scalar == nearest.map(\.1))
-              let sliced = try transaction.fetchOne(
-                #sql(
-                  "SELECT \(Vec.slice(vector, range: 8..<16, as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self))",
-                  as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
-                )
+              let sliced = try #sql(
+                "SELECT \(Vec.slice(vector, range: 8..<16, as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self))",
+                as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
               )
+              .fetchOne(transaction)
               #expect(sliced?.packedBytes == [0x01])
               let columnSlices = try #require(
-                try transaction.fetchOne(
-                  SQLiteBinaryEmbedding.where { $0.label.eq("near") }
-                    .select {
-                      (
-                        $0.embedding.slice(start: 0, end: 8),
-                        $0.embedding.slice(
-                          0...7,
-                          as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
-                        )
+                try SQLiteBinaryEmbedding.where { $0.label.eq("near") }
+                  .select {
+                    (
+                      $0.embedding.slice(start: 0, end: 8),
+                      $0.embedding.slice(
+                        0...7,
+                        as: BinaryEmbeddingVector<8>.PackedBitsRepresentation.self
                       )
-                    }
-                )
+                    )
+                  }
+                  .fetchOne(transaction)
               )
               let nearPrefix = try BinaryEmbeddingVector<8>(packedBytes: [0x85])
               #expect(columnSlices.0 == Array(nearPrefix))
               #expect(columnSlices.1 == nearPrefix)
               #expect(
-                try transaction.fetchOne(
-                  #sql("SELECT \(Vec.type(vector))", as: String.self)
-                ) == "bit"
+                try #sql("SELECT \(Vec.type(vector))", as: String.self)
+                  .fetchOne(transaction) == "bit"
               )
             }
           }
@@ -293,37 +289,35 @@
           }
           // Scalar helpers also apply to ordinary tables that store vector blobs.
           try await driver.withDatabase(
+            configuration: vecConfiguration(),
             schema: "CREATE TABLE plain_embeddings (embedding BLOB NOT NULL, label TEXT NOT NULL)"
           ) { database in
             try await database.write { transaction in
-              try transaction.execute(
-                SQLitePlainEmbedding.insert {
-                  SQLitePlainEmbedding(embedding: EmbeddingVector<3>([2, 0, 1]), label: "plain")
-                }
-              )
+              try SQLitePlainEmbedding.insert {
+                SQLitePlainEmbedding(embedding: EmbeddingVector<3>([2, 0, 1]), label: "plain")
+              }
+              .execute(transaction)
             }
             try await database.read { transaction in
               let result = try #require(
-                try transaction.fetchOne(
-                  SQLitePlainEmbedding.select {
-                    (
-                      $0.embedding.slice(0..<2),
-                      $0.embedding.slice(0..<2, as: EmbeddingVector<2>.self),
-                      $0.embedding.distanceL2(to: $0.embedding.normalize())
-                    )
-                  }
-                )
+                try SQLitePlainEmbedding.select {
+                  (
+                    $0.embedding.slice(0..<2),
+                    $0.embedding.slice(0..<2, as: EmbeddingVector<2>.self),
+                    $0.embedding.distanceL2(to: $0.embedding.normalize())
+                  )
+                }
+                .fetchOne(transaction)
               )
               #expect(result.0 == [2, 0])
               #expect(result.1 == EmbeddingVector<2>([2, 0]))
               #expect(abs(result.2 - (Double(5).squareRoot() - 1)) < 0.000001)
               // Structured queries surface the vector's own error, unlike raw-SQL conversions.
               #expect(throws: VectorDecodingError.dimensionMismatch(expected: 3, actual: 2)) {
-                try transaction.fetchOne(
-                  SQLitePlainEmbedding.select {
-                    $0.embedding.slice(start: 0, length: 2, as: EmbeddingVector<3>.self)
-                  }
-                )
+                try SQLitePlainEmbedding.select {
+                  $0.embedding.slice(start: 0, length: 2, as: EmbeddingVector<3>.self)
+                }
+                .fetchOne(transaction)
               }
             }
           }
@@ -333,7 +327,7 @@
         // returns: integer lengths and elements, and real distances.
         @Test
         func numericHelpersDecodeWithTheirSQLiteStorageClasses() throws {
-          let database = try SQLiteQueue(path: ":memory:")
+          let database = try SQLiteQueue(path: ":memory:", configuration: vecConfiguration())
           let floats: [Float].VectorBytesRepresentation = [1, -2, 3, -4, 5, -6, 7, -8]
           let codes: [Int8].Int8BytesRepresentation = [1, -2, 3, -4, 5, -6, 7, -8]
           let bits: [Bool].PackedBitsRepresentation = [
@@ -342,37 +336,35 @@
           let offset: [Int8].Int8BytesRepresentation = [0, 0, 0, 0, 0, 0, 0, 2]
           try database.readBlocking { transaction in
             let lengths = try #require(
-              try transaction.fetchOne(
-                #sql(
-                  "SELECT \(Vec.length(floats)), \(Vec.length(codes)), \(Vec.length(bits))",
-                  as: (Int, Int, Int).self
-                )
+              try #sql(
+                "SELECT \(Vec.length(floats)), \(Vec.length(codes)), \(Vec.length(bits))",
+                as: (Int, Int, Int).self
               )
+              .fetchOne(transaction)
             )
             #expect([lengths.0, lengths.1, lengths.2] == [8, 8, 8])
             let distances = try #require(
-              try transaction.fetchOne(
-                #sql(
-                  """
-                  SELECT \(Vec.distanceL1(codes, to: offset)), \(Vec.distanceL1(floats, to: floats)), \
-                  \(Vec.distanceHamming(bits, to: bits))
-                  """,
-                  as: (Double, Double, Double).self
-                )
+              try #sql(
+                """
+                SELECT \(Vec.distanceL1(codes, to: offset)), \(Vec.distanceL1(floats, to: floats)), \
+                \(Vec.distanceHamming(bits, to: bits))
+                """,
+                as: (Double, Double, Double).self
               )
+              .fetchOne(transaction)
             )
             #expect([distances.0, distances.1, distances.2] == [38, 0, 0])
             #expect(
-              try transaction.fetchAll(Vec.each(floats).order(by: \.rowid).select(\.value))
+              try Vec.each(floats).order(by: \.rowid).select(\.value).fetchAll(transaction)
                 == floats.queryOutput
             )
             #expect(
-              try transaction.fetchAll(Vec.each(codes).order(by: \.rowid).select(\.value))
+              try Vec.each(codes).order(by: \.rowid).select(\.value).fetchAll(transaction)
                 == codes.queryOutput
             )
             // SQLiteVec reports the most significant bit of each packed byte first.
             #expect(
-              try transaction.fetchAll(Vec.each(bits).order(by: \.rowid).select(\.value))
+              try Vec.each(bits).order(by: \.rowid).select(\.value).fetchAll(transaction)
                 == bits.queryOutput.reversed()
             )
           }
@@ -385,20 +377,20 @@
             return
           }
           try await driver.withDatabase(
+            configuration: vecConfiguration(),
             schema: "CREATE VIRTUAL TABLE int8_embeddings USING vec0(embedding int8[4], label text)"
           ) { database in
             typealias Codes = FixedEmbeddingVector<4, Int8>.Int8BytesRepresentation
             let exact = Codes(queryOutput: FixedEmbeddingVector<4, Int8>([-128, 0, 64, 127]))
             let floats = EmbeddingVector<4>([-1, 0, 0.5, 1])
             try await database.write { transaction in
-              try transaction.execute(
-                SQLiteInt8Embedding.insert {
-                  ($0.embedding, $0.label)
-                } values: {
-                  (Vec.int8(exact, as: Codes.self), "exact")
-                  (Vec.quantizeInt8(floats, as: Codes.self), "quantized")
-                }
-              )
+              try SQLiteInt8Embedding.insert {
+                ($0.embedding, $0.label)
+              } values: {
+                (Vec.int8(exact, as: Codes.self), "exact")
+                (Vec.quantizeInt8(floats, as: Codes.self), "quantized")
+              }
+              .execute(transaction)
               // Blob subtypes do not survive binding, so raw SQL tags the bound codes as well.
               let raw: [Int8].Int8BytesRepresentation = [-128, 0, 64, 126]
               try transaction.execute(
@@ -406,22 +398,20 @@
               )
             }
             try await database.read { transaction in
-              let rows = try transaction.fetchAll(SQLiteInt8Embedding.order { $0.label })
+              let rows = try SQLiteInt8Embedding.order { $0.label }.fetchAll(transaction)
               #expect(rows.map(\.label) == ["exact", "quantized", "raw"])
               #expect(
                 rows.map { Array($0.embedding) } == [
                   [-128, 0, 64, 127], [-128, 0, 63, 126], [-128, 0, 64, 126]
                 ]
               )
-              let nearest = try transaction.fetchAll(
-                SQLiteInt8Embedding.where { $0.embedding.match(exact) }
-                  .order { $0.distance }.limit(3).select { ($0.label, $0.distance) }
-              )
+              let nearest = try SQLiteInt8Embedding.where { $0.embedding.match(exact) }
+                .order { $0.distance }.limit(3).select { ($0.label, $0.distance) }
+                .fetchAll(transaction)
               #expect(nearest.map(\.0) == ["exact", "raw", "quantized"])
-              let scalar = try transaction.fetchAll(
-                SQLiteInt8Embedding.order { $0.embedding.distanceL1(to: exact) }
-                  .select { $0.embedding.distanceL1(to: exact) }
-              )
+              let scalar = try SQLiteInt8Embedding.order { $0.embedding.distanceL1(to: exact) }
+                .select { $0.embedding.distanceL1(to: exact) }
+                .fetchAll(transaction)
               #expect(scalar == [0, 1, 2])
               let stored = try transaction.fetchOne(
                 "SELECT embedding FROM int8_embeddings WHERE label = 'raw'",
@@ -446,6 +436,7 @@
           return
         }
         try await driver.withDatabase(
+          configuration: vecConfiguration(),
           schema: "CREATE VIRTUAL TABLE embeddings USING vec0(embedding float[3])"
         ) { database in
           let origin = EmbeddingVector<3>(repeating: 0)
@@ -475,9 +466,8 @@
           #if StructuredQueries
             #expect(
               try await database.read {
-                try $0.fetchOne(
-                  #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
-                )
+                try #sql("SELECT \(Vec.distanceL2(origin, to: neighbor))", as: Double.self)
+                  .fetchOne($0)
               } == 1
             )
           #endif

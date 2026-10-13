@@ -33,19 +33,18 @@
         sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
       )
       try await driver.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "scratch") })
+        try Item.insert { Item(id: 1, title: "scratch") }.execute(transaction)
       }
       let items = try await driver.read { transaction in
-        try transaction.fetchAll(Item.all)
+        try Item.all.fetchAll(transaction)
       }
       #expect(items == [Item(id: 1, title: "scratch")])
 
       // No file names it, so a second driver opens a different, empty database of its own.
       #expect(OrbitDatabasePath.temporary.fileURL == nil)
       let other = try SQLiteQueue(path: .temporary)
-      #expect(other.defaultIdentifier != driver.defaultIdentifier)
       await #expect(throws: SQLiteError.self) {
-        try await other.read { try $0.fetchCount(Item.all) }
+        try await other.read { try Item.all.fetchCount($0) }
       }
     }
 

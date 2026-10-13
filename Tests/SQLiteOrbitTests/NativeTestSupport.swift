@@ -35,13 +35,11 @@
 
   func withPooledDatabase<Result>(
     configuration: SQLiteConfiguration,
-    maximumReaderCount: Int = 4,
+    readerCount: Int = 4,
     _ body: (SQLitePool) async throws -> Result
   ) async throws -> Result {
-    var configuration = configuration
-    configuration.readerCount = maximumReaderCount
     return try await withTestDatabaseFile("pool") { file in
-      try await body(try file.pool(configuration: configuration))
+      try await body(try file.pool(configuration: configuration, readerCount: readerCount))
     }
   }
 

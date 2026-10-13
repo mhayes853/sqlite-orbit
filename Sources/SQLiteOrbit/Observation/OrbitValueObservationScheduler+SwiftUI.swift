@@ -6,9 +6,9 @@
   ///
   /// ```swift
   /// try OrbitValueObservation
-  ///   .tracking { try $0.fetchAll(Reminder.all) }
-  ///   .subscribe(to: database, scheduling: .mainActor.animation(.default)) { _ in
-  ///   } onChange: { change in reminders = change.value }
+  ///   .tracking { try Reminder.all.fetchAll($0) }
+  ///   .subscribe(to: database, scheduling: .transaction(Transaction(animation: .snappy))) { _ in
+  ///   } onChange: { @MainActor change in reminders = change.value }
   /// ```
   public struct OrbitTransactionValueObservationScheduler<
     Base: OrbitValueObservationMainActorScheduler
@@ -90,16 +90,96 @@
     ///
     /// ```swift
     /// try observation.subscribe(to: database, scheduling: .mainActor.animation()) { _ in
-    /// } onChange: { change in reminders = change.value }
+    /// } onChange: { @MainActor change in reminders = change.value }
     /// ```
     ///
     /// - Parameter animation: The animation applied to each scheduled callback.
     /// - Returns: A scheduler that animates this one's deliveries.
-    @MainActor
     public func animation(
       _ animation: Animation? = .default
-    ) -> OrbitTransactionValueObservationScheduler<Self> {
-      transaction(Transaction(animation: animation))
+    ) -> OrbitAnimatedValueObservationScheduler<Self> {
+      OrbitAnimatedValueObservationScheduler(base: self, animation: animation)
     }
   }
+
+  extension OrbitValueObservationScheduler
+  where Self == OrbitTransactionValueObservationScheduler<OrbitMainActorValueObservationScheduler> {
+    /// Delivers callbacks on the main actor inside `transaction`.
+    ///
+    /// This is ``OrbitValueObservationScheduler/mainActor`` followed by
+    /// ``OrbitValueObservationMainActorScheduler/transaction(_:)``, spelled so that it can be
+    /// written with a leading dot wherever a scheduler is expected. An immediate initial callback
+    /// bypasses the transaction.
+    ///
+    /// ```swift
+    /// try await $reminders.load(query, scheduler: .transaction(Transaction(animation: .snappy)))
+    /// ```
+    ///
+    /// - Parameter transaction: The SwiftUI transaction each scheduled callback runs inside.
+    /// - Returns: A main-actor scheduler that wraps its deliveries in `transaction`.
+    @MainActor
+    public static func transaction(_ transaction: Transaction) -> Self {
+      OrbitMainActorValueObservationScheduler.mainActor.transaction(transaction)
+    }
+  }
+
+  extension OrbitValueObservationScheduler
+  where Self == OrbitAnimatedValueObservationScheduler<OrbitMainActorValueObservationScheduler> {
+    /// Delivers callbacks on the main actor with `animation`.
+    ///
+    /// This is ``OrbitValueObservationScheduler/mainActor`` followed by
+    /// ``OrbitValueObservationMainActorScheduler/animation(_:)``, spelled so that it can be
+    /// written with a leading dot wherever a scheduler is expected. An immediate initial callback
+    /// is not animated.
+    ///
+    /// ```swift
+    /// @FetchAll(Reminder.all, scheduler: .animation(.bouncy)) var reminders
+    /// ```
+    ///
+    /// - Parameter animation: The animation applied to each scheduled callback.
+    /// - Returns: A main-actor scheduler that animates its deliveries.
+    public static func animation(_ animation: Animation? = .default) -> Self {
+      OrbitMainActorValueObservationScheduler.mainActor.animation(animation)
+    }
+  }
+
+  /// A main-actor scheduler that applies an animation to scheduled callbacks.
+  ///
+  /// Initial timing follows the base scheduler; an immediate initial value is not animated.
+  ///
+  /// ```swift
+  /// @FetchAll(Reminder.all, scheduler: .animation(.bouncy)) var reminders
+  /// ```
+  public struct OrbitAnimatedValueObservationScheduler<
+    Base: OrbitValueObservationMainActorScheduler
+  >:
+    OrbitValueObservationMainActorScheduler
+  {
+    private let base: Base
+    private let animation: Animation?
+
+    public init(base: Base, animation: Animation? = .default) {
+      self.base = base
+      self.animation = animation
+    }
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      base.immediateInitialValue(from: isolation)
+    }
+
+    public func schedule(
+      from isolation: isolated (any Actor)?,
+      _ action: @escaping @Sendable () -> Void
+    ) {
+      base.schedule(from: isolation) { [animation] in
+        MainActor.assumeIsolated { withAnimation(animation, action) }
+      }
+    }
+  }
+
+  extension OrbitAnimatedValueObservationScheduler: Equatable where Base: Equatable {}
+
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
+  extension OrbitAnimatedValueObservationScheduler: Hashable where Base: Hashable {}
+
 #endif

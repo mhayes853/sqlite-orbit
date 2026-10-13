@@ -184,13 +184,11 @@
     }
 
     @Test
-    func typedTablesAndInstancesProduceTheirTableRegion() {
-      let reminder = Reminder(id: 1, title: "One", isCompleted: false)
+    func typedTablesProduceTheirTableRegion() {
       let expected = OrbitDatabaseRegion(table: "reminders")
 
       #expect(OrbitDatabaseRegion(Reminder.self) == expected)
       #expect(Reminder.databaseRegion == expected)
-      #expect(reminder.databaseRegion == expected)
     }
 
     @Test

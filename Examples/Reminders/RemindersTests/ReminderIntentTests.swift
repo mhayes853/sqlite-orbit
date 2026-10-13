@@ -250,7 +250,7 @@ struct ReminderIntentTests {
   }
 
   private func insertReminder(
-    in database: RemindersDatabase,
+    in database: any OrbitObservableDatabaseWriter,
     list: RemindersList? = nil,
     title: String = "Call home"
   ) async throws -> (RemindersList, Reminder) {
@@ -269,7 +269,7 @@ struct ReminderIntentTests {
 
   private func status(
     of id: Reminder.ID,
-    in database: RemindersDatabase
+    in database: any OrbitObservableDatabaseWriter
   ) async throws -> Reminder.Status? {
     try await database.read {
       try Reminder.find(id).select(\.status).fetchOne($0)

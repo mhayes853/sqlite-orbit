@@ -131,10 +131,6 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     schema: SQLiteSchemaName = .main
   ) where Columns.Element == String {
     let columns = Set(columns.map(\.asciiLowercased))
-    guard !columns.isEmpty else {
-      self.init()
-      return
-    }
     self.init(
       includesUnspecifiedTables: false,
       tableRegions: [TableIdentifier(schema: schema, name: table): .columns(columns)]
@@ -373,14 +369,6 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
         in: tableName,
         schema: sqliteSchemaName
       )
-    }
-
-    /// The region containing every column in this instance's table.
-    ///
-    /// The instance's values do not narrow the region. Every instance of the same table has the
-    /// same region.
-    public var databaseRegion: OrbitDatabaseRegion {
-      Self.databaseRegion
     }
 
     /// The schema this table declares, or ``SQLiteSchemaName/main`` when it declares none.

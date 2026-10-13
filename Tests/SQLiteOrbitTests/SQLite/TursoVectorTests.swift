@@ -10,22 +10,23 @@
     func nativeVectorsAreAvailableOnEveryConnectionBeforeUserSetupAndAfterReopening() async throws {
       let setups = TestCounter()
       var configuration = SQLiteConfiguration.turso
-      configuration.readerCount = 2
-      configuration.connectionSetups.append(
-        SQLiteConnectionSetup { connection in
+      configuration.setups.append(
+        SQLiteSetup { connection in
           try connection.execute("SELECT vector_extract(vector32('[1,2,3]'))")
           setups.increment()
-          return SQLiteResultCode.ok.rawValue
         }
       )
       try await withTestDatabaseFile("turso-vectors") { file in
         for _ in 0..<2 {
-          let database = try file.tursoPool(configuration: configuration, writerCount: 2)
+          let database = try file.tursoPool(
+            configuration: configuration,
+            readerCount: 2,
+            writerCount: 2
+          )
           #expect(
             try await database.read {
-              try $0.fetchOne(
-                #sql("SELECT \(TursoVec.extract(TursoVec.vector32("[1,2,3]")))", as: String.self)
-              )
+              try #sql("SELECT \(TursoVec.extract(TursoVec.vector32("[1,2,3]")))", as: String.self)
+                .fetchOne($0)
             } == "[1,2,3]"
           )
         }
@@ -41,53 +42,47 @@
         let float64: [Double].TursoFloat64BytesRepresentation = [1, -2, 0.5]
         try await database.read { transaction in
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector32("[1,-2,0.5]"))",
-                as: [Float].VectorBytesRepresentation.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector32("[1,-2,0.5]"))",
+              as: [Float].VectorBytesRepresentation.self
             )
+            .fetchOne(transaction)
               == float32.queryOutput
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector("[1,-2,0.5]"))",
-                as: [Float].VectorBytesRepresentation.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector("[1,-2,0.5]"))",
+              as: [Float].VectorBytesRepresentation.self
             )
+            .fetchOne(transaction)
               == float32.queryOutput
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector64("[1,-2,0.5]"))",
-                as: [Double].TursoFloat64BytesRepresentation.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector64("[1,-2,0.5]"))",
+              as: [Double].TursoFloat64BytesRepresentation.self
             )
+            .fetchOne(transaction)
               == float64.queryOutput
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector32(float64))",
-                as: [Float].VectorBytesRepresentation.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector32(float64))",
+              as: [Float].VectorBytesRepresentation.self
             )
+            .fetchOne(transaction)
               == float32.queryOutput
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector64(float32))",
-                as: [Double].TursoFloat64BytesRepresentation.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector64(float32))",
+              as: [Double].TursoFloat64BytesRepresentation.self
             )
+            .fetchOne(transaction)
               == float64.queryOutput
           )
-          let bytes = try transaction.fetchOne(
-            #sql("SELECT \(TursoVec.vector32("[1,-2,0.5]"))", as: [UInt8].self)
-          )
+          let bytes = try #sql("SELECT \(TursoVec.vector32("[1,-2,0.5]"))", as: [UInt8].self)
+            .fetchOne(transaction)
           #expect(float32.queryBinding == bytes.map { .blob($0) })
         }
       }
@@ -105,9 +100,11 @@
         let json = "[" + values.map(String.init(describing:)).joined(separator: ",") + "]"
         let binaryJSON = "[" + bits.map { $0 ? "1" : "-1" }.joined(separator: ",") + "]"
         try await database.read { transaction in
-          let decodedVector = try transaction.fetchOne(
-            #sql("SELECT \(TursoVec.vector8(json))", as: Quantized8Vector.self)
+          let decodedVector = try #sql(
+            "SELECT \(TursoVec.vector8(json))",
+            as: Quantized8Vector.self
           )
+          .fetchOne(transaction)
           let encoded = try #require(decodedVector)
           #expect(encoded == float8)
           #expect(encoded.vectorBytes == float8.vectorBytes)
@@ -117,55 +114,47 @@
             #expect(abs(actual - expected) <= Float(max(1, dimensions - 1) * 10) / 255)
           }
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector1bit(binaryJSON))",
-                as: [Bool].TursoBytesRepresentation.self
-              )
-            ) == bits
+            try #sql(
+              "SELECT \(TursoVec.vector1bit(binaryJSON))",
+              as: [Bool].TursoBytesRepresentation.self
+            )
+            .fetchOne(transaction) == bits
           )
           #expect(
-            try transaction.fetchOne(#sql("SELECT \(TursoVec.extract(binary))", as: String.self))
+            try #sql("SELECT \(TursoVec.extract(binary))", as: String.self).fetchOne(transaction)
               == binaryJSON
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceCosine(binary, to: binary))", as: Double.self)
-            )
+            try #sql("SELECT \(TursoVec.distanceCosine(binary, to: binary))", as: Double.self)
+              .fetchOne(transaction)
               == 0
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceCosine(binary, to: opposite))", as: Double.self)
-            ) == Double(dimensions)
+            try #sql("SELECT \(TursoVec.distanceCosine(binary, to: opposite))", as: Double.self)
+              .fetchOne(transaction) == Double(dimensions)
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceDot(binary, to: binary))", as: Double.self)
-            ) == -Double(dimensions)
+            try #sql("SELECT \(TursoVec.distanceDot(binary, to: binary))", as: Double.self)
+              .fetchOne(transaction) == -Double(dimensions)
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceDot(binary, to: opposite))", as: Double.self)
-            ) == Double(dimensions)
+            try #sql("SELECT \(TursoVec.distanceDot(binary, to: opposite))", as: Double.self)
+              .fetchOne(transaction) == Double(dimensions)
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceJaccard(binary, to: opposite))", as: Double.self)
-            ) == 1
+            try #sql("SELECT \(TursoVec.distanceJaccard(binary, to: opposite))", as: Double.self)
+              .fetchOne(transaction) == 1
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceL2(float8, to: float8))", as: Double.self)
-            )
+            try #sql("SELECT \(TursoVec.distanceL2(float8, to: float8))", as: Double.self)
+              .fetchOne(transaction)
               == 0
           )
-          let convertedVector = try transaction.fetchOne(
-            #sql(
-              "SELECT \(TursoVec.vector32(float8))",
-              as: [Float].VectorBytesRepresentation.self
-            )
+          let convertedVector = try #sql(
+            "SELECT \(TursoVec.vector32(float8))",
+            as: [Float].VectorBytesRepresentation.self
           )
+          .fetchOne(transaction)
           let converted = try #require(convertedVector)
           #expect(converted.count == dimensions)
           for (actual, expected) in zip(converted, values) {
@@ -219,12 +208,11 @@
           ]
         }
         let result = try await database.read {
-          try $0.fetchOne(
-            #sql(
-              "SELECT \(distances.joined(separator: ", "))",
-              as: (Double, Double, Double, Double).self
-            )
+          try #sql(
+            "SELECT \(distances.joined(separator: ", "))",
+            as: (Double, Double, Double, Double).self
           )
+          .fetchOne($0)
         }
         let row = try #require(result)
         #expect(abs(row.0 - (1 - 1 / Double(2).squareRoot())) < 1e-6)
@@ -244,44 +232,42 @@
           try transaction.execute(
             "CREATE TABLE turso_sparse_embeddings (key INTEGER PRIMARY KEY, embedding BLOB)"
           )
-          try transaction.execute(
-            TursoSparseEmbedding.insert { TursoSparseEmbedding(key: 1, embedding: sparse) }
-          )
-          try transaction.execute(
-            TursoSparseEmbedding.insert {
-              ($0.key, $0.embedding)
-            } values: {
-              (2, TursoVec.vector32Sparse(json))
-            }
-          )
+          try TursoSparseEmbedding.insert { TursoSparseEmbedding(key: 1, embedding: sparse) }
+            .execute(transaction)
+          try TursoSparseEmbedding.insert {
+            ($0.key, $0.embedding)
+          } values: {
+            (2, TursoVec.vector32Sparse(json))
+          }
+          .execute(transaction)
         }
         try await database.read { transaction in
-          let rows = try transaction.fetchAll(TursoSparseEmbedding.order(by: \.key))
+          let rows = try TursoSparseEmbedding.order(by: \.key).fetchAll(transaction)
           #expect(rows.map(\.embedding) == [sparse, sparse])
-          let bytes = try transaction.fetchOne(
-            #sql("SELECT \(TursoVec.vector32Sparse(json))", as: [UInt8].self)
-          )
+          let bytes = try #sql("SELECT \(TursoVec.vector32Sparse(json))", as: [UInt8].self)
+            .fetchOne(transaction)
           #expect(sparse.queryBinding == bytes.map { .blob($0) })
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector32(sparse))",
-                as: [Float].VectorBytesRepresentation.self
-              )
-            ) == values
+            try #sql(
+              "SELECT \(TursoVec.vector32(sparse))",
+              as: [Float].VectorBytesRepresentation.self
+            )
+            .fetchOne(transaction) == values
           )
-          let sliced = try transaction.fetchOne(
-            #sql("SELECT \(TursoVec.slice(sparse, from: 2, to: 8))", as: SparseFloat32Vector.self)
+          let sliced = try #sql(
+            "SELECT \(TursoVec.slice(sparse, from: 2, to: 8))",
+            as: SparseFloat32Vector.self
           )
+          .fetchOne(transaction)
           #expect(sliced?.denseValues() == Array(values[2..<8]))
           if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             #expect(
-              try transaction.fetchOne(
-                #sql(
-                  "SELECT \(TursoVec.vector32Sparse(json, as: SizedSparseFloat32Vector<9>.self))",
-                  as: SizedSparseFloat32Vector<9>.self
-                )
-              ) == SizedSparseFloat32Vector<9>(compressing: EmbeddingVector<9> { values[$0] })
+              try #sql(
+                "SELECT \(TursoVec.vector32Sparse(json, as: SizedSparseFloat32Vector<9>.self))",
+                as: SizedSparseFloat32Vector<9>.self
+              )
+              .fetchOne(transaction)
+                == SizedSparseFloat32Vector<9>(compressing: EmbeddingVector<9> { values[$0] })
             )
           }
         }
@@ -298,55 +284,48 @@
           let joined = TursoVec.concat(left, TursoVec.vector32("[0,4]"))
           let joinedDouble = TursoVec.concat(double, TursoVec.vector64("[0,4]"))
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(joined)", as: [Float].VectorBytesRepresentation.self)
-            ) == [1, -2, 0, 4]
+            try #sql("SELECT \(joined)", as: [Float].VectorBytesRepresentation.self)
+              .fetchOne(transaction) == [1, -2, 0, 4]
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(joinedDouble)", as: [Double].TursoFloat64BytesRepresentation.self)
-            ) == [Double.pi, -2, 0, 4]
+            try #sql("SELECT \(joinedDouble)", as: [Double].TursoFloat64BytesRepresentation.self)
+              .fetchOne(transaction) == [Double.pi, -2, 0, 4]
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.slice(joined, from: 1, to: 3))",
-                as: [Float].VectorBytesRepresentation.self
-              )
-            ) == [-2, 0]
+            try #sql(
+              "SELECT \(TursoVec.slice(joined, from: 1, to: 3))",
+              as: [Float].VectorBytesRepresentation.self
+            )
+            .fetchOne(transaction) == [-2, 0]
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3))",
-                as: [Double].TursoFloat64BytesRepresentation.self
-              )
-            ) == [-2, 0]
+            try #sql(
+              "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3))",
+              as: [Double].TursoFloat64BytesRepresentation.self
+            )
+            .fetchOne(transaction) == [-2, 0]
           )
           if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             #expect(
-              try transaction.fetchOne(
-                #sql(
-                  "SELECT \(TursoVec.concat(left, TursoVec.vector32("[0,4]"), as: EmbeddingVector<4>.self))",
-                  as: EmbeddingVector<4>.self
-                )
-              ) == EmbeddingVector<4> { [Float(1), -2, 0, 4][$0] }
+              try #sql(
+                "SELECT \(TursoVec.concat(left, TursoVec.vector32("[0,4]"), as: EmbeddingVector<4>.self))",
+                as: EmbeddingVector<4>.self
+              )
+              .fetchOne(transaction) == EmbeddingVector<4> { [Float(1), -2, 0, 4][$0] }
             )
             #expect(
-              try transaction.fetchOne(
-                #sql(
-                  "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3, as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self))",
-                  as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self
-                )
-              ) == EmbeddingVector64<2> { [Double(-2), 0][$0] }
+              try #sql(
+                "SELECT \(TursoVec.slice(joinedDouble, from: 1, to: 3, as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self))",
+                as: EmbeddingVector64<2>.TursoFloat64BytesRepresentation.self
+              )
+              .fetchOne(transaction) == EmbeddingVector64<2> { [Double(-2), 0][$0] }
             )
             #expect(throws: VectorDecodingError.dimensionMismatch(expected: 3, actual: 2)) {
-              try transaction.fetchOne(
-                #sql(
-                  "SELECT \(TursoVec.slice(joined, from: 1, to: 3, as: EmbeddingVector<3>.self))",
-                  as: EmbeddingVector<3>.self
-                )
+              try #sql(
+                "SELECT \(TursoVec.slice(joined, from: 1, to: 3, as: EmbeddingVector<3>.self))",
+                as: EmbeddingVector<3>.self
               )
+              .fetchOne(transaction)
             }
           }
         }
@@ -355,21 +334,19 @@
         let error = await #expect(throws: SQLiteError.self) {
           try await database.readWithoutTransaction {
             let joined = TursoVec.concat(left, TursoVec.vector32("[0,4]"))
-            return try $0.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.slice(joined, from: 0, to: 5))",
-                as: [Float].VectorBytesRepresentation.self
-              )
+            return try #sql(
+              "SELECT \(TursoVec.slice(joined, from: 0, to: 5))",
+              as: [Float].VectorBytesRepresentation.self
             )
+            .fetchOne($0)
           }
         }
         #expect(error?.message?.contains("out of bounds") == true)
         #expect(error?.sql?.contains("vector_slice") == true)
         let reloaded = try await database.read {
           let joined = TursoVec.concat(left, TursoVec.vector32("[0,4]"))
-          return try $0.fetchOne(
-            #sql("SELECT \(joined)", as: [Float].VectorBytesRepresentation.self)
-          )
+          return try #sql("SELECT \(joined)", as: [Float].VectorBytesRepresentation.self)
+            .fetchOne($0)
         }
         #expect(reloaded == [1, -2, 0, 4])
       }
@@ -392,27 +369,25 @@
             (2, "neighbor", "[1,1,0]"),
             (3, "opposite", "[-1,0,0]")
           ] {
-            try transaction.execute(
-              TursoEmbedding.insert {
-                ($0.key, $0.title, $0.embedding)
-              } values: {
-                (key, title, TursoVec.vector32(json))
-              }
-            )
+            try TursoEmbedding.insert {
+              ($0.key, $0.title, $0.embedding)
+            } values: {
+              (key, title, TursoVec.vector32(json))
+            }
+            .execute(transaction)
           }
         }
         let vector: [Float].VectorBytesRepresentation = [1, 0, 0]
         let rows = try await database.read { transaction in
-          try transaction.fetchAll(
-            TursoEmbedding.order { TursoVec.distanceCosine($0.embedding, to: vector).asc() }
-              .select {
-                (
-                  $0.title, TursoVec.extract($0.embedding),
-                  TursoVec.distanceCosine($0.embedding, to: vector),
-                  TursoVec.distanceL2($0.embedding, to: TursoVec.vector32("[1,0,0]"))
-                )
-              }
-          )
+          try TursoEmbedding.order { TursoVec.distanceCosine($0.embedding, to: vector).asc() }
+            .select {
+              (
+                $0.title, TursoVec.extract($0.embedding),
+                TursoVec.distanceCosine($0.embedding, to: vector),
+                TursoVec.distanceL2($0.embedding, to: TursoVec.vector32("[1,0,0]"))
+              )
+            }
+            .fetchAll(transaction)
         }
         #expect(rows.map(\.0) == ["nearest", "neighbor", "opposite"])
         #expect(rows.map(\.1) == ["[1,0,0]", "[1,1,0]", "[-1,0,0]"])
@@ -422,18 +397,14 @@
         #expect(rows.map(\.3) == [0, 1, 2])
         #expect(
           try await database.read {
-            try $0.fetchAll(
-              TursoEmbedding.order { TursoVec.distanceCosine($0.embedding, to: vector).asc() }
-                .limit(2).select(\.title)
-            )
+            try TursoEmbedding.order { TursoVec.distanceCosine($0.embedding, to: vector).asc() }
+              .limit(2).select(\.title).fetchAll($0)
           } == ["nearest", "neighbor"]
         )
         #expect(
           try await database.read {
-            try $0.fetchAll(
-              TursoEmbedding.where { TursoVec.distanceL2($0.embedding, to: vector).lt(1.5) }
-                .order(by: \.key).select(\.title)
-            )
+            try TursoEmbedding.where { TursoVec.distanceL2($0.embedding, to: vector).lt(1.5) }
+              .order(by: \.key).select(\.title).fetchAll($0)
           } == ["nearest", "neighbor"]
         )
       }
@@ -457,20 +428,19 @@
             )
             """
           )
-          try transaction.execute(TursoEncodedEmbedding.insert { row })
-          try transaction.execute(
-            TursoEncodedEmbedding.insert {
-              ($0.key, $0.float64, $0.float8, $0.bits)
-            } values: {
-              (
-                2, TursoVec.vector64("[1,-2,0.5]"), TursoVec.vector8("[0,127,255]"),
-                TursoVec.vector1bit("[1,-1,1]")
-              )
-            }
-          )
+          try TursoEncodedEmbedding.insert { row }.execute(transaction)
+          try TursoEncodedEmbedding.insert {
+            ($0.key, $0.float64, $0.float8, $0.bits)
+          } values: {
+            (
+              2, TursoVec.vector64("[1,-2,0.5]"), TursoVec.vector8("[0,127,255]"),
+              TursoVec.vector1bit("[1,-1,1]")
+            )
+          }
+          .execute(transaction)
         }
         try await database.read { transaction in
-          let rows = try transaction.fetchAll(TursoEncodedEmbedding.order(by: \.key))
+          let rows = try TursoEncodedEmbedding.order(by: \.key).fetchAll(transaction)
           #expect(
             rows == [
               row,
@@ -485,15 +455,15 @@
           let double = [Double].TursoFloat64BytesRepresentation(queryOutput: row.float64)
           let float8 = row.float8
           let binary = [Bool].TursoBytesRepresentation(queryOutput: row.bits)
-          let distances = try transaction.fetchAll(
-            TursoEncodedEmbedding.select {
+          let distances =
+            try TursoEncodedEmbedding.select {
               (
                 TursoVec.distanceL2($0.float64, to: double),
                 TursoVec.distanceCosine($0.float8, to: float8),
                 TursoVec.distanceCosine($0.bits, to: binary), TursoVec.extract($0.bits)
               )
             }
-          )
+            .fetchAll(transaction)
           #expect(distances.count == 2)
           for distance in distances {
             #expect(abs(distance.0) < 1e-6)
@@ -549,16 +519,15 @@
           )
         }
         try await database.read { transaction throws -> Void in
-          let rows = try transaction.fetchAll(
-            #sql(
-              "SELECT * FROM encoded_values",
-              as: (
-                Quantized8Vector, SparseFloat32Vector, InlineQuantized8Vector<3>,
-                SizedSparseFloat32Vector<6>
-              )
-              .self
+          let rows = try #sql(
+            "SELECT * FROM encoded_values",
+            as: (
+              Quantized8Vector, SparseFloat32Vector, InlineQuantized8Vector<3>,
+              SizedSparseFloat32Vector<6>
             )
+            .self
           )
+          .fetchAll(transaction)
           #expect(rows.count == 2)
           for row in rows {
             #expect(row.0.vectorBytes == quantized.vectorBytes)
@@ -567,33 +536,29 @@
             #expect(row.3.vectorBytes == sized.vectorBytes)
           }
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<3>.self))",
-                as: InlineQuantized8Vector<3>.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<3>.self))",
+              as: InlineQuantized8Vector<3>.self
             )
+            .fetchOne(transaction)
               == InlineQuantized8Vector<3>(
                 quantizing: EmbeddingVector<3> { [Float(0), 127, 255][$0] }
               )
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceL2(inline, to: quantized))", as: Double.self)
-            ) == 0
+            try #sql("SELECT \(TursoVec.distanceL2(inline, to: quantized))", as: Double.self)
+              .fetchOne(transaction) == 0
           )
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceL2(sized, to: sparse))", as: Double.self)
-            ) == 0
+            try #sql("SELECT \(TursoVec.distanceL2(sized, to: sparse))", as: Double.self)
+              .fetchOne(transaction) == 0
           )
           #expect(throws: VectorDecodingError.dimensionMismatch(expected: 2, actual: 3)) {
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<2>.self))",
-                as: InlineQuantized8Vector<2>.self
-              )
+            try #sql(
+              "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<2>.self))",
+              as: InlineQuantized8Vector<2>.self
             )
+            .fetchOne(transaction)
           }
         }
       }
@@ -636,24 +601,21 @@
               as: EmbeddingVector64<3>.self
             )
           }
-          let float32 = try transaction.fetchOne(
-            #sql(
-              "SELECT \(TursoVec.vector32(vector, as: EmbeddingVector<3>.self))",
-              as: EmbeddingVector<3>.self
-            )
+          let float32 = try #sql(
+            "SELECT \(TursoVec.vector32(vector, as: EmbeddingVector<3>.self))",
+            as: EmbeddingVector<3>.self
           )
-          let float64 = try transaction.fetchOne(
-            #sql(
-              "SELECT \(TursoVec.vector64(vector, as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self))",
-              as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self
-            )
+          .fetchOne(transaction)
+          let float64 = try #sql(
+            "SELECT \(TursoVec.vector64(vector, as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self))",
+            as: EmbeddingVector64<3>.TursoFloat64BytesRepresentation.self
           )
-          let bits = try transaction.fetchOne(
-            #sql(
-              "SELECT \(TursoVec.vector1bit("[1,-1,1]", as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self))",
-              as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self
-            )
+          .fetchOne(transaction)
+          let bits = try #sql(
+            "SELECT \(TursoVec.vector1bit("[1,-1,1]", as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self))",
+            as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self
           )
+          .fetchOne(transaction)
           #expect(stored == vector)
           #expect(storedDouble == taggedDouble)
           #expect(nativeDouble == taggedDouble)
@@ -680,38 +642,35 @@
           try transaction.execute(
             "CREATE TABLE turso_binary_embeddings (key INTEGER PRIMARY KEY, embedding BLOB NOT NULL)"
           )
-          try transaction.execute(
-            TursoBinaryEmbedding.insert {
-              ($0.key, $0.embedding)
-            } values: {
-              (1, query)
-              (
-                2,
-                TursoVec.vector1bit(
-                  dense,
-                  as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self
-                )
+          try TursoBinaryEmbedding.insert {
+            ($0.key, $0.embedding)
+          } values: {
+            (1, query)
+            (
+              2,
+              TursoVec.vector1bit(
+                dense,
+                as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self
               )
-              (3, BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: neighbor))
-            }
-          )
+            )
+            (3, BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: neighbor))
+          }
+          .execute(transaction)
         }
         try await database.read { transaction throws -> Void in
-          let rows = try transaction.fetchAll(TursoBinaryEmbedding.order { $0.key })
+          let rows = try TursoBinaryEmbedding.order { $0.key }.fetchAll(transaction)
           #expect(rows.map(\.embedding) == [binary, binary, neighbor])
-          let distances = try transaction.fetchAll(
-            TursoBinaryEmbedding.order { $0.key }
-              .select {
-                TursoVec.distanceHamming($0.embedding, to: query)
-              }
-          )
+          let distances = try TursoBinaryEmbedding.order { $0.key }
+            .select {
+              TursoVec.distanceHamming($0.embedding, to: query)
+            }
+            .fetchAll(transaction)
           #expect(distances == rows.map { Double($0.embedding.hammingDistance(to: binary)) })
           #expect(distances == [0, 0, 1])
           let variable = [Bool].TursoBytesRepresentation(queryOutput: Array(neighbor))
           #expect(
-            try transaction.fetchOne(
-              #sql("SELECT \(TursoVec.distanceHamming(query, to: variable))", as: Double.self)
-            ) == 1
+            try #sql("SELECT \(TursoVec.distanceHamming(query, to: variable))", as: Double.self)
+              .fetchOne(transaction) == 1
           )
           #expect(
             try transaction.fetchOne(
@@ -723,9 +682,8 @@
           // Nine and ten logical dimensions have the same packed byte count. Turso's metadata
           // must still reject decoding a nine-dimensional value as ten dimensions.
           #expect(throws: VectorDecodingError.dimensionMismatch(expected: 10, actual: 9)) {
-            try transaction.fetchOne(
-              #sql("SELECT \(query)", as: BinaryEmbeddingVector<10>.TursoBytesRepresentation.self)
-            )
+            try #sql("SELECT \(query)", as: BinaryEmbeddingVector<10>.TursoBytesRepresentation.self)
+              .fetchOne(transaction)
           }
         }
       }
@@ -743,20 +701,18 @@
         let sparse = try dense.sparseFloat32()
         try await database.read { transaction throws -> Void in
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector8(dense, as: InlineQuantized8Vector<3>.self))",
-                as: InlineQuantized8Vector<3>.self
-              )
-            ) == quantized
+            try #sql(
+              "SELECT \(TursoVec.vector8(dense, as: InlineQuantized8Vector<3>.self))",
+              as: InlineQuantized8Vector<3>.self
+            )
+            .fetchOne(transaction) == quantized
           )
           #expect(
-            try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.vector32Sparse(dense, as: SizedSparseFloat32Vector<3>.self))",
-                as: SizedSparseFloat32Vector<3>.self
-              )
-            ) == sparse
+            try #sql(
+              "SELECT \(TursoVec.vector32Sparse(dense, as: SizedSparseFloat32Vector<3>.self))",
+              as: SizedSparseFloat32Vector<3>.self
+            )
+            .fetchOne(transaction) == sparse
           )
           #expect(
             try transaction.fetchOne("SELECT \(quantized)", as: InlineQuantized8Vector<3>.self)
@@ -779,15 +735,13 @@
         }
         let error = await #expect(throws: SQLiteError.self) {
           try await database.write { transaction in
-            try transaction.execute(
-              #sql("INSERT INTO vectors VALUES (\(TursoVec.vector32("[1,2,3]")))")
+            try #sql("INSERT INTO vectors VALUES (\(TursoVec.vector32("[1,2,3]")))")
+              .execute(transaction)
+            _ = try #sql(
+              "SELECT \(TursoVec.distanceL2(TursoVec.vector32("[1,2,3]"), to: TursoVec.vector32("[1,2]")))",
+              as: Double.self
             )
-            _ = try transaction.fetchOne(
-              #sql(
-                "SELECT \(TursoVec.distanceL2(TursoVec.vector32("[1,2,3]"), to: TursoVec.vector32("[1,2]")))",
-                as: Double.self
-              )
-            )
+            .fetchOne(transaction)
           }
         }
         #expect(error?.message?.lowercased().contains("dimension") == true)
@@ -796,13 +750,12 @@
             == 0
         )
         try await database.concurrentWrite {
-          try $0.execute(#sql("INSERT INTO vectors VALUES (\(TursoVec.vector32("[1,2,3]")))"))
+          try #sql("INSERT INTO vectors VALUES (\(TursoVec.vector32("[1,2,3]")))").execute($0)
         }
         #expect(
           try await database.read {
-            try $0.fetchOne(
-              #sql("SELECT embedding FROM vectors", as: [Float].VectorBytesRepresentation.self)
-            )
+            try #sql("SELECT embedding FROM vectors", as: [Float].VectorBytesRepresentation.self)
+              .fetchOne($0)
           } == [1, 2, 3]
         )
       }

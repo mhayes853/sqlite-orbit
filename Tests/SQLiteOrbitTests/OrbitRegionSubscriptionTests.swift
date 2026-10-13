@@ -76,7 +76,7 @@ struct OrbitRegionSubscriptionTests {
     }
 
     _ = try await concurrently(100) { index in
-      try? subscription.updateRegion(OrbitDatabaseRegion(table: "table\(index)"))
+      try subscription.updateRegion(OrbitDatabaseRegion(table: "table\(index)"))
     }
 
     #expect(applied.withLock { $0 } == subscription.region)

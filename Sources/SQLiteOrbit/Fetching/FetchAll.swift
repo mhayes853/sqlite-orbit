@@ -4,7 +4,6 @@
   #if canImport(SwiftUI)
     // Scoped, because SwiftUI vends a `Table` of its own and this file is about the other one.
     import protocol SwiftUI.DynamicProperty
-    import struct SwiftUI.Animation
   #endif
 
   /// A property that observes every row a query produces.
@@ -41,23 +40,26 @@
   /// try await $reminders.load(Reminder.order { $0.createdAt.desc() })
   /// ```
   ///
-  /// A custom scheduler passed to this property must be `Hashable`; its equality defines when a
-  /// rebuilt property keeps its existing observation.
+  /// The `scheduler` argument decides where values are delivered. By default they are delivered as
+  /// they are produced; in SwiftUI, `.animation(_:)` and `.transaction(_:)` deliver them on the main
+  /// actor inside an animation or transaction:
+  ///
+  /// ```swift
+  /// @FetchAll(Reminder.all, scheduler: .animation(.bouncy)) var reminders
+  /// ```
+  ///
+  /// The scheduler is not part of what the property observes. A view rebuilt with a different
+  /// scheduler keeps its observation and delivers through the new scheduler from then on. Whether
+  /// the first value arrives before the property's first read returns is decided once, by the
+  /// scheduler in effect when the observation starts.
   @dynamicMemberLookup
   @propertyWrapper
   public struct FetchAll<Element: Sendable>: Sendable {
-    @OrbitFetchState var storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>
-
-    init(storage: OrbitFetchStorage<OrbitFetchSectionCollection<Element, String?>>) {
-      _storage = OrbitFetchState(wrappedValue: storage)
-    }
-
+    var fetch: Fetch<OrbitFetchSectionCollection<Element, String?>>
     /// Creates a property holding rows that no query keeps current.
     private init(unobserved wrappedValue: [Element]) {
-      self.init(
-        storage: OrbitFetchStorage(
-          value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
-        )
+      fetch = Fetch(
+        wrappedValue: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil)
       )
     }
 
@@ -65,43 +67,36 @@
       wrappedValue: [Element],
       request: some OrbitFetchKeyRequest<OrbitFetchSectionCollection<Element, String?>>,
       database: (any OrbitObservableDatabase)?,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)?
+      scheduler: some OrbitValueObservationScheduler
     ) {
-      self.init(
-        storage: .make(
-          value: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil),
-          request: request,
-          database: database,
-          scheduler: scheduler
-        )
+      fetch = Fetch(
+        wrappedValue: OrbitFetchSectionCollection(elements: wrappedValue, sectionName: nil),
+        request,
+        database: database,
+        scheduler: scheduler
       )
     }
 
     /// The rows the query produced.
     public var wrappedValue: [Element] {
-      storage.value.elements
+      fetch.wrappedValue.elements
     }
 
     /// Returns this property wrapper, which is how its ``isLoading``, ``loadError``, ``load()``,
     /// and member readers are reached.
     public var projectedValue: Self {
       get { self }
-      nonmutating set { storage.adopt(from: newValue.storage) }
+      nonmutating set { fetch.projectedValue = newValue.fetch }
     }
 
     /// A read-only view onto the rows.
     public var reader: OrbitFetchReader<[Element]> {
-      let storage = self.storage
-      return OrbitFetchReader(
-        storage: storage,
-        tracked: { storage.value.elements },
-        untracked: { storage.untrackedValue.elements }
-      )
+      fetch.reader.map { $0.elements }
     }
 
     /// A read-only view onto the sections.
     public var sectionsReader: OrbitFetchReader<OrbitFetchSectionCollection<Element, String?>> {
-      OrbitFetchReader(storage)
+      fetch.reader
     }
 
     /// Returns a reader of one member of the rows.
@@ -116,14 +111,14 @@
 
     /// Whether a read is in flight.
     public var isLoading: Bool {
-      storage.isLoading
+      fetch.isLoading
     }
 
     /// The error the most recent read failed with, if it failed.
     ///
     /// A failed read leaves the rows it last produced in place.
     public var loadError: (any Error)? {
-      storage.loadError
+      fetch.loadError
     }
 
     /// The rows as they stand, and every set of rows the observation produces afterwards.
@@ -137,7 +132,7 @@
     ///
     /// - Throws: Whatever the read throws, which also becomes ``loadError``.
     public func load() async throws {
-      try await storage.load()
+      try await fetch.load()
     }
 
     // MARK: - Values without a query
@@ -172,7 +167,7 @@
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: _Selection, Element.QueryOutput == Element {
       self.init(unobserved: wrappedValue)
@@ -195,7 +190,7 @@
     public init(
       wrappedValue: [Element] = [],
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: Table, Element.QueryOutput == Element {
       // Spelled out rather than inferred: a statement of every column is a `Select` whose value is
@@ -226,7 +221,7 @@
       wrappedValue: [Element] = [],
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
@@ -255,7 +250,7 @@
       wrappedValue: [Element] = [],
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element == V.QueryOutput {
       self.init(
@@ -278,7 +273,7 @@
       wrappedValue: [Element] = [],
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
+      scheduler: some OrbitValueObservationScheduler = .immediate
     )
     where Element: QueryRepresentable, Element == S.QueryValue.QueryOutput {
       self.init(
@@ -306,8 +301,8 @@
     public func load<S: SelectStatement>(
       _ statement: S,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
       let statement: Select<S.From, S.From, ()> = statement.selectStar()
       return try await load(statement, database: database, scheduler: scheduler)
@@ -330,11 +325,11 @@
     public func load<V: QueryRepresentable>(
       _ statement: some Statement<V>,
       database: (any OrbitObservableDatabase)? = nil,
-      scheduler: (any OrbitValueObservationScheduler & Hashable)? = nil
-    ) async throws -> OrbitFetchSubscription
+      scheduler: some OrbitValueObservationScheduler = .immediate
+    ) async throws -> OrbitFetchLoad
     where Element == V.QueryOutput {
-      return try await storage.load(
-        request: OrbitFetchAllStatementRequest<V>(statement: statement),
+      try await fetch.load(
+        OrbitFetchAllStatementRequest<V>(statement: statement),
         database: database,
         scheduler: scheduler
       )
@@ -359,146 +354,7 @@
     extension FetchAll: DynamicProperty {
       /// Reconciles the property SwiftUI built for this render with the one that survived the last.
       public func update() {
-        _storage.reconcile()
-      }
-
-      /// Creates a property observing every row of a table, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - wrappedValue: The rows to hold until the first read finishes.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init(
-        wrappedValue: [Element] = [],
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where Element: Table, Element.QueryOutput == Element {
-        self.init(
-          wrappedValue: wrappedValue,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
-      }
-
-      /// Creates a property observing a select statement, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - wrappedValue: The rows to hold until the first read finishes.
-      ///   - statement: The statement to observe.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: SelectStatement>(
-        wrappedValue: [Element] = [],
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
-      }
-
-      /// Creates a property observing a statement, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - wrappedValue: The values to hold until the first read finishes.
-      ///   - statement: The statement to observe.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<V: QueryRepresentable>(
-        wrappedValue: [Element] = [],
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where Element == V.QueryOutput {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
-      }
-
-      /// Creates a property observing a statement, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - wrappedValue: The values to hold until the first read finishes.
-      ///   - statement: The statement to observe.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      public init<S: Statement<Element>>(
-        wrappedValue: [Element] = [],
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      )
-      where Element: QueryRepresentable, Element == S.QueryValue.QueryOutput {
-        self.init(
-          wrappedValue: wrappedValue,
-          statement,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
-      }
-
-      /// Observes a different select statement from now on, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - statement: The statement to observe.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      /// - Returns: The observation this started.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<S: SelectStatement>(
-        _ statement: S,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Element == S.From.QueryOutput, S.QueryValue == (), S.Joins == () {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
-      }
-
-      /// Observes a different statement from now on, delivering changes with an animation.
-      ///
-      /// - Parameters:
-      ///   - statement: The statement to observe.
-      ///   - database: The database to read from, or `nil` to resolve one the way
-      ///     ``OrbitDefaultDatabase`` describes.
-      ///   - animation: The animation applied to every change.
-      /// - Returns: The observation this started.
-      @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
-      @discardableResult
-      public func load<V: QueryRepresentable>(
-        _ statement: some Statement<V>,
-        database: (any OrbitObservableDatabase)? = nil,
-        animation: Animation?
-      ) async throws -> OrbitFetchSubscription
-      where Element == V.QueryOutput {
-        try await load(
-          statement,
-          database: database,
-          scheduler: OrbitFetchAnimationScheduler(animation: animation)
-        )
+        fetch.update()
       }
     }
   #endif

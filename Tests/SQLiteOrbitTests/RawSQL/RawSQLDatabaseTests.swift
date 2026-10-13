@@ -140,6 +140,13 @@
       }
       #expect(rows == [[.integer(1), .text("two"), .null]])
 
+      let raw = SQL(text: "SELECT '?', ?2, ?1, :name", bindings: [1, "two", "named"])
+      let parts = try raw.validatedParts() + [.text(", "), .binding("last")]
+      let reordered = try await database.read { transaction in
+        try transaction.fetchOne(SQL(parts: parts)) { [$0[0], $0[1], $0[2], $0[3], $0[4]] }
+      }
+      #expect(reordered == ["?", "two", 1, "named", "last"])
+
       // A parameter without a value is NULL, and a value without a parameter is refused.
       let unbound = try await database.read { transaction in
         try transaction.fetchOne(SQL(text: "SELECT ?, ?", bindings: [.integer(1)])) { $0[1] }
@@ -156,16 +163,18 @@
     }
 
     @Test
-    func writeTransactionsFetchWhatReturningReports() async throws {
+    func writeTransactionsReadWhatReturningReports() async throws {
       let database = try inMemoryDatabase()
       let (inserted, deleted, stopped) = try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        let inserted = try transaction.fetchAll(
+        var insertedCursor = try transaction.executeRowCursor(
           "INSERT INTO items (title) VALUES ('a'), ('b'), ('c') RETURNING id"
-        ) { $0[0].integerValue ?? 0 }
-        let deleted = try transaction.fetchOne(
+        )
+        let inserted = try insertedCursor.collect { $0[0].integerValue ?? 0 }
+        var deletedCursor = try transaction.executeRowCursor(
           "DELETE FROM items WHERE id = \(2) RETURNING title"
-        ) { $0[0].textValue }
+        )
+        let deleted = try deletedCursor.first { $0[0].textValue }
         var stopped: [Int64] = []
         try transaction.execute("UPDATE items SET title = upper(title) RETURNING id") { row in
           stopped.append(row[0].integerValue ?? 0)
@@ -319,16 +328,44 @@
     }
 
     @Test
-    func aWriteTransactionRunsAReadQueryThatWrites() async throws {
+    func aWriteTransactionReadsOnlyThroughRowCursorAndWritesThroughExecuteRowCursor()
+      async throws
+    {
       let database = try inMemoryDatabase()
       try await database.write { transaction in
         try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        // Only a read transaction holds a statement to reading; a write transaction may write.
-        var cursor = try transaction.rowCursor(
-          OrbitDatabaseQuery<OrbitDatabaseReadAccess>("INSERT INTO items (id) VALUES (1)"),
-          cached: false
+        // A write transaction reads the way a read transaction does: `rowCursor` and the `fetch`
+        // operations refuse SQL that may write, before it runs.
+        let refused = #expect(throws: SQLiteError.self) {
+          var cursor = try transaction.rowCursor(
+            "INSERT INTO items (id) VALUES (1) RETURNING id",
+            cached: false
+          )
+          _ = try cursor.next()
+        }
+        #expect(refused?.primaryCode == .readOnly)
+        let refusedFetch = #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchAll(
+            "INSERT INTO items (id) VALUES (2) RETURNING id",
+            as: Int.self
+          )
+        }
+        #expect(refusedFetch?.primaryCode == .readOnly)
+        let refusedFetchOne = #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchOne("DELETE FROM items RETURNING id") { $0[0].integerValue }
+        }
+        #expect(refusedFetchOne?.primaryCode == .readOnly)
+
+        // What may write is spelled `execute`.
+        var cursor = try transaction.executeRowCursor(
+          "INSERT INTO items (id) VALUES (1), (2), (3) RETURNING id"
         )
-        _ = try cursor.next()
+        #expect(try cursor.collect(as: Int.self) == [1, 2, 3])
+        var deleted = try transaction.executeRowCursor(
+          "DELETE FROM items WHERE id > 1 RETURNING id",
+          cached: true
+        )
+        #expect(try deleted.first(as: Int.self) != nil)
       }
       #expect(try await database.rowCount(of: "items") == 1)
     }
@@ -343,12 +380,41 @@
       #expect(region == OrbitDatabaseRegion(columns: ["id", "title"], in: "items"))
     }
 
+    @Test
+    func rawSectionFetchingPreservesOrderAndPropagatesErrors() throws {
+      let database = try inMemoryDatabase()
+      let sql: SQL = "SELECT column1, column2 FROM (VALUES ('A', 2), ('B', NULL), ('C', 2))"
+      try database.readBlocking { transaction in
+        var calls = 0
+        let sections = try transaction.fetchSections(sql) { row in
+          calls += 1
+          return (row[0].textValue, row[1].integerValue)
+        }
+        #expect(calls == 3)
+        #expect(sections.elements == ["A", "B", "C"])
+        #expect(sections.sectionNames == [2, nil])
+        #expect(sections[sectionName: 2]?.map { $0 } == ["A", "C"])
+        let empty = try transaction.fetchSections(sql + " WHERE 0") { ($0[0], $0[1].integerValue) }
+        #expect(empty.isEmpty && empty.elements.isEmpty)
+        #expect(throws: SQLiteError.self) {
+          _ = try transaction.fetchSections("SELECT * FROM missing_table") { ($0[0], 0) }
+        }
+        #expect(throws: NativeFunctionFailure.self) {
+          _ = try transaction.fetchSections(sql) { _ -> (Int, Int) in throw NativeFunctionFailure()
+          }
+        }
+        // A throwing transform releases its cursor, leaving the cached statement reusable.
+        let retried = try transaction.fetchSections(sql) { ($0[0].textValue, $0[1].integerValue) }
+        #expect(retried == sections)
+      }
+    }
+
     // MARK: - Functions
 
     @Test
     func nativeScalarFunctionsReceiveAndReturnValues() async throws {
       var configuration = SQLiteConfiguration.default
-      configuration.registerFunction("describe", argumentCount: nil, isDeterministic: true) {
+      configuration.registerFunction("describe", argumentCount: nil, flags: [.deterministic]) {
         arguments in
         var parts: [String] = []
         for index in 0..<arguments.count {
@@ -394,10 +460,8 @@
     @Test
     func nativeAggregateFunctionsAccumulateEachGroup() async throws {
       var configuration = SQLiteConfiguration.default
-      configuration.registerAggregateFunction("longest", argumentCount: 1) { LongestText() }
-      configuration.registerAggregateFunction("failing", argumentCount: 1) {
-        FailingAccumulator()
-      }
+      configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
+      configuration.registerAggregateFunction("failing", argumentCount: 1, FailingAccumulator())
       let database = try inMemoryDatabase(configuration: configuration)
       try await database.execute(
         sql: """
@@ -424,6 +488,120 @@
         }
       }
       #expect(error?.message?.contains("NativeFunctionFailure") == true)
+    }
+
+    @Test
+    func connectionLocalRegistrationsSurviveLendingAndHonorFlags() throws {
+      let factories = Lock(0)
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        try connection.registerFunction(
+          "echo",
+          argumentCount: 1,
+          flags: [.deterministic, .innocuous]
+        ) { $0[0] }
+        try connection.registerFunction("direct", argumentCount: 0, flags: [.directOnly]) { _ in 1 }
+        try connection.registerAggregateFunction(
+          "longest",
+          argumentCount: 1,
+          {
+            factories.withLock { $0 += 1 }
+            return LongestText()
+          }()
+        )
+        try connection.registerCollation("length") { lhs, rhs in
+          lhs.count < rhs.count ? .ascending : lhs.count > rhs.count ? .descending : .same
+        }
+        try connection.executeScript(
+          """
+          CREATE TABLE words (list INTEGER, word TEXT);
+          INSERT INTO words VALUES (1, 'abc'), (1, 'a'), (2, 'xy');
+          CREATE INDEX echo_index ON words(echo(word));
+          CREATE VIEW forbidden AS SELECT direct();
+          """
+        )
+      }
+      #expect(factories.withLock { $0 } == 0)
+      try owner.withReadConnection { (connection: borrowing SQLiteReadConnection) throws in
+        #expect(
+          try connection.fetchAll(
+            "SELECT echo(word) FROM words ORDER BY word COLLATE length"
+          ) { $0[0].textValue } == ["a", "xy", "abc"]
+        )
+        #expect(
+          try connection.fetchAll(
+            "SELECT longest(word) FROM words GROUP BY list ORDER BY list"
+          ) { $0[0].textValue } == ["abc", "xy"]
+        )
+        #expect(
+          try connection.fetchOne("SELECT longest(word) FROM words WHERE 0") { $0[0] } == .null
+        )
+        #expect(try connection.fetchOne("SELECT direct()") { $0[0] } == 1)
+        #expect(throws: SQLiteError.self) {
+          _ = try connection.fetchOne("SELECT * FROM forbidden") { $0[0] }
+        }
+      }
+      #expect(factories.withLock { $0 } == 3)
+      // Replacing a function also updates a statement cached under its previous definition.
+      try owner.withConnectionAccess { connection in
+        try connection.registerFunction("direct", argumentCount: 0) { _ in 2 }
+      }
+      let replaced = try owner.withReadConnection { connection in
+        try connection.fetchOne("SELECT direct()") { $0[0] }
+      }
+      #expect(replaced == 2)
+    }
+
+    @Test
+    func connectionLocalRegistrationReportsMissingCapabilities() throws {
+      var configuration = SQLiteConfiguration.default
+      configuration.library.scalarFunctions = nil
+      configuration.library.aggregateFunctions = nil
+      configuration.library.collations = nil
+      var owner = try SQLiteConnection(path: ":memory:", configuration: configuration)
+      try owner.withConnectionAccess { connection in
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .scalarFunctions
+          )
+        ) { try connection.registerFunction("echo", argumentCount: 1) { $0[0] } }
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .aggregateFunctions
+          )
+        ) { try connection.registerAggregateFunction("longest", argumentCount: 1, LongestText()) }
+        #expect(
+          throws: SQLiteFeatureUnavailableError(
+            libraryName: configuration.library.name,
+            feature: .collations
+          )
+        ) { try connection.registerCollation("same") { _, _ in .same } }
+      }
+    }
+
+    @Test
+    func invalidFunctionRegistrationsThrowInsteadOfTrappingOrTruncating() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withConnectionAccess { connection in
+        for count in [Int.min, -1, Int.max] {
+          #expect(throws: SQLiteError.self) {
+            try connection.registerFunction("invalid", argumentCount: count) { _ in nil }
+          }
+          #expect(throws: SQLiteError.self) {
+            try connection.registerAggregateFunction("invalid", argumentCount: count, LongestText())
+          }
+        }
+        for name in ["invalid\u{0}suffix", String(repeating: "x", count: 256)] {
+          #expect(throws: SQLiteError.self) {
+            try connection.registerFunction(name, argumentCount: 0) { _ in nil }
+          }
+        }
+        #expect(throws: SQLiteError.self) {
+          try connection.registerCollation("invalid\u{0}suffix") { _, _ in .same }
+        }
+      }
     }
 
     // MARK: - Collations

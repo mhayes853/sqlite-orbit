@@ -12,9 +12,8 @@
 
       let error = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
         try await database.read { transaction in
-          try transaction.fetchAll(
-            #sql("SELECT 1 AS id, 'not a number' AS quantity", as: (Int, Int).self)
-          )
+          try #sql("SELECT 1 AS id, 'not a number' AS quantity", as: (Int, Int).self)
+            .fetchAll(transaction)
         }
       }
 
@@ -31,9 +30,7 @@
 
       let error = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
         try await database.read { transaction in
-          try transaction.fetchAll(
-            #sql("SELECT 1 AS id, NULL AS title", as: (Int, String).self)
-          )
+          try #sql("SELECT 1 AS id, NULL AS title", as: (Int, String).self).fetchAll(transaction)
         }
       }
 
@@ -50,21 +47,21 @@
       // errors above, because the decoder already knows exactly what went wrong.
       let uuid = await #expect(throws: (any Error).self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT 'not a uuid'", as: UUID.self))
+          try #sql("SELECT 'not a uuid'", as: UUID.self).fetchOne(transaction)
         }
       }
       #expect(!(uuid is OrbitDatabaseColumnDecodingError))
 
       let date = await #expect(throws: (any Error).self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT 'not a date'", as: Date.self))
+          try #sql("SELECT 'not a date'", as: Date.self).fetchOne(transaction)
         }
       }
       #expect(!(date is OrbitDatabaseColumnDecodingError))
 
       let negative = await #expect(throws: (any Error).self) {
         try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT -1", as: UInt64.self))
+          try #sql("SELECT -1", as: UInt64.self).fetchOne(transaction)
         }
       }
       #expect(!(negative is OrbitDatabaseColumnDecodingError))

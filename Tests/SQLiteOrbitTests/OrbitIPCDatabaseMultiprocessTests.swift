@@ -26,13 +26,13 @@
         #expect(FileManager.default.fileExists(atPath: harness.databasePath))
         let database = try harness.database()
         let tableCount = try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM sqlite_master", as: Int.self))
+          try #sql("SELECT count(*) FROM sqlite_master", as: Int.self).fetchOne(transaction)
         }
         #expect(tableCount == 0)
         // Moving a new database into WAL needs an exclusive lock of SQLite's own, so a race between
         // openers would leave it in the default journal mode.
         let journalMode = try await database.read { transaction in
-          try transaction.fetchAll(#sql("SELECT * FROM pragma_journal_mode", as: String.self))
+          try #sql("SELECT * FROM pragma_journal_mode", as: String.self).fetchAll(transaction)
         }
         #expect(journalMode == ["wal"])
       }
@@ -81,17 +81,16 @@
         defer { harness.cleanup() }
         let database = try harness.database()
         try await database.write { transaction in
-          try transaction.execute(
-            #sql(
-              """
-              CREATE TABLE writes (
-                writer_id INTEGER NOT NULL,
-                sequence INTEGER NOT NULL
-              )
-              """,
-              as: Void.self
+          try #sql(
+            """
+            CREATE TABLE writes (
+              writer_id INTEGER NOT NULL,
+              sequence INTEGER NOT NULL
             )
+            """,
+            as: Void.self
           )
+          .execute(transaction)
         }
         let writerCount = 8
         let writesPerWriter = 20
@@ -105,7 +104,7 @@
 
         for writer in writers { try await harness.waitForSuccessfulExit(writer) }
         let count = try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM writes", as: Int.self))
+          try #sql("SELECT count(*) FROM writes", as: Int.self).fetchOne(transaction)
         }
         #expect(count == writerCount * writesPerWriter)
       }
@@ -116,23 +115,21 @@
         defer { harness.cleanup() }
         try await harness.database()
           .write { transaction in
-            try transaction.execute(
-              #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
-            )
+            try #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
+              .execute(transaction)
           }
         let holder = try harness.spawn("hold", holdMilliseconds: 800)
         try await harness.waitUntilMarked("held")
 
         var configuration = SQLiteConfiguration.default
-        configuration.busyTimeout = .limit(.milliseconds(100))
+        configuration.busyPolicy = .timeout(.milliseconds(100))
         let database = try harness.database(configuration: configuration)
         let clock = ContinuousClock()
         let started = clock.now
         let error = await #expect(throws: SQLiteError.self) {
           try await database.write { transaction in
-            try transaction.execute(
-              #sql("INSERT INTO writes (writer_id) VALUES (9999)", as: Void.self)
-            )
+            try #sql("INSERT INTO writes (writer_id) VALUES (9999)", as: Void.self)
+              .execute(transaction)
           }
         }
         let elapsed = clock.now - started
@@ -155,7 +152,7 @@
 
         try await harness.database()
           .write { transaction in
-            try transaction.execute(#sql("CREATE TABLE items (id INTEGER)", as: Void.self))
+            try #sql("CREATE TABLE items (id INTEGER)", as: Void.self).execute(transaction)
           }
 
         try await harness.waitForSuccessfulExit(listener)
@@ -264,7 +261,7 @@
           // Waits for the test's hold on the open lock as long as it takes, not the default five
           // seconds, which a loaded machine can spend before the test lets go.
           var configuration = SQLiteConfiguration.default
-          configuration.busyTimeout = .maximum
+          configuration.busyPolicy = .waitIndefinitely
           _ = try OrbitIPCDatabase(
             path: path,
             configuration: configuration,
@@ -279,15 +276,14 @@
           try await peer.waitForStart()
           for sequence in 0..<writeCount {
             try await database.write { transaction in
-              try transaction.execute(
-                #sql(
-                  """
-                  INSERT INTO writes (writer_id, sequence)
-                  VALUES (\(bind: peer.index), \(bind: sequence))
-                  """,
-                  as: Void.self
-                )
+              try #sql(
+                """
+                INSERT INTO writes (writer_id, sequence)
+                VALUES (\(bind: peer.index), \(bind: sequence))
+                """,
+                as: Void.self
               )
+              .execute(transaction)
             }
           }
 
@@ -302,9 +298,8 @@
           let milliseconds = try peer.int(OrbitDatabaseProcessHarness.holdMillisecondsVariable)
           try peer.markReady()
           try await database.write { transaction in
-            try transaction.execute(
-              #sql("INSERT INTO writes (writer_id) VALUES (1)", as: Void.self)
-            )
+            try #sql("INSERT INTO writes (writer_id) VALUES (1)", as: Void.self)
+              .execute(transaction)
             try peer.mark("held")
             Thread.sleep(forTimeInterval: Double(milliseconds) / 1000)
           }
@@ -328,7 +323,7 @@
           let errors = TestRecorder<String>()
           let observation = OrbitValueObservation<[Int]>
             .tracking { transaction in
-              try transaction.fetchAll(#sql("SELECT id FROM items ORDER BY id", as: Int.self))
+              try #sql("SELECT id FROM items ORDER BY id", as: Int.self).fetchAll(transaction)
             }
           let subscription = try observation.subscribe(
             to: database,
@@ -348,17 +343,18 @@
           let driver = try SQLiteQueue(path: path)
           let observer = TransactionEventRecorder()
           let subscription = try driver.subscribe(transactionObserver: observer)
-          let update = OrbitDatabaseQuery<OrbitDatabaseWriteAccess>(
-            #sql("UPDATE items SET quantity = quantity + 1 WHERE id = 1", as: Void.self)
+          let update = SQL(
+            fragment: #sql("UPDATE items SET quantity = quantity + 1 WHERE id = 1", as: Void.self)
+              .query
           )
           try await driver.write { transaction in
-            var cursor = try transaction.rowCursor(update, cached: true)
+            var cursor = try transaction.executeRowCursor(update, cached: true)
             while try cursor.next() != nil {}
           }
           try peer.markReady()
           try await peer.waitForStart()
           try await driver.write { transaction in
-            var cursor = try transaction.rowCursor(update, cached: true)
+            var cursor = try transaction.executeRowCursor(update, cached: true)
             while try cursor.next() != nil {}
           }
 

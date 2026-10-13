@@ -36,6 +36,17 @@
     }
   }
 
+  /// A vector is read from a row's first column as its blob is.
+  ///
+  /// ```swift
+  /// let vector = try transaction.fetchOne(
+  ///   "SELECT embedding FROM documents",
+  ///   as: EmbeddingVector<3>.self
+  /// )
+  /// ```
+  @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
+  extension FixedEmbeddingVector: ConvertibleFromOrbitDatabaseRow where Scalar: VectorScalar {}
+
   // SQLiteVec's signed Int8 vectors are raw bytes without scale or shift metadata, unlike Turso's
   // `Quantized8Vector`. SQL still needs `vec_int8` to tag a bound blob before SQLiteVec uses it.
   extension [Int8].Int8BytesRepresentation: OrbitDatabaseValueConvertible {}

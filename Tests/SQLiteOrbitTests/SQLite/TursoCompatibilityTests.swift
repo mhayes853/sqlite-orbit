@@ -20,16 +20,14 @@
 
       let database = try inMemoryDatabase()
       try await database.write { transaction in
-        try transaction.execute(
-          #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-        )
-        try transaction.execute(
-          #sql("INSERT INTO notes (id, title) VALUES (1, 'hello')", as: Void.self)
-        )
+        try #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          .execute(transaction)
+        try #sql("INSERT INTO notes (id, title) VALUES (1, 'hello')", as: Void.self)
+          .execute(transaction)
       }
 
       let titles = try await database.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+        try #sql("SELECT title FROM notes", as: String.self).fetchAll(transaction)
       }
       #expect(titles == ["hello"])
     }
@@ -39,15 +37,16 @@
       try await withTestDatabaseFile("turso") { file in
         let database = try file.tursoPool()
         try await database.write { transaction in
-          try transaction.execute(
-            #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
+          try #sql(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+            as: Void.self
           )
-          try transaction.execute(
-            #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
-          )
+          .execute(transaction)
+          try #sql("INSERT INTO notes (id, title) VALUES (1, 'pooled')", as: Void.self)
+            .execute(transaction)
         }
         let titles = try await database.read { transaction in
-          try transaction.fetchAll(#sql("SELECT title FROM notes", as: String.self))
+          try #sql("SELECT title FROM notes", as: String.self).fetchAll(transaction)
         }
         #expect(titles == ["pooled"])
       }
@@ -59,7 +58,7 @@
         let driver = try TursoPool(path: file.path)
 
         let mode = try await driver.readWithoutTransaction { connection in
-          try connection.fetchOne(#sql("SELECT * FROM pragma_journal_mode", as: String.self))
+          try #sql("SELECT * FROM pragma_journal_mode", as: String.self).fetchOne(connection)
         }
 
         #expect(mode?.lowercased() == "mvcc")
@@ -80,7 +79,7 @@
         }
 
         let count = try await driver.readWithoutTransaction { connection in
-          try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(connection)
         }
         #expect(count == 2)
       }
@@ -110,14 +109,14 @@
         for write in writes { try await write.value }
 
         let count = try await database.read { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 2)
       }
     }
 
     @Test
-    func tursoPoolPublishesEachConcurrentCommitWithItsActiveWriterCohort() async throws {
+    func tursoPoolPublishesCommitsAndCapturesAFiniteActiveWriterCohort() async throws {
       try await withTestDatabaseFile("turso") { file in
         let driver = try TursoPool(path: file.path, writerCount: 2)
         try await driver.write { transaction in
@@ -127,6 +126,12 @@
         let subscription = try driver.subscribe(transactionObserver: observer)
         let firstGate = TestGate()
         let secondGate = TestGate()
+        let thirdGate = TestGate()
+        defer {
+          firstGate.open()
+          secondGate.open()
+          thirdGate.open()
+        }
 
         let first = Task {
           try await driver.concurrentWrite { transaction in
@@ -148,22 +153,34 @@
         let firstCommit = try #require(observer.commits.first)
         #expect(firstCommit.origin == .local)
         #expect(firstCommit.region.isFullDatabase)
-        let barrier = try #require(firstCommit.activeWriterBarrier)
+        let barrier = try #require(driver.captureActiveWriters())
         #expect(barrier.hasActiveWriters)
 
-        let barrierFinished = Lock(false)
+        // This writer starts after the cohort was captured and must not extend its wait.
+        let third = Task {
+          try await driver.concurrentWrite { transaction in
+            try transaction.execute("INSERT INTO items VALUES (3)")
+            try thirdGate.enter()
+          }
+        }
+        try await thirdGate.waitUntilEntered()
+        let barrierFinished = TestCounter()
         let wait = Task {
           await barrier.wait()
-          barrierFinished.withLock { $0 = true }
+          barrierFinished.increment()
         }
         for _ in 0..<100 { await Task.yield() }
-        #expect(!barrierFinished.withLock { $0 })
+        #expect(barrierFinished.value == 0)
 
         secondGate.open()
         try await second.value
+        try await barrierFinished.waitForCount(1)
         await wait.value
-        #expect(barrierFinished.withLock { $0 })
+        #expect(!barrier.hasActiveWriters)
         #expect(observer.commits.count == 2)
+        thirdGate.open()
+        try await third.value
+        #expect(observer.commits.count == 3)
         _ = subscription
       }
     }
@@ -179,7 +196,7 @@
         let observation = OrbitValueObservation<Int>
           .tracking { transaction in
             fetchCount.withLock { $0 += 1 }
-            return try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self)) ?? 0
+            return try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction) ?? 0
           }
           .refetching(.coalesced)
         let recorder = TestRecorder<Int>()
@@ -260,9 +277,8 @@
             Task { () -> SQLiteError? in
               do {
                 try await driver.concurrentWrite { transaction in
-                  _ = try transaction.fetchOne(
-                    #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
-                  )
+                  _ = try #sql("SELECT value FROM counter WHERE id = 1", as: Int.self)
+                    .fetchOne(transaction)
                   try gate.enter()
                   try transaction.executeScript("UPDATE counter SET value = \(value) WHERE id = 1")
                 }
@@ -299,9 +315,7 @@
     @Test
     func tursoPoolRunsAReadAlongsideAConcurrentWrite() async throws {
       try await withTestDatabaseFile("turso") { file in
-        var configuration = SQLiteConfiguration.turso
-        configuration.readerCount = 1
-        let driver = try TursoPool(path: file.path, configuration: configuration, writerCount: 1)
+        let driver = try TursoPool(path: file.path, readerCount: 1, writerCount: 1)
         try await driver.write { transaction in
           try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         }
@@ -394,7 +408,7 @@
           try connection.execute("INSERT INTO items (id) VALUES (1)")
         }
         let count = try driver.readWithoutTransactionBlocking { connection in
-          try connection.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(connection)
         }
 
         #expect(count == 1)
@@ -422,7 +436,7 @@
         _ = try await writes
 
         let count = try driver.readBlocking { transaction in
-          try transaction.fetchOne(#sql("SELECT count(*) FROM items", as: Int.self))
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 2)
       }
@@ -437,7 +451,7 @@
 
     @Test
     func tursoUsesWholeDatabaseRegionsWithoutAnAuthorizer() throws {
-      let handle = try SQLiteHandle.open(
+      let handle = try SQLiteConnection.open(
         path: .memory,
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: .turso
@@ -456,7 +470,7 @@
 
     @Test
     func tursoRefusesWritesPassedThroughAReadTransaction() throws {
-      let handle = try SQLiteHandle.open(
+      var handle = try SQLiteConnection.open(
         path: .memory,
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: .turso
@@ -465,9 +479,8 @@
 
       #expect(throws: SQLiteError.self) {
         try handle.read { transaction in
-          try transaction.fetchAll(
-            #sql("INSERT INTO notes DEFAULT VALUES RETURNING id", as: Int.self)
-          )
+          try #sql("INSERT INTO notes DEFAULT VALUES RETURNING id", as: Int.self)
+            .fetchAll(transaction)
         }
       }
     }
@@ -503,7 +516,7 @@
       // nothing, which is what an empty result would wrongly vouch for.
       let driver = try SQLiteQueue(path: .memory)
       try await driver.writeWithoutTransaction { connection in
-        connection.isForeignKeysEnabled = false
+        try connection.setForeignKeysEnabled(false)
         try connection.executeScript(
           """
           CREATE TABLE lists (id INTEGER PRIMARY KEY);

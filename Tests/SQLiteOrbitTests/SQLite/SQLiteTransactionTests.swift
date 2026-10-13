@@ -9,8 +9,8 @@
 
     private func openTestConnection(
       configuration: SQLiteConfiguration = .default
-    ) throws -> SQLiteHandle {
-      let connection = try SQLiteHandle.open(
+    ) throws -> SQLiteConnection {
+      let connection = try SQLiteConnection.open(
         path: ":memory:",
         flags: [.readWrite, .create, .memory, .noMutex],
         configuration: configuration
@@ -25,15 +25,15 @@
 
     @Test
     func cursorsAdvanceLazilyAndStopWhenExhausted() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
         for id in 1...3 {
-          try transaction.execute(Item.insert { Item(id: id, title: "item \(id)") })
+          try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
         }
       }
 
       try connection.read { transaction in
-        var cursor = try transaction.fetchCursor(Item.all.order { $0.id })
+        var cursor = try Item.all.order { $0.id }.fetchCursor(transaction)
         var titles: [String] = []
         while let item = try cursor.next() {
           titles.append(item.title)
@@ -46,34 +46,32 @@
 
     @Test
     func writeCursorsReturnRowsFromReturningClauses() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "before") })
+        try Item.insert { Item(id: 1, title: "before") }.execute(transaction)
       }
 
       let updated = try connection.write { transaction in
-        try transaction.fetchAll(
-          #sql("UPDATE items SET title = 'after' RETURNING id", as: Int.self)
-        )
+        try #sql("UPDATE items SET title = 'after' RETURNING id", as: Int.self)
+          .fetchAll(transaction)
       }
       #expect(updated == [1])
 
       let titles = try connection.read { transaction in
-        try transaction.fetchAll(Item.select(\.title))
+        try Item.select(\.title).fetchAll(transaction)
       }
       #expect(titles == ["after"])
     }
 
     @Test
     func changesCountForgetsWhatTheStatementBeforeTheLastOneChanged() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       let counts = try connection.write { transaction -> [Int] in
         var counts: [Int] = []
-        try transaction.execute(
-          #sql("INSERT INTO items (id, title) VALUES (1, 'a'), (2, 'b'), (3, 'c')", as: Void.self)
-        )
+        try #sql("INSERT INTO items (id, title) VALUES (1, 'a'), (2, 'b'), (3, 'c')", as: Void.self)
+          .execute(transaction)
         counts.append(transaction.changesCount)
-        try transaction.execute(Item.where { $0.id.eq(1) }.delete())
+        try Item.where { $0.id.eq(1) }.delete().execute(transaction)
         counts.append(transaction.changesCount)
         return counts
       }
@@ -82,17 +80,17 @@
 
     @Test
     func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       let (before, first, second, afterDelete) = try connection.write {
         transaction -> (Int64, Int64, Int64, Int64) in
         // A connection that has never inserted has no rowid to report.
         let before = transaction.lastInsertedRowID
-        try transaction.execute(#sql("INSERT INTO items (title) VALUES ('a')", as: Void.self))
+        try #sql("INSERT INTO items (title) VALUES ('a')", as: Void.self).execute(transaction)
         let first = transaction.lastInsertedRowID
-        try transaction.execute(#sql("INSERT INTO items (title) VALUES ('b')", as: Void.self))
+        try #sql("INSERT INTO items (title) VALUES ('b')", as: Void.self).execute(transaction)
         let second = transaction.lastInsertedRowID
         // A statement that inserts nothing leaves the previous rowid in place.
-        try transaction.execute(Item.where { $0.id.eq(1) }.delete())
+        try Item.where { $0.id.eq(1) }.delete().execute(transaction)
         return (before, first, second, transaction.lastInsertedRowID)
       }
       #expect(before == 0)
@@ -103,7 +101,7 @@
 
     @Test
     func bindingsAndColumnsRoundTripPrimitivesAndBlobs() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.execute(
         """
         CREATE TABLE primitives (
@@ -114,56 +112,50 @@
 
       let payload: [UInt8] = [0x00, 0x01, 0xfe, 0xff]
       try connection.write { transaction in
-        try transaction.execute(
-          #sql(
-            """
-            INSERT INTO primitives (id, amount, flag, payload, missing)
-            VALUES (1, \(2.5, as: Double.self), \(true, as: Bool.self), \(payload, as: [UInt8].self), NULL)
-            """,
-            as: Void.self
-          )
+        try #sql(
+          """
+          INSERT INTO primitives (id, amount, flag, payload, missing)
+          VALUES (1, \(2.5, as: Double.self), \(true, as: Bool.self), \(payload, as: [UInt8].self), NULL)
+          """,
+          as: Void.self
         )
+        .execute(transaction)
       }
 
       try connection.read { transaction in
-        let amounts = try transaction.fetchAll(
-          #sql("SELECT amount FROM primitives", as: Double.self)
-        )
+        let amounts = try #sql("SELECT amount FROM primitives", as: Double.self)
+          .fetchAll(transaction)
         #expect(amounts == [2.5])
-        let flags = try transaction.fetchAll(#sql("SELECT flag FROM primitives", as: Bool.self))
+        let flags = try #sql("SELECT flag FROM primitives", as: Bool.self).fetchAll(transaction)
         #expect(flags == [true])
-        let payloads = try transaction.fetchAll(
-          #sql("SELECT payload FROM primitives", as: [UInt8].self)
-        )
+        let payloads = try #sql("SELECT payload FROM primitives", as: [UInt8].self)
+          .fetchAll(transaction)
         #expect(payloads == [payload])
-        let missing = try transaction.fetchAll(
-          #sql("SELECT missing FROM primitives", as: String?.self)
-        )
+        let missing = try #sql("SELECT missing FROM primitives", as: String?.self)
+          .fetchAll(transaction)
         #expect(missing == [String?.none])
       }
     }
 
     @Test
     func anEmptyBlobRoundTripsAsABlobRatherThanNull() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.execute("CREATE TABLE blobs (payload BLOB)")
 
       let empty: [UInt8] = []
       try connection.write { transaction in
-        try transaction.execute(
-          #sql(
-            "INSERT INTO blobs (payload) VALUES (\(empty, as: [UInt8].self))",
-            as: Void.self
-          )
+        try #sql(
+          "INSERT INTO blobs (payload) VALUES (\(empty, as: [UInt8].self))",
+          as: Void.self
         )
+        .execute(transaction)
       }
 
       try connection.read { transaction in
-        let types = try transaction.fetchAll(
-          #sql("SELECT typeof(payload) FROM blobs", as: String.self)
-        )
+        let types = try #sql("SELECT typeof(payload) FROM blobs", as: String.self)
+          .fetchAll(transaction)
         #expect(types == ["blob"])
-        let payloads = try transaction.fetchAll(#sql("SELECT payload FROM blobs", as: [UInt8].self))
+        let payloads = try #sql("SELECT payload FROM blobs", as: [UInt8].self).fetchAll(transaction)
         #expect(payloads == [[]])
       }
     }
@@ -196,14 +188,14 @@
         )
       }
 
-      let connection = try openTestConnection(configuration: configuration)
+      var connection = try openTestConnection(configuration: configuration)
       try connection.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "cached") })
+        try Item.insert { Item(id: 1, title: "cached") }.execute(transaction)
       }
 
       try connection.read { transaction in
         for _ in 0..<10 {
-          _ = try transaction.fetchAll(Item.all)
+          _ = try Item.all.fetchAll(transaction)
         }
       }
 
@@ -238,7 +230,7 @@
         )
       }
 
-      let connection = try openTestConnection(configuration: configuration)
+      var connection = try openTestConnection(configuration: configuration)
       try connection.write { transaction in
         try transaction.execute("INSERT INTO items VALUES (1, 'Original')")
         try transaction.executeScript(
@@ -251,7 +243,7 @@
       }
 
       let original = try connection.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM current_items", as: String.self))
+        try #sql("SELECT title FROM current_items", as: String.self).fetchAll(transaction)
       }
       try connection.write { transaction in
         try transaction.executeScript(
@@ -262,7 +254,7 @@
         )
       }
       let alternate = try connection.read { transaction in
-        try transaction.fetchAll(#sql("SELECT title FROM current_items", as: String.self))
+        try #sql("SELECT title FROM current_items", as: String.self).fetchAll(transaction)
       }
 
       #expect(original == ["Original"])
@@ -272,9 +264,9 @@
 
     @Test
     func transactionsExposeTheRawConnectionAndItsLibrary() throws {
-      let connection = try openTestConnection()
+      var connection = try openTestConnection()
       try connection.write { transaction in
-        try transaction.execute(Item.insert { Item(id: 1, title: "raw") })
+        try Item.insert { Item(id: 1, title: "raw") }.execute(transaction)
       }
 
       let count = try connection.read { transaction -> Int64 in

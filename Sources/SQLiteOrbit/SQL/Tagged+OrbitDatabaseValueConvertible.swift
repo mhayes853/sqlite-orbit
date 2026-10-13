@@ -21,4 +21,12 @@
   /// ```
   extension Tagged: ConvertibleFromOrbitDatabaseValue
   where RawValue: ConvertibleFromOrbitDatabaseValue {}
+
+  /// A tagged value is read from a row's first column as its raw value is.
+  ///
+  /// ```swift
+  /// let id = try transaction.fetchOne("SELECT max(id) FROM reminders", as: Reminder.ID?.self)
+  /// ```
+  extension Tagged: ConvertibleFromOrbitDatabaseRow
+  where RawValue: ConvertibleFromOrbitDatabaseValue {}
 #endif

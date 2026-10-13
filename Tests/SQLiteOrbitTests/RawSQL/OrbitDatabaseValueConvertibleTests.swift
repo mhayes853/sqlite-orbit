@@ -143,6 +143,13 @@ struct OrbitDatabaseValueConvertibleTests {
     let sql: SQL = "VALUES (\(1), \(UInt64.max), \(Failing()), \(2))"
     #expect(sql.text == "VALUES (?, ?, ?, ?)")
     #expect(sql.bindings == [.integer(1), .null, .null, .integer(2)])
+    let joined = [SQL("prefix \(sql)"), "suffix"].joined(separator: " ")
+    #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
+      try joined.validatedParts()
+    }
+    #expect(sql != SQL(text: sql.text, bindings: sql.bindings))
+    let customFailure: SQL = "VALUES (\(Failing()), \(UInt64.max))"
+    #expect(throws: FailingError.self) { try customFailure.validatedParts() }
   }
 
   #if StructuredQueries

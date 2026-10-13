@@ -40,7 +40,7 @@
     }
   }
 
-  private func makeAsyncTraitDatabase() async throws -> any OrbitObservableDatabase {
+  private func makeAsyncTraitDatabase() async throws -> any OrbitObservableDatabaseWriter {
     try SQLiteQueue(path: .memory)
   }
 #endif
