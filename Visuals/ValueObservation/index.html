@@ -161,6 +161,7 @@ svg .mono{font-family:var(--mono)}
 svg.focusing .edge{opacity:.1}
 svg.focusing .edge.rel{opacity:1;stroke-width:2.2}
 svg.focusing .node:not(.rel){opacity:.35}
+.zl{font:600 10.5px var(--mono);letter-spacing:.12em;fill:var(--dim)}
 .trail{fill:none;stroke-width:1.6;stroke-dasharray:3 5;opacity:.6}
 .pkt text{font:700 10.5px var(--mono);fill:#0a0d13}
 footer{max-width:1140px;margin:0 auto;padding:10px 18px 60px;color:var(--dim);font-size:13px}
@@ -1486,7 +1487,8 @@ class Ctx {
   edge(a, b, color, o = {}) {
     const A = this.n[a], B = this.n[b];
     const ca = { x: A.x + A.w / 2, y: A.y + A.h / 2 }, cb = { x: B.x + B.w / 2, y: B.y + B.h / 2 };
-    const pts = o.route ? [this.border(A, o.route[0]), ...o.route, this.border(B, o.route[o.route.length - 1])] : [this.border(A, cb), this.border(B, ca)];
+    // `pts` is a whole polyline, endpoints included; `route` only the bends between the borders.
+    const pts = o.pts ? o.pts : o.route ? [this.border(A, o.route[0]), ...o.route, this.border(B, o.route[o.route.length - 1])] : [this.border(A, cb), this.border(B, ca)];
     const d = 'M' + pts.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' L');
     const el = S('path', { d, class: 'edge' + (o.dash ? ' dash' : ''), stroke: color, 'marker-end': this.marker(color), 'data-a': a, 'data-b': b }, this.edgeLayer);
     this.edges[a + '>' + b] = el;
@@ -1929,7 +1931,6 @@ const ARCH = {
     file: 'Subscription/OrbitRegionSubscription.swift',
     r: 'The registration the database returns. Its region is a lower bound: a commit that overlaps it is always reported. <code>filtersByRegion</code> is <code>true</code> only when the database gave it an <code>onUpdateRegion</code>, and only then does the runtime narrow its registration. <code>updateRegion(_:)</code> is serialized, and returns only once every announcement that starts afterwards honors the new region. If it throws, the region is unchanged and the runtime ends the observation with that error. It is cancelled when the observation fails or the runtime is released.' }
 };
-const ARCH_POS = { fp: [0, 0], obs: [1, 0], def: [2, 0], ext: [3, 0], cb: [0, 1], dq: [1, 1], rt: [2, 1], ctl: [3, 1], sched: [0, 2], pipe: [1, 2], db: [2, 2], adv: [3, 2], sql: [1, 3], src: [2, 3], rsub: [3, 3] };
 const ARCH_EDGES = [
   ['fp', 'obs', 'OrbitFetchObservationRegistry gives equal requests one tracking(_:) observation'],
   ['obs', 'def', 'every copy shares one definition'],
@@ -1947,10 +1948,78 @@ const ARCH_EDGES = [
   ['db', 'sql', 'its writer reads and writes on SQLite connections, whose events reach the observer'],
   ['src', 'db', 'the hub (other handles, .local) · the transport (other processes, .external)']
 ];
-function archLayout(n) {
-  return n ? { W: 432, H: 458, cx: i => 12 + i * 104, cw: 90, ry: j => 12 + j * 112, rh: 86 }
-           : { W: 960, H: 440, cx: i => 20 + i * 240, cw: 200, ry: j => 20 + j * 106, rh: 64 };
-}
+// The map reads by role: Describe on the left, Run (the runtime and what it owns) in the middle,
+// Deliver on the right, and the Database underneath, feeding commits up into the runtime. Narrow
+// layouts stack the same zones top to bottom. Every edge is an orthogonal polyline, given in full.
+const ARCH_LAYOUT = {
+  wide: {
+    W: 960, H: 612,
+    nodes: {
+      fp: [20, 36, 170, 60], obs: [20, 121, 170, 60], def: [20, 206, 170, 60],
+      ctl: [287, 64, 170, 56], rt: [262, 176, 220, 120], ext: [552, 136, 190, 56], pipe: [552, 280, 190, 56], adv: [232, 336, 180, 56],
+      dq: [772, 206, 180, 60], sched: [772, 306, 180, 60], cb: [772, 406, 180, 60],
+      rsub: [14, 452, 190, 56], db: [352, 452, 180, 56], sql: [572, 452, 180, 56], src: [352, 540, 180, 56]
+    },
+    zones: [
+      { x: 8, y: 8, w: 194, h: 270, label: 'DESCRIBE', lx: 20, ly: 24 },
+      { x: 214, y: 30, w: 538, h: 380, label: 'RUN · ONE RUNTIME PER DATABASE', lx: 228, ly: 50, group: true },
+      { x: 762, y: 178, w: 192, h: 298, label: 'DELIVER', lx: 774, ly: 196 },
+      { x: 6, y: 424, w: 746, h: 182, label: 'DATABASE', lx: 18, ly: 442 }
+    ],
+    edges: P => ({
+      'fp>obs': [P('fp', 'b'), P('obs', 't')],
+      'obs>def': [P('obs', 'b'), P('def', 't')],
+      'def>rt': [P('def', 'r'), P('rt', 'l')],
+      'rt>ext': hvh(P('rt', 'r', -30), P('ext', 'l'), 517),
+      'rt>ctl': [P('rt', 't'), P('ctl', 'b')],
+      'rt>pipe': hvh(P('rt', 'r', 30), P('pipe', 'l'), 517),
+      'rt>dq': [P('rt', 'r'), P('dq', 'l')],
+      'dq>sched': [P('dq', 'b'), P('sched', 't')],
+      'sched>cb': [P('sched', 'b'), P('cb', 't')],
+      'rt>db': [P('rt', 'b', 70), P('db', 't')],
+      'rt>adv': [P('rt', 'b', -50), P('adv', 't')],
+      'adv>rsub': [P('adv', 'b'), { x: 322, y: 468 }, P('rsub', 'r', -12)],
+      'db>rsub': [P('db', 'l', 12), P('rsub', 'r', 12)],
+      'db>sql': [P('db', 'r'), P('sql', 'l')],
+      'src>db': [P('src', 't'), P('db', 'b')]
+    })
+  },
+  narrow: {
+    W: 440, H: 520,
+    nodes: {
+      fp: [8, 22, 120, 56], obs: [160, 22, 120, 56], def: [312, 22, 120, 56],
+      ctl: [8, 120, 120, 56], pipe: [8, 192, 120, 56], rt: [160, 120, 120, 128], ext: [312, 120, 120, 56], adv: [312, 192, 120, 56],
+      dq: [8, 304, 120, 56], sched: [8, 380, 120, 56], cb: [8, 456, 120, 56],
+      db: [160, 304, 120, 56], rsub: [312, 304, 120, 56], src: [160, 380, 120, 56], sql: [312, 380, 120, 56]
+    },
+    zones: [
+      { x: 2, y: 4, w: 436, h: 80, label: 'DESCRIBE', lx: 10, ly: 16 },
+      { x: 2, y: 96, w: 436, h: 162, label: 'RUN · ONE RUNTIME PER DATABASE', lx: 10, ly: 112, group: true },
+      { x: 2, y: 280, w: 132, h: 238, label: 'DELIVER', lx: 10, ly: 296 },
+      { x: 150, y: 280, w: 288, h: 162, label: 'DATABASE', lx: 158, ly: 296 }
+    ],
+    edges: P => ({
+      'fp>obs': [P('fp', 'r'), P('obs', 'l')],
+      'obs>def': [P('obs', 'r'), P('def', 'l')],
+      'def>rt': vhv(P('def', 'b'), P('rt', 't', 40), 88),
+      'rt>ext': [P('rt', 'r', -36), P('ext', 'l')],
+      'rt>ctl': [P('rt', 'l', -36), P('ctl', 'r')],
+      'rt>pipe': [P('rt', 'l', 36), P('pipe', 'r')],
+      'rt>adv': [P('rt', 'r', 36), P('adv', 'l')],
+      'rt>dq': vhv(P('rt', 'b', -44), P('dq', 't'), 268),
+      'dq>sched': [P('dq', 'b'), P('sched', 't')],
+      'sched>cb': [P('sched', 'b'), P('cb', 't')],
+      'rt>db': [P('rt', 'b'), P('db', 't')],
+      'adv>rsub': [P('adv', 'b'), P('rsub', 't')],
+      'db>rsub': [P('db', 'r', -10), P('rsub', 'l', -10)],
+      'db>sql': [P('db', 'r', 14), { x: 296, y: 346 }, { x: 296, y: 408 }, P('sql', 'l')],
+      'src>db': [P('src', 't'), P('db', 'b')]
+    })
+  }
+};
+// Elbows: horizontal, vertical, horizontal at x = mx; or vertical, horizontal, vertical at y = my.
+function hvh(a, b, mx) { return [a, { x: mx, y: a.y }, { x: mx, y: b.y }, b]; }
+function vhv(a, b, my) { return [a, { x: a.x, y: my }, { x: b.x, y: my }, b]; }
 const archInfoDefault = '<p class="hint">Tap or hover a component to see what it does and which source file it lives in. Its connections are highlighted in the map.</p><p class="hint">The observation and its definition only describe what to observe. Subscribing creates a runtime for the database. The runtime is the database\'s transaction observer, and it owns the advertisement, the delivery queue and the refetch controller\'s task. Regions come from SQLite\'s authorizer. The steps follow one subscription to its first value, then one commit from another process to a callback.</p>';
 function archInfo(id) {
   const el = document.getElementById('arch-info');
@@ -1981,15 +2050,26 @@ new Scene({
     ]
   }),
   build(ctx) {
-    const L = archLayout(ctx.narrow);
+    const L = ARCH_LAYOUT[ctx.narrow ? 'narrow' : 'wide'];
     ctx.svg(L.W, L.H, 'Architecture map of a value observation');
-    for (const [id, [i, j]] of Object.entries(ARCH_POS)) {
-      const m = ARCH[id];
-      const g = ctx.box(id, L.cx(i), L.ry(j), L.cw, L.rh, m.c, ctx.narrow ? m.short : (m.tt || m.t), ctx.narrow ? null : m.s,
-        { ts: ctx.narrow ? 10.5 : (m.tt ? 11.6 : 12.5), ss: 10.5, cls: 'clickable' });
+    for (const z of L.zones) {
+      if (z.group) ctx.rect(z.x, z.y, z.w, z.h, { fill: C.rt, fo: 0.035, stroke: C.rt, so: 0.5, dash: '6 5', rx: 14 });
+      else ctx.rect(z.x, z.y, z.w, z.h, { fill: '#ffffff', fo: 0.015, stroke: C.line, so: 0.8, rx: 12 });
+      ctx.text(z.lx, z.ly, z.label, { mono: true, cls: 'zl', size: ctx.narrow ? 9.5 : 10.5, fill: z.group ? C.rt : C.dim, op: z.group ? 0.85 : null });
+    }
+    for (const id in L.nodes) {
+      const m = ARCH[id], [x, y, w, h] = L.nodes[id];
+      const g = ctx.box(id, x, y, w, h, m.c, ctx.narrow ? m.short : (m.tt || m.t), ctx.narrow ? null : m.s,
+        { ts: ctx.narrow ? 10.5 : (m.tt ? 11.6 : 12.5), ss: 10.5, cls: 'clickable', fo: id === 'rt' ? 0.16 : null });
       g.setAttribute('tabindex', '0'); g.setAttribute('role', 'button'); g.setAttribute('aria-label', m.t);
     }
-    for (const [a, b] of ARCH_EDGES) ctx.edge(a, b, ARCH[a].c);
+    const P = (id, side, off = 0) => {
+      const [x, y, w, h] = L.nodes[id];
+      return side === 'l' ? { x, y: y + h / 2 + off } : side === 'r' ? { x: x + w, y: y + h / 2 + off }
+        : side === 't' ? { x: x + w / 2 + off, y } : { x: x + w / 2 + off, y: y + h };
+    };
+    const routes = L.edges(P);
+    for (const [a, b] of ARCH_EDGES) ctx.edge(a, b, ARCH[a].c, { pts: routes[a + '>' + b] });
     const svg = ctx.root;
     const focus = id => {
       svg.classList.add('focusing');
@@ -2038,7 +2118,7 @@ new Scene({
       run(c) {
         c.hot('rt', 'db', 'sql', 'ext');
         c.fly('rt', 'db', { label: 'read', color: C.rt });
-        c.fly('db', 'sql', { delay: 800, label: c.narrow ? 'SELECT' : 'SELECT … FROM reminders', color: C.db });
+        c.fly('db', 'sql', { delay: 800, label: 'SELECT …', color: C.db });
         c.fly('sql', 'db', { delay: 1600, label: 'readRegion', color: C.sql });
         c.fly('rt', 'ext', { delay: 800, label: 'capture', color: C.rt });
       } },
@@ -2064,7 +2144,7 @@ new Scene({
         c.hot('ctl', 'rt', 'db', 'sql', 'pipe', 'dq', 'sched', 'cb');
         c.fly('ctl', 'rt', { label: 'fetch', color: C.ctl });
         c.fly('rt', 'db', { delay: 800, label: 'read', color: C.rt });
-        c.fly('db', 'sql', { delay: 1500, label: c.narrow ? 'SELECT' : 'SELECT … FROM reminders', color: C.db });
+        c.fly('db', 'sql', { delay: 1500, label: 'SELECT …', color: C.db });
         c.fly('rt', 'pipe', { delay: 2300, label: 'reduce', color: C.rt });
         c.fly('rt', 'dq', { delay: 3000, label: 'publication', color: C.rt });
         c.fly('dq', 'sched', { delay: 3700, label: 'receive', color: C.dq });
