@@ -27,7 +27,7 @@ The first build compiles swift-syntax in release mode and takes several minutes.
 
 | Target | Contents |
 | --- | --- |
-| `FetchBenchmarks` | Reading 200,000 rows: by position, by name, into records, and dates; plus per-read access overhead. |
+| `FetchBenchmarks` | Reading 200,000 rows: by position, by name, into records, and dates; plus per-read access overhead and 100,000 one-row lookups by rowid. |
 | `InsertBenchmarks` | Writing 50,000 rows: by position, by name, from records; 1,000,000 bound strings; plus per-write access overhead. |
 | `BenchmarkSupport` | The fixture, the shared configuration, and a raw C connection. |
 | `CSQLiteBenchmark` | The SQLite C API, for the baseline every group is measured against. |
@@ -59,6 +59,16 @@ Every group runs 50 iterations, as GRDB's do, except `Arguments*`, which runs 10
 - `DateParsing` opens its in-memory database once rather than inside every iteration.
 - `Arguments*` gives every iteration a fresh table and transaction, and adds C-level
   `SQLITE_STATIC` and `SQLITE_TRANSIENT` baselines.
+- `Arguments*` also runs GRDB's ad-hoc paths, which hand it SQL for every row:
+  `GRDBExecuteSQL` (`execute(sql:arguments:)`) and `GRDBLiteral` (`execute(literal:)`) prepare a
+  statement every time, like `OrbitUncached`, and `GRDBCached` (`cachedStatement(sql:)`) reuses
+  one from GRDB's opt-in cache, like `Orbit`. GRDB's own tests run one prepared statement, like
+  `OrbitPrepared`.
+- `FetchOneByRowID` has no GRDB counterpart. It makes 100,000 one-row lookups by rowid in one
+  read, so the cost of running a statement dominates rather than of stepping rows, and runs each
+  library's ways of doing so: prepared once (`SQLite`, `GRDBPrepared`, `OrbitPrepared`), cached
+  (`GRDBCached`, `Orbit`), prepared per lookup (`SQLiteUncached`, `GRDB`, `GRDBLiteral`,
+  `OrbitUncached`), and through a query builder (`GRDBQueryInterface`, `OrbitStructuredQueries`).
 - `ReadAccessOverhead` and `AccessOverheadWrite` have no GRDB counterpart. They make 10,000
   separate one-row accesses to measure what an access costs apart from its query, comparing like
   drivers: `DatabaseQueue` with `SQLiteQueue`, `DatabasePool` with `SQLitePool`. Writes run with

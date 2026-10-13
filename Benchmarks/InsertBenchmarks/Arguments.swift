@@ -62,8 +62,9 @@ private func argumentsBenchmarks(named name: String, value: String) {
     }
   }
 
-  // GRDB's three tests. Legacy binds with `setArguments` and then executes, as
-  // `execute(arguments:)` once did; SQLITE_STATIC is today's `execute(arguments:)`;
+  // GRDB's three tests, all on its prepared path: one statement from `makeStatement`, run for
+  // every row, which `OrbitPrepared` compares with. Legacy binds with `setArguments` and then
+  // executes, as `execute(arguments:)` once did; SQLITE_STATIC is today's `execute(arguments:)`;
   // SQLITE_TRANSIENT binds once and re-executes without rebinding.
   Benchmark("\(name)/GRDBLegacy", configuration: .arguments) { benchmark in
     try measureGRDB(benchmark, value: value) { statement, arguments in
@@ -91,8 +92,37 @@ private func argumentsBenchmarks(named name: String, value: String) {
     }
   }
 
+  // GRDB's ad-hoc paths, which `Orbit` and `OrbitUncached` compare with: SQL handed to the
+  // database for every row. `execute(sql:arguments:)` and `execute(literal:)` prepare a fresh
+  // statement each time, as `OrbitUncached` does; `cachedStatement(sql:)` is GRDB's opt-in
+  // statement cache, which `Orbit` uses by default.
+  Benchmark("\(name)/GRDBExecuteSQL", configuration: .arguments) { benchmark in
+    try measureGRDBDatabase(benchmark, value: value) { db in
+      for _ in 0..<insertCount {
+        try db.execute(sql: "INSERT INTO t(a) VALUES (?)", arguments: [value])
+      }
+    }
+  }
+
+  Benchmark("\(name)/GRDBLiteral", configuration: .arguments) { benchmark in
+    try measureGRDBDatabase(benchmark, value: value) { db in
+      for _ in 0..<insertCount {
+        try db.execute(literal: "INSERT INTO t(a) VALUES (\(value))")
+      }
+    }
+  }
+
+  Benchmark("\(name)/GRDBCached", configuration: .arguments) { benchmark in
+    try measureGRDBDatabase(benchmark, value: value) { db in
+      for _ in 0..<insertCount {
+        try db.cachedStatement(sql: "INSERT INTO t(a) VALUES (?)").execute(arguments: [value])
+      }
+    }
+  }
+
   // Orbit binds interpolated values every time a statement runs. `Orbit` reuses the cached
-  // statement; `OrbitUncached` prepares each one anew; `OrbitPrepared` runs one prepared statement.
+  // statement, as `GRDBCached` does; `OrbitUncached` prepares each one anew, as `GRDBExecuteSQL`
+  // and `GRDBLiteral` do; `OrbitPrepared` runs one prepared statement, as GRDB's tests do.
   Benchmark("\(name)/Orbit", configuration: .arguments) { benchmark in
     try measureOrbit(benchmark, value: value) { transaction in
       for _ in 0..<insertCount {
@@ -136,6 +166,22 @@ private func measureGRDB(
         try insert(statement, [value])
       }
     }
+  )
+}
+
+/// Measures `insert` against GRDB's database inside a write, for the ad-hoc paths that hand SQL
+/// to the database rather than run a statement prepared up front.
+private func measureGRDBDatabase(
+  _ benchmark: Benchmark,
+  value: String,
+  insert: (GRDB.Database) throws -> Void
+) throws {
+  try measureInsert(
+    benchmark,
+    schema: "CREATE TABLE t(a)",
+    verify: { try verifyStrings(at: $0, value: value) },
+    open: { try DatabaseQueue(path: $0) },
+    insert: { dbQueue in try dbQueue.write(insert) }
   )
 }
 
