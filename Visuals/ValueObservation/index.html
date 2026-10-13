@@ -110,6 +110,25 @@ h2{font-size:clamp(20px,2.7vw,27px);margin:0;letter-spacing:-.01em;line-height:1
 .pick{display:flex;flex-wrap:wrap;gap:6px}
 .pick button{border:1px solid var(--line2);border-radius:9px;font-family:var(--mono);font-size:12px}
 .pick button.on{background:#24324f;color:var(--text);border-color:#3a5078}
+/* SQL panel: the observation's code and the statements a scenario runs, in order */
+.sqlp{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.08fr);gap:10px 18px;margin:12px 14px 0;padding:10px 12px 9px;border:1px solid var(--line);border-radius:12px;background:rgba(8,11,17,.55)}
+.sqlp .hd{font:600 10.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:2px 0 7px}
+.sqlp pre{margin:0;font:11.5px/1.5 var(--mono);color:#cfd7e5;white-space:pre;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;padding-bottom:2px}
+.sqlp ol{list-style:none;margin:0;padding:0;font:11.5px/1.45 var(--mono)}
+.sqlp li{display:grid;grid-template-columns:12px 112px minmax(0,1fr);gap:0 8px;padding:2px 6px 2px 4px;border-radius:6px;transition:background-color .25s,opacity .25s,box-shadow .25s}
+.sqlp li .mk{color:var(--dim);text-align:center}
+.sqlp li .who{font:11px/1.6 var(--sans);color:var(--muted);min-width:0}
+.sqlp li code{font:inherit;color:#cfd7e5;background:none;border:0;padding:0;border-radius:0;white-space:pre-wrap;overflow-wrap:break-word;min-width:0}
+.sqlp li code .cm.ln{display:block}
+.sqlp li.todo{opacity:.42}
+.sqlp li.done .mk{color:var(--ok)}
+.sqlp li.on{background:rgba(255,180,84,.12);box-shadow:inset 2px 0 0 var(--c-ep)}
+.sqlp li.on .mk{color:var(--c-ep)}
+.sqlp li.on .who{color:var(--text)}
+.sqlp .kw{color:var(--c-wire)}.sqlp .st{color:var(--c-reg)}.sqlp .nu{color:#f2b84b}.sqlp .cm{color:#7d89a1}
+.sqlp .k2{color:var(--c-sched)}.sqlp .ty{color:var(--c-def)}
+@media (max-width:860px){.sqlp{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.sqlp{margin:10px 8px 0;padding:8px 8px 7px}.sqlp pre,.sqlp ol{font-size:10.5px}.sqlp li{grid-template-columns:10px 66px minmax(0,1fr);gap:0 6px;padding:2px 4px 2px 2px}.sqlp li .who{font-size:10px;line-height:1.55}}
 /* architecture */
 .arch-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px}
 .arch-grid .stage{padding-bottom:10px}
@@ -1592,6 +1611,12 @@ class Scene {
       }
       if (this.toolbar) this.toolbar(bar);
     }
+    // The SQL panel sits between the toolbar and the stage. Its content changes only with the mode,
+    // and a step changes only which rows are highlighted, so its height never moves within a mode.
+    if (this.sql) {
+      this.sqlEl = H('div', { class: 'sqlp', role: 'group', 'aria-label': 'The observation and the SQL it runs' });
+      card.insertBefore(this.sqlEl, host);
+    }
     // The controls sit above the caption, and the caption is as tall as the scene's longest one, so
     // stepping never moves the buttons or the page.
     const ctr = H('div', { class: 'controls' }, card);
@@ -1637,6 +1662,7 @@ class Scene {
       this.capEl.style.minHeight = tallest + 'px';
     }
     this.capEl.innerHTML = capHTML(s, k);
+    this.paintSQL(list, k);
     this.dotsEl.textContent = '';
     list.forEach((st, i) => {
       const d = H('button', { type: 'button', class: 'dot' + (i === k ? ' on' : i < k ? ' done' : ''), 'aria-label': `Step ${i + 1}: ${stripTags(st.t)}` }, this.dotsEl);
@@ -1645,6 +1671,34 @@ class Scene {
     });
     this.bPrev.disabled = k === 0; this.bNext.disabled = k === list.length - 1;
     if (this.playing) this.schedule();
+  }
+  // A step's `sql` names the statement rows it runs: those are highlighted, rows an earlier step
+  // ran (or marked `done`, having run before the scenario starts) are ticked, and the rest dimmed.
+  paintSQL(list, k) {
+    if (!this.sqlEl) return;
+    if (this.sqlKey !== this.mode) {
+      this.sqlKey = this.mode;
+      const spec = this.sql(this.mode);
+      let prev = null;
+      const rows = spec.rows.map(r => {
+        const who = r.who !== prev ? r.who : ''; prev = r.who;
+        // A trailing comment goes on a line of its own, so it never wraps through the statement.
+        const [code, note] = r.swift != null ? r.swift.split(/ {2}(?=\/\/)/) : r.sql != null ? r.sql.split(/ {2}(?=--)/) : [null, r.note];
+        const body = (code == null ? '' : r.swift != null ? hlSwift(code) : hlSQL(code)) + (note ? `<span class="cm ln">${esc(note)}</span>` : '');
+        return `<li data-id="${r.id}"${r.done ? ' data-pre="1"' : ''}><span class="mk" aria-hidden="true"></span><span class="who">${esc(who)}</span><code>${body}</code></li>`;
+      }).join('');
+      this.sqlEl.innerHTML = `<div class="obs"><div class="hd">The observation</div><pre><code>${hlSwift(spec.obs)}</code></pre></div>`
+        + `<div class="stm"><div class="hd">${spec.title || 'The statements, in order'}</div><ol>${rows}</ol></div>`;
+    }
+    const ids = st => st && st.sql != null ? [].concat(st.sql) : [];
+    const cur = new Set(ids(list[k])), seen = new Set();
+    for (let i = 0; i < k; i++) ids(list[i]).forEach(x => seen.add(x));
+    this.sqlEl.querySelectorAll('li').forEach(li => {
+      const id = li.dataset.id, st = cur.has(id) ? 'on' : seen.has(id) || li.dataset.pre ? 'done' : 'todo';
+      li.className = st;
+      li.querySelector('.mk').textContent = st === 'on' ? '▸' : st === 'done' ? '✓' : '·';
+      if (st === 'on') li.setAttribute('aria-current', 'step'); else li.removeAttribute('aria-current');
+    });
   }
   schedule() {
     clearTimeout(this.timer);
@@ -1773,9 +1827,57 @@ function sceneState(ctx, L, st, kvTitle, kvColor, extraDraw) {
   };
 }
 function stepList(list) {
-  return list.map(s => ({ t: s.t, cap: s.cap, dur: s.dur, run(c) { c.d.hot = []; c.d.fresh = 0; if (s.run) s.run(c); c.redraw(); } }));
+  return list.map(s => ({ t: s.t, cap: s.cap, dur: s.dur, sql: s.sql, run(c) { c.d.hot = []; c.d.fresh = 0; if (s.run) s.run(c); c.redraw(); } }));
 }
 const REM = 'reminders(id, isCompleted, title)';
+
+/* ====================================================================================
+   SQL panel: one schema, reminders(id, title, isCompleted, listId) and lists(id, name), with
+   the same statements throughout. A scene's `sql(mode)` returns the observation's code and the
+   statement rows; each step's `sql` names the rows it runs.
+   ==================================================================================== */
+const Q = 'SELECT id, title FROM reminders WHERE isCompleted = 0';
+const Q_ALL = 'SELECT id, title FROM reminders';
+const Q_L = 'SELECT id, title, listId FROM reminders WHERE isCompleted = 0';
+const Q_LIST = 'SELECT name FROM lists WHERE id = 3';
+const W_TITLE = "UPDATE reminders SET title = 'Buy oat milk' WHERE id = 1";
+const W_DONE = 'UPDATE reminders SET isCompleted = 1 WHERE id = 2';
+const W_INS = "INSERT INTO reminders (title, listId) VALUES ('Call Sam', 3)";
+const W_LIST = "UPDATE lists SET name = 'Errands' WHERE id = 3";
+const W_INLIST = 'UPDATE reminders SET listId = 3 WHERE id = 1';
+const SQL_KW = new Set('SELECT FROM WHERE AND OR NOT IN IS NULL UPDATE SET INSERT INTO VALUES DELETE BEGIN IMMEDIATE CONCURRENT COMMIT ROLLBACK JOIN ON LIKE PRAGMA AS'.split(' '));
+const SW_KW = new Set('let var try await in if else guard return true false struct func'.split(' '));
+const hspan = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+function hlTokens(src, re, fn) {
+  let out = '', i = 0, m;
+  re.lastIndex = 0;
+  while ((m = re.exec(src))) { out += esc(src.slice(i, m.index)) + fn(m); i = re.lastIndex; }
+  return out + esc(src.slice(i));
+}
+function hlSQL(s) {
+  return hlTokens(s, /(--.*$)|('(?:[^']|'')*')|\b(\d+)\b|\b([A-Z]{2,})\b|(\?)/gm, m =>
+    m[1] ? hspan('cm', m[1]) : m[2] ? hspan('st', m[2]) : m[3] ? hspan('nu', m[3]) : m[4] ? (SQL_KW.has(m[4]) ? hspan('kw', m[4]) : esc(m[4])) : hspan('nu', m[5]));
+}
+function hlSwift(s) {
+  return hlTokens(s, /(\/\/.*$)|"((?:[^"\\]|\\.)*)"|(#sql)\b|\b([a-z]+)\b|\b([A-Z][A-Za-z0-9]+)\b|(…)/gm, m => {
+    if (m[1]) return hspan('cm', m[1]);
+    if (m[2] != null) return /^(SELECT|UPDATE|INSERT|DELETE)\b/.test(m[2]) ? `<span class="st">"</span>${hlSQL(m[2])}<span class="st">"</span>` : hspan('st', '"' + m[2] + '"');
+    if (m[3]) return hspan('k2', m[3]);
+    if (m[4]) return SW_KW.has(m[4]) ? hspan('k2', m[4]) : esc(m[4]);
+    if (m[5]) return hspan('ty', m[5]);
+    return hspan('cm', m[6]);
+  });
+}
+// The common observation, as code. `head` is the factory call, `chain` any operators after it.
+function obsCode(o = {}) {
+  const head = o.head || 'tracking', fetch = o.fetch || [`try #sql(`, `  "${Q}",`, `  as: Row.self`, `).fetchAll(tx)`];
+  const name = o.name || 'incomplete';
+  let s;
+  if (o.chain) s = `let ${name} = OrbitValueObservation\n  .${head} { tx in\n${fetch.map(l => '    ' + l).join('\n')}\n  }\n${o.chain.map(l => '  ' + l).join('\n')}`;
+  else s = `let ${name} = OrbitValueObservation.${head} { tx in\n${fetch.map(l => '  ' + l).join('\n')}\n}`;
+  return s + (o.tail ? '\n' + o.tail : '');
+}
+const SUBSCRIBE = 'let subscription = try incomplete.subscribe(to: database) { error in\n  …\n} onChange: { change in … }';
 
 /* ====================================================================================
    Scene 1: Architecture map
@@ -1864,6 +1966,20 @@ function archInfo(id) {
 }
 new Scene({
   id: 'arch', narrowAt: 600,
+  sql: () => ({
+    obs: obsCode({ tail: SUBSCRIBE }),
+    rows: [
+      { id: 'r1', who: 'initial read', sql: Q + '  -- reads reminders(id, isCompleted, title)' },
+      { id: 'wB', who: 'process W', sql: 'BEGIN IMMEDIATE' },
+      { id: 'wU', who: 'process W', sql: W_DONE + '  -- changes reminders(isCompleted)' },
+      { id: 'wC', who: 'process W', sql: 'COMMIT' },
+      { id: 'r2', who: 'refetch', sql: Q },
+      { id: 'lB', who: 'this handle', sql: 'BEGIN IMMEDIATE' },
+      { id: 'lU', who: 'this handle', sql: W_TITLE },
+      { id: 'lF', who: 'fetch, on the write', sql: Q },
+      { id: 'lC', who: 'this handle', sql: 'COMMIT' }
+    ]
+  }),
   build(ctx) {
     const L = archLayout(ctx.narrow);
     ctx.svg(L.W, L.H, 'Architecture map of a value observation');
@@ -1918,11 +2034,11 @@ new Scene({
         c.fly('rt', 'db', { delay: 1600, label: 'observer', color: C.rt });
         c.fly('db', 'rsub', { delay: 2400, label: 'subscription', color: C.db });
       } },
-    { t: 'The first read records its region', cap: 'The initial read runs in a read transaction, under an <code>OrbitDatabaseRegionRecorder</code>. SQLite\'s authorizer told each statement which columns it reads, and <code>SQLiteConnectionEvents</code> reports them to the recorder. Around the fetch, <code>ExternalTracking</code> records any observable properties it reads.',
+    { t: 'The first read records its region', sql: 'r1', cap: 'The initial read runs in a read transaction, under an <code>OrbitDatabaseRegionRecorder</code>. SQLite\'s authorizer told each statement which columns it reads, and <code>SQLiteConnectionEvents</code> reports them to the recorder. Around the fetch, <code>ExternalTracking</code> records any observable properties it reads.',
       run(c) {
         c.hot('rt', 'db', 'sql', 'ext');
         c.fly('rt', 'db', { label: 'read', color: C.rt });
-        c.fly('db', 'sql', { delay: 800, label: 'SELECT', color: C.db });
+        c.fly('db', 'sql', { delay: 800, label: c.narrow ? 'SELECT' : 'SELECT … FROM reminders', color: C.db });
         c.fly('sql', 'db', { delay: 1600, label: 'readRegion', color: C.sql });
         c.fly('rt', 'ext', { delay: 800, label: 'capture', color: C.rt });
       } },
@@ -1936,28 +2052,28 @@ new Scene({
         c.fly('rt', 'adv', { delay: 3000, label: 'beginUpdate', color: C.rt });
         c.fly('adv', 'rsub', { delay: 3800, label: 'updateRegion', color: C.adv });
       } },
-    { t: 'Another process commits', cap: 'A process that changed those columns sends a datagram, since our marker admits the commit. The transport hands it to <code>OrbitIPCDatabase</code>\'s observer, which calls <code>databaseDidChange(in:)</code> and then <code>databaseDidCommit</code> with origin <code>.external</code>. The commit overlaps the observed region, so <code>requestRefetch</code> starts the refetch controller.',
+    { t: 'Another process commits', sql: ['wB', 'wU', 'wC'], cap: 'Process W commits <code>' + W_DONE + '</code>, which changed a column the fetch read, and sends a datagram, since our marker admits the commit. The transport hands it to <code>OrbitIPCDatabase</code>\'s observer, which calls <code>databaseDidChange(in:)</code> and then <code>databaseDidCommit</code> with origin <code>.external</code>. The commit overlaps the observed region, so <code>requestRefetch</code> starts the refetch controller.',
       run(c) {
         c.hot('src', 'db', 'rt', 'ctl');
         c.fly('src', 'db', { label: 'datagram', color: C.src });
         c.fly('db', 'rt', { delay: 800, label: 'didCommit', color: C.db });
         c.fly('rt', 'ctl', { delay: 1600, label: 'Task', color: C.rt });
       } },
-    { t: 'The controller fetches again', cap: '<code>.immediate</code> calls <code>fetch(publishing: .ifCurrent)</code>. The runtime reads again under a recorder. Nothing newer arrived during the read, so it accepts the result and delivers it with source <code>.transaction(.external)</code>, and the controller returns.',
+    { t: 'The controller fetches again', sql: 'r2', cap: '<code>.immediate</code> calls <code>fetch(publishing: .ifCurrent)</code>. The runtime reads again under a recorder. Nothing newer arrived during the read, so it accepts the result and delivers it with source <code>.transaction(.external)</code>, and the controller returns.',
       run(c) {
         c.hot('ctl', 'rt', 'db', 'sql', 'pipe', 'dq', 'sched', 'cb');
         c.fly('ctl', 'rt', { label: 'fetch', color: C.ctl });
         c.fly('rt', 'db', { delay: 800, label: 'read', color: C.rt });
-        c.fly('db', 'sql', { delay: 1500, label: 'SELECT', color: C.db });
+        c.fly('db', 'sql', { delay: 1500, label: c.narrow ? 'SELECT' : 'SELECT … FROM reminders', color: C.db });
         c.fly('rt', 'pipe', { delay: 2300, label: 'reduce', color: C.rt });
         c.fly('rt', 'dq', { delay: 3000, label: 'publication', color: C.rt });
         c.fly('dq', 'sched', { delay: 3700, label: 'receive', color: C.dq });
         c.fly('sched', 'cb', { delay: 4400, label: 'value', color: C.sched });
       } },
-    { t: 'A write through this handle is different', cap: 'When this process writes through the same database, the runtime is told <code>databaseWillCommit(_:)</code> before <code>COMMIT</code>, and fetches on the writing transaction. It publishes as soon as the commit is reported, with no refetch controller and no second read (scene 03).',
+    { t: 'A write through this handle is different', sql: ['lB', 'lU', 'lF', 'lC'], cap: 'When this process writes through the same database, here <code>' + W_TITLE + '</code>, the runtime is told <code>databaseWillCommit(_:)</code> before <code>COMMIT</code>, and fetches on the writing transaction. It publishes as soon as the commit is reported, with no refetch controller and no second read (scene 03).',
       run(c) {
         c.hot('db', 'sql', 'rt', 'dq', 'sched', 'cb');
-        c.fly('db', 'sql', { label: 'write', color: C.db });
+        c.fly('db', 'sql', { label: c.narrow ? 'UPDATE' : 'UPDATE reminders SET title …', color: C.db });
         c.fly('sql', 'db', { delay: 800, label: 'willCommit', color: C.sql });
         c.fly('db', 'rt', { delay: 1600, label: 'fetch now', color: C.db });
         c.fly('rt', 'dq', { delay: 2400, label: 'publication', color: C.rt });
@@ -1986,6 +2102,32 @@ const REC_NODES = (() => {
 new Scene({
   id: 'recording', narrowAt: 640, modesLabel: 'Made with',
   modes: [{ key: 'auto', label: '<code>tracking(_:)</code>' }, { key: 'first', label: '<code>trackingConstantRegion(_:)</code>' }, { key: 'const', label: '<code>tracking(region:_:)</code>' }],
+  sql(mode) {
+    if (mode === 'const') return {
+      obs: 'let incomplete = OrbitValueObservation.tracking(\n  region: OrbitDatabaseRegion(table: "reminders")\n) { tx in\n'
+        + '  let rows = try #sql(\n    "' + Q + '",\n    as: Row.self\n  ).fetchAll(tx)\n'
+        + '  let list = try #sql("' + Q_LIST + '", as: String.self)\n    .fetchOne(tx)\n  return (rows, list)\n}',
+      rows: [
+        { id: 'f', who: 'every fetch', sql: Q },
+        { id: 'fl', who: 'every fetch', sql: Q_LIST + '  -- outside the given region' },
+        { id: 'w', who: 'a commit', sql: W_LIST + '  -- changes lists(name)' }
+      ] };
+    if (mode === 'first') return {
+      obs: obsCode({ head: 'trackingConstantRegion' }),
+      rows: [
+        { id: 'f1', who: 'fetch #1', sql: Q + '  -- recorded: ' + REM },
+        { id: 'f2', who: 'fetch #2, #3, …', sql: Q + '  -- not recorded: the stored region' },
+        { id: 'b', who: 'if it branched', sql: Q_LIST + '  -- read only sometimes: never watched' }
+      ] };
+    return {
+      obs: obsCode(),
+      rows: [
+        { id: 'f', who: 'every fetch', sql: Q + '  -- reads ' + REM },
+        { id: 'e1', who: 'other statements', sql: W_INS + '  -- changes all of reminders' },
+        { id: 'e2', who: 'other statements', sql: W_TITLE + '  -- changes reminders(title)' },
+        { id: 'e3', who: 'other statements', sql: 'PRAGMA user_version  -- reads .fullDatabase' }
+      ] };
+  },
   build(ctx) {
     const n = ctx.narrow, mode = this.mode;
     const L = panelsLayout(n, n ? 172 : 100, 7, n ? 11 : 10);
@@ -2023,39 +2165,39 @@ new Scene({
     if (mode === 'const') return stepList([
       { t: 'A region given up front', cap: '<code>tracking(region:_:)</code> gives the source <code>.constant(region)</code>, here <code>OrbitDatabaseRegion(table: "reminders")</code>. The runtime starts with <code>observedRegion</code> set to it, and its advertisement registers it with the database from the start, instead of <code>.fullDatabase</code>.',
         run(c) { c.set({ 'region source': '.constant(reminders)', observedRegion: 'reminders', 'advertisement.region': 'reminders' }); c.log('State(observedRegion: regionSource.initialRegion)', 'OrbitValueObservationAdvertisement(region: reminders)', 'install: database.subscribe(transactionObserver:region: reminders)'); c.hot('rt'); } },
-      { t: 'SQLite still authorizes the statement', cap: 'Preparing <code>' + SQLTXT + '</code> still calls the authorizer, and the statement still gets its regions, since the connection works out regions for every statement it prepares. No recorder is listening for this fetch, though.',
+      { t: 'SQLite still authorizes the statement', sql: 'f', cap: 'Preparing <code>' + SQLTXT + '</code> still calls the authorizer, and the statement still gets its regions, since the connection works out regions for every statement it prepares. No recorder is listening for this fetch, though.',
         run(c) { authorize(c); c.set({ 'statement readRegion': REM }); } },
-      { t: 'Every fetch reports the given region', cap: 'Each fetch is just <code>(try fetch(transaction), region)</code>, with no recorder. <code>accept</code> sets <code>observedRegion</code> to the same region every time, so the registration never moves.',
+      { t: 'Every fetch reports the given region', sql: ['f', 'fl'], cap: 'Each fetch is just <code>(try fetch(transaction), region)</code>, with no recorder. <code>accept</code> sets <code>observedRegion</code> to the same region every time, so the registration never moves.',
         run(c) { c.set({ recorder: 'none: no withObservation', 'output.region': 'reminders' }); c.log('regionSource.fetch: case .constant(let region) → (try fetch(transaction), region)', 'accept: observedRegion = reminders (unchanged)'); c.hot('fetch', 'rt'); c.fly('fetch', 'rt', { label: '(payload, reminders)', color: C.obs, bend: 0.12 }); } },
-      { t: 'The region is a promise', cap: 'The runtime believes the region it was given. A commit that touches only what the fetch reads outside it doesn\'t make the observation fetch again, and a database that filters by region may never even report it. A region wider than the reads costs only extra fetches.',
-        run(c) { c.set({ 'commits outside it': ['not refetched', C.bad] }); c.log('a commit to lists, which the fetch also reads → no overlap with reminders → ignored'); } }
+      { t: 'The region is a promise', sql: 'w', cap: 'The runtime believes the region it was given. A commit that touches only what the fetch reads outside it, like <code>' + W_LIST + '</code>, doesn\'t make the observation fetch again, and a database that filters by region may never even report it. A region wider than the reads costs only extra fetches.',
+        run(c) { c.set({ 'commits outside it': ['not refetched', C.bad] }); c.log(W_LIST + ': lists(name), which the fetch also reads → no overlap with reminders → ignored'); } }
     ]);
     if (mode === 'first') return stepList([
       { t: 'One recorded region per runtime', cap: '<code>trackingConstantRegion(_:)</code> gives the source <code>.constantOnFirstFetch</code>. Each runtime gets an <code>OrbitValueObservationFirstFetchRegion</code>, which starts empty. It belongs to the runtime, not the observation, because the same observation on another database is another schema.',
         run(c) { c.set({ 'region source': '.constantOnFirstFetch', FirstFetchRegion: 'nil' }); c.log('runtime init: firstFetchRegion = OrbitValueObservationFirstFetchRegion()'); c.hot('rt'); } },
-      { t: 'The first fetch is recorded', cap: 'With no region stored yet, the fetch runs under a recorder, exactly as with <code>tracking(_:)</code>: the authorizer reports each column the statement reads, and the statement keeps them as its <code>readRegion</code>.',
+      { t: 'The first fetch is recorded', sql: 'f1', cap: 'With no region stored yet, the fetch runs under a recorder, exactly as with <code>tracking(_:)</code>: the authorizer reports each column the statement reads, and the statement keeps them as its <code>readRegion</code>.',
         run(c) { c.log('firstFetchRegion.region == nil → fetchRecordingRegion'); authorize(c); region(c); c.set({ authorizations: '4 recorded' }); } },
-      { t: 'The recorder hears the read', cap: 'The cursor\'s first step reports the statement\'s <code>readRegion</code> through <code>SQLiteConnectionEvents</code>, and the recorder unions it into its own.',
+      { t: 'The recorder hears the read', sql: 'f1', cap: 'The cursor\'s first step reports the statement\'s <code>readRegion</code> through <code>SQLiteConnectionEvents</code>, and the recorder unions it into its own.',
         run(c) { report(c); } },
-      { t: 'The region is kept, once', cap: '<code>record(_:)</code> stores the recorder\'s region. It stores only the first one it is given, even if two fetches race to record.',
+      { t: 'The region is kept, once', sql: 'f1', cap: '<code>record(_:)</code> stores the recorder\'s region. It stores only the first one it is given, even if two fetches race to record.',
         run(c) { c.set({ FirstFetchRegion: REM, 'output.region': REM }); c.log('firstFetchRegion.record(' + REM + ')', 'record: guard recorded == nil'); c.hot('rec', 'rt'); c.fly('rec', 'rt', { label: 'region', color: C.rt }); } },
-      { t: 'Later fetches skip the recorder', cap: 'From then on a fetch runs as <code>(try fetch(transaction), region)</code>, with no recorder, and reports the stored region. Each refetch is the query and nothing more, using the statement the cache already compiled.',
+      { t: 'Later fetches skip the recorder', sql: 'f2', cap: 'From then on a fetch runs as <code>(try fetch(transaction), region)</code>, with no recorder, and reports the stored region. Each refetch is the query and nothing more, using the statement the cache already compiled.',
         run(c) { c.set({ 'recorder.readRegion': 'no recorder', 'output.region': REM + ' (stored)' }); c.log('later fetch: firstFetchRegion.region != nil → (try fetch(transaction), region)'); dimNodes(c, ['rec']); c.hot('fetch', 'rt'); c.fly('fetch', 'rt', { label: 'stored region', color: C.obs, bend: 0.12 }); } },
-      { t: 'Only for fetches that always read the same columns', cap: 'If the fetch reads one table, and then, depending on a row it finds there, a second, the second table is never watched whenever the first fetch didn\'t reach it, and a write to it is missed. Use <code>tracking(_:)</code> for a fetch like that.',
-        run(c) { c.log('first fetch read reminders only → lists is never watched'); } }
+      { t: 'Only for fetches that always read the same columns', sql: 'b', cap: 'If the fetch reads one table, and then, depending on a row it finds there, a second, such as <code>' + Q_LIST + '</code>, the second table is never watched whenever the first fetch didn\'t reach it, and a write to it is missed. Use <code>tracking(_:)</code> for a fetch like that.',
+        run(c) { c.log('first fetch read reminders only → lists is never watched', 'a later ' + Q_LIST + ' → its region isn\'t recorded'); } }
     ]);
     return stepList([
-      { t: 'Each fetch runs under a recorder', cap: '<code>tracking(_:)</code> gives the source <code>.automatic</code>. Every fetch runs inside <code>transaction.withObservation(OrbitDatabaseRegionRecorder())</code>, which registers the recorder with the connection\'s <code>SQLiteConnectionEvents</code> for as long as the fetch runs.',
+      { t: 'Each fetch runs under a recorder', sql: 'f', cap: '<code>tracking(_:)</code> gives the source <code>.automatic</code>. Every fetch runs inside <code>transaction.withObservation(OrbitDatabaseRegionRecorder())</code>, which registers the recorder with the connection\'s <code>SQLiteConnectionEvents</code> for as long as the fetch runs.',
         run(c) { c.log('regionSource.fetch: case .automatic → fetchRecordingRegion', 'transaction.withObservation(recorder) { try fetch(transaction) }'); c.hot('fetch', 'rec'); } },
-      { t: 'SQLite authorizes the statement', cap: 'Preparing <code>' + SQLTXT + '</code> makes SQLite call the authorizer SQLiteOrbit installs with <code>sqlite3_set_authorizer</code>, once per action. Each <code>SQLITE_READ</code> names a table, a column and a schema, and <code>isCompleted</code> is among them though only the <code>WHERE</code> clause uses it.',
+      { t: 'SQLite authorizes the statement', sql: 'f', cap: 'Preparing <code>' + SQLTXT + '</code> makes SQLite call the authorizer SQLiteOrbit installs with <code>sqlite3_set_authorizer</code>, once per action. Each <code>SQLITE_READ</code> names a table, a column and a schema, and <code>isCompleted</code> is among them though only the <code>WHERE</code> clause uses it.',
         run(c) { authorize(c); c.set({ authorizations: '4 recorded' }); } },
-      { t: 'Authorizations become a region', cap: '<code>sqliteDatabaseRegion(readBy:)</code> turns each <code>SQLITE_READ</code> into that column of that table: <code>' + REM + '</code>. The statement keeps it as its <code>readRegion</code>, and <code>SQLiteStatementCache</code> keeps the statement, so a refetch uses both without compiling again. A region names tables and columns, never rows.',
+      { t: 'Authorizations become a region', sql: 'f', cap: '<code>sqliteDatabaseRegion(readBy:)</code> turns each <code>SQLITE_READ</code> into that column of that table: <code>' + REM + '</code>. The statement keeps it as its <code>readRegion</code>, and <code>SQLiteStatementCache</code> keeps the statement, so a refetch uses both without compiling again. A region names tables and columns, never rows.',
         run(c) { region(c); } },
-      { t: 'The first step reports the read', cap: 'When the cursor first steps, <code>publishAccesses()</code> calls <code>didRead(in:)</code> on <code>SQLiteConnectionEvents</code> with the statement\'s <code>readRegion</code>, which tells every observer registered on the access, outermost first. The recorder unions it into its <code>readRegion</code>. A statement that writes reports its <code>changedRegion</code> with <code>didChange(in:)</code> the same way.',
+      { t: 'The first step reports the read', sql: 'f', cap: 'When the cursor first steps, <code>publishAccesses()</code> calls <code>didRead(in:)</code> on <code>SQLiteConnectionEvents</code> with the statement\'s <code>readRegion</code>, which tells every observer registered on the access, outermost first. The recorder unions it into its <code>readRegion</code>. A statement that writes reports its <code>changedRegion</code> with <code>didChange(in:)</code> the same way.',
         run(c) { report(c); } },
-      { t: 'The fetch returns a value and a region', cap: 'When the fetch returns, the runtime takes <code>(payload, recorder.readRegion)</code> as its output, and <code>accept</code> makes that region the <code>observedRegion</code>. This happens on every fetch, so a fetch that reads different tables depending on the data is tracked by what it read this time.',
+      { t: 'The fetch returns a value and a region', sql: 'f', cap: 'When the fetch returns, the runtime takes <code>(payload, recorder.readRegion)</code> as its output, and <code>accept</code> makes that region the <code>observedRegion</code>. This happens on every fetch, so a fetch that reads different tables depending on the data is tracked by what it read this time.',
         run(c) { c.set({ 'output.region': REM, observedRegion: REM }); c.log('return (payload, recorder.readRegion)', 'accept: observedRegion = ' + REM); c.hot('rec', 'rt'); c.fly('rec', 'rt', { label: '(payload, region)', color: C.rt }); } },
-      { t: 'When the region can\'t be pinned down', cap: 'A read SQLiteOrbit can\'t pin down counts as <code>.fullDatabase</code>: a statement with no authorizations at all, any <code>PRAGMA</code>, or a table whose schema can\'t be resolved. A fetch that reads through <code>sqliteConnection</code> must call <code>notifyReads(in:)</code> itself. For writes, <code>INSERT</code> and <code>DELETE</code> change the whole table, <code>UPDATE</code> the columns it sets and any generated columns, and a schema change, or a write with no region, <code>.fullDatabase</code>.',
+      { t: 'When the region can\'t be pinned down', sql: ['e1', 'e2', 'e3'], cap: 'A read SQLiteOrbit can\'t pin down counts as <code>.fullDatabase</code>: a statement with no authorizations at all, any <code>PRAGMA</code>, or a table whose schema can\'t be resolved. A fetch that reads through <code>sqliteConnection</code> must call <code>notifyReads(in:)</code> itself. For writes, <code>INSERT</code> and <code>DELETE</code> change the whole table, <code>UPDATE</code> the columns it sets and any generated columns, and a schema change, or a write with no region, <code>.fullDatabase</code>.',
         run(c) { c.log('no authorizations → .fullDatabase (the authorizer was displaced)', 'PRAGMA, or an unresolvable schema → .fullDatabase', 'INSERT / DELETE → the whole table', 'UPDATE → columns set + generated columns', 'schema change → .fullDatabase'); } }
     ]);
   }
@@ -2064,6 +2206,13 @@ new Scene({
 /* ====================================================================================
    Scene 3: A write through the observed handle
    ==================================================================================== */
+// The write each scenario makes through the observed handle, and the region it changes.
+const LOC_WRITE = {
+  overlap: { sql: W_TITLE, changed: 'reminders(title)' },
+  unrelated: { sql: W_LIST, changed: 'lists(name)' },
+  rollback: { sql: "UPDATE reminders SET title = 'Buy oat milk', listId = 99 WHERE id = 1", changed: 'reminders(listId, title)' },
+  filter: { sql: W_TITLE, changed: 'reminders(title)' }
+};
 const LOC_NODES = (() => {
   const defs = [
     ['body', C.obs, ['write { … }'], 'through the same handle'],
@@ -2080,6 +2229,17 @@ const LOC_NODES = (() => {
 new Scene({
   id: 'local', narrowAt: 640, modesLabel: 'The write',
   modes: [{ key: 'overlap', label: 'Changes observed columns' }, { key: 'unrelated', label: 'Changes something else' }, { key: 'rollback', label: 'COMMIT fails' }, { key: 'filter', label: '<code>filterTransactions</code> says no' }],
+  sql(mode) {
+    const write = LOC_WRITE[mode];
+    const rows = [
+      { id: 'b', who: 'this handle', sql: 'BEGIN IMMEDIATE' },
+      { id: 'u', who: 'this handle', sql: write.sql + '  -- changes ' + write.changed }
+    ];
+    if (mode === 'overlap' || mode === 'rollback') rows.push({ id: 'f', who: 'fetch, on the write', sql: Q + "  -- sees 'Buy oat milk'" });
+    if (mode === 'rollback') rows.push({ id: 'c', who: 'this handle', sql: 'COMMIT  -- SQLITE_CONSTRAINT' }, { id: 'rb', who: 'this handle', sql: 'ROLLBACK' });
+    else rows.push({ id: 'c', who: 'this handle', sql: 'COMMIT' });
+    return { obs: mode === 'filter' ? obsCode({ chain: ['.filterTransactions { $0.origin == .external }'] }) : obsCode(), rows };
+  },
   build(ctx) {
     const n = ctx.narrow;
     const L = panelsLayout(n, n ? 172 : 100, 6, n ? 11 : 10);
@@ -2091,16 +2251,15 @@ new Scene({
   },
   steps(mode) {
     const unrelated = mode === 'unrelated';
-    const sql = unrelated ? 'UPDATE lists SET name = ? WHERE id = 3' : 'UPDATE reminders SET title = ? WHERE id = 1';
-    const changed = unrelated ? 'lists(name)' : 'reminders(title)';
+    const { sql, changed } = LOC_WRITE[mode];
     const setup = { t: 'Setup', cap: (mode === 'filter' ? 'The observation was built with <code>.filterTransactions { $0.origin == .external }</code>, to refetch only for other processes\' writes. ' : '') + 'Its last fetch read <code>' + REM + '</code>. This process now writes through the same <code>OrbitIPCDatabase</code>: <code>write { ' + sql + ' }</code>. Its writer, a <code>SQLitePool</code>, reports the transaction to the observer the runtime subscribed.',
       run(c) { c.log('database.write { ' + sql + ' }'); c.hot('body'); } };
-    const change = { t: 'The statement reports its change', cap: '<code>BEGIN IMMEDIATE</code> starts the write. When the <code>UPDATE</code> first steps, <code>SQLiteConnectionEvents</code> reports its <code>changedRegion</code>, <code>' + changed + '</code>, to the writer\'s <code>OrbitCompositeDatabaseTransactionObserver</code>, which passes it to the runtime. <code>databaseDidChange(in:)</code> unions it into <code>transactionRegion</code>.',
+    const change = { t: 'The statement reports its change', sql: ['b', 'u'], cap: '<code>BEGIN IMMEDIATE</code> starts the write. When the <code>UPDATE</code> first steps, <code>SQLiteConnectionEvents</code> reports its <code>changedRegion</code>, <code>' + changed + '</code>, to the writer\'s <code>OrbitCompositeDatabaseTransactionObserver</code>, which passes it to the runtime. <code>databaseDidChange(in:)</code> unions it into <code>transactionRegion</code>.',
       run(c) {
         c.set({ transactionRegion: changed });
         c.log('BEGIN IMMEDIATE', 'first step → events.didChange(in: ' + changed + ')', 'composite → runtime.databaseDidChange(in:) → transactionRegion ∪= ' + changed);
         c.hot('body', 'conn', 'ev', 'rt');
-        c.fly('body', 'conn', { label: 'UPDATE', color: C.obs });
+        c.fly('body', 'conn', { label: c.narrow ? 'UPDATE' : unrelated ? 'UPDATE lists' : 'UPDATE reminders', color: C.obs });
         c.fly('conn', 'ev', { delay: 800, label: 'didChange', color: C.sql });
         c.fly('ev', 'rt', { delay: 1600, label: changed, color: C.sql });
       } };
@@ -2116,14 +2275,14 @@ new Scene({
         c.fly('conn', 'ev', { label: 'willCommit', color: C.sql });
         c.fly('ev', 'rt', { delay: 800, label: 'transaction', color: C.sql });
       } });
-    const fetch = { t: 'Fetch on the writer\'s transaction', cap: '<code>advertisement.beginFetch()</code> records the fetch\'s floor, the registered region, since another process can commit as soon as this transaction does. <code>willFetch</code> runs, then the fetch runs on the write transaction itself, so it sees the new title before anyone else can. The result is kept as <code>pendingLocal = .fetched(result, fetch: n)</code>.',
+    const fetch = { t: 'Fetch on the writer\'s transaction', sql: 'f', cap: '<code>advertisement.beginFetch()</code> records the fetch\'s floor, the registered region, since another process can commit as soon as this transaction does. <code>willFetch</code> runs, then the fetch runs on the write transaction itself, so it sees the new title before anyone else can. The result is kept as <code>pendingLocal = .fetched(result, fetch: n)</code>.',
       run(c) {
         c.set({ 'advertisement floors': 'fetch n: ' + REM, pendingLocal: '.fetched(result, fetch: n)' });
-        c.log('advertisement.beginFetch() → fetch n, floor ' + REM, 'events.willFetch()', 'fetch(transaction): reads the uncommitted title "Buy oat milk"', 'pendingLocal = .fetched(result, fetch: n)');
+        c.log('advertisement.beginFetch() → fetch n, floor ' + REM, 'events.willFetch()', 'fetch(transaction): ' + Q + ' → reads the uncommitted title "Buy oat milk"', 'pendingLocal = .fetched(result, fetch: n)');
         c.hot('rt', 'conn');
-        c.fly('rt', 'conn', { label: 'fetch', color: C.rt, bend: -0.18 });
+        c.fly('rt', 'conn', { label: c.narrow ? 'SELECT' : 'SELECT … FROM reminders', color: C.rt, bend: -0.18 });
       } };
-    const commitNothing = { t: 'COMMIT: nothing to do', cap: '<code>COMMIT</code> succeeds and <code>didCommit</code> reports <code>OrbitDatabaseCommit(origin: .local, region: ' + changed + ')</code>. <code>databaseDidCommit</code> finds <code>pendingLocal</code> is <code>.skipped</code>, clears it, and returns. Nothing is fetched, the refetch controller isn\'t involved, and <code>handleEvents</code>\' <code>databaseDidChange</code> doesn\'t run.' + (mode === 'filter' ? ' <code>filterTransactions</code> runs before any fetch, so a commit it rejects costs no read.' : ''),
+    const commitNothing = { t: 'COMMIT: nothing to do', sql: 'c', cap: '<code>COMMIT</code> succeeds and <code>didCommit</code> reports <code>OrbitDatabaseCommit(origin: .local, region: ' + changed + ')</code>. <code>databaseDidCommit</code> finds <code>pendingLocal</code> is <code>.skipped</code>, clears it, and returns. Nothing is fetched, the refetch controller isn\'t involved, and <code>handleEvents</code>\' <code>databaseDidChange</code> doesn\'t run.' + (mode === 'filter' ? ' <code>filterTransactions</code> runs before any fetch, so a commit it rejects costs no read.' : ''),
       run(c) {
         c.set({ pendingLocal: 'nil', 'refetch controller': 'never ran', subscribers: 'nothing delivered' });
         c.log('COMMIT', 'events.didCommit → databaseDidCommit(origin: .local, region: ' + changed + ')', 'pendingLocal was .skipped → return');
@@ -2136,7 +2295,7 @@ new Scene({
       : 'The change overlaps <code>observedRegion</code>, but <code>pipeline.transactionNeedsFetch</code>, which <code>filterTransactions</code> built, rejects the local commit, so it returns there.'), commitNothing]);
     const head = [setup, change, willCommit(true, 'The change overlaps <code>observedRegion</code>, and <code>pipeline.transactionNeedsFetch</code> accepts the commit, so it will fetch.'), fetch];
     if (mode === 'rollback') return stepList(head.concat([
-      { t: 'COMMIT fails', cap: '<code>COMMIT</code> throws, for instance because a deferred foreign key check fails with <code>SQLITE_CONSTRAINT</code>. The connection rolls back and calls <code>didRollback()</code>, and <code>databaseDidRollback()</code> clears <code>transactionRegion</code> and <code>pendingLocal</code>, ends the fetch\'s floor, and discards the result. The write throws. A body that throws never reaches <code>willCommit</code>, and its rollback only clears <code>transactionRegion</code>.',
+      { t: 'COMMIT fails', sql: ['c', 'rb'], cap: '<code>COMMIT</code> throws, here because the deferred foreign key check finds no list 99 and fails with <code>SQLITE_CONSTRAINT</code>. The connection rolls back and calls <code>didRollback()</code>, and <code>databaseDidRollback()</code> clears <code>transactionRegion</code> and <code>pendingLocal</code>, ends the fetch\'s floor, and discards the result. The write throws. A body that throws never reaches <code>willCommit</code>, and its rollback only clears <code>transactionRegion</code>.',
         run(c) {
           c.set({ pendingLocal: 'nil', 'advertisement floors': 'none', subscribers: 'nothing delivered' });
           c.log('COMMIT → SQLITE_CONSTRAINT (deferred foreign key)', 'rollbackIgnoringFailure() · events.didRollback()', 'databaseDidRollback: endFetch(n) · transactionRegion = nil · pendingLocal = nil', 'discard(result): cancels its observable dependencies');
@@ -2148,7 +2307,7 @@ new Scene({
         run(c) { c.log('no publication · no refetch'); } }
     ]));
     return stepList(head.concat([
-      { t: 'COMMIT, then publish', cap: '<code>COMMIT</code> succeeds and <code>didCommit</code> reports <code>OrbitDatabaseCommit(origin: .local, region: reminders(title))</code>. <code>databaseDidCommit</code> finds the fetched result, runs <code>handleEvents</code>\' <code>databaseDidChange</code>, and <code>publishLocal</code> ends the floor and accepts the result with source <code>.transaction(.local)</code>.',
+      { t: 'COMMIT, then publish', sql: 'c', cap: '<code>COMMIT</code> succeeds and <code>didCommit</code> reports <code>OrbitDatabaseCommit(origin: .local, region: reminders(title))</code>. <code>databaseDidCommit</code> finds the fetched result, runs <code>handleEvents</code>\' <code>databaseDidChange</code>, and <code>publishLocal</code> ends the floor and accepts the result with source <code>.transaction(.local)</code>.',
         run(c) {
           c.set({ pendingLocal: 'nil', 'advertisement floors': 'none' });
           c.log('COMMIT', 'events.didCommit → databaseDidCommit(origin: .local, region: reminders(title))', 'pendingLocal is .fetched → events.databaseDidChange()', 'publishLocal: endFetch(n) → floor · accept(source: .transaction(.local))');
@@ -2184,6 +2343,14 @@ const ELS_NODES = {
 new Scene({
   id: 'elsewhere', narrowAt: 640, modesLabel: 'The commit',
   modes: [{ key: 'handle', label: 'Another handle, this process' }, { key: 'process', label: 'Another process' }, { key: 'notx', label: 'This handle, no transaction' }],
+  sql(mode) {
+    const rows = mode === 'notx'
+      ? [{ id: 'u', who: 'this handle, no transaction', sql: W_TITLE + '  -- commits as it finishes' }]
+      : [{ id: 'b', who: mode === 'handle' ? 'handle B' : 'process W', sql: 'BEGIN IMMEDIATE' },
+         { id: 'u', who: mode === 'handle' ? 'handle B' : 'process W', sql: mode === 'handle' ? W_DONE + '  -- changes reminders(isCompleted)' : W_TITLE + '  -- changes reminders(title)' },
+         { id: 'c', who: mode === 'handle' ? 'handle B' : 'process W', sql: 'COMMIT' }];
+    return { obs: obsCode({ tail: SUBSCRIBE }), rows };
+  },
   build(ctx) {
     const n = ctx.narrow, mode = this.mode;
     const L = panelsLayout(n, n ? 324 : 226, 8, n ? 11 : 11);
@@ -2198,20 +2365,20 @@ new Scene({
   steps(mode) {
     const M = {
       handle: { src: 'srcB', path: 'hub', change: 'reminders(isCompleted)', origin: '.local', reason: '.databaseChange',
-        commit: { t: 'Handle B commits', cap: 'Another <code>OrbitIPCDatabase</code> on the same database, with a writer of its own, commits <code>UPDATE reminders SET isCompleted = 1 WHERE id = 2</code>. Once its write returns, <code>announce(_:)</code> calls the hub\'s <code>didCommit</code> with the changed region, then sends the commit to other processes.',
-          log: ['B: write { UPDATE reminders SET isCompleted = 1 WHERE id = 2 } commits', 'B.announce → hub.didCommit(region: reminders(isCompleted)) · then transport.send'], label: 'didCommit' },
+        commit: { t: 'Handle B commits', cap: 'Another <code>OrbitIPCDatabase</code> on the same database, with a writer of its own, commits <code>' + W_DONE + '</code>. Once its write returns, <code>announce(_:)</code> calls the hub\'s <code>didCommit</code> with the changed region, then sends the commit to other processes.',
+          log: ['B: write { ' + W_DONE + ' } commits', 'B.announce → hub.didCommit(region: reminders(isCompleted)) · then transport.send'], label: 'didCommit' },
         deliver: { t: 'The hub filters, then reports', cap: 'The hub calls each registration on this database whose writer isn\'t B\'s and whose region admits the change. Ours does, so its callback calls <code>databaseDidChange(in:)</code> and then <code>databaseDidCommit</code> with origin <code>.local</code>. No <code>willCommit</code> came first.',
           log: ['hub: registration\'s writer ≠ B\'s writer · region.admits(reminders(isCompleted))', 'observer.databaseDidChange(in: reminders(isCompleted))', 'observer.databaseDidCommit(OrbitDatabaseCommit(origin: .local, …))'] },
         barrier: 'SQLitePool returns nil' },
       process: { src: 'srcW', path: 'tr', change: 'reminders(title)', origin: '.external', reason: '.externalProcessChange',
-        commit: { t: 'Process W commits', cap: 'W\'s <code>OrbitIPCDatabase</code> commits <code>UPDATE reminders SET title = ? WHERE id = 1</code> and sends <code>.transactionDidCommit</code> with region <code>reminders(title)</code> through its transport. W sends it only to processes whose marker admits it, and ours does (<a href="../UnixDatagramIPC/#fanout">IPC scene 04</a>).',
-          log: ['W: write { UPDATE reminders SET title = ? WHERE id = 1 } commits', 'W: transport.send(.transactionDidCommit(reminders(title))) to peers whose marker admits it'], label: 'datagram' },
+        commit: { t: 'Process W commits', cap: 'W\'s <code>OrbitIPCDatabase</code> commits <code>' + W_TITLE + '</code> and sends <code>.transactionDidCommit</code> with region <code>reminders(title)</code> through its transport. W sends it only to processes whose marker admits it, and ours does (<a href="../UnixDatagramIPC/#fanout">IPC scene 04</a>).',
+          log: ['W: write { ' + W_TITLE + ' } commits', 'W: transport.send(.transactionDidCommit(reminders(title))) to peers whose marker admits it'], label: 'datagram' },
         deliver: { t: 'The transport delivers it', cap: 'Our transport\'s thread decodes the datagram and calls the handler <code>OrbitIPCDatabase.subscribe</code> registered, which calls <code>databaseDidChange(in:)</code> and then <code>databaseDidCommit</code> with origin <code>.external</code>.',
           log: ['transport handler: observer.databaseDidChange(in: reminders(title))', 'observer.databaseDidCommit(OrbitDatabaseCommit(origin: .external, …))'] },
         barrier: 'nil for another process' },
       notx: { src: 'srcN', path: 'comp', change: 'reminders(title)', origin: '.local', reason: '.databaseChange',
-        commit: { t: 'A write outside a transaction', cap: 'This handle runs <code>writeWithoutTransaction { UPDATE reminders SET title = ? WHERE id = 1 }</code>. SQLite commits the statement as it finishes, so there is no moment before the commit to observe, and no <code>willCommit</code>.',
-          log: ['this handle: writeWithoutTransaction { UPDATE reminders SET title = ? WHERE id = 1 }', 'SQLite commits the statement as it finishes: no willCommit'], label: 'UPDATE' },
+        commit: { t: 'A write outside a transaction', cap: 'This handle runs <code>writeWithoutTransaction { ' + W_TITLE + ' }</code>. SQLite commits the statement as it finishes, so there is no moment before the commit to observe, and no <code>willCommit</code>.',
+          log: ['this handle: writeWithoutTransaction { ' + W_TITLE + ' }', 'SQLite commits the statement as it finishes: no willCommit'], label: 'UPDATE' },
         deliver: { t: 'Reported as committed', cap: 'The statement\'s <code>didChange</code> reaches the runtime through the writer\'s composite observer, and <code>didCommitPendingChanges()</code> then reports <code>didCommit</code> with origin <code>.local</code>. It is reported even if the statement fails afterwards, since a needless refetch costs less than a missed change. <code>TursoPool.concurrentWrite</code> reports its commits the same way.',
           log: ['events.didChange(in: reminders(title)) → databaseDidChange(in:)', 'statement finishes → didCommitPendingChanges() → didCommit(origin: .local)'] },
         barrier: 'SQLitePool returns nil' }
@@ -2219,7 +2386,7 @@ new Scene({
     return stepList([
       { t: 'One observer, three sources', cap: '<code>OrbitIPCDatabase.subscribe(transactionObserver:region:)</code> registered the runtime\'s observer with three sources: its writer\'s own transactions, <code>OrbitDatabaseObservationHub</code> for other handles on the same database in this process, and the IPC transport for other processes. The initial value has been accepted, and the registration is <code>' + REM + '</code>.',
         run(c) { c.log('subscribe: [transport.subscribe, hub.subscribe, writer.subscribe] → one OrbitRegionSubscription'); c.hot('obsv'); } },
-      { t: M.commit.t, cap: M.commit.cap,
+      { t: M.commit.t, cap: M.commit.cap, sql: mode === 'notx' ? 'u' : ['b', 'u', 'c'],
         run(c) { c.log(...M.commit.log); c.hot(M.src, M.path); c.fly(M.src, M.path, { label: M.commit.label, color: C.src }); } },
       { t: M.deliver.t, cap: M.deliver.cap,
         run(c) {
@@ -2327,6 +2494,30 @@ function tlItem(c, name) { return c.d.items.find(i => i.name === name); }
 new Scene({
   id: 'controllers', narrowAt: 640, modesLabel: 'Controller',
   modes: [{ key: 'immediate', label: '<code>.immediate</code>' }, { key: 'coalesced', label: '<code>.coalesced</code>' }, { key: 'once', label: '<code>.once</code>' }, { key: 'custom', label: 'custom: debounce' }],
+  sql(mode) {
+    const ctl = mode === 'custom' ? 'DebouncingExternalRefetchController()' : '.' + mode;
+    const obs = obsCode({ chain: ['.refetching(' + ctl + ')'] });
+    if (mode === 'coalesced') return { obs, rows: [
+      { id: 'A', who: 'A · concurrentWrite', sql: W_TITLE },
+      { id: 'B', who: 'B · concurrentWrite', sql: W_DONE },
+      { id: 'C', who: 'C · concurrentWrite', sql: W_INS },
+      { id: 'D', who: 'D · still writing', sql: W_LIST },
+      { id: 'f', who: 'fetch · rev 3', sql: Q }
+    ] };
+    if (mode === 'custom') return { obs, rows: [
+      { id: 'c1', who: 'c1 · process W', sql: W_TITLE },
+      { id: 'c2', who: 'c2 · process W', sql: W_DONE },
+      { id: 'c3', who: 'c3 · process W', sql: W_INS },
+      { id: 'f', who: 'fetch · rev 3', sql: Q }
+    ] };
+    const rows = [
+      { id: 'c1', who: 'c1 · process W', sql: W_TITLE },
+      { id: 'f1', who: mode === 'once' ? 'fetch(.force) · rev 1' : 'fetch · rev 1', sql: Q },
+      { id: 'c2', who: 'c2 · process W', sql: W_DONE }
+    ];
+    if (mode === 'immediate') rows.push({ id: 'f2', who: 'fetch · rev 2', sql: Q });
+    return { obs, rows };
+  },
   build(ctx) {
     const coal = this.mode === 'coalesced';
     const lanes = {
@@ -2352,17 +2543,17 @@ new Scene({
       c.set({ isRefetching: 'false' });
     };
     if (mode === 'coalesced') return stepList([
-      { t: 'A commits while B and C still write', cap: 'On a <code>TursoPool</code>, writers A, B and C run <code>concurrentWrite</code> at once. A commits first, and its commit is reported while A\'s loan is still open. <code>requestRefetch</code> takes <code>captureActiveWriters()</code>: a barrier for the writers active now, A, B and C. The revision is 1, and <code>.coalesced</code> starts.',
+      { t: 'A commits while B and C still write', sql: 'A', cap: 'On a <code>TursoPool</code>, writers A, B and C run <code>concurrentWrite</code> at once. A commits first, with <code>' + W_TITLE + '</code>, and its commit is reported while A\'s loan is still open. <code>requestRefetch</code> takes <code>captureActiveWriters()</code>: a barrier for the writers active now, A, B and C. The revision is 1, and <code>.coalesced</code> starts.',
         run(c) {
           add(c, { type: 'loan', lane: 'c', t0: 0.3, t1: 1.5, yo: 40, label: 'A' }, { type: 'loan', lane: 'c', t0: 0.5, t1: 3.0, yo: 52, label: 'B' }, { type: 'loan', lane: 'c', t0: 0.7, t1: 4.0, yo: 64, label: 'C' });
           commit(c, 1.2, c.narrow ? 'A·1' : 'A · rev 1');
           c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.databaseChange]', refetchCommits: '[A]', activeWriterBarriers: '[{A, B, C}]' });
-          c.log('concurrentWrite A: didChange + didCommit(origin: .local), still inside A\'s loan', 'requestRefetch(…, activeWriterBarrier: captureActiveWriters()) → {A, B, C}', 'revision 1 · isRefetching = true · Task { .coalesced }');
+          c.log('A: ' + W_TITLE + ' → COMMIT', 'concurrentWrite A: didChange + didCommit(origin: .local), still inside A\'s loan', 'requestRefetch(…, activeWriterBarrier: captureActiveWriters()) → {A, B, C}', 'revision 1 · isRefetching = true · Task { .coalesced }');
           c.d.now = 1.2;
         } },
       { t: 'Wait for that cohort', cap: '<code>snapshot().hasActiveWriters</code> is <code>true</code>, so <code>.coalesced</code> calls <code>waitForActiveWriters()</code>, which takes the barriers recorded so far and waits on each one still active. It neither blocks a thread nor holds up other writers.',
         run(c) { add(c, { type: 'box', lane: 'k', name: 'w', t0: 1.5, t1: 4.0, label: c.narrow ? 'wait' : 'waitForActiveWriters()', dash: '4 3', col: C.ctl }); c.set({ 'fetch in flight': 'none: waiting' }); c.log('snapshot().hasActiveWriters → true', 'waitForActiveWriters(): barriers = [{A, B, C}] → await each still active'); c.d.now = 1.5; } },
-      { t: 'B and C commit', cap: 'Each commit calls <code>requestRefetch</code>, which bumps the revision and records a barrier of its own: B\'s commit captures B and C, C\'s captures C and D, which started meanwhile. The controller is already running, so nothing else starts.',
+      { t: 'B and C commit', sql: ['B', 'C', 'D'], cap: 'B commits <code>' + W_DONE + '</code>, and C <code>' + W_INS + '</code>. Each commit calls <code>requestRefetch</code>, which bumps the revision and records a barrier of its own: B\'s commit captures B and C, C\'s captures C and D, which started meanwhile. The controller is already running, so nothing else starts.',
         run(c) {
           add(c, { type: 'loan', lane: 'c', t0: 3.5, t1: 9.6, yo: 76, label: 'D', name: 'D' });
           commit(c, 2.8, c.narrow ? 'B·2' : 'B · rev 2'); commit(c, 3.8, c.narrow ? 'C·3' : 'C · rev 3');
@@ -2370,9 +2561,9 @@ new Scene({
           c.log('B commits → revision 2 · barrier {B, C}', 'C commits → revision 3 · barrier {C, D}', 'isRefetching is true → no second controller');
           c.d.now = 3.8;
         } },
-      { t: 'D doesn\'t extend the wait', cap: 'D started after the wait began. <code>waitForActiveWriters()</code> took its list of barriers when it was called, so it waits only for A, B and C, and returns when C\'s loan ends. Writers that keep arriving can\'t hold the fetch back for ever. If D commits while the fetch reads, that fetch is superseded and the loop decides again.',
+      { t: 'D doesn\'t extend the wait', sql: 'D', cap: 'D started after the wait began. <code>waitForActiveWriters()</code> took its list of barriers when it was called, so it waits only for A, B and C, and returns when C\'s loan ends. Writers that keep arriving can\'t hold the fetch back for ever. If D commits while the fetch reads, that fetch is superseded and the loop decides again.',
         run(c) { const D = c.d.items.find(i => i.name === 'D'); D.hl = 1; D.col = C.ep; c.log('the wait was given [{A, B, C}] → returns when C\'s loan ends'); c.d.now = 4.0; } },
-      { t: 'One fetch for three commits', cap: 'Then <code>fetch(publishing: .ifCurrent)</code> runs at revision 3. No commit arrives while it reads, so it is accepted and published, and outstanding invalidations, barriers included, are dropped. Three commits cost one fetch and one value.',
+      { t: 'One fetch for three commits', sql: 'f', cap: 'Then <code>fetch(publishing: .ifCurrent)</code> runs at revision 3. No commit arrives while it reads, so it is accepted and published, and outstanding invalidations, barriers included, are dropped. Three commits cost one fetch and one value.',
         run(c) {
           add(c, { type: 'box', lane: 'k', t0: 4.15, t1: 6.6, snap: 4.35, label: 'fetch · rev 3', fate: 'published', sub: '.published', subW: 10 });
           add(c, { type: 'chip', lane: 'p', t: 6.6, txt: 'A + B + C', col: C.ok, dy: 23, anchor: 'middle' });
@@ -2384,13 +2575,13 @@ new Scene({
         run(c) { done(c, 6.8); c.log('finishRefetching: hasPendingFetch? no → stop', 'SQLitePool / SQLiteQueue: captureActiveWriters() == nil → fetch at once'); c.d.now = null; } }
     ]);
     if (mode === 'once') return stepList([
-      { t: 'c1 commits', cap: 'c1 commits to the observed columns. <code>requestRefetch</code> bumps the revision to 1, sets <code>isRefetching</code>, and starts <code>.once</code> in a <code>Task</code>.',
-        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[c1]' }); c.log('requestRefetch → refetches.require · revision 1', 'isRefetching = true · Task { .once.refetch(using:) }'); c.d.now = 1.0; } },
-      { t: 'fetch(publishing: .force)', cap: '<code>.once</code> calls <code>fetch(publishing: .force)</code>. The request is at revision 1, the floor is recorded, and the read takes its snapshot.',
+      { t: 'c1 commits', sql: 'c1', cap: 'Process W commits c1, <code>' + W_TITLE + '</code>, to the observed columns. <code>requestRefetch</code> bumps the revision to 1, sets <code>isRefetching</code>, and starts <code>.once</code> in a <code>Task</code>.',
+        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[c1]' }); c.log('c1: ' + W_TITLE, 'requestRefetch → refetches.require · revision 1', 'isRefetching = true · Task { .once.refetch(using:) }'); c.d.now = 1.0; } },
+      { t: 'fetch(publishing: .force)', sql: 'f1', cap: '<code>.once</code> calls <code>fetch(publishing: .force)</code>. The request is at revision 1, the floor is recorded, and the read takes its snapshot.',
         run(c) { add(c, { type: 'box', lane: 'k', name: 'f1', t0: 1.5, t1: 4.6, snap: 1.75, label: 'fetch(.force) · rev 1' }); c.set({ 'fetch in flight': 'rev 1' }); c.log('performRefetch: refetches.beginFetch() → revision 1', 'advertisement.beginFetch() · willFetch · read()'); c.d.now = 1.75; } },
-      { t: 'c2 commits during the read', cap: 'c2 commits after the snapshot. The revision becomes 2 and a refetch is required again, but the controller is running, so nothing else starts.',
-        run(c) { commit(c, 2.7, c.narrow ? 'c2·2' : 'c2 · rev 2'); c.set({ 'refetches.revision': '2', refetchCommits: '[c1, c2]' }); c.log('requestRefetch → revision 2 · isRefetching → no second controller'); c.d.now = 2.7; } },
-      { t: 'Published anyway', cap: 'With <code>.force</code>, the revision isn\'t checked: <code>accept</code> publishes the value, though it predates c2. <code>finishPublishedFetch()</code> clears the requirement c2 raised, and <code>dropOutstandingInvalidations()</code> clears c2 from the outstanding commits along with c1.',
+      { t: 'c2 commits during the read', sql: 'c2', cap: 'c2, <code>' + W_DONE + '</code>, commits after the snapshot. The revision becomes 2 and a refetch is required again, but the controller is running, so nothing else starts.',
+        run(c) { commit(c, 2.7, c.narrow ? 'c2·2' : 'c2 · rev 2'); c.set({ 'refetches.revision': '2', refetchCommits: '[c1, c2]' }); c.log('c2: ' + W_DONE, 'requestRefetch → revision 2 · isRefetching → no second controller'); c.d.now = 2.7; } },
+      { t: 'Published anyway', sql: 'f1', cap: 'With <code>.force</code>, the revision isn\'t checked: <code>accept</code> publishes the value, though it predates c2. <code>finishPublishedFetch()</code> clears the requirement c2 raised, and <code>dropOutstandingInvalidations()</code> clears c2 from the outstanding commits along with c1.',
         run(c) {
           const f = tlItem(c, 'f1'); f.fate = 'published'; f.sub = c.narrow ? '.published (stale)' : '.published, though c2 is newer'; f.subCol = C.ep;
           add(c, { type: 'chip', lane: 'p', t: 4.6, txt: c.narrow ? 'c1 only' : 'value: c1 only', col: C.ep, dy: 23, anchor: 'middle' });
@@ -2402,27 +2593,27 @@ new Scene({
         run(c) { done(c, 4.9); c.log('finishRefetching(conclusively: true): hasPendingFetch? no → stop'); c.d.now = null; } }
     ]);
     if (mode === 'custom') return stepList([
-      { t: 'A custom controller', cap: 'This controller, from the documentation of <code>OrbitValueObservationRefetchSnapshot.commits</code>, lets this process\'s writes through at once but waits out a burst of other processes\' writes, so the burst costs one fetch. c1 comes from another process, and the controller starts.',
-        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 ext · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[(.external, …)]' }); c.log('requestRefetch(source: .transaction(.external)) → revision 1', 'Task { DebouncingExternalRefetchController().refetch(using:) }'); c.d.now = 1.0; } },
+      { t: 'A custom controller', sql: 'c1', cap: 'This controller, from the documentation of <code>OrbitValueObservationRefetchSnapshot.commits</code>, lets this process\'s writes through at once but waits out a burst of other processes\' writes, so the burst costs one fetch. c1, <code>' + W_TITLE + '</code>, comes from another process, and the controller starts.',
+        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 ext · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[(.external, …)]' }); c.log('c1: ' + W_TITLE, 'requestRefetch(source: .transaction(.external)) → revision 1', 'Task { DebouncingExternalRefetchController().refetch(using:) }'); c.d.now = 1.0; } },
       { t: 'Only external commits, so wait', cap: '<code>context.snapshot().commits</code> lists the commits outstanding since the last accepted fetch, each with its origin. All of them are <code>.external</code>, so it sleeps for 250 ms.',
         run(c) { add(c, { type: 'box', lane: 'k', t0: 1.3, t1: 4.3, label: c.narrow ? 'sleep 250 ms' : 'Task.sleep(for: 250 ms)', dash: '4 3', col: C.ctl }); c.log('snapshot().commits.allSatisfy { $0.origin == .external } → true', 'try? await Task.sleep(for: delay)'); c.d.now = 1.3; } },
-      { t: 'More external commits', cap: 'c2 and c3 arrive while it sleeps. Each bumps the revision and is appended to the outstanding commits, and no second controller starts.',
-        run(c) { commit(c, 2.2, c.narrow ? 'c2·2' : 'c2 · rev 2'); commit(c, 3.4, c.narrow ? 'c3·3' : 'c3 · rev 3'); c.set({ 'refetches.revision': '3', refetchCommits: '[c1, c2, c3] (.external)' }); c.log('requestRefetch × 2 → revision 3', 'isRefetching is true → no second controller'); c.d.now = 3.4; } },
-      { t: 'Then fetch until current', cap: 'After the sleep it runs the same loop as <code>.immediate</code>: <code>while await context.fetch(publishing: .ifCurrent) == .superseded {}</code>. One fetch covers all three commits.',
+      { t: 'More external commits', sql: ['c2', 'c3'], cap: 'c2, <code>' + W_DONE + '</code>, and c3, <code>' + W_INS + '</code>, arrive while it sleeps. Each bumps the revision and is appended to the outstanding commits, and no second controller starts.',
+        run(c) { commit(c, 2.2, c.narrow ? 'c2·2' : 'c2 · rev 2'); commit(c, 3.4, c.narrow ? 'c3·3' : 'c3 · rev 3'); c.set({ 'refetches.revision': '3', refetchCommits: '[c1, c2, c3] (.external)' }); c.log('c2: ' + W_DONE, 'c3: ' + W_INS, 'requestRefetch × 2 → revision 3', 'isRefetching is true → no second controller'); c.d.now = 3.4; } },
+      { t: 'Then fetch until current', sql: 'f', cap: 'After the sleep it runs the same loop as <code>.immediate</code>: <code>while await context.fetch(publishing: .ifCurrent) == .superseded {}</code>. One fetch covers all three commits.',
         run(c) { add(c, { type: 'box', lane: 'k', t0: 4.5, t1: 7.0, snap: 4.7, label: 'fetch · rev 3', fate: 'published', sub: '.published', subW: 10 }); add(c, { type: 'chip', lane: 'p', t: 7.0, txt: 'c1 + c2 + c3', col: C.ok, dy: 23, anchor: 'middle' }); c.set({ 'controller got': '.published', refetchReasons: '[]', refetchCommits: '[]' }); c.log('fetch(publishing: .ifCurrent) at revision 3 → .published'); c.d.now = 7.0; } },
       { t: 'Scoped to one call', cap: 'The context is <code>~Copyable</code> and <code>~Escapable</code>, so it can\'t outlive <code>refetch(using:)</code>. A controller that returns without a conclusive fetch is run again only if the revision moved since it started, so one that never fetches raises its invalidation once and then stops rather than spinning.',
         run(c) { done(c, 7.2); c.log('finishRefetching: conclusive · nothing pending → stop'); c.d.now = null; } }
     ]);
     return stepList([
-      { t: 'c1 commits', cap: 'c1 commits to the observed columns. <code>requestRefetch</code> bumps the refetch revision to 1. <code>isRefetching</code> is <code>false</code>, so it becomes <code>true</code> and a <code>Task</code> runs <code>.immediate</code>\'s <code>refetch(using:)</code>.',
-        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[c1]' }); c.log('requestRefetch → refetches.require(source:) · revision 1', 'isRefetching = true · Task { .immediate.refetch(using:) }'); c.d.now = 1.0; } },
-      { t: 'fetch(publishing: .ifCurrent)', cap: '<code>fetch(publishing: .ifCurrent)</code> calls <code>performRefetch</code>. <code>refetches.beginFetch()</code> hands out a request at revision 1, <code>advertisement.beginFetch()</code> records the floor, <code>willFetch</code> runs, and the read takes its snapshot (the yellow tick).',
+      { t: 'c1 commits', sql: 'c1', cap: 'Process W commits c1, <code>' + W_TITLE + '</code>, to the observed columns. <code>requestRefetch</code> bumps the refetch revision to 1. <code>isRefetching</code> is <code>false</code>, so it becomes <code>true</code> and a <code>Task</code> runs <code>.immediate</code>\'s <code>refetch(using:)</code>.',
+        run(c) { commit(c, 1.0, c.narrow ? 'c1·1' : 'c1 · rev 1'); c.set({ 'refetches.revision': '1', isRefetching: 'true', refetchReasons: '[.externalProcessChange]', refetchCommits: '[c1]' }); c.log('c1: ' + W_TITLE, 'requestRefetch → refetches.require(source:) · revision 1', 'isRefetching = true · Task { .immediate.refetch(using:) }'); c.d.now = 1.0; } },
+      { t: 'fetch(publishing: .ifCurrent)', sql: 'f1', cap: '<code>fetch(publishing: .ifCurrent)</code> calls <code>performRefetch</code>. <code>refetches.beginFetch()</code> hands out a request at revision 1, <code>advertisement.beginFetch()</code> records the floor, <code>willFetch</code> runs, and the read takes its snapshot (the yellow tick).',
         run(c) { add(c, { type: 'box', lane: 'k', name: 'f1', t0: 1.5, t1: 4.6, snap: 1.75, label: 'fetch · rev 1' }); c.set({ 'fetch in flight': 'rev 1' }); c.log('performRefetch: refetches.beginFetch() → request at revision 1', 'advertisement.beginFetch() · willFetch · read()'); c.d.now = 1.75; } },
-      { t: 'c2 commits during the read', cap: 'c2 commits after the snapshot, so this read can\'t see it. <code>requestRefetch</code> bumps the revision to 2, but <code>isRefetching</code> is <code>true</code>, so no second controller starts.',
-        run(c) { commit(c, 2.7, c.narrow ? 'c2·2' : 'c2 · rev 2'); c.set({ 'refetches.revision': '2', refetchCommits: '[c1, c2]' }); c.log('requestRefetch → refetches.require · revision 2', 'isRefetching is true → no second controller'); c.d.now = 2.7; } },
-      { t: 'Superseded', cap: 'The read finishes. Its request is at revision 1 and the revision is now 2, so <code>isCurrent</code> is <code>false</code>: the result is discarded, the fetch is marked finished, and <code>fetch</code> returns <code>.superseded</code>. Nothing is published.',
+      { t: 'c2 commits during the read', sql: 'c2', cap: 'c2, <code>' + W_DONE + '</code>, commits after the snapshot, so this read can\'t see it. <code>requestRefetch</code> bumps the revision to 2, but <code>isRefetching</code> is <code>true</code>, so no second controller starts.',
+        run(c) { commit(c, 2.7, c.narrow ? 'c2·2' : 'c2 · rev 2'); c.set({ 'refetches.revision': '2', refetchCommits: '[c1, c2]' }); c.log('c2: ' + W_DONE, 'requestRefetch → refetches.require · revision 2', 'isRefetching is true → no second controller'); c.d.now = 2.7; } },
+      { t: 'Superseded', sql: 'f1', cap: 'The read finishes. Its request is at revision 1 and the revision is now 2, so <code>isCurrent</code> is <code>false</code>: the result is discarded, the fetch is marked finished, and <code>fetch</code> returns <code>.superseded</code>. Nothing is published.',
         run(c) { const f = tlItem(c, 'f1'); f.fate = 'superseded'; f.sub = '.superseded'; c.set({ 'fetch in flight': 'none', 'controller got': '.superseded' }); c.log('isCurrent(request at 1)? revision is 2 → no', 'finishSupersededFetch() · discard(result) → .superseded'); c.d.now = 4.6; } },
-      { t: 'Fetch again, and publish', cap: '<code>.immediate</code> loops while it gets <code>.superseded</code>. The new request is at revision 2, and its snapshot includes c2. Nothing arrives during this read, so <code>accept</code> publishes it, <code>finishPublishedFetch()</code> clears the requirement, and outstanding invalidations are dropped. <code>fetch</code> returns <code>.published</code>.',
+      { t: 'Fetch again, and publish', sql: 'f2', cap: '<code>.immediate</code> loops while it gets <code>.superseded</code>. The new request is at revision 2, and its snapshot includes c2. Nothing arrives during this read, so <code>accept</code> publishes it, <code>finishPublishedFetch()</code> clears the requirement, and outstanding invalidations are dropped. <code>fetch</code> returns <code>.published</code>.',
         run(c) {
           add(c, { type: 'box', lane: 'k', t0: 4.9, t1: 7.7, snap: 5.15, label: 'fetch · rev 2', fate: 'published', sub: '.published', subW: 10 });
           add(c, { type: 'chip', lane: 'p', t: 7.7, txt: c.narrow ? 'c1 + c2' : 'value: c1 + c2', col: C.ok, dy: 23, anchor: 'middle' });
@@ -2443,6 +2634,52 @@ const RL = 'reminders + lists';
 new Scene({
   id: 'floors', narrowAt: 640, modesLabel: 'Case',
   modes: [{ key: 'withheld', label: 'A refetch reads more' }, { key: 'owed', label: 'A local write reads more' }, { key: 'narrow', label: 'Narrowing' }, { key: 'early', label: 'Hypothetical: widening counted early' }],
+  sql(mode) {
+    // The fetch reads lists only when a reminder it found belongs to one.
+    const obs = 'let incomplete = OrbitValueObservation.tracking { tx in\n'
+      + '  let rows = try #sql(\n    "' + Q_L + '",\n    as: Row.self\n  ).fetchAll(tx)\n'
+      + '  // Reads lists only when a reminder is in one.\n'
+      + '  guard let listID = rows.compactMap(\\.listId).first\n  else { return (rows, nil) }\n'
+      + '  let name = try #sql(\n    "SELECT name FROM lists WHERE id = \\(listID)",\n    as: String.self\n  ).fetchOne(tx)\n'
+      + '  return (rows, name)\n}';
+    const V = { who: 'process V', sql: W_LIST + '  -- changes lists(name)' };
+    const rows = {
+      withheld: [
+        { id: 'w', who: 'process W', sql: W_INLIST + '  -- reminders(listId)' },
+        { id: 'r1', who: 'refetch', sql: Q_L },
+        { id: 'l1', who: 'refetch', sql: Q_LIST + '  -- beyond its floor' },
+        Object.assign({ id: 'v' }, V),
+        { id: 'r2', who: 'refetch again', sql: Q_L },
+        { id: 'l2', who: 'refetch again', sql: Q_LIST }
+      ],
+      owed: [
+        { id: 'b', who: 'this handle', sql: 'BEGIN IMMEDIATE' },
+        { id: 'u', who: 'this handle', sql: W_INLIST },
+        { id: 'r1', who: 'fetch, on the write', sql: Q_L },
+        { id: 'l1', who: 'fetch, on the write', sql: Q_LIST + '  -- beyond its floor' },
+        { id: 'c', who: 'this handle', sql: 'COMMIT' },
+        Object.assign({ id: 'v' }, V),
+        { id: 'r2', who: 'covering fetch', sql: Q_L },
+        { id: 'l2', who: 'covering fetch', sql: Q_LIST }
+      ],
+      narrow: [
+        { id: 'r1', who: 'F1 · refetch', sql: Q_L },
+        { id: 'l1', who: 'F1 · refetch', sql: Q_LIST },
+        { id: 'u', who: 'this handle', sql: 'UPDATE reminders SET listId = NULL WHERE id = 1' },
+        { id: 'r2', who: 'F2 · on the write', sql: Q_L + '  -- no listId: lists not read' },
+        Object.assign({ id: 'v' }, V)
+      ],
+      early: [
+        { id: 'r0', who: 'an earlier fetch', sql: Q_L },
+        { id: 'l0', who: 'an earlier fetch', sql: Q_LIST },
+        { id: 'u', who: 'this handle', sql: W_TITLE },
+        { id: 'r1', who: 'fetch, on the write', sql: Q_L },
+        { id: 'l1', who: 'fetch, on the write', sql: Q_LIST },
+        Object.assign({ id: 'v' }, V)
+      ]
+    }[mode];
+    return { obs, rows };
+  },
   build(ctx) {
     const lanes = {
       f: { y: 12, h: 70, label: ['fetches', 'floor · what each read'], nl: ['fetches'], col: C.obs },
@@ -2465,7 +2702,7 @@ new Scene({
     };
     const seg = (t0, t1, txt, o = {}) => Object.assign({ t0, t1, txt, wide: txt === RL }, o);
     const skipped = (c, t) => {
-      add(c, { type: 'dot', lane: 'w', t, label: c.narrow ? 'lists' : 'UPDATE lists', fate: 'skipped', to: 'h' });
+      add(c, { type: 'dot', lane: 'w', t, label: c.narrow ? 'UPDATE lists' : "UPDATE lists SET name = 'Errands'", fate: 'skipped', to: 'h' });
       const L = c.d.L, X = L.x0 + (t / 10) * (L.x1 - L.x0);
       c.fly({ x: X, y: L.lanes.w.y + 10 }, { x: X, y: L.lanes.h.y + L.lanes.h.h + 4 }, { label: 'commit', color: C.bad, noTrail: 1, dur: 700 });
     };
@@ -2481,37 +2718,37 @@ new Scene({
       } });
     if (mode === 'withheld') return stepList([
       setupStep('The observation\'s last fetch read <code>reminders</code>, and that is what is registered with an <code>OrbitIPCDatabase</code>, which filters by region. A commit from another process that touches only <code>lists</code> isn\'t sent here.'),
-      { t: 'A refetch begins: its floor', cap: 'A commit to <code>reminders</code> starts the refetch controller. <code>performRefetch</code> calls <code>advertisement.beginFetch()</code> before the read takes its snapshot. The fetch\'s floor is <code>reminders</code>: what the database will honor for the whole fetch.',
+      { t: 'A refetch begins: its floor', sql: ['w', 'r1'], cap: 'Process W commits <code>' + W_INLIST + '</code>, which changes <code>reminders</code> and starts the refetch controller. <code>performRefetch</code> calls <code>advertisement.beginFetch()</code> before the read takes its snapshot. The fetch\'s floor is <code>reminders</code>: what the database will honor for the whole fetch.',
         run(c) { add(c, { type: 'box', lane: 'f', name: 'f1', t0: 1.0, t1: 3.2, snap: 1.2, label: 'refetch', sub: 'floor: reminders', subW: 4.2 }); c.set({ 'fetch floor': 'reminders' }); c.log('performRefetch: advertisement.beginFetch() → floor reminders', 'read() takes its snapshot'); c.d.now = 1.2; } },
-      { t: 'It reads more than its floor', cap: 'A reminder in the result is flagged, so this time the fetch also reads <code>lists</code>. The recorder reports <code>reminders + lists</code>.',
-        run(c) { tlItem(c, 'f1').sub = c.narrow ? 'read: + lists' : 'floor: reminders · read: + lists'; tlItem(c, 'f1').subCol = C.ep; c.set({ 'fetch read': RL }); c.log('a flagged reminder → the fetch also reads lists', 'recorder.readRegion = reminders + lists'); c.d.now = 2.0; } },
-      { t: 'A commit it can\'t see', cap: 'Another process commits to <code>lists</code> after the snapshot. Our registration is still <code>reminders</code>, so its sender skips us. The fetch can\'t see the commit, and nothing told us about it.',
-        run(c) { skipped(c, 2.3); c.log('another process: UPDATE lists … after the snapshot', 'our registration is reminders → not sent'); c.d.now = 2.3; } },
+      { t: 'It reads more than its floor', sql: 'l1', cap: 'Reminder 1 is now in list 3, so this time the fetch also runs <code>' + Q_LIST + '</code>. The recorder reports <code>reminders + lists</code>.',
+        run(c) { tlItem(c, 'f1').sub = c.narrow ? 'read: + lists' : 'floor: reminders · read: + lists'; tlItem(c, 'f1').subCol = C.ep; c.set({ 'fetch read': RL }); c.log('reminder 1 has listId 3 → ' + Q_LIST, 'recorder.readRegion = reminders + lists'); c.d.now = 2.0; } },
+      { t: 'A commit it can\'t see', sql: 'v', cap: 'Process V commits <code>' + W_LIST + '</code> after the snapshot. Our registration is still <code>reminders</code>, so its sender skips us. The fetch can\'t see the commit, and nothing told us about it.',
+        run(c) { skipped(c, 2.3); c.log('process V: ' + W_LIST + ' after the snapshot', 'our registration is reminders → not sent'); c.d.now = 2.3; } },
       { t: 'Withheld', cap: '<code>endFetch</code> returns the floor, <code>reminders</code>. <code>floor.contains(read region)</code> is <code>false</code>, and this is a refetch controller\'s fetch, so <code>accept</code> withholds it: <code>observedRegion</code> takes in what it read, a refetch is required again, and <code>fetch</code> returns <code>.superseded</code>. Nothing is published.',
         run(c) { const f = tlItem(c, 'f1'); f.fate = 'withheld'; f.sub = c.narrow ? 'withheld' : 'withheld: floor ⊉ read'; c.set({ observedRegion: RL, result: ['withheld · .superseded', C.bad] }); c.log('endFetch → floor reminders', 'accept: isRefetch && !floor.contains(read) → withhold', 'observedRegion ∪= reminders + lists · refetches.require(source:)'); c.d.now = 3.2; } },
       widen(3.4, 4.4, 'Widen, and wait for it'),
-      { t: 'Fetch again, covered', cap: '<code>.immediate</code> fetches again. The new floor is <code>reminders + lists</code>, which covers what it reads, and its snapshot comes after the <code>lists</code> commit. It is published. The withheld value never reached subscribers, so they get one value rather than two in a row that are likely the same.',
+      { t: 'Fetch again, covered', sql: ['r2', 'l2'], cap: '<code>.immediate</code> fetches again. The new floor is <code>reminders + lists</code>, which covers what it reads, and its snapshot comes after the <code>lists</code> commit. It is published. The withheld value never reached subscribers, so they get one value rather than two in a row that are likely the same.',
         run(c) { add(c, { type: 'box', lane: 'f', t0: 4.7, t1: 7.0, snap: 4.9, label: 'refetch', fate: 'published', sub: c.narrow ? 'covered · sees lists' : 'floor ⊇ read · sees the lists commit', subW: 10 }); c.set({ 'fetch floor': RL, 'fetch read': RL, result: ['published', C.ok] }); c.log('beginFetch() → floor reminders + lists', 'floor.contains(read) → publish'); c.d.now = 4.9; } }
     ]);
     if (mode === 'owed') return stepList([
       setupStep('The registration is <code>reminders</code>, as before. This time the fetch that reads more is the one a local write makes in <code>databaseWillCommit(_:)</code>, which isn\'t a refetch controller\'s and can\'t simply be made again.'),
-      { t: 'A local write\'s fetch', cap: 'This process writes <code>reminders</code> through the observed handle. In <code>databaseWillCommit(_:)</code>, <code>advertisement.beginFetch()</code> records the floor, <code>reminders</code>, and the fetch runs on the writing transaction.',
+      { t: 'A local write\'s fetch', sql: ['b', 'u', 'r1'], cap: 'This process writes <code>' + W_INLIST + '</code> through the observed handle. In <code>databaseWillCommit(_:)</code>, <code>advertisement.beginFetch()</code> records the floor, <code>reminders</code>, and the fetch runs on the writing transaction.',
         run(c) { add(c, { type: 'box', lane: 'f', name: 'f1', t0: 1.0, t1: 2.0, snap: 1.15, label: c.narrow ? 'local' : 'willCommit', sub: 'floor: reminders', subW: 3.4 }); c.set({ 'fetch floor': 'reminders' }); c.log('databaseWillCommit: advertisement.beginFetch() → floor reminders', 'fetch(transaction)'); c.d.now = 1.15; } },
-      { t: 'It reads more than its floor', cap: 'The write flagged a reminder, so the fetch also reads <code>lists</code>.',
+      { t: 'It reads more than its floor', sql: 'l1', cap: 'The write put reminder 1 in list 3, so the fetch also runs <code>' + Q_LIST + '</code>.',
         run(c) { tlItem(c, 'f1').sub = c.narrow ? 'read: + lists' : 'read: reminders + lists'; tlItem(c, 'f1').subCol = C.ep; c.set({ 'fetch read': RL }); c.log('recorder.readRegion = reminders + lists'); c.d.now = 1.6; } },
-      { t: 'Published, with a fetch owed', cap: '<code>COMMIT</code> succeeds, and <code>publishLocal</code> accepts the result. It isn\'t a refetch controller\'s fetch, so it is published although its floor doesn\'t cover what it read. <code>observedRegion</code> becomes what it read, and <code>owesCoveringFetch</code> is set.',
+      { t: 'Published, with a fetch owed', sql: 'c', cap: '<code>COMMIT</code> succeeds, and <code>publishLocal</code> accepts the result. It isn\'t a refetch controller\'s fetch, so it is published although its floor doesn\'t cover what it read. <code>observedRegion</code> becomes what it read, and <code>owesCoveringFetch</code> is set.',
         run(c) { const f = tlItem(c, 'f1'); f.fate = 'published'; f.sub = c.narrow ? 'published · owes' : 'published · owes a covering fetch'; f.subCol = C.ep; c.set({ observedRegion: RL, owesCoveringFetch: ['true', C.ep], result: 'published · .transaction(.local)' }); c.log('COMMIT · databaseDidCommit → publishLocal: endFetch → floor reminders', 'accept: not a refetch → published · owesCoveringFetch = !isCovered = true'); c.d.now = 2.0; } },
-      { t: 'A commit slips by during the update', cap: '<code>advertiseObservedRegion()</code> starts widening, and while <code>updateRegion(_:)</code> is under way, another process commits to <code>lists</code>. The sources still filter by <code>reminders</code>, so it isn\'t reported. The published value doesn\'t include it.',
-        run(c) { add(c, { type: 'span', lane: 'h', name: 'u', t0: 2.3, t1: 3.7, label: c.narrow ? 'update' : 'updateRegion(_:)' }); skipped(c, 2.9); c.log('beginUpdate(to: reminders + lists) → updateRegion under way', 'another process: UPDATE lists … → still filtered by reminders'); c.d.now = 2.9; } },
+      { t: 'A commit slips by during the update', sql: 'v', cap: '<code>advertiseObservedRegion()</code> starts widening, and while <code>updateRegion(_:)</code> is under way, process V commits <code>' + W_LIST + '</code>. The sources still filter by <code>reminders</code>, so it isn\'t reported. The published value doesn\'t include it.',
+        run(c) { add(c, { type: 'span', lane: 'h', name: 'u', t0: 2.3, t1: 3.7, label: c.narrow ? 'update' : 'updateRegion(_:)' }); skipped(c, 2.9); c.log('beginUpdate(to: reminders + lists) → updateRegion under way', 'process V: ' + W_LIST + ' → still filtered by reminders'); c.d.now = 2.9; } },
       { t: 'The update returns', cap: 'Once <code>updateRegion</code> returns, <code>finishUpdate(to:)</code> sets the region. Now that the registration covers what the fetch read, <code>advertiseObservedRegion()</code> clears <code>owesCoveringFetch</code> and calls <code>requestRefetch(source: .transaction(.external), reason: .externalProcessChange)</code>. A commit it missed was never reported, so it is looked for as one from another process would be.',
         run(c) { bands(c, [seg(0, 3.7, 'reminders'), seg(3.7, 10, RL)], [seg(0, 3.7, 'reminders'), seg(3.7, 10, RL)]); c.set({ 'advertisement.region': RL, owesCoveringFetch: 'false' }); c.log('updateRegion returns → finishUpdate(to: reminders + lists)', 'owesCoveringFetch → requestRefetch(source: .transaction(.external), reason: .externalProcessChange)'); c.d.now = 3.7; } },
-      { t: 'The covering fetch', cap: 'The refetch controller fetches with the floor <code>reminders + lists</code>. Its snapshot comes after the <code>lists</code> commit, so the value is right again, and it is published with source <code>.transaction(.external)</code>.',
+      { t: 'The covering fetch', sql: ['r2', 'l2'], cap: 'The refetch controller fetches with the floor <code>reminders + lists</code>. Its snapshot comes after the <code>lists</code> commit, so the value is right again, and it is published with source <code>.transaction(.external)</code>.',
         run(c) { add(c, { type: 'box', lane: 'f', t0: 4.0, t1: 6.2, snap: 4.2, label: c.narrow ? 'covering' : 'covering fetch', fate: 'published', sub: c.narrow ? 'sees lists' : 'floor ⊇ read · sees the lists commit', subW: 10 }); c.set({ 'fetch floor': RL, result: ['published · .transaction(.external)', C.ok] }); c.log('controller: fetch(.ifCurrent) → floor reminders + lists → covered → published'); c.d.now = 4.2; } }
     ]);
     if (mode === 'narrow') return stepList([
-      { t: 'Setup: a refetch reads both', cap: 'The registration is <code>reminders + lists</code>. A refetch, F1, is under way with that floor, and is reading both tables.',
+      { t: 'Setup: a refetch reads both', sql: ['r1', 'l1'], cap: 'The registration is <code>reminders + lists</code>. A refetch, F1, is under way with that floor, and is reading both tables.',
         run(c) { bands(c, [seg(0, 10, RL)], [seg(0, 10, RL)]); add(c, { type: 'box', lane: 'f', name: 'f1', row: 0, t0: 0.6, t1: 4.6, snap: 0.8, label: c.narrow ? 'F1 · R + L' : 'F1 refetch · floor reminders + lists' }); c.set({ 'fetch floor': 'F1: ' + RL, 'fetch read': 'F1: ' + RL }); c.log('F1: beginFetch() → floor reminders + lists · reading both'); c.d.now = 0.8; } },
-      { t: 'Another fetch reads less', cap: 'Meanwhile a local write\'s fetch, F2, is accepted. It read only <code>reminders</code>, so <code>observedRegion</code> becomes <code>reminders</code>.',
+      { t: 'Another fetch reads less', sql: ['u', 'r2'], cap: 'Meanwhile this process writes <code>UPDATE reminders SET listId = NULL WHERE id = 1</code>, and the write\'s fetch, F2, is accepted. No reminder is in a list now, so it read only <code>reminders</code>, so <code>observedRegion</code> becomes <code>reminders</code>.',
         run(c) { add(c, { type: 'box', lane: 'f', row: 1, t0: 1.2, t1: 2.0, label: 'F2', fate: 'published' }); c.set({ observedRegion: 'reminders' }); c.log('F2 (willCommit fetch) accepted: read reminders → observedRegion = reminders'); c.d.now = 2.0; } },
       { t: 'Narrowing counts at once', cap: '<code>beginUpdate(to: reminders)</code> intersects the region and every live floor with the target before <code>updateRegion(_:)</code> is even called, since the database may honor a narrower region at any moment. F1\'s floor is now <code>reminders</code>.',
         run(c) {
@@ -2522,21 +2759,21 @@ new Scene({
           c.log('beginUpdate(to: reminders): region ∩= reminders · F1\'s floor ∩= reminders', 'updateRegion(reminders) · finishUpdate(to: reminders)');
           c.d.now = 2.1;
         } },
-      { t: 'A commit to lists is skipped', cap: 'Another process commits to <code>lists</code>. Our registration no longer covers it, so it isn\'t reported. F1 took its snapshot before the commit and can\'t see it.',
-        run(c) { skipped(c, 3.4); c.log('another process: UPDATE lists … → not sent'); c.d.now = 3.4; } },
+      { t: 'A commit to lists is skipped', sql: 'v', cap: 'Process V commits <code>' + W_LIST + '</code>. Our registration no longer covers it, so it isn\'t reported. F1 took its snapshot before the commit and can\'t see it.',
+        run(c) { skipped(c, 3.4); c.log('process V: ' + W_LIST + ' → not sent'); c.d.now = 3.4; } },
       { t: 'F1 isn\'t covered', cap: 'F1 finishes having read <code>reminders + lists</code>, with the floor <code>reminders</code>, so it isn\'t covered: as a refetch it is withheld, <code>observedRegion</code> widens again, and it is made again once the registration covers <code>lists</code>. Had its floor stayed <code>reminders + lists</code>, it would have been published as covered, and the <code>lists</code> commit missed.',
         run(c) { const f = tlItem(c, 'f1'); f.fate = 'withheld'; c.set({ observedRegion: RL, result: ['F1 withheld · made again', C.ep] }); c.log('F1: floor reminders ⊉ read reminders + lists → withheld', 'observedRegion ∪= reminders + lists → widen, then fetch again'); c.d.now = 4.6; } }
     ]);
     // Hypothetical: the widening counted as soon as it was decided.
     return stepList([
-      { t: 'Setup: a widening under way', cap: 'A fetch has just read <code>reminders + lists</code>, so <code>advertiseObservedRegion()</code> is widening the registration. <code>updateRegion(_:)</code> is under way, and until it returns the sources may still filter by <code>reminders</code>.',
+      { t: 'Setup: a widening under way', sql: ['r0', 'l0'], cap: 'A fetch has just read <code>reminders + lists</code>, so <code>advertiseObservedRegion()</code> is widening the registration. <code>updateRegion(_:)</code> is under way, and until it returns the sources may still filter by <code>reminders</code>.',
         run(c) { add(c, { type: 'span', lane: 'h', t0: 1.0, t1: 4.2, label: 'updateRegion(_:) under way' }); bands(c, [seg(0, 4.2, 'reminders'), seg(4.2, 10, RL)], [seg(0, 4.2, 'reminders'), seg(4.2, 10, RL)]); c.log('beginUpdate(to: reminders + lists)', 'updateRegion(_:) under way: sources may still filter by reminders'); c.d.now = 1.0; } },
       { t: 'Suppose the widening counted at once', cap: 'Suppose <code>beginUpdate</code> set the region to <code>reminders + lists</code> as soon as it decided to widen, as it does when it narrows.',
         run(c) { bands(c, [seg(0, 1.0, 'reminders'), seg(1.0, 10, RL, { col: C.bad, dash: '4 3' })], [seg(0, 4.2, 'reminders'), seg(4.2, 10, RL)]); c.set({ 'advertisement.region': [RL + ' (too early)', C.bad] }); c.log('hypothetical: region = reminders + lists at once'); c.d.now = 1.0; } },
-      { t: 'A fetch starts during the update', cap: 'A local write\'s fetch starts now. <code>beginFetch()</code> would give it the floor <code>reminders + lists</code>, although the sources haven\'t widened yet.',
+      { t: 'A fetch starts during the update', sql: ['u', 'r1', 'l1'], cap: 'A local write, <code>' + W_TITLE + '</code>, fetches now. <code>beginFetch()</code> would give it the floor <code>reminders + lists</code>, although the sources haven\'t widened yet.',
         run(c) { add(c, { type: 'box', lane: 'f', name: 'f', t0: 1.6, t1: 3.0, snap: 1.75, label: c.narrow ? 'local' : 'willCommit fetch', sub: c.narrow ? 'floor: R + L' : 'floor: reminders + lists', subW: 4.4 }); c.set({ 'fetch floor': [RL, C.bad], 'fetch read': RL }); c.log('beginFetch() → floor reminders + lists (wrong)'); c.d.now = 1.75; } },
-      { t: 'A commit slips by', cap: 'Another process commits to <code>lists</code> after the fetch\'s snapshot. Its sender still sees <code>reminders</code>, so it skips us.',
-        run(c) { skipped(c, 2.4); c.log('another process: UPDATE lists … → not sent'); c.d.now = 2.4; } },
+      { t: 'A commit slips by', sql: 'v', cap: 'Process V commits <code>' + W_LIST + '</code> after the fetch\'s snapshot. Its sender still sees <code>reminders</code>, so it skips us.',
+        run(c) { skipped(c, 2.4); c.log('process V: ' + W_LIST + ' → not sent'); c.d.now = 2.4; } },
       { t: 'Wrongly covered: a commit lost', cap: 'The fetch read <code>reminders + lists</code>, and its floor contains that, so it would be published as covered, with no covering fetch owed. The <code>lists</code> commit is never read. The real code counts a widening only in <code>finishUpdate(to:)</code>, after <code>updateRegion</code> returns, so this fetch\'s floor is <code>reminders</code>. It owes a covering fetch, which reads after the update and sees the commit.',
         run(c) { const f = tlItem(c, 'f'); f.fate = 'stale'; f.sub = c.narrow ? 'misses the commit' : 'counted as covered · misses the lists commit'; add(c, { type: 'stale', lane: 'w', t0: 3.0, t1: 10, txt: c.narrow ? 'never read' : 'value misses this commit' }); c.set({ owesCoveringFetch: 'false', result: ['published, stale', C.bad] }); c.log('accept: floor.contains(read) → covered → no covering fetch', 'real code: floor = reminders → owesCoveringFetch → refetch after the update'); c.d.now = 3.0; } }
     ]);
@@ -2561,6 +2798,25 @@ const INI_NODES = (() => {
 new Scene({
   id: 'initial', narrowAt: 640, modesLabel: 'Case',
   modes: [{ key: 'async', label: '<code>.async()</code>, the default' }, { key: 'immediate', label: '<code>.immediate</code>' }, { key: 'late', label: 'A later subscriber' }, { key: 'raced', label: 'A commit during the first read' }],
+  sql(mode) {
+    if (mode === 'immediate') return {
+      obs: obsCode({ tail: 'let subscription = try incomplete.subscribe(\n  to: database, scheduling: .immediate\n) { error in … } onChange: { change in … }' }),
+      rows: [{ id: 'r', who: 'readBlocking', sql: Q + '  -- 3 rows' }] };
+    if (mode === 'late') return {
+      obs: obsCode({ tail: 'let first = try incomplete.subscribe(to: database) { … } onChange: { … }\n// later: the same observation, the same database\nlet second = try incomplete.subscribe(to: database) { … } onChange: { … }' }),
+      rows: [
+        { id: 'r', who: 'subscriber 1, earlier', sql: Q + '  -- 3 rows', done: true },
+        { id: 'n', who: 'subscriber 2', note: '-- no statement: caught up with the latest value' }
+      ] };
+    if (mode === 'raced') return {
+      obs: obsCode({ tail: SUBSCRIBE }),
+      rows: [
+        { id: 'r0', who: 'initial read · rev 0', sql: Q + '  -- 3 rows' },
+        { id: 'w', who: 'process W', sql: W_INS },
+        { id: 'r1', who: 'initial read · rev 1', sql: Q + '  -- 4 rows' }
+      ] };
+    return { obs: obsCode({ tail: SUBSCRIBE }), rows: [{ id: 'r', who: 'initial read · rev 0', sql: Q + '  -- 3 rows' }] };
+  },
   build(ctx) {
     const n = ctx.narrow, mode = this.mode;
     const L = panelsLayout(n, n ? 172 : 100, 8, n ? 11 : 10);
@@ -2587,9 +2843,9 @@ new Scene({
     const addSub = { t: 'Add the subscriber', cap: '<code>addSubscriber</code> registers the callbacks and scheduler. This is the first subscriber the runtime has ever had, so <code>handleEvents</code>\' <code>willStart</code> runs. There is nothing to catch it up with yet.',
       run(c) { c.set({ subscribers: '1' }); c.log('addSubscriber: subscribers.add → isFirstEver → events.willStart()', 'latest == nil · noEmissionSource == nil → nothing to replay'); c.hot('rt'); } };
     if (mode === 'immediate') return stepList([create, addSub,
-      { t: 'Read before returning', cap: '<code>.immediate</code>\'s <code>immediateInitialValue(from:)</code> is <code>true</code>, so <code>fetchInitialValueImmediatelyIfNeeded</code> runs: it bumps the read revision, which discards any asynchronous read already in flight once that read lands, records the floor, and calls <code>readBlocking</code> on the calling thread.',
+      { t: 'Read before returning', sql: 'r', cap: '<code>.immediate</code>\'s <code>immediateInitialValue(from:)</code> is <code>true</code>, so <code>fetchInitialValueImmediatelyIfNeeded</code> runs: it bumps the read revision, which discards any asynchronous read already in flight once that read lands, records the floor, and calls <code>readBlocking</code> on the calling thread.',
         run(c) { c.set({ 'reads.revision': '1' }); c.log('.immediate.immediateInitialValue(from:) → true', 'fetchInitialValueImmediatelyIfNeeded: reads.discardInFlightRead() → revision 1', 'advertisement.beginFetch() · willFetch · readBlocking()'); c.hot('rt', 'db'); c.fly('rt', 'db', { label: 'readBlocking', color: C.rt }); } },
-      { t: 'Accept and deliver inline', cap: 'The result is accepted with source <code>.initial</code>, <code>advertiseObservedRegion()</code> narrows the registration, and <code>deliver</code> runs from the caller\'s isolation. <code>.immediate</code> runs <code>onChange</code> inline.',
+      { t: 'Accept and deliver inline', sql: 'r', cap: 'The result is accepted with source <code>.initial</code>, <code>advertiseObservedRegion()</code> narrows the registration, and <code>deliver</code> runs from the caller\'s isolation. <code>.immediate</code> runs <code>onChange</code> inline.',
         run(c) { c.set({ initialFetchCompleted: 'true', latest: ['[3 reminders] · .initial', C.ok] }); c.log('accept(source: .initial): completeInitialFetch · observedRegion = what it read', 'advertiseObservedRegion()', 'deliver(from: isolation) → .immediate runs onChange inline'); c.hot('db', 'cb'); c.fly('db', 'rt', { label: 'result', color: C.db }); c.fly('rt', 'cb', { delay: 800, label: 'value', color: C.rt, bend: -0.2 }); } },
       { t: 'Then subscribe returns', cap: '<code>subscribe</code> returns with the first value already delivered. <code>.mainActor</code> does the same when <code>subscribe</code> is called on the main actor, and <code>.async(on: actor)</code> when called on that actor, which is what lets a view start with real data. <code>deferringInitialValue()</code> keeps a scheduler\'s delivery but reads asynchronously.',
         run(c) { c.set({ 'subscribe returned': ['yes, after the value', C.ok] }); c.log('subscribe returns → onChange has already run once'); c.hot('caller'); } }
@@ -2599,29 +2855,29 @@ new Scene({
         run(c) { c.log('runtime 1: 1 subscriber · latest = [3 reminders] · .initial'); c.hot('rt'); } },
       { t: 'Same observation, same database', cap: 'Subscriber 2 subscribes the same observation value, or a copy of it, to the same database. <code>runtime(for:)</code> finds the active runtime and returns it. Nothing new is registered with the database.',
         run(c) { c.log('definition.runtime(for:): active runtime found → shared'); c.hot('caller', 'def', 'rt'); c.fly('caller', 'def', { label: 'subscribe', color: C.obs }); c.fly('def', 'rt', { delay: 800, label: 'runtime 1', color: C.def }); } },
-      { t: 'Caught up at once', cap: '<code>addSubscriber</code> isn\'t the first, so <code>willStart</code> doesn\'t run. The latest change is handed to the new subscriber\'s scheduler right away. A runtime that has never emitted catches it up with the source of its latest no-emission update instead, and one that failed hands it the error.',
+      { t: 'Caught up at once', sql: 'n', cap: '<code>addSubscriber</code> isn\'t the first, so <code>willStart</code> doesn\'t run. The latest change is handed to the new subscriber\'s scheduler right away. A runtime that has never emitted catches it up with the source of its latest no-emission update instead, and one that failed hands it the error.',
         run(c) { c.set({ subscribers: '2' }); c.log('addSubscriber: not first → no willStart', 'latest != nil → subscriber.receive(.outcome(.success(latest)))'); c.hot('rt', 'cb'); c.fly('rt', 'cb', { label: 'latest', color: C.rt, bend: -0.2 }); } },
-      { t: 'No second read', cap: 'The initial fetch is done, so neither <code>fetchInitialValueIfNeeded</code> nor its immediate form reads anything. The same observation on another database gets a runtime of its own. An observation built again, even from the same closure, has a new identity and a runtime of its own, which is why <code>@FetchAll</code> shares observations for equal requests through <code>OrbitFetchObservationRegistry</code>.',
+      { t: 'No second read', sql: 'n', cap: 'The initial fetch is done, so neither <code>fetchInitialValueIfNeeded</code> nor its immediate form reads anything. The same observation on another database gets a runtime of its own. An observation built again, even from the same closure, has a new identity and a runtime of its own, which is why <code>@FetchAll</code> shares observations for equal requests through <code>OrbitFetchObservationRegistry</code>.',
         run(c) { c.set({ 'subscribe returned': 'yes' }); c.log('fetchInitialValueIfNeeded: requireInitialRead → initialFetchCompleted → nil'); } }
     ]);
     if (mode === 'raced') return stepList([
-      { t: 'The first read is in flight', cap: 'The runtime is installed, and its first subscriber, on <code>.async()</code>, started the initial read at revision 0.',
+      { t: 'The first read is in flight', sql: 'r0', cap: 'The runtime is installed, and its first subscriber, on <code>.async()</code>, started the initial read at revision 0.',
         run(c) { c.set({ 'runtimes[database]': 'runtime 1', subscribers: '1', readIsInFlight: 'true' }); c.log('requireInitialRead → request at revision 0 · Task { read() }'); c.hot('rt', 'db'); c.fly('rt', 'db', { label: 'read · rev 0', color: C.rt }); } },
-      { t: 'A commit lands during it', cap: 'Another process commits to the observed tables, and <code>requestRefetch</code> runs. The initial value isn\'t in yet, so instead of starting the refetch controller, it calls <code>reads.requireRead(source:)</code>: the read revision becomes 1 and a read is required. One is already in flight, so no second read starts.',
-        run(c) { c.set({ 'reads.revision': '1', readIsRequired: 'true' }); c.log('databaseDidCommit(origin: .external) → requestRefetch', 'initialFetchCompleted == false → reads.requireRead(source: .transaction(.external))', 'revision 1 · a read is in flight → no new request'); c.hot('db', 'rt'); c.fly('db', 'rt', { label: 'didCommit', color: C.db }); } },
-      { t: 'The first read is stale', cap: 'The read lands. Its request is at revision 0 and the revision is 1, so <code>completeRead</code> returns <code>false</code> and the result is discarded. <code>takeRequestIfPossible</code> hands out a new request at revision 1, with the source of the invalidation, and the read runs again.',
+      { t: 'A commit lands during it', sql: 'w', cap: 'Process W commits <code>' + W_INS + '</code> to the observed table, and <code>requestRefetch</code> runs. The initial value isn\'t in yet, so instead of starting the refetch controller, it calls <code>reads.requireRead(source:)</code>: the read revision becomes 1 and a read is required. One is already in flight, so no second read starts.',
+        run(c) { c.set({ 'reads.revision': '1', readIsRequired: 'true' }); c.log('process W: ' + W_INS, 'databaseDidCommit(origin: .external) → requestRefetch', 'initialFetchCompleted == false → reads.requireRead(source: .transaction(.external))', 'revision 1 · a read is in flight → no new request'); c.hot('db', 'rt'); c.fly('db', 'rt', { label: 'didCommit', color: C.db }); } },
+      { t: 'The first read is stale', sql: 'r1', cap: 'The read lands. Its request is at revision 0 and the revision is 1, so <code>completeRead</code> returns <code>false</code> and the result is discarded. <code>takeRequestIfPossible</code> hands out a new request at revision 1, with the source of the invalidation, and the read runs again.',
         run(c) { c.set({ readIsRequired: 'false' }); c.log('completeRead(request at 0): revision is 1 → false → discard(result)', 'takeRequestIfPossible → request at revision 1, source .transaction(.external)', 'Task { read() } again'); c.hot('rt', 'db'); c.fly('db', 'rt', { label: 'stale', color: C.bad }); c.fly('rt', 'db', { delay: 800, label: 'read · rev 1', color: C.rt }); } },
-      { t: 'The second read is current', cap: 'Nothing arrives during the second read, so it is accepted. <code>completeInitialFetch()</code> marks the initial fetch done and drops the invalidations it answered, so a refetch controller never sees them. The first value is delivered with the source of the read that produced it: <code>.transaction(.external)</code>, not <code>.initial</code>.',
+      { t: 'The second read is current', sql: 'r1', cap: 'Nothing arrives during the second read, so it is accepted. <code>completeInitialFetch()</code> marks the initial fetch done and drops the invalidations it answered, so a refetch controller never sees them. The first value is delivered with the source of the read that produced it: <code>.transaction(.external)</code>, not <code>.initial</code>.',
         run(c) { c.set({ readIsInFlight: 'false', initialFetchCompleted: 'true', latest: ['[4 reminders] · .transaction(.external)', C.ok], 'subscribe returned': 'yes, long before' }); c.log('completeRead(request at 1) → true → accept(source: .transaction(.external))', 'completeInitialFetch() · dropOutstandingInvalidations()', 'deliver → .async() queues the callback'); c.hot('db', 'rt', 'cb'); c.fly('db', 'rt', { label: 'result', color: C.db }); c.fly('rt', 'cb', { delay: 800, label: 'value', color: C.rt, bend: -0.2 }); } },
       { t: 'No refetch before the first value', cap: 'Until the initial value is accepted, every invalidation only makes the initial read run again, so the refetch controller never runs and a refetch is never published ahead of the first value.',
         run(c) { c.log('refetch controller: never started'); } }
     ]);
     return stepList([create, addSub,
-      { t: 'Start the read, don\'t wait', cap: '<code>.async()</code>, the default, has no actor, so <code>immediateInitialValue(from:)</code> is <code>false</code>. <code>fetchInitialValueIfNeeded</code> asks the read coordinator for the initial read, which hands out a request at revision 0, and starts it in a <code>Task</code>: <code>beginFetch()</code>, <code>willFetch</code>, then <code>read()</code>.',
+      { t: 'Start the read, don\'t wait', sql: 'r', cap: '<code>.async()</code>, the default, has no actor, so <code>immediateInitialValue(from:)</code> is <code>false</code>. <code>fetchInitialValueIfNeeded</code> asks the read coordinator for the initial read, which hands out a request at revision 0, and starts it in a <code>Task</code>: <code>beginFetch()</code>, <code>willFetch</code>, then <code>read()</code>.',
         run(c) { c.set({ readIsInFlight: 'true' }); c.log('.async().immediateInitialValue(from:) → false', 'fetchInitialValueIfNeeded: reads.requireInitialRead() → request at revision 0', 'Task { advertisement.beginFetch() · willFetch · read() }'); c.hot('rt', 'db'); c.fly('rt', 'db', { label: 'read · rev 0', color: C.rt }); } },
       { t: 'subscribe returns', cap: '<code>subscribe</code> returns the <code>OrbitSubscription</code> straight away, before any value. Keep it: releasing it ends the subscriber.',
         run(c) { c.set({ 'subscribe returned': 'yes, no value yet' }); c.log('subscribe returns OrbitSubscription'); c.hot('caller'); } },
-      { t: 'The read lands', cap: '<code>completeRead</code> finds the request current, so the result is accepted with source <code>.initial</code>. It becomes the latest value and the observed region. <code>advertiseObservedRegion()</code> narrows the registration, and <code>.async()</code> queues the callback for a <code>Task</code>.',
+      { t: 'The read lands', sql: 'r', cap: '<code>completeRead</code> finds the request current, so the result is accepted with source <code>.initial</code>. It becomes the latest value and the observed region. <code>advertiseObservedRegion()</code> narrows the registration, and <code>.async()</code> queues the callback for a <code>Task</code>.',
         run(c) { c.set({ readIsInFlight: 'false', initialFetchCompleted: 'true', latest: ['[3 reminders] · .initial', C.ok] }); c.log('completeRead(request at 0) → true → accept(source: .initial)', 'completeInitialFetch · observedRegion = what it read', 'advertiseObservedRegion() · deliver → .async() queues onChange'); c.hot('db', 'rt', 'cb'); c.fly('db', 'rt', { label: 'result', color: C.db }); c.fly('rt', 'cb', { delay: 800, label: 'value', color: C.rt, bend: -0.2 }); } }
     ]);
   }
@@ -2642,6 +2898,20 @@ const DEL_NODES = {
 new Scene({
   id: 'delivery', narrowAt: 640, modesLabel: 'Outcome',
   modes: [{ key: 'emit', label: 'A value' }, { key: 'none', label: 'Suppressed' }, { key: 'fail', label: 'A failure' }, { key: 'cancel', label: 'A subscriber cancels' }],
+  sql(mode) {
+    // The write that made the fetch being reduced, all run before the first step.
+    const writes = mode === 'none' ? [{ id: 'u', sql: 'DELETE FROM reminders' }]
+      : mode === 'fail' ? [{ id: 'u', sql: W_TITLE }]
+      : [{ id: 'u', sql: W_TITLE }, { id: 'i', sql: W_INS }];
+    const out = mode === 'none' ? '  -- no rows' : mode === 'fail' ? '' : "  -- 'Buy oat milk', 'Call Sam'";
+    return {
+      obs: obsCode({ name: 'titles', chain: ['.map { $0.map(\\.title) }', '.filter { !$0.isEmpty }', '.removeDuplicates()'] }),
+      title: 'The statements behind this fetch',
+      rows: [{ id: 'b', who: 'this handle', sql: 'BEGIN IMMEDIATE', done: true }]
+        .concat(writes.map(w => Object.assign({ who: 'this handle', done: true }, w)))
+        .concat([{ id: 'f', who: 'fetch, on the write', sql: Q + out, done: true }, { id: 'c', who: 'this handle', sql: 'COMMIT', done: true }])
+    };
+  },
   build(ctx) {
     const n = ctx.narrow;
     const L = panelsLayout(n, n ? 248 : 226, 7, n ? 11 : 10);
@@ -2653,7 +2923,7 @@ new Scene({
   },
   steps(mode) {
     const OBS = 'tracking { … }.map { $0.map(\\.title) }.filter { !$0.isEmpty }.removeDuplicates()';
-    const reduce = (out, cap) => ({ t: out ? 'Reduce' : 'Reduced to nothing', cap,
+    const reduce = (out, cap) => ({ t: out ? 'Reduce' : 'Reduced to nothing', cap, sql: 'f',
       run(c) {
         c.log('observation: ' + OBS, 'accept → pipeline.reduce(payload)');
         if (mode === 'fail') c.log('map → the transform throws');
@@ -2663,7 +2933,7 @@ new Scene({
       } });
     const fanout = (c, col, label) => { c.fly('q', 's1', { label, color: col }); c.fly('q', 's2', { delay: 150, label, color: col }); c.fly('q', 's3', { delay: 300, label, color: col }); };
     if (mode === 'none') return stepList([
-      reduce(false, 'Every reminder was deleted, so <code>map</code> gives an empty array and <code>filter { !$0.isEmpty }</code> returns <code>nil</code>. The reducers are called in order, each behind its own <code>Lock</code>, and one that returns <code>nil</code> ends the chain there.'),
+      reduce(false, 'This handle ran <code>DELETE FROM reminders</code>, so <code>map</code> gives an empty array and <code>filter { !$0.isEmpty }</code> returns <code>nil</code>. The reducers are called in order, each behind its own <code>Lock</code>, and one that returns <code>nil</code> ends the chain there.'),
       { t: 'No emission', cap: '<code>reduce</code> returned <code>nil</code>, so <code>accept</code> publishes <code>.noEmission(source:)</code> to every subscriber. The latest value stays as it was, since a suppressed value doesn\'t replace what a late subscriber is caught up with. <code>noEmissionSource</code> is recorded only while nothing has ever been emitted.',
         run(c) { c.set({ deliveries: '[.noEmission(.transaction(.local)) → s1, s2, s3]', isDelivering: 'true' }); c.log('subscribers.publishNoEmission(source: .transaction(.local)) → latest kept', 'deliveries.enqueue(publication) → true'); c.hot('red', 'reg', 'q'); c.fly('red', 'reg', { label: 'nil', color: C.pipe }); c.fly('reg', 'q', { delay: 800, label: '.noEmission', color: C.dq }); } },
       { t: 'Delivered as .noEmission', cap: 'Each subscriber\'s <code>onUpdate</code> gets <code>.noEmission(source: .transaction(.local))</code>. The <code>onChange</code> form, <code>changes(in:)</code> and <code>values(in:)</code> get nothing. <code>updates(in:)</code> yields it. <code>removeDuplicates</code> suppresses an equal value the same way.',
@@ -2722,6 +2992,16 @@ const OBV_NODES = (() => {
 new Scene({
   id: 'observable', narrowAt: 640, modesLabel: 'The change',
   modes: [{ key: 'read', label: 'A field the fetch read' }, { key: 'other', label: 'A field it didn\'t read' }, { key: 'race', label: 'A change during the fetch' }],
+  sql(mode) {
+    const obs = 'let filters = OrbitExternalValue(Filters())\n'
+      + 'let reminders = OrbitValueObservation.tracking { tx in\n'
+      + '  if filters.showsCompleted {\n    try #sql("' + Q_ALL + '", as: Row.self).fetchAll(tx)\n'
+      + '  } else {\n    try #sql(\n      "' + Q + '",\n      as: Row.self\n    ).fetchAll(tx)\n  }\n}';
+    const f1 = { id: 'f1', who: 'fetch #1', sql: Q + '  -- showsCompleted is false' };
+    const f2 = { id: 'f2', who: 'fetch #2', sql: Q_ALL + '  -- showsCompleted is true' };
+    if (mode === 'other') return { obs, rows: [f1, { id: 's', who: 'your code', swift: 'filters.search = "milk"  // not read: nothing runs' }] };
+    return { obs, rows: [f1, { id: 's', who: mode === 'race' ? 'another thread' : 'your code', swift: 'filters.showsCompleted = true' }, f2] };
+  },
   build(ctx) {
     const n = ctx.narrow;
     const L = panelsLayout(n, n ? 172 : 100, 6, n ? 11 : 10);
@@ -2732,31 +3012,31 @@ new Scene({
     ctx.redraw();
   },
   steps(mode) {
-    const capture = { t: 'Capture around the fetch', cap: 'The observation\'s fetch reads <code>filters.showsCompleted</code>, where <code>filters</code> is an <code>OrbitExternalValue(Filters())</code>. Every fetch runs inside <code>ExternalTracking.capture(_:)</code>, which, on systems with Observation, wraps it in <code>withObservationTracking</code> and records each <code>OrbitExternalValue</code> read in a task-local <code>ExternalAccessRecorder</code>.',
+    const capture = { t: 'Capture around the fetch', sql: 'f1', cap: 'The observation\'s fetch reads <code>filters.showsCompleted</code>, where <code>filters</code> is an <code>OrbitExternalValue(Filters())</code>. Every fetch runs inside <code>ExternalTracking.capture(_:)</code>, which, on systems with Observation, wraps it in <code>withObservationTracking</code> and records each <code>OrbitExternalValue</code> read in a task-local <code>ExternalAccessRecorder</code>.',
       run(c) { c.log('runtime fetch → externalTracking.capture { regionSource.fetch(…) }', 'withObservationTracking { accesses.recording { fetch } } onChange: { dependencies.didChange() }'); c.hot('trk', 'fetch'); c.fly('trk', 'fetch', { label: 'capture', color: C.ext }); } };
-    const read = { t: 'The fetch reads one field', cap: 'Reading <code>filters.showsCompleted</code> through dynamic member lookup registers an access to that member alone, plus a replacement epoch that only whole-value writes touch. It also records the member\'s version, read under the same lock as its value.',
-      run(c) { c.set({ 'accesses recorded': '[showsCompleted @ v0]' }); c.log('if filters.showsCompleted { … }', 'registrar.access(member showsCompleted) · access(replacementEpoch)', 'ExternalAccess(member: 0, replacement: 0).record()'); c.hot('fetch', 'ev'); c.fly('fetch', 'ev', { label: 'read', color: C.obs }); } };
+    const read = { t: 'The fetch reads one field', sql: 'f1', cap: 'Reading <code>filters.showsCompleted</code> through dynamic member lookup registers an access to that member alone, plus a replacement epoch that only whole-value writes touch. It also records the member\'s version, read under the same lock as its value.',
+      run(c) { c.set({ 'accesses recorded': '[showsCompleted @ v0]' }); c.log('if filters.showsCompleted { … } → false → ' + Q, 'registrar.access(member showsCompleted) · access(replacementEpoch)', 'ExternalAccess(member: 0, replacement: 0).record()'); c.hot('fetch', 'ev'); c.fly('fetch', 'ev', { label: 'read', color: C.obs }); } };
     const accept = { t: 'Captured, then active', cap: 'The versions are still current, so the fetch returns with an <code>ExternalDependencies</code> in phase <code>.captured</code>. When the fetch is accepted, <code>externalTracking.accept</code> calls <code>activate()</code>, making it <code>.active</code>, and cancels the previous fetch\'s set, which detaches its registrations.',
       run(c) { c.set({ 'this fetch\'s dependencies': '.captured → .active', 'active dependencies': 'this fetch\'s', outcome: 'accepted' }); c.log('accesses.areCurrent → true → ExternalCapture(dependencies: .captured)', 'accept: externalTracking.accept(dependencies) → activate() → .active', 'previous dependencies.cancel() → detach'); c.hot('trk', 'deps'); c.fly('trk', 'deps', { label: 'activate', color: C.ext }); } };
     if (mode === 'other') return stepList([capture, read, accept,
-      { t: 'A field it didn\'t read changes', cap: '<code>filters.search = "milk"</code> announces only <code>search</code>\'s key path and the whole value. This fetch registered neither, so its <code>onChange</code> doesn\'t fire and nothing is fetched.',
+      { t: 'A field it didn\'t read changes', sql: 's', cap: '<code>filters.search = "milk"</code> announces only <code>search</code>\'s key path and the whole value. This fetch registered neither, so its <code>onChange</code> doesn\'t fire and nothing is fetched.',
         run(c) { c.set({ 'search version': '1' }); c.log('filters.search = "milk"', 'willSet(member search) · willSet(value): neither registered → nothing'); c.hot('ev'); } },
       { t: 'What a whole-value write does', cap: 'Reading <code>filters.value</code> observes every change. Assigning <code>filters.value</code>, or calling <code>update { … }</code>, announces the whole value and the replacement epoch, so every fetch that read any member fetches again. <code>update(\\.search) { … }</code> changes one member, as an assignment does.',
         run(c) { c.log('value = … / update { … } → willSet(value) + willSet(replacementEpoch)', 'update(\\.member) { … } → willSet(member) + willSet(value)'); } }
     ]);
     if (mode === 'race') return stepList([capture, read,
-      { t: 'It changes during the fetch', cap: 'Another thread sets <code>filters.showsCompleted = true</code> before the fetch is accepted. Observation calls <code>onChange</code> while the dependencies are still <code>.captured</code>: they become <code>.invalidated</code>, and the runtime\'s handler calls <code>requestRefetch(source: .observable, reason: .observableChange)</code> at once.',
+      { t: 'It changes during the fetch', sql: 's', cap: 'Another thread sets <code>filters.showsCompleted = true</code> before the fetch is accepted. Observation calls <code>onChange</code> while the dependencies are still <code>.captured</code>: they become <code>.invalidated</code>, and the runtime\'s handler calls <code>requestRefetch(source: .observable, reason: .observableChange)</code> at once.',
         run(c) { c.set({ 'showsCompleted version': '1', 'this fetch\'s dependencies': ['.captured → .invalidated', C.bad] }); c.log('another thread: filters.showsCompleted = true', 'onChange → dependencies.didChange(): .captured → .invalidated', 'onDependencyChange → requestRefetch(source: .observable, reason: .observableChange)'); c.hot('ev', 'deps', 'rt'); c.fly('ev', 'deps', { label: 'willSet', color: C.ext, bend: 0.16 }); c.fly('deps', 'rt', { delay: 900, label: 'invalidate', color: C.ext }); } },
-      { t: 'Not accepted', cap: 'The result isn\'t accepted. A refetch controller\'s fetch is already superseded by the revision <code>requestRefetch</code> just bumped, and wherever a result does reach <code>accept</code>, <code>activate()</code> fails, so the dependencies are cancelled and it is declined. The controller fetches again and reads the new value. A forced fetch is published anyway, and the runtime then requires an observable refetch to watch the dependency again.',
+      { t: 'Not accepted', sql: 'f2', cap: 'The result isn\'t accepted. A refetch controller\'s fetch is already superseded by the revision <code>requestRefetch</code> just bumped, and wherever a result does reach <code>accept</code>, <code>activate()</code> fails, so the dependencies are cancelled and it is declined. The controller fetches again and reads the new value. A forced fetch is published anyway, and the runtime then requires an observable refetch to watch the dependency again.',
         run(c) { c.set({ outcome: ['not accepted · fetched again', C.ep], 'active dependencies': 'still the previous fetch\'s' }); c.log('accept: externalTracking.accept → activate() fails → cancel() → false', 'accept returns nil → .superseded → the controller fetches again'); c.hot('trk', 'rt'); } },
       { t: 'Version tokens close the gap', cap: 'A write can also land between the fetch registering its access and reading the locked storage, where Observation might miss it. Then the recorded version no longer matches, <code>accesses.areCurrent</code> is <code>false</code>, and <code>capture</code> calls <code>didChange()</code> itself, with the same result.',
         run(c) { c.log('accesses.areCurrent → false → dependencies.didChange()'); } }
     ]);
     return stepList([capture, read, accept,
-      { t: 'A field it read changes', cap: '<code>filters.showsCompleted = true</code>. The registrar\'s <code>willSet</code> for that member fires the one-shot <code>onChange</code>, so the dependencies go from <code>.active</code> to <code>.invalidated</code> and call the runtime\'s handler: <code>requestRefetch(source: .observable, reason: .observableChange)</code>. That starts the refetch controller, as a commit would.',
+      { t: 'A field it read changes', sql: 's', cap: '<code>filters.showsCompleted = true</code>. The registrar\'s <code>willSet</code> for that member fires the one-shot <code>onChange</code>, so the dependencies go from <code>.active</code> to <code>.invalidated</code> and call the runtime\'s handler: <code>requestRefetch(source: .observable, reason: .observableChange)</code>. That starts the refetch controller, as a commit would.',
         run(c) { c.set({ 'showsCompleted version': '1', 'this fetch\'s dependencies': ['.active → .invalidated', C.ep] }); c.log('filters.showsCompleted = true → willSet(member showsCompleted)', 'onChange → dependencies.didChange(): .active → .invalidated', 'requestRefetch(source: .observable, reason: .observableChange)'); c.hot('ev', 'deps', 'rt'); c.fly('ev', 'deps', { label: 'willSet', color: C.ext, bend: 0.16 }); c.fly('deps', 'rt', { delay: 900, label: 'invalidate', color: C.ext }); } },
-      { t: 'Fetched again', cap: 'The refetch controller fetches, capturing a new set of dependencies, which becomes active when the fetch is accepted. The change is delivered with source <code>.observable</code>. Without Observation, <code>capture</code> just runs the fetch, and only commits refetch it.',
-        run(c) { c.set({ 'this fetch\'s dependencies': '.captured → .active (new)', 'active dependencies': 'the new fetch\'s', outcome: ['published · .observable', C.ok] }); c.log('controller fetch → capture → accept → activate()', 'deliver: change.source == .observable'); c.hot('rt', 'trk'); c.fly('rt', 'trk', { label: 'fetch', color: C.rt, bend: -0.2 }); } }
+      { t: 'Fetched again', sql: 'f2', cap: 'The refetch controller fetches, now running <code>' + Q_ALL + '</code>, capturing a new set of dependencies, which becomes active when the fetch is accepted. The change is delivered with source <code>.observable</code>. Without Observation, <code>capture</code> just runs the fetch, and only commits refetch it.',
+        run(c) { c.set({ 'this fetch\'s dependencies': '.captured → .active (new)', 'active dependencies': 'the new fetch\'s', outcome: ['published · .observable', C.ok] }); c.log('controller fetch → capture → ' + Q_ALL + ' → accept → activate()', 'deliver: change.source == .observable'); c.hot('rt', 'trk'); c.fly('rt', 'trk', { label: 'fetch', color: C.rt, bend: -0.2 }); } }
     ]);
   }
 });
