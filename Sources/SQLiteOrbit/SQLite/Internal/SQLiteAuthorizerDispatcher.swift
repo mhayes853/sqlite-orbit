@@ -52,10 +52,14 @@ final class SQLiteAuthorizerDispatcher {
   typealias Handler = (SQLiteRawAuthorization) -> SQLiteAuthorizationDecision
 
   private var handlers: [Handler] = []
-  // What each `recordingAuthorizations` call in progress has seen, innermost last. These are kept
-  // here rather than captured by a handler so that recording a step, which a cached statement
-  // does on every first step, allocates nothing when SQLite authorizes nothing.
-  private var recordings: [[SQLiteRawAuthorization]] = []
+  // What SQLite has authorized since the outermost `recordingAuthorizations` call in progress
+  // began. Each call takes what was added while it ran, so nested calls share the one log rather
+  // than each appending to a list of its own. These are kept here rather than captured by a
+  // handler, and the log keeps its storage from one recording to the next, so that recording a
+  // step, which a cached statement does on every first step, allocates nothing when SQLite
+  // authorizes nothing, and recording a compilation allocates only the list it returns.
+  private var recorded: [SQLiteRawAuthorization] = []
+  private var recordingDepth = 0
   private var policy: SQLiteAuthorizationHandler?
   private var scopedPolicies: [SQLiteAuthorizationHandler] = []
   private var isUserAuthorizationSuspended = false
@@ -159,11 +163,19 @@ final class SQLiteAuthorizerDispatcher {
   func recordingAuthorizations<Result>(
     during operation: () throws -> Result
   ) rethrows -> (result: Result, authorizations: [SQLiteRawAuthorization]) {
-    let depth = recordings.count
-    recordings.append([])
-    defer { recordings.removeLast() }
+    let start = recorded.count
+    recordingDepth += 1
+    defer {
+      recordingDepth -= 1
+      // Emptying a log that is already empty is skipped, since keeping the storage of a log that
+      // never had any allocates some. A log grown by an unusually large statement gives its
+      // storage back rather than keep it.
+      if recordingDepth == 0, !recorded.isEmpty {
+        recorded.removeAll(keepingCapacity: recorded.count <= 64)
+      }
+    }
     let result = try operation()
-    return (result, recordings[depth])
+    return (result, Array(recorded[start...]))
   }
 
   private func authorize(_ authorization: SQLiteRawAuthorization) -> SQLiteAuthorizationDecision {
@@ -178,7 +190,7 @@ final class SQLiteAuthorizerDispatcher {
         break
       }
     }
-    for index in recordings.indices { recordings[index].append(authorization) }
+    if recordingDepth > 0 { recorded.append(authorization) }
     for handler in handlers { combine(handler(authorization)) }
     // The request is only made for a policy to see, since making one copies every argument into
     // an action.
