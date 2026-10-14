@@ -246,8 +246,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// not change this identity. Use it to reconcile declarations without comparing closures.
   public var identity: OrbitValueObservationIdentity { definition.identity }
 
-  /// Gives a GRDB subscription its own runtime, reducer state, and lifecycle events.
-  @_spi(GRDB)
+  /// Returns a new observation definition with the same fetch and operators.
+  ///
+  /// Subscriptions to this copy have independent runtime and reducer state, region inference,
+  /// and lifecycle events. Copies of the returned observation still share with each other.
+  /// Use this when separate consumers need separate observation lifecycles.
   public func independent() -> Self {
     Self(
       regionSource: definition.regionSource,
@@ -338,10 +341,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     tracking(regionSource: .constantOnFirstFetch, fetch)
   }
 
-  /// Resolves an explicit constant region on the first observation read, without blocking the
-  /// task that constructs an asynchronous observation. Used by the GRDB compatibility target.
-  @_spi(GRDB)
-  public static func trackingConstantRegion(
+  /// Resolves an explicit constant region inside the first observation read.
+  ///
+  /// The region is resolved once per runtime, against that database's schema. Constructing the
+  /// observation or its asynchronous sequences does not perform a blocking read.
+  public static func tracking(
     region: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion,
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {

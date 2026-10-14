@@ -727,6 +727,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   let configurationPointer: UnsafePointer<SQLiteConfiguration>
   let authorizer: SQLiteAuthorizerDispatcher
   let statements: SQLiteStatementCache
+  let scopedAccess: SQLiteScopedAccess?
 
   @_lifetime(borrow handle)
   init(handle: borrowing SQLiteConnection) {
@@ -735,15 +736,17 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
     self.configurationPointer = handle.configurationPointer
     self.authorizer = handle.authorizer
     self.statements = handle.statements
+    self.scopedAccess = nil
   }
 
-  @_lifetime(borrow grdbAccess)
-  init(grdbAccess: borrowing SQLiteGRDBAccess) {
-    connection = grdbAccess.connection
-    libraryPointer = grdbAccess.library
-    configurationPointer = grdbAccess.configuration
-    authorizer = grdbAccess.authorizer
-    statements = grdbAccess.statements
+  @_lifetime(borrow scopedAccess)
+  init(scopedAccess: borrowing SQLiteScopedAccess) {
+    connection = scopedAccess.connection
+    libraryPointer = scopedAccess.library
+    configurationPointer = scopedAccess.configurationPointer
+    authorizer = scopedAccess.authorizer
+    statements = scopedAccess.statements
+    self.scopedAccess = copy scopedAccess
   }
 
   /// The underlying `sqlite3 *`.

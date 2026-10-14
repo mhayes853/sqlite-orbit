@@ -1,24 +1,22 @@
 #if canImport(Foundation) && canImport(Dispatch)
   import Foundation
-  @_spi(GRDB) import SQLiteOrbit
+  import SQLiteOrbit
+
+  private struct DatabaseRollback: Error {}
 
   public final class Database {
     public enum TransactionCompletion { case commit, rollback }
     public enum TransactionKind { case deferred, immediate, exclusive }
     public enum ConflictResolution: String, Sendable { case rollback, abort, fail, ignore, replace }
-    let access: SQLiteGRDBAccess
-    init(_ access: SQLiteGRDBAccess) { self.access = access }
-    public var sqliteConnection: OpaquePointer? {
-      precondition((try? access.checkAccess()) != nil, "database access outlived its closure")
-      return access.sqliteConnection
-    }
-    public var changesCount: Int { checked { Int(access.changesCount) } }
+    let access: SQLiteScopedAccess
+    init(_ access: SQLiteScopedAccess) { self.access = access }
+    public var sqliteConnection: OpaquePointer? { checked { try access.sqliteConnection } }
+    public var changesCount: Int { checked { try access.changesCount } }
     public var totalChangesCount: Int { try! Int.fetchOne(self, sql: "SELECT total_changes()")! }
-    public var lastInsertedRowID: Int64 { checked { access.lastInsertedRowID } }
-    public var isInsideTransaction: Bool { checked { access.isInsideTransaction } }
-    private func checked<T>(_ body: () -> T) -> T {
-      do { try access.checkAccess() } catch { preconditionFailure(String(describing: error)) }
-      return body()
+    public var lastInsertedRowID: Int64 { checked { try access.lastInsertedRowID } }
+    public var isInsideTransaction: Bool { checked { try access.isInsideTransaction } }
+    private func checked<T>(_ body: () throws -> T) -> T {
+      do { return try body() } catch { preconditionFailure(String(describing: error)) }
     }
     public func execute(sql: String, arguments: StatementArguments = StatementArguments()) throws {
       try translate {
@@ -28,7 +26,7 @@
           let part = try access.firstStatement(remaining)
           guard let text = part.statement else { break }
           let bound = try bindArguments(arguments, sql: text, allowRemaining: true)
-          let cursor = try access.cursor(
+          let cursor = try access.statementCursor(
             SQLiteOrbit.SQL(text: text, bindings: bound.values.map(\.orbitValue))
           )
           while try cursor.next() != nil {}
@@ -63,14 +61,18 @@
       _ kind: TransactionKind? = nil,
       _ body: () throws -> TransactionCompletion
     ) throws {
-      guard kind == nil || kind == .immediate else {
-        throw DatabaseError(
-          resultCode: .SQLITE_MISUSE,
-          message: "Orbit supports immediate write transactions"
-        )
-      }
+      let mode: SQLiteWriteTransactionMode =
+        switch kind ?? .immediate {
+        case .deferred: .deferred
+        case .immediate: .immediate
+        case .exclusive: .exclusive
+        }
       try translate {
-        try access.inTransaction { _ in try body() == .commit }
+        do {
+          try access.transaction(mode: mode) { _ in
+            if try body() == .rollback { throw DatabaseRollback() }
+          }
+        } catch is DatabaseRollback {}
       }
     }
     public func inSavepoint(_ body: () throws -> TransactionCompletion) throws {
@@ -100,7 +102,7 @@
           allowMissing: unchecked
         )
         return RowCursor(
-          try access.cursor(
+          try access.statementCursor(
             SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
             cached: cached
           ),
@@ -186,19 +188,19 @@
   }
 
   public final class RowCursor: Cursor {
-    private let cursor: SQLiteGRDBCursor
+    private let cursor: SQLiteStatementCursor
     private let row = Row()
     public let sql: String
     public let arguments: StatementArguments
     public var columnNames: [String] { cursor.columnNames }
     public var columnCount: Int { columnNames.count }
-    public var databaseRegion: DatabaseRegion { DatabaseRegion(cursor.databaseRegion) }
-    init(_ cursor: SQLiteGRDBCursor, sql: String, arguments: StatementArguments) {
+    public var databaseRegion: DatabaseRegion { DatabaseRegion(cursor.readRegion) }
+    init(_ cursor: SQLiteStatementCursor, sql: String, arguments: StatementArguments) {
       self.cursor = cursor
       self.sql = sql
       self.arguments = arguments
     }
-    deinit { cursor.release() }
+    deinit { try? cursor.close() }
     public func next() throws -> Row? {
       try translate {
         guard let columns = try cursor.next() else { return nil }
@@ -270,9 +272,9 @@
       self.database = database
       self.sql = sql
       self.cached = cached
-      let info = try translate { try database.access.inspectStatement(sql) }
-      columnNames = info.columns
-      databaseRegion = DatabaseRegion(info.region)
+      let info = try translate { try database.access.statementInfo(sql) }
+      columnNames = info.columnNames
+      databaseRegion = DatabaseRegion(info.readRegion)
     }
     public func validateArguments(_ arguments: StatementArguments) throws {
       _ = try bindArguments(arguments, sql: sql)

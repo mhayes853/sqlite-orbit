@@ -1,5 +1,5 @@
 import Foundation
-@_spi(GRDB) import SQLiteOrbit
+import SQLiteOrbit
 import Testing
 
 @testable import SQLiteOrbitGRDB
@@ -25,7 +25,7 @@ struct NativeScopeTests {
   @Test func overlayCursorsParticipateInNativeAuthorizationScopes() throws {
     let queue = try SQLiteOrbit.SQLiteQueue(path: .memory)
     try queue.readBlocking { transaction in
-      try transaction.withGRDBAccess { access in
+      try transaction.withScopedAccess { access in
         let db = SQLiteOrbitGRDB.Database(access)
         func holdCursor() throws {
           let cursor = try SQLiteOrbitGRDB.Row.fetchCursor(db, sql: "SELECT 1")

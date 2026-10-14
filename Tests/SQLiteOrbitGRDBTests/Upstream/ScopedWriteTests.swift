@@ -3,6 +3,26 @@ import XCTest
 import SQLiteOrbitGRDB
 
 class ScopedWriteTests: GRDBTestCase {
+  func testTransactionKindsCommitAndRollBack() throws {
+    let queue = try makeDatabaseQueue()
+    try queue.writeWithoutTransaction { db in
+      try db.execute(sql: "CREATE TABLE t(id INTEGER)")
+      let kinds: [Database.TransactionKind] = [.deferred, .immediate, .exclusive]
+      for kind in kinds {
+        try db.inTransaction(kind) {
+          XCTAssertTrue(db.isInsideTransaction)
+          try db.execute(sql: "INSERT INTO t VALUES (1)")
+          return .commit
+        }
+        try db.inTransaction(kind) {
+          try db.execute(sql: "INSERT INTO t VALUES (2)")
+          return .rollback
+        }
+        XCTAssertFalse(db.isInsideTransaction)
+      }
+      XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT id FROM t"), [1, 1, 1])
+    }
+  }
   func testLimitsApplyToBulkWrites() throws {
     let queue = try makeDatabaseQueue()
     try queue.write { db in

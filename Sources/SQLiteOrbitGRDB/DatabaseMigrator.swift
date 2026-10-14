@@ -1,5 +1,5 @@
 #if canImport(Foundation) && canImport(Dispatch)
-  @_spi(GRDB) import SQLiteOrbit
+  import SQLiteOrbit
 
   public struct DatabaseMigrator: Sendable {
     public typealias ForeignKeyChecks = OrbitDatabaseMigrator.ForeignKeyChecks
@@ -16,7 +16,7 @@
       migrate: @escaping @Sendable (Database) throws -> Void
     ) {
       native.registerMigration(identifier, foreignKeyChecks: foreignKeyChecks) { transaction in
-        try transaction.withGRDBAccess { try migrate(Database($0)) }
+        try transaction.withScopedAccess { try migrate(Database($0)) }
       }
     }
     public func disablingDeferredForeignKeyChecks() -> Self {

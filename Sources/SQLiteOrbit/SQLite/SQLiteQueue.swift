@@ -25,7 +25,8 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The database this driver's connection is open on.
   public let path: OrbitDatabasePath
 
-  @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
+  /// The configuration supplied when opening this driver.
+  public let configuration: SQLiteConfiguration
 
   private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
@@ -42,10 +43,7 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   ) throws {
     self.connection = try SQLiteSerialConnection(path: path, configuration: configuration)
     self.path = path
-    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(
-      path: path,
-      configuration: configuration
-    )
+    self.configuration = configuration
   }
 
   /// Runs `body` in a read transaction on the driver's one connection.
@@ -237,4 +235,4 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   }
 #endif
 
-@_spi(GRDB) extension SQLiteQueue: SQLiteGRDBDatabaseMetadata {}
+extension SQLiteQueue: SQLiteDatabaseMetadata {}

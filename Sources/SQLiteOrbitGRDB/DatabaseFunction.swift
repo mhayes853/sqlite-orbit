@@ -1,6 +1,6 @@
 #if canImport(Foundation) && canImport(Dispatch)
   import Foundation
-  @_spi(GRDB) import SQLiteOrbit
+  import SQLiteOrbit
 
   public struct DatabaseFunction: Sendable {
     public let name: String

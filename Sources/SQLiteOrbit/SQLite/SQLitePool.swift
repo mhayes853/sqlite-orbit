@@ -46,7 +46,10 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The database this pool's connections are open on.
   public let path: OrbitDatabasePath
 
-  @_spi(GRDB) public let grdbDatabaseInfo: SQLiteGRDBDatabaseInfo?
+  /// The configuration supplied when opening this driver.
+  public let configuration: SQLiteConfiguration
+  /// The number of read connections opened by this pool.
+  public let readerCount: Int
 
   private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
@@ -91,11 +94,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       writerSetups: [.sql("SELECT count(*) FROM sqlite_schema")]
     )
     self.path = path
-    self.grdbDatabaseInfo = SQLiteGRDBDatabaseInfo(
-      path: path,
-      configuration: configuration,
-      readerCount: readerCount
-    )
+    self.configuration = configuration
+    self.readerCount = readerCount
   }
 
   /// Runs `body` in a read transaction on one of the pool's readers.
@@ -316,4 +316,4 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   }
 #endif
 
-@_spi(GRDB) extension SQLitePool: SQLiteGRDBDatabaseMetadata {}
+extension SQLitePool: SQLiteDatabaseMetadata {}

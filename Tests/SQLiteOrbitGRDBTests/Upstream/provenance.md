@@ -21,9 +21,9 @@ Source files: https://github.com/groue/GRDB.swift/tree/v7.11.1/Tests/GRDBTests
 
 PersistenceCallbackTests.swift, ScopedWriteTests.swift, and ObservationLifecycleTests.swift are additional shared application
 fixtures, not copied upstream. They check callback order, save fallback, bounded bulk writes,
-composite keys, intersecting filters, and independent observation subscription lifecycles.
+composite keys, intersecting filters, transaction modes, and independent observation subscription lifecycles.
 
-Run these 54 identical test bodies against GRDB itself with:
+Run these 55 identical test bodies against GRDB itself with:
 
     Tests/GRDBReference/run.sh
 

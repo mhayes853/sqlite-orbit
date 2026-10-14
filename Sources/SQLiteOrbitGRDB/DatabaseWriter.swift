@@ -1,6 +1,6 @@
 #if canImport(Foundation) && canImport(Dispatch)
   import Foundation
-  @_spi(GRDB) import SQLiteOrbit
+  import SQLiteOrbit
 
   // Native names are available from the overlay import without re-exporting Orbit's SQL and Row.
   public typealias SQLiteQueue = SQLiteOrbit.SQLiteQueue
@@ -42,17 +42,16 @@
   // across a single synchronous call: no caller can use the captured state until that call returns.
   private struct SynchronousTransfer<Value>: @unchecked Sendable { let value: Value }
   extension DatabaseReader {
-    public var path: String {
-      guard let info = (orbitDatabase as? any SQLiteGRDBDatabaseMetadata)?.grdbDatabaseInfo else {
-        preconditionFailure("the custom Orbit driver does not expose database metadata")
+    private var nativeMetadata: any SQLiteDatabaseMetadata {
+      if let metadata = orbitDatabase as? any SQLiteDatabaseMetadata { return metadata }
+      if let metadata = (orbitDatabase as? SQLiteOrbit.OrbitIPCDatabase)?.databaseMetadata {
+        return metadata
       }
-      return info.path.sqlitePath
+      preconditionFailure("the custom Orbit driver does not expose database metadata")
     }
+    public var path: String { nativeMetadata.path.sqlitePath }
     public var configuration: Configuration {
-      guard let info = (orbitDatabase as? any SQLiteGRDBDatabaseMetadata)?.grdbDatabaseInfo else {
-        preconditionFailure("the custom Orbit driver does not expose database metadata")
-      }
-      return Configuration(native: info.configuration, readerCount: info.readerCount)
+      Configuration(native: nativeMetadata.configuration, readerCount: nativeMetadata.readerCount)
     }
     @_disfavoredOverload
     public func read<T>(_ value: (Database) throws -> T) throws -> T {
@@ -60,7 +59,7 @@
         let operation = SynchronousTransfer(value: value)
         return try translate {
           try orbitDatabase.readBlocking { transaction in
-            try transaction.withGRDBAccess {
+            try transaction.withScopedAccess {
               SynchronousTransfer(value: try operation.value(Database($0)))
             }
           }
@@ -71,7 +70,7 @@
     public func read<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T {
       try await translate {
         try await orbitDatabase.read { transaction in
-          try transaction.withGRDBAccess { try value(Database($0)) }
+          try transaction.withScopedAccess { try value(Database($0)) }
         }
       }
     }
@@ -81,7 +80,7 @@
         let operation = SynchronousTransfer(value: value)
         return try translate {
           try orbitDatabase.readWithoutTransactionBlocking { connection in
-            try connection.withGRDBAccess {
+            try connection.withScopedAccess {
               SynchronousTransfer(value: try operation.value(Database($0)))
             }
           }
@@ -93,7 +92,7 @@
     {
       try await translate {
         try await orbitDatabase.readWithoutTransaction { connection in
-          try connection.withGRDBAccess { try value(Database($0)) }
+          try connection.withScopedAccess { try value(Database($0)) }
         }
       }
     }
@@ -110,7 +109,7 @@
         let operation = SynchronousTransfer(value: updates)
         return try translate {
           try orbitDatabase.writeBlocking { transaction in
-            try transaction.withGRDBAccess {
+            try transaction.withScopedAccess {
               SynchronousTransfer(value: try operation.value(Database($0)))
             }
           }
@@ -121,7 +120,7 @@
     public func write<T: Sendable>(_ updates: @Sendable (Database) throws -> T) async throws -> T {
       try await translate {
         try await orbitDatabase.write { transaction in
-          try transaction.withGRDBAccess { try updates(Database($0)) }
+          try transaction.withScopedAccess { try updates(Database($0)) }
         }
       }
     }
@@ -131,7 +130,7 @@
         let operation = SynchronousTransfer(value: updates)
         return try translate {
           try orbitDatabase.writeWithoutTransactionBlocking { connection in
-            try connection.withGRDBAccess {
+            try connection.withScopedAccess {
               SynchronousTransfer(value: try operation.value(Database($0)))
             }
           }
@@ -144,7 +143,7 @@
     {
       try await translate {
         try await orbitDatabase.writeWithoutTransaction { connection in
-          try connection.withGRDBAccess { try updates(Database($0)) }
+          try connection.withScopedAccess { try updates(Database($0)) }
         }
       }
     }
@@ -213,7 +212,7 @@
     public mutating func prepareDatabase(_ setup: @escaping @Sendable (Database) throws -> Void) {
       native.setups.append(
         SQLiteSetup { connection in
-          try connection.withGRDBAccess { try setup(Database($0)) }
+          try connection.withScopedAccess { try setup(Database($0)) }
         }
       )
     }

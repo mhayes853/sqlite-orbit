@@ -1,7 +1,7 @@
 #if canImport(Foundation) && canImport(Dispatch)
   import Dispatch
   import Foundation
-  @_spi(GRDB) import SQLiteOrbit
+  import SQLiteOrbit
 
   public protocol DatabaseCancellable: Sendable { func cancel() }
   public final class AnyDatabaseCancellable: DatabaseCancellable {
@@ -103,7 +103,7 @@
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
       Self(
         OrbitValueObservation.tracking { transaction in
-          try translate { try transaction.withGRDBAccess { try fetch(Database($0)) } }
+          try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
         }
       )
     }
@@ -112,7 +112,7 @@
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
       Self(
         OrbitValueObservation.trackingConstantRegion { transaction in
-          try translate { try transaction.withGRDBAccess { try fetch(Database($0)) } }
+          try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
         }
       )
     }
@@ -121,16 +121,16 @@
       fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
       Self(
-        OrbitValueObservation.trackingConstantRegion(
+        OrbitValueObservation.tracking(
           region: { transaction in
-            try transaction.withGRDBAccess { access in
+            try transaction.withScopedAccess { access in
               let db = Database(access)
               return try regions.reduce(DatabaseRegion()) { try $0.union($1.databaseRegion(db)) }
                 .native
             }
           },
           { transaction in
-            try translate { try transaction.withGRDBAccess { try fetch(Database($0)) } }
+            try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
           }
         )
       )

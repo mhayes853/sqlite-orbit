@@ -38,6 +38,40 @@ Queries are written as raw `SQL`, and
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) adds a type-safe
 query builder on top of it behind the `StructuredQueries` trait, which is on by default.
 
+## Driver metadata and scoped access
+
+Native queues and pools expose their opening `configuration` through `SQLiteDatabaseMetadata`.
+Pools also expose `readerCount`. `OrbitIPCDatabase.databaseMetadata` forwards these values when its
+underlying writer provides them. Inspecting metadata does not borrow a connection or block a task.
+
+For integrations that store connection or cursor objects, `withScopedAccess` lends a
+`SQLiteScopedAccess` view of a native transaction, connection, or setup access:
+
+```swift
+try database.readBlocking { transaction in
+  try transaction.withScopedAccess { access in
+    let info = try access.statementInfo("SELECT id, title FROM reminders")
+    let cursor = try access.statementCursor("SELECT id, title FROM reminders", cached: true)
+    while let row = try cursor.next() {
+      print(row[0].value, row[1].value)
+    }
+  }
+}
+```
+
+Rows returned by `SQLiteStatementCursor` own their values. The access and its cursors are valid on
+the creating thread until the closure returns; later or cross-thread operations throw a misuse
+error. The scope closes all outstanding statements before returning the borrowed connection.
+`statementInfo` inspects result columns, read/write regions, and parameter counts without executing
+SQL. A scoped write connection can group operations with `access.transaction(mode:_:)`.
+Reads or writes performed through the raw SQLite connection must call `notifyReads(in:)` or
+`notifyChanges(in:)` so they participate in observation.
+The ordinary borrowed API continues to enforce lifetimes at compile time.
+
+`OrbitValueObservation.tracking(region:_:)` also accepts a region resolver that runs once inside the
+first read of each runtime. `independent()` creates a new definition when separate consumers need
+separate observation runtimes, reducer state, and lifecycle events.
+
 ## GRDB compatibility
 
 The experimental `SQLiteOrbitGRDB` product provides common GRDB application APIs through

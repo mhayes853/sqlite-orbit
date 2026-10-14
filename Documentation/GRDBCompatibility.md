@@ -2,7 +2,7 @@
 
 `SQLiteOrbitGRDB` is an experimental, independently implemented compatibility product. It provides
 common GRDB 7 application APIs over Orbit's connections, transactions, migrations, and observation.
-GRDB itself is not a runtime dependency. The verification baseline is GRDB 7.11.1.
+GRDB itself is not a runtime dependency. The overlay is implemented entirely through SQLiteOrbit's public API; it imports no SPI. The verification baseline is GRDB 7.11.1.
 
 Select the `SQLiteOrbitGRDB` product in your application's target dependencies and replace
 `import GRDB` with `import SQLiteOrbitGRDB`. The normal `SQLiteOrbit` API remains available as a
@@ -68,7 +68,9 @@ attempt. Direct use of a pool or queue provides local observation.
 
 The overlay exposes `path` and `configuration` for all built-in drivers. An IPC handle constructed
 with a custom writer can perform access and observation, but metadata access requires that custom
-writer to supply Orbit's GRDB metadata SPI. No database access is performed to retrieve metadata.
+writer to conform to Orbit's public `SQLiteDatabaseMetadata` protocol. No database access is performed to retrieve metadata.
+Native drivers also expose their native `configuration`. Use `any DatabaseReader` or an
+`AnyDatabaseReader` wrapper when requesting GRDB-shaped configuration properties.
 
 ## Covered surface
 
@@ -105,7 +107,7 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
 - Orbit's pool writes remain barriers against that pool's reads. GRDB's pool can overlap reads and
   writes. Turso's explicitly concurrent write APIs remain native APIs.
 - Pool readers are opened eagerly. `maximumReaderCount` maps to Orbit's fixed reader count.
-- Explicit write transactions currently use IMMEDIATE. Other transaction kinds are rejected.
+- Explicit write transactions support DEFERRED, IMMEDIATE, and EXCLUSIVE through native managed transactions.
 - Values decode through DatabaseValueConvertible; GRDB's optimized StatementColumnConvertible
   coercions and its custom conformances are not implemented.
 - Ordered/limited bulk writes require SQLite's ENABLE_UPDATE_DELETE_LIMIT compilation option,

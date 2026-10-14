@@ -52,7 +52,8 @@ struct AdditionalCompatibilityTests {
     enum Columns: String, ColumnExpression { case value }
     let native = try SQLiteQueue(path: .memory)
     #expect(native.path == ":memory:")
-    #expect(native.configuration.foreignKeysEnabled)
+    let writer: any DatabaseWriter = native
+    #expect(writer.configuration.foreignKeysEnabled)
     try await native.write { db in
       try db.execute(sql: "CREATE TABLE t(value INTEGER); INSERT INTO t VALUES(42)")
       let request = Table<Int>("t").all().select(Columns.value).filter(Columns.value == 42)
