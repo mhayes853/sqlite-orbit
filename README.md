@@ -38,6 +38,52 @@ Queries are written as raw `SQL`, and
 [swift-structured-queries](https://github.com/pointfreeco/swift-structured-queries) adds a type-safe
 query builder on top of it behind the `StructuredQueries` trait, which is on by default.
 
+## Driver metadata and scoped access
+
+`OrbitDatabaseReader.databaseMetadata` exposes an optional `SQLiteDatabaseMetadata` struct snapshot
+containing the driver's path, opening configuration, and reader count. Built-in queues and pools
+provide it; custom readers default to `nil` and can supply their own snapshot. `OrbitIPCDatabase`
+forwards its underlying writer's snapshot. Inspecting metadata does not borrow a connection or block
+a task. Native drivers also expose their `configuration` and `readerCount` directly.
+
+For integrations that store connection or cursor objects, `withScopedAccess` lends a
+`SQLiteScopedAccess` view of a native transaction, connection, or setup access:
+
+```swift
+try database.readBlocking { transaction in
+  try transaction.withScopedAccess { access in
+    let info = try access.statementInfo("SELECT id, title FROM reminders")
+    let cursor = try access.statementCursor("SELECT id, title FROM reminders", cached: true)
+    while let row = try cursor.next() {
+      print(row[0].value, row[1].value)
+    }
+  }
+}
+```
+
+Rows returned by `SQLiteStatementCursor` own their values. The access and its cursors are valid on
+the creating thread until the closure returns; later or cross-thread operations throw a misuse
+error. The scope closes all outstanding statements before returning the borrowed connection.
+`statementInfo` inspects result columns, read/write regions, and parameter counts without executing
+SQL. A scoped write connection can group operations with `access.transaction(mode:_:)`.
+Reads or writes performed through the raw SQLite connection must call `notifyReads(in:)` or
+`notifyChanges(in:)` so they participate in observation.
+The ordinary borrowed API continues to enforce lifetimes at compile time.
+
+`OrbitValueObservation.tracking(region:_:)` also accepts a region resolver that runs once inside the
+first read of each runtime. Subscriptions to the same observation definition and database share
+fetches, reducer state, cached values, and lifecycle events. Each subscription has its own scheduling
+and cancellation; each async iterator has its own buffer. Construct a new observation definition
+when separate runtimes are needed.
+
+## GRDB compatibility
+
+The experimental `SQLiteOrbitGRDB` product provides common GRDB application APIs through
+`import SQLiteOrbitGRDB`, including records, SQL requests, migrations, and value observation.
+Native queues, pools, and `OrbitIPCDatabase` conform directly to its reader/writer protocols.
+See [the compatibility surface and verification guide](Documentation/GRDBCompatibility.md) for
+examples and current behavior differences.
+
 ## Raw SQL
 
 `SQL` is a string literal whose interpolated values are bound as parameters rather than spliced into

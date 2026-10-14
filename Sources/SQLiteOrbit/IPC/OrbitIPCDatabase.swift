@@ -68,6 +68,12 @@ public final class OrbitIPCDatabase:
 
   private let writer: any OrbitMultiprocessDatabaseWriter & OrbitObservableDatabase
   private let transport: any OrbitIPCTransport
+
+  /// The underlying driver's immutable opening settings, when it provides them.
+  /// Retrieving metadata does not perform database access or bypass IPC coordination.
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    writer.databaseMetadata
+  }
   private let delegateStorage: Lock<WeakDelegate>
 
   /// The delegate that receives important IPC database events.
