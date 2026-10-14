@@ -323,6 +323,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   /// - Parameter index: The column's zero-based position. A position outside the row stops the
   ///   process.
   @inlinable
+  @inline(__always)
   public subscript(index: Int) -> OrbitDatabaseValue {
     precondition(index: index)
     // Each value is read in the storage class SQLite reports, so reading it never converts it, and

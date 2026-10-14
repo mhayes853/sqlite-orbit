@@ -46,13 +46,28 @@ final class SQLiteRowColumnReader {
   // it invalidates.
 
   // The value of a column in the storage class SQLite holds it in.
+  //
+  // Always inlined, with text and blobs read out of line, so that reading a number costs no call:
+  // left to the optimizer, the whole switch is too large to inline into a row's subscript.
   @inlinable
+  @inline(__always)
   func value(_ statement: OpaquePointer, at column: Int32) -> OrbitDatabaseValue {
-    switch SQLiteColumnType(rawValue: columns.type(statement, column)) {
-    case .integer: .integer(columns.int64(statement, column))
-    case .float: .real(columns.double(statement, column))
-    case .text: .text(text(statement, at: column))
-    case .blob: .blob(blob(statement, at: column))
+    let type = columns.type(statement, column)
+    switch type {
+    case SQLiteColumnType.integer.rawValue: return .integer(columns.int64(statement, column))
+    case SQLiteColumnType.float.rawValue: return .real(columns.double(statement, column))
+    default: return storedValue(statement, at: column, type: type)
+    }
+  }
+
+  // A column's text, blob, or NULL, given the storage class SQLite reports for it.
+  @usableFromInline
+  @inline(never)
+  func storedValue(_ statement: OpaquePointer, at column: Int32, type: Int32) -> OrbitDatabaseValue
+  {
+    switch type {
+    case SQLiteColumnType.text.rawValue: .text(text(statement, at: column))
+    case SQLiteColumnType.blob.rawValue: .blob(blob(statement, at: column))
     default: .null
     }
   }
