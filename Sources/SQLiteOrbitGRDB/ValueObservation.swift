@@ -95,6 +95,12 @@
     }
   }
 
+  /// A GRDB-shaped observation backed by Orbit's shared observation runtime.
+  ///
+  /// Subscriptions to the same definition and database share fetches, reducer state, cached values,
+  /// and lifecycle hooks. Each subscriber retains its own scheduling and cancellation; each async
+  /// iterator has its own buffer. Unlike GRDB's default lifecycle, the runtime stops only when its
+  /// last subscriber leaves. Construct a new observation for a separate runtime.
   public struct ValueObservation<Reducer: ValueReducer>: Sendable {
     let native: OrbitValueObservation<Reducer.Value>
     init(_ native: OrbitValueObservation<Reducer.Value>) { self.native = native }
@@ -174,16 +180,15 @@
     ) -> AnyDatabaseCancellable {
       do {
         return AnyDatabaseCancellable(
-          try native.independent()
-            .subscribe(
-              to: reader.orbitDatabase,
-              scheduling: scheduler,
-              isolation: isolation,
-              onError: { error in
-                onError((error as? SQLiteError).map { DatabaseError($0) } ?? error)
-              },
-              onChange: { onChange($0.value) }
-            )
+          try native.subscribe(
+            to: reader.orbitDatabase,
+            scheduling: scheduler,
+            isolation: isolation,
+            onError: { error in
+              onError((error as? SQLiteError).map { DatabaseError($0) } ?? error)
+            },
+            onChange: { onChange($0.value) }
+          )
         )
       } catch {
         scheduler.schedule(from: isolation) { onError(error) }
@@ -254,7 +259,7 @@
       }
     }
     public func makeAsyncIterator() -> AsyncIterator {
-      AsyncIterator(iterator: observation.independent().values(in: database).makeAsyncIterator())
+      AsyncIterator(iterator: observation.values(in: database).makeAsyncIterator())
     }
   }
 

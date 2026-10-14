@@ -30,10 +30,9 @@ extension OrbitValueObservationBufferingPolicy {
 
 /// An asynchronous sequence of the elements an ``OrbitValueObservation`` produces for a database.
 ///
-/// The observation starts when iteration begins, and ends when the iterator and the sequence's
-/// buffered elements are released. Iterating the same sequence more than once, or from more than
-/// one task, starts an independent observation for each iteration; those iterations do not share
-/// elements with each other.
+/// Each iteration creates a subscription with its own buffer. Iterations of the same observation
+/// on the same database share the observation's fetch, reducer state, and lifecycle. Releasing an
+/// iterator ends its subscription; the runtime stops when its last subscription ends.
 ///
 /// An element that arrives while the consumer is busy is buffered according to an
 /// ``OrbitValueObservationBufferingPolicy``. Elements are buffered without bound by default, so a
@@ -73,9 +72,10 @@ public struct OrbitValueObservationSequence<Element: Sendable>: AsyncSequence, S
 
   /// Starts the observation and returns an iterator over the elements it produces.
   ///
-  /// Each call starts an independent observation; iterators do not share elements.
+  /// Each call creates a subscription with its own buffer, sharing the observation runtime
+  /// with other subscriptions to the same definition and database.
   ///
-  /// - Returns: An iterator that ends the observation when it is released.
+  /// - Returns: An iterator that ends its subscription when it is released.
   public func makeAsyncIterator() -> AsyncIterator {
     let holder = OrbitValueObservationSubscriptionHolder()
     let subscribe = self.subscribe
@@ -98,7 +98,7 @@ public struct OrbitValueObservationSequence<Element: Sendable>: AsyncSequence, S
 
   /// An iterator over the elements one observation produces.
   ///
-  /// The observation stops once the iterator and the elements it buffered are released.
+  /// Its subscription ends once the iterator and the elements it buffered are released.
   ///
   /// ```swift
   /// var iterator = observation.values(in: database).makeAsyncIterator()

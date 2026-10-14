@@ -63,25 +63,75 @@ struct ObservationAndConfigurationTests {
     try await queue.write { try $0.execute(sql: "UPDATE b SET n=3") }
     #expect(try await iterator.next() == 3)
   }
-  @Test func explicitRegionsAndIndependentIterators() async throws {
+  @Test func explicitRegionsAndSharedIteratorsHaveSeparateBuffers() async throws {
     let queue = try DatabaseQueue()
     try await queue.write { try $0.execute(sql: "CREATE TABLE t(n); INSERT INTO t VALUES (1)") }
+    let fetches = Counter()
+    let reductions = Counter()
+    let cancellations = Counter()
     let observation =
       ValueObservation.trackingConstantRegion(
         Table("t").all(),
         fetch: { db in
-          try Int.fetchOne(db, sql: "SELECT n FROM t")!
+          fetches.increment()
+          return try Int.fetchOne(db, sql: "SELECT n FROM t")!
         }
       )
+      .map { value in
+        reductions.increment()
+        return value
+      }
       .removeDuplicates()
+      .handleEvents(didCancel: { cancellations.increment() })
     let values = observation.values(in: queue)
     var first = values.makeAsyncIterator()
-    var second = values.makeAsyncIterator()
     #expect(try await first.next() == 1)
-    #expect(try await second.next() == 1)
-    try await queue.write { try $0.execute(sql: "UPDATE t SET n=2") }
+    func consumeSecond() async throws {
+      var second = values.makeAsyncIterator()
+      #expect(try await second.next() == 1)
+      #expect(fetches.value == 1)
+      #expect(reductions.value == 1)
+      try await queue.write { try $0.execute(sql: "UPDATE t SET n=2") }
+      #expect(try await second.next() == 2)
+      // The first iterator has not consumed this update yet; its buffer retains it.
+    }
+    try await consumeSecond()
+    #expect(cancellations.value == 0)
     #expect(try await first.next() == 2)
+    #expect(fetches.value == 2)
+    #expect(reductions.value == 2)
+    try await queue.write { try $0.execute(sql: "UPDATE t SET n=3") }
+    #expect(try await first.next() == 3)
+  }
+  @Test func differentDefinitionsAndDatabasesHaveSeparateRuntimes() async throws {
+    let firstDatabase = try DatabaseQueue()
+    let secondDatabase = try DatabaseQueue()
+    for (database, value) in [(firstDatabase, 1), (secondDatabase, 2)] {
+      try await database.write { db in
+        try db.execute(sql: "CREATE TABLE t(n)")
+        try db.execute(sql: "INSERT INTO t VALUES (?)", arguments: [value])
+      }
+    }
+    let fetches = Counter()
+    func makeObservation() -> ValueObservation<ValueReducers.Fetch<Int>> {
+      ValueObservation.tracking { db in
+        fetches.increment()
+        return try Int.fetchOne(db, sql: "SELECT n FROM t")!
+      }
+    }
+    let observation = makeObservation()
+    var first = observation.values(in: firstDatabase).makeAsyncIterator()
+    #expect(try await first.next() == 1)
+    var second = observation.values(in: secondDatabase).makeAsyncIterator()
     #expect(try await second.next() == 2)
+    let separate = makeObservation()
+    var third = separate.values(in: firstDatabase).makeAsyncIterator()
+    #expect(try await third.next() == 1)
+    #expect(fetches.value == 3)
+    try await firstDatabase.write { try $0.execute(sql: "UPDATE t SET n=3") }
+    #expect(try await first.next() == 3)
+    #expect(try await third.next() == 3)
+    #expect(fetches.value == 5)
   }
   @Test func releasedIteratorCancelsObservation() async throws {
     let queue = try DatabaseQueue()

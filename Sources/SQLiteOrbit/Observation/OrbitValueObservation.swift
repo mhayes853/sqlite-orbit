@@ -246,20 +246,6 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// not change this identity. Use it to reconcile declarations without comparing closures.
   public var identity: OrbitValueObservationIdentity { definition.identity }
 
-  /// Returns a new observation definition with the same fetch and operators.
-  ///
-  /// Subscriptions to this copy have independent runtime and reducer state, region inference,
-  /// and lifecycle events. Copies of the returned observation still share with each other.
-  /// Use this when separate consumers need separate observation lifecycles.
-  public func independent() -> Self {
-    Self(
-      regionSource: definition.regionSource,
-      fetch: definition.fetch,
-      refetchController: definition.refetchController,
-      makePipeline: definition.makePipeline
-    )
-  }
-
   var weakCopy: @Sendable () -> Self? {
     { [weak definition] in
       guard let definition else { return nil }
@@ -884,9 +870,11 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Starts this observation and delivers its changes through `scheduler`.
   ///
-  /// The observation runs until the returned subscription is cancelled or released, so store it
-  /// for as long as you want the callbacks. Without a `scheduler`, callbacks run asynchronously on
-  /// Swift's cooperative executor, as with ``OrbitValueObservationScheduler/async(priority:)``.
+  /// The subscription delivers changes until it is cancelled or released, so store it
+  /// for as long as you want the callbacks. Subscriptions to this definition on the same database
+  /// share a runtime, which stops when its last subscription ends. Without a `scheduler`, callbacks
+  /// run asynchronously on Swift's cooperative executor, as with
+  /// ``OrbitValueObservationScheduler/async(priority:)``.
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
   /// a gap between fetching and listening. A fetch error calls `onError` and ends the subscription.
@@ -920,7 +908,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that detaches from the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -968,7 +956,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onUpdate: Receives the outcome of each accepted fetch.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that detaches from the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -1024,7 +1012,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   - scheduler: A scheduler that guarantees main-actor delivery.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that detaches from the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   @MainActor
   public func subscribe<
@@ -1146,7 +1134,8 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iterator creates a subscription to the shared observation runtime. Releasing it ends
+  /// that subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///
@@ -1172,7 +1161,8 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of observed values without their source metadata.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iterator creates a subscription to the shared observation runtime. Releasing it ends
+  /// that subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///

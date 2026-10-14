@@ -71,8 +71,8 @@ public final class OrbitIPCDatabase:
 
   /// The underlying driver's immutable opening settings, when it provides them.
   /// Retrieving metadata does not perform database access or bypass IPC coordination.
-  public var databaseMetadata: (any SQLiteDatabaseMetadata)? {
-    writer as? any SQLiteDatabaseMetadata
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    writer.databaseMetadata
   }
   private let delegateStorage: Lock<WeakDelegate>
 

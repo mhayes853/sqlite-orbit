@@ -2,19 +2,27 @@
 ///
 /// Metadata can be inspected without borrowing a connection or blocking a task. It describes
 /// the supplied configuration, not role-specific setup or settings changed during an access.
-/// Custom drivers may conform so wrappers such as `OrbitIPCDatabase` can forward their metadata.
-public protocol SQLiteDatabaseMetadata: Sendable {
+/// Readers expose this snapshot through ``OrbitDatabaseReader/databaseMetadata``.
+public struct SQLiteDatabaseMetadata: Sendable {
   /// The database opened by the driver.
-  var path: OrbitDatabasePath { get }
+  public let path: OrbitDatabasePath
 
   /// The configuration supplied when opening the driver.
-  var configuration: SQLiteConfiguration { get }
+  public let configuration: SQLiteConfiguration
 
   /// The number of connections available for reading.
-  var readerCount: Int { get }
-}
+  public let readerCount: Int
 
-extension SQLiteDatabaseMetadata {
+  /// Creates a snapshot of a driver's opening settings.
+  ///
   /// A serial driver has one read connection.
-  public var readerCount: Int { 1 }
+  public init(
+    path: OrbitDatabasePath,
+    configuration: SQLiteConfiguration,
+    readerCount: Int = 1
+  ) {
+    self.path = path
+    self.configuration = configuration
+    self.readerCount = readerCount
+  }
 }

@@ -51,6 +51,11 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The number of read connections opened by this pool.
   public let readerCount: Int
 
+  /// The immutable opening settings, available without borrowing a connection.
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    SQLiteDatabaseMetadata(path: path, configuration: configuration, readerCount: readerCount)
+  }
+
   private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
@@ -315,5 +320,3 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     }
   }
 #endif
-
-extension SQLitePool: SQLiteDatabaseMetadata {}

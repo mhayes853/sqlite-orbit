@@ -1,5 +1,6 @@
 #if Turso
   import Foundation
+  import SQLiteOrbit
   import SQLiteOrbitGRDB
   import Testing
 
@@ -15,6 +16,9 @@
       )
       defer { try? FileManager.default.removeItem(at: file) }
       let database = try TursoPool(path: OrbitDatabasePath(file.path))
+      let metadata = try #require((database as any OrbitDatabaseReader).databaseMetadata)
+      #expect(metadata.path == OrbitDatabasePath(file.path))
+      #expect(metadata.readerCount == 5)
       var migrator = DatabaseMigrator()
       migrator.registerMigration("create", foreignKeyChecks: .immediate) {
         try $0.execute(sql: "CREATE TABLE item(id INTEGER PRIMARY KEY, name TEXT)")

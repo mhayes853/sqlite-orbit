@@ -28,6 +28,14 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The configuration supplied when opening this driver.
   public let configuration: SQLiteConfiguration
 
+  /// The queue has one read connection.
+  public var readerCount: Int { 1 }
+
+  /// The immutable opening settings, available without borrowing a connection.
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    SQLiteDatabaseMetadata(path: path, configuration: configuration, readerCount: readerCount)
+  }
+
   private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
@@ -234,5 +242,3 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
     }
   }
 #endif
-
-extension SQLiteQueue: SQLiteDatabaseMetadata {}

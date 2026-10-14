@@ -42,16 +42,16 @@
   // across a single synchronous call: no caller can use the captured state until that call returns.
   private struct SynchronousTransfer<Value>: @unchecked Sendable { let value: Value }
   extension DatabaseReader {
-    private var nativeMetadata: any SQLiteDatabaseMetadata {
-      if let metadata = orbitDatabase as? any SQLiteDatabaseMetadata { return metadata }
-      if let metadata = (orbitDatabase as? SQLiteOrbit.OrbitIPCDatabase)?.databaseMetadata {
-        return metadata
+    private var nativeMetadata: SQLiteDatabaseMetadata {
+      guard let metadata = orbitDatabase.databaseMetadata else {
+        preconditionFailure("the custom Orbit driver does not expose database metadata")
       }
-      preconditionFailure("the custom Orbit driver does not expose database metadata")
+      return metadata
     }
     public var path: String { nativeMetadata.path.sqlitePath }
     public var configuration: Configuration {
-      Configuration(native: nativeMetadata.configuration, readerCount: nativeMetadata.readerCount)
+      let metadata = nativeMetadata
+      return Configuration(native: metadata.configuration, readerCount: metadata.readerCount)
     }
     @_disfavoredOverload
     public func read<T>(_ value: (Database) throws -> T) throws -> T {

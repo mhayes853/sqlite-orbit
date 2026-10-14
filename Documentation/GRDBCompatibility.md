@@ -68,7 +68,8 @@ attempt. Direct use of a pool or queue provides local observation.
 
 The overlay exposes `path` and `configuration` for all built-in drivers. An IPC handle constructed
 with a custom writer can perform access and observation, but metadata access requires that custom
-writer to conform to Orbit's public `SQLiteDatabaseMetadata` protocol. No database access is performed to retrieve metadata.
+writer to provide an `OrbitDatabaseReader.databaseMetadata` snapshot. Custom readers default to
+`nil`. No database access is performed to retrieve metadata.
 Native drivers also expose their native `configuration`. Use `any DatabaseReader` or an
 `AnyDatabaseReader` wrapper when requesting GRDB-shaped configuration properties.
 
@@ -97,8 +98,13 @@ Observation uses native authorizer/cache metadata. Native writes and overlay wri
 tracked regions. Explicit constant regions resolve inside the first observation read, avoiding a
 blocking read when an async sequence is constructed. An observation can coalesce intermediate
 changes; use `removeDuplicates` when equal fetched values should be suppressed.
-Each subscription or async iterator starts its own observation runtime, with independent reducer
-state and lifecycle callbacks, matching GRDB even though native Orbit observations share runtimes.
+Subscriptions and async iterators of the same observation definition on the same database share
+native fetches, reducer state, cached values, and lifecycle callbacks. A late subscriber receives the
+latest value. Scheduling and cancellation belong to each subscriber; iterators have separate
+buffers. The runtime stops when its last subscriber leaves. Different databases or separately
+constructed definitions use separate runtimes. This intentionally differs from GRDB's default
+per-subscription lifecycle: `willStart` runs once per runtime and `didCancel` runs when the last
+subscriber leaves.
 
 ## Compatibility boundaries
 
@@ -115,8 +121,8 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
 - Dependencies that expose types from the original GRDB module require corresponding source
   changes; the overlay defines its own nominal types.
 - Query association/join/prefetch APIs, row adapters/scopes, Record class APIs, custom observation
-  reducers, shared observations, write-access observations, snapshots, backup, explicit close,
-  interrupt, specialized FTS helpers, and broad reactive access APIs remain future work.
+  reducers, the explicit `SharedValueObservation` API, write-access observations, snapshots, backup,
+  explicit close, interrupt, specialized FTS helpers, and broad reactive access APIs remain future work.
 - Custom explicit nested Codable containers require a custom PersistenceContainer encoder or row
   initializer. Normal synthesized nested properties use JSON columns.
 - Default Unicode functions/collations supplied by GRDB are not automatically installed.

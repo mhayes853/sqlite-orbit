@@ -120,19 +120,22 @@
       }
     }
 
-    @Test func explicitRegionsResolveOncePerIndependentRuntime() async throws {
+    @Test func explicitRegionsResolveOncePerRuntime() async throws {
       let database = try SQLiteQueue(path: .memory)
       try await database.write { transaction in
         try transaction.executeScript("CREATE TABLE items(id); INSERT INTO items VALUES (1)")
       }
       let resolutions = ResolutionCounter()
-      let observation = OrbitValueObservation.tracking(
-        region: { transaction in
-          resolutions.increment()
-          return try OrbitDatabaseRegion("SELECT id FROM items", in: transaction)
-        },
-        { try $0.fetchOne("SELECT count(*) FROM items", as: Int.self)! }
-      )
+      func makeObservation() -> OrbitValueObservation<Int> {
+        OrbitValueObservation.tracking(
+          region: { transaction in
+            resolutions.increment()
+            return try OrbitDatabaseRegion("SELECT id FROM items", in: transaction)
+          },
+          { try $0.fetchOne("SELECT count(*) FROM items", as: Int.self)! }
+        )
+      }
+      let observation = makeObservation()
       let values = observation.values(in: database)
       #expect(resolutions.value == 0)
       var first = values.makeAsyncIterator()
@@ -140,17 +143,29 @@
       try await database.write { try $0.execute("INSERT INTO items VALUES (2)") }
       #expect(try await first.next() == 2)
       #expect(resolutions.value == 1)
-      var second = observation.independent().values(in: database).makeAsyncIterator()
+      var second = values.makeAsyncIterator()
       #expect(try await second.next() == 2)
+      #expect(resolutions.value == 1)
+      let separate = makeObservation()
+      #expect(separate.identity != observation.identity)
+      var third = separate.values(in: database).makeAsyncIterator()
+      #expect(try await third.next() == 2)
       #expect(resolutions.value == 2)
     }
 
     @Test func driverMetadataIsAvailableWithoutBorrowingAConnection() throws {
       let queue = try SQLiteQueue(path: .memory)
-      let metadata: any SQLiteDatabaseMetadata = queue
+      let metadata = try #require((queue as any OrbitDatabaseReader).databaseMetadata)
       #expect(metadata.path == .memory)
       #expect(metadata.readerCount == 1)
       #expect(metadata.configuration.isForeignKeysEnabled)
+      var configurationCopy = metadata.configuration
+      configurationCopy.isForeignKeysEnabled = false
+      #expect(queue.databaseMetadata?.configuration.isForeignKeysEnabled == true)
+      #expect(queue.readerCount == 1)
+      let customSnapshot = SQLiteDatabaseMetadata(path: .memory, configuration: configurationCopy)
+      #expect(customSnapshot.readerCount == 1)
+      #expect(!customSnapshot.configuration.isForeignKeysEnabled)
       try withTemporaryDirectory("metadata") { directory in
         var configuration = SQLiteConfiguration.default
         configuration.isForeignKeysEnabled = false
@@ -163,7 +178,10 @@
           writer: pool,
           transport: InMemoryIPCTransport(network: .init())
         )
-        let forwarded = try #require(database.databaseMetadata)
+        let forwarded = try #require((database as any OrbitDatabaseReader).databaseMetadata)
+        let poolMetadata = try #require((pool as any OrbitDatabaseReader).databaseMetadata)
+        #expect(poolMetadata.path == forwarded.path)
+        #expect(poolMetadata.readerCount == forwarded.readerCount)
         #expect(forwarded.path == pool.path)
         #expect(forwarded.readerCount == 2)
         #expect(!forwarded.configuration.isForeignKeysEnabled)

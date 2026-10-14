@@ -40,9 +40,11 @@ query builder on top of it behind the `StructuredQueries` trait, which is on by 
 
 ## Driver metadata and scoped access
 
-Native queues and pools expose their opening `configuration` through `SQLiteDatabaseMetadata`.
-Pools also expose `readerCount`. `OrbitIPCDatabase.databaseMetadata` forwards these values when its
-underlying writer provides them. Inspecting metadata does not borrow a connection or block a task.
+`OrbitDatabaseReader.databaseMetadata` exposes an optional `SQLiteDatabaseMetadata` struct snapshot
+containing the driver's path, opening configuration, and reader count. Built-in queues and pools
+provide it; custom readers default to `nil` and can supply their own snapshot. `OrbitIPCDatabase`
+forwards its underlying writer's snapshot. Inspecting metadata does not borrow a connection or block
+a task. Native drivers also expose their `configuration` and `readerCount` directly.
 
 For integrations that store connection or cursor objects, `withScopedAccess` lends a
 `SQLiteScopedAccess` view of a native transaction, connection, or setup access:
@@ -69,8 +71,10 @@ Reads or writes performed through the raw SQLite connection must call `notifyRea
 The ordinary borrowed API continues to enforce lifetimes at compile time.
 
 `OrbitValueObservation.tracking(region:_:)` also accepts a region resolver that runs once inside the
-first read of each runtime. `independent()` creates a new definition when separate consumers need
-separate observation runtimes, reducer state, and lifecycle events.
+first read of each runtime. Subscriptions to the same observation definition and database share
+fetches, reducer state, cached values, and lifecycle events. Each subscription has its own scheduling
+and cancellation; each async iterator has its own buffer. Construct a new observation definition
+when separate runtimes are needed.
 
 ## GRDB compatibility
 
