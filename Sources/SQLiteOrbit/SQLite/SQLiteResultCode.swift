@@ -149,26 +149,31 @@ public struct SQLitePrepareFlags: OptionSet, Hashable, Sendable {
 /// if library.columns.type(statement, 0) == SQLiteColumnType.null.rawValue { ... }
 /// ```
 public struct SQLiteColumnType: RawRepresentable, Hashable, Sendable {
+  // The storage classes are computed and inlinable rather than stored: a stored `static let` is
+  // reached through an accessor call wherever another module inlines code that compares against
+  // it, as it does every column a row reads.
+
   /// The number SQLite reports for this storage class.
   public let rawValue: Int32
 
   /// Creates a storage class from the number SQLite reports.
   ///
   /// - Parameter rawValue: The number SQLite reports.
+  @inlinable
   public init(rawValue: Int32) {
     self.rawValue = rawValue
   }
 
   /// `SQLITE_INTEGER`.
-  public static let integer = Self(rawValue: 1)
+  @inlinable public static var integer: Self { Self(rawValue: 1) }
   /// `SQLITE_FLOAT`.
-  public static let float = Self(rawValue: 2)
+  @inlinable public static var float: Self { Self(rawValue: 2) }
   /// `SQLITE_TEXT`.
-  public static let text = Self(rawValue: 3)
+  @inlinable public static var text: Self { Self(rawValue: 3) }
   /// `SQLITE_BLOB`.
-  public static let blob = Self(rawValue: 4)
+  @inlinable public static var blob: Self { Self(rawValue: 4) }
   /// `SQLITE_NULL`.
-  public static let null = Self(rawValue: 5)
+  @inlinable public static var null: Self { Self(rawValue: 5) }
 }
 
 /// The text encoding and behavior flags accepted when registering a custom function.
