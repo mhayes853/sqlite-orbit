@@ -7,14 +7,20 @@ import XCTest
 private final class ObservationCounter: @unchecked Sendable {
   private let lock = NSLock()
   private var count = 0
+
   func increment() {
     lock.lock()
-    defer { lock.unlock() }
+    defer {
+      lock.unlock()
+    }
     count += 1
   }
+
   var value: Int {
     lock.lock()
-    defer { lock.unlock() }
+    defer {
+      lock.unlock()
+    }
     return count
   }
 }
@@ -58,7 +64,9 @@ class ObservationLifecycleTests: GRDBTestCase {
         firstValue.fulfill()
       }
     )
-    defer { first.cancel() }
+    defer {
+      first.cancel()
+    }
     wait(for: [firstValue], timeout: 5)
     let second = observation.start(
       in: database,
@@ -73,7 +81,9 @@ class ObservationLifecycleTests: GRDBTestCase {
         }
       }
     )
-    defer { second.cancel() }
+    defer {
+      second.cancel()
+    }
     wait(for: [secondValue], timeout: 5)
     XCTAssertEqual(starts.value, 1)
     XCTAssertEqual(fetches.value, 1)
@@ -97,7 +107,9 @@ class ObservationLifecycleTests: GRDBTestCase {
         restartedValue.fulfill()
       }
     )
-    defer { restarted.cancel() }
+    defer {
+      restarted.cancel()
+    }
     wait(for: [restartedValue], timeout: 5)
     XCTAssertEqual(starts.value, 2)
     XCTAssertEqual(fetches.value, 3)

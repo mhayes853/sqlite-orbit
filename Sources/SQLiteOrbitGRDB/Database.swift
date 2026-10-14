@@ -5,26 +5,61 @@
   private struct DatabaseRollback: Error {}
 
   public final class Database {
-    public enum TransactionCompletion { case commit, rollback }
-    public enum TransactionKind { case deferred, immediate, exclusive }
-    public enum ConflictResolution: String, Sendable { case rollback, abort, fail, ignore, replace }
-    let access: SQLiteScopedAccess
-    init(_ access: SQLiteScopedAccess) { self.access = access }
-    public var sqliteConnection: OpaquePointer? { checked { try access.sqliteConnection } }
-    public var changesCount: Int { checked { try access.changesCount } }
-    public var totalChangesCount: Int { try! Int.fetchOne(self, sql: "SELECT total_changes()")! }
-    public var lastInsertedRowID: Int64 { checked { try access.lastInsertedRowID } }
-    public var isInsideTransaction: Bool { checked { try access.isInsideTransaction } }
-    private func checked<T>(_ body: () throws -> T) -> T {
-      do { return try body() } catch { preconditionFailure(String(describing: error)) }
+    public enum TransactionCompletion {
+      case commit, rollback
     }
+
+    public enum TransactionKind {
+      case deferred, immediate, exclusive
+    }
+
+    public enum ConflictResolution: String, Sendable {
+      case rollback, abort, fail, ignore, replace
+    }
+
+    let access: SQLiteScopedAccess
+
+    init(_ access: SQLiteScopedAccess) {
+      self.access = access
+    }
+
+    public var sqliteConnection: OpaquePointer? {
+      checked { try access.sqliteConnection }
+    }
+
+    public var changesCount: Int {
+      checked { try access.changesCount }
+    }
+
+    public var totalChangesCount: Int {
+      try! Int.fetchOne(self, sql: "SELECT total_changes()")!
+    }
+
+    public var lastInsertedRowID: Int64 {
+      checked { try access.lastInsertedRowID }
+    }
+
+    public var isInsideTransaction: Bool {
+      checked { try access.isInsideTransaction }
+    }
+
+    private func checked<T>(_ body: () throws -> T) -> T {
+      do {
+        return try body()
+      } catch {
+        preconditionFailure(String(describing: error))
+      }
+    }
+
     public func execute(sql: String, arguments: StatementArguments = StatementArguments()) throws {
       try translate {
         var remaining = sql
         var arguments = arguments
         while true {
           let part = try access.firstStatement(remaining)
-          guard let text = part.statement else { break }
+          guard let text = part.statement else {
+            break
+          }
           let bound = try bindArguments(arguments, sql: text, allowRemaining: true)
           let cursor = try access.statementCursor(
             SQLiteOrbit.SQL(text: text, bindings: bound.values.map(\.orbitValue))
@@ -43,20 +78,25 @@
         }
       }
     }
+
     public func execute(literal: SQL) throws {
       try execute(sql: literal.sql, arguments: literal.arguments)
     }
+
     public func makeStatement(sql: String) throws -> Statement {
       try Statement(database: self, sql: sql, cached: false)
     }
+
     public func makeStatement(literal: SQL) throws -> Statement {
       let statement = try makeStatement(sql: literal.sql)
       statement.arguments = literal.arguments
       return statement
     }
+
     public func cachedStatement(sql: String) throws -> Statement {
       try Statement(database: self, sql: sql, cached: true)
     }
+
     public func inTransaction(
       _ kind: TransactionKind? = nil,
       _ body: () throws -> TransactionCompletion
@@ -70,17 +110,24 @@
       try translate {
         do {
           try access.transaction(mode: mode) { _ in
-            if try body() == .rollback { throw DatabaseRollback() }
+            if try body() == .rollback {
+              throw DatabaseRollback()
+            }
           }
         } catch is DatabaseRollback {}
       }
     }
+
     public func inSavepoint(_ body: () throws -> TransactionCompletion) throws {
-      if !isInsideTransaction { return try inTransaction(nil, body) }
+      if !isInsideTransaction {
+        return try inTransaction(nil, body)
+      }
       let name = "orbit_grdb_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
       try execute(sql: "SAVEPOINT \(name)")
       do {
-        if try body() == .rollback { try execute(sql: "ROLLBACK TO SAVEPOINT \(name)") }
+        if try body() == .rollback {
+          try execute(sql: "ROLLBACK TO SAVEPOINT \(name)")
+        }
         try execute(sql: "RELEASE SAVEPOINT \(name)")
       } catch {
         try? execute(sql: "ROLLBACK TO SAVEPOINT \(name)")
@@ -88,6 +135,7 @@
         throw error
       }
     }
+
     func cursor(
       sql: String,
       arguments: StatementArguments,
@@ -111,6 +159,7 @@
         )
       }
     }
+
     public func tableExists(_ name: String) throws -> Bool {
       try Bool.fetchOne(
         self,
@@ -119,6 +168,7 @@
         arguments: [name]
       ) ?? false
     }
+
     public func viewExists(_ name: String) throws -> Bool {
       try Bool.fetchOne(
         self,
@@ -127,6 +177,7 @@
         arguments: [name]
       ) ?? false
     }
+
     public func columns(in table: String) throws -> [ColumnInfo] {
       guard try tableExists(table) || viewExists(table) else {
         throw DatabaseError(message: "no such table: \(table)")
@@ -143,11 +194,14 @@
           )
         }
     }
+
     public func primaryKey(_ table: String) throws -> PrimaryKeyInfo {
       let tableColumns = try columns(in: table)
       let columns = tableColumns.filter { $0.primaryKeyIndex > 0 }
         .sorted { $0.primaryKeyIndex < $1.primaryKeyIndex }
-      guard try tableExists(table) else { throw DatabaseError(message: "no such table: \(table)") }
+      guard try tableExists(table) else {
+        throw DatabaseError(message: "no such table: \(table)")
+      }
       // INTEGER PRIMARY KEY is a rowid alias only when SQLite has not built a primary-key index
       // (WITHOUT ROWID and the inline DESC exception both have such an index).
       let hasPrimaryKeyIndex =
@@ -172,6 +226,7 @@
       return PrimaryKeyInfo(columns: keyColumns, rowIDColumn: integer, hiddenRowID: columns.isEmpty)
     }
   }
+
   public struct ColumnInfo: Sendable {
     public let cid: Int
     public let name: String
@@ -180,11 +235,15 @@
     public let defaultValueSQL: String?
     public let primaryKeyIndex: Int
   }
+
   public struct PrimaryKeyInfo: Sendable {
     public let columns: [String]
     public let rowIDColumn: String?
     let hiddenRowID: Bool
-    public var isRowID: Bool { rowIDColumn != nil || hiddenRowID }
+
+    public var isRowID: Bool {
+      rowIDColumn != nil || hiddenRowID
+    }
   }
 
   public final class RowCursor: Cursor {
@@ -192,23 +251,40 @@
     private let row = Row()
     public let sql: String
     public let arguments: StatementArguments
-    public var columnNames: [String] { cursor.columnNames }
-    public var columnCount: Int { columnNames.count }
-    public var databaseRegion: DatabaseRegion { DatabaseRegion(cursor.readRegion) }
+
+    public var columnNames: [String] {
+      cursor.columnNames
+    }
+
+    public var columnCount: Int {
+      columnNames.count
+    }
+
+    public var databaseRegion: DatabaseRegion {
+      DatabaseRegion(cursor.readRegion)
+    }
+
     init(_ cursor: SQLiteStatementCursor, sql: String, arguments: StatementArguments) {
       self.cursor = cursor
       self.sql = sql
       self.arguments = arguments
     }
-    deinit { try? cursor.close() }
+
+    deinit {
+      try? cursor.close()
+    }
+
     public func next() throws -> Row? {
       try translate {
-        guard let columns = try cursor.next() else { return nil }
+        guard let columns = try cursor.next() else {
+          return nil
+        }
         row.columns = columns.map { ($0.0, DatabaseValue($0.1)) }
         return row
       }
     }
   }
+
   extension Row {
     public static func fetchCursor(
       _ db: Database,
@@ -217,6 +293,7 @@
     ) throws -> RowCursor {
       try db.cursor(sql: sql, arguments: arguments)
     }
+
     public static func fetchAll(
       _ db: Database,
       sql: String,
@@ -224,6 +301,7 @@
     ) throws -> [Row] {
       try Array(fetchCursor(db, sql: sql, arguments: arguments).map { $0.copy() })
     }
+
     public static func fetchOne(
       _ db: Database,
       sql: String,
@@ -231,6 +309,7 @@
     ) throws -> Row? {
       try fetchCursor(db, sql: sql, arguments: arguments).next()?.copy()
     }
+
     public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
       throws -> RowCursor
     {
@@ -241,19 +320,23 @@
         unchecked: arguments == nil && statement.unchecked
       )
     }
+
     public static func fetchAll(_ statement: Statement, arguments: StatementArguments? = nil) throws
       -> [Row]
     {
       try Array(fetchCursor(statement, arguments: arguments).map { $0.copy() })
     }
+
     public static func fetchOne(_ statement: Statement, arguments: StatementArguments? = nil) throws
       -> Row?
     {
       try fetchCursor(statement, arguments: arguments).next()?.copy()
     }
+
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Row] {
       try fetchAll(db, sql: literal.sql, arguments: literal.arguments)
     }
+
     public static func fetchOne(_ db: Database, _ literal: SQL) throws -> Row? {
       try fetchOne(db, sql: literal.sql, arguments: literal.arguments)
     }
@@ -263,11 +346,22 @@
     let database: Database
     let cached: Bool
     public let sql: String
-    public var arguments = StatementArguments() { didSet { unchecked = false } }
+
+    public var arguments = StatementArguments() {
+      didSet {
+        unchecked = false
+      }
+    }
+
     var unchecked = false
     public let columnNames: [String]
-    public var columnCount: Int { columnNames.count }
+
+    public var columnCount: Int {
+      columnNames.count
+    }
+
     public let databaseRegion: DatabaseRegion
+
     init(database: Database, sql: String, cached: Bool) throws {
       self.database = database
       self.sql = sql
@@ -276,17 +370,21 @@
       columnNames = info.columnNames
       databaseRegion = DatabaseRegion(info.readRegion)
     }
+
     public func validateArguments(_ arguments: StatementArguments) throws {
       _ = try bindArguments(arguments, sql: sql)
     }
+
     public func setArguments(_ arguments: StatementArguments) throws {
       try validateArguments(arguments)
       self.arguments = arguments
     }
+
     public func setUncheckedArguments(_ arguments: StatementArguments) {
       self.arguments = arguments
       unchecked = true
     }
+
     public func execute(arguments: StatementArguments? = nil) throws {
       let cursor = try database.cursor(
         sql: sql,

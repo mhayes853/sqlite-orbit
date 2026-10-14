@@ -6,7 +6,8 @@ import Testing
 
 @Suite("GRDB native scopes")
 struct NativeScopeTests {
-  @Test func cachedTransactionControlUsesTheCurrentScope() throws {
+  @Test
+  func cachedTransactionControlUsesTheCurrentScope() throws {
     let queue = try DatabaseQueue()
     try queue.writeWithoutTransaction { db in
       try db.inTransaction {
@@ -22,11 +23,13 @@ struct NativeScopeTests {
     }
   }
 
-  @Test func overlayCursorsParticipateInNativeAuthorizationScopes() throws {
+  @Test
+  func overlayCursorsParticipateInNativeAuthorizationScopes() throws {
     let queue = try SQLiteOrbit.SQLiteQueue(path: .memory)
     try queue.readBlocking { transaction in
       try transaction.withScopedAccess { access in
         let db = SQLiteOrbitGRDB.Database(access)
+
         func holdCursor() throws {
           let cursor = try SQLiteOrbitGRDB.Row.fetchCursor(db, sql: "SELECT 1")
           #expect(try cursor.next() != nil)
@@ -41,7 +44,9 @@ struct NativeScopeTests {
         try holdCursor()
         try access.withConnectionAccess { connection in
           try connection.withAuthorization({ event in
-            if case .select = event.action { return .deny }
+            if case .select = event.action {
+              return .deny
+            }
             return .allow
           }) {
             let error = #expect(throws: DatabaseError.self) {

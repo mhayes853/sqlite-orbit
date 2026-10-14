@@ -6,20 +6,28 @@ import Testing
 private final class Counter: @unchecked Sendable {
   private let lock = NSLock()
   private var count = 0
+
   func increment() {
     lock.lock()
-    defer { lock.unlock() }
+    defer {
+      lock.unlock()
+    }
     count += 1
   }
+
   var value: Int {
     lock.lock()
-    defer { lock.unlock() }
+    defer {
+      lock.unlock()
+    }
     return count
   }
 }
+
 @Suite("GRDB observation and configuration", .timeLimit(.minutes(1)))
 struct ObservationAndConfigurationTests {
-  @Test func everyPoolConnectionIsPrepared() async throws {
+  @Test
+  func everyPoolConnectionIsPrepared() async throws {
     let count = Counter()
     var configuration = Configuration()
     configuration.maximumReaderCount = 2
@@ -44,7 +52,9 @@ struct ObservationAndConfigurationTests {
     #expect(try await pool.read { try Int.fetchOne($0, sql: "SELECT twice(21)") } == 42)
     #expect(try await pool.write { try Int.fetchOne($0, sql: "SELECT twice(10)") } == 20)
   }
-  @Test func dynamicRegionsFollowConditionalQueries() async throws {
+
+  @Test
+  func dynamicRegionsFollowConditionalQueries() async throws {
     let queue = try DatabaseQueue()
     try await queue.write { db in
       try db.execute(
@@ -63,7 +73,9 @@ struct ObservationAndConfigurationTests {
     try await queue.write { try $0.execute(sql: "UPDATE b SET n=3") }
     #expect(try await iterator.next() == 3)
   }
-  @Test func explicitRegionsAndSharedIteratorsHaveSeparateBuffers() async throws {
+
+  @Test
+  func explicitRegionsAndSharedIteratorsHaveSeparateBuffers() async throws {
     let queue = try DatabaseQueue()
     try await queue.write { try $0.execute(sql: "CREATE TABLE t(n); INSERT INTO t VALUES (1)") }
     let fetches = Counter()
@@ -103,7 +115,9 @@ struct ObservationAndConfigurationTests {
     try await queue.write { try $0.execute(sql: "UPDATE t SET n=3") }
     #expect(try await first.next() == 3)
   }
-  @Test func differentDefinitionsAndDatabasesHaveSeparateRuntimes() async throws {
+
+  @Test
+  func differentDefinitionsAndDatabasesHaveSeparateRuntimes() async throws {
     let firstDatabase = try DatabaseQueue()
     let secondDatabase = try DatabaseQueue()
     for (database, value) in [(firstDatabase, 1), (secondDatabase, 2)] {
@@ -113,12 +127,14 @@ struct ObservationAndConfigurationTests {
       }
     }
     let fetches = Counter()
+
     func makeObservation() -> ValueObservation<ValueReducers.Fetch<Int>> {
       ValueObservation.tracking { db in
         fetches.increment()
         return try Int.fetchOne(db, sql: "SELECT n FROM t")!
       }
     }
+
     let observation = makeObservation()
     var first = observation.values(in: firstDatabase).makeAsyncIterator()
     #expect(try await first.next() == 1)
@@ -133,11 +149,14 @@ struct ObservationAndConfigurationTests {
     #expect(try await third.next() == 3)
     #expect(fetches.value == 5)
   }
-  @Test func releasedIteratorCancelsObservation() async throws {
+
+  @Test
+  func releasedIteratorCancelsObservation() async throws {
     let queue = try DatabaseQueue()
     let cancellations = Counter()
     let observation = ValueObservation.tracking { db in try Int.fetchOne(db, sql: "SELECT 1")! }
       .handleEvents(didCancel: { cancellations.increment() })
+
     func consumeOne() async throws {
       var iterator = observation.values(in: queue).makeAsyncIterator()
       #expect(try await iterator.next() == 1)
@@ -145,7 +164,9 @@ struct ObservationAndConfigurationTests {
     try await consumeOne()
     #expect(cancellations.value == 1)
   }
-  @Test func cursorReleaseAllowsSchemaChanges() throws {
+
+  @Test
+  func cursorReleaseAllowsSchemaChanges() throws {
     let queue = try DatabaseQueue()
     try queue.write { db in
       try db.execute(sql: "CREATE TABLE t(n); INSERT INTO t VALUES(1),(2)")
@@ -157,7 +178,9 @@ struct ObservationAndConfigurationTests {
       try db.drop(table: "t")
     }
   }
-  @Test func readAccessRefusesWritesAndTranslatesCodes() throws {
+
+  @Test
+  func readAccessRefusesWritesAndTranslatesCodes() throws {
     let queue = try DatabaseQueue()
     try queue.write { try $0.execute(sql: "CREATE TABLE t(n NOT NULL UNIQUE)") }
     do {
@@ -173,12 +196,18 @@ struct ObservationAndConfigurationTests {
       #expect(error.sql?.contains("INSERT") == true)
     }
   }
-  @Test func enumsEncodeAsSQLScalars() throws {
-    enum Status: String, Codable { case ready }
+
+  @Test
+  func enumsEncodeAsSQLScalars() throws {
+    enum Status: String, Codable {
+      case ready
+    }
+
     struct Item: Codable, FetchableRecord, PersistableRecord, Equatable {
       let id: Int
       let status: Status
     }
+
     let queue = try DatabaseQueue()
     try queue.write { db in
       try db.execute(sql: "CREATE TABLE item(id INTEGER PRIMARY KEY, status TEXT)")

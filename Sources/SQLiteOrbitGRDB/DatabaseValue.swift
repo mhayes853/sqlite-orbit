@@ -4,6 +4,7 @@
 
   public protocol DatabaseValueConvertible {
     var databaseValue: DatabaseValue { get }
+
     static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self?
   }
 
@@ -16,14 +17,25 @@
       case string(String)
       case blob(Data)
     }
+
     public let storage: Storage
     public static let null = Self(storage: .null)
-    public init(storage: Storage) { self.storage = storage }
+
+    public init(storage: Storage) {
+      self.storage = storage
+    }
+
     public init?(_ value: Any) {
-      guard let value = value as? any DatabaseValueConvertible else { return nil }
+      guard let value = value as? any DatabaseValueConvertible else {
+        return nil
+      }
       self = value.databaseValue
     }
-    public init?(value: Any) { self.init(value) }
+
+    public init?(value: Any) {
+      self.init(value)
+    }
+
     init(_ value: OrbitDatabaseValue) {
       switch value {
       case .null: storage = .null
@@ -33,6 +45,7 @@
       case .blob(let bytes): storage = .blob(Data(bytes))
       }
     }
+
     var orbitValue: OrbitDatabaseValue {
       switch storage {
       case .null: .null
@@ -42,10 +55,23 @@
       case .blob(let data): .blob(Array(data))
       }
     }
-    public var isNull: Bool { storage == .null }
-    public var databaseValue: Self { self }
-    public static func fromDatabaseValue(_ dbValue: Self) -> Self? { dbValue }
-    var sqlLiteral: String { orbitValue.debugDescription }
+
+    public var isNull: Bool {
+      storage == .null
+    }
+
+    public var databaseValue: Self {
+      self
+    }
+
+    public static func fromDatabaseValue(_ dbValue: Self) -> Self? {
+      dbValue
+    }
+
+    var sqlLiteral: String {
+      orbitValue.debugDescription
+    }
+
     public var description: String {
       switch storage {
       case .null: "NULL"
@@ -55,12 +81,14 @@
       case .blob(let data): "Data(\(data.count) bytes)"
       }
     }
+
     public static func == (lhs: Self, rhs: Self) -> Bool {
       switch (lhs.storage, rhs.storage) {
       case (.int64(let n), .double(let d)), (.double(let d), .int64(let n)): Int64(exactly: d) == n
       default: lhs.storage == rhs.storage
       }
     }
+
     public func hash(into hasher: inout Hasher) {
       switch storage {
       case .int64(let n):
@@ -87,19 +115,30 @@
 
   extension DatabaseValueConvertible
   where Self: RawRepresentable, RawValue: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { rawValue.databaseValue }
+    public var databaseValue: DatabaseValue {
+      rawValue.databaseValue
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       RawValue.fromDatabaseValue(dbValue).flatMap(Self.init(rawValue:))
     }
   }
+
   extension Optional: DatabaseValueConvertible where Wrapped: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { self?.databaseValue ?? .null }
+    public var databaseValue: DatabaseValue {
+      self?.databaseValue ?? .null
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       dbValue.isNull ? .some(.none) : Wrapped.fromDatabaseValue(dbValue).map { .some($0) }
     }
   }
+
   extension Bool: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { Int64(self ? 1 : 0).databaseValue }
+    public var databaseValue: DatabaseValue {
+      Int64(self ? 1 : 0).databaseValue
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Bool? {
       switch dbValue.storage {
       case .int64(let n): n != 0
@@ -108,8 +147,12 @@
       }
     }
   }
+
   extension String: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { .init(storage: .string(self)) }
+    public var databaseValue: DatabaseValue {
+      .init(storage: .string(self))
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> String? {
       switch dbValue.storage {
       case .string(let s): s
@@ -118,8 +161,12 @@
       }
     }
   }
+
   extension Data: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { .init(storage: .blob(self)) }
+    public var databaseValue: DatabaseValue {
+      .init(storage: .blob(self))
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Data? {
       switch dbValue.storage {
       case .blob(let data): data
@@ -128,8 +175,12 @@
       }
     }
   }
+
   extension Double: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { .init(storage: .double(self)) }
+    public var databaseValue: DatabaseValue {
+      .init(storage: .double(self))
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Double? {
       switch dbValue.storage {
       case .int64(let n): Double(n)
@@ -138,45 +189,62 @@
       }
     }
   }
+
   extension Float: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { Double(self).databaseValue }
+    public var databaseValue: DatabaseValue {
+      Double(self).databaseValue
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Float? {
       Double.fromDatabaseValue(dbValue).map(Float.init)
     }
   }
+
   extension UUID: DatabaseValueConvertible {
     public var databaseValue: DatabaseValue {
       var bytes = uuid
       return withUnsafeBytes(of: &bytes) { Data($0).databaseValue }
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> UUID? {
       switch dbValue.storage {
       case .string(let s): return UUID(uuidString: s)
       case .blob(let data):
-        guard data.count == 16 else { return nil }
+        guard data.count == 16 else {
+          return nil
+        }
         return data.withUnsafeBytes { UUID(uuid: $0.loadUnaligned(as: uuid_t.self)) }
       default: return nil
       }
     }
   }
+
   extension Date: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { dateFormatter().string(from: self).databaseValue }
+    public var databaseValue: DatabaseValue {
+      dateFormatter().string(from: self).databaseValue
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Date? {
       if let number = Double.fromDatabaseValue(dbValue) {
         return Date(timeIntervalSince1970: number)
       }
-      guard let string = String.fromDatabaseValue(dbValue) else { return nil }
+      guard let string = String.fromDatabaseValue(dbValue) else {
+        return nil
+      }
       for format in [
         "yyyy-MM-dd HH:mm:ss.SSS", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd",
         "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX"
       ] {
         let formatter = dateFormatter()
         formatter.dateFormat = format
-        if let date = formatter.date(from: string) { return date }
+        if let date = formatter.date(from: string) {
+          return date
+        }
       }
       return nil
     }
   }
+
   func dateFormatter() -> DateFormatter {
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -193,6 +261,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -209,6 +278,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -225,6 +295,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -241,6 +312,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -257,6 +329,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -273,6 +346,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -289,6 +363,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -305,6 +380,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -321,6 +397,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -337,6 +414,7 @@
       }
       return .init(storage: .int64(value))
     }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
       switch dbValue.storage {
       case .int64(let n): Self(exactly: n)
@@ -347,7 +425,10 @@
   }
 
   extension URL: DatabaseValueConvertible {
-    public var databaseValue: DatabaseValue { absoluteString.databaseValue }
+    public var databaseValue: DatabaseValue {
+      absoluteString.databaseValue
+    }
+
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> URL? {
       String.fromDatabaseValue(dbValue).flatMap(URL.init(string:))
     }

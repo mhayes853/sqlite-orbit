@@ -4,9 +4,11 @@
   public enum RecordError: Error, Sendable {
     case recordNotFound(databaseTableName: String, key: [String: DatabaseValue])
   }
+
   public struct PersistenceConflictPolicy: Sendable {
     public let conflictResolutionForInsert: Database.ConflictResolution
     public let conflictResolutionForUpdate: Database.ConflictResolution
+
     public init(
       insert: Database.ConflictResolution = .abort,
       update: Database.ConflictResolution = .abort
@@ -15,59 +17,97 @@
       conflictResolutionForUpdate = update
     }
   }
+
   public struct InsertionSuccess: Sendable {
     public var rowID: Int64
     public var rowIDColumn: String?
     public var persistenceContainer: PersistenceContainer
   }
+
   public struct PersistenceSuccess: Sendable {
     public var persistenceContainer: PersistenceContainer
   }
 
   public protocol MutablePersistableRecord: EncodableRecord, TableRecord {
     static var persistenceConflictPolicy: PersistenceConflictPolicy { get }
+
     mutating func willInsert(_ db: Database) throws
+
     func aroundInsert(_ db: Database, insert: () throws -> InsertionSuccess) throws
+
     mutating func didInsert(_ inserted: InsertionSuccess)
+
     func willUpdate(_ db: Database, columns: Set<String>) throws
+
     func aroundUpdate(_ db: Database, columns: Set<String>, update: () throws -> PersistenceSuccess)
       throws
+
     func didUpdate(_ updated: PersistenceSuccess)
+
     func willSave(_ db: Database) throws
+
     func aroundSave(_ db: Database, save: () throws -> PersistenceSuccess) throws
+
     func didSave(_ saved: PersistenceSuccess)
+
     func willDelete(_ db: Database) throws
+
     func aroundDelete(_ db: Database, delete: () throws -> Bool) throws
+
     func didDelete(deleted: Bool)
   }
+
   public protocol PersistableRecord: MutablePersistableRecord {
     func willInsert(_ db: Database) throws
+
     func didInsert(_ inserted: InsertionSuccess)
+
     func willSave(_ db: Database) throws
+
     func didSave(_ saved: PersistenceSuccess)
   }
+
   extension MutablePersistableRecord {
-    public static var persistenceConflictPolicy: PersistenceConflictPolicy { .init() }
+    public static var persistenceConflictPolicy: PersistenceConflictPolicy {
+      .init()
+    }
+
     public mutating func willInsert(_ db: Database) throws {}
+
     public func aroundInsert(_ db: Database, insert: () throws -> InsertionSuccess) throws {
       _ = try insert()
     }
+
     public mutating func didInsert(_ inserted: InsertionSuccess) {}
+
     public func willUpdate(_ db: Database, columns: Set<String>) throws {}
+
     public func aroundUpdate(
       _ db: Database,
       columns: Set<String>,
       update: () throws -> PersistenceSuccess
-    ) throws { _ = try update() }
+    ) throws {
+      _ = try update()
+    }
+
     public func didUpdate(_ updated: PersistenceSuccess) {}
+
     public func willSave(_ db: Database) throws {}
+
     public func aroundSave(_ db: Database, save: () throws -> PersistenceSuccess) throws {
       _ = try save()
     }
+
     public func didSave(_ saved: PersistenceSuccess) {}
+
     public func willDelete(_ db: Database) throws {}
-    public func aroundDelete(_ db: Database, delete: () throws -> Bool) throws { _ = try delete() }
+
+    public func aroundDelete(_ db: Database, delete: () throws -> Bool) throws {
+      _ = try delete()
+    }
+
     public func didDelete(deleted: Bool) {}
+
     public mutating func insert(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -80,9 +120,12 @@
         saved = result
         return result
       }
-      guard let saved else { throw callbackMisuse("aroundSave") }
+      guard let saved else {
+        throw callbackMisuse("aroundSave")
+      }
       didSave(saved)
     }
+
     private mutating func insertWithCallbacks(
       _ db: Database,
       conflict: Database.ConflictResolution?
@@ -93,7 +136,9 @@
       let container = try PersistenceContainer(self)
       var inserted: InsertionSuccess?
       try aroundInsert(db) {
-        guard inserted == nil else { throw callbackMisuse("aroundInsert") }
+        guard inserted == nil else {
+          throw callbackMisuse("aroundInsert")
+        }
         let result = try performInsert(
           db,
           table: Self.databaseTableName,
@@ -103,10 +148,13 @@
         inserted = result
         return result
       }
-      guard let inserted else { throw callbackMisuse("aroundInsert") }
+      guard let inserted else {
+        throw callbackMisuse("aroundInsert")
+      }
       didInsert(inserted)
       return inserted
     }
+
     public func update(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -117,6 +165,7 @@
         onConflict: conflictResolution
       )
     }
+
     public func update(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil,
@@ -124,6 +173,7 @@
     ) throws {
       try update(db, columns: Set(columns), onConflict: conflictResolution)
     }
+
     public func update(
       _ db: Database,
       columns: Set<String>,
@@ -136,9 +186,12 @@
         saved = result
         return result
       }
-      guard let saved else { throw callbackMisuse("aroundSave") }
+      guard let saved else {
+        throw callbackMisuse("aroundSave")
+      }
       didSave(saved)
     }
+
     private func updateWithCallbacks(
       _ db: Database,
       columns: Set<String>,
@@ -148,7 +201,9 @@
       let container = try PersistenceContainer(self)
       var updated: PersistenceSuccess?
       try aroundUpdate(db, columns: columns) {
-        guard updated == nil else { throw callbackMisuse("aroundUpdate") }
+        guard updated == nil else {
+          throw callbackMisuse("aroundUpdate")
+        }
         try performUpdate(
           db,
           table: Self.databaseTableName,
@@ -160,10 +215,13 @@
         updated = result
         return result
       }
-      guard let updated else { throw callbackMisuse("aroundUpdate") }
+      guard let updated else {
+        throw callbackMisuse("aroundUpdate")
+      }
       didUpdate(updated)
       return updated
     }
+
     public mutating func save(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -189,9 +247,12 @@
         saved = result
         return result
       }
-      guard let saved else { throw callbackMisuse("aroundSave") }
+      guard let saved else {
+        throw callbackMisuse("aroundSave")
+      }
       didSave(saved)
     }
+
     public func inserted(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -200,6 +261,7 @@
       try result.insert(db, onConflict: conflictResolution)
       return result
     }
+
     public func saved(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -208,7 +270,9 @@
       try result.save(db, onConflict: conflictResolution)
       return result
     }
-    @discardableResult public func delete(_ db: Database) throws -> Bool {
+
+    @discardableResult
+    public func delete(_ db: Database) throws -> Bool {
       try willDelete(db)
       let container = try PersistenceContainer(self)
       let key = try primaryKeyValues(db, table: Self.databaseTableName, container: container)
@@ -226,16 +290,20 @@
       didDelete(deleted: deleted)
       return deleted
     }
+
     public func exists(_ db: Database) throws -> Bool {
       let key = try primaryKeyValues(
         db,
         table: Self.databaseTableName,
         container: PersistenceContainer(self)
       )
-      guard key.values.allSatisfy({ !$0.isNull }) else { return false }
+      guard key.values.allSatisfy({ !$0.isNull }) else {
+        return false
+      }
       return try QueryInterfaceRequest<Row>(table: Self.databaseTableName)
         .filter(key: key.mapValues { $0 as (any DatabaseValueConvertible)? }).fetchCount(db) > 0
     }
+
     public mutating func updateChanges(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil,
@@ -245,16 +313,23 @@
       try modify(&self)
       let after = try PersistenceContainer(self)
       let columns = Set(after.fields.filter { before[$0.0]?.databaseValue != $0.1 }.map(\.0))
-      guard !columns.isEmpty else { return false }
+      guard !columns.isEmpty else {
+        return false
+      }
       try update(db, columns: columns, onConflict: conflictResolution)
       return true
     }
   }
+
   extension PersistableRecord {
     public func willInsert(_ db: Database) throws {}
+
     public func didInsert(_ inserted: InsertionSuccess) {}
+
     public func willSave(_ db: Database) throws {}
+
     public func didSave(_ saved: PersistenceSuccess) {}
+
     public func insert(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -262,6 +337,7 @@
       var copy = self
       try copy.insertMutable(db, onConflict: conflictResolution)
     }
+
     public func save(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
@@ -270,17 +346,24 @@
       try copy.saveMutable(db, onConflict: conflictResolution)
     }
   }
+
   // Explicitly select the mutable implementations rather than recursing through overloads.
   extension MutablePersistableRecord {
     fileprivate mutating func insertMutable(
       _ db: Database,
       onConflict conflict: Database.ConflictResolution?
-    ) throws { try insert(db, onConflict: conflict) }
+    ) throws {
+      try insert(db, onConflict: conflict)
+    }
+
     fileprivate mutating func saveMutable(
       _ db: Database,
       onConflict conflict: Database.ConflictResolution?
-    ) throws { try save(db, onConflict: conflict) }
+    ) throws {
+      try save(db, onConflict: conflict)
+    }
   }
+
   func primaryKeyValues(_ db: Database, table: String, container: PersistenceContainer) throws
     -> [String: DatabaseValue]
   {
@@ -289,6 +372,7 @@
       uniqueKeysWithValues: primaryKey.columns.map { ($0, container[$0]?.databaseValue ?? .null) }
     )
   }
+
   func performInsert(
     _ db: Database,
     table: String,
@@ -309,9 +393,12 @@
     let rowID = db.lastInsertedRowID
     let column = try db.primaryKey(table).rowIDColumn
     var saved = container
-    if let column { saved[column] = rowID }
+    if let column {
+      saved[column] = rowID
+    }
     return InsertionSuccess(rowID: rowID, rowIDColumn: column, persistenceContainer: saved)
   }
+
   func performUpdate(
     _ db: Database,
     table: String,
@@ -343,7 +430,9 @@
       let exists =
         try QueryInterfaceRequest<Row>(table: table)
         .filter(key: key.mapValues { $0 as (any DatabaseValueConvertible)? }).fetchCount(db) > 0
-      if !exists { throw RecordError.recordNotFound(databaseTableName: table, key: key) }
+      if !exists {
+        throw RecordError.recordNotFound(databaseTableName: table, key: key)
+      }
     }
   }
 

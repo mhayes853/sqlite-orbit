@@ -6,7 +6,9 @@
 
   @Suite("GRDB Combine observation", .timeLimit(.minutes(1)))
   struct GRDBCombineObservationTests {
-    @Test @MainActor func publisherDeliversInitialValueAndCommittedChanges() async throws {
+    @Test
+    @MainActor
+    func publisherDeliversInitialValueAndCommittedChanges() async throws {
       let database = try DatabaseQueue()
       try await database.write { try $0.execute(sql: "CREATE TABLE t(n INTEGER)") }
       let output = AsyncStream<Int>.makeStream()
@@ -16,7 +18,9 @@
       let subscription = observation.publisher(in: database)
         .sink(
           receiveCompletion: { completion in
-            if case .failure(let error) = completion { Issue.record(error) }
+            if case .failure(let error) = completion {
+              Issue.record(error)
+            }
             output.continuation.finish()
           },
           receiveValue: { output.continuation.yield($0) }

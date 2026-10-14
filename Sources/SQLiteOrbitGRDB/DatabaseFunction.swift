@@ -7,6 +7,7 @@
     public let argumentCount: Int?
     public let isPure: Bool
     let body: @Sendable ([DatabaseValue]) throws -> (any DatabaseValueConvertible)?
+
     public init(
       _ name: String,
       argumentCount: Int? = nil,
@@ -19,15 +20,18 @@
       body = function
     }
   }
+
   public struct DatabaseCollation: Sendable {
     public let name: String
     let compare: @Sendable (String, String) -> ComparisonResult
+
     public init(_ name: String, function: @escaping @Sendable (String, String) -> ComparisonResult)
     {
       self.name = name
       compare = function
     }
   }
+
   extension Database {
     public func add(function: DatabaseFunction) {
       do {
@@ -43,8 +47,11 @@
             }
           }
         }
-      } catch { preconditionFailure(String(describing: error)) }
+      } catch {
+        preconditionFailure(String(describing: error))
+      }
     }
+
     public func add(collation: DatabaseCollation) {
       do {
         try translate {
@@ -61,7 +68,9 @@
             }
           }
         }
-      } catch { preconditionFailure(String(describing: error)) }
+      } catch {
+        preconditionFailure(String(describing: error))
+      }
     }
   }
 

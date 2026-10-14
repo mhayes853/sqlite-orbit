@@ -4,7 +4,8 @@ import Testing
 
 @Suite("GRDB additional compatibility", .timeLimit(.minutes(1)))
 struct AdditionalCompatibilityTests {
-  @Test func preparedStatementsAndUncheckedArguments() throws {
+  @Test
+  func preparedStatementsAndUncheckedArguments() throws {
     let queue = try DatabaseQueue()
     try queue.read { (db: Database) throws in
       let statement = try db.cachedStatement(sql: "SELECT ? AS a, ? AS b")
@@ -25,17 +26,22 @@ struct AdditionalCompatibilityTests {
       #expect(throws: DatabaseError.self) { try db.makeStatement(sql: "SELECT 1; SELECT 2") }
     }
   }
-  @Test func recordKeyEncodingSurvivesRequestTypeErasure() throws {
+
+  @Test
+  func recordKeyEncodingSurvivesRequestTypeErasure() throws {
     struct Event: Codable, FetchableRecord, PersistableRecord {
       let id: Date
       let name: String
+
       static func databaseDateEncodingStrategy(for column: String) -> DatabaseDateEncodingStrategy {
         .millisecondsSince1970
       }
+
       static func databaseDateDecodingStrategy(for column: String) -> DatabaseDateDecodingStrategy {
         .millisecondsSince1970
       }
     }
+
     let queue = try DatabaseQueue()
     let date = Date(timeIntervalSince1970: 123456)
     try queue.write { (db: Database) throws in
@@ -48,8 +54,13 @@ struct AdditionalCompatibilityTests {
       )
     }
   }
-  @Test func columnEnumsAndNativeMetadata() async throws {
-    enum Columns: String, ColumnExpression { case value }
+
+  @Test
+  func columnEnumsAndNativeMetadata() async throws {
+    enum Columns: String, ColumnExpression {
+      case value
+    }
+
     let native = try SQLiteQueue(path: .memory)
     #expect(native.path == ":memory:")
     let writer: any DatabaseWriter = native
@@ -64,7 +75,9 @@ struct AdditionalCompatibilityTests {
     #expect(erased.path == ":memory:")
     #expect(try await erased.read { try Int.fetchOne($0, sql: "SELECT value FROM t") } == 42)
   }
-  @Test func numberedGapsAndDollarNames() throws {
+
+  @Test
+  func numberedGapsAndDollarNames() throws {
     let queue = try DatabaseQueue()
     try queue.read { (db: Database) throws in
       #expect(try Int.fetchOne(db, sql: "SELECT ?3", arguments: [1, 2, 3]) == 3)
@@ -77,7 +90,9 @@ struct AdditionalCompatibilityTests {
       )
     }
   }
-  @Test func primaryKeyInspectionDistinguishesRowidAliases() throws {
+
+  @Test
+  func primaryKeyInspectionDistinguishesRowidAliases() throws {
     let queue = try DatabaseQueue()
     try queue.write { (db: Database) throws in
       try db.execute(
@@ -89,7 +104,9 @@ struct AdditionalCompatibilityTests {
       #expect(throws: DatabaseError.self) { try db.columns(in: "missing") }
     }
   }
-  @Test func asyncMigrationOnNativeDriver() async throws {
+
+  @Test
+  func asyncMigrationOnNativeDriver() async throws {
     let native = try SQLiteQueue(path: .memory)
     var migrator = DatabaseMigrator()
     migrator.registerMigration("create") { try $0.execute(sql: "CREATE TABLE t(value)") }

@@ -3,16 +3,27 @@
 
   public struct ResultCode: RawRepresentable, Hashable, Sendable {
     public let rawValue: Int32
-    public init(rawValue: Int32) { self.rawValue = rawValue }
-    public var primaryResultCode: Self { Self(rawValue: rawValue & 0xff) }
+
+    public init(rawValue: Int32) {
+      self.rawValue = rawValue
+    }
+
+    public var primaryResultCode: Self {
+      Self(rawValue: rawValue & 0xff)
+    }
   }
 
   public struct DatabaseError: Error, Sendable, CustomStringConvertible {
     public let extendedResultCode: ResultCode
-    public var resultCode: ResultCode { extendedResultCode.primaryResultCode }
+
+    public var resultCode: ResultCode {
+      extendedResultCode.primaryResultCode
+    }
+
     public let message: String?
     public let sql: String?
     public let arguments: StatementArguments?
+
     public init(
       resultCode: ResultCode = .SQLITE_ERROR,
       message: String? = nil,
@@ -24,6 +35,7 @@
       self.sql = sql
       self.arguments = arguments
     }
+
     init(_ error: SQLiteError, arguments: StatementArguments? = nil) {
       self.init(
         resultCode: .init(rawValue: error.code.rawValue),
@@ -32,22 +44,37 @@
         arguments: arguments
       )
     }
+
     public var isInterruptionError: Bool {
       resultCode == .SQLITE_INTERRUPT || resultCode == .SQLITE_ABORT
     }
+
     public var description: String {
       "SQLite error \(extendedResultCode.rawValue)" + (sql.map { " with statement `\($0)`" } ?? "")
         + (message.map { ": \($0)" } ?? "")
     }
   }
+
   func translate<T>(_ body: () throws -> T) throws -> T {
-    do { return try body() } catch let error as SQLiteError { throw DatabaseError(error) }
+    do {
+      return try body()
+    } catch let error as SQLiteError {
+      throw DatabaseError(error)
+    }
   }
+
   func translate<T: Sendable>(_ body: () async throws -> T) async throws -> T {
-    do { return try await body() } catch let error as SQLiteError { throw DatabaseError(error) }
+    do {
+      return try await body()
+    } catch let error as SQLiteError {
+      throw DatabaseError(error)
+    }
   }
+
   public func ~= (code: ResultCode, error: any Error) -> Bool {
-    guard let error = error as? DatabaseError else { return false }
+    guard let error = error as? DatabaseError else {
+      return false
+    }
     return code.rawValue < 256 ? error.resultCode == code : error.extendedResultCode == code
   }
 
@@ -224,6 +251,7 @@
     public static let SQLITE_OK_LOAD_PERMANENTLY = Self(rawValue: (SQLITE_OK.rawValue | (1 << 8)))
     public static let SQLITE_OK_SYMLINK = Self(rawValue: (SQLITE_OK.rawValue | (2 << 8)))
   }
+
   // swift-format-ignore: AlwaysUseLowerCamelCase
   extension DatabaseError {
     public static let SQLITE_OK = ResultCode.SQLITE_OK

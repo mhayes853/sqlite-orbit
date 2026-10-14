@@ -3,43 +3,78 @@
   import Foundation
   import SQLiteOrbit
 
-  public protocol DatabaseCancellable: Sendable { func cancel() }
+  public protocol DatabaseCancellable: Sendable {
+    func cancel()
+  }
+
   public final class AnyDatabaseCancellable: DatabaseCancellable {
     private let subscription: OrbitSubscription
+
     public init(_ cancel: @escaping @Sendable () -> Void) {
       subscription = OrbitSubscription(onCancel: cancel)
     }
-    init(_ subscription: OrbitSubscription) { self.subscription = subscription }
-    public func cancel() { subscription.cancel() }
+
+    init(_ subscription: OrbitSubscription) {
+      self.subscription = subscription
+    }
+
+    public func cancel() {
+      subscription.cancel()
+    }
   }
 
-  public protocol ValueReducer: Sendable { associatedtype Value: Sendable }
+  public protocol ValueReducer: Sendable {
+    associatedtype Value: Sendable
+  }
+
   public enum ValueReducers {
     public struct Fetch<Value: Sendable>: ValueReducer {}
+
     public struct Map<Base: ValueReducer, Value: Sendable>: ValueReducer {}
+
     public struct RemoveDuplicates<Base: ValueReducer>: ValueReducer {
       public typealias Value = Base.Value
     }
-    public struct Trace<Base: ValueReducer>: ValueReducer { public typealias Value = Base.Value }
+
+    public struct Trace<Base: ValueReducer>: ValueReducer {
+      public typealias Value = Base.Value
+    }
   }
 
   public protocol ValueObservationScheduler: OrbitValueObservationScheduler {}
+
   public protocol ValueObservationMainActorScheduler: ValueObservationScheduler {}
+
   public struct AsyncValueObservationScheduler: ValueObservationScheduler {
     private let queue: DispatchQueue
+
     fileprivate init(queue: DispatchQueue) {
       self.queue = DispatchQueue(label: "sqlite-orbit-grdb.observation", target: queue)
     }
-    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool { false }
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      false
+    }
+
     public func schedule(
       from isolation: isolated (any Actor)?,
       _ action: @escaping @Sendable () -> Void
-    ) { queue.async(execute: action) }
+    ) {
+      queue.async(execute: action)
+    }
   }
+
   public struct MainActorValueObservationScheduler: ValueObservationMainActorScheduler {
     private let immediate: Bool
-    fileprivate init(immediate: Bool) { self.immediate = immediate }
-    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool { immediate }
+
+    fileprivate init(immediate: Bool) {
+      self.immediate = immediate
+    }
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      immediate
+    }
+
     public func schedule(
       from isolation: isolated (any Actor)?,
       _ action: @escaping @Sendable () -> Void
@@ -51,31 +86,59 @@
       }
     }
   }
+
   extension ValueObservationScheduler where Self == AsyncValueObservationScheduler {
-    public static func async(onQueue queue: DispatchQueue) -> Self { Self(queue: queue) }
+    public static func async(onQueue queue: DispatchQueue) -> Self {
+      Self(queue: queue)
+    }
   }
+
   extension ValueObservationMainActorScheduler where Self == MainActorValueObservationScheduler {
-    public static var immediate: Self { Self(immediate: true) }
-    public static var mainActor: Self { Self(immediate: false) }
+    public static var immediate: Self {
+      Self(immediate: true)
+    }
+
+    public static var mainActor: Self {
+      Self(immediate: false)
+    }
   }
 
   public struct DatabaseRegion: Hashable, Sendable, DatabaseRegionConvertible {
     let native: OrbitDatabaseRegion
-    public init() { native = .empty }
-    init(_ native: OrbitDatabaseRegion) { self.native = native }
+
+    public init() {
+      native = .empty
+    }
+
+    init(_ native: OrbitDatabaseRegion) {
+      self.native = native
+    }
+
     public init(table: String, columns: [String]? = nil) {
       native =
         columns.map { OrbitDatabaseRegion(columns: $0, in: table) }
         ?? OrbitDatabaseRegion(table: table)
     }
+
     public static let fullDatabase = Self(.fullDatabase)
-    public var isEmpty: Bool { native.isEmpty }
-    public func databaseRegion(_ db: Database) throws -> Self { self }
-    public func union(_ other: Self) -> Self { Self(native.union(other.native)) }
+
+    public var isEmpty: Bool {
+      native.isEmpty
+    }
+
+    public func databaseRegion(_ db: Database) throws -> Self {
+      self
+    }
+
+    public func union(_ other: Self) -> Self {
+      Self(native.union(other.native))
+    }
   }
+
   public protocol DatabaseRegionConvertible: Sendable {
     func databaseRegion(_ db: Database) throws -> DatabaseRegion
   }
+
   extension SQLRequest: DatabaseRegionConvertible {
     public func databaseRegion(_ db: Database) throws -> DatabaseRegion {
       let sql = try sql(in: db)
@@ -88,6 +151,7 @@
       }
     }
   }
+
   extension QueryInterfaceRequest: DatabaseRegionConvertible {
     public func databaseRegion(_ db: Database) throws -> DatabaseRegion {
       let sql = try sql(in: db)
@@ -103,7 +167,11 @@
   /// last subscriber leaves. Construct a new observation for a separate runtime.
   public struct ValueObservation<Reducer: ValueReducer>: Sendable {
     let native: OrbitValueObservation<Reducer.Value>
-    init(_ native: OrbitValueObservation<Reducer.Value>) { self.native = native }
+
+    init(_ native: OrbitValueObservation<Reducer.Value>) {
+      self.native = native
+    }
+
     public static func tracking<Value: Sendable>(
       _ fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
@@ -113,6 +181,7 @@
         }
       )
     }
+
     public static func trackingConstantRegion<Value: Sendable>(
       _ fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
@@ -122,6 +191,7 @@
         }
       )
     }
+
     public static func trackingConstantRegion<Value: Sendable>(
       _ regions: any DatabaseRegionConvertible...,
       fetch: @escaping @Sendable (Database) throws -> Value
@@ -157,6 +227,7 @@
         onChange: { value in MainActor.assumeIsolated { onChange(value) } }
       )
     }
+
     public func start(
       in reader: any DatabaseReader,
       scheduling scheduler: some ValueObservationScheduler,
@@ -171,6 +242,7 @@
         onChange: onChange
       )
     }
+
     private func startSubscription(
       in reader: any DatabaseReader,
       scheduling scheduler: some ValueObservationScheduler,
@@ -195,21 +267,25 @@
         return AnyDatabaseCancellable({})
       }
     }
+
     public func values(in reader: any DatabaseReader) -> DatabaseValueObservationValues<
       Reducer.Value
     > {
       DatabaseValueObservationValues(observation: native, database: reader.orbitDatabase)
     }
+
     public func map<T: Sendable>(_ transform: @escaping @Sendable (Reducer.Value) throws -> T)
       -> ValueObservation<ValueReducers.Map<Reducer, T>>
     {
       .init(native.map(transform))
     }
+
     public func removeDuplicates(
       by predicate: @escaping @Sendable (Reducer.Value, Reducer.Value) -> Bool
     ) -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
       .init(native.removeDuplicates(by: predicate))
     }
+
     public func handleEvents(
       willStart: (@Sendable () -> Void)? = nil,
       willFetch: (@Sendable () -> Void)? = nil,
@@ -230,6 +306,7 @@
       )
     }
   }
+
   extension ValueObservation where Reducer.Value: Equatable {
     public func removeDuplicates() -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
       removeDuplicates(by: ==)
@@ -239,25 +316,35 @@
   public struct DatabaseValueObservationValues<Element: Sendable>: AsyncSequence, Sendable {
     let observation: OrbitValueObservation<Element>
     let database: any OrbitObservableDatabase
+
     public struct AsyncIterator: AsyncIteratorProtocol {
       fileprivate var iterator: OrbitValueObservationSequence<Element>.AsyncIterator
       private var finished = false
+
       fileprivate init(iterator: OrbitValueObservationSequence<Element>.AsyncIterator) {
         self.iterator = iterator
       }
+
       public mutating func next() async throws -> Element? {
-        guard !finished else { return nil }
+        guard !finished else {
+          return nil
+        }
         do {
           let value = try await iterator.next()
-          if value == nil { finished = true }
+          if value == nil {
+            finished = true
+          }
           return value
         } catch {
           finished = true
-          if let error = error as? SQLiteError { throw DatabaseError(error) }
+          if let error = error as? SQLiteError {
+            throw DatabaseError(error)
+          }
           throw error
         }
       }
     }
+
     public func makeAsyncIterator() -> AsyncIterator {
       AsyncIterator(iterator: observation.values(in: database).makeAsyncIterator())
     }

@@ -7,14 +7,22 @@ private struct Player: Codable, FetchableRecord, MutablePersistableRecord, Equat
   var id: Int64?
   var name: String
   var score: Int
-  mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }
+
+  mutating func didInsert(_ inserted: InsertionSuccess) {
+    id = inserted.rowID
+  }
 }
+
 private struct FixedPlayer: Codable, FetchableRecord, PersistableRecord, Sendable {
-  static var databaseTableName: String { "player" }
+  static var databaseTableName: String {
+    "player"
+  }
+
   let id: Int64
   var name: String
   var score: Int
 }
+
 private func schema(_ db: SQLiteOrbitGRDB.Database) throws {
   try db.create(table: "player") { t in
     t.autoIncrementedPrimaryKey("id")
@@ -25,7 +33,8 @@ private func schema(_ db: SQLiteOrbitGRDB.Database) throws {
 
 @Suite("GRDB compatibility", .timeLimit(.minutes(1)))
 struct CompatibilityTests {
-  @Test func rawSQLAndRows() throws {
+  @Test
+  func rawSQLAndRows() throws {
     let queue = try DatabaseQueue()
     try queue.write { db in
       try db.execute(
@@ -43,7 +52,9 @@ struct CompatibilityTests {
       #expect(rows[1]["a"] as Int == 2)
     }
   }
-  @Test func cursorIsLazyAndRequiresCopies() throws {
+
+  @Test
+  func cursorIsLazyAndRequiresCopies() throws {
     let queue = try DatabaseQueue()
     try queue.read { (db: SQLiteOrbitGRDB.Database) throws in
       let cursor = try SQLiteOrbitGRDB.Row.fetchCursor(db, sql: "SELECT 1 a UNION ALL SELECT 2")
@@ -56,7 +67,9 @@ struct CompatibilityTests {
       #expect(try cursor.next() == nil)
     }
   }
-  @Test func checkedAccessLifetime() throws {
+
+  @Test
+  func checkedAccessLifetime() throws {
     let queue = try DatabaseQueue()
     let escaped = try queue.read { $0 }
     #expect(throws: DatabaseError.self) { try Int.fetchOne(escaped, sql: "SELECT 1") }
@@ -65,7 +78,9 @@ struct CompatibilityTests {
     let statement = try queue.read { try $0.makeStatement(sql: "SELECT 1") }
     #expect(throws: DatabaseError.self) { try Int.fetchOne(statement) }
   }
-  @Test func parameterSyntax() throws {
+
+  @Test
+  func parameterSyntax() throws {
     let queue = try DatabaseQueue()
     try queue.read { (db: SQLiteOrbitGRDB.Database) throws in
       let row = try #require(
@@ -83,7 +98,9 @@ struct CompatibilityTests {
       #expect(throws: DatabaseError.self) { try Int.fetchOne(db, sql: "SELECT ?", arguments: []) }
     }
   }
-  @Test func recordsAndQueries() throws {
+
+  @Test
+  func recordsAndQueries() throws {
     let queue = try DatabaseQueue()
     try queue.write { db in
       try schema(db)
@@ -113,7 +130,9 @@ struct CompatibilityTests {
       #expect(try Player.fetchOne(db, id: 5)?.name == "Saved")
     }
   }
-  @Test func transactionsAndSavepoints() throws {
+
+  @Test
+  func transactionsAndSavepoints() throws {
     let queue = try DatabaseQueue()
     try queue.write { try $0.execute(sql: "CREATE TABLE t(a INTEGER)") }
     struct Failure: Error {}
@@ -140,7 +159,9 @@ struct CompatibilityTests {
     }
     #expect(try queue.read { try Int.fetchAll($0, sql: "SELECT a FROM t") } == [3])
   }
-  @Test func migrationsAndSchema() throws {
+
+  @Test
+  func migrationsAndSchema() throws {
     let queue = try DatabaseQueue()
     var migrator = DatabaseMigrator()
     migrator.registerMigration("v1", migrate: schema)
@@ -159,7 +180,9 @@ struct CompatibilityTests {
       #expect(try !db.tableExists("orbit_migrations"))
     }
   }
-  @Test func directNativeDriverConformance() async throws {
+
+  @Test
+  func directNativeDriverConformance() async throws {
     let native = try SQLiteOrbit.SQLiteQueue(path: .memory)
     try await native.write { db in try db.execute(sql: "CREATE TABLE t(a INTEGER)") }
     try await native.write { (tx: borrowing SQLiteOrbit.SQLiteWriteTransaction) in
@@ -171,7 +194,9 @@ struct CompatibilityTests {
     }
     #expect(try await count(in: native) == 1)
   }
-  @Test func observationSeesNativeAndOverlayWrites() async throws {
+
+  @Test
+  func observationSeesNativeAndOverlayWrites() async throws {
     let native = try SQLiteOrbit.SQLiteQueue(path: .memory)
     try await native.write { db in try db.execute(sql: "CREATE TABLE t(a INTEGER)") }
     let observation = SQLiteOrbitGRDB.ValueObservation
@@ -188,7 +213,9 @@ struct CompatibilityTests {
     try await native.write { db in try db.execute(sql: "INSERT INTO t VALUES (2)") }
     #expect(try await iterator.next() == "2")
   }
-  @Test func observationTerminatesOnError() async throws {
+
+  @Test
+  func observationTerminatesOnError() async throws {
     let queue = try DatabaseQueue()
     let observation = SQLiteOrbitGRDB.ValueObservation.tracking { db in
       try Int.fetchOne(db, sql: "SELECT * FROM missing")
@@ -197,7 +224,10 @@ struct CompatibilityTests {
     await #expect(throws: DatabaseError.self) { try await iterator.next() }
     #expect(try await iterator.next() == nil)
   }
-  @Test @MainActor func immediateObservationAndCancellation() throws {
+
+  @Test
+  @MainActor
+  func immediateObservationAndCancellation() throws {
     let queue = try DatabaseQueue()
     var values: [Int] = []
     let observation = SQLiteOrbitGRDB.ValueObservation.tracking { db in
@@ -212,7 +242,9 @@ struct CompatibilityTests {
     #expect(values == [42])
     subscription.cancel()
   }
-  @Test func ipcOverlayWritesReachPeers() async throws {
+
+  @Test
+  func ipcOverlayWritesReachPeers() async throws {
     let file = FileManager.default.temporaryDirectory.appendingPathComponent(
       UUID().uuidString + ".sqlite"
     )
@@ -240,7 +272,9 @@ struct CompatibilityTests {
     try await first.write { db in try db.execute(sql: "INSERT INTO t VALUES (1)") }
     #expect(try await iterator.next() == [1])
   }
-  @Test func codableFoundationAndJSON() throws {
+
+  @Test
+  func codableFoundationAndJSON() throws {
     struct Document: Codable, FetchableRecord, PersistableRecord, Equatable {
       let id: UUID
       let createdAt: Date
@@ -248,6 +282,7 @@ struct CompatibilityTests {
       let tags: [String]
       let optional: String?
     }
+
     let queue = try DatabaseQueue()
     let document = Document(
       id: UUID(),
@@ -270,6 +305,13 @@ struct CompatibilityTests {
     }
   }
 }
+
 extension SQLiteOrbitGRDB.DatabaseValue.Storage {
-  fileprivate var blobData: Data? { if case .blob(let data) = self { data } else { nil } }
+  fileprivate var blobData: Data? {
+    if case .blob(let data) = self {
+      data
+    } else {
+      nil
+    }
+  }
 }

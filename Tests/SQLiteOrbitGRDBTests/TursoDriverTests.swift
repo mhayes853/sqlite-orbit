@@ -6,15 +6,19 @@
 
   @Suite("GRDB Turso driver", .timeLimit(.minutes(1)))
   struct GRDBTursoDriverTests {
-    @Test func directAccessRecordsMigrationsAndObservation() async throws {
+    @Test
+    func directAccessRecordsMigrationsAndObservation() async throws {
       struct Item: Codable, FetchableRecord, PersistableRecord, Equatable, Sendable {
         let id: Int64
         let name: String
       }
+
       let file = FileManager.default.temporaryDirectory.appendingPathComponent(
         UUID().uuidString + ".sqlite"
       )
-      defer { try? FileManager.default.removeItem(at: file) }
+      defer {
+        try? FileManager.default.removeItem(at: file)
+      }
       let database = try TursoPool(path: OrbitDatabasePath(file.path))
       let metadata = try #require((database as any OrbitDatabaseReader).databaseMetadata)
       #expect(metadata.path == OrbitDatabasePath(file.path))
