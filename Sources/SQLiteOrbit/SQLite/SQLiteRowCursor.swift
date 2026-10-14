@@ -276,8 +276,6 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   /// How many columns the row has.
   public let columnCount: Int
 
-  // Stored apart from the decoder, which is mutable, so that reading one of these does not copy
-  // the decoder for every value read.
   @usableFromInline
   let library: UnsafePointer<SQLiteLibrary>
 
@@ -288,8 +286,11 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   let columnReader: SQLiteRowColumnReader
 
   #if StructuredQueries
+    // The column the Structured Queries decoder reads next. Each decode builds its decoder from
+    // the fields above and this position, and writes the position back, so the row holds a single
+    // reference to the column reader, and a row costs only one retain and one release.
     @usableFromInline
-    var decoder: SQLiteRowDecoder
+    var decodeIndex: Int32 = 0
   #endif
 
   @usableFromInline
@@ -299,13 +300,6 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     self.statement = statement
     self.columnReader = cursor.columnReader!
     self.columnCount = Int(cursor.columnCount)
-    #if StructuredQueries
-      self.decoder = SQLiteRowDecoder(
-        library: cursor.library,
-        statement: statement,
-        reader: cursor.columnReader!
-      )
-    #endif
   }
 
   /// The name of a column, as SQLite reports it.

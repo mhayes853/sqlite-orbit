@@ -14,6 +14,9 @@
     public mutating func decode<Value: QueryRepresentable>(
       _ type: Value.Type
     ) throws -> Value.QueryOutput {
+      var decoder = makeDecoder()
+      // Written back on the throwing path too, so a later decode starts where this one stopped.
+      defer { decodeIndex = decoder.currentIndex }
       do {
         return try Value(decoder: &decoder).queryOutput
       } catch let error as QueryDecodingError {
@@ -32,11 +35,25 @@
     public mutating func decode<each Value: QueryRepresentable>(
       _ type: (repeat each Value).Type
     ) throws -> (repeat (each Value).QueryOutput) {
+      var decoder = makeDecoder()
+      defer { decodeIndex = decoder.currentIndex }
       do {
         return try decoder.decodeColumns((repeat each Value).self)
       } catch let error as QueryDecodingError {
         throw decoder.describe(error)
       }
+    }
+
+    // A decoder standing on the column the row decodes next. It lives only as long as one decode
+    // call, which writes its position back to the row.
+    @inlinable
+    func makeDecoder() -> SQLiteRowDecoder {
+      SQLiteRowDecoder(
+        library: library,
+        statement: statement,
+        reader: columnReader,
+        currentIndex: decodeIndex
+      )
     }
   }
 
@@ -52,17 +69,19 @@
     let reader: SQLiteRowColumnReader
 
     @usableFromInline
-    var currentIndex: Int32 = 0
+    var currentIndex: Int32
 
-    @usableFromInline
+    @inlinable
     init(
       library: UnsafePointer<SQLiteLibrary>,
       statement: OpaquePointer,
-      reader: SQLiteRowColumnReader
+      reader: SQLiteRowColumnReader,
+      currentIndex: Int32
     ) {
       self.library = library
       self.statement = statement
       self.reader = reader
+      self.currentIndex = currentIndex
     }
 
     /// Checks the storage class of the column the decoder is standing on and steps past it.
