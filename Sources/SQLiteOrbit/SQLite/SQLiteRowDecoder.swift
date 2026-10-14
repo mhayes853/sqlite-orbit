@@ -65,8 +65,10 @@
     @usableFromInline
     let statement: OpaquePointer
 
+    // Held without a reference count, like the row's, for the same reason: the cursor owns the
+    // reader, and a decoder lives only as long as one decode call on a row of that cursor.
     @usableFromInline
-    let reader: SQLiteRowColumnReader
+    let reader: Unmanaged<SQLiteRowColumnReader>
 
     @usableFromInline
     var currentIndex: Int32
@@ -75,7 +77,7 @@
     init(
       library: UnsafePointer<SQLiteLibrary>,
       statement: OpaquePointer,
-      reader: SQLiteRowColumnReader,
+      reader: Unmanaged<SQLiteRowColumnReader>,
       currentIndex: Int32
     ) {
       self.library = library
@@ -98,7 +100,7 @@
       _ columnType: Any.Type
     ) throws(QueryDecodingError) -> Int32? {
       let column = currentIndex
-      switch reader.columns.type(statement, column) {
+      switch reader._withUnsafeGuaranteedRef({ $0.columns.type(statement, column) }) {
       case SQLiteColumnType.null.rawValue:
         currentIndex += 1
         return nil
@@ -113,19 +115,19 @@
     @inlinable
     mutating func decode(_ columnType: [UInt8].Type) throws(QueryDecodingError) -> [UInt8]? {
       guard let column = try column(.blob, columnType) else { return nil }
-      return reader.blob(statement, at: column)
+      return reader._withUnsafeGuaranteedRef { $0.blob(statement, at: column) }
     }
 
     @inlinable
     mutating func decode(_ columnType: Double.Type) throws(QueryDecodingError) -> Double? {
       guard let column = try column(.float, columnType) else { return nil }
-      return reader.columns.double(statement, column)
+      return reader._withUnsafeGuaranteedRef { $0.columns.double(statement, column) }
     }
 
     @inlinable
     mutating func decode(_ columnType: Int64.Type) throws(QueryDecodingError) -> Int64? {
       guard let column = try column(.integer, columnType) else { return nil }
-      return reader.columns.int64(statement, column)
+      return reader._withUnsafeGuaranteedRef { $0.columns.int64(statement, column) }
     }
 
     @inlinable
@@ -140,7 +142,7 @@
     @inlinable
     mutating func decode(_ columnType: String.Type) throws(QueryDecodingError) -> String? {
       guard let column = try column(.text, columnType) else { return nil }
-      return reader.text(statement, at: column)
+      return reader._withUnsafeGuaranteedRef { $0.text(statement, at: column) }
     }
 
     @inlinable
@@ -164,7 +166,9 @@
       // A mismatch names `String`, the type the text is read as before it is parsed.
       guard let column = try column(.text, String.self) else { return nil }
       do {
-        return try reader.withUTF8(statement, at: column, Date.init(orbitISO8601UTF8:))
+        return try reader._withUnsafeGuaranteedRef {
+          try $0.withUTF8(statement, at: column, Date.init(orbitISO8601UTF8:))
+        }
       } catch {
         throw QueryDecodingError.other(error)
       }
@@ -173,10 +177,13 @@
     @inlinable
     mutating func decode(_ columnType: UUID.Type) throws(QueryDecodingError) -> UUID? {
       guard let column = try column(.text, columnType) else { return nil }
-      guard let text = reader.columns.text(statement, column) else {
+      guard let text = reader._withUnsafeGuaranteedRef({ $0.columns.text(statement, column) })
+      else {
         throw QueryDecodingError.other(InvalidOrbitDatabaseUUIDError())
       }
-      let byteCount = Int(reader.columns.byteCount(statement, column))
+      let byteCount = Int(
+        reader._withUnsafeGuaranteedRef { $0.columns.byteCount(statement, column) }
+      )
       let utf8 = UnsafeBufferPointer(start: text, count: byteCount)
       if let uuid = UUID(orbitUTF8: utf8) {
         return uuid

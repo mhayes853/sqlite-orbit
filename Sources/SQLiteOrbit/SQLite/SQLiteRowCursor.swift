@@ -282,13 +282,16 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   @usableFromInline
   let statement: OpaquePointer
 
+  // Held without a reference count, which leaves the row nothing to release, so making and
+  // discarding one costs no more than copying its fields. That is safe because the cursor holds
+  // the reader strongly from its first row on and never replaces it, and a row cannot outlive the
+  // cursor that lent it.
   @usableFromInline
-  let columnReader: SQLiteRowColumnReader
+  let columnReader: Unmanaged<SQLiteRowColumnReader>
 
   #if StructuredQueries
     // The column the Structured Queries decoder reads next. Each decode builds its decoder from
-    // the fields above and this position, and writes the position back, so the row holds a single
-    // reference to the column reader, and a row costs only one retain and one release.
+    // the fields above and this position, and writes the position back.
     @usableFromInline
     var decodeIndex: Int32 = 0
   #endif
@@ -298,7 +301,7 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
   init(cursor: borrowing SQLiteRowCursor, statement: OpaquePointer) {
     self.library = cursor.library
     self.statement = statement
-    self.columnReader = cursor.columnReader!
+    self.columnReader = .passUnretained(cursor.columnReader!)
     self.columnCount = Int(cursor.columnCount)
   }
 
@@ -322,12 +325,12 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     precondition(index: index)
     // Each value is read in the storage class SQLite reports, so reading it never converts it, and
     // a later decode of the same column sees what it would have seen anyway.
-    return columnReader.value(statement, at: Int32(index))
+    return columnReader._withUnsafeGuaranteedRef { $0.value(statement, at: Int32(index)) }
   }
 
   /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.
   public func columnIndex(named name: String) -> Int? {
-    columnReader.index(named: name, statement: statement)
+    columnReader._withUnsafeGuaranteedRef { $0.index(named: name, statement: statement) }
   }
 
   @inlinable
