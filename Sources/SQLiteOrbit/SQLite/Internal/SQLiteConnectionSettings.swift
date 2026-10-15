@@ -131,14 +131,8 @@ struct SQLiteConnectionSettings: ~Copyable {
   mutating func ensureQueryOnly(_ isQueryOnly: Bool) throws {
     guard self.isQueryOnly != isQueryOnly else { return }
     self.isQueryOnly = nil
-    // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
-    // keyword as a different expression kind than the pragma implementation accepts.
     try authorizer.requiringExecution {
-      try SQLiteConnection.executeScript(
-        "PRAGMA query_only = \(isQueryOnly ? 1 : 0)",
-        on: connection,
-        library: library
-      )
+      try statements.execute(isQueryOnly ? .queryOnly : .writable)
     }
     self.isQueryOnly = isQueryOnly
   }

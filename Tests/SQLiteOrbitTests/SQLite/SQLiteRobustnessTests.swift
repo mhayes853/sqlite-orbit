@@ -666,6 +666,93 @@
       #expect(titles == ["after"])
     }
 
+    @Test(.libraryHooks)
+    func controlStatementsAreCompiledOnceAndOutliveTheirFailures() throws {
+      let base = builtInTestLibrary
+      let control: Set<String> = [
+        "BEGIN DEFERRED TRANSACTION", "BEGIN IMMEDIATE TRANSACTION", "COMMIT", "ROLLBACK"
+      ]
+      let prepared = Lock([String: Int]())
+      let live = Lock(Set<UInt>())
+      let failsNextCommit = Lock(false)
+      var configuration = SQLiteConfiguration.default
+      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
+        connection,
+        sql,
+        count,
+        flags,
+        statement,
+        tail in
+        let code = base.statements.preparation.prepare(
+          connection,
+          sql,
+          count,
+          flags,
+          statement,
+          tail
+        )
+        if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee, let sql,
+          control.contains(String(cString: sql))
+        {
+          prepared.withLock { $0[String(cString: sql), default: 0] += 1 }
+          live.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+        }
+        return code
+      }
+      configuration.library.statements.execution.finalize = LibraryHooks.finalize { statement in
+        if let statement { live.withLock { _ = $0.remove(UInt(bitPattern: statement)) } }
+        return base.statements.execution.finalize(statement)
+      }
+      configuration.library.statements.execution.step = LibraryHooks.step { statement in
+        let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
+        let fails = failsNextCommit.withLock { fails in
+          defer { if sql == "COMMIT" { fails = false } }
+          return sql == "COMMIT" && fails
+        }
+        return fails ? SQLiteResultCode.busy.rawValue : base.statements.execution.step(statement)
+      }
+
+      do {
+        var handle = try openConnection(configuration: configuration)
+        for id in 1...3 {
+          try handle.write { transaction in
+            try Item.insert { Item(id: id, title: "row") }.execute(transaction)
+          }
+          _ = try handle.read { transaction in
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+          }
+        }
+
+        // A commit that fails is reported as it is, and its transaction rolled back...
+        failsNextCommit.withLock { $0 = true }
+        let error = #expect(throws: SQLiteError.self) {
+          try handle.write { transaction in
+            try Item.insert { Item(id: 4, title: "lost") }.execute(transaction)
+          }
+        }
+        #expect(error?.primaryCode == .busy)
+        #expect(error?.sql == "COMMIT")
+
+        // ...and the statement that failed runs the next commit.
+        try handle.write { transaction in
+          try Item.insert { Item(id: 4, title: "kept") }.execute(transaction)
+        }
+        let titles = try handle.read { transaction in
+          try #sql("SELECT title FROM items WHERE id = 4", as: String.self).fetchAll(transaction)
+        }
+        #expect(titles == ["kept"])
+        #expect(
+          prepared.withLock { $0 } == [
+            "BEGIN DEFERRED TRANSACTION": 1, "BEGIN IMMEDIATE TRANSACTION": 1, "COMMIT": 1,
+            "ROLLBACK": 1
+          ]
+        )
+        #expect(live.withLock { $0.count } == 4)
+      }
+      // Closing the connection finalizes them.
+      #expect(live.withLock { $0.isEmpty })
+    }
+
     @Test
     func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
       var handle = try openConnection()

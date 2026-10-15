@@ -49,6 +49,13 @@ final class SQLiteStatementCache {
   private var schemaVersionStatement: OpaquePointer?
   private var isSchemaVersionUnavailable = false
 
+  // The statements that control the connection, compiled on first use and kept until the
+  // connection closes, indexed by `SQLiteControlStatement`.
+  private var controlStatements = [OpaquePointer?](
+    repeating: nil,
+    count: SQLiteControlStatement.allCases.count
+  )
+
   init(
     library: UnsafePointer<SQLiteLibrary>,
     connection: OpaquePointer,
@@ -253,6 +260,65 @@ final class SQLiteStatementCache {
       self.schemaVersionStatement = nil
     }
     isSchemaVersionUnavailable = false
+    // A control statement was authorized when it was compiled, so it is compiled again under the
+    // new policy rather than run under the old one's decision.
+    finalizeControlStatements()
+  }
+
+  /// Runs one of the connection's control statements to completion, compiling it on first use.
+  ///
+  /// The statement is stepped through the library's step entry point, as any statement the
+  /// connection executes is, and under the caller's authorization: SQLite authorizes it again
+  /// whenever it recompiles one that a setting change has expired.
+  ///
+  /// - Throws: A ``SQLiteError`` naming the statement's SQL when it cannot be compiled or fails.
+  func execute(_ control: SQLiteControlStatement) throws {
+    let statement: OpaquePointer
+    if let compiled = controlStatements[control.rawValue] {
+      statement = compiled
+    } else {
+      // Fixed SQL holding one statement, so it never compiles to nothing.
+      guard
+        let compiled = try library.pointee.prepare(
+          control.sql,
+          on: connection,
+          flags: SQLitePrepareFlags.persistent.rawValue
+        )
+      else { return }
+      controlStatements[control.rawValue] = compiled
+      statement = compiled
+    }
+    var code: Int32
+    repeat {
+      code = library.pointee.statements.execution.step(statement)
+    } while code == SQLiteResultCode.row.rawValue
+    guard code == SQLiteResultCode.done.rawValue else {
+      let error = SQLiteError.reported(
+        by: library.pointee,
+        on: connection,
+        code: code,
+        sql: control.sql
+      )
+      if control.isFlagPragma {
+        // A flag pragma takes effect as it compiles, and only expires itself, so that it compiles
+        // again on its next step, once its program has run. One that failed before then would set
+        // nothing the next time, so it is compiled afresh.
+        _ = library.pointee.statements.execution.finalize(statement)
+        controlStatements[control.rawValue] = nil
+      } else {
+        _ = library.pointee.statements.execution.reset(statement)
+      }
+      throw error
+    }
+    _ = library.pointee.statements.execution.reset(statement)
+  }
+
+  private func finalizeControlStatements() {
+    for index in controlStatements.indices {
+      guard let statement = controlStatements[index] else { continue }
+      _ = library.pointee.statements.execution.finalize(statement)
+      controlStatements[index] = nil
+    }
   }
 
   /// Drops the cached statements when another connection has changed the schema since they were
@@ -393,6 +459,7 @@ final class SQLiteStatementCache {
       _ = library.pointee.statements.execution.finalize(schemaVersionStatement)
       self.schemaVersionStatement = nil
     }
+    finalizeControlStatements()
   }
 
   private func finalizeIdle() {
@@ -404,6 +471,42 @@ final class SQLiteStatementCache {
       _ = library.pointee.statements.execution.finalize(entry.statement.pointer)
     }
     idle.removeAll()
+  }
+}
+
+/// A statement the connection runs to control itself rather than for the application: beginning
+/// and ending transactions, and switching `query_only`. Each is kept compiled for the life of the
+/// connection, since every access runs some of them.
+enum SQLiteControlStatement: Int, CaseIterable {
+  case beginDeferred
+  case beginImmediate
+  case beginExclusive
+  case beginConcurrent
+  case commit
+  case rollback
+  case queryOnly
+  case writable
+
+  var sql: String {
+    switch self {
+    case .beginDeferred: "BEGIN DEFERRED TRANSACTION"
+    case .beginImmediate: "BEGIN IMMEDIATE TRANSACTION"
+    case .beginExclusive: "BEGIN EXCLUSIVE TRANSACTION"
+    case .beginConcurrent: "BEGIN CONCURRENT TRANSACTION"
+    case .commit: "COMMIT"
+    case .rollback: "ROLLBACK"
+    // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
+    // keyword as a different expression kind than the pragma implementation accepts.
+    case .queryOnly: "PRAGMA query_only = 1"
+    case .writable: "PRAGMA query_only = 0"
+    }
+  }
+
+  var isFlagPragma: Bool {
+    switch self {
+    case .queryOnly, .writable: true
+    default: false
+    }
   }
 }
 

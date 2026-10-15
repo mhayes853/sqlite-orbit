@@ -277,7 +277,7 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute("BEGIN DEFERRED TRANSACTION") }
+    try authorizer.requiringExecution { try statements.execute(.beginDeferred) }
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
@@ -287,7 +287,7 @@ public struct SQLiteConnection: ~Copyable {
       rollbackIgnoringFailure()
       throw error
     }
-    try authorizer.withoutUserAuthorization { try endTransaction(with: "ROLLBACK") }
+    try authorizer.withoutUserAuthorization { try endTransaction(with: .rollback) }
     return value
   }
 
@@ -403,12 +403,12 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute(mode.beginSQL) }
+    try authorizer.requiringExecution { try statements.execute(mode.beginStatement) }
     statements.invalidateIfSchemaChanged()
     do {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
-      try endTransaction(with: "COMMIT")
+      try endTransaction(with: .commit)
       observations.didCommit()
       return value
     } catch {
@@ -418,19 +418,19 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func endTransaction(with sql: String) throws {
+  private borrowing func endTransaction(with control: SQLiteControlStatement) throws {
     do {
-      try authorizer.requiringExecution { try execute(sql) }
+      try authorizer.requiringExecution { try statements.execute(control) }
     } catch {
       if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
-        authorizer.withoutUserAuthorization { try? execute("ROLLBACK") }
+        authorizer.withoutUserAuthorization { try? statements.execute(.rollback) }
       }
       throw error
     }
   }
 
   private borrowing func rollbackIgnoringFailure() {
-    authorizer.withoutUserAuthorization { try? endTransaction(with: "ROLLBACK") }
+    authorizer.withoutUserAuthorization { try? endTransaction(with: .rollback) }
   }
 
   static func execute(
