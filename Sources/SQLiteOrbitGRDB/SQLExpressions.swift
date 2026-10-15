@@ -86,7 +86,6 @@
   }
 
   extension SQLExpressible {
-
     public var isEmpty: SQLExpression {
       length(self) == 0
     }
@@ -173,9 +172,7 @@
     public static func select<T>(_ selections: any SQLSelectable..., as type: T.Type)
       -> QueryInterfaceRequest<T>
     {
-      var result = all().asRequest(of: type)
-      result.selections = selections.map(\.sqlSelection)
-      return result
+      all().asRequest(of: type).selecting(selections)
     }
   }
 

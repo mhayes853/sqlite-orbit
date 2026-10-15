@@ -27,12 +27,7 @@
     public let argumentCount: Int?
     public let isPure: Bool
 
-    enum Kind: Sendable {
-      case scalar(@Sendable ([DatabaseValue]) throws -> (any DatabaseValueConvertible)?)
-      case aggregate(@Sendable (borrowing SQLiteConnectionAccess) throws -> Void)
-    }
-
-    let kind: Kind
+    let install: @Sendable (borrowing SQLiteConnectionAccess) throws -> Void
 
     public init(
       _ name: String,
@@ -43,7 +38,16 @@
       self.name = name
       self.argumentCount = argumentCount
       isPure = pure
-      kind = .scalar(function)
+      install = { connection in
+        try connection.registerFunction(
+          name,
+          argumentCount: argumentCount,
+          flags: pure ? [.deterministic] : []
+        ) { arguments in
+          let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
+          return try function(values)?.databaseValue.orbitValue ?? .null
+        }
+      }
     }
 
     public init<Aggregate: DatabaseAggregate>(
@@ -55,7 +59,7 @@
       self.name = name
       self.argumentCount = argumentCount
       isPure = pure
-      kind = .aggregate { connection in
+      install = { connection in
         try connection.registerAggregateFunction(
           name,
           argumentCount: argumentCount,
@@ -89,19 +93,7 @@
       do {
         try translate {
           try access.withConnectionAccess { connection in
-            switch function.kind {
-            case .scalar(let body):
-              try connection.registerFunction(
-                function.name,
-                argumentCount: function.argumentCount,
-                flags: function.isPure ? [.deterministic] : []
-              ) { arguments in
-                let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
-                return try body(values)?.databaseValue.orbitValue ?? .null
-              }
-            case .aggregate(let install):
-              try install(connection)
-            }
+            try function.install(connection)
           }
         }
       } catch {

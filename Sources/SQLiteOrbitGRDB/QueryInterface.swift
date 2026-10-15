@@ -62,7 +62,7 @@
     }
   }
 
-  public struct Column: ColumnExpression, SQLSelectable, SQLOrderingTerm, Sendable {
+  public struct Column: ColumnExpression, Sendable {
     public let name: String
 
     public init(_ name: String) {
@@ -77,28 +77,8 @@
       .init(sql: quoted(name))
     }
 
-    public var sqlSelection: SQL {
-      sqlExpression.literal
-    }
-
-    public var sqlOrdering: SQL {
-      sqlExpression.literal
-    }
-
-    public var asc: SQLExpression {
-      sqlExpression.asc
-    }
-
-    public var desc: SQLExpression {
-      sqlExpression.desc
-    }
-
     public func forKey(_ key: String) -> SQLExpression {
       sqlExpression.forKey(key)
-    }
-
-    public func set(to value: (any DatabaseValueConvertible)?) -> SQLAssignment {
-      SQLAssignment(column: name, value: SQL(sql: "?", arguments: [value]))
     }
   }
 
@@ -210,15 +190,15 @@
   }
 
   public func count(_ expression: some SQLExpressible) -> SQLExpression {
-    .init(SQL(sql: "COUNT(") + expression.sqlExpression.literal + SQL(sql: ")"))
+    sqlFunction("COUNT", [expression.sqlExpression])
   }
 
   public func max(_ expression: some SQLExpressible) -> SQLExpression {
-    .init(SQL(sql: "MAX(") + expression.sqlExpression.literal + SQL(sql: ")"))
+    sqlFunction("MAX", [expression.sqlExpression])
   }
 
   public func min(_ expression: some SQLExpressible) -> SQLExpression {
-    .init(SQL(sql: "MIN(") + expression.sqlExpression.literal + SQL(sql: ")"))
+    sqlFunction("MIN", [expression.sqlExpression])
   }
 
   public protocol FetchRequest {
@@ -347,14 +327,7 @@
       if !havingPredicates.isEmpty {
         result = result + SQL(sql: " HAVING ") + joined(havingPredicates, separator: " AND ")
       }
-      let ordering = try resolvedOrdering(in: db)
-      if !ordering.isEmpty {
-        result = result + SQL(sql: " ORDER BY ") + joined(ordering, separator: ", ")
-      }
-      if let rowLimit {
-        result = result + SQL(sql: " LIMIT \(rowLimit)" + (offset.map { " OFFSET \($0)" } ?? ""))
-      }
-      return result
+      return result + (try orderingAndLimitSQL())
     }
 
     func condition(in db: Database) throws -> SQL {
@@ -437,6 +410,10 @@
     }
 
     public func order(_ terms: any SQLOrderingTerm...) -> Self {
+      ordered(by: terms)
+    }
+
+    func ordered(by terms: [any SQLOrderingTerm]) -> Self {
       var result = self
       result.ordering = terms.map(\.sqlOrdering)
       result.reversedOrdering = reverseOrderings(terms)
@@ -466,7 +443,7 @@
       return result
     }
 
-    private func resolvedOrdering(in db: Database) throws -> [SQL] {
+    private func resolvedOrdering() throws -> [SQL] {
       guard isReversed else {
         return ordering
       }
@@ -490,6 +467,10 @@
     }
 
     public func select(_ selections: any SQLSelectable...) -> Self {
+      selecting(selections)
+    }
+
+    func selecting(_ selections: [any SQLSelectable]) -> Self {
       var result = self
       result.selections = selections.map(\.sqlSelection)
       return result
@@ -498,9 +479,7 @@
     public func select<T>(_ selections: any SQLSelectable..., as type: T.Type)
       -> QueryInterfaceRequest<T>
     {
-      var result = asRequest(of: type)
-      result.selections = selections.map(\.sqlSelection)
-      return result
+      asRequest(of: type).selecting(selections)
     }
 
     public func distinct() -> Self {
@@ -549,9 +528,9 @@
       return try condition(in: db)
     }
 
-    private func mutationSuffix(in db: Database) throws -> SQL {
+    private func orderingAndLimitSQL() throws -> SQL {
       var result = SQL(sql: "")
-      let ordering = try resolvedOrdering(in: db)
+      let ordering = try resolvedOrdering()
       if !ordering.isEmpty {
         result = result + SQL(sql: " ORDER BY ") + joined(ordering, separator: ", ")
       }
@@ -565,7 +544,7 @@
     public func deleteAll(_ db: Database) throws -> Int {
       let sql =
         SQL(sql: "DELETE FROM " + quoted(table)) + (try mutationCondition(in: db))
-        + (try mutationSuffix(in: db))
+        + (try orderingAndLimitSQL())
       try db.execute(literal: sql)
       return db.changesCount
     }
@@ -580,7 +559,7 @@
       let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ") + $0.value }
       let sql =
         SQL(sql: "UPDATE " + quoted(table) + " SET ") + joined(clauses, separator: ", ")
-        + (try mutationCondition(in: db)) + (try mutationSuffix(in: db))
+        + (try mutationCondition(in: db)) + (try orderingAndLimitSQL())
       try db.execute(literal: sql)
       return db.changesCount
     }
@@ -646,11 +625,7 @@
     }
 
     public static func order(_ terms: any SQLOrderingTerm...) -> QueryInterfaceRequest<Self> {
-      var result = all()
-      result.ordering = terms.map(\.sqlOrdering)
-      result.reversedOrdering = reverseOrderings(terms)
-      result.isReversed = false
-      return result
+      all().ordered(by: terms)
     }
 
     public static func limit(_ limit: Int, offset: Int? = nil) -> QueryInterfaceRequest<Self> {
@@ -658,9 +633,7 @@
     }
 
     public static func select(_ selections: any SQLSelectable...) -> QueryInterfaceRequest<Self> {
-      var result = all()
-      result.selections = selections.map(\.sqlSelection)
-      return result
+      all().selecting(selections)
     }
 
     public static func filter(key: [String: (any DatabaseValueConvertible)?])
@@ -701,11 +674,11 @@
     }
 
     public func set(to value: (any DatabaseValueConvertible)?) -> SQLAssignment {
-      Column(name).set(to: value)
+      SQLAssignment(column: name, value: SQL(sql: "?", arguments: [value]))
     }
 
     public var sqlExpression: SQLExpression {
-      Column(name).sqlExpression
+      .init(sql: quoted(name))
     }
 
     public var asc: SQLExpression {

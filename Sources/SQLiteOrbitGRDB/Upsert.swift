@@ -43,19 +43,8 @@
       selection: [any SQLSelectable],
       decode: (Row) throws -> T
     ) throws -> T {
-      try willSave(db)
-      var success: (InsertionSuccess, T)?
-      try aroundSave(db) {
-        guard success == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        try willInsert(db)
-        let container = try PersistenceContainer(self)
-        var inserted: (InsertionSuccess, T)?
-        try aroundInsert(db) {
-          guard inserted == nil else {
-            throw callbackMisuse("aroundInsert")
-          }
+      try withSaveCallbacks(db) { record in
+        let inserted = try record.withInsertCallbacks(db) { container in
           let key = try db.primaryKey(Self.databaseTableName)
           guard !container.isEmpty else {
             throw DatabaseError(
@@ -136,21 +125,12 @@
             rowIDColumn: key.rowIDColumn,
             persistenceContainer: saved
           )
-          inserted = (result, returned)
-          return result
+          return (result, returned)
         }
-        guard let inserted else {
-          throw callbackMisuse("aroundInsert")
-        }
-        didInsert(inserted.0)
-        success = inserted
-        return PersistenceSuccess(persistenceContainer: inserted.0.persistenceContainer)
+        return (
+          PersistenceSuccess(persistenceContainer: inserted.0.persistenceContainer), inserted.1
+        )
       }
-      guard let success else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(PersistenceSuccess(persistenceContainer: success.0.persistenceContainer))
-      return success.1
     }
 
     public mutating func upsert(_ db: Database) throws {

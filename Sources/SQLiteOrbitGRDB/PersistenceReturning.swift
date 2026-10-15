@@ -2,48 +2,33 @@
   import Foundation
 
   extension MutablePersistableRecord {
-    mutating func insertReturning<T>(
+    // Empty selections execute without RETURNING; public fetch APIs require a selection.
+    mutating func insertRecord<T>(
       _ db: Database,
       conflict: Database.ConflictResolution?,
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      precondition(!selection.isEmpty, "Invalid empty selection")
-      try willSave(db)
-      var success: (InsertionSuccess, T)?
-      try aroundSave(db) {
-        guard success == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let result = try insertReturningWithCallbacks(
+      try withSaveCallbacks(db) { record in
+        let inserted = try record.insertWithCallbacks(
           db,
           conflict: conflict,
           selection: selection,
           fetch: fetch
         )
-        success = result
-        return PersistenceSuccess(persistenceContainer: result.0.persistenceContainer)
+        return (
+          PersistenceSuccess(persistenceContainer: inserted.0.persistenceContainer), inserted.1
+        )
       }
-      guard let success else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(PersistenceSuccess(persistenceContainer: success.0.persistenceContainer))
-      return success.1
     }
 
-    mutating func insertReturningWithCallbacks<T>(
+    mutating func insertWithCallbacks<T>(
       _ db: Database,
       conflict: Database.ConflictResolution?,
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> (InsertionSuccess, T) {
-      try willInsert(db)
-      let container = try PersistenceContainer(self)
-      var success: (InsertionSuccess, T)?
-      try aroundInsert(db) {
-        guard success == nil else {
-          throw callbackMisuse("aroundInsert")
-        }
+      try withInsertCallbacks(db) { container in
         let sql = insertionSQL(
           table: Self.databaseTableName,
           container: container,
@@ -63,48 +48,30 @@
           rowIDColumn: column,
           persistenceContainer: saved
         )
-        success = (inserted, returned)
-        return inserted
+        return (inserted, returned)
       }
-      guard let success else {
-        throw callbackMisuse("aroundInsert")
-      }
-      didInsert(success.0)
-      return success
     }
 
-    func updateReturning<T>(
+    func updateRecord<T>(
       _ db: Database,
       conflict: Database.ConflictResolution?,
       columns: Set<String>,
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      precondition(!selection.isEmpty, "Invalid empty selection")
-      try willSave(db)
-      var success: (PersistenceSuccess, T)?
-      try aroundSave(db) {
-        guard success == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let result = try updateReturningWithCallbacks(
+      var copy = self
+      return try copy.withSaveCallbacks(db) { record in
+        try record.updateWithCallbacks(
           db,
           columns: columns,
           conflict: conflict,
           selection: selection,
           fetch: fetch
         )
-        success = result
-        return result.0
       }
-      guard let success else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(success.0)
-      return success.1
     }
 
-    func updateReturningWithCallbacks<T>(
+    func updateWithCallbacks<T>(
       _ db: Database,
       columns: Set<String>,
       conflict: Database.ConflictResolution?,
@@ -142,49 +109,78 @@
       return success
     }
 
-    mutating func saveReturning<T>(
+    mutating func saveRecord<T>(
       _ db: Database,
       conflict: Database.ConflictResolution?,
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      precondition(!selection.isEmpty, "Invalid empty selection")
-      try willSave(db)
-      var success: (PersistenceSuccess, T)?
-      try aroundSave(db) {
-        guard success == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let container = try PersistenceContainer(self)
+      try withSaveCallbacks(db) { record in
+        let container = try PersistenceContainer(record)
         let key = try primaryKeyValues(db, table: Self.databaseTableName, container: container)
         if key.values.allSatisfy({ !$0.isNull }) {
           do {
-            let result = try updateReturningWithCallbacks(
+            return try record.updateWithCallbacks(
               db,
               columns: Set(container.fields.map(\.0)),
               conflict: conflict,
               selection: selection,
               fetch: fetch
             )
-            success = result
-            return result.0
           } catch RecordError.recordNotFound {}
         }
-        let inserted = try insertReturningWithCallbacks(
+        let inserted = try record.insertWithCallbacks(
           db,
           conflict: conflict,
           selection: selection,
           fetch: fetch
         )
         let result = PersistenceSuccess(persistenceContainer: inserted.0.persistenceContainer)
-        success = (result, inserted.1)
-        return result
+        return (result, inserted.1)
+      }
+    }
+
+    mutating func withSaveCallbacks<T>(
+      _ db: Database,
+      save: (inout Self) throws -> (PersistenceSuccess, T)
+    ) throws -> T {
+      try willSave(db)
+      var success: (PersistenceSuccess, T)?
+      try aroundSave(db) {
+        guard success == nil else {
+          throw callbackMisuse("aroundSave")
+        }
+        let result = try save(&self)
+        success = result
+        return result.0
       }
       guard let success else {
         throw callbackMisuse("aroundSave")
       }
       didSave(success.0)
       return success.1
+    }
+
+    mutating func withInsertCallbacks<T>(
+      _ db: Database,
+      insert: (PersistenceContainer) throws -> (InsertionSuccess, T)
+    ) throws -> (InsertionSuccess, T) {
+      try willInsert(db)
+      let container = try PersistenceContainer(self)
+      var success: (InsertionSuccess, T)?
+      try aroundInsert(db) {
+        guard success == nil else {
+          throw callbackMisuse("aroundInsert")
+        }
+        let result = try insert(container)
+        success = result
+        return result.0
+      }
+      guard let success else {
+        throw callbackMisuse("aroundInsert")
+      }
+      didInsert(success.0)
+      return success
     }
 
     func missingRecord(_ db: Database) throws -> RecordError {
@@ -262,7 +258,8 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      return try insertReturning(db, conflict: conflict, selection: selection, fetch: fetch)
+      precondition(!selection.isEmpty, "Invalid empty selection")
+      return try insertRecord(db, conflict: conflict, selection: selection, fetch: fetch)
     }
 
     public mutating func insertAndFetch<T: FetchableRecord & TableRecord>(
@@ -270,10 +267,10 @@
       onConflict conflict: Database.ConflictResolution? = nil,
       as returnedType: T.Type
     ) throws -> T {
-      let record = self
-      return try insertReturning(db, conflict: conflict, selection: T.databaseSelection) {
+      let source = self
+      return try insertAndFetch(db, onConflict: conflict, selection: T.databaseSelection) {
         guard let record = try T.fetchOne($0) else {
-          throw try record.missingRecord(db)
+          throw try source.missingRecord(db)
         }
         return record
       }
@@ -284,12 +281,7 @@
       onConflict conflict: Database.ConflictResolution? = nil
     ) throws -> Self where Self: FetchableRecord {
       var copy = self
-      return try copy.insertReturning(db, conflict: conflict, selection: Self.databaseSelection) {
-        guard let record = try Self.fetchOne($0) else {
-          throw try missingRecord(db)
-        }
-        return record
-      }
+      return try copy.insertAndFetch(db, onConflict: conflict, as: Self.self)
     }
 
     public mutating func saveAndFetch<T>(
@@ -298,7 +290,8 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      return try saveReturning(db, conflict: conflict, selection: selection, fetch: fetch)
+      precondition(!selection.isEmpty, "Invalid empty selection")
+      return try saveRecord(db, conflict: conflict, selection: selection, fetch: fetch)
     }
 
     public mutating func saveAndFetch<T: FetchableRecord & TableRecord>(
@@ -306,10 +299,10 @@
       onConflict conflict: Database.ConflictResolution? = nil,
       as returnedType: T.Type
     ) throws -> T {
-      let record = self
-      return try saveReturning(db, conflict: conflict, selection: T.databaseSelection) {
+      let source = self
+      return try saveAndFetch(db, onConflict: conflict, selection: T.databaseSelection) {
         guard let record = try T.fetchOne($0) else {
-          throw try record.missingRecord(db)
+          throw try source.missingRecord(db)
         }
         return record
       }
@@ -320,12 +313,7 @@
       onConflict conflict: Database.ConflictResolution? = nil
     ) throws -> Self where Self: FetchableRecord {
       var copy = self
-      return try copy.saveReturning(db, conflict: conflict, selection: Self.databaseSelection) {
-        guard let record = try Self.fetchOne($0) else {
-          throw try missingRecord(db)
-        }
-        return record
-      }
+      return try copy.saveAndFetch(db, onConflict: conflict, as: Self.self)
     }
   }
 
@@ -336,8 +324,9 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
+      precondition(!selection.isEmpty, "Invalid empty selection")
       var copy = self
-      return try copy.insertReturning(db, conflict: conflict, selection: selection, fetch: fetch)
+      return try copy.insertRecord(db, conflict: conflict, selection: selection, fetch: fetch)
     }
 
     public func insertAndFetch<T: FetchableRecord & TableRecord>(
@@ -345,11 +334,9 @@
       onConflict conflict: Database.ConflictResolution? = nil,
       as returnedType: T.Type
     ) throws -> T {
-      let record = self
-      var copy = self
-      return try copy.insertReturning(db, conflict: conflict, selection: T.databaseSelection) {
+      try insertAndFetch(db, onConflict: conflict, selection: T.databaseSelection) {
         guard let record = try T.fetchOne($0) else {
-          throw try record.missingRecord(db)
+          throw try missingRecord(db)
         }
         return record
       }
@@ -361,8 +348,9 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
+      precondition(!selection.isEmpty, "Invalid empty selection")
       var copy = self
-      return try copy.saveReturning(db, conflict: conflict, selection: selection, fetch: fetch)
+      return try copy.saveRecord(db, conflict: conflict, selection: selection, fetch: fetch)
     }
 
     public func saveAndFetch<T: FetchableRecord & TableRecord>(
@@ -370,11 +358,9 @@
       onConflict conflict: Database.ConflictResolution? = nil,
       as returnedType: T.Type
     ) throws -> T {
-      let record = self
-      var copy = self
-      return try copy.saveReturning(db, conflict: conflict, selection: T.databaseSelection) {
+      try saveAndFetch(db, onConflict: conflict, selection: T.databaseSelection) {
         guard let record = try T.fetchOne($0) else {
-          throw try record.missingRecord(db)
+          throw try missingRecord(db)
         }
         return record
       }
@@ -408,7 +394,8 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      try updateReturning(
+      precondition(!selection.isEmpty, "Invalid empty selection")
+      return try updateRecord(
         db,
         conflict: conflict,
         columns: Set(try PersistenceContainer(self).fields.map(\.0)),
@@ -424,7 +411,8 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      try updateReturning(
+      precondition(!selection.isEmpty, "Invalid empty selection")
+      return try updateRecord(
         db,
         conflict: conflict,
         columns: Set(columns),

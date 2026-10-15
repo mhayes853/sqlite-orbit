@@ -112,36 +112,12 @@
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
     ) throws {
-      try willSave(db)
-      var saved: PersistenceSuccess?
-      try aroundSave(db) {
-        guard saved == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let inserted = try insertWithCallbacks(db, conflict: conflictResolution)
-        let result = PersistenceSuccess(persistenceContainer: inserted.persistenceContainer)
-        saved = result
-        return result
-      }
-      guard let saved else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(saved)
-    }
-
-    private mutating func insertWithCallbacks(
-      _ db: Database,
-      conflict: Database.ConflictResolution?
-    )
-      throws -> InsertionSuccess
-    {
-      try insertReturningWithCallbacks(
+      try insertRecord(
         db,
-        conflict: conflict,
+        conflict: conflictResolution,
         selection: [],
         fetch: { try $0.execute() }
       )
-      .0
     }
 
     public func update(
@@ -165,72 +141,36 @@
 
     public func update(
       _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      columns: some Collection<some ColumnExpression>
+    ) throws {
+      try update(db, onConflict: conflict, columns: columns.map(\.name))
+    }
+
+    public func update(
+      _ db: Database,
       columns: Set<String>,
       onConflict conflictResolution: Database.ConflictResolution? = nil
     ) throws {
-      try willSave(db)
-      var saved: PersistenceSuccess?
-      try aroundSave(db) {
-        guard saved == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let result = try updateWithCallbacks(db, columns: columns, conflict: conflictResolution)
-        saved = result
-        return result
-      }
-      guard let saved else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(saved)
-    }
-
-    private func updateWithCallbacks(
-      _ db: Database,
-      columns: Set<String>,
-      conflict: Database.ConflictResolution?
-    ) throws -> PersistenceSuccess {
-      try updateReturningWithCallbacks(
+      try updateRecord(
         db,
+        conflict: conflictResolution,
         columns: columns,
-        conflict: conflict,
         selection: [],
         fetch: { try $0.execute() }
       )
-      .0
     }
 
     public mutating func save(
       _ db: Database,
       onConflict conflictResolution: Database.ConflictResolution? = nil
     ) throws {
-      try willSave(db)
-      var saved: PersistenceSuccess?
-      try aroundSave(db) {
-        guard saved == nil else {
-          throw callbackMisuse("aroundSave")
-        }
-        let container = try PersistenceContainer(self)
-        let pk = try db.primaryKey(Self.databaseTableName)
-        if pk.columns.allSatisfy({ container[$0]?.databaseValue.isNull == false }) {
-          do {
-            let result = try updateWithCallbacks(
-              db,
-              columns: Set(container.fields.map(\.0)),
-              conflict: conflictResolution
-            )
-            saved = result
-            return result
-          } catch RecordError.recordNotFound {}
-        }
-        let inserted = try insertWithCallbacks(db, conflict: conflictResolution)
-        let result = PersistenceSuccess(persistenceContainer: inserted.persistenceContainer)
-        saved = result
-        return result
-      }
-      guard let saved else {
-        throw callbackMisuse("aroundSave")
-      }
-      didSave(saved)
+      try saveRecord(
+        db,
+        conflict: conflictResolution,
+        selection: [],
+        fetch: { try $0.execute() }
+      )
     }
 
     public func inserted(
@@ -315,7 +255,12 @@
       onConflict conflictResolution: Database.ConflictResolution? = nil
     ) throws {
       var copy = self
-      try copy.insertMutable(db, onConflict: conflictResolution)
+      try copy.insertRecord(
+        db,
+        conflict: conflictResolution,
+        selection: [],
+        fetch: { try $0.execute() }
+      )
     }
 
     public func save(
@@ -323,24 +268,12 @@
       onConflict conflictResolution: Database.ConflictResolution? = nil
     ) throws {
       var copy = self
-      try copy.saveMutable(db, onConflict: conflictResolution)
-    }
-  }
-
-  // Explicitly select the mutable implementations rather than recursing through overloads.
-  extension MutablePersistableRecord {
-    fileprivate mutating func insertMutable(
-      _ db: Database,
-      onConflict conflict: Database.ConflictResolution?
-    ) throws {
-      try insert(db, onConflict: conflict)
-    }
-
-    fileprivate mutating func saveMutable(
-      _ db: Database,
-      onConflict conflict: Database.ConflictResolution?
-    ) throws {
-      try save(db, onConflict: conflict)
+      try copy.saveRecord(
+        db,
+        conflict: conflictResolution,
+        selection: [],
+        fetch: { try $0.execute() }
+      )
     }
   }
 

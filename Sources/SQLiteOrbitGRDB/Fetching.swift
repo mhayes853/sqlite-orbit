@@ -5,7 +5,6 @@
   public typealias DatabaseValueCursor<Value> = AnyCursor<Value>
 
   extension DatabaseValueConvertible {
-
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
       try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
     }
@@ -26,11 +25,9 @@
       let sql = try request.sql(in: db)
       return try fetchOne(db, sql: sql.sql, arguments: sql.arguments)
     }
-
   }
 
   extension DatabaseValueConvertible where Self: Hashable {
-
     public static func fetchSet(
       _ db: Database,
       sql: String,
@@ -55,7 +52,6 @@
   }
 
   extension FetchableRecord {
-
     public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
       throws -> AnyCursor<Self>
     {
@@ -85,11 +81,9 @@
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
       try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
     }
-
   }
 
   extension FetchableRecord where Self: Hashable {
-
     public static func fetchSet(
       _ db: Database,
       sql: String,
@@ -114,14 +108,9 @@
   }
 
   extension Row {
-
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> RowCursor {
       try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
     }
-
-  }
-
-  extension Row {
 
     public static func fetchSet(
       _ db: Database,
@@ -291,16 +280,6 @@
     }
   }
 
-  extension MutablePersistableRecord {
-    public func update(
-      _ db: Database,
-      onConflict conflict: Database.ConflictResolution? = nil,
-      columns: some Collection<some ColumnExpression>
-    ) throws {
-      try update(db, onConflict: conflict, columns: columns.map(\.name))
-    }
-  }
-
   extension Table {
     public func fetchCursor(_ db: Database) throws -> AnyCursor<RowDecoder> {
       try all().fetchCursor(db)
@@ -329,10 +308,7 @@
     }
 
     public func order(_ terms: any SQLOrderingTerm...) -> QueryInterfaceRequest<RowDecoder> {
-      var result = all()
-      result.ordering = terms.map(\.sqlOrdering)
-      result.reversedOrdering = reverseOrderings(terms)
-      return result
+      all().ordered(by: terms)
     }
 
     public func order(sql: String, arguments: StatementArguments = StatementArguments())
@@ -342,17 +318,13 @@
     }
 
     public func select(_ selections: any SQLSelectable...) -> QueryInterfaceRequest<RowDecoder> {
-      var result = all()
-      result.selections = selections.map(\.sqlSelection)
-      return result
+      all().selecting(selections)
     }
 
     public func select<T>(_ selections: any SQLSelectable..., as type: T.Type)
       -> QueryInterfaceRequest<T>
     {
-      var result = all().asRequest(of: type)
-      result.selections = selections.map(\.sqlSelection)
-      return result
+      all().asRequest(of: type).selecting(selections)
     }
 
     public func limit(_ count: Int, offset: Int? = nil) -> QueryInterfaceRequest<RowDecoder> {
