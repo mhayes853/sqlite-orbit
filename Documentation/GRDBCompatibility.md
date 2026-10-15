@@ -79,15 +79,15 @@ Native drivers also expose their native `configuration`. Use `any DatabaseReader
 | --- | --- |
 | Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`; `asyncRead`; queue `inDatabase`; explicit transactions and savepoints. |
 | Configuration | Foreign keys, busy timeout/callback, maximum reader count, per-connection `prepareDatabase`, and selection of a native SQLiteLibrary. |
-| SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
-| Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, lazy cursors, set fetching, and cursor mapping/filtering. |
-| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
+| SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation (including identifiers and SQL fragments), SQL composition/building, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
+| Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, lazy cursors, set fetching, cursor transformations/reductions, and cursor-to-collection construction. |
+| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change dictionaries, change-only updates and returning updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
 | Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, and JSON encoder/decoder customization. |
-| Queries | SQLRequest, Table, Column/ColumnExpression, predicates, key/ID filtering, selections, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions, counts, and bulk update/delete. |
-| Schema | Table/column/index creation, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, and schema versions. |
+| Queries | SQLRequest, Table, Column/ColumnExpression, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions, counts, and bulk update/delete. |
+| Schema | Table/column/index/view creation, generated columns, partial/expression indexes, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, foreign-key violations/checks, and schema versions. |
 | Migrations | Registration, sync/async migration, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
 | Observation | Dynamic tracking, inferred/explicit constant regions, callbacks, asynchronous sequences, immediate/main-actor/dispatch-queue scheduling, map/removeDuplicates, event hooks, cancellation, and conditional Combine publishers. |
-| Connection setup | Custom scalar functions, aggregates, and collations, including installation on every pool connection through prepareDatabase. |
+| Connection setup | Custom scalar functions, aggregates, named built-in collations, and custom collations, including installation on every pool connection through prepareDatabase. |
 | Maintenance | WAL checkpoints with passive/full/restart/truncate modes, schema selection, and frame counts. |
 
 Rows fetched by `fetchAll` and `fetchOne` own their values. A row cursor reuses its current `Row`;
@@ -143,7 +143,7 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
 - Dependencies that expose types from the original GRDB module require corresponding source
   changes; the overlay defines its own nominal types.
 - Query association/join/prefetch APIs, row adapters/scopes, Record class APIs, custom observation
-  reducers, the explicit `SharedValueObservation` API, write-access observations, snapshots, backup,
+  reducers, the explicit `SharedValueObservation` API, write-access observations, snapshots, backup, vacuum,
   explicit close, interrupt, specialized FTS helpers, and broad reactive access APIs remain future work.
 - Custom explicit nested Codable containers require a custom PersistenceContainer encoder or row
   initializer. Normal synthesized nested properties use JSON columns.
@@ -154,6 +154,28 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
   capabilities, including unavailable deferred foreign-key checks. Use immediate migration checks
   or explicitly disable deferred checks there.
 
+The convenience API audit also covers cursor sequence/iterator initializers, lazy prefix/drop/flatten
+operations, extrema and reductions, and construction of arrays, sets, and dictionaries from cursors.
+Cursor transformations return `AnyCursor`; GRDB's concrete adapter cursor types are not provided.
+The custom `Cursor.forEach` implementation is preserved through mapping, filtering,
+and enumeration; collection construction honors it as well. `Cursor.isEmpty` consumes its first element when present, as in GRDB.
+
+Primary-key derivations resolve metadata inside the eventual database access. Creating such a
+request does not open a connection or require that the table already exists. Replacing its selection,
+ordering, or grouping also replaces the corresponding deferred derivation. Record change helpers
+compare encoded database values and skip persistence callbacks and SQL when nothing changed.
+
+DDL expressions and view definitions render bound values as SQL literals using the selected
+engine's quoting function. The existing SQL tokenizer distinguishes parameters from quoted text,
+identifiers, and comments. Generated columns and partial/expression indexes require engine support.
+
+The audit deliberately leaves larger SQL/query features (associations, adapters, CTEs, JSON/FTS
+DSLs, and custom reducers) for separate work. They are not simple forwarding conveniences even when
+some can be built using the current native API. Vacuum was tested but deferred: SQLite's internal
+transaction control is rejected by Orbit's guard outside a managed transaction (`SQLITE_AUTH`).
+It needs coordinated support in native connection execution; the overlay does not bypass that guard.
+No SQLiteOrbit native public API changes were made for this convenience expansion.
+
 Combine code is conditionally compiled on platforms that provide Combine. Linux verification
 covers callbacks and async sequences; Apple-platform compilation and Combine execution require an
 Apple SDK.
@@ -161,7 +183,7 @@ Apple SDK.
 ## Verification
 
 The package includes maintained fixtures derived from GRDB 7.11.1's argument, database-value,
-Codable encoding, and row tests, plus shared application callback fixtures. Their provenance and
+Codable encoding, row, cursor, record-change, and foreign-key violation tests, plus shared application fixtures. Their provenance and
 MIT license are in `Tests/SQLiteOrbitGRDBTests/Upstream`. The same fixtures run against GRDB itself
 in a separate test package, so the main package does not resolve or link GRDB.
 

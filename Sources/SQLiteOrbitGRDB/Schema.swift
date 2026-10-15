@@ -54,7 +54,11 @@
       var sql =
         "CREATE " + (options.contains(.temporary) ? "TEMPORARY " : "") + "TABLE "
         + (options.contains(.ifNotExists) ? "IF NOT EXISTS " : "") + quoted(name) + " ("
-      sql += (definition.columns.map(\.sql) + definition.constraints).joined(separator: ", ") + ")"
+      sql +=
+        try
+        (definition.columns.map { try $0.sql(in: self) } + definition.constraints
+        + definition.expressionConstraints.map { try $0.expandedSQL(in: self) })
+        .joined(separator: ", ") + ")"
       let suffix = [
         options.contains(.withoutRowID) ? "WITHOUT ROWID" : nil,
         options.contains(.strict) ? "STRICT" : nil
@@ -65,7 +69,12 @@
       }
       try execute(sql: sql)
       for column in definition.columns where column.isIndexed {
-        try create(index: name + "_on_" + column.name, on: name, columns: [column.name])
+        try create(
+          index: name + "_on_" + column.name,
+          on: name,
+          columns: [column.name],
+          ifNotExists: options.contains(.ifNotExists)
+        )
       }
     }
 
@@ -73,7 +82,7 @@
       let alteration = TableAlteration()
       try body(alteration)
       for column in alteration.added {
-        try execute(sql: "ALTER TABLE \(quoted(name)) ADD COLUMN \(column.sql)")
+        try execute(sql: "ALTER TABLE \(quoted(name)) ADD COLUMN \(try column.sql(in: self))")
       }
       for action in alteration.actions {
         try execute(sql: "ALTER TABLE \(quoted(name)) \(action)")
@@ -93,15 +102,17 @@
       on table: String,
       columns: [String],
       unique: Bool = false,
-      ifNotExists: Bool = false
+      ifNotExists: Bool = false,
+      condition: (any SQLExpressible)? = nil
     ) throws {
-      try execute(
-        sql: "CREATE " + (unique ? "UNIQUE " : "") + "INDEX "
-          + (ifNotExists ? "IF NOT EXISTS " : "")
-          + quoted(name) + " ON " + quoted(table) + " ("
-          + columns.map(quoted).joined(separator: ", ")
-          + ")"
-      )
+      var options: IndexOptions = []
+      if unique {
+        options.insert(.unique)
+      }
+      if ifNotExists {
+        options.insert(.ifNotExists)
+      }
+      try create(index: name, on: table, columns: columns, options: options, condition: condition)
     }
 
     public func drop(index name: String) throws {
@@ -114,14 +125,18 @@
     let type: ColumnType?
     var clauses: [String] = []
     var isIndexed = false
+    var expressionClauses: [SQL] = []
 
     init(name: String, type: ColumnType?) {
       self.name = name
       self.type = type
     }
 
-    var sql: String {
-      ([quoted(name)] + (type.map { [$0.rawValue] } ?? []) + clauses).joined(separator: " ")
+    func sql(in db: Database) throws -> String {
+      try
+        ([quoted(name)] + (type.map { [$0.rawValue] } ?? []) + clauses
+        + expressionClauses.map { try $0.expandedSQL(in: db) })
+        .joined(separator: " ")
     }
 
     @discardableResult
@@ -202,6 +217,7 @@
   public final class TableDefinition {
     var columns: [ColumnDefinition] = []
     var constraints: [String] = []
+    var expressionConstraints: [SQL] = []
 
     @discardableResult
     public func column(_ name: String, _ type: ColumnType? = nil)

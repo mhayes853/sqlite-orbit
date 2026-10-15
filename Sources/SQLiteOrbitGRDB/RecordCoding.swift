@@ -136,12 +136,7 @@
 
     public func databaseChanges(from record: some EncodableRecord) throws -> [String: DatabaseValue]
     {
-      let previous = try record.databaseDictionary
-      return try databaseDictionary.reduce(into: [:]) {
-        if previous[$1.key] != $1.value {
-          $0[$1.key] = previous[$1.key] ?? .null
-        }
-      }
+      try PersistenceContainer(self).changes(from: PersistenceContainer(record))
     }
   }
 

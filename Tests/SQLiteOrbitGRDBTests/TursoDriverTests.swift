@@ -42,6 +42,19 @@
         try String.fetchSet(db, Table<Item>("item").select(Column("name")))
       }
       #expect(names == ["Updated"])
+      let ids = try await database.read { db in
+        try Table<Row>("item").all().filterWhenConnected { _ in Column("name") == "Updated" }
+          .orderByPrimaryKey().reversed().selectPrimaryKey(as: Int64.self).fetchAll(db)
+      }
+      #expect(ids == [1])
+      let changed = try await database.write { db in
+        try Item(id: 1, name: "Final").updateChanges(db, from: stored)
+      }
+      #expect(changed)
+      let statementNames = try await database.read { db in
+        try Set(String.fetchCursor(db.cachedStatement(literal: "SELECT name FROM item")))
+      }
+      #expect(statementNames == ["Final"])
     }
   }
 #endif

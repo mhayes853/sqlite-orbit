@@ -232,7 +232,7 @@
       let before = try PersistenceContainer(self)
       try modify(&self)
       let after = try PersistenceContainer(self)
-      let columns = Set(after.fields.filter { before[$0.0]?.databaseValue != $0.1 }.map(\.0))
+      let columns = Set(after.changes(from: before).keys)
       guard !columns.isEmpty else {
         return false
       }

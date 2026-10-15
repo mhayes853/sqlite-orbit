@@ -87,13 +87,13 @@
     public init(stringInterpolation: StringInterpolation) {
       self.init(
         sql: stringInterpolation.sql,
-        arguments: StatementArguments(stringInterpolation.values)
+        arguments: stringInterpolation.arguments
       )
     }
 
     public struct StringInterpolation: StringInterpolationProtocol {
       var sql = ""
-      var values: [DatabaseValue] = []
+      var arguments = StatementArguments()
 
       public init(literalCapacity: Int, interpolationCount: Int) {
         sql.reserveCapacity(literalCapacity)
@@ -105,17 +105,27 @@
 
       public mutating func appendInterpolation(_ value: (any DatabaseValueConvertible)?) {
         sql += "?"
-        values.append(value?.databaseValue ?? .null)
+        arguments += StatementArguments([value])
       }
 
-      public mutating func appendInterpolation(sql text: String) {
-        sql += text
+      public mutating func appendInterpolation(identifier: String) {
+        sql += quoted(identifier)
+      }
+
+      public mutating func appendInterpolation(
+        sql text: String,
+        arguments: StatementArguments = StatementArguments()
+      ) {
+        appendInterpolation(SQL(sql: text, arguments: arguments))
+      }
+
+      public mutating func appendInterpolation(literal: SQL) {
+        appendInterpolation(literal)
       }
 
       public mutating func appendInterpolation(_ literal: SQL) {
-        precondition(literal.arguments.namedValues.isEmpty)
         sql += literal.sql
-        values += literal.arguments.values
+        arguments += literal.arguments
       }
 
       public mutating func appendInterpolation(_ expression: some SQLExpressible) {
@@ -123,8 +133,59 @@
       }
     }
 
+    public var isEmpty: Bool {
+      sql.isEmpty
+    }
+
+    public func build(_ db: Database) throws -> (sql: String, arguments: StatementArguments) {
+      (sql, arguments)
+    }
+
+    public mutating func append(literal: SQL) {
+      self = self + literal
+    }
+
+    public mutating func append(sql: String, arguments: StatementArguments = StatementArguments()) {
+      append(literal: SQL(sql: sql, arguments: arguments))
+    }
+
+    public static func += (lhs: inout Self, rhs: Self) {
+      lhs.append(literal: rhs)
+    }
+
     public static func + (lhs: Self, rhs: Self) -> Self {
       .init(sql: lhs.sql + rhs.sql, arguments: lhs.arguments + rhs.arguments)
+    }
+  }
+
+  extension SQL {
+    // Schema statements cannot bind parameters. Reuse the SQL tokenizer so question marks in
+    // strings, identifiers, and comments remain untouched; let the selected engine quote values.
+    func expandedSQL(in db: Database) throws -> String {
+      var parameters: [(Range<Int>, Int)] = []
+      let values = try bindArguments(
+        arguments,
+        sql: sql,
+        parameter: { parameters.append(($0, $1)) }
+      )
+      .values
+      guard !parameters.isEmpty else {
+        return sql
+      }
+      let literals = try values.map {
+        try String.fetchOne(db, sql: "SELECT quote(?)", arguments: [$0])!
+      }
+      var bytes = Array(sql.utf8)
+      for (range, slot) in parameters.reversed() {
+        bytes.replaceSubrange(range, with: literals[slot].utf8)
+      }
+      return String(decoding: bytes, as: UTF8.self)
+    }
+  }
+
+  extension Sequence where Element == SQL {
+    public func joined(separator: String = "") -> SQL {
+      SQLiteOrbitGRDB.joined(Array(self), separator: separator)
     }
   }
 
@@ -134,7 +195,8 @@
     _ arguments: StatementArguments,
     sql: String,
     allowRemaining: Bool = false,
-    allowMissing: Bool = false
+    allowMissing: Bool = false,
+    parameter: ((Range<Int>, Int) -> Void)? = nil
   ) throws -> (values: [DatabaseValue], consumed: Int) {
     let bytes = Array(sql.utf8)
     var i = 0
@@ -223,6 +285,7 @@
             slots[token] = slot
           }
         }
+        parameter?(start..<i, slot - 1)
         if token.count > 1 && names[slot] == nil {
           names[slot] = String(token.dropFirst())
         }

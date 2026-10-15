@@ -1,3 +1,6 @@
+// swift-format-ignore-file: ReplaceForEachWithForLoop
+
+// Cursor is not a Sequence; custom forEach implementations must remain in use.
 #if canImport(Foundation) && canImport(Dispatch)
   import Foundation
 
@@ -14,6 +17,7 @@
   /// Owned values. Rows returned by fetchAll/fetchOne are independent of their connection; a cursor
   /// reuses its row until the caller makes a copy, following GRDB's cursor contract.
   public final class Row: @unchecked Sendable, Hashable, RandomAccessCollection,
+    CustomStringConvertible,
     ExpressibleByDictionaryLiteral
   {
     var columns: [(String, DatabaseValue)]
@@ -100,6 +104,10 @@
       self[column.name]
     }
 
+    public var description: String {
+      "[" + columns.map { $0.0 + ":" + $0.1.description }.joined(separator: " ") + "]"
+    }
+
     public var columnNames: [String] {
       columns.map(\.0)
     }
@@ -171,17 +179,40 @@
     associatedtype Element
 
     func next() throws -> Element?
+
+    func forEach(_ body: (Element) throws -> Void) throws
   }
 
   public final class AnyCursor<Element>: Cursor {
     private let advance: () throws -> Element?
+    private let visit: (((Element) throws -> Void) throws -> Void)?
 
     public init<C: Cursor>(_ cursor: C) where C.Element == Element {
       advance = cursor.next
+      visit = cursor.forEach
     }
 
-    init(_ advance: @escaping () throws -> Element?) {
+    public init(_ advance: @escaping () throws -> Element?) {
       self.advance = advance
+      visit = nil
+    }
+
+    init(
+      _ advance: @escaping () throws -> Element?,
+      forEach visit: @escaping ((Element) throws -> Void) throws -> Void
+    ) {
+      self.advance = advance
+      self.visit = visit
+    }
+
+    public func forEach(_ body: (Element) throws -> Void) throws {
+      if let visit {
+        try visit(body)
+      } else {
+        while let value = try advance() {
+          try body(value)
+        }
+      }
     }
 
     public func next() throws -> Element? {
@@ -191,29 +222,52 @@
 
   extension Cursor {
     public func map<T>(_ transform: @escaping (Element) throws -> T) -> AnyCursor<T> {
-      AnyCursor { try self.next().map(transform) }
+      AnyCursor(
+        { try self.next().map(transform) },
+        forEach: { body in
+          try self.forEach { try body(transform($0)) }
+        }
+      )
     }
 
     public func filter(_ predicate: @escaping (Element) throws -> Bool) -> AnyCursor<Element> {
-      AnyCursor {
-        while let value = try self.next() {
-          if try predicate(value) {
-            return value
+      AnyCursor(
+        {
+          while let value = try self.next() {
+            if try predicate(value) {
+              return value
+            }
+          }
+          return nil
+        },
+        forEach: { body in
+          try self.forEach {
+            if try predicate($0) {
+              try body($0)
+            }
           }
         }
-        return nil
-      }
+      )
     }
 
     public func compactMap<T>(_ transform: @escaping (Element) throws -> T?) -> AnyCursor<T> {
-      AnyCursor {
-        while let value = try self.next() {
-          if let result = try transform(value) {
-            return result
+      AnyCursor(
+        {
+          while let value = try self.next() {
+            if let result = try transform(value) {
+              return result
+            }
+          }
+          return nil
+        },
+        forEach: { body in
+          try self.forEach {
+            if let result = try transform($0) {
+              try body(result)
+            }
           }
         }
-        return nil
-      }
+      )
     }
 
     public func forEach(_ body: (Element) throws -> Void) throws {
@@ -228,15 +282,6 @@
         result = try nextPartialResult(result, value)
       }
       return result
-    }
-  }
-
-  extension Array {
-    public init<C: Cursor>(_ cursor: C) throws where C.Element == Element {
-      self.init()
-      while let value = try cursor.next() {
-        append(value)
-      }
     }
   }
 

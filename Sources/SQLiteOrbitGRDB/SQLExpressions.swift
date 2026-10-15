@@ -79,6 +79,11 @@
     binary(lhs.sqlExpression, ">=", rhs.sqlExpression)
   }
 
+  extension SQL: SQLSelectable, SQLOrderingTerm {
+    public var sqlSelection: SQL { self }
+    public var sqlOrdering: SQL { self }
+  }
+
   extension SQL: SQLExpressible {
     public var sqlExpression: SQLExpression {
       SQLExpression(self)

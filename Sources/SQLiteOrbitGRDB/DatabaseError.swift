@@ -50,7 +50,7 @@
     }
 
     public var description: String {
-      "SQLite error \(extendedResultCode.rawValue)" + (sql.map { " with statement `\($0)`" } ?? "")
+      "SQLite error \(resultCode.rawValue)" + (sql.map { " with statement `\($0)`" } ?? "")
         + (message.map { ": \($0)" } ?? "")
     }
   }

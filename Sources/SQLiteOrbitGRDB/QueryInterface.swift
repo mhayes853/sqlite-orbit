@@ -309,6 +309,11 @@
     var rowLimit: Int?
     var offset: Int?
     var isDistinct = false
+    private var predicateResolvers: [@Sendable (Database) throws -> SQL] = []
+    private var havingResolvers: [@Sendable (Database) throws -> SQL] = []
+    private var selectionResolver: (@Sendable (Database) throws -> [SQL])?
+    private var orderingResolver: (@Sendable (Database) throws -> ([SQL], [SQL]?))?
+    private var groupResolver: (@Sendable (Database) throws -> [SQL])?
     private var ids: [[RecordKey]] = []
     private var keys: [[[String: RecordKey]]] = []
     private var recordType = RecordKeyEncodingType(RowDecoder.self as? any EncodableRecord.Type)
@@ -319,19 +324,23 @@
 
     public func sql(in db: Database) throws -> SQL {
       var result = SQL(sql: "SELECT " + (isDistinct ? "DISTINCT " : ""))
-      result = result + joined(selections, separator: ", ") + SQL(sql: " FROM " + quoted(table))
+      result =
+        result + joined(try selectionResolver?(db) ?? selections, separator: ", ")
+        + SQL(sql: " FROM " + quoted(table))
       result = result + (try condition(in: db))
+      let groups = try groupResolver?(db) ?? groups
       if !groups.isEmpty {
         result = result + SQL(sql: " GROUP BY ") + joined(groups, separator: ", ")
       }
+      let havingPredicates = try havingPredicates + havingResolvers.map { try $0(db) }
       if !havingPredicates.isEmpty {
         result = result + SQL(sql: " HAVING ") + joined(havingPredicates, separator: " AND ")
       }
-      return result + (try orderingAndLimitSQL())
+      return result + (try orderingAndLimitSQL(in: db))
     }
 
     func condition(in db: Database) throws -> SQL {
-      var predicates = predicates
+      var predicates = try predicates + predicateResolvers.map { try $0(db) }
       for ids in ids {
         let pk = try db.primaryKey(table)
         guard pk.columns.count == 1 else {
@@ -415,6 +424,7 @@
 
     func ordered(by terms: [any SQLOrderingTerm]) -> Self {
       var result = self
+      result.orderingResolver = nil
       result.ordering = terms.map(\.sqlOrdering)
       result.reversedOrdering = reverseOrderings(terms)
       result.isReversed = false
@@ -423,6 +433,7 @@
 
     public func order(sql: String, arguments: StatementArguments = StatementArguments()) -> Self {
       var result = self
+      result.orderingResolver = nil
       result.reversedOrdering = nil
       result.isReversed = false
       result.ordering = [SQL(sql: sql, arguments: arguments)]
@@ -437,13 +448,15 @@
 
     public func unordered() -> Self {
       var result = self
+      result.orderingResolver = nil
       result.ordering = []
       result.reversedOrdering = []
       result.isReversed = false
       return result
     }
 
-    private func resolvedOrdering() throws -> [SQL] {
+    private func resolvedOrdering(in db: Database) throws -> [SQL] {
+      let (ordering, reversedOrdering) = try orderingResolver?(db) ?? (ordering, reversedOrdering)
       guard isReversed else {
         return ordering
       }
@@ -472,6 +485,7 @@
 
     func selecting(_ selections: [any SQLSelectable]) -> Self {
       var result = self
+      result.selectionResolver = nil
       result.selections = selections.map(\.sqlSelection)
       return result
     }
@@ -490,6 +504,7 @@
 
     public func group(_ expressions: any SQLExpressible...) -> Self {
       var result = self
+      result.groupResolver = nil
       result.groups = expressions.map { $0.sqlExpression.literal }
       return result
     }
@@ -497,6 +512,62 @@
     public func having(_ expression: some SQLExpressible) -> Self {
       var result = self
       result.havingPredicates.append(expression.sqlExpression.literal)
+      return result
+    }
+
+    public func filterWhenConnected(
+      _ predicate: @escaping @Sendable (Database) throws -> any SQLExpressible
+    ) -> Self {
+      var result = self
+      result.predicateResolvers.append { try predicate($0).sqlExpression.literal }
+      return result
+    }
+
+    public func havingWhenConnected(
+      _ predicate: @escaping @Sendable (Database) throws -> any SQLExpressible
+    ) -> Self {
+      var result = self
+      result.havingResolvers.append { try predicate($0).sqlExpression.literal }
+      return result
+    }
+
+    public func selectWhenConnected(
+      _ selection: @escaping @Sendable (Database) throws -> [any SQLSelectable]
+    ) -> Self {
+      var result = self
+      result.selectionResolver = { try selection($0).map(\.sqlSelection) }
+      return result
+    }
+
+    public func annotatedWhenConnected(
+      with selection: @escaping @Sendable (Database) throws -> [any SQLSelectable]
+    ) -> Self {
+      var result = self
+      let previous = selectionResolver
+      let selections = selections
+      result.selectionResolver = { db in
+        try (previous?(db) ?? selections) + selection(db).map(\.sqlSelection)
+      }
+      return result
+    }
+
+    public func orderWhenConnected(
+      _ terms: @escaping @Sendable (Database) throws -> [any SQLOrderingTerm]
+    ) -> Self {
+      var result = self
+      result.orderingResolver = { db in
+        let terms = try terms(db)
+        return (terms.map(\.sqlOrdering), reverseOrderings(terms))
+      }
+      result.isReversed = false
+      return result
+    }
+
+    public func groupWhenConnected(
+      _ expressions: @escaping @Sendable (Database) throws -> [any SQLExpressible]
+    ) -> Self {
+      var result = self
+      result.groupResolver = { try expressions($0).map { $0.sqlExpression.literal } }
       return result
     }
 
@@ -515,11 +586,19 @@
       result.ids = ids
       result.keys = keys
       result.recordType = recordType
+      result.predicateResolvers = predicateResolvers
+      result.havingResolvers = havingResolvers
+      result.selectionResolver = selectionResolver
+      result.orderingResolver = orderingResolver
+      result.groupResolver = groupResolver
       return result
     }
 
     private func mutationCondition(in db: Database) throws -> SQL {
-      guard groups.isEmpty && havingPredicates.isEmpty else {
+      guard
+        try (groupResolver?(db) ?? groups).isEmpty && havingPredicates.isEmpty
+          && havingResolvers.isEmpty
+      else {
         throw DatabaseError(
           resultCode: .SQLITE_MISUSE,
           message: "grouped requests do not support bulk writes"
@@ -528,9 +607,9 @@
       return try condition(in: db)
     }
 
-    private func orderingAndLimitSQL() throws -> SQL {
+    private func orderingAndLimitSQL(in db: Database) throws -> SQL {
       var result = SQL(sql: "")
-      let ordering = try resolvedOrdering()
+      let ordering = try resolvedOrdering(in: db)
       if !ordering.isEmpty {
         result = result + SQL(sql: " ORDER BY ") + joined(ordering, separator: ", ")
       }
@@ -544,7 +623,7 @@
     public func deleteAll(_ db: Database) throws -> Int {
       let sql =
         SQL(sql: "DELETE FROM " + quoted(table)) + (try mutationCondition(in: db))
-        + (try orderingAndLimitSQL())
+        + (try orderingAndLimitSQL(in: db))
       try db.execute(literal: sql)
       return db.changesCount
     }
@@ -559,7 +638,7 @@
       let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ") + $0.value }
       let sql =
         SQL(sql: "UPDATE " + quoted(table) + " SET ") + joined(clauses, separator: ", ")
-        + (try mutationCondition(in: db)) + (try orderingAndLimitSQL())
+        + (try mutationCondition(in: db)) + (try orderingAndLimitSQL(in: db))
       try db.execute(literal: sql)
       return db.changesCount
     }

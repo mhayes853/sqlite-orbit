@@ -97,6 +97,12 @@
       try Statement(database: self, sql: sql, cached: true)
     }
 
+    public func cachedStatement(literal: SQL) throws -> Statement {
+      let statement = try cachedStatement(sql: literal.sql)
+      statement.arguments = literal.arguments
+      return statement
+    }
+
     public func inTransaction(
       _ kind: TransactionKind? = nil,
       _ body: () throws -> TransactionCompletion

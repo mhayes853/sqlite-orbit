@@ -212,7 +212,7 @@
       return nil
     }
 
-    private func requireObjectSchema(_ name: String, types: [String], in schemaName: String?) throws
+    func requireObjectSchema(_ name: String, types: [String], in schemaName: String?) throws
       -> String
     {
       guard let schema = try objectSchema(name, types: types, in: schemaName) else {
