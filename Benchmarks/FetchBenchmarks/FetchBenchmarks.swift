@@ -14,5 +14,6 @@ let benchmarks: @Sendable () -> Void = {
   registerFetchRecordStructuredQueries()
   registerDateParsing()
   registerReadAccessOverhead()
+  registerAlternatingAccessOverhead()
   registerFetchOneByRowID()
 }

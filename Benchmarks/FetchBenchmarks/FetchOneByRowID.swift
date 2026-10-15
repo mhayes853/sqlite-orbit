@@ -48,8 +48,6 @@ private func expectLookups(sum: Int) throws {
   blackHole(sum)
 }
 
-private struct MissingRowError: Error {}
-
 /// The fixture's table to GRDB's query interface, which looks rows up by rowid when the table has
 /// no primary key.
 private struct GRDBItem: TableRecord {
