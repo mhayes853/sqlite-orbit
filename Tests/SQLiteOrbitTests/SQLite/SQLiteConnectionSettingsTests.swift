@@ -109,7 +109,9 @@
         if let install = configuration.library.busyHandler?.install {
           configuration.busyPolicy = .handler { _ in false }
           configuration.library.busyHandler?.install = LibraryHooks.installBusyHandler {
-            connection, callback, context in
+            connection,
+            callback,
+            context in
             installations.increment()
             return install(connection, callback, context)
           }
@@ -507,7 +509,7 @@
       }
 
       @Test
-      func aFailedQueryOnlyRestoreHoldsBackTheNextWrite() async throws {
+      func aFailedQueryOnlyChangeHoldsBackTheWriteThatNeedsIt() async throws {
         let probe = PragmaProbe(failing: "PRAGMA query_only = 0")
         let driver = try SQLiteQueue(path: .memory, configuration: probe.configuration())
         try await driver.write { transaction in
@@ -515,20 +517,24 @@
         }
         probe.isFailing = true
 
-        let error = await #expect(throws: SQLiteError.self) {
-          try await driver.read { transaction in
-            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
-          }
+        // A read leaves the connection query-only rather than turning it back off on its way out,
+        // so nothing fails until something needs to write.
+        let before = try await driver.read { transaction in
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
-        #expect(error?.sql == "PRAGMA query_only = 0")
+        #expect(before == 0)
 
-        // Left read-only, the connection refuses to write until it has been made writable again.
+        // Left read-only, the connection refuses to write until it has been made writable again,
+        // and the write's body never runs.
+        let ran = TestCounter()
         let held = await #expect(throws: SQLiteError.self) {
           try await driver.write { transaction in
+            ran.increment()
             try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
           }
         }
         #expect(held?.sql == "PRAGMA query_only = 0")
+        #expect(ran.value == 0)
 
         probe.isFailing = false
         try await driver.write { transaction in
@@ -538,6 +544,39 @@
           try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(count == 1)
+      }
+
+      @Test
+      func aFailedQueryOnlyChangeHoldsBackTheReadAndIsRetriedByTheNext() async throws {
+        let probe = PragmaProbe(failing: "PRAGMA query_only = 1")
+        let driver = try SQLiteQueue(path: .memory, configuration: probe.configuration())
+        try await driver.write { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        probe.isFailing = true
+
+        let ran = TestCounter()
+        let error = await #expect(throws: SQLiteError.self) {
+          try await driver.read { _ in ran.increment() }
+        }
+        #expect(error?.sql == "PRAGMA query_only = 1")
+        #expect(ran.value == 0)
+
+        // Whatever the failure left the flag at, the next access sets the one it needs.
+        probe.isFailing = false
+        try await driver.write { transaction in
+          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
+        }
+        probe.isFailing = true
+        await #expect(throws: SQLiteError.self) {
+          try await driver.read { _ in ran.increment() }
+        }
+        probe.isFailing = false
+        let count = try await driver.read { transaction in
+          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+        }
+        #expect(count == 1)
+        #expect(ran.value == 0)
       }
     }
 

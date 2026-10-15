@@ -232,13 +232,23 @@ public struct SQLiteConnection: ~Copyable {
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than having it
     // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
-    // its own. The access turns it back off with the rest of its settings.
+    // its own. It stays on once the read ends, until an access that may write begins, so that
+    // consecutive reads keep the statements every change of it would expire.
     guard !isReadOnly else { return }
-    try settings.pointee.setQueryOnly(true)
+    try settings.pointee.ensureQueryOnly(true)
+  }
+
+  private borrowing func beginWritable() throws {
+    // Every access that may write passes through here before running anything, since a read
+    // before it may have left the connection query-only. Turning that off is recovery from the
+    // read rather than the application's own statement, so its authorization does not apply, as
+    // it does not to restoring any other setting.
+    try authorizer.withoutUserAuthorization { try settings.pointee.ensureQueryOnly(false) }
   }
 
   // Every access runs its body through here, so that none begins under a setting an earlier one
-  // changed, and none ends without putting back what it changed.
+  // changed, and none ends without putting back what it changed. `query_only` is left to each
+  // access to set as it begins.
   private borrowing func withRestoredSettings<Result: ~Copyable>(
     _ body: () throws -> Result
   ) throws -> Result {
@@ -295,7 +305,8 @@ public struct SQLiteConnection: ~Copyable {
     }
     return try withManagedAccess(cancellation: cancellation, commitsPendingChanges: true) {
       observations in
-      try withoutTransaction { address, state in
+      try beginWritable()
+      return try withoutTransaction { address, state in
         try body(
           SQLiteWriteConnection(
             handle: self,

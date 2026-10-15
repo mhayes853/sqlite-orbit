@@ -113,6 +113,127 @@
       #expect(titles == ["yes"])
     }
 
+    @Test
+    func aReadAfterAWriteRefusesRawAndCachedMutations() throws {
+      var handle = try openConnection()
+      let insert = "INSERT INTO items (title) VALUES ('nope')"
+
+      // Compiled while the connection could write, and kept: the cache keeps the first, and the
+      // second is a raw statement this test holds across the accesses.
+      let held = try handle.withWriteConnection { connection in
+        try connection.execute(SQL(text: insert))
+        let library = connection.sqlite
+        let statement = try #require(
+          try library.prepare(
+            insert,
+            on: connection.sqliteConnection,
+            flags: SQLitePrepareFlags.persistent.rawValue
+          )
+        )
+        return UInt(bitPattern: statement)
+      }
+      let statement = try #require(OpaquePointer(bitPattern: held))
+      let library = handle.configuration.library
+      defer { _ = library.statements.execution.finalize(statement) }
+
+      try handle.withReadConnection { connection in
+        // The cached statement is held to the read when it is lent.
+        #expect(throws: SQLiteError.self) {
+          _ = try connection.rowCursor(SQL(text: insert), cached: true)
+        }
+        // Raw SQL, compiled anew or compiled before the read began, is refused by the library
+        // itself: SQLite refuses to step either, and Turso to compile the new one and, with a
+        // generic error, to step the old one.
+        #if Turso
+          #expect(throws: SQLiteError.self) {
+            try library.prepare(insert, on: connection.sqliteConnection)
+          }
+          let refusal = SQLiteResultCode.error.rawValue
+        #else
+          let raw = try #require(try library.prepare(insert, on: connection.sqliteConnection))
+          defer { _ = library.statements.execution.finalize(raw) }
+          let refusal = SQLiteResultCode.readOnly.rawValue
+          #expect(library.statements.execution.step(raw) & 0xff == refusal)
+        #endif
+        #expect(library.statements.execution.step(statement) & 0xff == refusal)
+        _ = library.statements.execution.reset(statement)
+      }
+
+      // The next write can write again, through either statement.
+      try handle.withWriteConnection { connection in
+        #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
+        _ = library.statements.execution.reset(statement)
+        try connection.execute(SQL(text: insert))
+      }
+      let count = try handle.read { transaction in
+        try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+      }
+      #expect(count == 3)
+    }
+
+    @Test(.libraryHooks)
+    func consecutiveReadsOnAWritableConnectionReuseTheirStatements() throws {
+      let probe = StatementLifecycleProbe()
+      do {
+        var handle = try openConnection(
+          configuration: probe.configuration(matching: "SELECT title FROM items")
+        )
+        try handle.write { transaction in
+          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
+        }
+        for _ in 0..<5 {
+          let titles = try handle.read { transaction in
+            try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+          }
+          #expect(titles == ["kept"])
+        }
+        // Compiled once and never dropped: nothing between the reads expired it, so its first
+        // step never found it recompiled and emptied the cache.
+        #expect(probe.prepared.value == 1)
+        #expect(probe.finalized.value == 0)
+
+        // A write between reads still leaves the statement where the next read finds it.
+        try handle.write { transaction in
+          try Item.insert { Item(id: 2, title: "also") }.execute(transaction)
+        }
+        let titles = try handle.read { transaction in
+          try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll(transaction)
+        }
+        #expect(titles == ["kept", "also"])
+      }
+    }
+
+    #if !Turso
+      @Test
+      func aWritableConnectionClosedAfterAReadStillRemovesItsLog() throws {
+        try withTestDatabaseFile("wal") { file in
+          let log = file.url.path + "-wal"
+          do {
+            var configuration = SQLiteConfiguration.default
+            configuration.journalMode = .wal
+            var handle = try SQLiteConnection(path: file.path, configuration: configuration)
+            try handle.write { transaction in
+              try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+              try transaction.execute("INSERT INTO items (id) VALUES (1)")
+            }
+            #expect(FileManager.default.fileExists(atPath: log))
+            // Closed while query-only, which a read leaves it.
+            let count = try handle.read { transaction in
+              try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+            }
+            #expect(count == 1)
+          }
+          // The last connection to close checkpoints the log into the database and removes it.
+          #expect(!FileManager.default.fileExists(atPath: log))
+          var handle = try SQLiteConnection(path: file.path, configuration: .default)
+          let count = try handle.read { transaction in
+            try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+          }
+          #expect(count == 1)
+        }
+      }
+    #endif
+
     @Test(.libraryHooks)
     func aStatementIsReusableAfterTheQueryUsingItFails() throws {
       let probe = StatementLifecycleProbe()

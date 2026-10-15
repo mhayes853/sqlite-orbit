@@ -7,6 +7,11 @@
 /// under a setting an earlier one left behind. Only changes made through here are known: a raw
 /// `PRAGMA` or a busy handler installed through the raw library is not tracked.
 ///
+/// `query_only` is the exception: it belongs to the kind of access rather than to the access, so
+/// every access on a connection that can write sets it to what its kind needs as it begins, and
+/// nothing puts it back as it ends. Changing it makes SQLite expire every statement the connection
+/// has compiled, so setting it only when it must change is what lets consecutive reads reuse them.
+///
 /// The handle keeps this in storage of its own rather than inline, since the handle is only ever
 /// borrowed and the settings still have to change.
 struct SQLiteConnectionSettings: ~Copyable {
@@ -32,8 +37,10 @@ struct SQLiteConnectionSettings: ~Copyable {
   // recovery also fails, the next access must restore it even when the last known value matches.
   private var needsForeignKeysRestore = false
 
-  // Configured off. A connection that can write turns it on only for the duration of a read.
-  private(set) var isQueryOnly = false
+  // Configured off. A connection that can write turns it on as a read begins, and off as any
+  // other access begins. `nil` once a change has failed, since a pragma can change the native flag
+  // while it compiles even when stepping it then fails: the next access sets it whatever it needs.
+  private var isQueryOnly: Bool? = false
 
   init(
     library: UnsafePointer<SQLiteLibrary>,
@@ -119,7 +126,11 @@ struct SQLiteConnectionSettings: ~Copyable {
     needsForeignKeysRestore = false
   }
 
-  mutating func setQueryOnly(_ isQueryOnly: Bool) throws {
+  /// Sets `query_only` unless it is known to be set that way already. A failed change leaves it
+  /// unknown, so the next call sets it whatever it asks for.
+  mutating func ensureQueryOnly(_ isQueryOnly: Bool) throws {
+    guard self.isQueryOnly != isQueryOnly else { return }
+    self.isQueryOnly = nil
     // Numeric booleans are accepted by both SQLite and Turso. Turso currently parses the `ON`
     // keyword as a different expression kind than the pragma implementation accepts.
     try authorizer.requiringExecution {
@@ -132,7 +143,8 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Puts every changed setting back to its configured value.
+  /// Puts every changed setting back to its configured value, except `query_only`, which each
+  /// access sets as it begins.
   ///
   /// Every changed setting is attempted even after one fails, so one failure leaves no more
   /// behind than it has to. A setting that cannot be restored stays changed.
@@ -150,13 +162,6 @@ struct SQLiteConnectionSettings: ~Copyable {
     if isForeignKeysEnabled != configuredForeignKeys || needsForeignKeysRestore {
       do {
         try setForeignKeysEnabled(configuredForeignKeys)
-      } catch {
-        failure = failure ?? error
-      }
-    }
-    if isQueryOnly {
-      do {
-        try setQueryOnly(false)
       } catch {
         failure = failure ?? error
       }
