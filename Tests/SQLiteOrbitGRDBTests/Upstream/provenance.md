@@ -19,13 +19,14 @@ upstream general harness. Test bodies retain their upstream assertions.
 
 Source files: https://github.com/groue/GRDB.swift/tree/v7.11.1/Tests/GRDBTests
 
-PersistenceCallbackTests.swift and ScopedWriteTests.swift are additional shared application
-fixtures, not copied upstream. They check callback order, save fallback, bounded bulk writes,
-composite keys, intersecting filters, and transaction modes. Observation lifecycle tests live outside
-this shared fixture directory because Orbit shares runtimes by definition and database, whereas
+PersistenceCallbackTests.swift, ScopedWriteTests.swift, and ExpandedSurfaceTests.swift are additional
+shared application fixtures, not copied upstream. They check callback order, save fallback, bounded bulk writes,
+composite keys, intersecting filters, transaction modes, set/key fetching, request reversal,
+RETURNING values and callbacks, UPSERT, schema resolution, aggregates, and WAL checkpoints.
+Observation lifecycle tests live outside this shared fixture directory because Orbit shares runtimes by definition and database, whereas
 GRDB starts separate runtimes by default.
 
-Run these 54 identical test bodies against GRDB itself with:
+Run these 66 identical test bodies against GRDB itself with:
 
     Tests/GRDBReference/run.sh
 

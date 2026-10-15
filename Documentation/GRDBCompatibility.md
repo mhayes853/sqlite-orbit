@@ -80,14 +80,15 @@ Native drivers also expose their native `configuration`. Use `any DatabaseReader
 | Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`; `asyncRead`; queue `inDatabase`; explicit transactions and savepoints. |
 | Configuration | Foreign keys, busy timeout/callback, maximum reader count, per-connection `prepareDatabase`, and selection of a native SQLiteLibrary. |
 | SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
-| Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, lazy cursors, and cursor mapping/filtering. |
-| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change updates, conflict policies, and persistence callbacks. |
+| Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, lazy cursors, set fetching, and cursor mapping/filtering. |
+| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
 | Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, and JSON encoder/decoder customization. |
-| Queries | SQLRequest, Table, Column/ColumnExpression, predicates, key/ID filtering, selections, ordering, limits/offsets, distinct/group/having, counts, and bulk update/delete. |
-| Schema | Table/column/index creation, constraints/defaults/foreign keys, common ALTER operations, table/view existence, column inspection, and primary-key inspection. |
+| Queries | SQLRequest, Table, Column/ColumnExpression, predicates, key/ID filtering, selections, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions, counts, and bulk update/delete. |
+| Schema | Table/column/index creation, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, and schema versions. |
 | Migrations | Registration, sync/async migration, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
 | Observation | Dynamic tracking, inferred/explicit constant regions, callbacks, asynchronous sequences, immediate/main-actor/dispatch-queue scheduling, map/removeDuplicates, event hooks, cancellation, and conditional Combine publishers. |
-| Connection setup | Custom scalar functions and collations, including installation on every pool connection through prepareDatabase. |
+| Connection setup | Custom scalar functions, aggregates, and collations, including installation on every pool connection through prepareDatabase. |
+| Maintenance | WAL checkpoints with passive/full/restart/truncate modes, schema selection, and frame counts. |
 
 Rows fetched by `fetchAll` and `fetchOne` own their values. A row cursor reuses its current `Row`;
 call `copy()` before retaining a row across cursor advances. Connections, cursors, and statements
@@ -105,6 +106,27 @@ buffers. The runtime stops when its last subscriber leaves. Different databases 
 constructed definitions use separate runtimes. This intentionally differs from GRDB's default
 per-subscription lifecycle: `willStart` runs once per runtime and `didCancel` runs when the last
 subscriber leaves.
+
+UPSERT uses SQLite's atomic `ON CONFLICT DO UPDATE` and reports the rowid of the inserted or
+updated row to insertion callbacks. It supports conflict targets, explicit assignments with the
+`excluded` alias, and the `.noColumnUnlessSpecified` update strategy. Tables without rowids are
+supported. Returning persistence APIs execute SQL `RETURNING`, so defaults and generated columns
+are available and returned values precede changes made by AFTER triggers, as in SQLite and GRDB.
+Both record-returning and selection/statement-fetch forms are available for insert, update, and
+save; updates can restrict columns. Statements are consumed to completion before success callbacks.
+These APIs require a selected engine with the corresponding UPSERT/RETURNING support.
+
+`DatabaseAggregate` forwards group state and errors to Orbit's native aggregate implementation.
+Aggregate support depends on the selected engine. `Database.checkpoint(_:on:)` uses Orbit's native
+checkpoint implementation, including its busy policy. Invoke it through `writeWithoutTransaction`;
+SQLite may reject a checkpoint with an active transaction or statement. The compatibility default
+schema is `"main"`; explicitly pass `nil` to checkpoint all attached schemas.
+
+Schema inspection follows temporary, main, and attached schema resolution. Expression indexes are
+excluded from `IndexInfo`, matching GRDB 7.11.1's representation. Foreign keys with omitted target
+columns resolve against the destination primary key. Metadata is queried through native SQL access.
+Typed ordering expressions support `reversed()` and NULL placement. Raw ordering SQL cannot be
+reversed; use an SQL expression for reversible ordering.
 
 ## Compatibility boundaries
 

@@ -261,13 +261,7 @@
     }
 
     public static func find(_ db: Database, id: any DatabaseValueConvertible) throws -> Self {
-      guard let record = try fetchOne(db, id: id) else {
-        throw RecordError.recordNotFound(
-          databaseTableName: databaseTableName,
-          key: ["id": id.databaseValue]
-        )
-      }
-      return record
+      try find(db, key: id)
     }
   }
 

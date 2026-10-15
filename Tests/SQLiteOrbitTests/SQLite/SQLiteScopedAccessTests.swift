@@ -54,6 +54,7 @@
         }
       }
       #expect(throws: SQLiteError.self) { try access.checkAccess() }
+      #expect(throws: SQLiteError.self) { try access.checkpoint() }
       #expect(throws: SQLiteError.self) { try access.sqliteConnection }
       #expect(throws: SQLiteError.self) { try access.configuration }
       #expect(throws: SQLiteError.self) { try access.changesCount }

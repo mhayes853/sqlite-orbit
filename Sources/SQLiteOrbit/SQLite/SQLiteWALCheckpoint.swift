@@ -65,3 +65,30 @@ public struct SQLiteWALCheckpointResult: Hashable, Sendable {
     self.checkpointedFrameCount = checkpointedFrameCount
   }
 }
+
+func orbitCheckpoint(
+  _ mode: SQLiteWALCheckpointMode,
+  schema: SQLiteSchemaName?,
+  connection: OpaquePointer,
+  library: SQLiteLibrary
+) throws -> SQLiteWALCheckpointResult {
+  var logFrameCount: Int32 = -1
+  var checkpointedFrameCount: Int32 = -1
+  func runCheckpoint(_ name: UnsafePointer<CChar>?) -> Int32 {
+    library.connections.walCheckpoint(
+      connection,
+      name,
+      mode.rawValue,
+      &logFrameCount,
+      &checkpointedFrameCount
+    )
+  }
+  let code = schema.map { $0.rawValue.withCString(runCheckpoint) } ?? runCheckpoint(nil)
+  guard code == SQLiteResultCode.ok.rawValue else {
+    throw SQLiteError.reported(by: library, on: connection, code: code, sql: nil)
+  }
+  return SQLiteWALCheckpointResult(
+    logFrameCount: Int(logFrameCount),
+    checkpointedFrameCount: Int(checkpointedFrameCount)
+  )
+}

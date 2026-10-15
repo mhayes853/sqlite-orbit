@@ -434,26 +434,11 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     _ mode: SQLiteWALCheckpointMode = .passive,
     schema: SQLiteSchemaName? = nil
   ) throws -> SQLiteWALCheckpointResult {
-    let library = base.base.library
-    let connection = base.base.connection
-    var logFrameCount: Int32 = -1
-    var checkpointedFrameCount: Int32 = -1
-    func runCheckpoint(_ name: UnsafePointer<CChar>?) -> Int32 {
-      library.pointee.connections.walCheckpoint(
-        connection,
-        name,
-        mode.rawValue,
-        &logFrameCount,
-        &checkpointedFrameCount
-      )
-    }
-    let code = schema.map { $0.rawValue.withCString(runCheckpoint) } ?? runCheckpoint(nil)
-    guard code == SQLiteResultCode.ok.rawValue else {
-      throw SQLiteError.reported(by: library.pointee, on: connection, code: code, sql: nil)
-    }
-    return SQLiteWALCheckpointResult(
-      logFrameCount: Int(logFrameCount),
-      checkpointedFrameCount: Int(checkpointedFrameCount)
+    try orbitCheckpoint(
+      mode,
+      schema: schema,
+      connection: base.base.connection,
+      library: base.base.library.pointee
     )
   }
 

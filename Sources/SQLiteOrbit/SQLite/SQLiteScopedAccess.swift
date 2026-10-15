@@ -244,6 +244,26 @@ public final class SQLiteScopedAccess {
     )
   }
 
+  /// Moves the write-ahead log into the database through this scope's write connection.
+  ///
+  /// Requires write access. SQLite reports an error if active statements or a transaction prevent
+  /// the checkpoint. The connection's configured busy policy applies.
+  public func checkpoint(
+    _ mode: SQLiteWALCheckpointMode = .passive,
+    schema: SQLiteSchemaName? = nil
+  ) throws -> SQLiteWALCheckpointResult {
+    try checkAccess()
+    guard !readOnly else {
+      throw SQLiteError(code: .readOnly, message: "checkpoints require write access")
+    }
+    return try orbitCheckpoint(
+      mode,
+      schema: schema,
+      connection: connection,
+      library: library.pointee
+    )
+  }
+
   /// Lends the native connection access for function installation, collation installation, or
   /// authorization changes. The native view cannot escape the synchronous body. Raw SQL through
   /// it must respect this scope's read/write permissions and use `notifyReads` or `notifyChanges`.

@@ -160,71 +160,6 @@
       }
     }
 
-    public func tableExists(_ name: String) throws -> Bool {
-      try Bool.fetchOne(
-        self,
-        sql:
-          "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ? COLLATE NOCASE)",
-        arguments: [name]
-      ) ?? false
-    }
-
-    public func viewExists(_ name: String) throws -> Bool {
-      try Bool.fetchOne(
-        self,
-        sql:
-          "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'view' AND name = ? COLLATE NOCASE)",
-        arguments: [name]
-      ) ?? false
-    }
-
-    public func columns(in table: String) throws -> [ColumnInfo] {
-      guard try tableExists(table) || viewExists(table) else {
-        throw DatabaseError(message: "no such table: \(table)")
-      }
-      return try Row.fetchAll(self, sql: "SELECT * FROM pragma_table_info(?)", arguments: [table])
-        .map {
-          ColumnInfo(
-            cid: $0["cid"],
-            name: $0["name"],
-            type: $0["type"],
-            notNull: $0["notnull"],
-            defaultValueSQL: $0["dflt_value"],
-            primaryKeyIndex: $0["pk"]
-          )
-        }
-    }
-
-    public func primaryKey(_ table: String) throws -> PrimaryKeyInfo {
-      let tableColumns = try columns(in: table)
-      let columns = tableColumns.filter { $0.primaryKeyIndex > 0 }
-        .sorted { $0.primaryKeyIndex < $1.primaryKeyIndex }
-      guard try tableExists(table) else {
-        throw DatabaseError(message: "no such table: \(table)")
-      }
-      // INTEGER PRIMARY KEY is a rowid alias only when SQLite has not built a primary-key index
-      // (WITHOUT ROWID and the inline DESC exception both have such an index).
-      let hasPrimaryKeyIndex =
-        try Bool.fetchOne(
-          self,
-          sql: "SELECT EXISTS(SELECT 1 FROM pragma_index_list(?) WHERE origin = 'pk')",
-          arguments: [table]
-        ) ?? false
-      let integer =
-        columns.count == 1 && columns[0].type.uppercased() == "INTEGER" && !hasPrimaryKeyIndex
-        ? columns[0].name : nil
-      let keyColumns: [String]
-      if columns.isEmpty {
-        let names = Set(tableColumns.map { $0.name.lowercased() })
-        guard let alias = ["rowid", "_rowid_", "oid"].first(where: { !names.contains($0) }) else {
-          throw DatabaseError(message: "table has no accessible primary key: \(table)")
-        }
-        keyColumns = [alias]
-      } else {
-        keyColumns = columns.map(\.name)
-      }
-      return PrimaryKeyInfo(columns: keyColumns, rowIDColumn: integer, hiddenRowID: columns.isEmpty)
-    }
   }
 
   public struct ColumnInfo: Sendable {
@@ -313,12 +248,7 @@
     public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
       throws -> RowCursor
     {
-      try statement.database.cursor(
-        sql: statement.sql,
-        arguments: arguments ?? statement.arguments,
-        cached: statement.cached,
-        unchecked: arguments == nil && statement.unchecked
-      )
+      try statement.makeCursor(arguments: arguments)
     }
 
     public static func fetchAll(_ statement: Statement, arguments: StatementArguments? = nil) throws
@@ -353,6 +283,7 @@
       }
     }
 
+    var persistenceCursors: [RowCursor]?
     var unchecked = false
     public let columnNames: [String]
 
@@ -385,13 +316,26 @@
       unchecked = true
     }
 
-    public func execute(arguments: StatementArguments? = nil) throws {
+    func makeCursor(arguments: StatementArguments?) throws -> RowCursor {
       let cursor = try database.cursor(
         sql: sql,
         arguments: arguments ?? self.arguments,
         cached: cached,
         unchecked: arguments == nil && unchecked
       )
+      persistenceCursors?.append(cursor)
+      return cursor
+    }
+
+    func finishPersistenceExecution() throws {
+      for cursor in persistenceCursors ?? [] {
+        while try cursor.next() != nil {}
+      }
+      persistenceCursors = nil
+    }
+
+    public func execute(arguments: StatementArguments? = nil) throws {
+      let cursor = try makeCursor(arguments: arguments)
       while try cursor.next() != nil {}
     }
   }

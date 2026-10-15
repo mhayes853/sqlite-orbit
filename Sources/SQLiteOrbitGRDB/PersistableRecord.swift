@@ -115,6 +115,9 @@
       try willSave(db)
       var saved: PersistenceSuccess?
       try aroundSave(db) {
+        guard saved == nil else {
+          throw callbackMisuse("aroundSave")
+        }
         let inserted = try insertWithCallbacks(db, conflict: conflictResolution)
         let result = PersistenceSuccess(persistenceContainer: inserted.persistenceContainer)
         saved = result
@@ -132,27 +135,13 @@
     )
       throws -> InsertionSuccess
     {
-      try willInsert(db)
-      let container = try PersistenceContainer(self)
-      var inserted: InsertionSuccess?
-      try aroundInsert(db) {
-        guard inserted == nil else {
-          throw callbackMisuse("aroundInsert")
-        }
-        let result = try performInsert(
-          db,
-          table: Self.databaseTableName,
-          container: container,
-          conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForInsert
-        )
-        inserted = result
-        return result
-      }
-      guard let inserted else {
-        throw callbackMisuse("aroundInsert")
-      }
-      didInsert(inserted)
-      return inserted
+      try insertReturningWithCallbacks(
+        db,
+        conflict: conflict,
+        selection: [],
+        fetch: { try $0.execute() }
+      )
+      .0
     }
 
     public func update(
@@ -182,6 +171,9 @@
       try willSave(db)
       var saved: PersistenceSuccess?
       try aroundSave(db) {
+        guard saved == nil else {
+          throw callbackMisuse("aroundSave")
+        }
         let result = try updateWithCallbacks(db, columns: columns, conflict: conflictResolution)
         saved = result
         return result
@@ -197,29 +189,14 @@
       columns: Set<String>,
       conflict: Database.ConflictResolution?
     ) throws -> PersistenceSuccess {
-      try willUpdate(db, columns: columns)
-      let container = try PersistenceContainer(self)
-      var updated: PersistenceSuccess?
-      try aroundUpdate(db, columns: columns) {
-        guard updated == nil else {
-          throw callbackMisuse("aroundUpdate")
-        }
-        try performUpdate(
-          db,
-          table: Self.databaseTableName,
-          container: container,
-          columns: columns,
-          conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForUpdate
-        )
-        let result = PersistenceSuccess(persistenceContainer: container)
-        updated = result
-        return result
-      }
-      guard let updated else {
-        throw callbackMisuse("aroundUpdate")
-      }
-      didUpdate(updated)
-      return updated
+      try updateReturningWithCallbacks(
+        db,
+        columns: columns,
+        conflict: conflict,
+        selection: [],
+        fetch: { try $0.execute() }
+      )
+      .0
     }
 
     public mutating func save(
@@ -229,6 +206,9 @@
       try willSave(db)
       var saved: PersistenceSuccess?
       try aroundSave(db) {
+        guard saved == nil else {
+          throw callbackMisuse("aroundSave")
+        }
         let container = try PersistenceContainer(self)
         let pk = try db.primaryKey(Self.databaseTableName)
         if pk.columns.allSatisfy({ container[$0]?.databaseValue.isNull == false }) {
@@ -373,70 +353,7 @@
     )
   }
 
-  func performInsert(
-    _ db: Database,
-    table: String,
-    container: PersistenceContainer,
-    conflict: Database.ConflictResolution
-  ) throws -> InsertionSuccess {
-    let prefix = "INSERT OR \(conflict.rawValue.uppercased()) INTO \(quoted(table))"
-    if container.isEmpty {
-      try db.execute(sql: prefix + " DEFAULT VALUES")
-    } else {
-      let columns = container.fields.map { quoted($0.0) }.joined(separator: ", ")
-      let placeholders = Array(repeating: "?", count: container.count).joined(separator: ", ")
-      try db.execute(
-        sql: prefix + " (\(columns)) VALUES (\(placeholders))",
-        arguments: StatementArguments(container.fields.map(\.1))
-      )
-    }
-    let rowID = db.lastInsertedRowID
-    let column = try db.primaryKey(table).rowIDColumn
-    var saved = container
-    if let column {
-      saved[column] = rowID
-    }
-    return InsertionSuccess(rowID: rowID, rowIDColumn: column, persistenceContainer: saved)
-  }
-
-  func performUpdate(
-    _ db: Database,
-    table: String,
-    container: PersistenceContainer,
-    columns: Set<String>,
-    conflict: Database.ConflictResolution
-  ) throws {
-    let key = try primaryKeyValues(db, table: table, container: container)
-    guard key.values.allSatisfy({ !$0.isNull }) else {
-      throw RecordError.recordNotFound(databaseTableName: table, key: key)
-    }
-    let fields = container.fields.filter { field in
-      columns.contains { $0.caseInsensitiveCompare(field.0) == .orderedSame }
-        && !key.keys.contains { $0.caseInsensitiveCompare(field.0) == .orderedSame }
-    }
-    // An update of a record with only a primary key still checks that the row exists.
-    let assignments =
-      fields.isEmpty
-      ? [quoted(key.keys.sorted()[0]) + " = " + quoted(key.keys.sorted()[0])]
-      : fields.map { quoted($0.0) + " = ?" }
-    let orderedKey = key.sorted { $0.key < $1.key }
-    let whereSQL = orderedKey.map { quoted($0.key) + " = ?" }.joined(separator: " AND ")
-    try db.execute(
-      sql:
-        "UPDATE OR \(conflict.rawValue.uppercased()) \(quoted(table)) SET \(assignments.joined(separator: ", ")) WHERE \(whereSQL)",
-      arguments: StatementArguments(fields.map(\.1) + orderedKey.map(\.value))
-    )
-    if db.changesCount == 0 {
-      let exists =
-        try QueryInterfaceRequest<Row>(table: table)
-        .filter(key: key.mapValues { $0 as (any DatabaseValueConvertible)? }).fetchCount(db) > 0
-      if !exists {
-        throw RecordError.recordNotFound(databaseTableName: table, key: key)
-      }
-    }
-  }
-
-  private func callbackMisuse(_ name: String) -> DatabaseError {
+  func callbackMisuse(_ name: String) -> DatabaseError {
     DatabaseError(
       resultCode: .SQLITE_MISUSE,
       message: "\(name) must invoke its persistence closure exactly once"

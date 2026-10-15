@@ -65,7 +65,8 @@ Rows returned by `SQLiteStatementCursor` own their values. The access and its cu
 the creating thread until the closure returns; later or cross-thread operations throw a misuse
 error. The scope closes all outstanding statements before returning the borrowed connection.
 `statementInfo` inspects result columns, read/write regions, and parameter counts without executing
-SQL. A scoped write connection can group operations with `access.transaction(mode:_:)`.
+SQL. A scoped write connection can group operations with `access.transaction(mode:_:)` and run WAL
+checkpoints with `access.checkpoint(_:schema:)`.
 Reads or writes performed through the raw SQLite connection must call `notifyReads(in:)` or
 `notifyChanges(in:)` so they participate in observation.
 The ordinary borrowed API continues to enforce lifetimes at compile time.

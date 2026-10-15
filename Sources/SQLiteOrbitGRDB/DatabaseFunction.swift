@@ -2,11 +2,37 @@
   import Foundation
   import SQLiteOrbit
 
+  public protocol DatabaseAggregate: SendableMetatype {
+    init()
+
+    mutating func step(_ dbValues: [DatabaseValue]) throws
+
+    func finalize() throws -> (any DatabaseValueConvertible)?
+  }
+
+  private struct AggregateBridge<Aggregate: DatabaseAggregate>: SQLiteAggregateAccumulator {
+    var aggregate = Aggregate()
+
+    mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
+      try aggregate.step((0..<arguments.count).map { DatabaseValue(arguments[$0]) })
+    }
+
+    func finish() throws -> OrbitDatabaseValue {
+      try aggregate.finalize()?.databaseValue.orbitValue ?? .null
+    }
+  }
+
   public struct DatabaseFunction: Sendable {
     public let name: String
     public let argumentCount: Int?
     public let isPure: Bool
-    let body: @Sendable ([DatabaseValue]) throws -> (any DatabaseValueConvertible)?
+
+    enum Kind: Sendable {
+      case scalar(@Sendable ([DatabaseValue]) throws -> (any DatabaseValueConvertible)?)
+      case aggregate(@Sendable (borrowing SQLiteConnectionAccess) throws -> Void)
+    }
+
+    let kind: Kind
 
     public init(
       _ name: String,
@@ -17,7 +43,33 @@
       self.name = name
       self.argumentCount = argumentCount
       isPure = pure
-      body = function
+      kind = .scalar(function)
+    }
+
+    public init<Aggregate: DatabaseAggregate>(
+      _ name: String,
+      argumentCount: Int? = nil,
+      pure: Bool = false,
+      aggregate: Aggregate.Type
+    ) {
+      self.name = name
+      self.argumentCount = argumentCount
+      isPure = pure
+      kind = .aggregate { connection in
+        try connection.registerAggregateFunction(
+          name,
+          argumentCount: argumentCount,
+          flags: pure ? [.deterministic] : [],
+          AggregateBridge<Aggregate>()
+        )
+      }
+    }
+
+    public func callAsFunction(_ arguments: any SQLExpressible...) -> SQLExpression {
+      SQLExpression(
+        SQL(sql: quoted(name) + "(")
+          + joined(arguments.map { $0.sqlExpression.literal }, separator: ", ") + SQL(sql: ")")
+      )
     }
   }
 
@@ -37,13 +89,18 @@
       do {
         try translate {
           try access.withConnectionAccess { connection in
-            try connection.registerFunction(
-              function.name,
-              argumentCount: function.argumentCount,
-              flags: function.isPure ? [.deterministic] : []
-            ) { arguments in
-              let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
-              return try function.body(values)?.databaseValue.orbitValue ?? .null
+            switch function.kind {
+            case .scalar(let body):
+              try connection.registerFunction(
+                function.name,
+                argumentCount: function.argumentCount,
+                flags: function.isPure ? [.deterministic] : []
+              ) { arguments in
+                let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
+                return try body(values)?.databaseValue.orbitValue ?? .null
+              }
+            case .aggregate(let install):
+              try install(connection)
             }
           }
         }

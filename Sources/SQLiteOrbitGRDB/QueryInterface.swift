@@ -19,6 +19,7 @@
 
   public struct SQLExpression: SQLExpressible, SQLSelectable, SQLOrderingTerm, Sendable {
     let literal: SQL
+    var orderingReversal: SQL?
 
     public init(sql: String, arguments: StatementArguments = StatementArguments()) {
       literal = SQL(sql: sql, arguments: arguments)
@@ -45,11 +46,15 @@
     }
 
     public var asc: SQLExpression {
-      .init(literal + SQL(sql: " ASC"))
+      var result = Self(literal + SQL(sql: " ASC"))
+      result.orderingReversal = literal + SQL(sql: " DESC")
+      return result
     }
 
     public var desc: SQLExpression {
-      .init(literal + SQL(sql: " DESC"))
+      var result = Self(literal + SQL(sql: " DESC"))
+      result.orderingReversal = literal + SQL(sql: " ASC")
+      return result
     }
 
     public func forKey(_ key: String) -> SQLExpression {
@@ -93,7 +98,7 @@
     }
 
     public func set(to value: (any DatabaseValueConvertible)?) -> SQLAssignment {
-      SQLAssignment(column: name, value: value?.databaseValue ?? .null)
+      SQLAssignment(column: name, value: SQL(sql: "?", arguments: [value]))
     }
   }
 
@@ -107,10 +112,10 @@
 
   public struct SQLAssignment: Sendable {
     let column: String
-    let value: DatabaseValue
+    let value: SQL
   }
 
-  private func binary(_ lhs: SQLExpression, _ op: String, _ rhs: SQLExpression) -> SQLExpression {
+  func binary(_ lhs: SQLExpression, _ op: String, _ rhs: SQLExpression) -> SQLExpression {
     .init(SQL(sql: "(") + lhs.literal + SQL(sql: " \(op) ") + rhs.literal + SQL(sql: ")"))
   }
 
@@ -317,6 +322,8 @@
     var selections: [SQL] = [SQL(sql: "*")]
     var predicates: [SQL] = []
     var ordering: [SQL] = []
+    var reversedOrdering: [SQL]? = []
+    var isReversed = false
     var groups: [SQL] = []
     var havingPredicates: [SQL] = []
     var rowLimit: Int?
@@ -340,6 +347,7 @@
       if !havingPredicates.isEmpty {
         result = result + SQL(sql: " HAVING ") + joined(havingPredicates, separator: " AND ")
       }
+      let ordering = try resolvedOrdering(in: db)
       if !ordering.isEmpty {
         result = result + SQL(sql: " ORDER BY ") + joined(ordering, separator: ", ")
       }
@@ -422,16 +430,56 @@
       return result
     }
 
+    public func filter(keys: [[String: (any DatabaseValueConvertible)?]]) -> Self {
+      var result = self
+      result.keys.append(keys.map { $0.mapValues { $0.map(RecordKey.init) ?? .value(.null) } })
+      return result
+    }
+
     public func order(_ terms: any SQLOrderingTerm...) -> Self {
       var result = self
       result.ordering = terms.map(\.sqlOrdering)
+      result.reversedOrdering = reverseOrderings(terms)
+      result.isReversed = false
       return result
     }
 
     public func order(sql: String, arguments: StatementArguments = StatementArguments()) -> Self {
       var result = self
+      result.reversedOrdering = nil
+      result.isReversed = false
       result.ordering = [SQL(sql: sql, arguments: arguments)]
       return result
+    }
+
+    public func reversed() -> Self {
+      var result = self
+      result.isReversed.toggle()
+      return result
+    }
+
+    public func unordered() -> Self {
+      var result = self
+      result.ordering = []
+      result.reversedOrdering = []
+      result.isReversed = false
+      return result
+    }
+
+    private func resolvedOrdering(in db: Database) throws -> [SQL] {
+      guard isReversed else {
+        return ordering
+      }
+      if ordering.isEmpty {
+        return []
+      }
+      guard let reversedOrdering else {
+        throw DatabaseError(
+          resultCode: .SQLITE_MISUSE,
+          message: "ordering SQL literals cannot be reversed; order by expressions instead"
+        )
+      }
+      return reversedOrdering
     }
 
     public func limit(_ limit: Int, offset: Int? = nil) -> Self {
@@ -478,6 +526,8 @@
       result.selections = selections
       result.predicates = predicates
       result.ordering = ordering
+      result.reversedOrdering = reversedOrdering
+      result.isReversed = isReversed
       result.groups = groups
       result.havingPredicates = havingPredicates
       result.rowLimit = rowLimit
@@ -499,8 +549,9 @@
       return try condition(in: db)
     }
 
-    private func mutationSuffix() -> SQL {
+    private func mutationSuffix(in db: Database) throws -> SQL {
       var result = SQL(sql: "")
+      let ordering = try resolvedOrdering(in: db)
       if !ordering.isEmpty {
         result = result + SQL(sql: " ORDER BY ") + joined(ordering, separator: ", ")
       }
@@ -514,7 +565,7 @@
     public func deleteAll(_ db: Database) throws -> Int {
       let sql =
         SQL(sql: "DELETE FROM " + quoted(table)) + (try mutationCondition(in: db))
-        + mutationSuffix()
+        + (try mutationSuffix(in: db))
       try db.execute(literal: sql)
       return db.changesCount
     }
@@ -526,10 +577,10 @@
       guard !assignments.isEmpty else {
         return 0
       }
-      let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ?", arguments: [$0.value]) }
+      let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ") + $0.value }
       let sql =
         SQL(sql: "UPDATE " + quoted(table) + " SET ") + joined(clauses, separator: ", ")
-        + (try mutationCondition(in: db)) + mutationSuffix()
+        + (try mutationCondition(in: db)) + (try mutationSuffix(in: db))
       try db.execute(literal: sql)
       return db.changesCount
     }
@@ -597,6 +648,8 @@
     public static func order(_ terms: any SQLOrderingTerm...) -> QueryInterfaceRequest<Self> {
       var result = all()
       result.ordering = terms.map(\.sqlOrdering)
+      result.reversedOrdering = reverseOrderings(terms)
+      result.isReversed = false
       return result
     }
 

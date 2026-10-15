@@ -34,6 +34,14 @@
       try await database.write { try Item(id: 1, name: "Turso").insert($0) }
       #expect(try await iterator.next() == [Item(id: 1, name: "Turso")])
       #expect(database.path == file.path)
+      let stored = try await database.write { db in
+        try Item(id: 1, name: "Updated").upsertAndFetch(db)
+      }
+      #expect(stored == Item(id: 1, name: "Updated"))
+      let names = try await database.read { db in
+        try String.fetchSet(db, Table<Item>("item").select(Column("name")))
+      }
+      #expect(names == ["Updated"])
     }
   }
 #endif
