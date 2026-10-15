@@ -307,11 +307,12 @@ let package = Package(
   dependencies: [
     // Leaves out the default `SQLiteVecStaticAPI` trait, which makes sqlite-vec call the linked
     // SQLite's functions directly. Orbit initializes it with the API table of whichever library
-    // opened the connection, and Turso does not export every function it references.
+    // opened the connection, and Turso does not export every function it references. The NEON and
+    // AVX kernels are only compiled for their architectures, and AVX is checked at runtime.
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "3625c9aebe3953fe6cfcd0f375b8886bbd553aa6",
-      traits: ["SQLiteVecNEON"]
+      revision: "95e7b089bc99a2c56a49e2ca44d25d56d82c4afc",
+      traits: ["SQLiteVecNEON", "SQLiteVecAVX"]
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two

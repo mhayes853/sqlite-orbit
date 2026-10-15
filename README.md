@@ -1000,11 +1000,12 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `3625c9a` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `95e7b08` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and
-then a Turso build fails to link.
+then a Turso build fails to link. Orbit enables the NEON and AVX distance kernels; AVX runs only
+on x86 processors that report support at runtime, and others use the scalar code.
 The query-core bindings bring a transitive Foundation dependency even when the general
 `StructuredQueries` trait is disabled; that trait still controls Orbit's full query-builder
 integration.
