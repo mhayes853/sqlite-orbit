@@ -391,9 +391,10 @@
         }
         #expect(rows.map(\.0) == ["nearest", "neighbor", "opposite"])
         #expect(rows.map(\.1) == ["[1,0,0]", "[1,1,0]", "[-1,0,0]"])
-        #expect(abs(rows[0].2) < 1e-6)
-        #expect(abs(rows[1].2 - (1 - 1 / Double(2).squareRoot())) < 1e-6)
-        #expect(abs(rows[2].2 - 2) < 1e-6)
+        let cosines = try rows.map { try #require($0.2) }
+        #expect(abs(cosines[0]) < 1e-6)
+        #expect(abs(cosines[1] - (1 - 1 / Double(2).squareRoot())) < 1e-6)
+        #expect(abs(cosines[2] - 2) < 1e-6)
         #expect(rows.map(\.3) == [0, 1, 2])
         #expect(
           try await database.read {
@@ -403,7 +404,8 @@
         )
         #expect(
           try await database.read {
-            try TursoEmbedding.where { TursoVec.distanceL2($0.embedding, to: vector).lt(1.5) }
+            try TursoEmbedding
+              .where { TursoVec.distanceL2($0.embedding, to: vector).lt(Double?(1.5)) }
               .order(by: \.key).select(\.title).fetchAll($0)
           } == ["nearest", "neighbor"]
         )
@@ -466,8 +468,8 @@
             .fetchAll(transaction)
           #expect(distances.count == 2)
           for distance in distances {
-            #expect(abs(distance.0) < 1e-6)
-            #expect(abs(distance.1) < 1e-6)
+            #expect(abs(try #require(distance.0)) < 1e-6)
+            #expect(abs(try #require(distance.1)) < 1e-6)
             #expect(distance.2 == 0)
             #expect(distance.3 == "[1,-1,1]")
           }
@@ -761,6 +763,64 @@
       }
     }
 
+    // Turso's native functions reject NULL, so the helpers wrap them in CASE. These run the
+    // guards in the engine against stored and bound NULLs. Unlike SQLiteVec, Turso reports a
+    // zero-norm cosine as 1 rather than NULL.
+    @Test
+    func missingVectorsAndUndefinedDistancesDecodeAsNil() async throws {
+      try await withTestDatabaseFile("turso-vectors") { file in
+        let database = try file.tursoPool()
+        try await database.write { transaction in
+          try transaction.execute(
+            "CREATE TABLE turso_nullable_embeddings (key INTEGER PRIMARY KEY, embedding F32_BLOB(2))"
+          )
+          try transaction.execute(
+            """
+            INSERT INTO turso_nullable_embeddings
+            VALUES (1, vector32('[3,4]')), (2, NULL), (3, vector32('[0,0]'))
+            """
+          )
+        }
+        let candidate: [Float].VectorBytesRepresentation = [3, 4]
+        let missing: [Float].VectorBytesRepresentation? = nil
+        try await database.read { transaction in
+          let rows = try TursoNullableEmbedding.order(by: \.key)
+            .select {
+              (
+                TursoVec.extract($0.embedding), TursoVec.distanceL2($0.embedding, to: candidate),
+                TursoVec.distanceCosine($0.embedding, to: candidate)
+              )
+            }
+            .fetchAll(transaction)
+          #expect(rows.map(\.0) == ["[3,4]", nil, "[0,0]"])
+          #expect(rows.map(\.1) == [0, nil, 5])
+          let cosines = rows.map(\.2)
+          #expect(abs(try #require(cosines[0])) < 1e-6)
+          #expect(cosines[1] == nil)
+          #expect(cosines[2] == 1)
+          let fallbacks =
+            try TursoNullableEmbedding.select {
+              TursoVec.distanceL2($0.embedding, to: missing).ifnull(Double(-1))
+            }
+            .fetchAll(transaction)
+          #expect(fallbacks == [-1, -1, -1])
+          #expect(
+            try TursoNullableEmbedding
+              .where { TursoVec.distanceCosine($0.embedding, to: candidate).isNot(nil) }
+              .select(\.key)
+              .fetchAll(transaction) == [1, 3]
+          )
+          #expect(
+            try #sql(
+              "SELECT embedding FROM turso_nullable_embeddings ORDER BY key",
+              as: [Float].VectorBytesRepresentation?.self
+            )
+            .fetchAll(transaction) == [[3, 4], nil, [0, 0]]
+          )
+        }
+      }
+    }
+
     // The helpers target Rust Turso. Keep the engine's unsupported libSQL functions explicit
     // using raw SQL; upstream intentionally provides no libSQL query helpers.
     @Test(arguments: ["vector16", "vectorb16", "vector_top_k"])
@@ -807,6 +867,14 @@
     var title: String
     @Column(as: [Float].VectorBytesRepresentation.self)
     var embedding: [Float]
+  }
+
+  @Table("turso_nullable_embeddings")
+  private struct TursoNullableEmbedding {
+    @Column(primaryKey: true)
+    var key: Int
+    @Column(as: [Float].VectorBytesRepresentation?.self)
+    var embedding: [Float]?
   }
 
   @Table("turso_encoded_embeddings")

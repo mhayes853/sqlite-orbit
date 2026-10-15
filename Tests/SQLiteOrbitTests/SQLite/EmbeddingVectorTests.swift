@@ -311,7 +311,8 @@
               )
               #expect(result.0 == [2, 0])
               #expect(result.1 == EmbeddingVector<2>([2, 0]))
-              #expect(abs(result.2 - (Double(5).squareRoot() - 1)) < 0.000001)
+              let distance = try #require(result.2)
+              #expect(abs(distance - (Double(5).squareRoot() - 1)) < 0.000001)
               // Structured queries surface the vector's own error, unlike raw-SQL conversions.
               #expect(throws: VectorDecodingError.dimensionMismatch(expected: 3, actual: 2)) {
                 try SQLitePlainEmbedding.select {
@@ -355,8 +356,8 @@
             )
             #expect([distances.0, distances.1, distances.2] == [38, 0, 0])
             #expect(
-              try Vec.each(floats).order(by: \.rowid).select(\.value).fetchAll(transaction)
-                == floats.queryOutput
+              try Vec.each(floats).order(by: \.rowid).select { $0.value }.fetchAll(transaction)
+                == floats.queryOutput.map(Optional.some)
             )
             #expect(
               try Vec.each(codes).order(by: \.rowid).select(\.value).fetchAll(transaction)
@@ -367,6 +368,59 @@
               try Vec.each(bits).order(by: \.rowid).select(\.value).fetchAll(transaction)
                 == bits.queryOutput.reversed()
             )
+          }
+        }
+
+        // Missing vectors and undefined scores both reach Orbit as NULL, which the optional
+        // helper results decode as nil rather than failing the storage-class check.
+        @Test(arguments: SQLiteTestDriver.allCases)
+        func missingVectorsAndUndefinedDistancesDecodeAsNil(_ driver: SQLiteTestDriver)
+          async throws
+        {
+          try await driver.withDatabase(
+            configuration: vecConfiguration(),
+            schema: "CREATE TABLE nullable_embeddings (key INTEGER PRIMARY KEY, embedding BLOB)"
+          ) { database in
+            try await database.write {
+              try $0.execute(
+                """
+                INSERT INTO nullable_embeddings
+                VALUES (1, vec_f32('[3,4]')), (2, NULL), (3, vec_f32('[0,0]'))
+                """
+              )
+            }
+            let candidate: [Float].VectorBytesRepresentation = [3, 4]
+            let missing: [Float].VectorBytesRepresentation? = nil
+            try await database.read { transaction in
+              let rows = try SQLiteNullableEmbedding.order(by: \.key)
+                .select {
+                  (
+                    Vec.length($0.embedding), Vec.distanceL2($0.embedding, to: candidate),
+                    Vec.distanceCosine($0.embedding, to: candidate)
+                  )
+                }
+                .fetchAll(transaction)
+              #expect(rows.map(\.0) == [2, nil, 2])
+              #expect(rows.map(\.1) == [0, nil, 5])
+              #expect(rows.map(\.2) == [0, nil, nil])
+              let fallbacks =
+                try SQLiteNullableEmbedding.select {
+                  Vec.distanceL2($0.embedding, to: missing).ifnull(Double(-1))
+                }
+                .fetchAll(transaction)
+              #expect(fallbacks == [-1, -1, -1])
+              #expect(
+                try SQLiteNullableEmbedding
+                  .where { Vec.distanceCosine($0.embedding, to: candidate).isNot(nil) }
+                  .select(\.key)
+                  .fetchAll(transaction) == [1]
+              )
+              let components: [Float].VectorBytesRepresentation = [1, .nan, -2]
+              #expect(
+                try Vec.each(components).order(by: \.rowid).select { $0.value }
+                  .fetchAll(transaction) == [1, nil, -2]
+              )
+            }
           }
         }
 
@@ -490,6 +544,14 @@
     private struct SQLitePlainEmbedding {
       var embedding: EmbeddingVector<3>
       var label: String
+    }
+
+    @Table("nullable_embeddings")
+    private struct SQLiteNullableEmbedding {
+      @Column(primaryKey: true)
+      var key: Int
+      @Column(as: [Float].VectorBytesRepresentation?.self)
+      var embedding: [Float]?
     }
 
     @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)

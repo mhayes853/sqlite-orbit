@@ -1000,7 +1000,7 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `95e7b08` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `8473c89` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and
@@ -1055,6 +1055,23 @@ decoding; `F32_BLOB(3)` gives the column BLOB affinity without enforcing dimensi
 For variable-size models, use `[Float]` with `@Column(as: [Float].VectorBytesRepresentation.self)`.
 Convert JSON explicitly before distance
 comparisons, for example `TursoVec.distanceL2(column, to: TursoVec.vector32("[1,0,0]"))`.
+
+Floating distances decode as `Double?`. A NULL column or a `nil` argument makes the result `nil`
+without calling the native function, which rejects NULL. Ascending order puts NULL first, so
+filter before ranking, and compare against an optional value:
+
+```swift
+let near = try await database.read { transaction in
+  try Document
+    .where { TursoVec.distanceL2($0.embedding, to: vector).lt(Double?(1.5)) }
+    .select(\.title)
+    .fetchAll(transaction)
+}
+```
+
+`.isNot(nil)` filters out missing scores, and `.ifnull(_:)` supplies a fallback. A zero fallback
+ranks a missing vector as an exact match. Turso reports a zero-norm cosine as 1, while SQLiteVec
+returns NULL.
 
 The bundled Rust Turso engine supports `vector`/`vector32`, `vector64`, `vector8`, `vector1bit`,
 `vector32Sparse`, JSON extraction, cosine/L2/dot/Jaccard distances, and dense concatenation and

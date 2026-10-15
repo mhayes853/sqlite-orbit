@@ -311,7 +311,7 @@ let package = Package(
     // AVX kernels are only compiled for their architectures, and AVX is checked at runtime.
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "95e7b089bc99a2c56a49e2ca44d25d56d82c4afc",
+      revision: "8473c89127cd018f946860d04841815ae7014d7d",
       traits: ["SQLiteVecNEON", "SQLiteVecAVX"]
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
