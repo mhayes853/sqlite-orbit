@@ -76,6 +76,11 @@ let packageTarget1: Target = .target(
       condition: .when(traits: ["Vectors"])
     ),
     .product(
+      name: "StructuredQueriesTursoVecCore",
+      package: "sqlite-vec-data",
+      condition: .when(traits: ["Vectors"])
+    ),
+    .product(
       name: "StructuredQueriesSQLite",
       package: "swift-structured-queries",
       condition: .when(traits: ["StructuredQueries"])
@@ -280,7 +285,7 @@ let package = Package(
     .trait(
       name: "Vectors",
       description:
-        "Includes SQLite Vec and initializes it automatically on supported SQLite connections."
+        "Adds SQLite Vec and Turso vector query helpers, initializing Vec on supported connections."
     ),
     .trait(
       name: "Dependencies",
@@ -300,9 +305,14 @@ let package = Package(
     )
   ],
   dependencies: [
+    // Leaves out the default `SQLiteVecStaticAPI` trait, which makes sqlite-vec call the linked
+    // SQLite's functions directly. Orbit initializes it with the API table of whichever library
+    // opened the connection, and Turso does not export every function it references. The NEON and
+    // AVX kernels are only compiled for their architectures, and AVX is checked at runtime.
     .package(
       url: "https://github.com/mhayes853/sqlite-vec-data",
-      revision: "f980c99e337ff7c3aff250558d038ee2b149f47e"
+      revision: "0479516be24fb7befdfde82eb113568896b3ff64",
+      traits: ["SQLiteVecNEON", "SQLiteVecAVX"]
     ),
     .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.12.0"),
     // SwiftPM can only condition a dependency's trait on one of this package's traits, not on two
