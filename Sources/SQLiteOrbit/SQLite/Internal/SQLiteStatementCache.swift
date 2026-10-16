@@ -168,7 +168,7 @@ final class SQLiteStatementCache {
       try library.pointee.prepareStatement(sql, on: connection, flags: flags)
     }
     guard let statement else { return nil }
-    let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
+    let isReadOnly = sqliteIsReadOnly(statement, authorizations: authorizations, library: library)
     guard !requiresReadOnly || isReadOnly else {
       _ = library.pointee.statements.execution.finalize(statement)
       throw Self.mayWriteError(sql: sql)
@@ -642,7 +642,7 @@ struct SQLiteCompiledStatement {
   let invalidatesStatementCache: Bool
   let cacheGeneration: UInt64
 
-  // `sqlite3_stmt_readonly`, which is what a read transaction is refused a statement by.
+  // What `sqliteIsReadOnly` reports, which is what a read transaction is refused a statement by.
   let isReadOnly: Bool
 
   init(pointer: OpaquePointer, metadata: Self) {
@@ -696,7 +696,23 @@ struct SQLiteCompiledStatement {
   }
 }
 
-// `isReadOnly` is what `sqlite3_stmt_readonly` reports for the statement.
+// Whether a statement only reads, which is what `sqlite3_stmt_readonly` reports, except for
+// `PRAGMA optimize`, run as a pragma or read as the `pragma_optimize` table. SQLite reports that
+// one read-only, since its own program writes nothing, yet stepping it runs ANALYZE, which writes
+// the statistics tables. Held to this, a read refuses it as it compiles, as it does any other
+// statement that may write, rather than relying on `query_only` to refuse its ANALYZE. The pragma
+// is found among the statement's authorizations, so a library without an authorizer is left to
+// what SQLite reports.
+func sqliteIsReadOnly(
+  _ statement: OpaquePointer,
+  authorizations: [SQLiteRawAuthorization],
+  library: UnsafePointer<SQLiteLibrary>
+) -> Bool {
+  guard library.pointee.statements.inspection.isReadOnly(statement) != 0 else { return false }
+  return !authorizations.contains(where: \.runsOptimize)
+}
+
+// `isReadOnly` is what `sqliteIsReadOnly` reports for the statement.
 func sqliteInvalidatesStatementCache(
   after authorizations: [SQLiteRawAuthorization],
   isReadOnly: Bool
@@ -711,6 +727,22 @@ func sqliteInvalidatesStatementCache(
 }
 
 extension SQLiteRawAuthorization {
+  // Whether this authorizes `PRAGMA optimize`, or a read of the table that runs it. Most
+  // authorizations read a column, so the name's length rules nearly all of them out before it is
+  // lowercased.
+  var runsOptimize: Bool {
+    let name: String
+    switch action {
+    case .pragma: name = "optimize"
+    case .read: name = "pragma_optimize"
+    default: return false
+    }
+    guard let argument = firstArgument, argument.utf8.count == name.utf8.count else {
+      return false
+    }
+    return argument.asciiLowercased == name
+  }
+
   var invalidatesStatementCache: Bool {
     switch action {
     case .createIndex, .createTable, .createTemporaryIndex, .createTemporaryTable,

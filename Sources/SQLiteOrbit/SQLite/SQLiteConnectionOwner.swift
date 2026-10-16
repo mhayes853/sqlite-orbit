@@ -489,7 +489,11 @@ public struct SQLiteConnection: ~Copyable {
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard let statement else { return }
         next = tail ?? end
-        let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
+        let isReadOnly = sqliteIsReadOnly(
+          statement,
+          authorizations: authorizations,
+          library: library
+        )
 
         if let statements,
           sqliteInvalidatesStatementCache(after: authorizations, isReadOnly: isReadOnly)

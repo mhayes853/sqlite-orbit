@@ -204,6 +204,46 @@
     }
 
     #if !Turso
+      @Test(
+        arguments: [
+          "PRAGMA optimize", "pragma Main.OPTIMIZE(0x10002)", "SELECT * FROM pragma_optimize"
+        ]
+      )
+      func aReadRefusesTheOptimizeThatSQLiteReportsAsReadOnly(sql: String) throws {
+        var handle = try openConnection()
+        try handle.execute("CREATE INDEX items_title ON items (title)")
+        try handle.write { transaction in
+          for id in 1...100 {
+            try Item.insert { Item(id: id, title: "\(id % 7)") }.execute(transaction)
+          }
+        }
+        let statistics = "SELECT count(*) FROM sqlite_schema WHERE name = 'sqlite_stat1'"
+
+        // SQLite reports the pragma read-only, yet stepping it runs ANALYZE, which writes the
+        // statistics. Outside a transaction that write would commit, so the read refuses it as it
+        // compiles, as it does any statement that may write, cached or not.
+        try handle.withReadConnection { connection in
+          _ = try connection.fetchAll("SELECT title FROM items WHERE title = '3'") { $0[0] }
+          for cached in [true, false] {
+            let error = #expect(throws: SQLiteError.self) {
+              _ = try connection.rowCursor(SQL(text: sql), cached: cached)
+            }
+            #expect(error?.primaryCode == .readOnly)
+          }
+          let error = #expect(throws: SQLiteError.self) {
+            try connection.transaction { _ = try $0.prepare(SQL(text: sql)) }
+          }
+          #expect(error?.primaryCode == .readOnly)
+          #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 0)
+        }
+
+        // A write runs it.
+        try handle.withWriteConnection { connection in
+          try connection.execute(SQL(text: sql))
+          #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 1)
+        }
+      }
+
       @Test
       func aWritableConnectionClosedAfterAReadStillRemovesItsLog() throws {
         try withTestDatabaseFile("wal") { file in

@@ -195,7 +195,11 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
           statements.refreshedMetadata(for: statement, sql: sql)
             ?? SQLiteCompiledStatement(
               pointer: statement,
-              isReadOnly: library.pointee.statements.inspection.isReadOnly(statement) != 0,
+              isReadOnly: sqliteIsReadOnly(
+                statement,
+                authorizations: authorizations,
+                library: library
+              ),
               authorizations: authorizations,
               cacheGeneration: statements.generation,
               statements: statements,
