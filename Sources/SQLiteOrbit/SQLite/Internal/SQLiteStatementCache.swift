@@ -300,9 +300,9 @@ final class SQLiteStatementCache {
         sql: control.sql
       )
       if control.isFlagPragma {
-        // A flag pragma takes effect as it compiles, and only expires itself, so that it compiles
-        // again on its next step, once its program has run. One that failed before then would set
-        // nothing the next time, so it is compiled afresh.
+        // A flag pragma takes effect as it compiles, and its program expires every statement, itself
+        // included, so that it compiles again on its next step. One that failed before its program
+        // ran is not expired, and would set nothing the next time, so it is compiled afresh.
         _ = library.pointee.statements.execution.finalize(statement)
         controlStatements[control.rawValue] = nil
       } else {
