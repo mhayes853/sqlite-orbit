@@ -28,7 +28,7 @@
       func configuration(matching sqlPrefix: String) -> SQLiteConfiguration {
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.statements.preparation.prepare = {
+        configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
           [self]
           connection,
           sql,
@@ -54,7 +54,8 @@
           }
           return code
         }
-        configuration.library.statements.execution.finalize = { [self] statement in
+        configuration.library.statements.execution.finalize = LibraryHooks.finalize {
+          [self] statement in
           if let statement,
             cachedPointers.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
           {
@@ -113,6 +114,127 @@
     }
 
     @Test
+    func aReadAfterAWriteRefusesRawAndCachedMutations() throws {
+      var handle = try openConnection()
+      let insert = "INSERT INTO items (title) VALUES ('nope')"
+
+      // Compiled while the connection could write, and kept: the cache keeps the first, and the
+      // second is a raw statement this test holds across the accesses.
+      let held = try handle.withWriteConnection { connection in
+        try connection.execute(SQL(text: insert))
+        let library = connection.sqlite
+        let statement = try #require(
+          try library.prepare(
+            insert,
+            on: connection.sqliteConnection,
+            flags: SQLitePrepareFlags.persistent.rawValue
+          )
+        )
+        return UInt(bitPattern: statement)
+      }
+      let statement = try #require(OpaquePointer(bitPattern: held))
+      let library = handle.configuration.library
+      defer { _ = library.statements.execution.finalize(statement) }
+
+      try handle.withReadConnection { connection in
+        // The cached statement is held to the read when it is lent.
+        #expect(throws: SQLiteError.self) {
+          _ = try connection.rowCursor(SQL(text: insert), cached: true)
+        }
+        // Raw SQL, compiled anew or compiled before the read began, is refused by the library
+        // itself: SQLite refuses to step either, and Turso to compile the new one and, with a
+        // generic error, to step the old one.
+        #if Turso
+          #expect(throws: SQLiteError.self) {
+            try library.prepare(insert, on: connection.sqliteConnection)
+          }
+          let refusal = SQLiteResultCode.error.rawValue
+        #else
+          let raw = try #require(try library.prepare(insert, on: connection.sqliteConnection))
+          defer { _ = library.statements.execution.finalize(raw) }
+          let refusal = SQLiteResultCode.readOnly.rawValue
+          #expect(library.statements.execution.step(raw) & 0xff == refusal)
+        #endif
+        #expect(library.statements.execution.step(statement) & 0xff == refusal)
+        _ = library.statements.execution.reset(statement)
+      }
+
+      // The next write can write again, through either statement.
+      try handle.withWriteConnection { connection in
+        #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
+        _ = library.statements.execution.reset(statement)
+        try connection.execute(SQL(text: insert))
+      }
+      let count = try handle.read { transaction in
+        try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+      }
+      #expect(count == 3)
+    }
+
+    @Test(.libraryHooks)
+    func consecutiveReadsOnAWritableConnectionReuseTheirStatements() throws {
+      let probe = StatementLifecycleProbe()
+      do {
+        var handle = try openConnection(
+          configuration: probe.configuration(matching: "SELECT title FROM items")
+        )
+        try handle.write { transaction in
+          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
+        }
+        for _ in 0..<5 {
+          let titles = try handle.read { transaction in
+            try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+          }
+          #expect(titles == ["kept"])
+        }
+        // Compiled once and never dropped: nothing between the reads expired it, so its first
+        // step never found it recompiled and emptied the cache.
+        #expect(probe.prepared.value == 1)
+        #expect(probe.finalized.value == 0)
+
+        // A write between reads still leaves the statement where the next read finds it.
+        try handle.write { transaction in
+          try Item.insert { Item(id: 2, title: "also") }.execute(transaction)
+        }
+        let titles = try handle.read { transaction in
+          try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll(transaction)
+        }
+        #expect(titles == ["kept", "also"])
+      }
+    }
+
+    #if !Turso
+      @Test
+      func aWritableConnectionClosedAfterAReadStillRemovesItsLog() throws {
+        try withTestDatabaseFile("wal") { file in
+          let log = file.url.path + "-wal"
+          do {
+            var configuration = SQLiteConfiguration.default
+            configuration.journalMode = .wal
+            var handle = try SQLiteConnection(path: file.path, configuration: configuration)
+            try handle.write { transaction in
+              try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+              try transaction.execute("INSERT INTO items (id) VALUES (1)")
+            }
+            #expect(FileManager.default.fileExists(atPath: log))
+            // Closed while query-only, which a read leaves it.
+            let count = try handle.read { transaction in
+              try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+            }
+            #expect(count == 1)
+          }
+          // The last connection to close checkpoints the log into the database and removes it.
+          #expect(!FileManager.default.fileExists(atPath: log))
+          var handle = try SQLiteConnection(path: file.path, configuration: .default)
+          let count = try handle.read { transaction in
+            try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+          }
+          #expect(count == 1)
+        }
+      }
+    #endif
+
+    @Test(.libraryHooks)
     func aStatementIsReusableAfterTheQueryUsingItFails() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -141,7 +263,7 @@
       #expect(probe.finalized.value == probe.prepared.value)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aPartiallyReadCursorDoesNotResumeWhenItsStatementIsReused() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -235,7 +357,7 @@
       #expect(stored == extremes)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
       let probe = StatementLifecycleProbe()
       do {
@@ -303,14 +425,14 @@
       var library: SQLiteLibrary {
         let base = builtInTestLibrary
         var library = base
-        library.connections.open = { path, connection, flags, vfs in
+        library.connections.open = LibraryHooks.open { path, connection, flags, vfs in
           let code = base.connections.open(path, connection, flags, vfs)
           if code == SQLiteResultCode.ok.rawValue {
             self.state.withLock { $0.opened += 1 }
           }
           return code
         }
-        library.connections.close = { connection in
+        library.connections.close = LibraryHooks.close { connection in
           self.state.withLock { $0.closed += 1 }
           return base.connections.close(connection)
         }
@@ -318,7 +440,7 @@
       }
     }
 
-    @Test
+    @Test(.libraryHooks)
     func releasingAPoolClosesEveryConnectionItOpened() async throws {
       let counter = ConnectionCounter()
       var configuration = SQLiteConfiguration.default
@@ -513,12 +635,12 @@
       var title: String
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
       let base = builtInTestLibrary
       let isArmed = Lock(true)
       var configuration = SQLiteConfiguration.default
-      configuration.library.statements.execution.step = { statement in
+      configuration.library.statements.execution.step = LibraryHooks.step { statement in
         let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
         guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else {
           return base.statements.execution.step(statement)
@@ -542,6 +664,93 @@
         try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
       }
       #expect(titles == ["after"])
+    }
+
+    @Test(.libraryHooks)
+    func controlStatementsAreCompiledOnceAndOutliveTheirFailures() throws {
+      let base = builtInTestLibrary
+      let control: Set<String> = [
+        "BEGIN DEFERRED TRANSACTION", "BEGIN IMMEDIATE TRANSACTION", "COMMIT", "ROLLBACK"
+      ]
+      let prepared = Lock([String: Int]())
+      let live = Lock(Set<UInt>())
+      let failsNextCommit = Lock(false)
+      var configuration = SQLiteConfiguration.default
+      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
+        connection,
+        sql,
+        count,
+        flags,
+        statement,
+        tail in
+        let code = base.statements.preparation.prepare(
+          connection,
+          sql,
+          count,
+          flags,
+          statement,
+          tail
+        )
+        if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee, let sql,
+          control.contains(String(cString: sql))
+        {
+          prepared.withLock { $0[String(cString: sql), default: 0] += 1 }
+          live.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+        }
+        return code
+      }
+      configuration.library.statements.execution.finalize = LibraryHooks.finalize { statement in
+        if let statement { live.withLock { _ = $0.remove(UInt(bitPattern: statement)) } }
+        return base.statements.execution.finalize(statement)
+      }
+      configuration.library.statements.execution.step = LibraryHooks.step { statement in
+        let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
+        let fails = failsNextCommit.withLock { fails in
+          defer { if sql == "COMMIT" { fails = false } }
+          return sql == "COMMIT" && fails
+        }
+        return fails ? SQLiteResultCode.busy.rawValue : base.statements.execution.step(statement)
+      }
+
+      do {
+        var handle = try openConnection(configuration: configuration)
+        for id in 1...3 {
+          try handle.write { transaction in
+            try Item.insert { Item(id: id, title: "row") }.execute(transaction)
+          }
+          _ = try handle.read { transaction in
+            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+          }
+        }
+
+        // A commit that fails is reported as it is, and its transaction rolled back...
+        failsNextCommit.withLock { $0 = true }
+        let error = #expect(throws: SQLiteError.self) {
+          try handle.write { transaction in
+            try Item.insert { Item(id: 4, title: "lost") }.execute(transaction)
+          }
+        }
+        #expect(error?.primaryCode == .busy)
+        #expect(error?.sql == "COMMIT")
+
+        // ...and the statement that failed runs the next commit.
+        try handle.write { transaction in
+          try Item.insert { Item(id: 4, title: "kept") }.execute(transaction)
+        }
+        let titles = try handle.read { transaction in
+          try #sql("SELECT title FROM items WHERE id = 4", as: String.self).fetchAll(transaction)
+        }
+        #expect(titles == ["kept"])
+        #expect(
+          prepared.withLock { $0 } == [
+            "BEGIN DEFERRED TRANSACTION": 1, "BEGIN IMMEDIATE TRANSACTION": 1, "COMMIT": 1,
+            "ROLLBACK": 1
+          ]
+        )
+        #expect(live.withLock { $0.count } == 4)
+      }
+      // Closing the connection finalizes them.
+      #expect(live.withLock { $0.isEmpty })
     }
 
     @Test

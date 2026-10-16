@@ -4,7 +4,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteBusyHandlerTests {
     // Turso's header does not declare `sqlite3_busy_handler`, so its library has no busy handler to
     // install and refuses the configuration, as the last test here checks for any such library.
@@ -115,13 +115,12 @@
             attempts.increment()
             return false
           }
-          configuration.library.busyHandler = SQLiteLibrary.BusyHandler {
-            connection,
-            callback,
-            data in
-            if failRestore.withLock({ $0 }) { return SQLiteResultCode.ioError.rawValue }
-            return install(connection, callback, data)
-          }
+          configuration.library.busyHandler = SQLiteLibrary.BusyHandler(
+            install: LibraryHooks.installBusyHandler { connection, callback, data in
+              if failRestore.withLock({ $0 }) { return SQLiteResultCode.ioError.rawValue }
+              return install(connection, callback, data)
+            }
+          )
           let waiter = try file.queue(configuration: configuration)
           let error = #expect(throws: SQLiteError.self) {
             try waiter.writeWithoutTransactionBlocking { connection in

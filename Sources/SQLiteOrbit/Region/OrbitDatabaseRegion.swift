@@ -34,7 +34,7 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
     /// Whether a column not listed in `exceptions` belongs to the region.
     let includesUnspecifiedColumns: Bool
     /// Columns whose membership is the inverse of `includesUnspecifiedColumns`.
-    let exceptions: Set<String>
+    private(set) var exceptions: Set<String>
 
     static let empty = Self(includesUnspecifiedColumns: false, exceptions: [])
     static let full = Self(includesUnspecifiedColumns: true, exceptions: [])
@@ -43,8 +43,19 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
       Self(includesUnspecifiedColumns: false, exceptions: columns)
     }
 
+    /// No columns yet, with room for `capacity` to be inserted without growing.
+    static func columns(capacity: Int) -> Self {
+      .columns(Set(minimumCapacity: capacity))
+    }
+
     func contains(column: String) -> Bool {
       includesUnspecifiedColumns != exceptions.contains(column)
+    }
+
+    /// Adds a column, already lowercased, to the region, for building one a column at a time.
+    mutating func insert(column: String) {
+      guard !includesUnspecifiedColumns else { return }
+      exceptions.insert(column)
     }
 
     func combining(
@@ -81,7 +92,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ) {
     let defaultTableRegion: TableRegion = includesUnspecifiedTables ? .full : .empty
     self.includesUnspecifiedTables = includesUnspecifiedTables
-    self.tableRegions = tableRegions.filter { $0.value != defaultTableRegion }
+    // Checked first, since filtering copies the dictionary even when it keeps every table.
+    self.tableRegions =
+      tableRegions.values.contains(defaultTableRegion)
+      ? tableRegions.filter { $0.value != defaultTableRegion }
+      : tableRegions
   }
 
   /// The empty database region.
@@ -175,8 +190,11 @@ public struct OrbitDatabaseRegion: Hashable, Sendable, SetAlgebra {
   ///
   /// - Parameter other: The other region.
   public func union(_ other: Self) -> Self {
-    if self == other || other.isEmpty || isFullDatabase { return self }
+    // Comparing the regions is left until last, since it is the one check that reads their
+    // tables, and a union with nothing, the most common, needs none of it.
+    if other.isEmpty || isFullDatabase { return self }
     if isEmpty || other.isFullDatabase { return other }
+    if self == other { return self }
     return combining(other, with: { $0 || $1 })
   }
 

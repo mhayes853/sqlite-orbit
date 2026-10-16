@@ -19,7 +19,9 @@ func bind(
   }
 }
 
-private func bind(
+// Binds one value to the parameter at `index`, counting from one, as both an `SQL`'s values and a
+// prepared statement's arguments are bound.
+func bind(
   _ value: OrbitDatabaseValue,
   to statement: OpaquePointer,
   at index: Int32,

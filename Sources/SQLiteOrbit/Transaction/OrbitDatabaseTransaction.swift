@@ -53,6 +53,11 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
   /// transaction, whose ``OrbitDatabaseWriteTransaction/executeRowCursor(_:cached:)`` is the cursor
   /// over SQL that may write.
   ///
+  /// The methods built on this one reuse prepared statements unless passed `cached: false`.
+  /// Native SQLite drivers keep a connection's most recently used statements, up to
+  /// ``SQLiteConfiguration/maximumCachedStatements``. Pass `false` for SQL that runs only once, so
+  /// it does not take the place of a statement that is run again.
+  ///
   /// ```swift
   /// try await database.read { transaction in
   ///   var cursor = try transaction.rowCursor("SELECT title FROM reminders", cached: true)
@@ -63,8 +68,10 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
   /// - Parameters:
   ///   - sql: The SQL to run, which must only read.
   ///   - cached: Whether the driver may reuse an idle prepared statement for this SQL. Caching is
-  ///     an optimization; each live cursor retains independent iteration state. Native SQLite
-  ///     drivers prepare another statement when an existing cursor is still using the same SQL.
+  ///     an optimization; each live cursor retains independent iteration state. A cursor holds its
+  ///     statement until it is dropped, so native SQLite drivers prepare another statement when an
+  ///     existing cursor is still using the same SQL, and reset a statement a cursor left
+  ///     unfinished before reusing it.
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or one with the
   ///   code ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
@@ -120,9 +127,12 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
   /// try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = \(id)")
   /// ```
   ///
-  /// - Parameter sql: The SQL to run. Any rows it returns are discarded.
+  /// - Parameters:
+  ///   - sql: The SQL to run. Any rows it returns are discarded.
+  ///   - cached: Whether the driver may reuse a prepared statement. See
+  ///     ``OrbitDatabaseReadTransaction/rowCursor(_:cached:)``.
   /// - Throws: A ``SQLiteError`` when the statement fails.
-  borrowing func execute(_ sql: SQL) throws
+  borrowing func execute(_ sql: SQL, cached: Bool) throws
 
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
   ///
@@ -163,8 +173,8 @@ public protocol OrbitDatabaseWriteTransaction: OrbitDatabaseReadTransaction, ~Co
 }
 
 extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
-  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
-  /// statement.
+  /// Creates a cursor over the rows SQL that only reads returns, through the connection's cache of
+  /// prepared statements.
   ///
   /// A statement that SQLite reports may write is refused with a ``SQLiteError`` whose code is
   /// ``SQLiteResultCode/readOnly``, in a write transaction as much as in a read one.
@@ -179,9 +189,10 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Parameter sql: The SQL to run, which must only read.
   /// - Returns: A cursor over the statement's rows, valid until this transaction ends.
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound, or may write.
+  @inlinable
   @_lifetime(borrow self)
   public borrowing func rowCursor(_ sql: SQL) throws -> RowCursor {
-    try rowCursor(sql, cached: false)
+    try rowCursor(sql, cached: true)
   }
 
   /// Returns a value made from each row SQL that only reads returns.
@@ -200,6 +211,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Returns: The values, in the order the rows were returned.
   /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails or may
   ///   write.
+  @inlinable
   public borrowing func fetchAll<Element>(
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
@@ -224,6 +236,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Returns: The value, or `nil` when the SQL returned no rows.
   /// - Throws: Whatever `transform` throws, or a ``SQLiteError`` when the statement fails or may
   ///   write.
+  @inlinable
   public borrowing func fetchOne<Element>(
     _ sql: SQL,
     _ transform: (inout Row) throws -> Element
@@ -233,8 +246,24 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
 }
 
 extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable {
+  /// Runs SQL that may write, discarding any rows it returns, through the connection's cache of
+  /// prepared statements.
+  ///
+  /// Interpolated values are bound as parameters rather than spliced into the text. Read
+  /// ``changesCount`` afterwards for how many rows it changed.
+  ///
+  /// ```swift
+  /// try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = \(id)")
+  /// ```
+  ///
+  /// - Parameter sql: The SQL to run. Any rows it returns are discarded.
+  /// - Throws: A ``SQLiteError`` when the statement fails.
+  public borrowing func execute(_ sql: SQL) throws {
+    try execute(sql, cached: true)
+  }
+
   /// Creates a cursor over the rows SQL that may write returns, such as from a `RETURNING`
-  /// clause, without reusing a prepared statement.
+  /// clause, through the connection's cache of prepared statements.
   ///
   /// ```swift
   /// var cursor = try transaction.executeRowCursor(
@@ -248,7 +277,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   /// - Throws: A ``SQLiteError`` when the statement cannot be prepared or bound.
   @_lifetime(borrow self)
   public borrowing func executeRowCursor(_ sql: SQL) throws -> RowCursor {
-    try executeRowCursor(sql, cached: false)
+    try executeRowCursor(sql, cached: true)
   }
 
   /// Runs SQL that may write and lends any returned rows to `body`.
@@ -274,7 +303,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
     _ sql: SQL,
     _ body: (inout Row) throws -> OrbitDatabaseRowIteration
   ) throws {
-    try withOrbitCursor(try executeRowCursor(sql, cached: false)) { try $0.forEach(body) }
+    try withOrbitCursor(try executeRowCursor(sql, cached: true)) { try $0.forEach(body) }
   }
 }
 

@@ -49,7 +49,7 @@ func waitUntil(
 ///
 /// ```swift
 /// let steps = TestCounter()
-/// configuration.library.statements.execution.step = { statement in
+/// configuration.library.statements.execution.step = LibraryHooks.step { statement in
 ///   steps.increment()
 ///   return base.statements.execution.step(statement)
 /// }

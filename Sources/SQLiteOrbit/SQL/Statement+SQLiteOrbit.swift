@@ -155,7 +155,7 @@
   extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
     // Steps SQL that only reads to completion, discarding its rows.
     fileprivate borrowing func executeReadOnly(_ sql: SQL) throws {
-      try withOrbitCursor(try rowCursor(sql, cached: false)) { cursor in
+      try withOrbitCursor(try rowCursor(sql, cached: true)) { cursor in
         while try cursor.next() != nil {}
       }
     }
@@ -190,7 +190,7 @@
       Transaction: ~Escapable,
       Transaction.Row: OrbitDatabaseStructuredRow
     {
-      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: false))
+      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: true))
     }
 
     /// Fetches every value this statement selects.
@@ -275,7 +275,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseQueryCursor(
-        base: try transaction.executeRowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.executeRowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -359,7 +359,7 @@
       Transaction: ~Escapable,
       Transaction.Row: OrbitDatabaseStructuredRow
     {
-      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: false))
+      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: true))
     }
 
     /// Fetches every value this raw SQL produces in a read transaction.
@@ -435,7 +435,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseQueryCursor(
-        base: try transaction.executeRowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.executeRowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -536,7 +536,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseTupleQueryCursor(
-        base: try transaction.rowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.rowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -620,7 +620,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseTupleQueryCursor(
-        base: try transaction.executeRowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.executeRowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -701,7 +701,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseTupleQueryCursor(
-        base: try transaction.rowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.rowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -775,7 +775,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseTupleQueryCursor(
-        base: try transaction.executeRowCursor(SQL(fragment: query), cached: false)
+        base: try transaction.executeRowCursor(SQL(fragment: query), cached: true)
       )
     }
 
@@ -856,7 +856,7 @@
       Transaction: ~Escapable,
       Transaction.Row: OrbitDatabaseStructuredRow
     {
-      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: false))
+      OrbitDatabaseQueryCursor(base: try transaction.rowCursor(SQL(fragment: query), cached: true))
     }
 
     /// Fetches every table value this statement selects.
@@ -994,7 +994,7 @@
       Transaction.Row: OrbitDatabaseStructuredRow
     {
       OrbitDatabaseTupleQueryCursor(
-        base: try transaction.rowCursor(SQL(fragment: selectStar().query), cached: false)
+        base: try transaction.rowCursor(SQL(fragment: selectStar().query), cached: true)
       )
     }
 

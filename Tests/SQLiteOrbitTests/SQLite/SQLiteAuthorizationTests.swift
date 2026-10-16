@@ -168,6 +168,33 @@
         }
       }
 
+      @Test
+      func aPolicySetAfterTransactionsHaveRunStillGovernsTheirControl() throws {
+        var configuration = SQLiteConfiguration.default
+        configuration.setups.append(.script(schema))
+        let database = try SQLiteQueue(path: .memory, configuration: configuration)
+        try database.writeBlocking { try $0.execute("INSERT INTO copies VALUES ('kept')") }
+
+        // The connection keeps its BEGIN compiled from one transaction to the next, but compiles
+        // it again under a new policy rather than running it on the old one's decision.
+        try database.writeWithoutTransactionBlocking { connection in
+          try connection.setAuthorization { event in
+            if case .transaction(operation: "BEGIN") = event.action { return .deny }
+            return .allow
+          }
+        }
+        let error = #expect(throws: SQLiteError.self) {
+          try database.writeBlocking { try $0.execute("INSERT INTO copies VALUES ('lost')") }
+        }
+        #expect(error?.primaryCode == .auth)
+
+        try database.writeWithoutTransactionBlocking { try $0.setAuthorization(nil) }
+        let count = try database.readBlocking {
+          try $0.fetchOne("SELECT count(*) FROM copies") { $0[0].integerValue }
+        }
+        #expect(count == 1)
+      }
+
       @Test(arguments: ["journal_mode", "query_only"])
       func aPoolsOwnSetupIsExemptFromTheConfigurationsAuthorization(pragma: String) async throws {
         var configuration = SQLiteConfiguration.default

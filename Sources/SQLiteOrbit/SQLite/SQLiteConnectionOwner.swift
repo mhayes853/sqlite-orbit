@@ -232,13 +232,23 @@ public struct SQLiteConnection: ~Copyable {
     // A connection opened read-only refuses writes already. One that can write must be told not
     // to for the duration, so that a read attempting a mutation fails rather than having it
     // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
-    // its own. The access turns it back off with the rest of its settings.
+    // its own. It stays on once the read ends, until an access that may write begins, so that
+    // consecutive reads keep the statements every change of it would expire.
     guard !isReadOnly else { return }
-    try settings.pointee.setQueryOnly(true)
+    try settings.pointee.ensureQueryOnly(true)
+  }
+
+  private borrowing func beginWritable() throws {
+    // Every access that may write passes through here before running anything, since a read
+    // before it may have left the connection query-only. Turning that off is recovery from the
+    // read rather than the application's own statement, so its authorization does not apply, as
+    // it does not to restoring any other setting.
+    try authorizer.withoutUserAuthorization { try settings.pointee.ensureQueryOnly(false) }
   }
 
   // Every access runs its body through here, so that none begins under a setting an earlier one
-  // changed, and none ends without putting back what it changed.
+  // changed, and none ends without putting back what it changed. `query_only` is left to each
+  // access to set as it begins.
   private borrowing func withRestoredSettings<Result: ~Copyable>(
     _ body: () throws -> Result
   ) throws -> Result {
@@ -267,7 +277,7 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute("BEGIN DEFERRED TRANSACTION") }
+    try authorizer.requiringExecution { try statements.execute(.beginDeferred) }
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
@@ -277,7 +287,7 @@ public struct SQLiteConnection: ~Copyable {
       rollbackIgnoringFailure()
       throw error
     }
-    try authorizer.withoutUserAuthorization { try endTransaction(with: "ROLLBACK") }
+    try authorizer.withoutUserAuthorization { try endTransaction(with: .rollback) }
     return value
   }
 
@@ -295,7 +305,8 @@ public struct SQLiteConnection: ~Copyable {
     }
     return try withManagedAccess(cancellation: cancellation, commitsPendingChanges: true) {
       observations in
-      try withoutTransaction { address, state in
+      try beginWritable()
+      return try withoutTransaction { address, state in
         try body(
           SQLiteWriteConnection(
             handle: self,
@@ -343,10 +354,13 @@ public struct SQLiteConnection: ~Copyable {
     // Each interceptor wraps whatever step was in effect when it was installed, so nested ones
     // compose, the innermost running first, and each is taken off again in reverse order.
     let previous = libraryStorage.pointee.statements.execution.step
-    libraryStorage.pointee.statements.execution.step = { statement in
+    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push { statement in
       intercept(statement, previous)
     }
-    defer { libraryStorage.pointee.statements.execution.step = previous }
+    defer {
+      libraryStorage.pointee.statements.execution.step = previous
+      SQLiteStepInterception.pop()
+    }
     return try operation()
   }
 
@@ -389,12 +403,12 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute(mode.beginSQL) }
+    try authorizer.requiringExecution { try statements.execute(mode.beginStatement) }
     statements.invalidateIfSchemaChanged()
     do {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
-      try endTransaction(with: "COMMIT")
+      try endTransaction(with: .commit)
       observations.didCommit()
       return value
     } catch {
@@ -404,19 +418,19 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func endTransaction(with sql: String) throws {
+  private borrowing func endTransaction(with control: SQLiteControlStatement) throws {
     do {
-      try authorizer.requiringExecution { try execute(sql) }
+      try authorizer.requiringExecution { try statements.execute(control) }
     } catch {
       if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
-        authorizer.withoutUserAuthorization { try? execute("ROLLBACK") }
+        authorizer.withoutUserAuthorization { try? statements.execute(.rollback) }
       }
       throw error
     }
   }
 
   private borrowing func rollbackIgnoringFailure() {
-    authorizer.withoutUserAuthorization { try? endTransaction(with: "ROLLBACK") }
+    authorizer.withoutUserAuthorization { try? endTransaction(with: .rollback) }
   }
 
   static func execute(
@@ -484,7 +498,7 @@ public struct SQLiteConnection: ~Copyable {
         }
 
         if let observations {
-          let preparedStatement = SQLitePreparedStatement(
+          let compiledStatement = SQLiteCompiledStatement(
             pointer: statement,
             isReadOnly: isReadOnly,
             authorizations: authorizations,
@@ -493,8 +507,8 @@ public struct SQLiteConnection: ~Copyable {
             authorizer: authorizer,
             library: library
           )
-          observations.didRead(in: preparedStatement.readRegion)
-          observations.didChange(in: preparedStatement.changedRegion)
+          observations.didRead(in: compiledStatement.readRegion)
+          observations.didChange(in: compiledStatement.changedRegion)
         }
 
         try stepToCompletion(statement, on: connection, library: library, sql: sql)

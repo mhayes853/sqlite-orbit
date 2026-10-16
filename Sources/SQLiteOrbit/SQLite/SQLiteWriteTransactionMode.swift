@@ -9,12 +9,12 @@ public enum SQLiteWriteTransactionMode: Equatable, Sendable {
   /// Uses `BEGIN CONCURRENT`, requiring a SQLite build that supports it.
   case concurrent
 
-  var beginSQL: String {
+  var beginStatement: SQLiteControlStatement {
     switch self {
-    case .deferred: "BEGIN DEFERRED TRANSACTION"
-    case .immediate: "BEGIN IMMEDIATE TRANSACTION"
-    case .exclusive: "BEGIN EXCLUSIVE TRANSACTION"
-    case .concurrent: "BEGIN CONCURRENT TRANSACTION"
+    case .deferred: .beginDeferred
+    case .immediate: .beginImmediate
+    case .exclusive: .beginExclusive
+    case .concurrent: .beginConcurrent
     }
   }
 }

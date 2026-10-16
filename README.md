@@ -201,6 +201,40 @@ let deletedIDs = try await database.write { transaction in
 }
 ```
 
+`execute` and the fetches reuse a compiled statement from the connection's cache, but still build
+the SQL and look its statement up every time. A loop that runs one statement many times can prepare
+it once instead, and pass each run's values as arguments in place of the parameters written in its
+SQL:
+
+```swift
+try await database.write { transaction in
+  var insert = try transaction.prepare("INSERT INTO items (a, b, c) VALUES (?, ?, ?)")
+  for item in items {
+    try insert.execute(item.a, item.b, item.c)
+  }
+}
+
+try await database.read { transaction in
+  var byList = try transaction.prepare("SELECT * FROM reminders WHERE list_id = ? ORDER BY title")
+  for list in lists {
+    groups[list.id] = try byList.fetchAll(list.id, as: Reminder.self)
+  }
+}
+```
+
+A `SQLitePreparedStatement` runs with `execute`, `executeRowCursor`, `fetchAll`, `fetchOne`,
+`rowCursor`, and `fetchCursor`, or with a `bindings:` array of `OrbitDatabaseValue`s built at
+runtime. As with a transaction, only `execute` and `executeRowCursor` run a statement that may
+write; the reading runs refuse it with `.readOnly`. Arguments bind
+by position, and a run must pass exactly one for each of the statement's `parameterCount`
+parameters: since every run rebinds every parameter, a missing one would otherwise silently keep
+the previous run's value, so the run is refused with `.range` instead. For the same reason
+`prepare` refuses SQL with values interpolated into it. A read transaction refuses a statement that
+may write, as it does any other. The statement lasts until its transaction ends, and dropping it
+returns it to the connection's cache, so preparing the same SQL in a later transaction compiles
+nothing. Each run reports what it reads and changes to observers, exactly like running the SQL
+through the transaction.
+
 `SQL` runs one statement. A script of several, such as a schema, runs with `executeScript`, which
 takes a plain `String` and binds nothing:
 
@@ -505,6 +539,11 @@ let library = #sqliteLibrary(module: "MySQLite")
 var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitIPCDatabase(path: databasePath, configuration: configuration)
 ```
+
+Every entry point in the table is a C function pointer, apart from trusted-schema control, so the
+package calls the build exactly as C would, without allocating or reference counting. An entry
+point you supply yourself is therefore a C function or a closure that captures nothing. A wrapper
+around another entry point reaches anything it needs through a global, as it would in C.
 
 The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
 exports. `.standard` is the default; add encryption for a module such as SQLCipher:

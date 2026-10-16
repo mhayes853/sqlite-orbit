@@ -2,7 +2,7 @@
   import Testing
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteExtensionsTests {
     private static let initializer: SQLiteExtensionInitializer = { _, _, _ in
       SQLiteResultCode.constraint.rawValue
@@ -15,13 +15,13 @@
       var library = builtInTestLibrary
       library.extensions = SQLiteLibrary.Extensions(
         autoExtensions: SQLiteLibrary.AutoExtensions(
-          register: { initializer in
+          register: LibraryHooks.registerAutoExtension { initializer in
             let callback = unsafeBitCast(initializer, to: SQLiteExtensionInitializer.self)
             #expect(callback(nil, nil, nil) == SQLiteResultCode.constraint.rawValue)
             registrations.increment()
             return SQLiteResultCode.ok.rawValue
           },
-          cancel: { _ in
+          cancel: LibraryHooks.cancelAutoExtension { _ in
             cancellations.increment()
             return cancellations.value == 1 ? 1 : 0
           }
@@ -56,7 +56,6 @@
       }
       #expect(error?.code == .busy)
     }
-
   }
 #endif
 

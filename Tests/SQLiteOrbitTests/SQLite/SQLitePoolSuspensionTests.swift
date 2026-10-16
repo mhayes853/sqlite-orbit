@@ -4,7 +4,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLitePoolSuspensionTests {
     @Test
     func suspendedPoolRefusesWritesAndKeepsReadingUntilResumed() async throws {
@@ -226,7 +226,7 @@
     var library: SQLiteLibrary {
       let base = builtInTestLibrary
       var library = base
-      library.statements.execution.step = { [self] statement in
+      library.statements.execution.step = LibraryHooks.step { [self] statement in
         if let sql = base.statements.inspection.sql(statement),
           String(cString: sql).contains(endlessMarker)
         {

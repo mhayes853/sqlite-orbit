@@ -53,7 +53,7 @@ extension OrbitDatabaseRowCursor where Self: ~Copyable, Self: ~Escapable {
 // nonescapable value returned indirectly, as a generic one is, to a local, so a cursor whose
 // statement failed to prepare would be torn down as garbage. Handing the result straight to this
 // function as an argument never binds it, and the function binds the cursor only once it exists.
-@usableFromInline
+@inlinable
 func withOrbitCursor<Cursor: OrbitDatabaseRowCursor & ~Copyable & ~Escapable, Result>(
   _ cursor: consuming Cursor,
   _ body: (inout Cursor) throws -> Result

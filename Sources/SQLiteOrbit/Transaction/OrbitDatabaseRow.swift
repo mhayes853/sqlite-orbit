@@ -127,32 +127,46 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
   ///   - type: The type to convert the value to.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when its value cannot be
   ///   converted.
+  @inlinable
+  @inline(__always)
   public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
     index: Int,
     as type: Value.Type
   ) -> Value {
     get throws {
+      // Always inlined, so that a caller converting to a concrete type gets the conversion
+      // specialized even when its row type is generic, as a row initializer's is. Otherwise every
+      // column read calls the conversion through `Value`'s witness table.
       do {
         return try Value(orbitDatabaseValue: self[index])
       } catch {
-        let reason =
-          switch error {
-          case let error as OrbitDatabaseValueConversionError where error.value == .null:
-            "to not be NULL"
-          case let error as OrbitDatabaseValueConversionError:
-            "to decode \(error.typeName), but found \(error.value.orbitStorageClassName)"
-              + (error.reason.map { " (\($0))" } ?? "")
-          default:
-            "to decode \(Value.self), but \(error)"
-          }
-        throw OrbitDatabaseColumnDecodingError(
-          columnIndex: index,
-          columnName: columnName(at: index),
-          reason: reason,
-          underlyingError: error
-        )
+        throw orbitColumnDecodingError(at: index, decoding: Value.self, error)
       }
     }
+  }
+
+  @usableFromInline
+  func orbitColumnDecodingError(
+    at index: Int,
+    decoding type: Any.Type,
+    _ error: any Error
+  ) -> OrbitDatabaseColumnDecodingError {
+    let reason =
+      switch error {
+      case let error as OrbitDatabaseValueConversionError where error.value == .null:
+        "to not be NULL"
+      case let error as OrbitDatabaseValueConversionError:
+        "to decode \(error.typeName), but found \(error.value.orbitStorageClassName)"
+          + (error.reason.map { " (\($0))" } ?? "")
+      default:
+        "to decode \(type), but \(error)"
+      }
+    return OrbitDatabaseColumnDecodingError(
+      columnIndex: index,
+      columnName: columnName(at: index),
+      reason: reason,
+      underlyingError: error
+    )
   }
 
   /// The value of the first column with a name, converted to a type.
@@ -169,6 +183,8 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
   ///   - type: The type to convert the value to.
   /// - Throws: ``OrbitDatabaseColumnDecodingError`` naming the column when the row has no column
   ///   with the name, or when its value cannot be converted.
+  @inlinable
+  @inline(__always)
   public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
     column name: String,
     as type: Value.Type
@@ -177,11 +193,7 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
       if let index = columnIndex(named: name) {
         return try self[index, as: Value.self]
       }
-      throw OrbitDatabaseColumnDecodingError(
-        columnIndex: nil,
-        columnName: name,
-        reason: "to exist"
-      )
+      throw OrbitDatabaseColumnDecodingError(missingColumnNamed: name)
     }
   }
 }

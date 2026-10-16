@@ -366,7 +366,7 @@
       }
     }
 
-    @Test
+    @Test(.libraryHooks)
     func functionCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
       // A function's callbacks read arguments and write results through the build that called them,
       // which is the whole reason a table has to carry them. Interposing those entry points is the
@@ -376,15 +376,20 @@
       let writtenResults = Lock(0)
 
       var configuration = SQLiteConfiguration.default
-      configuration.library.scalarFunctions!.callbacks.context.userData = { context in
+      configuration.library.scalarFunctions!.callbacks.context.userData = LibraryHooks.userData {
+        context in
         userData.withLock { $0 += 1 }
         return builtInTestLibrary.scalarFunctions!.callbacks.context.userData(context)
       }
-      configuration.library.scalarFunctions!.callbacks.argument.text = { value in
+      configuration.library.scalarFunctions!.callbacks.argument.text = LibraryHooks.argumentText {
+        value in
         readArguments.withLock { $0 += 1 }
         return builtInTestLibrary.scalarFunctions!.callbacks.argument.text(value)
       }
-      configuration.library.scalarFunctions!.callbacks.result.text = { context, text, count in
+      configuration.library.scalarFunctions!.callbacks.result.text = LibraryHooks.resultText {
+        context,
+        text,
+        count in
         writtenResults.withLock { $0 += 1 }
         builtInTestLibrary.scalarFunctions!.callbacks.result.text(context, text, count)
       }
@@ -401,11 +406,13 @@
       #expect(writtenResults.withLock { $0 } == 1)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
       let aggregateContexts = Lock(0)
       var configuration = SQLiteConfiguration.default
-      configuration.library.aggregateFunctions!.context = { context, size in
+      configuration.library.aggregateFunctions!.context = LibraryHooks.aggregateContext {
+        context,
+        size in
         aggregateContexts.withLock { $0 += 1 }
         return builtInTestLibrary.aggregateFunctions!.context(context, size)
       }

@@ -57,10 +57,86 @@ public struct SQL: Hashable, Sendable {
   /// This is an unvalidated projection. Execution adapters should first use ``validatedParts()``
   /// so a failed value conversion cannot silently become a `NULL` binding.
   public var text: String {
-    parts.reduce(into: "") { text, part in
+    // Sized up front, so the text is allocated once rather than grown append by append.
+    var count = 0
+    for part in parts {
+      switch part {
+      case .text(let fragment), .statement(let fragment, _): count += fragment.utf8.count
+      case .binding: count += 1
+      }
+    }
+    var text = ""
+    text.reserveCapacity(count)
+    for part in parts {
       switch part {
       case .text(let fragment), .statement(let fragment, _): text.append(fragment)
       case .binding: text.append("?")
+      }
+    }
+    return text
+  }
+
+  /// Lends the UTF-8 of ``text`` to `body` a piece at a time, without joining the pieces, until
+  /// `body` returns `false`.
+  ///
+  /// - Returns: Whether every piece was lent.
+  func forEachTextChunk(_ body: (UnsafeRawBufferPointer) -> Bool) -> Bool {
+    for part in parts {
+      switch part {
+      case .text(let fragment), .statement(let fragment, _):
+        guard fragment.withUTF8Bytes(body) else { return false }
+      case .binding:
+        var placeholder = UInt8(ascii: "?")
+        guard withUnsafeBytes(of: &placeholder, body) else { return false }
+      }
+    }
+    return true
+  }
+
+  /// The pieces of ``text`` alone, with every value dropped, so that keeping them keeps none of
+  /// the values alive.
+  var textPieces: [Part] {
+    parts.map { part in
+      switch part {
+      case .text: part
+      case .binding: .binding(.null)
+      case .statement(let fragment, _): .statement(text: fragment, bindings: [])
+      }
+    }
+  }
+
+  /// Whether this SQL is certainly made of the same text as `pieces`, the ``textPieces`` of some
+  /// SQL: piece for piece, the very same strings, and a value wherever it has one.
+  ///
+  /// SQL written as one literal, as a statement run in a loop is, is built from the same strings
+  /// every time, which this finds without reading a byte of them. Two strings that only hold
+  /// equal text are not the same string, so `false` means only that this could not tell.
+  func hasTextIdentical(to pieces: [Part]) -> Bool {
+    guard parts.count == pieces.count else { return false }
+    return parts.withUnsafeBufferPointer { parts in
+      pieces.withUnsafeBufferPointer { pieces in
+        for index in parts.indices {
+          // A part whose bytes are the piece's own holds the very same string. Comparing them
+          // reads no text and copies no part, which would retain its string. Bytes the part's
+          // case leaves unused may differ, which only sends it on to the checks below.
+          let part = UnsafeRawBufferPointer(
+            start: parts.baseAddress! + index,
+            count: MemoryLayout<Part>.size
+          )
+          let piece = UnsafeRawBufferPointer(
+            start: pieces.baseAddress! + index,
+            count: MemoryLayout<Part>.size
+          )
+          if part.hasSameBytes(as: piece) { continue }
+          if case .binding = parts[index], case .binding = pieces[index] { continue }
+          // Prebound SQL keeps its values beside its text, so it never matches its piece whole.
+          guard
+            case .statement(let fragment, _) = parts[index],
+            case .statement(let piece, _) = pieces[index],
+            fragment.isIdentical(to: piece)
+          else { return false }
+        }
+        return true
       }
     }
   }
@@ -359,6 +435,47 @@ extension SQL: CustomDebugStringConvertible {
       }
     }
     return description
+  }
+}
+
+extension String {
+  // Whether the two are one string: the same few bytes held inline, or the same storage. A string's
+  // storage cannot be freed or changed while `other` holds on to it, so sharing it means sharing
+  // its text. Strings that merely hold equal text are not identical.
+  func isIdentical(to other: String) -> Bool {
+    withUnsafeBytes(of: self) { lhs in
+      withUnsafeBytes(of: other) { rhs in lhs.hasSameBytes(as: rhs) }
+    }
+  }
+
+  // Native strings are contiguous already; only a bridged one is copied.
+  func withUTF8Bytes<Result>(_ body: (UnsafeRawBufferPointer) -> Result) -> Result {
+    if let result = utf8.withContiguousStorageIfAvailable({ body(UnsafeRawBufferPointer($0)) }) {
+      return result
+    }
+    var copy = self
+    return copy.withUTF8 { body(UnsafeRawBufferPointer($0)) }
+  }
+}
+
+extension UnsafeRawBufferPointer {
+  // Eight bytes at a time: `elementsEqual` walks a buffer a byte at a time through the generic
+  // sequence machinery, which made comparing a statement's text cost more than hashing it.
+  func hasSameBytes(as other: UnsafeRawBufferPointer) -> Bool {
+    guard count == other.count else { return false }
+    var offset = 0
+    while offset + 8 <= count {
+      guard
+        loadUnaligned(fromByteOffset: offset, as: UInt64.self)
+          == other.loadUnaligned(fromByteOffset: offset, as: UInt64.self)
+      else { return false }
+      offset += 8
+    }
+    while offset < count {
+      guard self[offset] == other[offset] else { return false }
+      offset += 1
+    }
+    return true
   }
 }
 
