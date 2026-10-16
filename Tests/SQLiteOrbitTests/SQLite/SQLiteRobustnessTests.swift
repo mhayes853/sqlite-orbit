@@ -25,7 +25,7 @@
       let finalized = TestCounter()
       private let cachedPointers = Lock<Set<UInt>>([])
 
-      func configuration(matching sqlPrefix: String) -> SQLiteConfiguration {
+      func configuration(matching sqlPrefixes: String...) -> SQLiteConfiguration {
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
@@ -47,7 +47,7 @@
           // Metadata probes use flags=0; only track statements prepared for the cache.
           if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee,
             flags & SQLitePrepareFlags.persistent.rawValue != 0,
-            let sql, String(cString: sql).hasPrefix(sqlPrefix)
+            let sql, sqlPrefixes.contains(where: String(cString: sql).hasPrefix)
           {
             cachedPointers.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
             prepared.increment()
@@ -87,15 +87,30 @@
       var handle = try openConnection()
 
       // The connection can write, but not while lending a read transaction: a mutation that was
-      // merely rolled back at the end of the read would look like it had worked.
-      #expect(throws: SQLiteError.self) {
-        try handle.read { transaction in
-          try #sql(
-            "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id",
-            as: Int.self
-          )
-          .fetchAll(transaction)
+      // merely rolled back at the end of the read would look like it had worked. The read refuses
+      // it as it compiles, whether the statement comes from the cache, is compiled for its cursor
+      // alone, or is prepared to run again, and it never has to make the connection query-only.
+      let insert = "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id"
+      let refusals = [
+        #expect(throws: SQLiteError.self) {
+          try handle.read { transaction in
+            try transaction.fetchAll(SQL(text: insert), as: Int.self)
+          }
+        },
+        #expect(throws: SQLiteError.self) {
+          try handle.read { transaction in
+            _ = try transaction.rowCursor(SQL(text: insert), cached: false)
+          }
+        },
+        #expect(throws: SQLiteError.self) {
+          try handle.read { transaction in
+            _ = try transaction.prepare(SQL(text: insert), cached: false)
+          }
         }
+      ]
+      for refusal in refusals {
+        #expect(refusal?.primaryCode == .readOnly)
+        #expect(refusal?.message?.contains("may write") == true)
       }
 
       // A read that threw turns `query_only` back off on its way out too.
@@ -203,7 +218,43 @@
       }
     }
 
+    // The first two rely on an authorizer, which Turso lacks: without one every write empties the
+    // cache, and nothing tells `PRAGMA optimize` apart from what reads.
     #if !Turso
+      @Test(.libraryHooks)
+      func alternatingReadsAndWritesKeepTheirStatements() throws {
+        let probe = StatementLifecycleProbe()
+        do {
+          var handle = try openConnection(
+            configuration: probe.configuration(
+              matching: "SELECT title FROM items",
+              "INSERT INTO items"
+            )
+          )
+          for id in 1...5 {
+            try handle.write { transaction in
+              try transaction.execute("INSERT INTO items (id, title) VALUES (\(id), 'kept')")
+            }
+            let titles = try handle.read { transaction in
+              try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+            }
+            #expect(titles.count == id)
+          }
+          // Each compiled once and never dropped: a read that only runs statements it can check
+          // never makes the connection query-only, so switching between reads and writes expired
+          // neither, and no first step found one recompiled and emptied the cache.
+          #expect(probe.prepared.value == 2)
+          #expect(probe.finalized.value == 0)
+
+          // Asked last, since SQLite compiles a pragma that reports a flag again every time it runs.
+          let isQueryOnly = try handle.read { transaction in
+            try transaction.fetchOne("PRAGMA query_only", as: Int.self)
+          }
+          #expect(isQueryOnly == 0)
+        }
+        #expect(probe.finalized.value == 2)
+      }
+
       @Test(
         arguments: [
           "PRAGMA optimize", "pragma Main.OPTIMIZE(0x10002)", "SELECT * FROM pragma_optimize"
@@ -257,9 +308,10 @@
               try transaction.execute("INSERT INTO items (id) VALUES (1)")
             }
             #expect(FileManager.default.fileExists(atPath: log))
-            // Closed while query-only, which a read leaves it.
+            // Closed while query-only, which a read that lends the raw handle leaves it.
             let count = try handle.read { transaction in
-              try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+              _ = transaction.sqliteConnection
+              return try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
             }
             #expect(count == 1)
           }
@@ -301,6 +353,33 @@
         #expect(probe.finalized.value == 0)
       }
       #expect(probe.finalized.value == probe.prepared.value)
+    }
+
+    @Test
+    func statementsCompiledBeforeAReadLendsTheRawHandleStillRun() throws {
+      var handle = try openConnection()
+      try handle.write { transaction in
+        try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
+      }
+      let titles = try handle.read { transaction in
+        var byID = try transaction.prepare("SELECT title FROM items WHERE id = ?")
+        let before = try byID.fetchAll(1) { $0[0].textValue }
+        let cached = try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+
+        // Lending the raw handle makes the connection query-only, which expires every statement
+        // compiled so far, including the one this read is still holding. Each compiles again on
+        // its next step rather than fail.
+        _ = transaction.sqliteConnection
+        let after = try byID.fetchAll(1) { $0[0].textValue }
+        let recached = try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+        return [before, cached, after, recached]
+      }
+      #expect(titles == [["kept"], ["kept"], ["kept"], ["kept"]])
+
+      // And the write after it makes the connection writable again.
+      try handle.write { transaction in
+        try Item.insert { Item(id: 2, title: "also") }.execute(transaction)
+      }
     }
 
     @Test(.libraryHooks)

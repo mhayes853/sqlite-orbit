@@ -60,6 +60,12 @@ extension SQLiteLibrary {
   /// Existing connections are unaffected. Registration is runtime-wide, including connections
   /// outside Orbit. Registering the same initializer again is a harmless no-op.
   ///
+  /// A read refuses SQL that SQLite reports may write, but a function or virtual table that writes
+  /// through the raw handle while a read-only `SELECT` steps, as SQLite's `eval()` can, is not
+  /// refused on a connection that can write. Inside a read transaction its write is discarded when
+  /// the read rolls back, and outside one it commits. A connection opened read-only, such as a
+  /// pool's reader, refuses it.
+  ///
   /// - Throws: ``SQLiteFeatureUnavailableError`` when automatic registration is unsupported, or
   ///   ``SQLiteError`` when registration fails.
   public func registerAutoExtension(_ initializer: SQLiteExtensionInitializer) throws {

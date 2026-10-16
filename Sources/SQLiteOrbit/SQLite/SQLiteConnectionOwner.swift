@@ -207,15 +207,22 @@ public struct SQLiteConnection: ~Copyable {
     return try withWriteConnection(cancellation: cancellation) { try body($0.base.base.access) }
   }
 
-  /// Lends read access, temporarily enforcing query-only mode on writable connections.
-  /// Call the borrowed connection's `transaction` method when a stable snapshot is needed.
+  /// Lends read access. Call the borrowed connection's `transaction` method when a stable snapshot
+  /// is needed.
+  ///
+  /// Every statement the connection compiles for the read is refused when SQLite reports that it
+  /// may write. A connection that can write is also made query-only before the read lends its raw
+  /// `sqlite3 *`, so that raw SQL cannot write either. What SQLite reports as read-only but writes
+  /// on its own, such as a function or virtual table from a C extension that writes through the
+  /// raw handle while a `SELECT` steps, is not refused on a connection that can write: inside a
+  /// read transaction its write is discarded by the rollback that ends the read, and outside one it
+  /// commits. A connection opened read-only refuses it.
   public mutating func withReadConnection<Result: ~Copyable>(
     cancellation: SQLiteConnectionCancellation? = nil,
     _ body: (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
     try withManagedAccess(cancellation: cancellation) { observations in
-      try beginQueryOnly()
-      return try withoutTransaction { address, state in
+      try withoutTransaction { address, state in
         try body(
           SQLiteReadConnection(
             handle: self,
@@ -228,14 +235,17 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func beginQueryOnly() throws {
-    // A connection opened read-only refuses writes already. One that can write must be told not
-    // to for the duration, so that a read attempting a mutation fails rather than having it
-    // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
-    // its own. It stays on once the read ends, until an access that may write begins, so that
-    // consecutive reads keep the statements every change of it would expire.
-    guard !isReadOnly else { return }
-    try settings.pointee.ensureQueryOnly(true)
+  // The settings a read turns query-only before it lends the raw handle, or `nil` for a connection
+  // opened read-only, which refuses writes already. A read on one that can write must refuse a
+  // mutation rather than have it quietly discarded by a read transaction's rollback, or kept by a
+  // statement that commits on its own. The statements a read compiles itself are refused when
+  // SQLite reports that they may write, which needs no setting, so the connection is only made
+  // query-only for SQL Orbit never sees. Turning it on expires every statement the connection has
+  // compiled, and the write that follows has to turn it off again, expiring them all once more, so
+  // a read that never lends the raw handle leaves it as it is. Once on, it stays on until an access
+  // that may write begins, so that consecutive reads keep their statements.
+  var queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>? {
+    isReadOnly ? nil : settings
   }
 
   private borrowing func beginWritable() throws {
@@ -248,7 +258,7 @@ public struct SQLiteConnection: ~Copyable {
 
   // Every access runs its body through here, so that none begins under a setting an earlier one
   // changed, and none ends without putting back what it changed. `query_only` is left to each
-  // access to set as it begins.
+  // access to set when it needs it.
   private borrowing func withRestoredSettings<Result: ~Copyable>(
     _ body: () throws -> Result
   ) throws -> Result {
@@ -281,7 +291,13 @@ public struct SQLiteConnection: ~Copyable {
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
-      value = try body(SQLiteReadTransaction(handle: self, observations: observations))
+      value = try body(
+        SQLiteReadTransaction(
+          handle: self,
+          observations: observations,
+          queryOnlySettings: queryOnlySettings
+        )
+      )
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
       rollbackIgnoringFailure()

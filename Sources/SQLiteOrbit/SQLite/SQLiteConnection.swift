@@ -40,7 +40,8 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     self.base = SQLiteReadTransaction(
       handle: handle,
       observations: observations,
-      connectionState: state
+      connectionState: state,
+      queryOnlySettings: handle.queryOnlySettings
     )
     self.handle = address
     self.state = state
@@ -50,8 +51,13 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
   /// duration of the access that lent this connection and must not be used to mutate the database.
+  ///
+  /// A connection that can write is made query-only the first time a read lends this, so that SQL
+  /// run through it cannot write. That expires every statement the connection has compiled, and a
+  /// cursor partway through its rows may then fail with `SQLITE_ABORT_ROLLBACK`, so get this before
+  /// creating the cursors it is used beside.
   public var sqliteConnection: OpaquePointer {
-    base.connection
+    base.sqliteConnection
   }
 
   /// The SQLite build this connection runs against, so raw work uses the same one.

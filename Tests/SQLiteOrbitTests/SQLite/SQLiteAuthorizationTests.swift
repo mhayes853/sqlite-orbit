@@ -1,5 +1,5 @@
 #if BuiltInSQLite
-  import SQLiteOrbit
+  @testable import SQLiteOrbit
   import Testing
 
   @Suite
@@ -131,7 +131,7 @@
         #expect(count == 0)
       }
 
-      @Test(arguments: ["BEGIN", "COMMIT", "query_only", "foreign_keys"])
+      @Test(arguments: ["BEGIN", "COMMIT", "foreign_keys"])
       func ignoringManagedControlFailsInsteadOfSilentlySkippingIt(action: String) throws {
         var configuration = SQLiteConfiguration.default
         configuration.setups.append(.script(schema))
@@ -144,9 +144,7 @@
         let database = try SQLiteQueue(path: .memory, configuration: configuration)
         let ran = TestCounter()
         let error = #expect(throws: SQLiteError.self) {
-          if action == "query_only" {
-            try database.readBlocking { _ in _ = ran.increment() }
-          } else if action == "foreign_keys" {
+          if action == "foreign_keys" {
             try database.writeWithoutTransactionBlocking { connection in
               try connection.setForeignKeysEnabled(false)
               try connection.execute("INSERT INTO copies VALUES ('lost')")
@@ -166,6 +164,41 @@
             try connection.fetchOne("SELECT count(*) FROM copies") { $0[0].integerValue } == 0
           )
         }
+      }
+
+      @Test(arguments: [SQLiteAuthorizationDecision.ignore, .deny])
+      func aReadMakesItsRawHandleQueryOnlyWhateverThePolicySays(
+        decision: SQLiteAuthorizationDecision
+      ) throws {
+        var configuration = SQLiteConfiguration.default
+        configuration.setups.append(.script(schema))
+        configuration.authorization = { event in
+          if case .pragma(name: "query_only", value: .some) = event.action { return decision }
+          return .allow
+        }
+        let database = try SQLiteQueue(path: .memory, configuration: configuration)
+
+        // Making the read query-only is the driver's own enforcement, which the application's
+        // policy neither sees nor stops.
+        let step = try database.readBlocking { transaction in
+          let library = transaction.sqlite
+          let insert = try #require(
+            try library.prepare(
+              "INSERT INTO copies VALUES ('lost')",
+              on: transaction.sqliteConnection
+            )
+          )
+          defer { _ = library.statements.execution.finalize(insert) }
+          return library.statements.execution.step(insert) & 0xff
+        }
+        #expect(step == SQLiteResultCode.readOnly.rawValue)
+
+        // Nor does it stop the write that follows from making the connection writable again.
+        try database.writeBlocking { try $0.execute("INSERT INTO copies VALUES ('kept')") }
+        let count = try database.readBlocking {
+          try $0.fetchOne("SELECT count(*) FROM copies") { $0[0].integerValue }
+        }
+        #expect(count == 1)
       }
 
       @Test

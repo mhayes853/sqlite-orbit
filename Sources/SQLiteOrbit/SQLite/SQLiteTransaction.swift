@@ -55,25 +55,38 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   let observations: SQLiteConnectionEvents
   let connectionState: SQLiteConnectionState?
 
+  // The settings of a connection that can write, lent for a read, which is made query-only before
+  // the raw handle is lent. `nil` for a connection opened read-only, and for the read transaction
+  // a write lends its observers, since turning it on there would refuse the write's own statements.
+  let queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>?
+
   @_lifetime(borrow handle)
   init(
     handle: borrowing SQLiteConnection,
     observations: SQLiteConnectionEvents,
-    connectionState: SQLiteConnectionState? = nil
+    connectionState: SQLiteConnectionState? = nil,
+    queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>? = nil
   ) {
     self.access = SQLiteConnectionAccess(handle: handle)
     self.statements = handle.statements
     self.authorizer = handle.authorizer
     self.observations = observations
     self.connectionState = connectionState
+    self.queryOnlySettings = queryOnlySettings
   }
 
   /// The underlying `sqlite3 *`.
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
   /// duration of the access that lent this transaction and must not be used to mutate the database.
+  ///
+  /// A connection that can write is made query-only the first time a read lends this, so that SQL
+  /// run through it cannot write. That expires every statement the connection has compiled, and a
+  /// cursor partway through its rows may then fail with `SQLITE_ABORT_ROLLBACK`, so get this before
+  /// creating the cursors it is used beside.
   public var sqliteConnection: OpaquePointer {
-    access.sqliteConnection
+    queryOnlySettings?.pointee.ensureQueryOnlyForUncheckedAccess()
+    return access.sqliteConnection
   }
 
   /// The SQLite build this connection runs against, so raw work uses the same one.

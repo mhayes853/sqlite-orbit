@@ -97,8 +97,8 @@ public final class SQLiteSerialConnection: Sendable {
   /// }
   /// ```
   ///
-  /// A connection that can write enforces `PRAGMA query_only` for the duration, so a read that
-  /// attempts a write fails.
+  /// A read that attempts a write fails: SQL that SQLite reports may write is refused, and a
+  /// connection that can write enforces `PRAGMA query_only` once the read lends its raw handle.
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
   ///   transaction unless `body` opens one.

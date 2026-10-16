@@ -517,10 +517,11 @@
         }
         probe.isFailing = true
 
-        // A read leaves the connection query-only rather than turning it back off on its way out,
-        // so nothing fails until something needs to write.
+        // A read that lends the raw handle leaves the connection query-only rather than turning it
+        // back off on its way out, so nothing fails until something needs to write.
         let before = try await driver.read { transaction in
-          try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
+          _ = transaction.sqliteConnection
+          return try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
         #expect(before == 0)
 
@@ -547,7 +548,7 @@
       }
 
       @Test
-      func aFailedQueryOnlyChangeHoldsBackTheReadAndIsRetriedByTheNext() async throws {
+      func aFailedQueryOnlyChangeLeavesTheReadRunningAndIsRetriedByTheNext() async throws {
         let probe = PragmaProbe(failing: "PRAGMA query_only = 1")
         let driver = try SQLiteQueue(path: .memory, configuration: probe.configuration())
         try await driver.write { transaction in
@@ -555,28 +556,34 @@
         }
         probe.isFailing = true
 
-        let ran = TestCounter()
-        let error = await #expect(throws: SQLiteError.self) {
-          try await driver.read { _ in ran.increment() }
+        // Lending the raw handle cannot throw, so a read whose change fails still runs to its end.
+        let count = try await driver.read { transaction in
+          _ = transaction.sqliteConnection
+          return try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
-        #expect(error?.sql == "PRAGMA query_only = 1")
-        #expect(ran.value == 0)
+        #expect(count == 0)
 
         // Whatever the failure left the flag at, the next access sets the one it needs.
         probe.isFailing = false
         try await driver.write { transaction in
           try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
         }
-        probe.isFailing = true
-        await #expect(throws: SQLiteError.self) {
-          try await driver.read { _ in ran.increment() }
+        let isRefused = try await driver.read { transaction in
+          let library = transaction.sqlite
+          let insert = "INSERT INTO items (id) VALUES (2)"
+          // SQLite refuses to step the insert, and Turso to compile it.
+          guard let statement = try? library.prepare(insert, on: transaction.sqliteConnection)
+          else {
+            return true
+          }
+          defer { _ = library.statements.execution.finalize(statement) }
+          return library.statements.execution.step(statement) != SQLiteResultCode.done.rawValue
         }
-        probe.isFailing = false
-        let count = try await driver.read { transaction in
+        #expect(isRefused)
+        let after = try await driver.read { transaction in
           try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
         }
-        #expect(count == 1)
-        #expect(ran.value == 0)
+        #expect(after == 1)
       }
     }
 

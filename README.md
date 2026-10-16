@@ -448,8 +448,9 @@ try owner.withWriteConnection { connection in
 ```
 
 The owner is noncopyable and does not conform to `Sendable`. Lending is synchronous and exclusive;
-a driver supplies serialization and chooses when to start a transaction. Read lending enforces
-query-only access, and both lenders restore scoped settings and clean up before returning.
+a driver supplies serialization and chooses when to start a transaction. Read lending refuses
+SQL that may write, and enforces `PRAGMA query_only` before lending the raw handle, and both lenders
+restore scoped settings and clean up before returning.
 Releasing the owner closes the connection.
 
 Observation uses one `OrbitDatabaseTransactionObserver` protocol for scoped access and database
@@ -642,7 +643,7 @@ explicitly:
 
 - Missing authorizer callbacks broaden observed reads and writes to the whole database, and every
   write invalidates the statement cache. This loses precision, not correctness.
-- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
+- Reads use the numeric spelling of `PRAGMA query_only`, which both engines accept.
 - Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
   multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
   unimplemented entry point. Use `TursoPool` directly for an observable MVCC database confined to

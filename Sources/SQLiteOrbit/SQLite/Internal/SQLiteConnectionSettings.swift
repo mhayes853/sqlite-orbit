@@ -7,10 +7,12 @@
 /// under a setting an earlier one left behind. Only changes made through here are known: a raw
 /// `PRAGMA` or a busy handler installed through the raw library is not tracked.
 ///
-/// `query_only` is the exception: it belongs to the kind of access rather than to the access, so
-/// every access on a connection that can write sets it to what its kind needs as it begins, and
-/// nothing puts it back as it ends. Changing it makes SQLite expire every statement the connection
-/// has compiled, so setting it only when it must change is what lets consecutive reads reuse them.
+/// `query_only` is the exception: it belongs to the kind of access rather than to the access, and
+/// nothing puts it back as it ends. On a connection that can write, every access that may write
+/// turns it off as it begins, and a read turns it on only before lending something whose writes
+/// Orbit cannot refuse itself, such as the raw handle. Changing it makes SQLite expire every
+/// statement the connection has compiled, so setting it only when it must change is what lets
+/// reads and writes that alternate keep the statements they share.
 ///
 /// The handle keeps this in storage of its own rather than inline, since the handle is only ever
 /// borrowed and the settings still have to change.
@@ -37,9 +39,10 @@ struct SQLiteConnectionSettings: ~Copyable {
   // recovery also fails, the next access must restore it even when the last known value matches.
   private var needsForeignKeysRestore = false
 
-  // Configured off. A connection that can write turns it on as a read begins, and off as any
-  // other access begins. `nil` once a change has failed, since a pragma can change the native flag
-  // while it compiles even when stepping it then fails: the next access sets it whatever it needs.
+  // Configured off. A connection that can write turns it on when a read lends the raw handle, and
+  // off as any access that may write begins. `nil` once a change has failed, since a pragma can
+  // change the native flag while it compiles even when stepping it then fails: the next change
+  // sets it whatever it needs.
   private var isQueryOnly: Bool? = false
 
   init(
@@ -137,8 +140,20 @@ struct SQLiteConnectionSettings: ~Copyable {
     self.isQueryOnly = isQueryOnly
   }
 
-  /// Puts every changed setting back to its configured value, except `query_only`, which each
-  /// access sets as it begins.
+  /// Turns `query_only` on before a read lends something whose writes only it can refuse.
+  ///
+  /// Turning it on is the driver's own enforcement rather than the application's statement, so
+  /// the application's authorization does not apply to it. The pragma is fixed and takes effect as
+  /// it compiles, so little but running out of memory, or an interruption while another statement
+  /// runs, can stop it. Should it fail, the read goes on without it rather than fail where nothing
+  /// can throw, and the next change sets it whatever it needs.
+  mutating func ensureQueryOnlyForUncheckedAccess() {
+    guard isQueryOnly != true else { return }
+    authorizer.withoutUserAuthorization { try? ensureQueryOnly(true) }
+  }
+
+  /// Puts every changed setting back to its configured value, except `query_only`, which belongs
+  /// to the kind of access rather than to the access.
   ///
   /// Every changed setting is attempted even after one fails, so one failure leaves no more
   /// behind than it has to. A setting that cannot be restored stays changed.
