@@ -372,7 +372,8 @@
         }
 
         // Missing vectors and undefined scores both reach Orbit as NULL, which the optional
-        // helper results decode as nil rather than failing the storage-class check.
+        // helper results decode as nil rather than failing the storage-class check. `whenPresent`
+        // guards the nullable column so the native functions never see NULL.
         @Test(arguments: SQLiteTestDriver.allCases)
         func missingVectorsAndUndefinedDistancesDecodeAsNil(_ driver: SQLiteTestDriver)
           async throws
@@ -393,10 +394,11 @@
             let missing: [Float].VectorBytesRepresentation? = nil
             try await database.read { transaction in
               let rows = try SQLiteNullableEmbedding.order(by: \.key)
-                .select {
+                .select { row in
                   (
-                    Vec.length($0.embedding), Vec.distanceL2($0.embedding, to: candidate),
-                    Vec.distanceCosine($0.embedding, to: candidate)
+                    row.embedding.whenPresent { Vec.length($0) },
+                    row.embedding.whenPresent { Vec.distanceL2($0, to: candidate) },
+                    row.embedding.whenPresent { Vec.distanceCosine($0, to: candidate) }
                   )
                 }
                 .fetchAll(transaction)
@@ -405,13 +407,16 @@
               #expect(rows.map(\.2) == [0, nil, nil])
               let fallbacks =
                 try SQLiteNullableEmbedding.select {
-                  Vec.distanceL2($0.embedding, to: missing).ifnull(Double(-1))
+                  $0.embedding.whenPresent(missing) { Vec.distanceL2($0, to: $1) }
+                    .ifnull(Double(-1))
                 }
                 .fetchAll(transaction)
               #expect(fallbacks == [-1, -1, -1])
               #expect(
                 try SQLiteNullableEmbedding
-                  .where { Vec.distanceCosine($0.embedding, to: candidate).isNot(nil) }
+                  .where {
+                    $0.embedding.whenPresent { Vec.distanceCosine($0, to: candidate) }.isNot(nil)
+                  }
                   .select(\.key)
                   .fetchAll(transaction) == [1]
               )

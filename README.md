@@ -1000,7 +1000,7 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `8473c89` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `0479516` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and
@@ -1056,14 +1056,18 @@ For variable-size models, use `[Float]` with `@Column(as: [Float].VectorBytesRep
 Convert JSON explicitly before distance
 comparisons, for example `TursoVec.distanceL2(column, to: TursoVec.vector32("[1,0,0]"))`.
 
-Floating distances decode as `Double?`. A NULL column or a `nil` argument makes the result `nil`
-without calling the native function, which rejects NULL. Ascending order puts NULL first, so
-filter before ranking, and compare against an optional value:
+Floating distances decode as `Double?`, since undefined results can be NULL. The native functions
+reject NULL inputs, so wrap a nullable column or optional argument in `whenPresent`. Its closure
+receives a nonoptional expression, and a `CASE` guard returns NULL without calling the function.
+Ascending order puts NULL first, so filter before ranking, and compare against an optional value:
 
 ```swift
+let candidate: EmbeddingVector<3>? = vector
 let near = try await database.read { transaction in
   try Document
-    .where { TursoVec.distanceL2($0.embedding, to: vector).lt(Double?(1.5)) }
+    .where { row in
+      candidate.whenPresent { TursoVec.distanceL2(row.embedding, to: $0) }.lt(Double?(1.5))
+    }
     .select(\.title)
     .fetchAll(transaction)
 }

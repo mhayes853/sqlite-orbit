@@ -763,7 +763,7 @@
       }
     }
 
-    // Turso's native functions reject NULL, so the helpers wrap them in CASE. These run the
+    // Turso's native functions reject NULL, so `whenPresent` wraps them in CASE. These run the
     // guards in the engine against stored and bound NULLs. Unlike SQLiteVec, Turso reports a
     // zero-norm cosine as 1 rather than NULL.
     @Test
@@ -785,10 +785,11 @@
         let missing: [Float].VectorBytesRepresentation? = nil
         try await database.read { transaction in
           let rows = try TursoNullableEmbedding.order(by: \.key)
-            .select {
+            .select { row in
               (
-                TursoVec.extract($0.embedding), TursoVec.distanceL2($0.embedding, to: candidate),
-                TursoVec.distanceCosine($0.embedding, to: candidate)
+                row.embedding.whenPresent { TursoVec.extract($0) },
+                row.embedding.whenPresent { TursoVec.distanceL2($0, to: candidate) },
+                row.embedding.whenPresent { TursoVec.distanceCosine($0, to: candidate) }
               )
             }
             .fetchAll(transaction)
@@ -800,13 +801,16 @@
           #expect(cosines[2] == 1)
           let fallbacks =
             try TursoNullableEmbedding.select {
-              TursoVec.distanceL2($0.embedding, to: missing).ifnull(Double(-1))
+              $0.embedding.whenPresent(missing) { TursoVec.distanceL2($0, to: $1) }
+                .ifnull(Double(-1))
             }
             .fetchAll(transaction)
           #expect(fallbacks == [-1, -1, -1])
           #expect(
             try TursoNullableEmbedding
-              .where { TursoVec.distanceCosine($0.embedding, to: candidate).isNot(nil) }
+              .where {
+                $0.embedding.whenPresent { TursoVec.distanceCosine($0, to: candidate) }.isNot(nil)
+              }
               .select(\.key)
               .fetchAll(transaction) == [1, 3]
           )
