@@ -47,6 +47,8 @@
 
     func writeWithoutTransaction<T: Sendable>(_ updates: @Sendable (Database) throws -> T)
       async throws -> T
+
+    func asyncWriteWithoutTransaction(_ updates: @escaping @Sendable (Database) -> Void)
   }
 
   // Synchronous GRDB access accepts non-Sendable results and closures. These boxes transfer ownership
@@ -131,6 +133,38 @@
   }
 
   extension DatabaseWriter {
+    /// Schedules updates in a transaction. Completion runs after commit or rollback, before
+    /// releasing the writer connection. Neither database argument may escape its closure.
+    public func asyncWrite<T>(
+      _ updates: @escaping @Sendable (Database) throws -> T,
+      completion: @escaping @Sendable (Database, Result<T, Error>) -> Void
+    ) {
+      asyncWriteWithoutTransaction { db in
+        do {
+          var result: T?
+          try db.inTransaction {
+            result = try updates(db)
+            return .commit
+          }
+          completion(db, .success(result!))
+        } catch {
+          completion(db, .failure(error))
+        }
+      }
+    }
+
+    /// Schedules access without opening a transaction. Handle SQL errors inside the closure.
+    /// As with GRDB, this callback has no channel for connection acquisition failures.
+    public func asyncWriteWithoutTransaction(_ updates: @escaping @Sendable (Database) -> Void) {
+      Task {
+        do {
+          try await writeWithoutTransaction { updates($0) }
+        } catch {
+          preconditionFailure("could not acquire the database writer: \(error)")
+        }
+      }
+    }
+
     @_disfavoredOverload
     public func write<T>(_ updates: (Database) throws -> T) throws -> T {
       try withoutActuallyEscaping(updates) { updates in

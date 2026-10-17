@@ -2,11 +2,17 @@
   import Foundation
   import SQLiteOrbit
 
-  public protocol DatabaseValueConvertible {
+  public protocol DatabaseValueConvertible: SQLExpressible {
     var databaseValue: DatabaseValue { get }
 
     static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self?
   }
+
+  extension DatabaseValueConvertible {
+    public var sqlExpression: SQLExpression { SQLExpression(value: self) }
+  }
+
+  extension DatabaseValue: SQLSpecificExpressible {}
 
   public struct DatabaseValue: Hashable, Sendable, DatabaseValueConvertible, CustomStringConvertible
   {
@@ -124,7 +130,8 @@
     }
   }
 
-  extension Optional: DatabaseValueConvertible where Wrapped: DatabaseValueConvertible {
+  extension Optional: DatabaseValueConvertible, SQLExpressible
+  where Wrapped: DatabaseValueConvertible {
     public var databaseValue: DatabaseValue {
       self?.databaseValue ?? .null
     }

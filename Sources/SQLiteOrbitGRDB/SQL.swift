@@ -80,6 +80,10 @@
       self.arguments = arguments
     }
 
+    public init(_ expression: some SQLSpecificExpressible) {
+      self = expression.sqlExpression.literal
+    }
+
     public init(stringLiteral value: String) {
       self.init(sql: value)
     }

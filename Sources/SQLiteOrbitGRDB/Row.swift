@@ -17,7 +17,7 @@
   /// Owned values. Rows returned by fetchAll/fetchOne are independent of their connection; a cursor
   /// reuses its row until the caller makes a copy, following GRDB's cursor contract.
   public final class Row: @unchecked Sendable, Hashable, RandomAccessCollection,
-    CustomStringConvertible,
+    CustomStringConvertible, CustomDebugStringConvertible,
     ExpressibleByDictionaryLiteral
   {
     var columns: [(String, DatabaseValue)]
@@ -106,6 +106,31 @@
 
     public var description: String {
       "[" + columns.map { $0.0 + ":" + $0.1.description }.joined(separator: " ") + "]"
+    }
+
+    public var debugDescription: String { description }
+
+    public var containsNonNullValue: Bool {
+      columns.contains { !$0.1.isNull }
+    }
+
+    public func hasNull(atIndex index: Int) -> Bool {
+      columns[index].1.isNull
+    }
+
+    public func coalesce<T: DatabaseValueConvertible>(_ columns: some Collection<String>) -> T? {
+      for column in columns {
+        if let value = self[column] as T? {
+          return value
+        }
+      }
+      return nil
+    }
+
+    public func coalesce<T: DatabaseValueConvertible>(
+      _ columns: some Collection<any ColumnExpression>
+    ) -> T? {
+      coalesce(columns.map(\.name))
     }
 
     public var columnNames: [String] {

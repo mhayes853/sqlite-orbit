@@ -13,11 +13,19 @@
     var sqlOrdering: SQL { get }
   }
 
-  public protocol ColumnExpression: SQLExpressible, SQLSelectable, SQLOrderingTerm {
+  /// An SQL expression rather than an ordinary Swift value.
+  public protocol SQLSpecificExpressible: SQLExpressible, SQLSelectable, SQLOrderingTerm {}
+
+  extension SQLSpecificExpressible {
+    public var sqlSelection: SQL { sqlExpression.literal }
+    public var sqlOrdering: SQL { sqlExpression.literal }
+  }
+
+  public protocol ColumnExpression: SQLSpecificExpressible {
     var name: String { get }
   }
 
-  public struct SQLExpression: SQLExpressible, SQLSelectable, SQLOrderingTerm, Sendable {
+  public struct SQLExpression: SQLSpecificExpressible, Sendable {
     let literal: SQL
     var orderingReversal: SQL?
 
@@ -35,14 +43,6 @@
 
     public var sqlExpression: Self {
       self
-    }
-
-    public var sqlSelection: SQL {
-      literal
-    }
-
-    public var sqlOrdering: SQL {
-      literal
     }
 
     public var asc: SQLExpression {
@@ -99,7 +99,9 @@
     .init(SQL(sql: "(") + lhs.literal + SQL(sql: " \(op) ") + rhs.literal + SQL(sql: ")"))
   }
 
-  public func == (lhs: some SQLExpressible, rhs: (any DatabaseValueConvertible)?) -> SQLExpression {
+  public func == (lhs: some SQLSpecificExpressible, rhs: (any DatabaseValueConvertible)?)
+    -> SQLExpression
+  {
     binary(
       lhs.sqlExpression,
       rhs?.databaseValue.isNull != false ? "IS" : "=",
@@ -107,7 +109,9 @@
     )
   }
 
-  public func != (lhs: some SQLExpressible, rhs: (any DatabaseValueConvertible)?) -> SQLExpression {
+  public func != (lhs: some SQLSpecificExpressible, rhs: (any DatabaseValueConvertible)?)
+    -> SQLExpression
+  {
     binary(
       lhs.sqlExpression,
       rhs?.databaseValue.isNull != false ? "IS NOT" : "<>",
@@ -115,61 +119,39 @@
     )
   }
 
-  public func == (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
-    binary(lhs.sqlExpression, "=", rhs.sqlExpression)
+  public func == (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
+    let isNull = (rhs as? any DatabaseValueConvertible)?.databaseValue.isNull == true
+    return binary(lhs.sqlExpression, isNull ? "IS" : "=", rhs.sqlExpression)
   }
 
-  public func != (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
-    binary(lhs.sqlExpression, "<>", rhs.sqlExpression)
+  public func != (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
+    let isNull = (rhs as? any DatabaseValueConvertible)?.databaseValue.isNull == true
+    return binary(lhs.sqlExpression, isNull ? "IS NOT" : "<>", rhs.sqlExpression)
   }
 
-  public func && (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func && (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "AND", rhs.sqlExpression)
   }
 
-  public func || (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func || (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "OR", rhs.sqlExpression)
   }
 
-  public prefix func ! (expression: some SQLExpressible) -> SQLExpression {
+  public prefix func ! (expression: some SQLSpecificExpressible) -> SQLExpression {
     .init(SQL(sql: "NOT ") + expression.sqlExpression.literal)
   }
 
-  public func < (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "<", SQLExpression(value: rhs))
-  }
-
-  public func <= (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "<=", SQLExpression(value: rhs))
-  }
-
-  public func > (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, ">", SQLExpression(value: rhs))
-  }
-
-  public func >= (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, ">=", SQLExpression(value: rhs))
-  }
-
-  public func + (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "+", SQLExpression(value: rhs))
-  }
-
-  public func - (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "-", SQLExpression(value: rhs))
-  }
-
-  public func * (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "*", SQLExpression(value: rhs))
-  }
-
-  public func / (lhs: some SQLExpressible, rhs: any DatabaseValueConvertible) -> SQLExpression {
-    binary(lhs.sqlExpression, "/", SQLExpression(value: rhs))
-  }
-
   extension SQLExpressible {
-    public func like(_ pattern: String) -> SQLExpression {
-      binary(sqlExpression, "LIKE", SQLExpression(value: pattern))
+    public func like(_ pattern: some SQLExpressible, escape: (any SQLExpressible)? = nil)
+      -> SQLExpression
+    {
+      var sql =
+        SQL(sql: "(") + sqlExpression.literal + SQL(sql: " LIKE ")
+        + pattern.sqlExpression.literal
+      if let escape {
+        sql += SQL(sql: " ESCAPE ") + escape.sqlExpression.literal
+      }
+      return SQLExpression(sql + SQL(sql: ")"))
     }
   }
 
@@ -744,14 +726,6 @@
   }
 
   extension ColumnExpression {
-    public var sqlSelection: SQL {
-      sqlExpression.literal
-    }
-
-    public var sqlOrdering: SQL {
-      sqlExpression.literal
-    }
-
     public func set(to value: (any DatabaseValueConvertible)?) -> SQLAssignment {
       SQLAssignment(column: name, value: SQL(sql: "?", arguments: [value]))
     }

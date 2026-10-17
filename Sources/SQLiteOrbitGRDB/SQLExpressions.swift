@@ -17,7 +17,7 @@
     return SQLExpression(sql)
   }
 
-  public func abs(_ value: some SQLExpressible) -> SQLExpression {
+  public func abs(_ value: some SQLSpecificExpressible) -> SQLExpression {
     sqlFunction("ABS", [value.sqlExpression])
   }
 
@@ -43,40 +43,130 @@
     sqlFunction("TOTAL", [value.sqlExpression], filter: filter)
   }
 
-  public func ?? (lhs: some SQLExpressible, rhs: (any DatabaseValueConvertible)?) -> SQLExpression {
+  public func ?? (lhs: some SQLSpecificExpressible, rhs: (any DatabaseValueConvertible)?)
+    -> SQLExpression
+  {
     sqlFunction("IFNULL", [lhs.sqlExpression, SQLExpression(value: rhs)])
   }
 
-  public func + (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func + (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "+", rhs.sqlExpression)
   }
 
-  public func - (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func - (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "-", rhs.sqlExpression)
   }
 
-  public func * (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func * (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "*", rhs.sqlExpression)
   }
 
-  public func / (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func / (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "/", rhs.sqlExpression)
   }
 
-  public func < (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func < (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "<", rhs.sqlExpression)
   }
 
-  public func <= (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func <= (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, "<=", rhs.sqlExpression)
   }
 
-  public func > (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func > (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, ">", rhs.sqlExpression)
   }
 
-  public func >= (lhs: some SQLExpressible, rhs: some SQLExpressible) -> SQLExpression {
+  public func >= (lhs: some SQLSpecificExpressible, rhs: some SQLExpressible) -> SQLExpression {
     binary(lhs.sqlExpression, ">=", rhs.sqlExpression)
+  }
+
+  extension SQLSpecificExpressible {
+    public static prefix func - (value: Self) -> SQLExpression {
+      SQLExpression(SQL(sql: "-(") + value.sqlExpression.literal + SQL(sql: ")"))
+    }
+
+    public static prefix func ~ (value: Self) -> SQLExpression {
+      SQLExpression(SQL(sql: "~(") + value.sqlExpression.literal + SQL(sql: ")"))
+    }
+
+    public static func & (lhs: Self, rhs: some SQLExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "&", rhs.sqlExpression)
+    }
+
+    public static func & (lhs: some SQLExpressible, rhs: Self) -> SQLExpression {
+      binary(lhs.sqlExpression, "&", rhs.sqlExpression)
+    }
+
+    public static func & (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "&", rhs.sqlExpression)
+    }
+
+    public static func | (lhs: Self, rhs: some SQLExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "|", rhs.sqlExpression)
+    }
+
+    public static func | (lhs: some SQLExpressible, rhs: Self) -> SQLExpression {
+      binary(lhs.sqlExpression, "|", rhs.sqlExpression)
+    }
+
+    public static func | (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "|", rhs.sqlExpression)
+    }
+
+    public static func << (lhs: Self, rhs: some SQLExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "<<", rhs.sqlExpression)
+    }
+
+    public static func << (lhs: some SQLExpressible, rhs: Self) -> SQLExpression {
+      binary(lhs.sqlExpression, "<<", rhs.sqlExpression)
+    }
+
+    public static func << (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "<<", rhs.sqlExpression)
+    }
+
+    public static func >> (lhs: Self, rhs: some SQLExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, ">>", rhs.sqlExpression)
+    }
+
+    public static func >> (lhs: some SQLExpressible, rhs: Self) -> SQLExpression {
+      binary(lhs.sqlExpression, ">>", rhs.sqlExpression)
+    }
+
+    public static func >> (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, ">>", rhs.sqlExpression)
+    }
+
+    public static func === (lhs: Self, rhs: (any SQLExpressible)?) -> SQLExpression {
+      binary(lhs.sqlExpression, "IS", rhs?.sqlExpression ?? SQLExpression(value: nil))
+    }
+
+    public static func === (lhs: (any SQLExpressible)?, rhs: Self) -> SQLExpression {
+      binary(lhs?.sqlExpression ?? SQLExpression(value: nil), "IS", rhs.sqlExpression)
+    }
+
+    public static func === (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "IS", rhs.sqlExpression)
+    }
+
+    public static func !== (lhs: Self, rhs: (any SQLExpressible)?) -> SQLExpression {
+      binary(lhs.sqlExpression, "IS NOT", rhs?.sqlExpression ?? SQLExpression(value: nil))
+    }
+
+    public static func !== (lhs: (any SQLExpressible)?, rhs: Self) -> SQLExpression {
+      binary(lhs?.sqlExpression ?? SQLExpression(value: nil), "IS NOT", rhs.sqlExpression)
+    }
+
+    public static func !== (lhs: Self, rhs: some SQLSpecificExpressible) -> SQLExpression {
+      binary(lhs.sqlExpression, "IS NOT", rhs.sqlExpression)
+    }
+  }
+
+  public func coalesce(_ values: some Collection<any SQLSpecificExpressible>) -> SQLExpression {
+    guard let first = values.first else { return SQLExpression(value: nil) }
+    return values.count == 1
+      ? first.sqlExpression : sqlFunction("COALESCE", values.map(\.sqlExpression))
   }
 
   extension SQL: SQLSelectable, SQLOrderingTerm {
@@ -84,7 +174,7 @@
     public var sqlOrdering: SQL { self }
   }
 
-  extension SQL: SQLExpressible {
+  extension SQL: SQLSpecificExpressible {
     public var sqlExpression: SQLExpression {
       SQLExpression(self)
     }
@@ -141,7 +231,7 @@
 
   extension Range where Bound: DatabaseValueConvertible {
     public func contains(_ expression: some SQLExpressible) -> SQLExpression {
-      (expression >= lowerBound) && (expression < upperBound)
+      (expression.sqlExpression >= lowerBound) && (expression.sqlExpression < upperBound)
     }
   }
 
