@@ -76,18 +76,29 @@ Native drivers also expose their native `configuration`. Use `any DatabaseReader
 `asyncWrite(_:completion:)` commits or rolls back before calling completion, while still holding
 the writer connection. Completion may access that connection, and the result need not be Sendable.
 `asyncWriteWithoutTransaction(_:)` leaves transaction and SQL error handling to its closure.
-These callback APIs schedule native async access in Swift tasks. They preserve writer exclusion,
-but do not guarantee GRDB's submission ordering relative to other accesses issued immediately
-after scheduling a callback. Chain dependent work from completion. Their database arguments are
+
+`asyncUnsafeRead(_:)` provides read-only access without an implicit transaction. Consecutive
+queries can see different commits from other connections. This retains Orbit's stricter read-only
+rule: GRDB's unsafe queue reads can allow writes. The connection remains scoped to the callback.
+`asyncMigrate(_:completion:)` runs pending migrations with the native migrator and calls success
+on the same writer connection before releasing its barrier. Each migration has its own transaction;
+on failure, earlier committed migrations remain applied. Acquisition and migration errors are
+delivered as failures. Its completion may perform further writes.
+
+These callback APIs schedule native async access in Swift tasks and retain the native driver's
+access coordination, but do not guarantee GRDB's submission ordering relative to accesses issued
+immediately after scheduling a callback. Chain dependent work from completion. Their database arguments are
 scoped to the callbacks, and IPC announcements can follow completion when the access is released.
-The nonthrowing callback signature cannot report failure to acquire a connection; such a failure
-is a precondition failure. SQL errors inside `asyncWrite` are delivered to completion normally.
+The `asyncWriteWithoutTransaction` callback signature cannot report failure to acquire a connection;
+such a failure is a precondition failure (including when used by `asyncWrite`). SQL errors inside
+`asyncWrite` are delivered to completion normally. Result-based read and migration callbacks deliver
+at most one result, even if native access cleanup fails after the callback has run.
 
 ## Covered surface
 
 | Area | Implemented APIs |
 | --- | --- |
-| Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`; callback `asyncRead`, `asyncWrite`, and `asyncWriteWithoutTransaction`; queue `inDatabase`; explicit transactions and savepoints. |
+| Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`; callback `asyncRead`, `asyncUnsafeRead`, `asyncWrite`, and `asyncWriteWithoutTransaction`; queue `inDatabase`; explicit transactions and savepoints. |
 | Configuration | Foreign keys, busy timeout/callback, maximum reader count, per-connection `prepareDatabase`, and selection of a native SQLiteLibrary. |
 | SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation (including identifiers and SQL fragments), SQL composition/building, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
 | Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, null inspection, row coalescing, lazy cursors, set fetching, cursor transformations/reductions, and cursor-to-collection construction. |
@@ -95,7 +106,7 @@ is a precondition failure. SQL errors inside `asyncWrite` are delivered to compl
 | Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, and JSON encoder/decoder customization. |
 | Queries | SQLRequest, Table, Column/ColumnExpression, SQLSpecificExpressible, bound value expressions, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions including coalesce, LIKE/ESCAPE, bitwise/unary/null-safe identity operators, counts, and bulk update/delete. |
 | Schema | Table/column/index/view creation, generated columns, partial/expression indexes, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, foreign-key violations/checks, and schema versions. |
-| Migrations | Registration, sync/async migration, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
+| Migrations | Registration, sync/async migration, callback `asyncMigrate`, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
 | Observation | Dynamic tracking, inferred/explicit constant regions, callbacks, asynchronous sequences, immediate/main-actor/dispatch-queue scheduling, map/removeDuplicates, event hooks, cancellation, and conditional Combine publishers. |
 | Connection setup | Custom scalar functions, aggregates, named built-in collations, and custom collations, including installation on every pool connection through prepareDatabase. |
 | Maintenance | WAL checkpoints with passive/full/restart/truncate modes, schema selection, and frame counts. |

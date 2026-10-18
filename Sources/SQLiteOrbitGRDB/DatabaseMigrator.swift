@@ -44,6 +44,27 @@
       try await translate { try await native.migrate(writer.orbitDatabase, upTo: target) }
     }
 
+    /// Schedules all pending migrations. Success receives the writer connection outside a
+    /// transaction, before releasing the writer barrier. The database may not escape completion.
+    public func asyncMigrate(
+      _ writer: any DatabaseWriter,
+      completion: @escaping @Sendable (Result<Database, Error>) -> Void
+    ) {
+      let completion = DatabaseAccessCompletion(completion)
+      Task {
+        do {
+          try await translate {
+            try await writer.orbitDatabase.writeWithoutTransaction { connection in
+              try native.migrate(connection)
+              connection.withScopedAccess { completion(.success(Database($0))) }
+            }
+          }
+        } catch {
+          completion(.failure(error))
+        }
+      }
+    }
+
     public func appliedIdentifiers(_ db: Database) throws -> Set<String> {
       guard try db.tableExists("grdb_migrations") else {
         return []

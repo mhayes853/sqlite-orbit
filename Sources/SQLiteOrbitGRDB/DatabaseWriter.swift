@@ -34,6 +34,8 @@
     func unsafeRead<T>(_ value: (Database) throws -> T) throws -> T
 
     func unsafeRead<T: Sendable>(_ value: @Sendable (Database) throws -> T) async throws -> T
+
+    func asyncUnsafeRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void)
   }
 
   public protocol DatabaseWriter: DatabaseReader {
@@ -55,6 +57,26 @@
   // across a single synchronous call: no caller can use the captured state until that call returns.
   private struct SynchronousTransfer<Value>: @unchecked Sendable {
     let value: Value
+  }
+
+  // A native access may fail during cleanup after its scoped callback has run. Delivery remains
+  // exactly once, and the callback is released before invocation so it can schedule another access.
+  final class DatabaseAccessCompletion: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completion: (@Sendable (Result<Database, Error>) -> Void)?
+
+    init(_ completion: @escaping @Sendable (Result<Database, Error>) -> Void) {
+      self.completion = completion
+    }
+
+    func callAsFunction(_ result: Result<Database, Error>) {
+      let callback = lock.withLock {
+        let callback = completion
+        completion = nil
+        return callback
+      }
+      callback?(result)
+    }
   }
 
   extension DatabaseReader {
@@ -122,11 +144,25 @@
     }
 
     public func asyncRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
+      let completion = DatabaseAccessCompletion(value)
       Task {
         do {
-          try await read { value(.success($0)) }
+          try await read { completion(.success($0)) }
         } catch {
-          value(.failure(error))
+          completion(.failure(error))
+        }
+      }
+    }
+
+    /// Schedules read-only access without a transaction or a shared snapshot across queries.
+    /// The database is valid only inside the callback. Acquisition failures are delivered as errors.
+    public func asyncUnsafeRead(_ value: @escaping @Sendable (Result<Database, Error>) -> Void) {
+      let completion = DatabaseAccessCompletion(value)
+      Task {
+        do {
+          try await unsafeRead { completion(.success($0)) }
+        } catch {
+          completion(.failure(error))
         }
       }
     }

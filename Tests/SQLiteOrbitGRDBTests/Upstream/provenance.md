@@ -35,7 +35,8 @@ Test bodies retain their upstream assertions.
 Source files: https://github.com/groue/GRDB.swift/tree/v7.11.1/Tests/GRDBTests
 
 PersistenceCallbackTests.swift, ScopedWriteTests.swift, ExpandedSurfaceTests.swift, and
-ConvenienceSurfaceTests.swift, SmallConvenienceTests.swift, and AsyncWriteSurfaceTests.swift
+ConvenienceSurfaceTests.swift, SmallConvenienceTests.swift, AsyncWriteSurfaceTests.swift, and
+AsyncReadAndMigrationTests.swift
 are additional shared application fixtures, not copied upstream.
 They check callback order, save fallback, bounded bulk writes,
 composite keys, intersecting filters, transaction modes, set/key fetching, request reversal,
@@ -45,10 +46,13 @@ and SQL composition. The small convenience and callback fixtures additionally ch
 inspection, row reuse/copying, bitwise and unary operators, optional comparisons, null-safe
 identity, LIKE/ESCAPE, expression initialization, SQL coalescing, commit/rollback completion,
 deferred commit errors, non-Sendable and optional results, and partial writes outside transactions.
+The read/migration fixtures check callback scheduling, nontransactional reads, migration completion
+with write access, chained and already-applied migrations, migration rollback/history, and SQL errors.
+They use GRDB's unsafe-read contract and migration callback scenarios as their reference.
 Observation lifecycle tests live outside this shared fixture directory because Orbit shares runtimes by definition and database, whereas
 GRDB starts separate runtimes by default.
 
-Run these 154 identical test bodies against GRDB itself with:
+Run these 160 identical test bodies against GRDB itself with:
 
     Tests/GRDBReference/run.sh
 

@@ -32,6 +32,32 @@ private func exerciseCallbacks(_ database: any DatabaseWriter) async throws {
   #expect(
     try await database.read { try Int.fetchAll($0, sql: "SELECT n FROM item ORDER BY n") } == [1, 2]
   )
+  let values: [Int] = try await withCheckedThrowingContinuation { continuation in
+    AnyDatabaseReader(database)
+      .asyncUnsafeRead { result in
+        do {
+          let db = try result.get()
+          #expect(!db.isInsideTransaction)
+          continuation.resume(returning: try Int.fetchAll(db, sql: "SELECT n FROM item ORDER BY n"))
+        } catch { continuation.resume(throwing: error) }
+      }
+  }
+  #expect(values == [1, 2])
+  var migrator = DatabaseMigrator()
+  migrator.registerMigration("callback", foreignKeyChecks: .immediate) { db in
+    try db.execute(sql: "CREATE TABLE callback_marker(n); INSERT INTO callback_marker VALUES (42)")
+  }
+  let marker: Int? = try await withCheckedThrowingContinuation { continuation in
+    migrator.asyncMigrate(database) { result in
+      do {
+        let db = try result.get()
+        #expect(!db.isInsideTransaction)
+        continuation.resume(returning: try Int.fetchOne(db, sql: "SELECT n FROM callback_marker"))
+      } catch { continuation.resume(throwing: error) }
+    }
+  }
+  #expect(marker == 42)
+
 }
 
 @Suite("GRDB callback drivers", .timeLimit(.minutes(1)))
@@ -90,4 +116,45 @@ struct CallbackDriverTests {
     }
     Issue.record("Observation ended before receiving callback writes")
   }
+  @Test
+  func callbackMigrationsNotifyIPCPeers() async throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer {
+      for suffix in ["", "-wal", "-shm"] {
+        try? FileManager.default.removeItem(atPath: file.path + suffix)
+      }
+    }
+    let network = SQLiteOrbit.InMemoryIPCTransport.Network()
+    let first = OrbitIPCDatabase(
+      writer: try SQLiteOrbit.SQLitePool(path: OrbitDatabasePath(file.path)),
+      transport: InMemoryIPCTransport(network: network)
+    )
+    let second = OrbitIPCDatabase(
+      writer: try SQLiteOrbit.SQLitePool(path: OrbitDatabasePath(file.path)),
+      transport: InMemoryIPCTransport(network: network)
+    )
+    try await first.write { (db: SQLiteOrbitGRDB.Database) in
+      try db.execute(sql: "CREATE TABLE item(n)")
+    }
+    var iterator = SQLiteOrbitGRDB.ValueObservation
+      .tracking { db in
+        try Int.fetchAll(db, sql: "SELECT n FROM item")
+      }
+      .values(in: second).makeAsyncIterator()
+    #expect(try await iterator.next() == [])
+    var migrator = DatabaseMigrator()
+    migrator.registerMigration("insert", foreignKeyChecks: .immediate) {
+      try $0.execute(sql: "INSERT INTO item VALUES (42)")
+    }
+    let value: Int? = try await withCheckedThrowingContinuation { continuation in
+      migrator.asyncMigrate(first) { result in
+        do {
+          continuation.resume(returning: try Int.fetchOne(result.get(), sql: "SELECT n FROM item"))
+        } catch { continuation.resume(throwing: error) }
+      }
+    }
+    #expect(value == 42)
+    #expect(try await iterator.next() == [42])
+  }
+
 }
