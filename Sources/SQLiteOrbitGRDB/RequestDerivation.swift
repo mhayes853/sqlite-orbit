@@ -58,8 +58,8 @@
     }
 
     public func group(_ expressions: [any SQLExpressible]) -> Self {
-      let fragments = expressions.map { $0.sqlExpression.literal }
-      return groupWhenConnected { _ in fragments.map(SQLExpression.init) }
+      let expressions = expressions.map(\.sqlExpression)
+      return groupWhenConnected { _ in expressions }
     }
 
     public func group(sql: String, arguments: StatementArguments = StatementArguments()) -> Self {

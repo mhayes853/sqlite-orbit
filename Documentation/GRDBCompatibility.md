@@ -104,7 +104,7 @@ at most one result, even if native access cleanup fails after the callback has r
 | Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, null inspection, row coalescing, lazy cursors, set fetching, cursor transformations/reductions, and cursor-to-collection construction. |
 | Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change dictionaries, change-only updates and returning updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
 | Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, and JSON encoder/decoder customization. |
-| Queries | SQLRequest, Table, Column/ColumnExpression, SQLSpecificExpressible, bound value expressions, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions including coalesce, LIKE/ESCAPE, bitwise/unary/null-safe identity operators, counts, and bulk update/delete. |
+| Queries | SQLRequest, Table, Column/ColumnExpression, SQLSpecificExpressible, bound value expressions, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions including coalesce, LIKE/ESCAPE, bitwise/unary/null-safe identity operators, compound column assignments, counts, bulk update/delete, and bulk UPDATE/DELETE RETURNING. |
 | Schema | Table/column/index/view creation, generated columns, partial/expression indexes, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, foreign-key violations/checks, and schema versions. |
 | Migrations | Registration, sync/async migration, callback `asyncMigrate`, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
 | Observation | Dynamic tracking, inferred/explicit constant regions, callbacks, asynchronous sequences, immediate/main-actor/dispatch-queue scheduling, map/removeDuplicates, event hooks, cancellation, and conditional Combine publishers. |
@@ -137,6 +137,25 @@ Both record-returning and selection/statement-fetch forms are available for inse
 save; updates can restrict columns. Statements are consumed to completion before success callbacks.
 These APIs require a selected engine with the corresponding UPSERT/RETURNING support.
 
+Bulk requests support `updateAll(_:onConflict:_:)` with array or variadic assignments, and
+`TableRecord.updateAll` forwarding. `updateAndFetchAll/Set/Cursor` and
+`deleteAndFetchAll/Set/Cursor` return records using the decoder's `databaseSelection`, independently
+of the request's selection. `deleteAndFetchIds` returns a set of IDs from a single-column primary
+key. `updateAndFetchStatement` and `deleteAndFetchStatement` accept explicit returned selections,
+including expressions and aliases, for scalar or row fetching. Assignments accept `.set(to:)`
+and `+=`, `-=`, `*=`, `/=`, `&=`, `|=`, `<<=`, and `>>=`. Typed `$0.column` closure overloads
+require the unimplemented DatabaseComponents DSL.
+
+Bulk mutations bypass per-record persistence callbacks and use the record type's update conflict
+policy unless explicitly overridden. Native observation and IPC announcements still apply.
+`updateAll` with no assignments returns zero without database access; returning updates require
+nonempty assignments and selections. Preparing a statement or cursor does not execute it.
+Arrays and sets consume the statement to completion. Returned rows have no guaranteed order.
+SQLite performs all matching mutations on the first step of a RETURNING statement; consuming
+one returned row does not limit how many rows are changed. Exhaust or release cursors before
+leaving their database access. Decoding errors do not undo statement changes by themselves;
+letting the error escape a transactional `write` rolls back the transaction.
+
 `DatabaseAggregate` forwards group state and errors to Orbit's native aggregate implementation.
 Aggregate support depends on the selected engine. `Database.checkpoint(_:on:)` uses Orbit's native
 checkpoint implementation, including its busy policy. Invoke it through `writeWithoutTransaction`;
@@ -159,8 +178,15 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
 - Explicit write transactions support DEFERRED, IMMEDIATE, and EXCLUSIVE through native managed transactions.
 - Values decode through DatabaseValueConvertible; GRDB's optimized StatementColumnConvertible
   coercions and its custom conformances are not implemented.
-- Ordered/limited bulk writes require SQLite's ENABLE_UPDATE_DELETE_LIMIT compilation option,
-  as in GRDB. Unsupported engines and grouped bulk requests reject the write before mutation.
+- Ungrouped bulk writes ignore ordering unless a limit is present, matching GRDB. Direct limited
+  writes require SQLite's ENABLE_UPDATE_DELETE_LIMIT compilation option. GRDB 7.11.1 appends
+  RETURNING after LIMIT; engines that reject that grammar also reject these limited returning
+  requests before mutation, even when ordinary limited writes work.
+- Bulk grouping is supported for column expressions that contain a unique key, including unary
+  negation and collated columns. These requests use a key subquery, preserving HAVING, ordering,
+  and limits without requiring UPDATE/DELETE LIMIT support. Composite WITHOUT ROWID keys use tuple
+  subqueries; GRDB 7.11.1 does not implement this case. Other grouped bulk requests are rejected
+  before mutation. The overlay throws an error for invalid grouping where GRDB uses a precondition.
 - Dependencies that expose types from the original GRDB module require corresponding source
   changes; the overlay defines its own nominal types.
 - Query association/join/prefetch APIs, row adapters/scopes, Record class APIs, custom observation

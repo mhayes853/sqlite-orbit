@@ -83,7 +83,10 @@
 
   extension SQLSpecificExpressible {
     public static prefix func - (value: Self) -> SQLExpression {
-      SQLExpression(SQL(sql: "-(") + value.sqlExpression.literal + SQL(sql: ")"))
+      let expression = value.sqlExpression
+      var result = SQLExpression(SQL(sql: "-(") + expression.literal + SQL(sql: ")"))
+      result.groupingColumn = expression.groupingColumn
+      return result
     }
 
     public static prefix func ~ (value: Self) -> SQLExpression {
@@ -186,7 +189,10 @@
     }
 
     public func collating(_ collation: String) -> SQLExpression {
-      SQLExpression(sqlExpression.literal + SQL(sql: " COLLATE " + quoted(collation)))
+      let expression = sqlExpression
+      var result = SQLExpression(expression.literal + SQL(sql: " COLLATE " + quoted(collation)))
+      result.groupingColumn = expression.groupingColumn
+      return result
     }
   }
 

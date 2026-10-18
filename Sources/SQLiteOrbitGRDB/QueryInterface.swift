@@ -28,6 +28,7 @@
   public struct SQLExpression: SQLSpecificExpressible, Sendable {
     let literal: SQL
     var orderingReversal: SQL?
+    var groupingColumn: String?
 
     public init(sql: String, arguments: StatementArguments = StatementArguments()) {
       literal = SQL(sql: sql, arguments: arguments)
@@ -35,6 +36,11 @@
 
     init(_ literal: SQL) {
       self.literal = literal
+    }
+
+    init(column: String) {
+      literal = SQL(sql: quoted(column))
+      groupingColumn = column
     }
 
     init(value: (any DatabaseValueConvertible)?) {
@@ -74,7 +80,7 @@
     }
 
     public var sqlExpression: SQLExpression {
-      .init(sql: quoted(name))
+      .init(column: name)
     }
 
     public func forKey(_ key: String) -> SQLExpression {
@@ -286,7 +292,7 @@
     var ordering: [SQL] = []
     var reversedOrdering: [SQL]? = []
     var isReversed = false
-    var groups: [SQL] = []
+    var groups: [SQLExpression] = []
     var havingPredicates: [SQL] = []
     var rowLimit: Int?
     var offset: Int?
@@ -295,7 +301,7 @@
     private var havingResolvers: [@Sendable (Database) throws -> SQL] = []
     private var selectionResolver: (@Sendable (Database) throws -> [SQL])?
     private var orderingResolver: (@Sendable (Database) throws -> ([SQL], [SQL]?))?
-    private var groupResolver: (@Sendable (Database) throws -> [SQL])?
+    private var groupResolver: (@Sendable (Database) throws -> [SQLExpression])?
     private var ids: [[RecordKey]] = []
     private var keys: [[[String: RecordKey]]] = []
     private var recordType = RecordKeyEncodingType(RowDecoder.self as? any EncodableRecord.Type)
@@ -312,7 +318,7 @@
       result = result + (try condition(in: db))
       let groups = try groupResolver?(db) ?? groups
       if !groups.isEmpty {
-        result = result + SQL(sql: " GROUP BY ") + joined(groups, separator: ", ")
+        result = result + SQL(sql: " GROUP BY ") + joined(groups.map(\.literal), separator: ", ")
       }
       let havingPredicates = try havingPredicates + havingResolvers.map { try $0(db) }
       if !havingPredicates.isEmpty {
@@ -487,7 +493,7 @@
     public func group(_ expressions: any SQLExpressible...) -> Self {
       var result = self
       result.groupResolver = nil
-      result.groups = expressions.map { $0.sqlExpression.literal }
+      result.groups = expressions.map(\.sqlExpression)
       return result
     }
 
@@ -549,7 +555,7 @@
       _ expressions: @escaping @Sendable (Database) throws -> [any SQLExpressible]
     ) -> Self {
       var result = self
-      result.groupResolver = { try expressions($0).map { $0.sqlExpression.literal } }
+      result.groupResolver = { try expressions($0).map(\.sqlExpression) }
       return result
     }
 
@@ -576,19 +582,6 @@
       return result
     }
 
-    private func mutationCondition(in db: Database) throws -> SQL {
-      guard
-        try (groupResolver?(db) ?? groups).isEmpty && havingPredicates.isEmpty
-          && havingResolvers.isEmpty
-      else {
-        throw DatabaseError(
-          resultCode: .SQLITE_MISUSE,
-          message: "grouped requests do not support bulk writes"
-        )
-      }
-      return try condition(in: db)
-    }
-
     private func orderingAndLimitSQL(in db: Database) throws -> SQL {
       var result = SQL(sql: "")
       let ordering = try resolvedOrdering(in: db)
@@ -601,29 +594,66 @@
       return result
     }
 
-    @discardableResult
-    public func deleteAll(_ db: Database) throws -> Int {
-      let sql =
-        SQL(sql: "DELETE FROM " + quoted(table)) + (try mutationCondition(in: db))
-        + (try orderingAndLimitSQL(in: db))
-      try db.execute(literal: sql)
-      return db.changesCount
+    func mutationStatement(
+      _ db: Database,
+      assignments: [SQLAssignment]? = nil,
+      conflict: Database.ConflictResolution? = nil,
+      selection: [any SQLSelectable] = []
+    ) throws -> Statement {
+      var sql: SQL
+      if let assignments {
+        let policy =
+          conflict
+          ?? (RowDecoder.self as? any MutablePersistableRecord.Type)?
+          .persistenceConflictPolicy.conflictResolutionForUpdate ?? .abort
+        let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ") + $0.value }
+        sql =
+          SQL(sql: "UPDATE OR " + policy.rawValue.uppercased() + " " + quoted(table) + " SET ")
+          + joined(clauses, separator: ", ")
+      } else {
+        sql = SQL(sql: "DELETE FROM " + quoted(table))
+      }
+      let groups = try groupResolver?(db) ?? groups
+      if groups.isEmpty {
+        sql += try condition(in: db)
+        // Ordering without a limit has no effect on a bulk mutation, and is ignored by GRDB.
+        if rowLimit != nil { sql += try orderingAndLimitSQL(in: db) }
+      } else {
+        let names = groups.compactMap(\.groupingColumn)
+        guard names.count == groups.count, try db.table(table, hasUniqueKey: names) else {
+          throw DatabaseError(
+            resultCode: .SQLITE_MISUSE,
+            message: "grouped bulk writes require a unique key"
+          )
+        }
+        let columns = try mutationKeyColumns(db)
+        let key = joined(columns.map { SQL(sql: quoted($0)) }, separator: ", ")
+        var source = selecting(columns.map(Column.init))
+        source.groups = groups
+        source.groupResolver = nil
+        sql +=
+          SQL(sql: " WHERE ")
+          + (columns.count == 1 ? key : SQL(sql: "(") + key + SQL(sql: ")"))
+          + SQL(sql: " IN (") + (try source.sql(in: db)) + SQL(sql: ")")
+      }
+      if !selection.isEmpty {
+        sql += SQL(sql: " RETURNING ") + joined(selection.map(\.sqlSelection), separator: ", ")
+      }
+      return try db.makeStatement(literal: sql)
     }
 
-    @discardableResult
-    public func updateAll(_ db: Database, _ assignments: SQLAssignment...) throws
-      -> Int
-    {
-      guard !assignments.isEmpty else {
-        return 0
+    private func mutationKeyColumns(_ db: Database) throws -> [String] {
+      let key = try db.primaryKey(table)
+      if key.isRowID { return key.columns }
+      let names = Set(try db.columns(in: table).map { $0.name.lowercased() })
+      for alias in ["rowid", "_rowid_", "oid"] where !names.contains(alias) {
+        if (try? db.makeStatement(sql: "SELECT \(alias) FROM \(quoted(table)) LIMIT 0")) != nil {
+          return [alias]
+        }
       }
-      let clauses = assignments.map { SQL(sql: quoted($0.column) + " = ") + $0.value }
-      let sql =
-        SQL(sql: "UPDATE " + quoted(table) + " SET ") + joined(clauses, separator: ", ")
-        + (try mutationCondition(in: db)) + (try orderingAndLimitSQL(in: db))
-      try db.execute(literal: sql)
-      return db.changesCount
+      return key.columns
     }
+
   }
 
   func joined(_ fragments: [SQL], separator: String) -> SQL {
@@ -731,7 +761,7 @@
     }
 
     public var sqlExpression: SQLExpression {
-      .init(sql: quoted(name))
+      .init(column: name)
     }
 
     public var asc: SQLExpression {
