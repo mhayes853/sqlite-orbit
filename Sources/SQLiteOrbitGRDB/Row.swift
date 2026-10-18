@@ -20,14 +20,48 @@
     CustomStringConvertible, CustomDebugStringConvertible,
     ExpressibleByDictionaryLiteral
   {
-    var columns: [(String, DatabaseValue)]
+    private var storedColumns: [(String, DatabaseValue)] = []
+    private let base: Row?
+    private let adapter: (any _LayoutedRowAdapter)?
+    private let mapping: _LayoutedColumnMapping?
 
-    public init() {
-      columns = []
+    var columns: [(String, DatabaseValue)] {
+      get {
+        guard let base, let mapping else { return storedColumns }
+        let columns = base.columns
+        return mapping._layoutColumns.map { (index, name) in (name, columns[index].1) }
+      }
+      set {
+        precondition(base == nil)
+        storedColumns = newValue
+      }
+    }
+
+    public convenience init() {
+      self.init([])
     }
 
     init(_ columns: [(String, DatabaseValue)]) {
-      self.columns = columns
+      storedColumns = columns
+      base = nil
+      adapter = nil
+      mapping = nil
+    }
+
+    init(base: Row, adapter: some _LayoutedRowAdapter) {
+      self.base = base
+      self.adapter = adapter
+      mapping = adapter._mapping
+    }
+
+    private var columnCount: Int {
+      mapping?._layoutColumns.count ?? storedColumns.count
+    }
+
+    private func column(at index: Int) -> (String, DatabaseValue) {
+      guard let base, let mapping else { return storedColumns[index] }
+      let (source, name) = mapping._layoutColumns[index]
+      return (name, base.column(at: source).1)
     }
 
     public convenience init(_ dictionary: [String: (any DatabaseValueConvertible)?]) {
@@ -61,7 +95,7 @@
     }
 
     public var endIndex: Index {
-      Index(offset: columns.count)
+      Index(offset: columnCount)
     }
 
     public func index(after i: Index) -> Index {
@@ -73,15 +107,15 @@
     }
 
     public subscript(position: Index) -> (String, DatabaseValue) {
-      columns[position.offset]
+      column(at: position.offset)
     }
 
     public subscript(_ index: Int) -> (any DatabaseValueConvertible)? {
-      columns[index].1.rawValue
+      column(at: index).1.rawValue
     }
 
     public subscript(_ column: String) -> (any DatabaseValueConvertible)? {
-      index(ofColumn: column).flatMap { columns[$0].1.rawValue }
+      index(ofColumn: column).flatMap { self.column(at: $0).1.rawValue }
     }
 
     public subscript<T: DatabaseValueConvertible>(_ index: Int) -> T {
@@ -108,14 +142,27 @@
       "[" + columns.map { $0.0 + ":" + $0.1.description }.joined(separator: " ") + "]"
     }
 
-    public var debugDescription: String { description }
+    public var debugDescription: String {
+      guard self != unadapted else { return description }
+      var result = "▿ " + description
+      result += "\n  unadapted: " + unadapted.description
+      func appendScopes(_ row: Row, prefix: String) {
+        for (name, scoped) in row.scopes.sorted(by: { $0.name < $1.name }) {
+          result += "\n" + prefix + "- " + name + ": " + scoped.description
+          appendScopes(scoped, prefix: prefix + "  ")
+        }
+      }
+      appendScopes(self, prefix: "  ")
+      return result
+    }
 
     public var containsNonNullValue: Bool {
-      columns.contains { !$0.1.isNull }
+      (0..<columnCount).contains { !column(at: $0).1.isNull }
+        || scopes.contains { $0.row.containsNonNullValue }
     }
 
     public func hasNull(atIndex index: Int) -> Bool {
-      columns[index].1.isNull
+      column(at: index).1.isNull
     }
 
     public func coalesce<T: DatabaseValueConvertible>(_ columns: some Collection<String>) -> T? {
@@ -134,11 +181,11 @@
     }
 
     public var columnNames: [String] {
-      columns.map(\.0)
+      mapping?._layoutColumns.map(\.1) ?? storedColumns.map(\.0)
     }
 
     public var databaseValues: [DatabaseValue] {
-      columns.map(\.1)
+      (0..<columnCount).map { column(at: $0).1 }
     }
 
     public func hasColumn(_ column: String) -> Bool {
@@ -146,23 +193,28 @@
     }
 
     public func index(ofColumn column: String) -> Int? {
-      columns.firstIndex { $0.0.caseInsensitiveCompare(column) == .orderedSame }
+      if let mapping { return mapping._layoutIndex(ofColumn: column) }
+      return storedColumns.firstIndex { $0.0.caseInsensitiveCompare(column) == .orderedSame }
     }
 
     public func copy() -> Row {
-      Row(columns)
+      if let base, let adapter {
+        return Row(base: base.copy(), adapter: adapter)
+      }
+      return Row(storedColumns)
     }
 
     public func decode<T: DatabaseValueConvertible>(_ type: T.Type = T.self, at index: Int) throws
       -> T
     {
-      guard columns.indices.contains(index) else {
+      guard (0..<columnCount).contains(index) else {
         throw RowDecodingError(column: String(index), databaseValue: .null, type: type)
       }
-      guard let value = T.fromDatabaseValue(columns[index].1) else {
+      let (name, databaseValue) = column(at: index)
+      guard let value = T.fromDatabaseValue(databaseValue) else {
         throw RowDecodingError(
-          column: columns[index].0,
-          databaseValue: columns[index].1,
+          column: name,
+          databaseValue: databaseValue,
           type: type
         )
       }
@@ -191,12 +243,121 @@
     }
 
     public static func == (lhs: Row, rhs: Row) -> Bool {
-      lhs.columnNames == rhs.columnNames && lhs.databaseValues == rhs.databaseValues
+      if lhs === rhs { return true }
+      return lhs.columnNames == rhs.columnNames && lhs.databaseValues == rhs.databaseValues
+        && Set(lhs.scopes.names) == Set(rhs.scopes.names)
+        && lhs.scopes.allSatisfy { rhs.scopes[$0.name] == $0.row }
     }
 
     public func hash(into hasher: inout Hasher) {
       hasher.combine(columnNames)
       hasher.combine(databaseValues)
+      for name in scopes.names.sorted() {
+        hasher.combine(name)
+        hasher.combine(scopes[name])
+      }
+    }
+  }
+
+  extension Row {
+    /// The direct, case-sensitive named scopes defined by this row's adapter.
+    public var scopes: ScopesView {
+      ScopesView(base: base ?? self, adapters: adapter?._scopes ?? [:])
+    }
+
+    /// Recursive scope lookup, visiting all children before their descendants.
+    public var scopesTree: ScopesTreeView {
+      ScopesTreeView(scopes: scopes)
+    }
+
+    /// The same column projection without named scopes.
+    public var unscoped: Row {
+      guard let base, let adapter else { return self }
+      return Row(base: base, adapter: adapter._mapping)
+    }
+
+    /// The original row before any column projection, renaming, or scoping.
+    public var unadapted: Row {
+      base?.unadapted ?? self
+    }
+
+    /// Decodes a required scoped record, throwing for missing or entirely NULL scopes.
+    public func decode<Record: FetchableRecord>(
+      _ type: Record.Type = Record.self,
+      forKey scope: String
+    ) throws -> Record {
+      guard let row = scopesTree[scope], row.containsNonNullValue else {
+        throw RowDecodingError(column: scope, databaseValue: .null, type: type)
+      }
+      return try Record(row: row)
+    }
+
+    /// Decodes a scoped record, or returns nil for a missing or entirely NULL scope.
+    public func decodeIfPresent<Record: FetchableRecord>(
+      _ type: Record.Type = Record.self,
+      forKey scope: String
+    ) throws -> Record? {
+      guard let row = scopesTree[scope], row.containsNonNullValue else { return nil }
+      return try Record(row: row)
+    }
+
+    public subscript<Record: FetchableRecord>(_ scope: String) -> Record {
+      try! decode(forKey: scope)
+    }
+
+    public subscript<Record: FetchableRecord>(_ scope: String) -> Record? {
+      try! decodeIfPresent(forKey: scope)
+    }
+
+    public struct ScopesView: Collection {
+      public typealias Index = Dictionary<String, any _LayoutedRowAdapter>.Index
+      private let base: Row
+      private let adapters: [String: any _LayoutedRowAdapter]
+
+      fileprivate init(base: Row, adapters: [String: any _LayoutedRowAdapter]) {
+        self.base = base
+        self.adapters = adapters
+      }
+
+      public var names: Dictionary<String, any _LayoutedRowAdapter>.Keys { adapters.keys }
+      public var startIndex: Index { adapters.startIndex }
+      public var endIndex: Index { adapters.endIndex }
+
+      public func index(after index: Index) -> Index {
+        adapters.index(after: index)
+      }
+
+      public subscript(position: Index) -> (name: String, row: Row) {
+        let (name, adapter) = adapters[position]
+        return (name, Row(base: base, adapter: adapter))
+      }
+
+      public subscript(_ name: String) -> Row? {
+        adapters[name].map { Row(base: base, adapter: $0) }
+      }
+    }
+
+    public struct ScopesTreeView {
+      fileprivate let scopes: ScopesView
+
+      public var names: Set<String> {
+        scopes.reduce(into: []) { result, scope in
+          result.insert(scope.name)
+          result.formUnion(scope.row.scopesTree.names)
+        }
+      }
+
+      public subscript(_ name: String) -> Row? {
+        var pending = Array(scopes)
+        var index = 0
+        while index < pending.count {
+          let scope = pending[index]
+          if scope.name == name { return scope.row }
+          pending.append(contentsOf: scope.row.scopes)
+          index += 1
+        }
+        return nil
+      }
     }
   }
 
@@ -314,59 +475,81 @@
     public static func fetchCursor(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> AnyCursor<Self> {
-      try Row.fetchCursor(db, sql: sql, arguments: arguments)
+      try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter)
         .map { try $0.decode(Self.self, at: 0) }
     }
 
     public static func fetchAll(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> [Self] {
-      try Array(fetchCursor(db, sql: sql, arguments: arguments))
+      try Array(fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter))
     }
 
     public static func fetchOne(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Self? {
-      guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments) else {
+      guard let row = try Row.fetchOne(db, sql: sql, arguments: arguments, adapter: adapter) else {
         return nil
       }
-      if let value = Self.fromDatabaseValue(row.databaseValues[0]) {
+      guard let first = row.databaseValues.first else {
+        return try row.decode(Self.self, at: 0)
+      }
+      if let value = Self.fromDatabaseValue(first) {
         return value
       }
-      if row.databaseValues[0].isNull {
+      if first.isNull {
         return nil
       }
       return try row.decode(Self.self, at: 0)
     }
 
-    public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
+    public static func fetchCursor(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    )
       throws -> AnyCursor<Self>
     {
-      try Row.fetchCursor(statement, arguments: arguments).map { try $0.decode(Self.self, at: 0) }
+      try Row.fetchCursor(statement, arguments: arguments, adapter: adapter)
+        .map { try $0.decode(Self.self, at: 0) }
     }
 
-    public static func fetchAll(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchAll(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> [Self]
     {
-      try Array(fetchCursor(statement, arguments: arguments))
+      try Array(fetchCursor(statement, arguments: arguments, adapter: adapter))
     }
 
-    public static func fetchOne(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchOne(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Self?
     {
-      guard let row = try Row.fetchOne(statement, arguments: arguments) else {
+      guard let row = try Row.fetchOne(statement, arguments: arguments, adapter: adapter) else {
         return nil
       }
-      if let value = Self.fromDatabaseValue(row.databaseValues[0]) {
+      guard let first = row.databaseValues.first else {
+        return try row.decode(Self.self, at: 0)
+      }
+      if let value = Self.fromDatabaseValue(first) {
         return value
       }
-      if row.databaseValues[0].isNull {
+      if first.isNull {
         return nil
       }
       return try row.decode(Self.self, at: 0)

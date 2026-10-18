@@ -182,25 +182,28 @@
     public static func fetchAll(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> [Self] {
-      try Array(fetchCursor(db, sql: sql, arguments: arguments))
+      try Array(fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter))
     }
 
     public static func fetchOne(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Self? {
-      try Row.fetchOne(db, sql: sql, arguments: arguments).map(Self.init(row:))
+      try Row.fetchOne(db, sql: sql, arguments: arguments, adapter: adapter).map(Self.init(row:))
     }
 
     public static func fetchCursor(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> AnyCursor<Self> {
-      try Row.fetchCursor(db, sql: sql, arguments: arguments).map(Self.init(row:))
+      try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter).map(Self.init(row:))
     }
 
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Self] {
@@ -525,15 +528,23 @@
   private final class RecordDecoder: Decoder {
     let row: Row
     let record: any FetchableRecord.Type
-    var codingPath: [any CodingKey] = []
+    let codingPath: [any CodingKey]
+    let columnDecodingStrategy: DatabaseColumnDecodingStrategy
 
     var userInfo: [CodingUserInfoKey: Any] {
       record.databaseDecodingUserInfo
     }
 
-    init(row: Row, record: any FetchableRecord.Type) {
+    init(
+      row: Row,
+      record: any FetchableRecord.Type,
+      codingPath: [any CodingKey] = [],
+      columnDecodingStrategy: DatabaseColumnDecodingStrategy? = nil
+    ) {
       self.row = row
       self.record = record
+      self.codingPath = codingPath
+      self.columnDecodingStrategy = columnDecodingStrategy ?? record.databaseColumnDecodingStrategy
     }
 
     func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
@@ -543,32 +554,45 @@
     func unkeyedContainer() throws -> any UnkeyedDecodingContainer {
       throw DecodingError.typeMismatch(
         [Any].self,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
+        .init(codingPath: codingPath, debugDescription: "records require keyed columns")
       )
     }
 
     func singleValueContainer() throws -> any SingleValueDecodingContainer {
       throw DecodingError.typeMismatch(
         Any.self,
-        .init(codingPath: [], debugDescription: "records require keyed columns")
+        .init(codingPath: codingPath, debugDescription: "records require keyed columns")
       )
     }
 
     func column(_ key: any CodingKey) -> String? {
       row.columnNames.first {
-        record.databaseColumnDecodingStrategy.key($0).caseInsensitiveCompare(key.stringValue)
+        columnDecodingStrategy.key($0).caseInsensitiveCompare(key.stringValue)
           == .orderedSame
       }
     }
 
     func decode<T: Decodable>(_ type: T.Type, key: any CodingKey) throws -> T {
       guard let column = column(key), let index = row.index(ofColumn: column) else {
+        if let scoped = row.scopesTree[key.stringValue] {
+          if let recordType = type as? any FetchableRecord.Type {
+            return try recordType.init(row: scoped) as! T
+          }
+          return try T(
+            from: RecordDecoder(
+              row: scoped,
+              record: record,
+              codingPath: codingPath + [key],
+              columnDecodingStrategy: .useDefaultKeys
+            )
+          )
+        }
         throw DecodingError.keyNotFound(
           key,
-          .init(codingPath: [], debugDescription: "missing database column")
+          .init(codingPath: codingPath, debugDescription: "missing database column")
         )
       }
-      let value = row.databaseValues[index]
+      let value: DatabaseValue = row[index]
 
       func mismatch() -> RowDecodingError {
         RowDecodingError(column: column, databaseValue: value, type: type)
@@ -616,7 +640,7 @@
       if let text = String.fromDatabaseValue(value), text.first == "{" || text.first == "[" {
         return try record.databaseJSONDecoder(for: column).decode(type, from: Data(text.utf8))
       }
-      return try T(from: ColumnDecoder(value: value, path: [key], userInfo: userInfo))
+      return try T(from: ColumnDecoder(value: value, path: codingPath + [key], userInfo: userInfo))
     }
   }
 
@@ -624,24 +648,24 @@
     let decoder: RecordDecoder
 
     var codingPath: [any CodingKey] {
-      []
+      decoder.codingPath
     }
 
     var allKeys: [Key] {
-      decoder.row.columnNames.compactMap {
-        Key(stringValue: decoder.record.databaseColumnDecodingStrategy.key($0))
-      }
+      let names = Set(decoder.row.columnNames.map { decoder.columnDecodingStrategy.key($0) })
+        .union(decoder.row.scopesTree.names)
+      return names.compactMap(Key.init(stringValue:))
     }
 
     func contains(_ key: Key) -> Bool {
-      decoder.column(key) != nil
+      decoder.column(key) != nil || decoder.row.scopesTree[key.stringValue] != nil
     }
 
     func decodeNil(forKey key: Key) throws -> Bool {
       guard let column = decoder.column(key), let index = decoder.row.index(ofColumn: column) else {
-        return true
+        return decoder.row.scopesTree[key.stringValue]?.containsNonNullValue != true
       }
-      return decoder.row.databaseValues[index].isNull
+      return decoder.row.hasNull(atIndex: index)
     }
 
     func decode<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T {
@@ -651,11 +675,20 @@
     func nestedContainer<NestedKey: CodingKey>(keyedBy type: NestedKey.Type, forKey key: Key) throws
       -> KeyedDecodingContainer<NestedKey>
     {
+      if decoder.column(key) == nil, let scoped = decoder.row.scopesTree[key.stringValue] {
+        return try RecordDecoder(
+          row: scoped,
+          record: decoder.record,
+          codingPath: codingPath + [key],
+          columnDecodingStrategy: decoder.columnDecodingStrategy
+        )
+        .container(keyedBy: type)
+      }
       throw DecodingError.typeMismatch(
         type,
         .init(
-          codingPath: [key],
-          debugDescription: "explicit nested containers require a custom row decoder"
+          codingPath: codingPath + [key],
+          debugDescription: "no scoped keyed container for \(key.stringValue)"
         )
       )
     }

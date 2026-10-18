@@ -146,7 +146,8 @@
       sql: String,
       arguments: StatementArguments,
       cached: Bool = false,
-      unchecked: Bool = false
+      unchecked: Bool = false,
+      adapter: (any RowAdapter)? = nil
     ) throws -> RowCursor {
       try translate {
         let bound = try bindArguments(
@@ -155,14 +156,16 @@
           allowRemaining: unchecked,
           allowMissing: unchecked
         )
-        return RowCursor(
-          try access.statementCursor(
-            SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
-            cached: cached
-          ),
-          sql: sql,
-          arguments: arguments
+        let cursor = try access.statementCursor(
+          SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
+          cached: cached
         )
+        do {
+          return try RowCursor(cursor, sql: sql, arguments: arguments, adapter: adapter)
+        } catch {
+          try? cursor.close()
+          throw error
+        }
       }
     }
 
@@ -189,7 +192,8 @@
 
   public final class RowCursor: Cursor {
     private let cursor: SQLiteStatementCursor
-    private let row = Row()
+    private let baseRow: Row
+    private let row: Row
     public let sql: String
     public let arguments: StatementArguments
 
@@ -205,7 +209,20 @@
       DatabaseRegion(cursor.readRegion)
     }
 
-    init(_ cursor: SQLiteStatementCursor, sql: String, arguments: StatementArguments) {
+    init(
+      _ cursor: SQLiteStatementCursor,
+      sql: String,
+      arguments: StatementArguments,
+      adapter: (any RowAdapter)?
+    ) throws {
+      let baseRow = Row()
+      self.baseRow = baseRow
+      if let adapter {
+        let layout = _LayoutedColumnMapping(layoutColumns: Array(cursor.columnNames.enumerated()))
+        row = try Row(base: baseRow, adapter: adapter._layoutedAdapter(from: layout))
+      } else {
+        row = baseRow
+      }
       self.cursor = cursor
       self.sql = sql
       self.arguments = arguments
@@ -220,7 +237,7 @@
         guard let columns = try cursor.next() else {
           return nil
         }
-        row.columns = columns.map { ($0.0, DatabaseValue($0.1)) }
+        baseRow.columns = columns.map { ($0.0, DatabaseValue($0.1)) }
         return row
       }
     }
@@ -230,43 +247,58 @@
     public static func fetchCursor(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> RowCursor {
-      try db.cursor(sql: sql, arguments: arguments)
+      try db.cursor(sql: sql, arguments: arguments, adapter: adapter)
     }
 
     public static func fetchAll(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> [Row] {
-      try Array(fetchCursor(db, sql: sql, arguments: arguments).map { $0.copy() })
+      try Array(fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter).map { $0.copy() })
     }
 
     public static func fetchOne(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Row? {
-      try fetchCursor(db, sql: sql, arguments: arguments).next()?.copy()
+      try fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter).next()?.copy()
     }
 
-    public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
+    public static func fetchCursor(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    )
       throws -> RowCursor
     {
-      try statement.makeCursor(arguments: arguments)
+      try statement.makeCursor(arguments: arguments, adapter: adapter)
     }
 
-    public static func fetchAll(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchAll(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> [Row]
     {
-      try Array(fetchCursor(statement, arguments: arguments).map { $0.copy() })
+      try Array(fetchCursor(statement, arguments: arguments, adapter: adapter).map { $0.copy() })
     }
 
-    public static func fetchOne(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchOne(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Row?
     {
-      try fetchCursor(statement, arguments: arguments).next()?.copy()
+      try fetchCursor(statement, arguments: arguments, adapter: adapter).next()?.copy()
     }
 
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Row] {
@@ -322,12 +354,16 @@
       unchecked = true
     }
 
-    func makeCursor(arguments: StatementArguments?) throws -> RowCursor {
+    func makeCursor(
+      arguments: StatementArguments?,
+      adapter: (any RowAdapter)? = nil
+    ) throws -> RowCursor {
       let cursor = try database.cursor(
         sql: sql,
         arguments: arguments ?? self.arguments,
         cached: cached,
-        unchecked: arguments == nil && unchecked
+        unchecked: arguments == nil && unchecked,
+        adapter: adapter
       )
       persistenceCursors?.append(cursor)
       return cursor

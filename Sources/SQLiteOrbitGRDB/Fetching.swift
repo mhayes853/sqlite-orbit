@@ -12,18 +12,16 @@
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
-      let sql = try request.sql(in: db)
-      return try fetchCursor(db, sql: sql.sql, arguments: sql.arguments)
+      try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) }
     }
 
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Self] {
-      let sql = try request.sql(in: db)
-      return try fetchAll(db, sql: sql.sql, arguments: sql.arguments)
+      try Array(fetchCursor(db, request))
     }
 
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Self? {
-      let sql = try request.sql(in: db)
-      return try fetchOne(db, sql: sql.sql, arguments: sql.arguments)
+      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
+      return try fetchOne(prepared.statement, adapter: prepared.adapter)
     }
   }
 
@@ -31,9 +29,10 @@
     public static func fetchSet(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Set<Self> {
-      Set(try fetchAll(db, sql: sql, arguments: arguments))
+      Set(try fetchAll(db, sql: sql, arguments: arguments, adapter: adapter))
     }
 
     public static func fetchSet(_ db: Database, _ literal: SQL) throws -> Set<Self> {
@@ -44,38 +43,52 @@
       Set(try fetchAll(db, request))
     }
 
-    public static func fetchSet(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchSet(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Set<Self>
     {
-      Set(try fetchAll(statement, arguments: arguments))
+      Set(try fetchAll(statement, arguments: arguments, adapter: adapter))
     }
   }
 
   extension FetchableRecord {
-    public static func fetchCursor(_ statement: Statement, arguments: StatementArguments? = nil)
+    public static func fetchCursor(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    )
       throws -> AnyCursor<Self>
     {
-      try Row.fetchCursor(statement, arguments: arguments).map(Self.init(row:))
+      try Row.fetchCursor(statement, arguments: arguments, adapter: adapter).map(Self.init(row:))
     }
 
-    public static func fetchAll(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchAll(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> [Self]
     {
-      try Array(fetchCursor(statement, arguments: arguments))
+      try Array(fetchCursor(statement, arguments: arguments, adapter: adapter))
     }
 
-    public static func fetchOne(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchOne(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Self?
     {
-      try Row.fetchOne(statement, arguments: arguments).map(Self.init(row:))
+      try Row.fetchOne(statement, arguments: arguments, adapter: adapter).map(Self.init(row:))
     }
 
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
-      let sql = try request.sql(in: db)
-      return try db.cursor(sql: sql.sql, arguments: sql.arguments, cached: request.cached)
-        .map(Self.init(row:))
+      try Row.fetchCursor(db, request).map(Self.init(row:))
     }
 
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
@@ -87,9 +100,10 @@
     public static func fetchSet(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Set<Self> {
-      Set(try fetchAll(db, sql: sql, arguments: arguments))
+      Set(try fetchAll(db, sql: sql, arguments: arguments, adapter: adapter))
     }
 
     public static func fetchSet(_ db: Database, _ literal: SQL) throws -> Set<Self> {
@@ -100,10 +114,14 @@
       Set(try fetchAll(db, request))
     }
 
-    public static func fetchSet(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchSet(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Set<Self>
     {
-      Set(try fetchAll(statement, arguments: arguments))
+      Set(try fetchAll(statement, arguments: arguments, adapter: adapter))
     }
   }
 
@@ -115,9 +133,10 @@
     public static func fetchSet(
       _ db: Database,
       sql: String,
-      arguments: StatementArguments = StatementArguments()
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil
     ) throws -> Set<Row> {
-      Set(try fetchAll(db, sql: sql, arguments: arguments))
+      Set(try fetchAll(db, sql: sql, arguments: arguments, adapter: adapter))
     }
 
     public static func fetchSet(_ db: Database, _ literal: SQL) throws -> Set<Row> {
@@ -128,10 +147,14 @@
       Set(try fetchAll(db, request))
     }
 
-    public static func fetchSet(_ statement: Statement, arguments: StatementArguments? = nil) throws
+    public static func fetchSet(
+      _ statement: Statement,
+      arguments: StatementArguments? = nil,
+      adapter: (any RowAdapter)? = nil
+    ) throws
       -> Set<Row>
     {
-      Set(try fetchAll(statement, arguments: arguments))
+      Set(try fetchAll(statement, arguments: arguments, adapter: adapter))
     }
   }
 

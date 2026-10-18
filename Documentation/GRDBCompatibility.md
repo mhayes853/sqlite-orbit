@@ -102,8 +102,9 @@ at most one result, even if native access cleanup fails after the callback has r
 | Configuration | Foreign keys, busy timeout/callback, maximum reader count, per-connection `prepareDatabase`, and selection of a native SQLiteLibrary. |
 | SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation (including identifiers and SQL fragments), SQL composition/building, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
 | Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, null inspection, row coalescing, lazy cursors, set fetching, cursor transformations/reductions, and cursor-to-collection construction. |
+| Row adapters | Custom RowAdapter conformances and layout protocols, ColumnMapping, RenameColumnAdapter, EmptyRowAdapter, RangeRowAdapter, SuffixRowAdapter, splittingRowAdapters, ScopeAdapter, addingScopes, scopes/scopesTree, unscoped/unadapted, and scoped record decoding. |
 | Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change dictionaries, change-only updates and returning updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
-| Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, and JSON encoder/decoder customization. |
+| Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, JSON encoder/decoder customization, and nested records/keyed containers from row scopes. |
 | Queries | SQLRequest, Table, Column/ColumnExpression, SQLSpecificExpressible, bound value expressions, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions including coalesce, LIKE/ESCAPE, bitwise/unary/null-safe identity operators, compound column assignments, counts, bulk update/delete, and bulk UPDATE/DELETE RETURNING. |
 | Schema | Table/column/index/view creation, generated columns, partial/expression indexes, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, foreign-key violations/checks, and schema versions. |
 | Migrations | Registration, sync/async migration, callback `asyncMigrate`, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
@@ -168,6 +169,47 @@ columns resolve against the destination primary key. Metadata is queried through
 Typed ordering expressions support `reversed()` and NULL placement. Raw ordering SQL cannot be
 reversed; use an SQL expression for reversible ordering.
 
+Row adapters reshape fetched rows without changing the executed SQL. SQL and statement fetching
+accept `adapter:` for rows, records, and scalars (including cursor and set fetching). Scalar fetches
+read the first adapted column. `SQLRequest` accepts a mutable adapter, and `FetchRequest.adapted`
+builds an adapter inside the eventual database access. Chained adaptations resolve against the
+previous column mapping, matching GRDB. `PreparedRequest` carries the statement, bound arguments,
+and adapter; the default preparation hook preserves existing `sql(in:)` request conformances.
+
+```swift
+let request = SQLRequest<Row>(sql: """
+  SELECT player.id, player.name, team.id, team.name
+  FROM player LEFT JOIN team ON team.id = player.teamId
+  """, adapter: ScopeAdapter(base: EmptyRowAdapter(), scopes: [
+    "player": RangeRowAdapter(0..<2),
+    "team": RangeRowAdapter(2..<4)
+  ]))
+
+try database.read { db in
+  if let row = try request.fetchOne(db) {
+    let player: Player = try row.decode(forKey: "player")
+    let team: Team? = try row.decodeIfPresent(forKey: "team")
+    // Use player and its optional joined team.
+  }
+}
+```
+
+Scopes are case-sensitive. `scopes` looks up direct children, while `scopesTree` and scoped record
+decoding search breadth-first. Optional scoped records are nil for missing or entirely NULL scopes;
+`containsNonNullValue` also examines nested scopes. Synthesized Decodable properties can consume
+scopes, and nested FetchableRecord types retain their own row initializer and decoding strategies.
+A column takes precedence when it shares a coding key with a scope. Plain nested Decodable values
+use their own column names; column decoding strategies do not rename scopes.
+
+`unscoped` removes scopes while retaining the column projection; `unadapted` exposes the original
+columns. Adapted cursors reuse their rows, including scoped views, until copied. `copy`, `fetchOne`,
+and `fetchAll` preserve independent values and nested scopes after the access ends. Equality includes
+scopes. Adapters resolve once per cursor, before stepping, so a failed column mapping or throwing
+adapter does not execute a RETURNING mutation. Out-of-bounds range/suffix adapters are programmer
+errors, as in GRDB. Custom adapters use the public underscored layout protocols; as in GRDB 7.11.1,
+the concrete layout mapping initializer is internal, so they can delegate to built-in adapters.
+These features use only Orbit's existing public API and work with the same drivers and observations.
+
 ## Compatibility boundaries
 
 This is a supported subset, not complete GRDB protocol or behavior parity:
@@ -189,11 +231,11 @@ This is a supported subset, not complete GRDB protocol or behavior parity:
   before mutation. The overlay throws an error for invalid grouping where GRDB uses a precondition.
 - Dependencies that expose types from the original GRDB module require corresponding source
   changes; the overlay defines its own nominal types.
-- Query association/join/prefetch APIs, row adapters/scopes, Record class APIs, custom observation
+- Query association/join/prefetch APIs, prefetched row collections, Record class APIs, custom observation
   reducers, the explicit `SharedValueObservation` API, write-access observations, snapshots, backup, vacuum,
   explicit close, interrupt, specialized FTS helpers, and broad reactive access APIs remain future work.
-- Custom explicit nested Codable containers require a custom PersistenceContainer encoder or row
-  initializer. Normal synthesized nested properties use JSON columns.
+- Explicit nested Codable encoding containers require a custom PersistenceContainer encoder.
+  Decoding supports named row scopes and JSON columns; prefetched collection decoding remains future work.
 - Default Unicode functions/collations supplied by GRDB are not automatically installed.
 - Schema inspection covers ordinary tables/views and common primary keys; advanced schema metadata
   APIs remain future work.
@@ -216,7 +258,7 @@ DDL expressions and view definitions render bound values as SQL literals using t
 engine's quoting function. The existing SQL tokenizer distinguishes parameters from quoted text,
 identifiers, and comments. Generated columns and partial/expression indexes require engine support.
 
-The audit deliberately leaves larger SQL/query features (associations, adapters, CTEs, JSON/FTS
+The audit deliberately leaves larger SQL/query features (associations, CTEs, JSON/FTS
 DSLs, and custom reducers) for separate work. They are not simple forwarding conveniences even when
 some can be built using the current native API. Vacuum was tested but deferred: SQLite's internal
 transaction control is rejected by Orbit's guard outside a managed transaction (`SQLITE_AUTH`).
@@ -230,7 +272,7 @@ Apple SDK.
 ## Verification
 
 The package includes maintained fixtures derived from GRDB 7.11.1's argument, database-value,
-Codable encoding, row, cursor, record-change, and foreign-key violation tests, plus shared application fixtures. Their provenance and
+Codable encoding, row/adapters, cursor, record-change, and foreign-key violation tests, plus shared application fixtures. Their provenance and
 MIT license are in `Tests/SQLiteOrbitGRDBTests/Upstream`. The same fixtures run against GRDB itself
 in a separate test package, so the main package does not resolve or link GRDB.
 

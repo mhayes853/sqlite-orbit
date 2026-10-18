@@ -1,0 +1,180 @@
+// Selected test bodies from GRDB 7.11.1; see LICENSE and provenance.md.
+import XCTest
+import SQLiteOrbitGRDB
+
+class RowFetchTests: GRDBTestCase {
+    func testFetchCursor() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            func test(_ cursor: RowCursor) throws {
+                var row = try cursor.next()!
+                XCTAssertEqual(row["firstName"] as String, "Arthur")
+                XCTAssertEqual(row["lastName"] as String, "Martin")
+                row = try cursor.next()!
+                XCTAssertEqual(row["firstName"] as String, "Barbara")
+                XCTAssertEqual(row["lastName"] as String, "Gourde")
+                XCTAssertTrue(try cursor.next() == nil) // end
+                XCTAssertTrue(try cursor.next() == nil) // past the end
+            }
+            do {
+                let sql = "SELECT 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                try test(Row.fetchCursor(db, sql: sql))
+                try test(Row.fetchCursor(statement))
+                try test(Row.fetchCursor(db, SQLRequest<Void>(sql: sql)))
+                try test(SQLRequest<Row>(sql: sql).fetchCursor(db))
+            }
+            do {
+                let sql = "SELECT 0 AS firstName, 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 0, 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                let adapter = SuffixRowAdapter(fromIndex: 1)
+                try test(Row.fetchCursor(db, sql: sql, adapter: adapter))
+                try test(Row.fetchCursor(statement, adapter: adapter))
+                try test(Row.fetchCursor(db, SQLRequest<Void>(sql: sql, adapter: adapter)))
+                try test(SQLRequest<Row>(sql: sql, adapter: adapter).fetchCursor(db))
+            }
+        }
+    }
+
+    func testFetchCursorWithInterpolation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request: SQLRequest<Row> = "SELECT \("O'Brien")"
+            let cursor = try request.fetchCursor(db)
+            let row = try cursor.next()!
+            XCTAssertEqual(row[0], "O'Brien")
+        }
+    }
+
+    func testFetchAll() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            func test(_ array: [Row]) {
+                XCTAssertEqual(array.map { $0["firstName"] as String }, ["Arthur", "Barbara"])
+                XCTAssertEqual(array.map { $0["lastName"] as String }, ["Martin", "Gourde"])
+            }
+            do {
+                let sql = "SELECT 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                try test(Row.fetchAll(db, sql: sql))
+                try test(Row.fetchAll(statement))
+                try test(Row.fetchAll(db, SQLRequest<Void>(sql: sql)))
+                try test(SQLRequest<Row>(sql: sql).fetchAll(db))
+            }
+            do {
+                let sql = "SELECT 0 AS firstName, 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 0, 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                let adapter = SuffixRowAdapter(fromIndex: 1)
+                try test(Row.fetchAll(db, sql: sql, adapter: adapter))
+                try test(Row.fetchAll(statement, adapter: adapter))
+                try test(Row.fetchAll(db, SQLRequest<Void>(sql: sql, adapter: adapter)))
+                try test(SQLRequest<Row>(sql: sql, adapter: adapter).fetchAll(db))
+            }
+        }
+    }
+
+    func testFetchAllWithInterpolation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request: SQLRequest<Row> = "SELECT \("O'Brien")"
+            let rows = try request.fetchAll(db)
+            XCTAssertEqual(rows[0][0], "O'Brien")
+        }
+    }
+
+    func testFetchSet() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            func test(_ set: Set<Row>) {
+                XCTAssertEqual(Set(set.map { $0["firstName"] as String }), ["Arthur", "Barbara"])
+                XCTAssertEqual(Set(set.map { $0["lastName"] as String }), ["Martin", "Gourde"])
+            }
+            do {
+                let sql = "SELECT 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                try test(Row.fetchSet(db, sql: sql))
+                try test(Row.fetchSet(statement))
+                try test(Row.fetchSet(db, SQLRequest<Void>(sql: sql)))
+                try test(SQLRequest<Row>(sql: sql).fetchSet(db))
+            }
+            do {
+                let sql = "SELECT 0 AS firstName, 'Arthur' AS firstName, 'Martin' AS lastName UNION ALL SELECT 0, 'Barbara', 'Gourde'"
+                let statement = try db.makeStatement(sql: sql)
+                let adapter = SuffixRowAdapter(fromIndex: 1)
+                try test(Row.fetchSet(db, sql: sql, adapter: adapter))
+                try test(Row.fetchSet(statement, adapter: adapter))
+                try test(Row.fetchSet(db, SQLRequest<Void>(sql: sql, adapter: adapter)))
+                try test(SQLRequest<Row>(sql: sql, adapter: adapter).fetchSet(db))
+            }
+        }
+    }
+
+    func testFetchSetWithInterpolation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request: SQLRequest<Row> = "SELECT \("O'Brien")"
+            let rows = try request.fetchSet(db)
+            XCTAssertEqual(rows.first![0], "O'Brien")
+        }
+    }
+
+    func testFetchOne() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            do {
+                func test(_ nilBecauseMissingRow: Row?) {
+                    XCTAssertTrue(nilBecauseMissingRow == nil)
+                }
+                do {
+                    let sql = "SELECT 1 WHERE 0"
+                    let statement = try db.makeStatement(sql: sql)
+                    try test(Row.fetchOne(db, sql: sql))
+                    try test(Row.fetchOne(statement))
+                    try test(Row.fetchOne(db, SQLRequest<Void>(sql: sql)))
+                    try test(SQLRequest<Row>(sql: sql).fetchOne(db))
+                }
+                do {
+                    let sql = "SELECT 0, 1 WHERE 0"
+                    let statement = try db.makeStatement(sql: sql)
+                    let adapter = SuffixRowAdapter(fromIndex: 1)
+                    try test(Row.fetchOne(db, sql: sql, adapter: adapter))
+                    try test(Row.fetchOne(statement, adapter: adapter))
+                    try test(Row.fetchOne(db, SQLRequest<Void>(sql: sql, adapter: adapter)))
+                    try test(SQLRequest<Row>(sql: sql, adapter: adapter).fetchOne(db))
+                }
+            }
+            do {
+                func test(_ row: Row?) {
+                    XCTAssertEqual(row!["firstName"] as String, "Arthur")
+                    XCTAssertEqual(row!["lastName"] as String, "Martin")
+                }
+                do {
+                    let sql = "SELECT 'Arthur' AS firstName, 'Martin' AS lastName"
+                    let statement = try db.makeStatement(sql: sql)
+                    try test(Row.fetchOne(db, sql: sql))
+                    try test(Row.fetchOne(statement))
+                    try test(Row.fetchOne(db, SQLRequest<Void>(sql: sql)))
+                    try test(SQLRequest<Row>(sql: sql).fetchOne(db))
+                }
+                do {
+                    let sql = "SELECT 0 AS firstName, 'Arthur' AS firstName, 'Martin' AS lastName"
+                    let statement = try db.makeStatement(sql: sql)
+                    let adapter = SuffixRowAdapter(fromIndex: 1)
+                    try test(Row.fetchOne(db, sql: sql, adapter: adapter))
+                    try test(Row.fetchOne(statement, adapter: adapter))
+                    try test(Row.fetchOne(db, SQLRequest<Void>(sql: sql, adapter: adapter)))
+                    try test(SQLRequest<Row>(sql: sql, adapter: adapter).fetchOne(db))
+                }
+            }
+        }
+    }
+
+    func testFetchOneWithInterpolation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request: SQLRequest<Row> = "SELECT \("O'Brien")"
+            let row = try request.fetchOne(db)
+            XCTAssertEqual(row![0], "O'Brien")
+        }
+    }
+}

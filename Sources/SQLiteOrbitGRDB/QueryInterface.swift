@@ -195,6 +195,11 @@
     func sql(in db: Database) throws -> SQL
 
     var cached: Bool { get }
+
+    func makePreparedRequest(
+      _ db: Database,
+      forSingleResult singleResult: Bool
+    ) throws -> PreparedRequest
   }
 
   func decodeRow<T>(_ row: Row, as type: T.Type) throws -> T {
@@ -205,7 +210,8 @@
       return try record.init(row: row) as! T
     }
     if let scalar = type as? any DatabaseValueConvertible.Type,
-      let value = scalar.fromDatabaseValue(row.databaseValues[0]) as? T
+      let first = row.databaseValues.first,
+      let value = scalar.fromDatabaseValue(first) as? T
     {
       return value
     }
@@ -222,9 +228,7 @@
     }
 
     public func fetchCursor(_ db: Database) throws -> AnyCursor<RowDecoder> {
-      let sql = try sql(in: db)
-      return try db.cursor(sql: sql.sql, arguments: sql.arguments, cached: cached)
-        .map { try decodeRow($0, as: RowDecoder.self) }
+      try Row.fetchCursor(db, self).map { try decodeRow($0, as: RowDecoder.self) }
     }
 
     public func fetchAll(_ db: Database) throws -> [RowDecoder] {
@@ -232,15 +236,9 @@
     }
 
     public func fetchOne(_ db: Database) throws -> RowDecoder? {
-      let sql = try sql(in: db)
-      guard
-        let row = try db.cursor(sql: sql.sql, arguments: sql.arguments, cached: cached).next()?
-          .copy()
-      else {
-        return nil
-      }
+      guard let row = try Row.fetchOne(db, self) else { return nil }
       if let scalar = RowDecoder.self as? any DatabaseValueConvertible.Type,
-        row.databaseValues[0].isNull, scalar.fromDatabaseValue(.null) == nil
+        row.databaseValues.first?.isNull == true, scalar.fromDatabaseValue(.null) == nil
       {
         return nil
       }
@@ -261,27 +259,41 @@
   public struct SQLRequest<RowDecoder>: FetchRequest, Sendable {
     private let literal: SQL
     public let cached: Bool
+    public var adapter: (any RowAdapter)?
 
     public init(
       sql: String,
       arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil,
       cached: Bool = false
     ) {
       literal = SQL(sql: sql, arguments: arguments)
       self.cached = cached
+      self.adapter = adapter
     }
 
-    public init(literal: SQL, cached: Bool = false) {
+    public init(literal: SQL, adapter: (any RowAdapter)? = nil, cached: Bool = false) {
       self.literal = literal
       self.cached = cached
+      self.adapter = adapter
     }
 
     public func sql(in db: Database) throws -> SQL {
       literal
     }
 
+    public func makePreparedRequest(
+      _ db: Database,
+      forSingleResult singleResult: Bool = false
+    ) throws -> PreparedRequest {
+      let statement =
+        try cached
+        ? db.cachedStatement(literal: literal) : db.makeStatement(literal: literal)
+      return PreparedRequest(statement: statement, adapter: adapter)
+    }
+
     public func asRequest<T>(of type: T.Type) -> SQLRequest<T> {
-      .init(literal: literal, cached: cached)
+      .init(literal: literal, adapter: adapter, cached: cached)
     }
   }
 
@@ -835,38 +847,34 @@
 
   extension FetchRequest where RowDecoder == Row {
     public func fetchCursor(_ db: Database) throws -> RowCursor {
-      let sql = try sql(in: db)
-      return try db.cursor(sql: sql.sql, arguments: sql.arguments, cached: cached)
+      try Row.fetchCursor(db, self)
     }
   }
 
   extension FetchableRecord {
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Self? {
-      let sql = try request.sql(in: db)
-      return try fetchOne(db, sql: sql.sql, arguments: sql.arguments)
+      try Row.fetchOne(db, request).map(Self.init(row:))
     }
 
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Self] {
-      let sql = try request.sql(in: db)
-      return try fetchAll(db, sql: sql.sql, arguments: sql.arguments)
+      try Array(fetchCursor(db, request))
     }
   }
 
   extension Row {
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Row? {
-      let sql = try request.sql(in: db)
-      return try fetchOne(db, sql: sql.sql, arguments: sql.arguments)
+      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
+      return try fetchOne(prepared.statement, adapter: prepared.adapter)
     }
 
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Row] {
-      let sql = try request.sql(in: db)
-      return try fetchAll(db, sql: sql.sql, arguments: sql.arguments)
+      try Array(fetchCursor(db, request).map { $0.copy() })
     }
 
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws -> RowCursor
     {
-      let sql = try request.sql(in: db)
-      return try fetchCursor(db, sql: sql.sql, arguments: sql.arguments)
+      let prepared = try request.makePreparedRequest(db, forSingleResult: false)
+      return try fetchCursor(prepared.statement, adapter: prepared.adapter)
     }
   }
 

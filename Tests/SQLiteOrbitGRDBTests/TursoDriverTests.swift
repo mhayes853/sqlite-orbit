@@ -43,7 +43,8 @@
       }
       #expect(names == ["Updated"])
       let ids = try await database.read { db in
-        try Table<Row>("item").all().filterWhenConnected { _ in Column("name") == "Updated" }
+        try Table<SQLiteOrbitGRDB.Row>("item").all()
+          .filterWhenConnected { _ in Column("name") == "Updated" }
           .orderByPrimaryKey().reversed().selectPrimaryKey(as: Int64.self).fetchAll(db)
       }
       #expect(ids == [1])
