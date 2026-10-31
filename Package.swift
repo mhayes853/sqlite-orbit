@@ -248,7 +248,12 @@ let packageTargets: [Target] =
     // upstream's Swift 5 language mode and upcoming features.
     .testTarget(
       name: "SQLiteOrbitGRDBUpstreamTests",
-      dependencies: ["SQLiteOrbitGRDB"],
+      dependencies: [
+        "SQLiteOrbitGRDB",
+        // A few upstream tests call the SQLite C API on the overlay's connections.
+        .target(name: "CSQLite3", condition: .when(traits: ["SystemSQLite"])),
+        .product(name: "SQLCipher", package: "swift-sqlcipher", condition: .when(traits: ["SQLCipher"]))
+      ],
       exclude: ["LICENSE"],
       resources: [.copy("Resources/Betty.jpeg"), .copy("Resources/Issue1383.sqlite")],
       swiftSettings: [
@@ -256,6 +261,8 @@ let packageTargets: [Target] =
         .enableUpcomingFeature("InferSendableFromCaptures"),
         .enableUpcomingFeature("GlobalActorIsolatedTypesUsability"),
         .define("Turso", .when(traits: ["Turso"])),
+        // Upstream files import SQLCipher instead of the system SQLite under this define.
+        .define("SQLCipher", .when(traits: ["SQLCipher"])),
         // GRDB's tests gate FTS5 cases on this. The system SQLite and SQLCipher builds ship FTS5.
         .define("SQLITE_ENABLE_FTS5", .when(traits: ["SystemSQLite"])),
         .define("SQLITE_ENABLE_FTS5", .when(traits: ["SQLCipher"]))

@@ -338,8 +338,11 @@ def ported_source(path, entry):
         text = remove_declarations(text, list(entry.removed))
     banner = (
         f"// Generated from GRDB 7.11.1 Tests/GRDBTests/{path} by Tests/GRDBReference/grdb_upstream.py.\n"
-        "// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.\n"
+        "// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.\n"
     )
+    if re.search(r"^\s*import CSQLite3$", text, re.M):
+        # Turso has no SQLite C module to call into.
+        text = "#if !Turso\n" + text.rstrip("\n") + "\n#endif  // !Turso\n"
     return banner + text
 
 
