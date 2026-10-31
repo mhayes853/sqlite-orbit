@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/ValueObservation/ValueObservationQueryInterfaceRequestTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -71,9 +71,100 @@ class ValueObservationQueryInterfaceRequestTests: GRDBTestCase {
         }
     }
     
-
+    func testOneRowWithPrefetchedRows() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write(setup)
+        let request = Parent
+            .including(all: Parent.children.orderByPrimaryKey())
+            .orderByPrimaryKey()
+            .asRequest(of: Row.self)
+        let observation = ValueObservation.trackingConstantRegion(request.fetchOne)
+        
+        let recorder = observation.record(in: dbQueue)
+        try dbQueue.writeWithoutTransaction(performDatabaseModifications)
+        let results = try wait(for: recorder.next(6), timeout: 5)
+        
+        XCTAssertNil(results[0])
+        
+        XCTAssertEqual(results[1]!.unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[1]!.prefetchedRows["children"], [])
+        
+        XCTAssertEqual(results[2]!.unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[2]!.prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        
+        XCTAssertEqual(results[3]!.unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[3]!.prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA2", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        
+        XCTAssertEqual(results[4]!.unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[4]!.prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA2", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        
+        XCTAssertEqual(results[5]!.unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[5]!.prefetchedRows["children"], [])
+    }
     
-
+    func testAllRowsWithPrefetchedRows() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write(setup)
+        let request = Parent
+            .including(all: Parent.children.orderByPrimaryKey())
+            .orderByPrimaryKey()
+            .asRequest(of: Row.self)
+        let observation = ValueObservation.trackingConstantRegion(request.fetchAll)
+        
+        let recorder = observation.record(in: dbQueue)
+        try dbQueue.writeWithoutTransaction(performDatabaseModifications)
+        let results = try wait(for: recorder.next(6), timeout: 5)
+        
+        XCTAssertEqual(results[0].count, 0)
+        
+        XCTAssertEqual(results[1].count, 2)
+        XCTAssertEqual(results[1][0].unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[1][0].prefetchedRows["children"], [])
+        XCTAssertEqual(results[1][1].unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[1][1].prefetchedRows["children"], [])
+        
+        XCTAssertEqual(results[2].count, 2)
+        XCTAssertEqual(results[2][0].unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[2][0].prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        XCTAssertEqual(results[2][1].unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[2][1].prefetchedRows["children"], [
+            ["id": 3, "parentId": 2, "name": "barA", "grdb_parentId": 2]])
+        
+        XCTAssertEqual(results[3].count, 2)
+        XCTAssertEqual(results[3][0].unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[3][0].prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA2", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        XCTAssertEqual(results[3][1].unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[3][1].prefetchedRows["children"], [
+            ["id": 3, "parentId": 2, "name": "barA", "grdb_parentId": 2]])
+        
+        XCTAssertEqual(results[4].count, 3)
+        XCTAssertEqual(results[4][0].unscoped, ["id": 1, "name": "foo"])
+        XCTAssertEqual(results[4][0].prefetchedRows["children"], [
+            ["id": 1, "parentId": 1, "name": "fooA2", "grdb_parentId": 1],
+            ["id": 2, "parentId": 1, "name": "fooB", "grdb_parentId": 1]])
+        XCTAssertEqual(results[4][1].unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[4][1].prefetchedRows["children"], [
+            ["id": 3, "parentId": 2, "name": "barA", "grdb_parentId": 2]])
+        XCTAssertEqual(results[4][2].unscoped, ["id": 3, "name": "baz"])
+        XCTAssertEqual(results[4][2].prefetchedRows["children"], [
+            ["id": 4, "parentId": 3, "name": "bazA", "grdb_parentId": 3]])
+        
+        XCTAssertEqual(results[5].count, 2)
+        XCTAssertEqual(results[5][0].unscoped, ["id": 2, "name": "bar"])
+        XCTAssertEqual(results[5][0].prefetchedRows["children"], [])
+        XCTAssertEqual(results[5][1].unscoped, ["id": 3, "name": "baz"])
+        XCTAssertEqual(results[5][1].prefetchedRows["children"], [])
+    }
     
     func testOneRecordWithPrefetchedRows() throws {
         let request = Parent

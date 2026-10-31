@@ -21,6 +21,11 @@
 
     let access: SQLiteScopedAccess
     var _connectionState: DatabaseConnectionState?
+    // When set, accumulates the regions read by the statements of this database.
+    var regionRecorder: DatabaseRegion?
+    // Raw read statements, finalized by the access wrapper that enabled them.
+    var rawStatements: RawStatementList?
+    var transactionWasOpen = false
 
     init(_ access: SQLiteScopedAccess) {
       self.access = access
@@ -35,7 +40,7 @@
     }
 
     public var totalChangesCount: Int {
-      try! Int.fetchOne(self, sql: "SELECT total_changes()")!
+      checked { try untracedTotalChanges() }
     }
 
     public var lastInsertedRowID: Int64 {
@@ -92,7 +97,8 @@
     }
 
     public func execute(literal: SQL) throws {
-      try execute(sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(self)
+      try execute(sql: sql, arguments: arguments)
     }
 
     public func makeStatement(sql: String) throws -> Statement {
@@ -129,8 +135,9 @@
     }
 
     public func makeStatement(literal: SQL) throws -> Statement {
-      let statement = try makeStatement(sql: literal.sql)
-      statement.arguments = literal.arguments
+      let (sql, arguments) = try literal.build(self)
+      let statement = try makeStatement(sql: sql)
+      statement.arguments = arguments
       return statement
     }
 
@@ -139,8 +146,9 @@
     }
 
     public func cachedStatement(literal: SQL) throws -> Statement {
-      let statement = try cachedStatement(sql: literal.sql)
-      statement.arguments = literal.arguments
+      let (sql, arguments) = try literal.build(self)
+      let statement = try cachedStatement(sql: sql)
+      statement.arguments = arguments
       return statement
     }
 
@@ -156,7 +164,11 @@
         case .exclusive: .exclusive
         }
       var committed = false
-      defer { connectionState.transactionDidEnd(self, committed: committed) }
+      connectionState.transactionDate = nil
+      defer {
+        connectionState.transactionDate = nil
+        connectionState.transactionDidEnd(self, committed: committed)
+      }
       try translate {
         traceTransactionStatement("BEGIN \(kind.rawValue) TRANSACTION")
         do {
@@ -273,23 +285,212 @@
           allowRemaining: unchecked,
           allowMissing: unchecked
         )
-        let cursor = try access.statementCursor(
-          SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
-          cached: cached
-        )
+        let source: RowCursor.Source
+        if let raw = try rawSelect(sql: sql, values: bound.values) {
+          source = .raw(raw)
+        } else {
+          source = .native(
+            try access.statementCursor(
+              SQLiteOrbit.SQL(text: sql, bindings: bound.values.map(\.orbitValue)),
+              cached: cached
+            )
+          )
+        }
         do {
-          let rows = try RowCursor(cursor, sql: sql, arguments: arguments, adapter: adapter)
+          let rows = try RowCursor(source, sql: sql, arguments: arguments, adapter: adapter)
           rows.trace = { [weak self] in self?.traceStatement(sql: sql, values: bound.values) }
           rows.boundValues = bound.values
+          if let recorded = regionRecorder {
+            regionRecorder = recorded.union(rows.databaseRegion)
+          }
           rows.publicStatementArguments = connectionState.publicStatementArguments
           return rows
         } catch {
-          try? cursor.close()
+          source.close()
           throw error
         }
       }
     }
 
+    // Read-only queries run on raw statements in accesses that finalize them before returning,
+    // which avoids SQLiteOrbit's owned row copies. Other statements use native cursors.
+    private func rawSelect(sql: String, values: [DatabaseValue]) throws -> RawSelectStatement? {
+      guard let rawStatements else { return nil }
+      let keyword = sql.drop { $0.isWhitespace }.prefix(6).uppercased()
+      guard keyword.hasPrefix("SELECT") || keyword.hasPrefix("WITH") || keyword.hasPrefix("VALUES")
+      else { return nil }
+      if transactionWasOpen, !(try access.isInsideTransaction) {
+        throw SQLiteError(
+          code: SQLiteResultCode(rawValue: 4),
+          message: "transaction was aborted",
+          sql: sql
+        )
+      }
+      let info = try access.statementInfo(sql)
+      guard info.isReadOnly, info.parameterCount == values.count else { return nil }
+      let raw = try RawSelectStatement(access: access, sql: sql, values: values, region: info)
+      rawStatements.append(raw)
+      return raw
+    }
+
+    // Enables raw statements; `finalizeRawStatements` must run before the access ends.
+    func enableRawStatements() {
+      rawStatements = RawStatementList()
+      transactionWasOpen = (try? access.isInsideTransaction) ?? false
+    }
+
+    func finalizeRawStatements() {
+      rawStatements?.finalizeAll()
+      rawStatements = nil
+    }
+  }
+
+  final class RawStatementList {
+    private var statements: [RawSelectStatement] = []
+
+    func append(_ statement: RawSelectStatement) {
+      statements.removeAll { $0.isFinalized }
+      statements.append(statement)
+    }
+
+    func finalizeAll() {
+      for statement in statements { statement.finalize() }
+      statements = []
+    }
+  }
+
+  // A prepared read-only statement stepped directly through the library's function table.
+  final class RawSelectStatement {
+    private let access: SQLiteScopedAccess
+    private let library: SQLiteLibrary
+    private let connection: OpaquePointer
+    private var pointer: OpaquePointer?
+    private let sql: String
+    private let readRegion: OrbitDatabaseRegion
+    private var published = false
+    let columnNames: [String]
+
+    var isFinalized: Bool { pointer == nil }
+    var region: OrbitDatabaseRegion { readRegion }
+
+    init(
+      access: SQLiteScopedAccess,
+      sql: String,
+      values: [DatabaseValue],
+      region: SQLiteStatementInfo
+    )
+      throws
+    {
+      self.access = access
+      self.sql = sql
+      library = try access.configuration.library
+      connection = try access.sqliteConnection
+      readRegion = region.readRegion
+      columnNames = region.columnNames
+      var statement: OpaquePointer?
+      let code = sql.withCString {
+        library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
+      }
+      guard code == 0, let statement else {
+        if let statement { _ = library.statements.execution.finalize(statement) }
+        throw error(code)
+      }
+      pointer = statement
+      for (offset, value) in values.enumerated() {
+        let index = Int32(offset + 1)
+        let code: Int32
+        switch value.storage {
+        case .null: code = library.bindings.null(statement, index)
+        case .int64(let n): code = library.bindings.int64(statement, index, n)
+        case .double(let d): code = library.bindings.double(statement, index, d)
+        case .string(let string):
+          code = string.withCString {
+            library.bindings.text(statement, index, $0, Int32(string.utf8.count))
+          }
+        case .blob(let data):
+          code = data.withUnsafeBytes {
+            library.bindings.blob(
+              statement,
+              index,
+              $0.baseAddress ?? UnsafeRawPointer(bitPattern: 1),
+              Int32($0.count)
+            )
+          }
+        }
+        guard code == 0 else {
+          finalize()
+          throw error(code)
+        }
+      }
+    }
+
+    deinit {
+      finalize()
+    }
+
+    private func error(_ code: Int32) -> SQLiteError {
+      let extended = library.connections.extendedErrorCode(connection)
+      let message = library.connections.errorMessage(connection).map { String(cString: $0) }
+      return SQLiteError(
+        code: SQLiteResultCode(rawValue: extended != 0 ? extended : code),
+        message: message,
+        sql: sql
+      )
+    }
+
+    func finalize() {
+      if let pointer { _ = library.statements.execution.finalize(pointer) }
+      pointer = nil
+    }
+
+    /// The columns of the next row, or nil when done.
+    func step() throws -> [(String, DatabaseValue)]? {
+      try access.checkAccess()
+      guard let statement = pointer else { return nil }
+      if !published {
+        published = true
+        try access.notifyReads(in: readRegion)
+      }
+      let code = library.statements.execution.step(statement)
+      switch code {
+      case 100:
+        let columns = library.columns
+        let count = columns.count(statement)
+        var values: [(String, DatabaseValue)] = []
+        values.reserveCapacity(Int(count))
+        var index: Int32 = 0
+        while index < count {
+          defer { index += 1 }
+          let name = columnNames[Int(index)]
+          switch columns.type(statement, index) {
+          case 1:
+            values.append((name, DatabaseValue(storage: .int64(columns.int64(statement, index)))))
+          case 2:
+            values.append((name, DatabaseValue(storage: .double(columns.double(statement, index)))))
+          case 3:
+            let length = Int(columns.byteCount(statement, index))
+            let text = columns.text(statement, index)
+              .map {
+                String(decoding: UnsafeBufferPointer(start: $0, count: length), as: UTF8.self)
+              }
+            values.append((name, DatabaseValue(storage: .string(text ?? ""))))
+          case 4:
+            let length = Int(columns.byteCount(statement, index))
+            let data = columns.blob(statement, index).map { Data(bytes: $0, count: length) }
+            values.append((name, DatabaseValue(storage: .blob(data ?? Data()))))
+          default: values.append((name, .null))
+          }
+        }
+        return values
+      case 101:
+        finalize()
+        return nil
+      default:
+        let error = error(code)
+        finalize()
+        throw error
+      }
+    }
   }
 
   public struct ColumnInfo: Sendable {
@@ -318,26 +519,45 @@
   }
 
   public final class RowCursor: Cursor {
-    private let cursor: SQLiteStatementCursor
+    enum Source {
+      case native(SQLiteStatementCursor)
+      case raw(RawSelectStatement)
+
+      var columnNames: [String] {
+        switch self {
+        case .native(let cursor): cursor.columnNames
+        case .raw(let statement): statement.columnNames
+        }
+      }
+
+      func close() {
+        switch self {
+        case .native(let cursor): try? cursor.close()
+        case .raw(let statement): statement.finalize()
+        }
+      }
+    }
+
+    private let source: Source
     private let baseRow: Row
     private let row: Row
     public let sql: String
     public let arguments: StatementArguments
-
-    public var columnNames: [String] {
-      cursor.columnNames
-    }
+    public let columnNames: [String]
 
     public var columnCount: Int {
       columnNames.count
     }
 
     public var databaseRegion: DatabaseRegion {
-      DatabaseRegion(cursor.readRegion)
+      switch source {
+      case .native(let cursor): DatabaseRegion(cursor.readRegion)
+      case .raw(let statement): DatabaseRegion(statement.region)
+      }
     }
 
     init(
-      _ cursor: SQLiteStatementCursor,
+      _ source: Source,
       sql: String,
       arguments: StatementArguments,
       adapter: (any RowAdapter)?
@@ -345,19 +565,20 @@
       let baseRow = Row()
       baseRow.storedIsFetched = true
       self.baseRow = baseRow
+      columnNames = source.columnNames
       if let adapter {
-        let layout = _LayoutedColumnMapping(layoutColumns: Array(cursor.columnNames.enumerated()))
+        let layout = _LayoutedColumnMapping(layoutColumns: Array(columnNames.enumerated()))
         row = try Row(base: baseRow, adapter: adapter._layoutedAdapter(from: layout))
       } else {
         row = baseRow
       }
-      self.cursor = cursor
+      self.source = source
       self.sql = sql
       self.arguments = arguments
     }
 
     deinit {
-      try? cursor.close()
+      source.close()
     }
 
     // Starts the statement trace on the first step, as SQLite does.
@@ -376,9 +597,14 @@
       if let failure {
         throw failure
       }
-      let columns: SQLiteStatementCursor.Element?
+      let columns: [(String, DatabaseValue)]?
       do {
-        columns = try cursor.next()
+        switch source {
+        case .native(let cursor):
+          columns = try cursor.next()?.map { ($0.0, DatabaseValue($0.1)) }
+        case .raw(let statement):
+          columns = try statement.step()
+        }
       } catch let error as SQLiteError {
         let failure = DatabaseError(
           error,
@@ -393,7 +619,7 @@
         activeTrace = nil
         return nil
       }
-      baseRow.columns = columns.map { ($0.0, DatabaseValue($0.1)) }
+      baseRow.columns = columns
       return row
     }
   }
@@ -486,6 +712,12 @@
 
     public let databaseRegion: DatabaseRegion
 
+    /// Whether the statement does not write to the database.
+    public let isReadonly: Bool
+
+    // The row being dumped, read by dump formats.
+    var dumpedRow: Row?
+
     init(database: Database, sql: String, cached: Bool) throws {
       self.database = database
       self.sql = trimmedSQLStatement(sql)
@@ -493,6 +725,12 @@
       let info = try translate { try database.access.statementInfo(sql) }
       columnNames = info.columnNames
       databaseRegion = DatabaseRegion(info.readRegion)
+      isReadonly = info.isReadOnly
+    }
+
+    /// The index of the leftmost column with the given name, compared case-insensitively.
+    public func index(ofColumn name: String) -> Int? {
+      columnNames.firstIndex { $0.caseInsensitiveCompare(name) == .orderedSame }
     }
 
     public func validateArguments(_ arguments: StatementArguments) throws {

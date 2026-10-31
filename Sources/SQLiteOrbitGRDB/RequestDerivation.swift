@@ -43,6 +43,8 @@
   }
 
   extension SelectionRequest where Self: TypedRequest, Self.RowDecoder: TableRecord {
+    public typealias DatabaseComponents = RowDecoder.DatabaseComponents
+
     public func select(
       _ selection: (RowDecoder.DatabaseComponents) throws -> any SQLSelectable
     ) rethrows -> Self {
@@ -103,6 +105,8 @@
   }
 
   extension FilteredRequest where Self: TypedRequest, Self.RowDecoder: TableRecord {
+    public typealias DatabaseComponents = RowDecoder.DatabaseComponents
+
     public func filter(
       _ predicate: (RowDecoder.DatabaseComponents) throws -> any SQLSpecificExpressible
     ) rethrows -> Self {
@@ -368,6 +372,8 @@
   }
 
   extension AggregatingRequest where Self: TypedRequest, Self.RowDecoder: TableRecord {
+    public typealias DatabaseComponents = RowDecoder.DatabaseComponents
+
     public func group(
       _ expression: (RowDecoder.DatabaseComponents) throws -> any SQLExpressible
     ) rethrows -> Self {
@@ -422,6 +428,8 @@
   }
 
   extension OrderedRequest where Self: TypedRequest, Self.RowDecoder: TableRecord {
+    public typealias DatabaseComponents = RowDecoder.DatabaseComponents
+
     public func order(
       _ ordering: (RowDecoder.DatabaseComponents) throws -> any SQLOrderingTerm
     ) rethrows -> Self {

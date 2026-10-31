@@ -286,15 +286,7 @@
     }
 
     public func withStableOrder() -> Self {
-      let table = databaseTableName
-      return withDestinationRelation { relation in
-        let stable = SQLRelation.Ordering(
-          Deferred { db in
-            try db.primaryKey(table).columns.map { SQLExpression.column($0).sqlOrdering }
-          }
-        )
-        relation.ordering = relation.ordering.appending(stable)
-      }
+      withDestinationRelation { $0 = $0.withStableOrder() }
     }
 
     public var databaseTableName: String {

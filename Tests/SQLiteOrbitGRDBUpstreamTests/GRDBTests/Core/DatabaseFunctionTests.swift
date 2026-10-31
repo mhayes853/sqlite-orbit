@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseFunctionTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -17,7 +17,34 @@ class DatabaseFunctionTests: GRDBTestCase {
     
     // MARK: - Default functions
     
-
+    func testDefaultFunctions() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            
+            // Those functions are automatically added to all connections.
+            // See Database.setupDefaultFunctions()
+            
+            let capitalize = DatabaseFunction.capitalize
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(capitalize.name)('jérÔME')"), "Jérôme")
+            
+            let lowercase = DatabaseFunction.lowercase
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(lowercase.name)('jérÔME')"), "jérôme")
+            
+            let uppercase = DatabaseFunction.uppercase
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(uppercase.name)('jérÔME')"), "JÉRÔME")
+            
+            // Locale-dependent tests. Are they fragile?
+            
+            let localizedCapitalize = DatabaseFunction.localizedCapitalize
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(localizedCapitalize.name)('jérÔME')"), "Jérôme")
+            
+            let localizedLowercase = DatabaseFunction.localizedLowercase
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(localizedLowercase.name)('jérÔME')"), "jérôme")
+            
+            let localizedUppercase = DatabaseFunction.localizedUppercase
+            XCTAssertEqual(try String.fetchOne(db, sql: "SELECT \(localizedUppercase.name)('jérÔME')"), "JÉRÔME")
+        }
+    }
 
     // MARK: - Return values
 

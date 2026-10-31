@@ -1,5 +1,6 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabasePool/DatabasePoolTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
+#if !Turso
 // Import C SQLite functions
 #if GRDBCIPHER // CocoaPods (SQLCipher subspec)
 import SQLCipher
@@ -317,3 +318,4 @@ class DatabasePoolTests: GRDBTestCase {
     
 
 }
+#endif  // !Turso

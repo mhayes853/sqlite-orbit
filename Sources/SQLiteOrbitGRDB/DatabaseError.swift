@@ -326,6 +326,9 @@
     public static let SQLITE_CANTOPEN_CONVPATH = Self(
       rawValue: (SQLITE_CANTOPEN.rawValue | (4 << 8))
     )
+    public static let SQLITE_CANTOPEN_DIRTYWAL = Self(
+      rawValue: (SQLITE_CANTOPEN.rawValue | (5 << 8))
+    )
     public static let SQLITE_CANTOPEN_SYMLINK = Self(
       rawValue: (SQLITE_CANTOPEN.rawValue | (6 << 8))
     )
@@ -479,6 +482,7 @@
     public static let SQLITE_CANTOPEN_ISDIR = ResultCode.SQLITE_CANTOPEN_ISDIR
     public static let SQLITE_CANTOPEN_FULLPATH = ResultCode.SQLITE_CANTOPEN_FULLPATH
     public static let SQLITE_CANTOPEN_CONVPATH = ResultCode.SQLITE_CANTOPEN_CONVPATH
+    public static let SQLITE_CANTOPEN_DIRTYWAL = ResultCode.SQLITE_CANTOPEN_DIRTYWAL
     public static let SQLITE_CANTOPEN_SYMLINK = ResultCode.SQLITE_CANTOPEN_SYMLINK
     public static let SQLITE_CORRUPT_VTAB = ResultCode.SQLITE_CORRUPT_VTAB
     public static let SQLITE_CORRUPT_SEQUENCE = ResultCode.SQLITE_CORRUPT_SEQUENCE

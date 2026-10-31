@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/Cursor/MapCursorTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 

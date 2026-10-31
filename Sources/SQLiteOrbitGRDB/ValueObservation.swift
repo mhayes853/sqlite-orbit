@@ -10,8 +10,18 @@
   public final class AnyDatabaseCancellable: DatabaseCancellable {
     private let subscription: OrbitSubscription
 
-    public init(_ cancel: @escaping @Sendable () -> Void) {
+    /// Creates a cancellable that calls `cancel` once, when cancelled or deinitialized.
+    public init(cancel: @escaping @Sendable () -> Void) {
       subscription = OrbitSubscription(onCancel: cancel)
+    }
+
+    public convenience init(_ cancel: @escaping @Sendable () -> Void) {
+      self.init(cancel: cancel)
+    }
+
+    /// Wraps another cancellable.
+    public convenience init(_ base: some DatabaseCancellable) {
+      self.init(cancel: { base.cancel() })
     }
 
     init(_ subscription: OrbitSubscription) {
@@ -57,10 +67,12 @@
 
   public protocol ValueObservationMainActorScheduler: ValueObservationScheduler {}
 
+  /// Delivers values asynchronously on a dispatch queue.
   public struct AsyncValueObservationScheduler: ValueObservationScheduler {
     private let queue: DispatchQueue
 
-    fileprivate init(queue: DispatchQueue) {
+    /// Creates a scheduler that delivers values on `queue`.
+    public init(queue: DispatchQueue) {
       self.queue = DispatchQueue(label: "sqlite-orbit-grdb.observation", target: queue)
     }
 
@@ -76,26 +88,73 @@
     }
   }
 
-  public struct MainActorValueObservationScheduler: ValueObservationMainActorScheduler {
-    private let immediate: Bool
-
-    fileprivate init(immediate: Bool) {
-      self.immediate = immediate
-    }
+  /// Delivers the initial value synchronously, and later values on the main queue.
+  ///
+  /// GRDB requires starting such observations on the main thread; SQLiteOrbitGRDB also accepts
+  /// other threads, where the initial value is delivered synchronously on the starting thread.
+  public struct ImmediateValueObservationScheduler: ValueObservationMainActorScheduler {
+    public init() {}
 
     public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
-      immediate
+      true
     }
 
     public func schedule(
       from isolation: isolated (any Actor)?,
       _ action: @escaping @Sendable () -> Void
     ) {
-      if immediate && (isolation === MainActor.shared || Thread.isMainThread) {
+      if isolation === MainActor.shared || Thread.isMainThread {
         action()
       } else {
         DispatchQueue.main.async(execute: action)
       }
+    }
+  }
+
+  /// Delivers all values asynchronously on the main actor.
+  public final class DelayedMainActorValueObservationScheduler:
+    ValueObservationMainActorScheduler
+  {
+    public init() {}
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      false
+    }
+
+    public func schedule(
+      from isolation: isolated (any Actor)?,
+      _ action: @escaping @Sendable () -> Void
+    ) {
+      DispatchQueue.main.async(execute: action)
+    }
+  }
+
+  /// Delivers values asynchronously, in order, from a task.
+  public final class TaskValueObservationScheduler: ValueObservationScheduler {
+    private let continuation: AsyncStream<@Sendable () -> Void>.Continuation
+    private let task: Task<Void, Never>
+
+    init(priority: TaskPriority?) {
+      let (stream, continuation) = AsyncStream.makeStream(of: (@Sendable () -> Void).self)
+      self.continuation = continuation
+      task = Task(priority: priority) {
+        for await action in stream { action() }
+      }
+    }
+
+    deinit {
+      task.cancel()
+    }
+
+    public func immediateInitialValue(from isolation: isolated (any Actor)?) -> Bool {
+      false
+    }
+
+    public func schedule(
+      from isolation: isolated (any Actor)?,
+      _ action: @escaping @Sendable () -> Void
+    ) {
+      continuation.yield(action)
     }
   }
 
@@ -107,14 +166,20 @@
 
   // Declared on the base protocol so that `.immediate` also resolves in generic scheduler
   // contexts, as in GRDB.
-  extension ValueObservationScheduler where Self == MainActorValueObservationScheduler {
-    public static var immediate: Self {
-      Self(immediate: true)
-    }
+  extension ValueObservationScheduler where Self == ImmediateValueObservationScheduler {
+    public static var immediate: Self { Self() }
+  }
 
-    public static var mainActor: Self {
-      Self(immediate: false)
-    }
+  extension ValueObservationScheduler where Self == DelayedMainActorValueObservationScheduler {
+    public static var mainActor: Self { Self() }
+  }
+
+  extension ValueObservationScheduler where Self == TaskValueObservationScheduler {
+    /// A scheduler that delivers values from a task.
+    public static var task: Self { Self(priority: nil) }
+
+    /// A scheduler that delivers values from a task with the given priority.
+    public static func task(priority: TaskPriority) -> Self { Self(priority: priority) }
   }
 
   public struct DatabaseRegion: Hashable, Sendable, DatabaseRegionConvertible {
@@ -146,6 +211,10 @@
 
     public func union(_ other: Self) -> Self {
       Self(native.union(other.native))
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+      lhs.native == rhs.native
     }
 
     /// The region common to both regions.
@@ -279,33 +348,61 @@
   /// last subscriber leaves. Construct a new observation for a separate runtime.
   public struct ValueObservation<Reducer: ValueReducer>: Sendable {
     let native: OrbitValueObservation<Reducer.Value>
+    let hooks: ObservationHooks
 
     /// Whether the observation would fetch with write access. SQLiteOrbit observations always
     /// fetch in read-only transactions, so fetches cannot write even when this is true.
     public var requiresWriteAccess = false
 
-    init(_ native: OrbitValueObservation<Reducer.Value>) {
+    init(_ native: OrbitValueObservation<Reducer.Value>, hooks: ObservationHooks) {
       self.native = native
+      self.hooks = hooks
+      requiresWriteAccess = false
+    }
+
+    private func derived<R: ValueReducer>(_ native: OrbitValueObservation<R.Value>)
+      -> ValueObservation<R>
+    {
+      var result = ValueObservation<R>(native, hooks: hooks)
+      result.requiresWriteAccess = requiresWriteAccess
+      return result
+    }
+
+    // Fetches with a database that records the region it reads, reported to willTrackRegion.
+    private static func recordingFetch<Value>(
+      _ fetch: @escaping @Sendable (Database) throws -> Value,
+      hooks: ObservationHooks
+    ) -> @Sendable (borrowing SQLiteReadTransaction) throws -> Value {
+      { transaction in
+        try translate {
+          try transaction.withScopedAccess { access in
+            let db = Database(access)
+            db.regionRecorder = DatabaseRegion()
+            let value = try fetch(db)
+            hooks.didTrack(db.regionRecorder ?? DatabaseRegion())
+            return value
+          }
+        }
+      }
+    }
+
+    private static func make<Value: Sendable>(
+      _ build: (ObservationHooks) -> OrbitValueObservation<Value>
+    ) -> Self where Reducer == ValueReducers.Fetch<Value> {
+      let hooks = ObservationHooks()
+      return Self(build(hooks).handleEvents(willStart: { hooks.reset() }), hooks: hooks)
     }
 
     public static func tracking<Value: Sendable>(
       _ fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
-      Self(
-        OrbitValueObservation.tracking { transaction in
-          try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
-        }
-      )
+      make { OrbitValueObservation.tracking(recordingFetch(fetch, hooks: $0)) }
     }
 
     public static func trackingConstantRegion<Value: Sendable>(
       _ fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
-      Self(
-        OrbitValueObservation.trackingConstantRegion { transaction in
-          try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
-        }
-      )
+      make { OrbitValueObservation.trackingConstantRegion(recordingFetch(fetch, hooks: $0)) }
     }
 
     /// Observes changes in the given regions, which are resolved when observation starts.
@@ -336,20 +433,23 @@
       _ regions: [any DatabaseRegionConvertible],
       fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
-      Self(
+      make { hooks in
         OrbitValueObservation.tracking(
           region: { transaction in
             try transaction.withScopedAccess { access in
               let db = Database(access)
-              return try regions.reduce(DatabaseRegion()) { try $0.union($1.databaseRegion(db)) }
-                .native
+              let region = try regions.reduce(DatabaseRegion()) {
+                try $0.union($1.databaseRegion(db))
+              }
+              hooks.didTrack(region)
+              return region.native
             }
           },
           { transaction in
             try translate { try transaction.withScopedAccess { try fetch(Database($0)) } }
           }
         )
-      )
+      }
     }
 
     @preconcurrency @MainActor
@@ -404,89 +504,358 @@
         )
       } catch {
         scheduler.schedule(from: isolation) { onError(error) }
-        return AnyDatabaseCancellable({})
+        return AnyDatabaseCancellable(cancel: {})
       }
     }
 
-    public func values(in reader: any DatabaseReader) -> DatabaseValueObservationValues<
-      Reducer.Value
-    > {
-      DatabaseValueObservationValues(observation: native, database: reader.orbitDatabase)
+    /// An asynchronous sequence of the observed values.
+    ///
+    /// With the default `.task` scheduler and buffering policy, subscriptions share SQLiteOrbit's
+    /// observation runtime and its buffers; otherwise values are delivered through the
+    /// scheduler into an `AsyncThrowingStream` with the given buffering policy.
+    public func values(
+      in reader: any DatabaseReader,
+      scheduling scheduler: some ValueObservationScheduler = .task,
+      bufferingPolicy: AsyncValueObservation<Reducer.Value>.BufferingPolicy = .unbounded
+    ) -> AsyncValueObservation<Reducer.Value> {
+      if scheduler is TaskValueObservationScheduler, case .unbounded = bufferingPolicy {
+        return AsyncValueObservation(native: native, database: reader.orbitDatabase)
+      }
+      return AsyncValueObservation(bufferingPolicy: bufferingPolicy) { onError, onChange in
+        self.start(in: reader, scheduling: scheduler, onError: onError, onChange: onChange)
+      }
+    }
+
+    /// Returns an observation shared by all its subscribers, which fetch once for all.
+    public func shared(
+      in reader: any DatabaseReader,
+      scheduling scheduler: some ValueObservationScheduler = .async(onQueue: .main),
+      extent: SharedValueObservationExtent = .whileObserved
+    ) -> SharedValueObservation<Reducer.Value> {
+      SharedValueObservation(scheduler: scheduler, extent: extent) { onError, onChange in
+        self.start(in: reader, scheduling: scheduler, onError: onError, onChange: onChange)
+      }
     }
 
     public func map<T: Sendable>(_ transform: @escaping @Sendable (Reducer.Value) throws -> T)
       -> ValueObservation<ValueReducers.Map<Reducer, T>>
     {
-      .init(native.map(transform))
+      derived(native.map(transform))
     }
 
     public func removeDuplicates(
       by predicate: @escaping @Sendable (Reducer.Value, Reducer.Value) -> Bool
     ) -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
-      .init(native.removeDuplicates(by: predicate))
+      derived(native.removeDuplicates(by: predicate))
     }
 
+    /// Logs observation events to a stream, or to the standard output.
+    public func print(
+      _ prefix: String = "",
+      to stream: (any TextOutputStream)? = nil
+    ) -> ValueObservation<ValueReducers.Trace<Reducer>> {
+      let output = LockedOutputStream(stream)
+      let prefix = prefix.isEmpty ? "" : "\(prefix): "
+      return handleEvents(
+        willStart: { output.write("\(prefix)start") },
+        willFetch: { output.write("\(prefix)fetch") },
+        willTrackRegion: { output.write("\(prefix)tracked region: \($0)") },
+        databaseDidChange: { output.write("\(prefix)database did change") },
+        didReceiveValue: { output.write("\(prefix)value: \($0)") },
+        didFail: { output.write("\(prefix)failure: \($0)") },
+        didCancel: { output.write("\(prefix)cancel") }
+      )
+    }
+
+    /// Performs side effects on observation events.
+    ///
+    /// `willTrackRegion` reports the region read by fetches performed through the compatibility
+    /// `Database`, or the explicit regions of `tracking(regions:fetch:)`, when it changes.
     public func handleEvents(
       willStart: (@Sendable () -> Void)? = nil,
       willFetch: (@Sendable () -> Void)? = nil,
+      willTrackRegion: (@Sendable (DatabaseRegion) -> Void)? = nil,
       databaseDidChange: (@Sendable () -> Void)? = nil,
       didReceiveValue: (@Sendable (Reducer.Value) -> Void)? = nil,
       didFail: (@Sendable (Error) -> Void)? = nil,
       didCancel: (@Sendable () -> Void)? = nil
     ) -> ValueObservation<ValueReducers.Trace<Reducer>> {
-      .init(
+      if let willTrackRegion {
+        hooks.add(willTrackRegion)
+      }
+      return derived(
         native.handleEvents(
           willStart: willStart,
           willFetch: willFetch,
           databaseDidChange: databaseDidChange,
           didReceiveValue: didReceiveValue,
-          didFail: didFail,
+          didFail: { didFail?(($0 as? SQLiteError).map { DatabaseError($0) } ?? $0) },
           didCancel: didCancel
         )
       )
     }
   }
 
-  extension ValueObservation where Reducer.Value: Equatable {
-    public func removeDuplicates() -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
-      removeDuplicates(by: ==)
+  // Region tracking callbacks of an observation definition and its derived observations.
+  final class ObservationHooks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var trackRegion: [@Sendable (DatabaseRegion) -> Void] = []
+    private var lastRegion: DatabaseRegion?
+
+    func add(_ callback: @escaping @Sendable (DatabaseRegion) -> Void) {
+      lock.withLock { trackRegion.append(callback) }
+    }
+
+    func reset() {
+      lock.withLock { lastRegion = nil }
+    }
+
+    func didTrack(_ region: DatabaseRegion) {
+      let callbacks: [@Sendable (DatabaseRegion) -> Void] = lock.withLock {
+        guard region != lastRegion else { return [] }
+        lastRegion = region
+        return trackRegion
+      }
+      for callback in callbacks { callback(region) }
     }
   }
 
-  public struct DatabaseValueObservationValues<Element: Sendable>: AsyncSequence, Sendable {
-    let observation: OrbitValueObservation<Element>
-    let database: any OrbitObservableDatabase
+  private final class LockedOutputStream: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stream: (any TextOutputStream)?
 
-    public struct AsyncIterator: AsyncIteratorProtocol {
-      fileprivate var iterator: OrbitValueObservationSequence<Element>.AsyncIterator
-      private var finished = false
+    init(_ stream: (any TextOutputStream)?) {
+      self.stream = stream
+    }
 
-      fileprivate init(iterator: OrbitValueObservationSequence<Element>.AsyncIterator) {
-        self.iterator = iterator
-      }
-
-      public mutating func next() async throws -> Element? {
-        guard !finished else {
-          return nil
-        }
-        do {
-          let value = try await iterator.next()
-          if value == nil {
-            finished = true
-          }
-          return value
-        } catch {
-          finished = true
-          if let error = error as? SQLiteError {
-            throw DatabaseError(error)
-          }
-          throw error
+    func write(_ string: String) {
+      lock.withLock {
+        if stream != nil {
+          stream!.write(string)
+        } else {
+          Swift.print(string)
         }
       }
     }
+  }
 
-    public func makeAsyncIterator() -> AsyncIterator {
-      AsyncIterator(iterator: observation.values(in: database).makeAsyncIterator())
+  /// An asynchronous sequence of observed values.
+  public struct AsyncValueObservation<Element: Sendable>: AsyncSequence, Sendable {
+    public typealias BufferingPolicy = AsyncThrowingStream<Element, Error>.Continuation
+      .BufferingPolicy
+    public typealias AsyncIterator = Iterator
+
+    nonisolated(unsafe) let bufferingPolicy: BufferingPolicy
+    let start:
+      @Sendable (
+        @escaping @Sendable (Error) -> Void, @escaping @Sendable (Element) -> Void
+      ) -> AnyDatabaseCancellable
+    private let native: (OrbitValueObservation<Element>, any OrbitObservableDatabase)?
+
+    // Iterates SQLiteOrbit's shared observation sequence directly.
+    init(native: OrbitValueObservation<Element>, database: any OrbitObservableDatabase) {
+      bufferingPolicy = .unbounded
+      start = { _, _ in AnyDatabaseCancellable(cancel: {}) }
+      self.native = (native, database)
+    }
+
+    init(
+      bufferingPolicy: BufferingPolicy,
+      start:
+        @escaping @Sendable (
+          @escaping @Sendable (Error) -> Void, @escaping @Sendable (Element) -> Void
+        ) -> AnyDatabaseCancellable
+    ) {
+      self.bufferingPolicy = bufferingPolicy
+      self.start = start
+      native = nil
+    }
+
+    public func makeAsyncIterator() -> Iterator {
+      if let (observation, database) = native {
+        return Iterator(native: observation.values(in: database).makeAsyncIterator())
+      }
+      var cancellable: AnyDatabaseCancellable?
+      let stream = AsyncThrowingStream(Element.self, bufferingPolicy: bufferingPolicy) {
+        continuation in
+        let started = start(
+          { continuation.finish(throwing: $0) },
+          { continuation.yield($0) }
+        )
+        cancellable = started
+        continuation.onTermination = { @Sendable [weak started] _ in started?.cancel() }
+      }
+      return Iterator(iterator: stream.makeAsyncIterator(), cancellable: cancellable!)
+    }
+
+    /// The iterator, which cancels the observation when released.
+    public struct Iterator: AsyncIteratorProtocol {
+      private var iterator: AsyncThrowingStream<Element, Error>.AsyncIterator?
+      private var nativeIterator: OrbitValueObservationSequence<Element>.AsyncIterator?
+      private let cancellable: AnyDatabaseCancellable?
+      private var finished = false
+
+      init(
+        iterator: AsyncThrowingStream<Element, Error>.AsyncIterator,
+        cancellable: AnyDatabaseCancellable
+      ) {
+        self.iterator = iterator
+        self.cancellable = cancellable
+      }
+
+      init(native: OrbitValueObservationSequence<Element>.AsyncIterator) {
+        nativeIterator = native
+        cancellable = nil
+      }
+
+      public mutating func next() async throws -> Element? {
+        if iterator != nil {
+          return try await iterator!.next()
+        }
+        guard !finished else { return nil }
+        do {
+          let value = try await nativeIterator!.next()
+          if value == nil { finished = true }
+          return value
+        } catch {
+          finished = true
+          throw (error as? SQLiteError).map { DatabaseError($0) } ?? error
+        }
+      }
+    }
+  }
+
+  /// The overlay's former name of `AsyncValueObservation`.
+  public typealias DatabaseValueObservationValues<Element: Sendable> =
+    AsyncValueObservation<Element>
+
+  /// How long a shared observation keeps observing.
+  public enum SharedValueObservationExtent: Sendable {
+    /// Until the shared observation is deinitialized.
+    case observationLifetime
+    /// While it has subscribers.
+    case whileObserved
+  }
+
+  /// An observation whose subscribers share fetches and values.
+  public final class SharedValueObservation<Element: Sendable>: @unchecked Sendable {
+    private final class Client: Sendable {
+      let onError: @Sendable (Error) -> Void
+      let onChange: @Sendable (Element) -> Void
+
+      init(
+        onError: @escaping @Sendable (Error) -> Void,
+        onChange: @escaping @Sendable (Element) -> Void
+      ) {
+        self.onError = onError
+        self.onChange = onChange
+      }
+    }
+
+    private let scheduler: any ValueObservationScheduler
+    private let extent: SharedValueObservationExtent
+    private let startObservation:
+      (@escaping @Sendable (Error) -> Void, @escaping @Sendable (Element) -> Void) ->
+        AnyDatabaseCancellable
+    // A recursive lock supports subscriptions started from synchronous notifications.
+    private let lock = NSRecursiveLock()
+    private var clients: [Client] = []
+    private var isObserving = false
+    private var cancellable: AnyDatabaseCancellable?
+    private var lastResult: Result<Element, Error>?
+
+    init(
+      scheduler: some ValueObservationScheduler,
+      extent: SharedValueObservationExtent,
+      start:
+        @escaping (
+          @escaping @Sendable (Error) -> Void, @escaping @Sendable (Element) -> Void
+        ) -> AnyDatabaseCancellable
+    ) {
+      self.scheduler = scheduler
+      self.extent = extent
+      startObservation = start
+    }
+
+    /// Starts observing; late subscribers first receive the latest value.
+    public func start(
+      onError: @escaping @Sendable (Error) -> Void,
+      onChange: @escaping @Sendable (Element) -> Void
+    ) -> AnyDatabaseCancellable {
+      lock.withLock {
+        let client = Client(onError: onError, onChange: onChange)
+        clients.append(client)
+        if !isObserving {
+          isObserving = true
+          cancellable = startObservation(
+            { [weak self] in self?.handleError($0) },
+            { [weak self] in self?.handleChange($0) }
+          )
+        } else if let result = lastResult {
+          let deliver: @Sendable () -> Void = {
+            switch result {
+            case .success(let value): onChange(value)
+            case .failure(let error): onError(error)
+            }
+          }
+          if scheduler.immediateInitialValue() {
+            deliver()
+          } else {
+            scheduler.schedule(deliver)
+          }
+        }
+        return AnyDatabaseCancellable(cancel: { self.handleCancel(client) })
+      }
+    }
+
+    /// An asynchronous sequence of the shared values.
+    public func values(
+      bufferingPolicy: AsyncValueObservation<Element>.BufferingPolicy = .unbounded
+    ) -> AsyncValueObservation<Element> {
+      AsyncValueObservation(bufferingPolicy: bufferingPolicy) { onError, onChange in
+        self.start(onError: onError, onChange: onChange)
+      }
+    }
+
+    private func stopIfNeeded() {
+      if extent == .whileObserved {
+        isObserving = false
+        cancellable = nil
+        lastResult = nil
+      }
+    }
+
+    private func handleError(_ error: Error) {
+      lock.withLock {
+        let notified = clients
+        clients = []
+        if extent == .whileObserved {
+          stopIfNeeded()
+        } else {
+          lastResult = .failure(error)
+        }
+        for client in notified { client.onError(error) }
+      }
+    }
+
+    private func handleChange(_ value: Element) {
+      lock.withLock {
+        lastResult = .success(value)
+        for client in clients { client.onChange(value) }
+      }
+    }
+
+    private func handleCancel(_ client: Client) {
+      lock.withLock {
+        clients.removeAll { $0 === client }
+        if clients.isEmpty { stopIfNeeded() }
+      }
+    }
+  }
+
+  extension ValueObservation where Reducer.Value: Equatable {
+    public func removeDuplicates() -> ValueObservation<ValueReducers.RemoveDuplicates<Reducer>> {
+      removeDuplicates(by: ==)
     }
   }
 

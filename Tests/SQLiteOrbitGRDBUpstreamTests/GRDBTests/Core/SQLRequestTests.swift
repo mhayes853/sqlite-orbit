@@ -1,11 +1,21 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/SQLRequestTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
 class SQLRequestTests: GRDBTestCase {
     
-
+    func testSQLRequest() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request = SQLRequest(sql: "SELECT 1")
+            let preparedRequest = try request.makePreparedRequest(db, forSingleResult: false)
+            XCTAssertEqual(preparedRequest.statement.sql, "SELECT 1")
+            XCTAssertNil(preparedRequest.adapter)
+            let row = try request.fetchOne(db)
+            XCTAssertEqual(row, ["1": 1])
+        }
+    }
     
     func testSQLRequestWithArgumentsAndAdapter() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -19,9 +29,25 @@ class SQLRequestTests: GRDBTestCase {
         }
     }
     
-
+    func testNotCachedSQLRequest() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request = SQLRequest(sql: "SELECT 1")
+            let preparedRequest1 = try request.makePreparedRequest(db, forSingleResult: false)
+            let preparedRequest2 = try request.makePreparedRequest(db, forSingleResult: false)
+            XCTAssertTrue(preparedRequest1.statement !== preparedRequest2.statement)
+        }
+    }
     
-
+    func testCachedSQLRequest() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request = SQLRequest(sql: "SELECT 1", cached: true)
+            let preparedRequest1 = try request.makePreparedRequest(db, forSingleResult: false)
+            let preparedRequest2 = try request.makePreparedRequest(db, forSingleResult: false)
+            XCTAssertTrue(preparedRequest1.statement === preparedRequest2.statement)
+        }
+    }
     
     func testSQLLiteralInitializer() throws {
         let dbQueue = try makeDatabaseQueue()

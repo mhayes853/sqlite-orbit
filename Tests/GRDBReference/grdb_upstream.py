@@ -24,6 +24,7 @@ Indented entries under a file adjust it:
 
   - NAME: reason   removes declarations named NAME (tests or helpers) before compilation
   ~ NAME: reason   compiles the test but skips it at runtime (XCTSkip)
+  ! NAME: reason   always removes NAME because GRDB itself fails it here (kept by autoexclude)
 
 Lines starting with `x PATH: reason` record upstream files deliberately not ported.
 
@@ -80,6 +81,7 @@ class Entry:
         self.path = path
         self.removed = collections.OrderedDict()
         self.skipped = collections.OrderedDict()
+        self.pinned = collections.OrderedDict()
 
 
 def manifest_file(path):
@@ -109,9 +111,10 @@ def read_manifest():
                 item = line.strip()
                 kind, rest = item[0], item[1:].strip()
                 name, _, reason = rest.partition(": ")
-                if current is None or kind not in "-~":
+                if current is None or kind not in "-~!":
                     sys.exit(f"{manifest}: unexpected line {line!r}")
-                (current.removed if kind == "-" else current.skipped)[name.strip()] = reason.strip()
+                target = {"-": current.removed, "~": current.skipped, "!": current.pinned}[kind]
+                target[name.strip()] = reason.strip()
                 continue
             current = Entry(line.strip())
             entries[current.path] = current
@@ -132,6 +135,7 @@ def write_manifest(header, entries, declined):
     for path in sorted(entries):
         entry = entries[path]
         lines = [path]
+        lines += [f"  ! {n}: {r}" for n, r in entry.pinned.items()]
         lines += [f"  - {n}: {r}" for n, r in entry.removed.items()]
         lines += [f"  ~ {n}: {r}" for n, r in entry.skipped.items()]
         files[manifest_file(path)].append("\n".join(lines))
@@ -334,8 +338,8 @@ def convert_imports(text):
 def ported_source(path, entry):
     text = open(os.path.join(UPSTREAM_TESTS, path)).read()
     text = convert_imports(text)
-    if entry is not None and entry.removed:
-        text = remove_declarations(text, list(entry.removed))
+    if entry is not None and (entry.removed or entry.pinned):
+        text = remove_declarations(text, list(entry.pinned) + list(entry.removed))
     banner = (
         f"// Generated from GRDB 7.11.1 Tests/GRDBTests/{path} by Tests/GRDBReference/grdb_upstream.py.\n"
         "// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.\n"
@@ -585,6 +589,7 @@ def cmd_autoexclude(args):
         entry = Entry(path)
         if path in entries:
             entry.skipped = entries[path].skipped
+            entry.pinned = entries[path].pinned
         log = []
         for _ in range(16):
             try:
@@ -648,6 +653,12 @@ def enclosing_helper(mask, line):
     offset = 0
     for _ in range(line - 1):
         offset = mask.index("\n", offset) + 1
+    # An error in a type's own header (an unknown conformance, say) belongs to that type.
+    header = re.match(r"\s*(?:@\w+\s+)*(?:(?:private|fileprivate|internal|public|final)\s+)*"
+                      r"(?:struct|class|enum|actor|protocol)\s+(\w+)", mask[offset:mask.find("\n", offset)])
+    if header and not re.search(r":\s*(GRDBTestCase|XCTestCase|RowTestCase|BackupTestCase|FailureTestCase)\b",
+                                mask[offset:mask.find("\n", offset)]):
+        return header.group(1)
     stack = []
     decl = re.compile(r"(?:func|class|struct|enum|extension|actor|var|let|init)\b\s*([A-Za-z_]\w*)?")
     depth = 0

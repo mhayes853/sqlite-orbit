@@ -4,81 +4,33 @@
 
 JSON/JSONColumnTests.swift
 JSON/JSONExpressionsTests.swift
-  ~ test_JSON_index_and_generated_columns: runtime: XCTAssertEqual failed: ("Optional("CREATE INDEX \"player_on_address\" ON \"player\" (JSON_EXTRACT(\"address\",
 QueryInterface/Association/AssociationAggregateTests.swift
-  ~ testAnnotatedWithHasManyCustomAverage: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyCustomCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyCustomMax: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyCustomMin: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyCustomSum: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyCustomTotal: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultAverage: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultMax: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultMaxJoiningRequired: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultMax_Swift61: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultMin: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultSum: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyDefaultTotal: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyMultipleCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyMultipleCustomAggregates: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyMultipleDefaultAggregates: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
-  ~ testAnnotatedWithHasManyThroughDefaultCount: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testIfNullOperator: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
 QueryInterface/Association/AssociationBelongsToDecodableRecordTests.swift
-  ~ testAnnotatedWithOptional: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testAnnotatedWithRequired: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testRequestRefining: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
-  ~ testRequestRefining_swift61: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
 QueryInterface/Association/AssociationBelongsToFetchableRecordTests.swift
-  ~ testIncludingOptional_ColumnDecodingStrategy: runtime: threw error "DecodingError.keyNotFound: Key 'xplayer' not found in keyed decoding container. Debug description
-  ~ testIncludingRequired_ColumnDecodingStrategy: runtime: threw error "DecodingError.keyNotFound: Key 'xplayer' not found in keyed decoding container. Debug description
 QueryInterface/Association/AssociationBelongsToRowScopeTests.swift
 QueryInterface/Association/AssociationBelongsToSQLDerivationTests.swift
 QueryInterface/Association/AssociationBelongsToSQLTests.swift
-  - testRecordsFilteredByNonExistingAssociatedRecord: missing type DatabaseObjectID
+  - testRecordsFilteredByNonExistingAssociatedRecord: missing type DatabaseSchemaSource
 QueryInterface/Association/AssociationChainRowScopesTests.swift
 QueryInterface/Association/AssociationChainSQLTests.swift
 QueryInterface/Association/AssociationHasManyOrderingTests.swift
-  ~ testIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllDecodedAsOptional: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testReorderedIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
 QueryInterface/Association/AssociationHasManyRowScopeTests.swift
 QueryInterface/Association/AssociationHasManySQLTests.swift
 QueryInterface/Association/AssociationHasManyThroughOrderingTests.swift
-  ~ testIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testReorderedIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
 QueryInterface/Association/AssociationHasManyThroughRowScopeTests.swift
-  ~ testDiscussion1274: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
 QueryInterface/Association/AssociationHasManyThroughSQLTests.swift
 QueryInterface/Association/AssociationHasOneSQLDerivationTests.swift
 QueryInterface/Association/AssociationHasOneSQLTests.swift
 QueryInterface/Association/AssociationHasOneThroughDecodableRecordTests.swift
-  ~ testIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testIncludingOptionalIncludingRequiredPivot: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
 QueryInterface/Association/AssociationHasOneThroughFetchableRecordTests.swift
 QueryInterface/Association/AssociationHasOneThroughRowScopeTests.swift
 QueryInterface/Association/AssociationHasOneThroughSQLDerivationTests.swift
 QueryInterface/Association/AssociationHasOneThroughSQLTests.swift
 QueryInterface/Association/AssociationParallelDecodableRecordTests.swift
-  ~ testParallelTwoIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testParallelTwoIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
 QueryInterface/Association/AssociationParallelRowScopesTests.swift
 QueryInterface/Association/AssociationParallelSQLTests.swift
 QueryInterface/Association/AssociationPrefetchingCodableRecordTests.swift
-  ~ testMissingIncludingAllHasMany: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyScalar: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyThroughHasManyUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasMany_ColumnDecodingStrategy: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testSelfJoin: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift
 QueryInterface/Association/AssociationPrefetchingObservationTests.swift
   ~ testIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
   ~ testIncludingAllHasManyIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
@@ -87,90 +39,43 @@ QueryInterface/Association/AssociationPrefetchingObservationTests.swift
   ~ testIncludingAllHasManyWithCompoundPrimaryKey: runtime: XCTAssertTrue failed - compoundprimarykey(name,pk1,pk2)
   ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2),b(colb1,colb2,colb3)
   ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: XCTAssertTrue failed - a(*),c(colc1,colc2),d(cold1,cold2,cold3)
+QueryInterface/Association/AssociationPrefetchingRowTests.swift
 QueryInterface/Association/AssociationPrefetchingSQLTests.swift
-  ~ testAssociationFilteredByOtherAssociation: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testCTE: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testDistinct: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyIncludingAllHasManyWithCompoundForeignKey: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyScalar: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyThroughBelongsToUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyThroughHasManyUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyThroughHasOneUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingAllHasManyWithCompoundForeignKey: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingOptionalBelongsToIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingOptionalHasOneIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testIncludingOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testJoiningOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testJoiningOptionalBelongsToJoiningOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testJoiningOptionalHasOneIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
-  ~ testAggregate: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
 QueryInterface/Association/AssociationRowScopeSearchTests.swift
-  ~ testDecodableWithCustomRowDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testFlatDecodableRecordDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
-  ~ testNestedDecodableRecordDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
 QueryInterface/Association/AssociationTableAliasTestsSQLTests.swift
 QueryInterface/ColumnExpressionTests.swift
-  - testRawColumnExpression: no exact matches in call to subscript
-  - testRawRepresentableColumnExpression: cannot convert value of type 'Player.Columns' to expected argument type 'String'
   ~ testCodingKeysAsColumnExpression: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
   ~ testColumnsDerivedFromCodingKeys: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
+  ~ testRawColumnExpression: runtime: XCTAssertEqual failed: ("player(id,name,score)") is not equal to ("player(id,name,score)[1]") -
+  ~ testRawRepresentableColumnExpression: runtime: XCTAssertEqual failed: ("player(id,name,score)") is not equal to ("player(id,name,score)[1]") -
 QueryInterface/CommonTableExpressionTests.swift
-  ~ testChatWithLatestMessage: runtime: threw error "DecodingError.keyNotFound: Key 'chat' not found in keyed decoding container. Debug description: m
+QueryInterface/DerivableRequestTests.swift
 QueryInterface/FetchableRecord+QueryInterfaceRequestTests.swift
-  - testFetch: cannot convert value of type 'Database' to expected argument type 'Statement'
 QueryInterface/ForeignKeyDefinitionTests.swift
 QueryInterface/QueryInterfaceExpressionsTests.swift
   - testFastPrimaryKeyExpression: internal API fastPrimaryKey
-  ~ testCustomFunction: runtime: XCTAssertEqual failed: ("SELECT "avgOf"("age", 1, 2) FROM "readers"") is not equal to ("SELECT avgOf("age", 1,
-  ~ testStringFunctions: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/GRDBTestCase.swift:217: Fatal error: 'try!' expression unexpectedly rais
 QueryInterface/QueryInterfaceExtensibilityTests.swift
 QueryInterface/QueryInterfacePromiseTests.swift
 QueryInterface/QueryInterfaceRequestTests.swift
 QueryInterface/Record+QueryInterfaceRequestTests.swift
 QueryInterface/TableDefinitionTests.swift
-  - testTableCreationOptions: extra trailing closure passed in call
-  - testReindex: reference to member 'localizedCompare' cannot be resolved without a contextual type
-  - testCreateView: generic parameter 'RowDecoder' could not be inferred
-  - testCreateViewOptions: generic parameter 'RowDecoder' could not be inferred
-  - testDropView: generic parameter 'RowDecoder' could not be inferred
-  ~ testCreateIndex: runtime: XCTAssertEqual failed: ("CREATE INDEX "test_on_a" ON "test" ("a")") is not equal to ("CREATE INDEX "test_on_a"
-  ~ testCreateIndexOn: runtime: XCTAssertEqual failed: ("CREATE INDEX "index_test_on_a" ON "test" ("a")") is not equal to ("CREATE INDEX "inde
-  ~ testCreatePartialIndex: runtime: XCTAssertEqual failed: ("CREATE UNIQUE INDEX IF NOT EXISTS "test_on_a_b" ON "test" ("a", "b") WHERE ("a" = 1)"
+  ~ testReindex: runtime: XCTAssertEqual failed: ("REINDEX "BINARY"") is not equal to ("REINDEX BINARY") -
 QueryInterface/TableRecord+QueryInterfaceRequestTests.swift
 QueryInterface/TableTests.swift
   - test_request_derivation: failed to produce diagnostic for expression; please submit a bug report (https://swift.org/contributing/#reporting-bugs)
+QueryInterface/VirtualTableModuleTests.swift
 Record/PersistableRecord/DatabaseColumnEncodingStrategyTests.swift
 Record/PersistableRecord/DatabaseDataEncodingStrategyTests.swift
 Record/PersistableRecord/DatabaseDateEncodingStrategyTests.swift
 Record/PersistableRecord/DatabaseUUIDEncodingStrategyTests.swift
 Record/PersistableRecord/MutablePersistableRecordChangesTests.swift
-  - testUpdateChangesWithRecord: cannot convert value of type 'MyRecord.Columns' to expected argument type 'String'
-  ~ testRecordValueChange: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"players\" S
-  ~ testDatabaseEqualsWithDifferentTypesAndDifferentWidth: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"players\" S
 Record/PersistableRecord/MutablePersistableRecordEncodableTests.swift
-  ~ testCustomizedRecord: runtime: XCTAssertEqual failed: ("[context:"GRDB root" key:NULL nestedKeyed:"{\"context\":\"JSON nested: nestedKeyed\",
-  ~ testRecord: runtime: XCTAssertEqual failed: ("[context:NULL key:NULL nestedKeyed:"{\"name\":\"foo\"}" nestedSingle:"bar,key:nil,con
-  ~ testSingleValueContainer: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
-  ~ testSingleValueContainerWithEncodableRecord: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
 Record/PersistableRecord/MutablePersistableRecordPersistenceConflictPolicyTests.swift
   - testReplacePolicy: missing type TransactionObserver
 Record/PersistableRecord/MutablePersistableRecordTests.swift
-  - testRecordErrorRecordNotFoundDescription: missing RecordError.description
-  - test_insertAndFetch_fetch_select: extra trailing closure passed in call
-  - testIssue1820: missing FTS5
 Record/PersistableRecord/PersistableRecordTests.swift
-  - testStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
-  - testOptionalStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
-  - test_insertAndFetch_selection_fetch_column_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns_excluding_DatabaseComponents: extra trailing closure passed in call
 Record/PersistableRecord/RecordMappedOnMutableViewTests.swift
-  - SchemaSource: missing type DatabaseObjectID
+  - SchemaSource: missing type DatabaseSchemaSource
   - test_read_only_primary_key: missing Configuration.schemaSource
   - test_CRUD: missing Configuration.schemaSource
   - test_fetch_by_primary_key: missing Configuration.schemaSource
@@ -178,7 +83,7 @@ Record/PersistableRecord/RecordMappedOnMutableViewTests.swift
   - test_team_has_one_captain_request: missing Configuration.schemaSource
   - test_captain_belongs_to_team_request: missing Configuration.schemaSource
 Record/TableRecord/TableRecordDeleteTests.swift
-  - ViewSchemaSource: missing type DatabaseObjectID
+  - ViewSchemaSource: missing type DatabaseSchemaSource
   - testSingleColumnPrimaryKey_view: missing Configuration.schemaSource
   - testMultipleColumnPrimaryKey_view: missing Configuration.schemaSource
   - testImplicitUniqueIndexOnSingleColumnPrimaryKey_view: missing Configuration.schemaSource
@@ -188,24 +93,15 @@ Record/TableRecord/TableRecordDeleteTests.swift
   - testRequestDeleteAndFetchSet_view: missing Configuration.schemaSource
   - testRequestDeleteAndFetchIds_view: missing Configuration.schemaSource
 Record/TableRecord/TableRecordTests.swift
-  ~ testCrossAttachedDatabaseAssociation: runtime: XCTAssertEqual threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Deb
-  ~ testRecordInAttachedDatabase: runtime: XCTAssertEqual threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Deb
 Record/TableRecord/TableRecordUpdateTests.swift
-  - ViewSchemaSource: missing type DatabaseObjectID
+  - ViewSchemaSource: missing type DatabaseSchemaSource
   - testRequestUpdateAll_view: missing Configuration.schemaSource
   - testRequestUpdateAll_DatabaseComponents_view: missing Configuration.schemaSource
   - testRequestUpdateAndFetchCursor_view: missing Configuration.schemaSource
-  - testRequestUpdateAndFetchCursor_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
   - testRequestUpdateAndFetchCursor_DatabaseComponents_view: missing Configuration.schemaSource
   - testRequestUpdateAndFetchAll_view: missing Configuration.schemaSource
-  - testRequestUpdateAndFetchAll_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
   - testRequestUpdateAndFetchAll_DatabaseComponents_view: missing Configuration.schemaSource
-  - testRequestUpdateAndFetchSet_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
 
-x QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift: no test compiles: cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[B]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[D]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[Record.CInfo]'
 x QueryInterface/Association/AssociationPrefetchingRelationTests.swift: no test compiles: missing SQLAssociationKey, missing type SQLAssociationCardinality, missing type SQLAssociationCardinality
-x QueryInterface/Association/AssociationPrefetchingRowTests.swift: no test compiles: missing Row.prefetchedRows, missing Row.prefetchedRows, missing Row.prefetchedRows
-x QueryInterface/DerivableRequestTests.swift: expressions are not allowed at the top level
 x QueryInterface/SQLExpressionIsConstantTests.swift: no test compiles: missing parameter tableName:, missing parameter tableName:, missing parameter tableName:
 x QueryInterface/SQLIdentifyingColumnsTests.swift: no test compiles: missing parameter tableName:
-x QueryInterface/VirtualTableModuleTests.swift: no test compiles: missing type VirtualTableConfiguration, missing type VirtualTableConfiguration, missing parameter using:

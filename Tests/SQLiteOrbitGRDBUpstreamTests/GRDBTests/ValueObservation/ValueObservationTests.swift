@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/ValueObservation/ValueObservationTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import Dispatch
 import SQLiteOrbitGRDB
@@ -21,7 +21,15 @@ class ValueObservationTests: GRDBTestCase {
             .start(in: writer, onError: { _ in }, onChange: { })
     }
     
-
+    // Test passes if it compiles.
+    // See <https://github.com/groue/GRDB.swift/issues/1541>
+    func testValuesFromAnyDatabaseWriter(writer: any DatabaseWriter) {
+        func observe<T>(
+            fetch: @escaping @Sendable (Database) throws -> T
+        ) throws -> AsyncValueObservation<T> {
+            ValueObservation.tracking(fetch).values(in: writer)
+        }
+    }
     
     func testImmediateError() throws {
         struct TestError: Error { }
@@ -95,13 +103,247 @@ class ValueObservationTests: GRDBTestCase {
         try test(makeDatabasePool())
     }
     
-
+    func testViewOptimization() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write {
+            try $0.execute(sql: """
+                CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
+                CREATE VIEW v AS SELECT * FROM t
+                """)
+        }
+        
+        // Test that view v is included in the request region
+        let request = SQLRequest<Row>(sql: "SELECT name FROM v ORDER BY id")
+        try dbQueue.inDatabase { db in
+            let region = try request.databaseRegion(db)
+            XCTAssertEqual(region.description, "t(id,name),v(id,name)")
+        }
+        
+        // Test that view v is not included in the observed region.
+        // This optimization helps observation of views that feed from a
+        // single table.
+        let regionMutex: Mutex<DatabaseRegion?> = Mutex(nil)
+        let expectation = self.expectation(description: "")
+        let observation = ValueObservation
+            .trackingConstantRegion { _ = try request.fetchAll($0) }
+            .handleEvents(willTrackRegion: { region in
+                regionMutex.store(region)
+                expectation.fulfill()
+            })
+        let observer = observation.start(
+            in: dbQueue,
+            onError: { error in XCTFail("Unexpected error: \(error)") },
+            onChange: { _ in })
+        withExtendedLifetime(observer) {
+            waitForExpectations(timeout: 2, handler: nil)
+            XCTAssertEqual(regionMutex.load()!.description, "t(id,name)") // view is NOT tracked
+        }
+    }
     
-
+    func testPragmaTableOptimization() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write {
+            try $0.execute(sql: """
+                CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
+                """)
+        }
+        
+        struct T: TableRecord { }
+        
+        // A request that requires a pragma introspection query
+        let request = T.filter(key: 1).asRequest(of: Row.self)
+        
+        // Test that no pragma table is included in the observed region.
+        // This optimization helps observation that feed from a single table.
+        let regionMutex: Mutex<DatabaseRegion?> = Mutex(nil)
+        let expectation = self.expectation(description: "")
+        let observation = ValueObservation
+            .trackingConstantRegion{ _ = try request.fetchAll($0) }
+            .handleEvents(willTrackRegion: { region in
+                regionMutex.store(region)
+                expectation.fulfill()
+            })
+        let observer = observation.start(
+            in: dbQueue,
+            onError: { error in XCTFail("Unexpected error: \(error)") },
+            onChange: { _ in })
+        withExtendedLifetime(observer) {
+            waitForExpectations(timeout: 2, handler: nil)
+            XCTAssertEqual(regionMutex.load()?.description, "t(id,name)[1]") // pragma_table_xinfo is NOT tracked
+        }
+    }
     
     // MARK: - Constant Explicit Region
     
-
+    func testTrackingExplicitRegion() throws {
+        class TestStream: TextOutputStream {
+            private var stringsMutex: Mutex<[String]> = Mutex([])
+            var strings: [String] { stringsMutex.load() }
+            func write(_ string: String) {
+                stringsMutex.withLock { $0.append(string) }
+            }
+        }
+        
+        // Test behavior with DatabaseQueue, DatabasePool, etc
+        do {
+            try assertValueObservation(
+                ValueObservation
+                    .tracking(region: DatabaseRegion.fullDatabase, fetch: Table("t").fetchCount),
+                records: [0, 1, 1, 2, 3, 4],
+                setup: { db in
+                    try db.execute(sql: """
+                        CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                        """)
+                },
+                recordedUpdates: { db in
+                    try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                    try db.execute(sql: "UPDATE t SET id = id")
+                    try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                    try db.inTransaction {
+                        try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                        try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                        try db.execute(sql: "DELETE FROM t WHERE id = 1")
+                        return .commit
+                    }
+                    try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                })
+        }
+        
+        // Track only table "t"
+        do {
+            let dbQueue = try makeDatabaseQueue()
+            try dbQueue.write { db in
+                try db.execute(sql: """
+                    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    CREATE TABLE other(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    """)
+            }
+            
+            let logger = TestStream()
+            let observation = ValueObservation.tracking(
+                region: Table("t"),
+                fetch: Table("t").fetchCount)
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            expectation.expectedFulfillmentCount = 2
+            let cancellable = observation.start(
+                in: dbQueue,
+                onError: { error in XCTFail("Unexpected error: \(error)") },
+                onChange: { _ in
+                    expectation.fulfill()
+                })
+            try withExtendedLifetime(cancellable) {
+                try dbQueue.writeWithoutTransaction { db in
+                    try db.execute(sql: """
+                        INSERT INTO other DEFAULT VALUES;
+                        INSERT INTO t DEFAULT VALUES;
+                        """)
+                }
+                wait(for: [expectation], timeout: 4)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "tracked region: t(*)",
+                    "value: 0",
+                    "database did change",
+                    "fetch",
+                    "value: 1",
+                ])
+            }
+        }
+        
+        // Track only table "other"
+        do {
+            let dbQueue = try makeDatabaseQueue()
+            try dbQueue.write { db in
+                try db.execute(sql: """
+                    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    CREATE TABLE other(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    """)
+            }
+            
+            let logger = TestStream()
+            let observation = ValueObservation.tracking(
+                region: Table("other"),
+                fetch: Table("t").fetchCount)
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            expectation.expectedFulfillmentCount = 2
+            let cancellable = observation.start(
+                in: dbQueue,
+                onError: { error in XCTFail("Unexpected error: \(error)") },
+                onChange: { _ in
+                    expectation.fulfill()
+                })
+            try withExtendedLifetime(cancellable) {
+                try dbQueue.writeWithoutTransaction { db in
+                    try db.execute(sql: """
+                        INSERT INTO other DEFAULT VALUES;
+                        INSERT INTO t DEFAULT VALUES;
+                        """)
+                }
+                wait(for: [expectation], timeout: 4)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "tracked region: other(*)",
+                    "value: 0",
+                    "database did change",
+                    "fetch",
+                    "value: 0",
+                ])
+            }
+        }
+        
+        // Track both "t" and "other"
+        do {
+            let dbQueue = try makeDatabaseQueue()
+            try dbQueue.write { db in
+                try db.execute(sql: """
+                    CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    CREATE TABLE other(id INTEGER PRIMARY KEY AUTOINCREMENT);
+                    """)
+            }
+            
+            let logger = TestStream()
+            let observation = ValueObservation.tracking(
+                region: Table("t"), Table("other"),
+                fetch: Table("t").fetchCount)
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            expectation.expectedFulfillmentCount = 3
+            let cancellable = observation.start(
+                in: dbQueue,
+                onError: { error in XCTFail("Unexpected error: \(error)") },
+                onChange: { _ in
+                    expectation.fulfill()
+                })
+            try withExtendedLifetime(cancellable) {
+                try dbQueue.writeWithoutTransaction { db in
+                    try db.execute(sql: """
+                        INSERT INTO other DEFAULT VALUES;
+                        INSERT INTO t DEFAULT VALUES;
+                        """)
+                }
+                wait(for: [expectation], timeout: 4)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "tracked region: other(*),t(*)",
+                    "value: 0",
+                    "database did change",
+                    "fetch",
+                    "value: 0",
+                    "database did change",
+                    "fetch",
+                    "value: 1",
+                ])
+            }
+        }
+    }
     
     // MARK: - Snapshot Optimization
     
@@ -330,7 +572,46 @@ class ValueObservationTests: GRDBTestCase {
     
     // MARK: - Unspecified Changes
     
+    func test_ValueObservation_is_triggered_by_explicit_change_notification() throws {
+        let dbQueue1 = try makeDatabaseQueue(filename: "test.sqlite")
+        try dbQueue1.write { db in
+            try db.execute(sql: "CREATE TABLE test(a)")
+        }
+        
+        let undetectedExpectation = expectation(description: "undetected")
+        undetectedExpectation.expectedFulfillmentCount = 2 // initial value and change
+        undetectedExpectation.isInverted = true
 
+        let detectedExpectation = expectation(description: "detected")
+        detectedExpectation.expectedFulfillmentCount = 2 // initial value and change
+        
+        let observation = ValueObservation.tracking { db in
+            try Table("test").fetchCount(db)
+        }
+        let cancellable = observation.start(
+            in: dbQueue1,
+            scheduling: .immediate,
+            onError: { error in XCTFail("Unexpected error: \(error)") },
+            onChange: { _ in
+                undetectedExpectation.fulfill()
+                detectedExpectation.fulfill()
+            })
+
+        try withExtendedLifetime(cancellable) {
+            // Change performed from external connection is not detected...
+            let dbQueue2 = try makeDatabaseQueue(filename: "test.sqlite")
+            try dbQueue2.write { db in
+                try db.execute(sql: "INSERT INTO test (a) VALUES (1)")
+            }
+            wait(for: [undetectedExpectation], timeout: 2)
+            
+            // ... until we perform an explicit change notification
+            try dbQueue1.write { db in
+                try db.notifyChanges(in: Table("test"))
+            }
+            wait(for: [detectedExpectation], timeout: 2)
+        }
+    }
     
     // MARK: - Cancellation
     

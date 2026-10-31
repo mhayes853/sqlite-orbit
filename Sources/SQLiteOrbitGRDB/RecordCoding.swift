@@ -46,7 +46,7 @@
       }
     }
 
-    public subscript(_ column: Column) -> (any DatabaseValueConvertible)? {
+    public subscript(_ column: some ColumnExpression) -> (any DatabaseValueConvertible)? {
       get {
         self[column.name]
       }
@@ -207,11 +207,13 @@
     }
 
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Self] {
-      try fetchAll(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchAll(db, sql: sql, arguments: arguments)
     }
 
     public static func fetchOne(_ db: Database, _ literal: SQL) throws -> Self? {
-      try fetchOne(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchOne(db, sql: sql, arguments: arguments)
     }
   }
 
@@ -397,8 +399,10 @@
       return UnsupportedEncodingContainer(encoder: self)
     }
 
+    // As in GRDB, a single value at the record level encodes the keyed columns of the value
+    // into the record's container.
     func singleValueContainer() -> any SingleValueEncodingContainer {
-      UnsupportedEncodingContainer(encoder: self)
+      RecordSingleValueEncodingContainer(encoder: self)
     }
 
     func encode<T: Encodable>(_ value: T, key: any CodingKey) throws {
@@ -421,6 +425,8 @@
         )
       } else if let convertible = value as? any DatabaseValueConvertible {
         result = convertible.databaseValue
+      } else if let single = try singleValue(value, key: key, column: column) {
+        result = single
       } else {
         let data = try record.databaseJSONEncoder(for: column).encode(value)
         let json = try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
@@ -439,6 +445,156 @@
       }
       container[column] = result
     }
+  }
+
+  extension RecordEncoder {
+    /// Encodes values that encode a single value (such as wrappers of strings), or returns nil
+    /// for values that need keyed or unkeyed containers, which are stored as JSON.
+    fileprivate func singleValue<T: Encodable>(_ value: T, key: any CodingKey, column: String)
+      throws -> DatabaseValue?
+    {
+      let probe = ColumnValueEncoder(
+        codingPath: codingPath + [key],
+        userInfo: userInfo,
+        record: record,
+        column: column
+      )
+      try value.encode(to: probe)
+      if probe.requiresJSON { return nil }
+      return probe.value ?? .null
+    }
+  }
+
+  private struct RecordSingleValueEncodingContainer: SingleValueEncodingContainer {
+    let encoder: RecordEncoder
+
+    var codingPath: [any CodingKey] { encoder.codingPath }
+
+    mutating func encodeNil() throws {
+      throw EncodingError.invalidValue(
+        NSNull(),
+        .init(codingPath: codingPath, debugDescription: "records require keyed columns")
+      )
+    }
+
+    mutating func encode<T: Encodable>(_ value: T) throws {
+      if let record = value as? any EncodableRecord {
+        try record.encode(to: &encoder.container)
+      } else if value is any DatabaseValueConvertible {
+        throw EncodingError.invalidValue(
+          value,
+          .init(codingPath: codingPath, debugDescription: "records require keyed columns")
+        )
+      } else {
+        try value.encode(to: encoder)
+      }
+    }
+  }
+
+  /// Encodes a nested value that encodes a single value, and detects other values.
+  private final class ColumnValueEncoder: Encoder, SingleValueEncodingContainer {
+    let codingPath: [any CodingKey]
+    let userInfo: [CodingUserInfoKey: Any]
+    let record: any EncodableRecord.Type
+    let column: String
+    var value: DatabaseValue?
+    var requiresJSON = false
+
+    init(
+      codingPath: [any CodingKey],
+      userInfo: [CodingUserInfoKey: Any],
+      record: any EncodableRecord.Type,
+      column: String
+    ) {
+      self.codingPath = codingPath
+      self.userInfo = userInfo
+      self.record = record
+      self.column = column
+    }
+
+    func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> {
+      requiresJSON = true
+      return KeyedEncodingContainer(DiscardingKeyedContainer<Key>(codingPath: codingPath))
+    }
+
+    func unkeyedContainer() -> any UnkeyedEncodingContainer {
+      requiresJSON = true
+      return DiscardingUnkeyedContainer(codingPath: codingPath)
+    }
+
+    func singleValueContainer() -> any SingleValueEncodingContainer { self }
+
+    func encodeNil() throws { value = .null }
+
+    func encode<T: Encodable>(_ value: T) throws {
+      if let date = value as? Date {
+        self.value = encodeDatabaseDate(
+          date,
+          strategy: record.databaseDateEncodingStrategy(for: column)
+        )
+      } else if let data = value as? Data {
+        self.value = try encodeDatabaseData(
+          data,
+          strategy: record.databaseDataEncodingStrategy(for: column)
+        )
+      } else if let uuid = value as? UUID {
+        self.value = encodeDatabaseUUID(
+          uuid,
+          strategy: record.databaseUUIDEncodingStrategy(for: column)
+        )
+      } else if let convertible = value as? any DatabaseValueConvertible {
+        self.value = convertible.databaseValue
+      } else {
+        try value.encode(to: self)
+      }
+    }
+  }
+
+  private struct DiscardingKeyedContainer<Key: CodingKey>: KeyedEncodingContainerProtocol {
+    let codingPath: [any CodingKey]
+    mutating func encodeNil(forKey key: Key) throws {}
+    mutating func encode<T: Encodable>(_ value: T, forKey key: Key) throws {}
+    mutating func nestedContainer<NestedKey: CodingKey>(
+      keyedBy keyType: NestedKey.Type,
+      forKey key: Key
+    ) -> KeyedEncodingContainer<NestedKey> {
+      KeyedEncodingContainer(DiscardingKeyedContainer<NestedKey>(codingPath: codingPath))
+    }
+    mutating func nestedUnkeyedContainer(forKey key: Key) -> any UnkeyedEncodingContainer {
+      DiscardingUnkeyedContainer(codingPath: codingPath)
+    }
+    mutating func superEncoder() -> any Encoder { DiscardingEncoder(codingPath: codingPath) }
+    mutating func superEncoder(forKey key: Key) -> any Encoder {
+      DiscardingEncoder(codingPath: codingPath)
+    }
+  }
+
+  private struct DiscardingUnkeyedContainer: UnkeyedEncodingContainer {
+    let codingPath: [any CodingKey]
+    var count = 0
+    mutating func encodeNil() throws { count += 1 }
+    mutating func encode<T: Encodable>(_ value: T) throws { count += 1 }
+    mutating func nestedContainer<NestedKey: CodingKey>(keyedBy keyType: NestedKey.Type)
+      -> KeyedEncodingContainer<NestedKey>
+    {
+      KeyedEncodingContainer(DiscardingKeyedContainer<NestedKey>(codingPath: codingPath))
+    }
+    mutating func nestedUnkeyedContainer() -> any UnkeyedEncodingContainer { self }
+    mutating func superEncoder() -> any Encoder { DiscardingEncoder(codingPath: codingPath) }
+  }
+
+  private struct DiscardingEncoder: Encoder, SingleValueEncodingContainer {
+    let codingPath: [any CodingKey]
+    var userInfo: [CodingUserInfoKey: Any] { [:] }
+    func container<Key: CodingKey>(keyedBy type: Key.Type) -> KeyedEncodingContainer<Key> {
+      KeyedEncodingContainer(DiscardingKeyedContainer<Key>(codingPath: codingPath))
+    }
+    func unkeyedContainer() -> any UnkeyedEncodingContainer {
+      DiscardingUnkeyedContainer(codingPath: codingPath)
+    }
+    func singleValueContainer() -> any SingleValueEncodingContainer { self }
+    mutating func encodeNil() throws {}
+    mutating func encode<T: Encodable>(_ value: T) throws {}
   }
 
   private struct RecordEncodingContainer<Key: CodingKey>: KeyedEncodingContainerProtocol {
@@ -540,6 +696,9 @@
     let record: any FetchableRecord.Type
     let codingPath: [any CodingKey]
     let columnDecodingStrategy: DatabaseColumnDecodingStrategy
+    /// The key, if any, that was decoded from the whole row, as GRDB allows for one key of
+    /// a nested record type (`struct PlayerInfo: Decodable { var player: Player; ... }`).
+    var decodedRootKey: String?
 
     var userInfo: [CodingUserInfoKey: Any] {
       record.databaseDecodingUserInfo
@@ -591,6 +750,39 @@
           return try T(
             from: RecordDecoder(
               row: scoped,
+              record: record,
+              codingPath: codingPath + [key],
+              columnDecodingStrategy: .useDefaultKeys
+            )
+          )
+        }
+        if let rows = row.prefetchedRows[key.stringValue] {
+          return try T(
+            from: PrefetchedRowsDecoder(rows: rows, record: record, codingPath: codingPath + [key])
+          )
+        }
+        let isScalar =
+          type is any DatabaseValueConvertible.Type || type == Date.self || type == Data.self
+        if !isScalar {
+          if let rootKey = decodedRootKey {
+            let keys = [rootKey, key.stringValue].sorted()
+            throw DecodingError.keyNotFound(
+              key,
+              .init(
+                codingPath: codingPath,
+                debugDescription: "No such key: \(keys.joined(separator: " or "))"
+              )
+            )
+          }
+          // A nested record that is not a column, scope, or prefetched key decodes from the
+          // whole row.
+          decodedRootKey = key.stringValue
+          if let recordType = type as? any FetchableRecord.Type {
+            return try recordType.init(row: row) as! T
+          }
+          return try T(
+            from: RecordDecoder(
+              row: row,
               record: record,
               codingPath: codingPath + [key],
               columnDecodingStrategy: .useDefaultKeys
@@ -724,16 +916,21 @@
     var allKeys: [Key] {
       let names = Set(decoder.row.columnNames.map { decoder.columnDecodingStrategy.key($0) })
         .union(decoder.row.scopesTree.names)
+        .union(decoder.row.prefetchedRows.keys)
       return names.compactMap(Key.init(stringValue:))
     }
 
     func contains(_ key: Key) -> Bool {
       decoder.column(key) != nil || decoder.row.scopesTree[key.stringValue] != nil
+        || decoder.row.prefetchedRows[key.stringValue] != nil
     }
 
     func decodeNil(forKey key: Key) throws -> Bool {
       guard let column = decoder.column(key), let index = decoder.row.index(ofColumn: column) else {
-        return decoder.row.scopesTree[key.stringValue]?.containsNonNullValue != true
+        if let scoped = decoder.row.scopesTree[key.stringValue] {
+          return !scoped.containsNonNullValue
+        }
+        return decoder.row.prefetchedRows[key.stringValue] == nil
       }
       return decoder.row.hasNull(atIndex: index)
     }
@@ -774,6 +971,66 @@
     func superDecoder(forKey key: Key) throws -> any Decoder {
       decoder
     }
+  }
+
+  /// Decodes collections of prefetched rows (`[Book]`, `Set<Book>`, `[String]`).
+  private struct PrefetchedRowsDecoder: Decoder, UnkeyedDecodingContainer {
+    let rows: [Row]
+    let record: any FetchableRecord.Type
+    let codingPath: [any CodingKey]
+    var currentIndex = 0
+
+    init(rows: [Row], record: any FetchableRecord.Type, codingPath: [any CodingKey]) {
+      self.rows = rows
+      self.record = record
+      self.codingPath = codingPath
+    }
+
+    var userInfo: [CodingUserInfoKey: Any] { record.databaseDecodingUserInfo }
+    var count: Int? { rows.count }
+    var isAtEnd: Bool { currentIndex >= rows.count }
+
+    func container<Key: CodingKey>(keyedBy type: Key.Type) throws -> KeyedDecodingContainer<Key> {
+      throw DecodingError.typeMismatch(
+        type,
+        .init(codingPath: codingPath, debugDescription: "prefetched rows decode as a collection")
+      )
+    }
+
+    func unkeyedContainer() throws -> any UnkeyedDecodingContainer { self }
+
+    func singleValueContainer() throws -> any SingleValueDecodingContainer {
+      throw DecodingError.typeMismatch(
+        Any.self,
+        .init(codingPath: codingPath, debugDescription: "prefetched rows decode as a collection")
+      )
+    }
+
+    mutating func decodeNil() throws -> Bool { false }
+
+    mutating func decode<T: Decodable>(_ type: T.Type) throws -> T {
+      defer { currentIndex += 1 }
+      let strategy =
+        (type as? any FetchableRecord.Type)?.databaseColumnDecodingStrategy ?? .useDefaultKeys
+      return try T(
+        from: RecordDecoder(
+          row: rows[currentIndex],
+          record: record,
+          codingPath: codingPath,
+          columnDecodingStrategy: strategy
+        )
+      )
+    }
+
+    mutating func nestedContainer<NestedKey: CodingKey>(keyedBy type: NestedKey.Type) throws
+      -> KeyedDecodingContainer<NestedKey>
+    {
+      try container(keyedBy: type)
+    }
+
+    mutating func nestedUnkeyedContainer() throws -> any UnkeyedDecodingContainer { self }
+
+    mutating func superDecoder() throws -> any Decoder { self }
   }
 
   private struct ColumnDecoder: Decoder, SingleValueDecodingContainer {

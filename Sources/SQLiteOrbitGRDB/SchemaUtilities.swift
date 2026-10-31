@@ -34,14 +34,15 @@
 
     @discardableResult
     public func defaults(sql: String) -> Self {
-      clauses.append("DEFAULT " + sql)
+      defaultClause = SQL(sql: "DEFAULT " + sql)
       return self
     }
 
     @discardableResult
     public func check(_ condition: (Column) -> any SQLExpressible) -> Self {
-      expressionClauses.append(
-        SQL(sql: "CHECK (") + condition(Column(name)).sqlExpression.literal + SQL(sql: ")")
+      checkClauses.append(
+        SQL(sql: "CHECK (") + SQL(elements: [.expression(condition(Column(name)).sqlExpression)])
+          + SQL(sql: ")")
       )
       return self
     }
@@ -58,10 +59,9 @@
       _ expression: some SQLExpressible,
       _ qualification: GeneratedColumnQualification = .virtual
     ) -> Self {
-      expressionClauses.append(
-        SQL(sql: "GENERATED ALWAYS AS (") + expression.sqlExpression.literal
-          + SQL(sql: ") " + qualification.sql)
-      )
+      generatedClause =
+        SQL(sql: "GENERATED ALWAYS AS (") + SQL(elements: [.expression(expression.sqlExpression)])
+        + SQL(sql: ") " + qualification.sql)
       return self
     }
 
@@ -73,17 +73,18 @@
 
   extension TableDefinition {
     public func check(_ expression: some SQLExpressible) {
-      expressionConstraints.append(
-        SQL(sql: "CHECK (") + expression.sqlExpression.literal + SQL(sql: ")")
+      checkConstraints.append(
+        SQL(sql: "CHECK (") + SQL(elements: [.expression(expression.sqlExpression)])
+          + SQL(sql: ")")
       )
     }
 
     public func constraint(sql: String) {
-      constraints.append(sql)
+      literalConstraints.append(SQL(sql: sql))
     }
 
     public func constraint(literal: SQL) {
-      expressionConstraints.append(literal)
+      literalConstraints.append(literal)
     }
   }
 
@@ -111,17 +112,16 @@
       options: IndexOptions = [],
       condition: (any SQLExpressible)? = nil
     ) throws {
-      var sql =
-        SQL(
-          sql: "CREATE " + (options.contains(.unique) ? "UNIQUE " : "") + "INDEX "
-            + (options.contains(.ifNotExists) ? "IF NOT EXISTS " : "")
-            + quoted(name) + " ON " + quoted(table) + " ("
+      try execute(
+        sql: indexSQL(
+          self,
+          name: name,
+          table: table,
+          expressions: expressions.map(\.sqlExpression),
+          options: options,
+          condition: condition?.sqlExpression
         )
-        + joined(expressions.map { $0.sqlExpression.literal }, separator: ", ") + SQL(sql: ")")
-      if let condition {
-        sql = sql + SQL(sql: " WHERE ") + condition.sqlExpression.literal
-      }
-      try execute(sql: sql.expandedSQL(in: self))
+      )
     }
 
     public func create(
@@ -149,7 +149,7 @@
     }
 
     public func reindex(collation: DatabaseCollation) throws {
-      try execute(sql: "REINDEX " + quoted(collation.name))
+      try execute(sql: "REINDEX " + collation.name)
     }
 
     public func create(

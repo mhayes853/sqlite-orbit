@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/Statement/SelectStatementTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -123,7 +123,119 @@ class SelectStatementTests : GRDBTestCase {
         }
     }
     
-
+    func testConsumeMultipleStatements() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.writeWithoutTransaction { db in
+            do {
+                // SQL, no argument
+                let statements = try db.allStatements(sql: """
+                    SELECT age FROM persons ORDER BY age;
+                    SELECT age FROM persons ORDER BY age DESC;
+                    """)
+                let ages = try Array(statements.flatMap { try Int.fetchCursor($0) })
+                XCTAssertEqual(ages, [13, 26, 41, 41, 26, 13])
+            }
+            do {
+                // Literal, no argument
+                let statements = try db.allStatements(literal: """
+                    SELECT age FROM persons ORDER BY age;
+                    SELECT age FROM persons ORDER BY age DESC;
+                    """)
+                let ages = try Array(statements.flatMap { try Int.fetchCursor($0) })
+                XCTAssertEqual(ages, [13, 26, 41, 41, 26, 13])
+            }
+            
+            do {
+                // SQL, missing arguments
+                let statements = try db.allStatements(sql: """
+                    SELECT count(*) FROM persons WHERE age > ?;
+                    SELECT count(*) FROM persons WHERE age < ?;
+                    """)
+                let counts = try Array(statements.map { try
+                    Int.fetchOne($0, arguments: [30])!
+                })
+                XCTAssertEqual(counts, [1, 2])
+            }
+            do {
+                // Literal, missing arguments
+                let statements = try db.allStatements(literal: """
+                    SELECT count(*) FROM persons WHERE age > ?;
+                    SELECT count(*) FROM persons WHERE age < ?;
+                    """)
+                let counts = try Array(statements.map { try
+                    Int.fetchOne($0, arguments: [30])!
+                })
+                XCTAssertEqual(counts, [1, 2])
+            }
+            
+            do {
+                // SQL, matching arguments
+                let statements = try db.allStatements(sql: """
+                    SELECT name FROM persons WHERE name = ?;
+                    SELECT name FROM persons WHERE age > ? ORDER BY name;
+                    """, arguments: ["Arthur", 20])
+                let names = try Array(statements.map { try String.fetchAll($0) })
+                XCTAssertEqual(names, [["Arthur"], ["Arthur", "Barbara"]])
+            }
+            do {
+                // Literal, matching arguments
+                let statements = try db.allStatements(literal: """
+                    SELECT name FROM persons WHERE name = \("Arthur");
+                    SELECT name FROM persons WHERE age > \(20) ORDER BY name;
+                    """)
+                let names = try Array(statements.map { try String.fetchAll($0) })
+                XCTAssertEqual(names, [["Arthur"], ["Arthur", "Barbara"]])
+            }
+            
+            do {
+                // SQL, too few arguments
+                let statements = try db.allStatements(sql: """
+                    SELECT name FROM persons WHERE name = ?;
+                    SELECT name FROM persons WHERE age > ? ORDER BY name;
+                    """, arguments: ["Arthur"])
+                _ = try Array(statements.map { try String.fetchAll($0) })
+                XCTFail("Expected Error")
+            } catch DatabaseError.SQLITE_MISUSE {
+                // OK
+            }
+            do {
+                // Literal, too few arguments
+                let statements = try db.allStatements(literal: """
+                    SELECT name FROM persons WHERE name = \("Arthur");
+                    SELECT name FROM persons WHERE age > ? ORDER BY name;
+                    """)
+                _ = try Array(statements.map { try String.fetchAll($0) })
+                XCTFail("Expected Error")
+            } catch DatabaseError.SQLITE_MISUSE {
+                // OK
+            }
+            
+            do {
+                // SQL, too many arguments
+                let statements = try db.allStatements(sql: """
+                    SELECT name FROM persons WHERE name = ?;
+                    SELECT name FROM persons WHERE age > ? ORDER BY name;
+                    """, arguments: ["Arthur", 20, 55])
+                _ = try Array(statements.map { try String.fetchAll($0) })
+                XCTFail("Expected Error")
+            } catch DatabaseError.SQLITE_MISUSE {
+                // OK
+            }
+            
+            do {
+                // Mix statement kinds
+                let statements = try db.allStatements(literal: """
+                    CREATE TABLE t(a);
+                    INSERT INTO t VALUES (0);
+                    SELECT a FROM t ORDER BY a;
+                    INSERT INTO t VALUES (1);
+                    SELECT a FROM t ORDER BY a;
+                    """)
+                let values = try Array(statements.map { try Int.fetchAll($0) })
+                XCTAssertEqual(values, [[], [], [0], [], [0, 1]])
+            }
+        }
+    }
     
 
 }

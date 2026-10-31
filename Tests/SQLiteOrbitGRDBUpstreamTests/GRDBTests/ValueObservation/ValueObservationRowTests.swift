@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/ValueObservation/ValueObservationRowTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -106,9 +106,65 @@ class ValueObservationRowTests: GRDBTestCase {
         })
     }
     
-
+    func testFTS4Observation() throws {
+        try assertValueObservation(
+            ValueObservation.trackingConstantRegion(SQLRequest<Row>(sql: "SELECT * FROM ft_documents").fetchAll),
+            records: [
+                [],
+                [["content":"foo"]]],
+            setup: { db in
+                try db.create(virtualTable: "ft_documents", using: FTS4())
+        },
+            recordedUpdates: { db in
+                try db.execute(sql: "INSERT INTO ft_documents VALUES (?)", arguments: ["foo"])
+        })
+    }
     
-
+    func testSynchronizedFTS4Observation() throws {
+        try assertValueObservation(
+            ValueObservation.trackingConstantRegion(SQLRequest<Row>(sql: "SELECT * FROM ft_documents").fetchAll),
+            records: [
+                [],
+                [["content":"foo"]]],
+            setup: { db in
+                try db.create(table: "documents") { t in
+                    t.primaryKey("id", .integer)
+                    t.column("content", .text)
+                }
+                try db.create(virtualTable: "ft_documents", using: FTS4()) { t in
+                    t.synchronize(withTable: "documents")
+                    t.column("content")
+                }
+        },
+            recordedUpdates: { db in
+                try db.execute(sql: "INSERT INTO documents (content) VALUES (?)", arguments: ["foo"])
+        })
+    }
     
-
+    func testJoinedFTS4Observation() throws {
+        try assertValueObservation(
+            ValueObservation.trackingConstantRegion(SQLRequest<Row>(sql: """
+                SELECT document.* FROM document
+                JOIN ft_document ON ft_document.rowid = document.id
+                WHERE ft_document MATCH 'foo'
+                """).fetchAll),
+            records: [
+                [],
+                [["id":1]]],
+            setup: { db in
+                try db.create(table: "document") { t in
+                    t.autoIncrementedPrimaryKey("id")
+                }
+                try db.create(virtualTable: "ft_document", using: FTS4()) { t in
+                    t.column("content")
+                }
+        },
+            recordedUpdates: { db in
+                try db.inTransaction {
+                    try db.execute(sql: "INSERT INTO document (id) VALUES (?)", arguments: [1])
+                    try db.execute(sql: "INSERT INTO ft_document (rowid, content) VALUES (?, ?)", arguments: [1, "foo"])
+                    return .commit
+                }
+        })
+    }
 }

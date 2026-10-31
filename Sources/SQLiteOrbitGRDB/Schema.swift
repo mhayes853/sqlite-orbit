@@ -158,42 +158,6 @@
       self.type = type
     }
 
-    // Raw clauses appended by schema helpers defined in other files are sorted into the
-    // structured slots, so that the generated SQL follows GRDB's clause order.
-    var clauses: [String] {
-      get { [] }
-      set {
-        for clause in newValue {
-          if clause.hasPrefix("DEFAULT ") {
-            defaultClause = SQL(sql: clause)
-          } else {
-            literalClauses.append(SQL(sql: clause))
-          }
-        }
-      }
-    }
-
-    var expressionClauses: [SQL] {
-      get { [] }
-      set {
-        for clause in newValue {
-          guard case .sql(let text, _) = clause.elements.first else {
-            literalClauses.append(clause)
-            continue
-          }
-          if text.hasPrefix("CHECK") {
-            checkClauses.append(clause)
-          } else if text.hasPrefix("GENERATED") {
-            generatedClause = clause
-          } else if text.hasPrefix("DEFAULT") {
-            defaultClause = clause
-          } else {
-            literalClauses.append(clause)
-          }
-        }
-      }
-    }
-
     @discardableResult
     public func notNull(onConflict conflict: Database.ConflictResolution? = nil) -> Self {
       notNullConflict = conflict ?? .abort
@@ -435,25 +399,6 @@
     init(name: String, options: TableOptions) {
       self.name = name
       self.options = options
-    }
-
-    // Constraints appended by schema helpers defined in other files.
-    var constraints: [String] {
-      get { [] }
-      set { literalConstraints += newValue.map { SQL(sql: $0) } }
-    }
-
-    var expressionConstraints: [SQL] {
-      get { [] }
-      set {
-        for constraint in newValue {
-          if case .sql(let text, _) = constraint.elements.first, text.hasPrefix("CHECK") {
-            checkConstraints.append(constraint)
-          } else {
-            literalConstraints.append(constraint)
-          }
-        }
-      }
     }
 
     var columns: [ColumnDefinition] {

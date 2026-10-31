@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Private/DatabaseRegionTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -260,7 +260,27 @@ class DatabaseRegionTests : GRDBTestCase {
         }
     }
     
+    func testDatabaseRegionOfDerivedRequests() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "CREATE TABLE foo (id INTEGER PRIMARY KEY, a TEXT)")
+            struct Record: TableRecord {
+                static let databaseTableName = "foo"
+            }
+            
+            let request = Record.filter(keys: [1, 2, 3])
+            try XCTAssertEqual(request.databaseRegion(db).description, "foo(a,id)[1,2,3]")
 
+            do {
+                let derivedRequest = AnyFetchRequest(request)
+                try XCTAssertEqual(derivedRequest.databaseRegion(db).description, "foo(a,id)[1,2,3]")
+            }
+            do {
+                let derivedRequest: AdaptedFetchRequest = request.adapted { db in SuffixRowAdapter(fromIndex: 1) }
+                try XCTAssertEqual(derivedRequest.databaseRegion(db).description, "foo(a,id)[1,2,3]")
+            }
+        }
+    }
     
 
     

@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/SQLLiteralTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -825,7 +825,28 @@ extension SQLLiteralTests {
         }
     }
     
-
+    func testCollationInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            do {
+                // Database.CollationName
+                let query: SQL = "SELECT * FROM player ORDER BY email COLLATION \(.nocase)"
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT * FROM player ORDER BY email COLLATION NOCASE
+                    """)
+                XCTAssertEqual(arguments, [])
+            }
+            do {
+                // DatabaseCollation
+                let query: SQL = "SELECT * FROM player ORDER BY name COLLATION \(.localizedCompare)"
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT * FROM player ORDER BY name COLLATION swiftLocalizedCompare
+                    """)
+                XCTAssertEqual(arguments, [])
+            }
+        }
+    }
     
 
     

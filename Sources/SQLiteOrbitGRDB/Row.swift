@@ -28,6 +28,9 @@
     private let adapter: (any _LayoutedRowAdapter)?
     private let mapping: _LayoutedColumnMapping?
 
+    /// The rows prefetched with `including(all:)`, by association key.
+    public internal(set) var prefetchedRows = PrefetchedRowsView()
+
     var columns: [(String, DatabaseValue)] {
       get {
         guard let base, let mapping else { return storedColumns }
@@ -199,16 +202,32 @@
     }
 
     public var debugDescription: String {
-      guard self != unadapted else { return description }
-      var result = "▿ " + description
-      result += "\n  unadapted: " + unadapted.description
-      func appendScopes(_ row: Row, prefix: String) {
-        for (name, scoped) in row.scopes.sorted(by: { $0.name < $1.name }) {
-          result += "\n" + prefix + "- " + name + ": " + scoped.description
-          appendScopes(scoped, prefix: prefix + "  ")
-        }
+      debugDescription(level: 0)
+    }
+
+    private func debugDescription(level: Int) -> String {
+      if level == 0 && self == unadapted && prefetchedRows.isEmpty {
+        return description
       }
-      appendScopes(self, prefix: "  ")
+      let prefix = String(repeating: "  ", count: level + 1)
+      var result: String
+      if level == 0 {
+        result = "▿ " + description
+        let unadapted = self.unadapted
+        if self != unadapted {
+          result += "\n" + prefix + "unadapted: " + unadapted.description
+        }
+      } else {
+        result = description
+      }
+      for (name, scoped) in scopes.sorted(by: { $0.name < $1.name }) {
+        result += "\n" + prefix + "- " + name + ": " + scoped.debugDescription(level: level + 1)
+      }
+      for key in prefetchedRows.keys.sorted() {
+        guard let rows = prefetchedRows[key] else { continue }
+        let count = rows.count == 1 ? "1 row" : rows.count == 0 ? "0 row" : "\(rows.count) rows"
+        result += "\n" + prefix + "+ " + key + ": " + count
+      }
       return result
     }
 
@@ -255,10 +274,13 @@
 
     public func copy() -> Row {
       if let base, let adapter {
-        return Row(base: base.copy(), adapter: adapter)
+        let row = Row(base: base.copy(), adapter: adapter)
+        row.prefetchedRows = prefetchedRows
+        return row
       }
       let row = Row(storedColumns)
       row.storedIsFetched = storedIsFetched
+      row.prefetchedRows = prefetchedRows
       return row
     }
 
@@ -303,6 +325,7 @@
     public static func == (lhs: Row, rhs: Row) -> Bool {
       if lhs === rhs { return true }
       return lhs.columnNames == rhs.columnNames && lhs.databaseValues == rhs.databaseValues
+        && lhs.prefetchedRows == rhs.prefetchedRows
         && Set(lhs.scopes.names) == Set(rhs.scopes.names)
         && lhs.scopes.allSatisfy { rhs.scopes[$0.name] == $0.row }
     }
@@ -320,7 +343,11 @@
   extension Row {
     /// The direct, case-sensitive named scopes defined by this row's adapter.
     public var scopes: ScopesView {
-      ScopesView(base: base ?? self, adapters: adapter?._scopes ?? [:])
+      ScopesView(
+        base: base ?? self,
+        adapters: adapter?._scopes ?? [:],
+        prefetchedRows: prefetchedRows
+      )
     }
 
     /// Recursive scope lookup, visiting all children before their descendants.
@@ -330,7 +357,12 @@
 
     /// The same column projection without named scopes.
     public var unscoped: Row {
-      guard let base, let adapter else { return self }
+      guard let base, let adapter else {
+        if prefetchedRows.isEmpty { return self }
+        let row = Row(storedColumns)
+        row.storedIsFetched = storedIsFetched
+        return row
+      }
       return Row(base: base, adapter: adapter._mapping)
     }
 
@@ -371,10 +403,25 @@
       public typealias Index = Dictionary<String, any _LayoutedRowAdapter>.Index
       private let base: Row
       private let adapters: [String: any _LayoutedRowAdapter]
+      private let prefetchedRows: PrefetchedRowsView
 
-      fileprivate init(base: Row, adapters: [String: any _LayoutedRowAdapter]) {
+      fileprivate init(
+        base: Row,
+        adapters: [String: any _LayoutedRowAdapter],
+        prefetchedRows: PrefetchedRowsView
+      ) {
         self.base = base
         self.adapters = adapters
+        self.prefetchedRows = prefetchedRows
+      }
+
+      // A scoped row gives access to the rows prefetched for its own associations.
+      private func scopedRow(_ name: String, _ adapter: any _LayoutedRowAdapter) -> Row {
+        let row = Row(base: base, adapter: adapter)
+        if let prefetch = prefetchedRows.prefetches.first(where: { $0.key == name })?.prefetch {
+          row.prefetchedRows = PrefetchedRowsView(prefetches: prefetch.prefetches)
+        }
+        return row
       }
 
       public var names: Dictionary<String, any _LayoutedRowAdapter>.Keys { adapters.keys }
@@ -387,11 +434,11 @@
 
       public subscript(position: Index) -> (name: String, row: Row) {
         let (name, adapter) = adapters[position]
-        return (name, Row(base: base, adapter: adapter))
+        return (name, scopedRow(name, adapter))
       }
 
       public subscript(_ name: String) -> Row? {
-        adapters[name].map { Row(base: base, adapter: $0) }
+        adapters[name].map { scopedRow(name, $0) }
       }
     }
 
@@ -416,6 +463,124 @@
         }
         return nil
       }
+    }
+  }
+
+  extension Row {
+    /// A view on the rows prefetched with `including(all:)`.
+    public struct PrefetchedRowsView: Equatable, @unchecked Sendable {
+      struct Prefetch: Equatable {
+        /// Nil for intermediate (through) associations.
+        var rows: [Row]?
+        var prefetches: [(key: String, prefetch: Prefetch)]
+
+        static func == (lhs: Prefetch, rhs: Prefetch) -> Bool {
+          lhs.rows == rhs.rows && lhs.prefetches.elementsEqual(rhs.prefetches) { $0 == $1 }
+        }
+      }
+
+      var prefetches: [(key: String, prefetch: Prefetch)] = []
+
+      init() {}
+
+      init(prefetches: [(key: String, prefetch: Prefetch)]) {
+        self.prefetches = prefetches
+      }
+
+      public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.prefetches.elementsEqual(rhs.prefetches) { $0 == $1 }
+      }
+
+      public var isEmpty: Bool { prefetches.isEmpty }
+
+      /// The keys of all prefetched rows, including nested associations.
+      public var keys: Set<String> {
+        var result: Set<String> = []
+        var pending = prefetches
+        var index = 0
+        while index < pending.count {
+          let (key, prefetch) = pending[index]
+          if prefetch.rows != nil { result.insert(key) }
+          pending += prefetch.prefetches
+          index += 1
+        }
+        return result
+      }
+
+      /// The prefetched rows for a key, searched breadth-first.
+      public subscript(_ key: String) -> [Row]? {
+        var pending = prefetches
+        var index = 0
+        while index < pending.count {
+          let (prefetchKey, prefetch) = pending[index]
+          if prefetchKey == key, let rows = prefetch.rows { return rows }
+          pending += prefetch.prefetches
+          index += 1
+        }
+        return nil
+      }
+
+      mutating func setRows(_ rows: [Row], forKeyPath keyPath: [String]) {
+        Self.setRows(rows, forKeyPath: keyPath[...], in: &prefetches)
+      }
+
+      private static func setRows(
+        _ rows: [Row],
+        forKeyPath keyPath: ArraySlice<String>,
+        in prefetches: inout [(key: String, prefetch: Prefetch)]
+      ) {
+        guard let key = keyPath.first else { return }
+        let index =
+          prefetches.firstIndex { $0.key == key }
+          ?? {
+            prefetches.append((key, Prefetch(rows: nil, prefetches: [])))
+            return prefetches.count - 1
+          }()
+        if keyPath.count == 1 {
+          prefetches[index].prefetch.rows = rows
+        } else {
+          setRows(rows, forKeyPath: keyPath.dropFirst(), in: &prefetches[index].prefetch.prefetches)
+        }
+      }
+    }
+
+    private func prefetchedRowsForKey(_ key: String) throws -> [Row] {
+      guard let rows = prefetchedRows[key] else {
+        let keys = prefetchedRows.keys
+        var message = "key for prefetched rows not found: \(String(reflecting: key))"
+        if !keys.isEmpty { message += " - available keys: \(keys.sorted())" }
+        throw DatabaseError(resultCode: .SQLITE_ERROR, message: message)
+      }
+      return rows
+    }
+
+    /// Decodes the records prefetched for an association key.
+    public func decode<Records: RangeReplaceableCollection>(
+      _ type: Records.Type = Records.self,
+      forKey key: String
+    ) throws -> Records where Records.Element: FetchableRecord {
+      var records = Records()
+      for row in try prefetchedRowsForKey(key) {
+        records.append(try Records.Element(row: row))
+      }
+      return records
+    }
+
+    /// Decodes the set of records prefetched for an association key.
+    public func decode<Record: FetchableRecord & Hashable>(
+      _ type: Set<Record>.Type = Set<Record>.self,
+      forKey key: String
+    ) throws -> Set<Record> {
+      try Set(prefetchedRowsForKey(key).map { try Record(row: $0) })
+    }
+
+    public subscript<Records: RangeReplaceableCollection>(_ key: String) -> Records
+    where Records.Element: FetchableRecord {
+      try! decode(Records.self, forKey: key)
+    }
+
+    public subscript<Record: FetchableRecord & Hashable>(_ key: String) -> Set<Record> {
+      try! decode(Set<Record>.self, forKey: key)
     }
   }
 
@@ -614,11 +779,13 @@
     }
 
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Self] {
-      try fetchAll(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchAll(db, sql: sql, arguments: arguments)
     }
 
     public static func fetchOne(_ db: Database, _ literal: SQL) throws -> Self? {
-      try fetchOne(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchOne(db, sql: sql, arguments: arguments)
     }
   }
 

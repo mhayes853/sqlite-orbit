@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseReaderTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -51,7 +51,21 @@ class DatabaseReaderTests : GRDBTestCase {
     
 
     
-
+    func testUnsafeReentrantReadIsReentrantFromWrite() throws {
+        func test(_ dbWriter: some DatabaseWriter) throws {
+            try dbWriter.write { db1 in
+                try dbWriter.unsafeReentrantRead { db2 in
+                    try dbWriter.unsafeReentrantRead { db3 in
+                        XCTAssertTrue(db1 === db2)
+                        XCTAssertTrue(db2 === db3)
+                    }
+                }
+            }
+        }
+        
+        try test(makeDatabaseQueue())
+        try test(makeDatabasePool())
+    }
     
     // MARK: - AsyncRead
     

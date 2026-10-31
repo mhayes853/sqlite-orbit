@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Record/TableRecord/TableRecordUpdateTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -426,7 +426,32 @@ class TableRecordUpdateTests: GRDBTestCase {
     
 
     
+    func testRequestUpdateAndFetchCursor_DatabaseComponents_table() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        
+        try makeDatabaseQueue().write { db in
+            try Player.createTable(db)
+            try Player(id: 1, name: "Arthur", score: 10, bonus: 0).insert(db)
+            try Player(id: 2, name: "Barbara", score: 20, bonus: 10).insert(db)
+            try Player(id: 3, name: "Craig", score: 30, bonus: 20).insert(db)
 
+            let request = Player.filter { $0.id != 2 }
+            let cursor = try request.updateAndFetchCursor(db) { [$0.score += 100] }
+            let updatedPlayers = try Array(cursor).sorted(by: { $0.id < $1.id })
+            XCTAssertEqual(updatedPlayers, [
+                Player(id: 1, name: "Arthur", score: 110, bonus: 0),
+                Player(id: 3, name: "Craig", score: 130, bonus: 20),
+            ])
+        }
+    }
     
 
     
@@ -460,7 +485,33 @@ class TableRecordUpdateTests: GRDBTestCase {
     
 
     
+    func testRequestUpdateAndFetchAll_DatabaseComponents_table() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        
+        try makeDatabaseQueue().write { db in
+            try Player.createTable(db)
+            try Player(id: 1, name: "Arthur", score: 10, bonus: 0).insert(db)
+            try Player(id: 2, name: "Barbara", score: 20, bonus: 10).insert(db)
+            try Player(id: 3, name: "Craig", score: 30, bonus: 20).insert(db)
 
+            let request = Player.filter { $0.id != 2 }
+            let updatedPlayers = try request
+                .updateAndFetchAll(db) { [$0.score += 100] }
+                .sorted(by: { $0.id < $1.id })
+            XCTAssertEqual(updatedPlayers, [
+                Player(id: 1, name: "Arthur", score: 110, bonus: 0),
+                Player(id: 3, name: "Craig", score: 130, bonus: 20),
+            ])
+        }
+    }
 
 
 
@@ -490,7 +541,31 @@ class TableRecordUpdateTests: GRDBTestCase {
         }
     }
 
+    func testRequestUpdateAndFetchSet_DatabaseComponents() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        
+        try makeDatabaseQueue().write { db in
+            try Player.createTable(db)
+            try Player(id: 1, name: "Arthur", score: 10, bonus: 0).insert(db)
+            try Player(id: 2, name: "Barbara", score: 20, bonus: 10).insert(db)
+            try Player(id: 3, name: "Craig", score: 30, bonus: 20).insert(db)
 
+            let request = Player.filter { $0.id != 2 }
+            let updatedPlayers = try request.updateAndFetchSet(db) { [$0.score += 100] }
+            XCTAssertEqual(updatedPlayers, [
+                Player(id: 1, name: "Arthur", score: 110, bonus: 0),
+                Player(id: 3, name: "Craig", score: 130, bonus: 20),
+            ])
+        }
+    }
     
     func testNilAssignment() throws {
         try makeDatabaseQueue().write { db in

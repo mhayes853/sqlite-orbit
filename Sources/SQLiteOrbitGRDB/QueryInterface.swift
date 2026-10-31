@@ -61,11 +61,11 @@
     }
 
     public func fetchAll(_ db: Database) throws -> [RowDecoder] {
-      try Array(fetchCursor(db))
+      try Row.fetchAllRows(db, self).map { try decodeRow($0, as: RowDecoder.self) }
     }
 
     public func fetchOne(_ db: Database) throws -> RowDecoder? {
-      guard let row = try Row.fetchOne(db, self) else { return nil }
+      guard let row = try Row.fetchOneRow(db, self) else { return nil }
       if let scalar = RowDecoder.self as? any DatabaseValueConvertible.Type,
         row.databaseValues.first?.isNull == true, scalar.fromDatabaseValue(.null) == nil
       {
@@ -128,6 +128,25 @@
     }
   }
 
+  extension SQLRequest where RowDecoder == Row {
+    /// Creates a request of rows from raw SQL.
+    public init(
+      sql: String,
+      arguments: StatementArguments = StatementArguments(),
+      adapter: (any RowAdapter)? = nil,
+      cached: Bool = false
+    ) {
+      self.init(literal: SQL(sql: sql, arguments: arguments), adapter: adapter, cached: cached)
+    }
+
+    /// Creates a request of rows from an SQL literal.
+    public init(literal: SQL, adapter: (any RowAdapter)? = nil, cached: Bool = false) {
+      self.literal = literal
+      self.cached = cached
+      self.adapter = adapter
+    }
+  }
+
   extension SQLRequest: ExpressibleByStringInterpolation {
     public typealias StringInterpolation = SQLInterpolation
 
@@ -178,24 +197,22 @@
       _ db: Database,
       forSingleResult singleResult: Bool = false
     ) throws -> PreparedRequest {
-      if relation.hasPrefetchedAssociations {
-        throw DatabaseError(
-          resultCode: .SQLITE_MISUSE,
-          message: "Not implemented: prefetching associations with including(all:)"
-        )
-      }
-      return try SQLQueryGenerator(relation: relation, forSingleResult: singleResult)
+      var prepared = try SQLQueryGenerator(relation: relation, forSingleResult: singleResult)
         .makePreparedRequest(db)
+      let associations = relation.prefetchedAssociations
+      if !associations.isEmpty {
+        let relation = relation
+        prepared.supplementaryFetch = { db, rows in
+          try prefetch(db, associations: associations, from: relation, into: rows)
+        }
+      }
+      return prepared
     }
 
     public func fetchCount(_ db: Database) throws -> Int {
       try relation.fetchCount(db)
     }
 
-    /// Whether the request fetches no row.
-    public func isEmpty(_ db: Database) throws -> Bool {
-      try !(SQLRequest<Bool>(literal: "SELECT EXISTS (\(sqlSubquery))").fetchOne(db) ?? false)
-    }
   }
 
   extension QueryInterfaceRequest: TypedRequest {}
@@ -302,20 +319,7 @@
     }
 
     public func withStableOrder() -> Self {
-      let table = self.table
-      let current = relation
-      return with { request in
-        let stable = SQLRelation.Ordering(
-          Deferred { db in
-            if let columns = try? db.primaryKey(table).columns {
-              return columns.map { SQLExpression.column($0).sqlOrdering }
-            }
-            let count = try SQLQueryGenerator(relation: current).columnCount(db)
-            return (1...count).map { SQL(sql: "\($0)").sqlOrdering }
-          }
-        )
-        request.relation.ordering = request.relation.ordering.appending(stable)
-      }
+      with { $0.relation = $0.relation.withStableOrder() }
     }
 
     func ordered(by terms: [any SQLOrderingTerm]) -> Self {
@@ -467,28 +471,53 @@
 
   extension FetchableRecord {
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Self? {
-      try Row.fetchOne(db, request).map(Self.init(row:))
+      try Row.fetchOneRow(db, request).map(Self.init(row:))
     }
 
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Self] {
-      try Array(fetchCursor(db, request))
+      try Row.fetchAllRows(db, request).map(Self.init(row:))
     }
   }
 
   extension Row {
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Row? {
-      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
-      return try fetchOne(prepared.statement, adapter: prepared.adapter)
+      try fetchOneRow(db, request)
     }
 
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Row] {
-      try Array(fetchCursor(db, request).map { $0.copy() })
+      try fetchAllRows(db, request)
     }
 
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws -> RowCursor
     {
       let prepared = try request.makePreparedRequest(db, forSingleResult: false)
+      guard prepared.supplementaryFetch == nil else {
+        throw DatabaseError(
+          resultCode: .SQLITE_MISUSE,
+          message: "Not implemented: fetchCursor with supplementary fetch"
+        )
+      }
       return try fetchCursor(prepared.statement, adapter: prepared.adapter)
+    }
+
+    /// Fetches owned rows, then the rows of prefetched associations.
+    static func fetchAllRows(_ db: Database, _ request: some FetchRequest) throws -> [Row] {
+      let prepared = try request.makePreparedRequest(db, forSingleResult: false)
+      let rows = try Array(
+        fetchCursor(prepared.statement, adapter: prepared.adapter).map { $0.copy() }
+      )
+      try prepared.supplementaryFetch?(db, rows)
+      return rows
+    }
+
+    /// Fetches one owned row, then the rows of prefetched associations.
+    static func fetchOneRow(_ db: Database, _ request: some FetchRequest) throws -> Row? {
+      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
+      guard let row = try fetchOne(prepared.statement, adapter: prepared.adapter) else {
+        return nil
+      }
+      try prepared.supplementaryFetch?(db, [row])
+      return row
     }
   }
 #endif

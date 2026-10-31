@@ -31,6 +31,37 @@
       }
     }
 
+    /// Registers a migration that replaces previously registered migrations.
+    ///
+    /// When the migration runs, `migrate` receives the merged identifiers that were already
+    /// applied, and their records are replaced by the record of this migration. Unlike GRDB, the
+    /// records of merged migrations are not removed when this migration was already applied.
+    public mutating func registerMigration(
+      _ identifier: String,
+      foreignKeyChecks: ForeignKeyChecks = .deferred,
+      merging mergedIdentifiers: Set<String> = [],
+      migrate:
+        @escaping @Sendable (_ db: Database, _ appliedIdentifiers: Set<String>) throws ->
+        Void
+    ) {
+      var merged = mergedIdentifiers
+      merged.remove(identifier)
+      registerMigration(identifier, foreignKeyChecks: foreignKeyChecks) { [merged] db in
+        guard !merged.isEmpty, try db.tableExists("grdb_migrations") else {
+          return try migrate(db, [])
+        }
+        let applied = try Set(String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations"))
+          .intersection(merged)
+        try migrate(db, applied)
+        let identifiers = merged.sorted()
+        try db.execute(
+          sql: "DELETE FROM grdb_migrations WHERE identifier IN ("
+            + identifiers.map { _ in "?" }.joined(separator: ", ") + ")",
+          arguments: StatementArguments(identifiers)
+        )
+      }
+    }
+
     public func disablingDeferredForeignKeyChecks() -> Self {
       var result = self
       result.native = native.disablingDeferredForeignKeyChecks()

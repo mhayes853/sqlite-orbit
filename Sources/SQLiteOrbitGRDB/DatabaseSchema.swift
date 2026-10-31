@@ -33,6 +33,14 @@
     public let destinationTable: String
     public let mapping: [(origin: String, destination: String)]
 
+    /// Creates a foreign key description.
+    public init(id: Int, destinationTable: String, mapping: [(origin: String, destination: String)])
+    {
+      self.id = id
+      self.destinationTable = destinationTable
+      self.mapping = mapping
+    }
+
     public var originColumns: [String] {
       mapping.map(\.origin)
     }

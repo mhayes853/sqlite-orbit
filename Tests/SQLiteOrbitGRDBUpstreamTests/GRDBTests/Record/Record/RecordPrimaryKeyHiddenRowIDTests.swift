@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Record/Record/RecordPrimaryKeyHiddenRowIDTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -952,5 +952,33 @@ class RecordPrimaryKeyHiddenRowIDTests : GRDBTestCase {
     
     // MARK: - RowID
     
-
+    func testRowIdIsSelectedByDefault() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            do {
+                let record = Person(name: "Arthur")
+                try record.insert(db)
+            }
+            
+            let records = try Person.fetchCursor(db)
+            while let record = try records.next() {
+                XCTAssert(record.id != nil)
+            }
+            
+            XCTAssertTrue(try Person.fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.fetchOne(db, key: 1)!.id != nil)
+            XCTAssertTrue(try Person.fetchOne(db, key: ["rowid": 1])!.id != nil)
+            XCTAssertTrue(try Person.find(db, key: 1).id != nil)
+            XCTAssertTrue(try Person.find(db, key: ["rowid": 1]).id != nil)
+            XCTAssertTrue(try Person.fetchAll(db).first!.id != nil)
+            XCTAssertTrue(try Person.fetchAll(db, keys: [1]).first!.id != nil)
+            XCTAssertTrue(try Person.fetchAll(db, keys: [["rowid": 1]]).first!.id != nil)
+            XCTAssertTrue(try Person.all().fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.filter(Column.rowID == 1).fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.filter(sql: "rowid = 1").fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.order(Column.rowID).fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.order(sql: "rowid").fetchOne(db)!.id != nil)
+            XCTAssertTrue(try Person.limit(1).fetchOne(db)!.id != nil)
+        }
+    }
 }

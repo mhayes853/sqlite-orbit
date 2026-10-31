@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseRegionObservationTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -15,9 +15,71 @@ class DatabaseRegionObservationTests: GRDBTestCase {
     }
     #endif
     
+    func testDatabaseRegionObservation_FullDatabase() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write {
+            try $0.execute(sql: "CREATE TABLE t1(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+            try $0.execute(sql: "CREATE TABLE t2(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+        }
+        
+        let notificationExpectation = expectation(description: "notification")
+        notificationExpectation.assertForOverFulfill = true
+        notificationExpectation.expectedFulfillmentCount = 3
+        
+        let observation = DatabaseRegionObservation(tracking: .fullDatabase)
+        
+        let countMutex = Mutex(0)
+        let cancellable = observation.start(
+            in: dbQueue,
+            onError: { XCTFail("Unexpected error: \($0)") },
+            onChange: { db in
+                countMutex.increment()
+                notificationExpectation.fulfill()
+            })
+        
+        try withExtendedLifetime(cancellable) {
+            try dbQueue.write { db in
+                try db.execute(sql: "INSERT INTO t1 (id, name) VALUES (1, 'foo')")
+            }
+            try dbQueue.write { db in
+                try db.execute(sql: "INSERT INTO t2 (id, name) VALUES (1, 'foo')")
+            }
+            try dbQueue.write { db in
+                try db.execute(sql: "INSERT INTO t1 (id, name) VALUES (2, 'foo')")
+                try db.execute(sql: "INSERT INTO t2 (id, name) VALUES (2, 'foo')")
+            }
+            waitForExpectations(timeout: 1, handler: nil)
+            
+            XCTAssertEqual(countMutex.load(), 3)
+        }
+    }
 
-
-
+    func testDatabaseRegionObservation_ImmediateCancellation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write {
+            try $0.execute(sql: "CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)")
+        }
+        
+        let notificationExpectation = expectation(description: "notification")
+        notificationExpectation.isInverted = true
+        
+        let observation = DatabaseRegionObservation(tracking: .fullDatabase)
+        
+        let cancellable = observation.start(
+            in: dbQueue,
+            onError: { XCTFail("Unexpected error: \($0)") },
+            onChange: { db in
+                notificationExpectation.fulfill()
+            })
+        cancellable.cancel()
+        
+        try withExtendedLifetime(cancellable) {
+            try dbQueue.write { db in
+                try db.execute(sql: "INSERT INTO t (id, name) VALUES (1, 'foo')")
+            }
+            waitForExpectations(timeout: 0.1, handler: nil)
+        }
+    }
     
     func testDatabaseRegionObservationVariadic() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -176,7 +238,41 @@ class DatabaseRegionObservationTests: GRDBTestCase {
         }
     }
 
+    func test_DatabaseRegionObservation_is_triggered_by_explicit_change_notification() throws {
+        let dbQueue1 = try makeDatabaseQueue(filename: "test.sqlite")
+        try dbQueue1.write { db in
+            try db.execute(sql: "CREATE TABLE test(a)")
+        }
+        
+        let undetectedExpectation = expectation(description: "undetected")
+        undetectedExpectation.isInverted = true
 
+        let detectedExpectation = expectation(description: "detected")
+        
+        let observation = DatabaseRegionObservation(tracking: Table("test"))
+        let cancellable = observation.start(
+            in: dbQueue1,
+            onError: { error in XCTFail("Unexpected error: \(error)") },
+            onChange: { _ in
+                undetectedExpectation.fulfill()
+                detectedExpectation.fulfill()
+            })
+        
+        try withExtendedLifetime(cancellable) {
+            // Change performed from external connection is not detected...
+            let dbQueue2 = try makeDatabaseQueue(filename: "test.sqlite")
+            try dbQueue2.write { db in
+                try db.execute(sql: "INSERT INTO test (a) VALUES (1)")
+            }
+            wait(for: [undetectedExpectation], timeout: 2)
+            
+            // ... until we perform an explicit change notification
+            try dbQueue1.write { db in
+                try db.notifyChanges(in: Table("test"))
+            }
+            wait(for: [detectedExpectation], timeout: 2)
+        }
+    }
     
     // Regression test for https://github.com/groue/GRDB.swift/issues/514
     // TODO: uncomment and make this test pass.

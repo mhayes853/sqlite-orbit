@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Record/PersistableRecord/MutablePersistableRecordChangesTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -269,7 +269,100 @@ class MutablePersistableRecordChangesTests: GRDBTestCase {
         }
     }
     
-
+    func testUpdateChangesWithRecord() throws {
+        class MyRecord: Record {
+            var id: Int64?
+            var firstName: String?
+            var lastName: String?
+            
+            init(id: Int64?, firstName: String?, lastName: String?) {
+                self.id = id
+                self.firstName = firstName
+                self.lastName = lastName
+                super.init()
+            }
+            
+            override class var databaseTableName: String {
+                "myRecord"
+            }
+            
+            enum Columns: String, ColumnExpression {
+                case id, firstName, lastName
+            }
+            
+            required init(row: Row) throws {
+                id = row[Columns.id]
+                firstName = row[Columns.firstName]
+                lastName = row[Columns.lastName]
+                try super.init(row: row)
+            }
+            
+            override func encode(to container: inout PersistenceContainer) throws {
+                container[Columns.id] = id
+                container[Columns.firstName] = firstName
+                container[Columns.lastName] = lastName
+            }
+            
+            override func didInsert(_ inserted: InsertionSuccess) {
+                super.didInsert(inserted)
+                id = inserted.rowID
+            }
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write { db in
+            try db.create(table: "myRecord") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("firstName", .text)
+                t.column("lastName", .text)
+            }
+            
+            var record = MyRecord(id: nil, firstName: "Arthur", lastName: "Smith")
+            try record.insert(db)
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) { _ in }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Arthur"
+                }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = nil
+                }
+                XCTAssertEqual(record.firstName, nil)
+                XCTAssertEqual(record.lastName, "Smith")
+                XCTAssertTrue(modified)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"myRecord\" SET \"firstName\"=NULL WHERE \"id\"=1")
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Bob"
+                    $0.lastName = "Johnson"
+                }
+                XCTAssertEqual(record.firstName, "Bob")
+                XCTAssertEqual(record.lastName, "Johnson")
+                XCTAssertTrue(modified)
+                XCTAssertTrue([
+                    "UPDATE \"myRecord\" SET \"firstName\"=\'Bob\', \"lastName\"=\'Johnson\' WHERE \"id\"=1",
+                    "UPDATE \"myRecord\" SET \"lastName\"=\'Johnson\', \"firstName\"=\'Bob\' WHERE \"id\"=1"]
+                    .contains(lastSQLQuery))
+            }
+        }
+    }
     
     func testUpdateChangesWithNonRecordClass() throws {
         class MyRecord: Codable, PersistableRecord {

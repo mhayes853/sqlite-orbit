@@ -212,7 +212,7 @@
       guard
         let statement = try primaryKeyStatement(
           db,
-          prefix: "DELETE FROM \(quoted(Self.databaseTableName)) WHERE ",
+          prefix: "DELETE FROM \(quoted(type(of: self).databaseTableName)) WHERE ",
           suffix: ""
         )
       else {
@@ -226,7 +226,7 @@
       guard
         let statement = try primaryKeyStatement(
           db,
-          prefix: "SELECT EXISTS (SELECT 1 FROM \(quoted(Self.databaseTableName)) WHERE ",
+          prefix: "SELECT EXISTS (SELECT 1 FROM \(quoted(type(of: self).databaseTableName)) WHERE ",
           suffix: ")"
         )
       else {
@@ -240,7 +240,7 @@
       -> Statement?
     {
       let container = try PersistenceContainer(self)
-      let columns = try db.primaryKey(Self.databaseTableName).columns
+      let columns = try db.primaryKey(type(of: self).databaseTableName).columns
       let values = columns.map { container[$0]?.databaseValue ?? .null }
       if values.allSatisfy(\.isNull) { return nil }
       let predicate = columns.map { quoted($0) + "=?" }.joined(separator: " AND ")

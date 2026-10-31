@@ -28,18 +28,19 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> (InsertionSuccess, T) {
-      try withInsertCallbacks(db) { container in
+      let recordType = type(of: self)
+      return try withInsertCallbacks(db) { container in
         // Resolve schema information before executing, as GRDB does.
-        let column = try db.primaryKey(Self.databaseTableName).rowIDColumn
+        let column = try db.primaryKey(recordType.databaseTableName).rowIDColumn
         let sql = insertionSQL(
-          table: Self.databaseTableName,
+          table: recordType.databaseTableName,
           container: container,
-          conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForInsert
+          conflict: conflict ?? recordType.persistenceConflictPolicy.conflictResolutionForInsert
         )
         let statement = try returningStatement(
           db,
           sql: sql,
-          table: Self.databaseTableName,
+          table: recordType.databaseTableName,
           selection: selection
         )
         let returned = try fetch(statement)
@@ -84,6 +85,7 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> (PersistenceSuccess, T) {
+      let recordType = type(of: self)
       try willUpdate(db, columns: columns)
       let container = try PersistenceContainer(self)
       var success: (PersistenceSuccess, T)?
@@ -93,15 +95,15 @@
         }
         let sql = try updateSQL(
           db,
-          table: Self.databaseTableName,
+          table: recordType.databaseTableName,
           container: container,
           columns: columns,
-          conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForUpdate
+          conflict: conflict ?? recordType.persistenceConflictPolicy.conflictResolutionForUpdate
         )
         let statement = try returningStatement(
           db,
           sql: sql,
-          table: Self.databaseTableName,
+          table: recordType.databaseTableName,
           selection: selection
         )
         let returned = try fetch(statement)
@@ -126,9 +128,14 @@
       selection: [any SQLSelectable],
       fetch: (Statement) throws -> T
     ) throws -> T {
-      try withSaveCallbacks(db) { record in
+      let recordType = type(of: self)
+      return try withSaveCallbacks(db) { record in
         let container = try PersistenceContainer(record)
-        let key = try primaryKeyValues(db, table: Self.databaseTableName, container: container)
+        let key = try primaryKeyValues(
+          db,
+          table: recordType.databaseTableName,
+          container: container
+        )
         if key.values.allSatisfy({ !$0.isNull }) {
           do {
             return try record.updateWithCallbacks(
@@ -195,11 +202,12 @@
     }
 
     func missingRecord(_ db: Database) throws -> RecordError {
-      .recordNotFound(
-        databaseTableName: Self.databaseTableName,
+      let recordType = type(of: self)
+      return .recordNotFound(
+        databaseTableName: recordType.databaseTableName,
         key: try primaryKeyValues(
           db,
-          table: Self.databaseTableName,
+          table: recordType.databaseTableName,
           container: PersistenceContainer(self)
         )
       )
@@ -466,7 +474,7 @@
         db,
         onConflict: conflict,
         columns: columns,
-        selection: Self.databaseSelection
+        selection: type(of: self).databaseSelection
       ) {
         guard let record = try Self.fetchOne($0) else {
           throw try missingRecord(db)

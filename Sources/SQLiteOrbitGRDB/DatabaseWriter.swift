@@ -103,7 +103,7 @@
         return try translate {
           try orbitDatabase.readBlocking { transaction in
             try transaction.withScopedAccess {
-              SynchronousTransfer(value: try operation.value(Database($0)))
+              SynchronousTransfer(value: try enterAccess($0, isWriter: false, operation.value))
             }
           }
           .value
@@ -126,7 +126,7 @@
         return try translate {
           try orbitDatabase.readWithoutTransactionBlocking { connection in
             try connection.withScopedAccess {
-              SynchronousTransfer(value: try operation.value(Database($0)))
+              SynchronousTransfer(value: try enterAccess($0, isWriter: false, operation.value))
             }
           }
           .value
@@ -233,7 +233,7 @@
         return try translate {
           try orbitDatabase.writeWithoutTransactionBlocking { connection in
             try connection.withScopedAccess {
-              SynchronousTransfer(value: try operation.value(Database($0)))
+              SynchronousTransfer(value: try enterAccess($0, isWriter: true, operation.value))
             }
           }
           .value
@@ -308,6 +308,9 @@
     private(set) var native: SQLiteConfiguration
     public var maximumReaderCount = 5
 
+    /// The clock that provides `Database.transactionDate`.
+    public var transactionClock: any TransactionClock = .default
+
     /// Whether statement arguments appear in error descriptions and trace events.
     public var publicStatementArguments = false
 
@@ -360,6 +363,10 @@
 
     /// The native configuration, with the GRDB-only options applied to each connection.
     var resolvedNative: SQLiteConfiguration {
+      resolvedNative(registry: nil)
+    }
+
+    func resolvedNative(registry: ConnectionRegistry?) -> SQLiteConfiguration {
       var native = native
       if journalMode == .wal {
         native.journalMode = .wal
@@ -371,6 +378,8 @@
         SQLiteSetup { connection in
           try connection.withScopedAccess { access in
             let db = Database(access)
+            registry?
+              .register(try access.sqliteConnection, library: try access.configuration.library)
             db.connectionState.configuration = configuration
             db.connectionState.publicStatementArguments = publicStatementArguments
             if readonly {
@@ -436,7 +445,10 @@
       // Runs before every other setup, so a reused connection handle starts without state.
       native.setups.append(
         SQLiteSetup { connection in
-          try connection.withScopedAccess { DatabaseConnectionState.reset(try $0.sqliteConnection) }
+          try connection.withScopedAccess {
+            DatabaseConnectionState.reset(try $0.sqliteConnection)
+            Database($0).installDefaultFunctionsAndCollations()
+          }
         }
       )
     }
@@ -469,8 +481,9 @@
     }
   }
 
-  public final class DatabaseQueue: DatabaseWriter {
+  public final class DatabaseQueue: DatabaseWriter, ConnectionRegistryOwner {
     public let orbitDatabase: any OrbitObservableDatabaseWriter
+    let connectionRegistry = ConnectionRegistry()
     public let path: String
     public let configuration: Configuration
 
@@ -482,8 +495,12 @@
       self.path = path
       self.configuration = configuration
       try configuration.checkReadonlyPath(path)
+      let registry = connectionRegistry
       orbitDatabase = try translate {
-        try SQLiteQueue(path: OrbitDatabasePath(path), configuration: configuration.resolvedNative)
+        try SQLiteQueue(
+          path: OrbitDatabasePath(path),
+          configuration: configuration.resolvedNative(registry: registry)
+        )
       }
     }
 
@@ -508,8 +525,9 @@
     }
   }
 
-  public final class DatabasePool: DatabaseWriter {
+  public final class DatabasePool: DatabaseWriter, ConnectionRegistryOwner {
     public let orbitDatabase: any OrbitObservableDatabaseWriter
+    let connectionRegistry = ConnectionRegistry()
     public let path: String
     public let configuration: Configuration
 
@@ -517,29 +535,36 @@
       self.path = path
       self.configuration = configuration
       try configuration.checkReadonlyPath(path)
+      let registry = connectionRegistry
       orbitDatabase = try translate {
         try SQLitePool(
           path: OrbitDatabasePath(path),
-          configuration: configuration.resolvedNative,
+          configuration: configuration.resolvedNative(registry: registry),
           readerCount: configuration.maximumReaderCount
         )
       }
     }
   }
 
-  public final class AnyDatabaseReader: DatabaseReader {
+  public final class AnyDatabaseReader: DatabaseReader, ConnectionRegistryOwner {
     public let orbitDatabase: any OrbitObservableDatabaseWriter
+    let connectionRegistry: ConnectionRegistry
 
     public init(_ reader: any DatabaseReader) {
       orbitDatabase = reader.orbitDatabase
+      connectionRegistry =
+        (reader as? any ConnectionRegistryOwner)?.connectionRegistry ?? ConnectionRegistry()
     }
   }
 
-  public final class AnyDatabaseWriter: DatabaseWriter {
+  public final class AnyDatabaseWriter: DatabaseWriter, ConnectionRegistryOwner {
     public let orbitDatabase: any OrbitObservableDatabaseWriter
+    let connectionRegistry: ConnectionRegistry
 
     public init(_ writer: any DatabaseWriter) {
       orbitDatabase = writer.orbitDatabase
+      connectionRegistry =
+        (writer as? any ConnectionRegistryOwner)?.connectionRegistry ?? ConnectionRegistry()
     }
   }
 

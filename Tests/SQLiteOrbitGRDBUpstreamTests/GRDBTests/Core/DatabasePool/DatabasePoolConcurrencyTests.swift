@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabasePool/DatabasePoolConcurrencyTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import Dispatch
 import Foundation
@@ -606,7 +606,66 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
         }
     }
     
-
+    func testReadBlockIsolationStartingWithWriteTransaction() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        
+        // Block 1                      Block 2
+        // BEGIN IMMEDIATE TRANSACTION
+        // INSERT INTO items (id) VALUES (NULL)
+        // >
+        let s1 = DispatchSemaphore(value: 0)
+        //                              dbPool.read {
+        //                              SELECT COUNT(*) FROM items -> 0
+        //                              <
+        let s2 = DispatchSemaphore(value: 0)
+        // INSERT INTO items (id) VALUES (NULL)
+        // >
+        let s3 = DispatchSemaphore(value: 0)
+        //                              SELECT COUNT(*) FROM items -> 0
+        //                              <
+        let s4 = DispatchSemaphore(value: 0)
+        // COMMIT
+        // >
+        let s5 = DispatchSemaphore(value: 0)
+        //                              SELECT COUNT(*) FROM items -> 0
+        //                              }
+        
+        let block1 = { () in
+            do {
+                try dbPool.writeInTransaction(.immediate) { db in
+                    try db.execute(sql: "INSERT INTO items (id) VALUES (NULL)")
+                    s1.signal()
+                    _ = s2.wait(timeout: .distantFuture)
+                    try db.execute(sql: "INSERT INTO items (id) VALUES (NULL)")
+                    s3.signal()
+                    _ = s4.wait(timeout: .distantFuture)
+                    return .commit
+                }
+                s5.signal()
+            } catch {
+                XCTFail("error: \(error)")
+            }
+        }
+        let block2 = { () in
+            try! dbPool.read { db in
+                _ = s1.wait(timeout: .distantFuture)
+                XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM items")!, 0)
+                s2.signal()
+                _ = s3.wait(timeout: .distantFuture)
+                XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM items")!, 0)
+                s4.signal()
+                _ = s5.wait(timeout: .distantFuture)
+                XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM items")!, 0)
+            }
+        }
+        let blocks = [block1, block2]
+        DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+            blocks[index]()
+        }
+    }
     
     func testUnsafeReadMethodIsolationOfStatement() throws {
         let dbPool = try makeDatabasePool()

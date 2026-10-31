@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseAbortedTransactionTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -9,11 +9,179 @@ class DatabaseAbortedTransactionTests : GRDBTestCase {
     
 
     
-
+    func testWriteTransactionAbortedByInterrupt() throws {
+        func setup<T: DatabaseWriter>(_ dbWriter: T) throws -> T {
+            try dbWriter.write { db in
+                try db.execute(sql: "CREATE TABLE t(a);")
+            }
+            return dbWriter
+        }
+        func test(_ dbWriter: some DatabaseWriter) throws {
+            let semaphore1 = DispatchSemaphore(value: 0)
+            let semaphore2 = DispatchSemaphore(value: 0)
+            
+            let block1 = {
+                do {
+                    try dbWriter.write { db in
+                        db.add(function: DatabaseFunction("wait", argumentCount: 0, pure: true) { _ in
+                            semaphore1.signal()
+                            semaphore2.wait()
+                            return nil
+                        })
+                        try db.execute(sql: "INSERT INTO t SELECT wait()")
+                    }
+                    XCTFail("Expected error")
+                } catch let error as DatabaseError {
+                    // Transactions throw the first uncatched error: SQLITE_INTERRUPT
+                    XCTAssertEqual(error.resultCode, .SQLITE_INTERRUPT)
+                    XCTAssertEqual(error.message, "interrupted")
+                    XCTAssertEqual(error.sql, "INSERT INTO t SELECT wait()")
+                } catch {
+                    XCTFail("Unexpected error: \(error)")
+                }
+            }
+            let block2 = {
+                semaphore1.wait()
+                dbWriter.interrupt()
+                semaphore2.signal()
+            }
+            let blocks = [block1, block2]
+            DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+                blocks[index]()
+            }
+        }
+        
+        try test(setup(DatabaseQueue()))
+        try test(setup(makeDatabaseQueue()))
+        try test(setup(makeDatabasePool()))
+    }
     
-
+    func testWriteTransactionAbortedByInterruptPreventsFurtherDatabaseAccess() throws {
+        func setup<T: DatabaseWriter>(_ dbWriter: T) throws -> T {
+            try dbWriter.write { db in
+                try db.execute(sql: "CREATE TABLE t(a);")
+            }
+            return dbWriter
+        }
+        func test(_ dbWriter: some DatabaseWriter) throws {
+            let semaphore1 = DispatchSemaphore(value: 0)
+            let semaphore2 = DispatchSemaphore(value: 0)
+            
+            let block1 = {
+                do {
+                    try dbWriter.write { db in
+                        do {
+                            db.add(function: DatabaseFunction("wait", argumentCount: 0, pure: true) { _ in
+                                semaphore1.signal()
+                                semaphore2.wait()
+                                return nil
+                            })
+                            try db.execute(sql: "INSERT INTO t SELECT wait()")
+                            XCTFail("Expected error")
+                        } catch let error as DatabaseError {
+                            XCTAssertEqual(error.resultCode, .SQLITE_INTERRUPT)
+                        } catch {
+                            XCTFail("Unexpected error: \(error)")
+                        }
+                        
+                        XCTAssertFalse(db.isInsideTransaction)
+                        
+                        do {
+                            _ = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM t")
+                            XCTFail("Expected error")
+                        } catch let error as DatabaseError {
+                            XCTAssertEqual(error.resultCode, .SQLITE_ABORT)
+                            XCTAssertEqual(error.message, "Transaction was aborted")
+                            XCTAssertEqual(error.sql, "SELECT COUNT(*) FROM t")
+                        } catch {
+                            XCTFail("Unexpected error: \(error)")
+                        }
+                        
+                        do {
+                            try db.execute(sql: "INSERT INTO t (a) VALUES (0)")
+                            XCTFail("Expected error")
+                        } catch let error as DatabaseError {
+                            XCTAssertEqual(error.resultCode, .SQLITE_ABORT)
+                            XCTAssertEqual(error.message, "Transaction was aborted")
+                            XCTAssertEqual(error.sql, "INSERT INTO t (a) VALUES (0)")
+                        } catch {
+                            XCTFail("Unexpected error: \(error)")
+                        }
+                    }
+                    XCTFail("Expected error")
+                } catch let error as DatabaseError {
+                    // SQLITE_INTERRUPT has been caught. So we get SQLITE_ABORT
+                    // from the last commit.
+                    XCTAssertEqual(error.resultCode, .SQLITE_ABORT)
+                    XCTAssertEqual(error.message, "Transaction was aborted")
+                } catch {
+                    XCTFail("Unexpected error: \(error)")
+                }
+            }
+            let block2 = {
+                semaphore1.wait()
+                dbWriter.interrupt()
+                semaphore2.signal()
+            }
+            let blocks = [block1, block2]
+            DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+                blocks[index]()
+            }
+        }
+        
+        try test(setup(DatabaseQueue()))
+        try test(setup(makeDatabaseQueue()))
+        try test(setup(makeDatabasePool()))
+    }
     
-
+    func testWriteTransactionAbortedByInterruptDoesNotPreventRollback() throws {
+        func setup<T: DatabaseWriter>(_ dbWriter: T) throws -> T {
+            try dbWriter.write { db in
+                try db.execute(sql: "CREATE TABLE t(a);")
+            }
+            return dbWriter
+        }
+        func test(_ dbWriter: some DatabaseWriter) throws {
+            let semaphore1 = DispatchSemaphore(value: 0)
+            let semaphore2 = DispatchSemaphore(value: 0)
+            
+            let block1 = {
+                try! dbWriter.writeWithoutTransaction { db in
+                    db.add(function: DatabaseFunction("wait", argumentCount: 0, pure: true) { _ in
+                        semaphore1.signal()
+                        semaphore2.wait()
+                        return nil
+                    })
+                    try db.inTransaction {
+                        do {
+                            try db.execute(sql: "INSERT INTO t SELECT wait()")
+                            XCTFail("Expected error")
+                        } catch let error as DatabaseError {
+                            XCTAssertEqual(error.resultCode, .SQLITE_INTERRUPT)
+                        } catch {
+                            XCTFail("Unexpected error: \(error)")
+                        }
+                        
+                        XCTAssertFalse(db.isInsideTransaction)
+                        return .rollback
+                    }
+                }
+            }
+            let block2 = {
+                semaphore1.wait()
+                dbWriter.interrupt()
+                semaphore2.signal()
+            }
+            let blocks = [block1, block2]
+            DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+                blocks[index]()
+            }
+        }
+        
+        try test(setup(DatabaseQueue()))
+        try test(setup(makeDatabaseQueue()))
+        try test(setup(makeDatabasePool()))
+    }
     
     func testTransactionAbortedByConflictPreventsFurtherDatabaseAccess() throws {
         func setup<T: DatabaseWriter>(_ dbWriter: T) throws -> T {

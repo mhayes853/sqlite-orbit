@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseWriterTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -7,9 +7,41 @@ import SQLiteOrbitGRDB
 
 class DatabaseWriterTests : GRDBTestCase {
     
-
+    func testDatabaseQueueUnsafeReentrantWrite() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.unsafeReentrantWrite { db1 in
+            try db1.create(table: "table1") { t in
+                t.primaryKey("id", .integer)
+            }
+            try dbQueue.unsafeReentrantWrite { db2 in
+                try db2.execute(sql: "INSERT INTO table1 (id) VALUES (NULL)")
+                
+                try dbQueue.unsafeReentrantWrite { db3 in
+                    try XCTAssertEqual(Int.fetchOne(db3, sql: "SELECT * FROM table1"), 1)
+                    XCTAssertTrue(db1 === db2)
+                    XCTAssertTrue(db2 === db3)
+                }
+            }
+        }
+    }
     
-
+    func testDatabasePoolUnsafeReentrantWrite() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.unsafeReentrantWrite { db1 in
+            try db1.create(table: "table1") { t in
+                t.primaryKey("id", .integer)
+            }
+            try dbPool.unsafeReentrantWrite { db2 in
+                try db2.execute(sql: "INSERT INTO table1 (id) VALUES (NULL)")
+                
+                try dbPool.unsafeReentrantWrite { db3 in
+                    try XCTAssertEqual(Int.fetchOne(db3, sql: "SELECT * FROM table1"), 1)
+                    XCTAssertTrue(db1 === db2)
+                    XCTAssertTrue(db2 === db3)
+                }
+            }
+        }
+    }
     
     func testAsyncWriteWithoutTransactionSuccess() throws {
         func test(_ dbWriter: some DatabaseWriter) throws {

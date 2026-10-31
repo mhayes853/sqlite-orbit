@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Compilation/CompilationProtocolTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import SQLiteOrbitGRDB
 
 // GRDB 1.2 has shipped with a change in the DatabaseReader public protocol.
@@ -132,6 +132,18 @@ private class UserTableRecord2 : TableRecord {
 
 // MARK: - VirtualTableModule
 
+private struct UserVirtualTableModule1 : VirtualTableModule {
+    struct CustomTableDefinition { }
+    let moduleName = "UserVirtualTableModule1"
+    func makeTableDefinition(configuration: VirtualTableConfiguration) -> CustomTableDefinition { preconditionFailure() }
+    func moduleArguments(for definition: CustomTableDefinition, in db: Database) throws -> [String] { preconditionFailure() }
+    func database(_ db: Database, didCreate tableName: String, using definition: CustomTableDefinition) throws { }
+}
 
-
-
+private class UserVirtualTableModule2 : VirtualTableModule {
+    struct CustomTableDefinition { }
+    let moduleName = "UserVirtualTableModule2"
+    func makeTableDefinition(configuration: VirtualTableConfiguration) -> CustomTableDefinition { preconditionFailure() }
+    func moduleArguments(for definition: CustomTableDefinition, in db: Database) throws -> [String] { preconditionFailure() }
+    func database(_ db: Database, didCreate tableName: String, using definition: CustomTableDefinition) throws { }
+}

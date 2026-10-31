@@ -3,6 +3,13 @@
   public struct PreparedRequest {
     public var statement: Statement
     public var adapter: (any RowAdapter)?
+    /// Fetches associated rows (`including(all:)`) into the rows fetched by the statement.
+    var supplementaryFetch: ((Database, [Row]) throws -> Void)?
+
+    public init(statement: Statement, adapter: (any RowAdapter)? = nil) {
+      self.statement = statement
+      self.adapter = adapter
+    }
   }
 
   extension FetchRequest {

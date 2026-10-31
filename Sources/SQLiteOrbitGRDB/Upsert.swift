@@ -22,9 +22,10 @@
       selection: [any SQLSelectable],
       decode: (Row) throws -> T
     ) throws -> T {
-      try withSaveCallbacks(db) { record in
+      let recordType = type(of: self)
+      return try withSaveCallbacks(db) { record in
         let inserted = try record.withInsertCallbacks(db) { container in
-          let table = Self.databaseTableName
+          let table = recordType.databaseTableName
           let key = try db.primaryKey(table)
           let hasRowID = try db.tableHasRowID(table)
           guard !container.isEmpty else {
@@ -130,7 +131,7 @@
         onConflict: target,
         updating: strategy,
         assignments: assignments,
-        selection: Self.databaseSelection,
+        selection: type(of: self).databaseSelection,
         decode: Self.init(row:)
       )
     }
@@ -177,7 +178,7 @@
         onConflict: target,
         updating: strategy,
         assignments: assignments,
-        selection: Self.databaseSelection,
+        selection: type(of: self).databaseSelection,
         decode: Self.init(row:)
       )
     }

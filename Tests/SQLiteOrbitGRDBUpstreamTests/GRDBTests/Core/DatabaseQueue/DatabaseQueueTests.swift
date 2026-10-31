@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseQueue/DatabaseQueueTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import Dispatch
 import SQLiteOrbitGRDB
@@ -54,9 +54,62 @@ class DatabaseQueueTests: GRDBTestCase {
         }
     }
     
-
+    func testAddRemoveFunction() throws {
+        // Adding a function and then removing it should succeed
+        let dbQueue = try makeDatabaseQueue()
+        let fn = DatabaseFunction("succ", argumentCount: 1) { dbValues in
+            guard let int = Int.fromDatabaseValue(dbValues[0]) else {
+                return nil
+            }
+            return int + 1
+        }
+        try dbQueue.inDatabase { db in
+            db.add(function: fn)
+            XCTAssertEqual(try Int.fetchOne(db, sql: "SELECT succ(1)"), 2) // 2
+            db.remove(function: fn)
+        }
+        do {
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "SELECT succ(1)")
+                XCTFail("Expected Error")
+            }
+            XCTFail("Expected Error")
+        }
+        catch let error as DatabaseError {
+            // expected error
+            XCTAssertEqual(error.resultCode, .SQLITE_ERROR)
+            XCTAssertEqual(error.message!.lowercased(), "no such function: succ") // lowercaseString: accept multiple SQLite version
+            XCTAssertEqual(error.sql!, "SELECT succ(1)")
+            XCTAssertEqual(error.description.lowercased(), "sqlite error 1: no such function: succ - while executing `select succ(1)`")
+        }
+    }
     
-
+    func testAddRemoveCollation() throws {
+        // Adding a collation and then removing it should succeed
+        let dbQueue = try makeDatabaseQueue()
+        let collation = DatabaseCollation("test_collation_foo") { (string1, string2) in
+            return (string1 as NSString).localizedStandardCompare(string2)
+        }
+        try dbQueue.inDatabase { db in
+            db.add(collation: collation)
+            try db.execute(sql: "CREATE TABLE files (name TEXT COLLATE TEST_COLLATION_FOO)")
+            db.remove(collation: collation)
+        }
+        do {
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "CREATE TABLE files_fail (name TEXT COLLATE TEST_COLLATION_FOO)")
+                XCTFail("Expected Error")
+            }
+            XCTFail("Expected Error")
+        }
+        catch let error as DatabaseError {
+            // expected error
+            XCTAssertEqual(error.resultCode, .SQLITE_ERROR)
+            XCTAssertEqual(error.message!.lowercased(), "no such collation sequence: test_collation_foo") // lowercaseString: accept multiple SQLite version
+            XCTAssertEqual(error.sql!, "CREATE TABLE files_fail (name TEXT COLLATE TEST_COLLATION_FOO)")
+            XCTAssertEqual(error.description.lowercased(), "sqlite error 1: no such collation sequence: test_collation_foo - while executing `create table files_fail (name text collate test_collation_foo)`")
+        }
+    }
     
 
     

@@ -6,7 +6,8 @@
 
   extension DatabaseValueConvertible {
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
-      try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchCursor(db, sql: sql, arguments: arguments)
     }
 
     @_disfavoredOverload
@@ -97,7 +98,8 @@
     }
 
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
-      try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchCursor(db, sql: sql, arguments: arguments)
     }
   }
 
@@ -133,7 +135,8 @@
 
   extension Row {
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> RowCursor {
-      try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
+      let (sql, arguments) = try literal.build(db)
+      return try fetchCursor(db, sql: sql, arguments: arguments)
     }
 
     public static func fetchSet(
@@ -173,8 +176,7 @@
 
   extension FetchRequest {
     public func isEmpty(_ db: Database) throws -> Bool {
-      let sql = try sql(in: db)
-      return try Bool.fetchOne(db, sql: "SELECT NOT EXISTS(\(sql.sql))", arguments: sql.arguments)!
+      try !(SQLRequest<Bool>(literal: "SELECT EXISTS (\(sqlSubquery))").fetchOne(db) ?? false)
     }
   }
 
@@ -410,12 +412,12 @@
 
     public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Self]
     where R.RowDecoder == Self {
-      try Array(Row.fetchCursor(db, request).map { try Self(row: $0.copy()) })
+      try Row.fetchAllRows(db, request).map(Self.init(row:))
     }
 
     public static func fetchOne<R: FetchRequest>(_ db: Database, _ request: R) throws -> Self?
     where R.RowDecoder == Self {
-      try Row.fetchOne(db, request).map(Self.init(row:))
+      try Row.fetchOneRow(db, request).map(Self.init(row:))
     }
   }
 
@@ -431,18 +433,23 @@
       -> RowCursor where R.RowDecoder == Row
     {
       let prepared = try request.makePreparedRequest(db, forSingleResult: false)
+      guard prepared.supplementaryFetch == nil else {
+        throw DatabaseError(
+          resultCode: .SQLITE_MISUSE,
+          message: "Not implemented: fetchCursor with supplementary fetch"
+        )
+      }
       return try fetchCursor(prepared.statement, adapter: prepared.adapter)
     }
 
     public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Row]
     where R.RowDecoder == Row {
-      try Array(fetchCursor(db, request).map { $0.copy() })
+      try fetchAllRows(db, request)
     }
 
     public static func fetchOne<R: FetchRequest>(_ db: Database, _ request: R) throws -> Row?
     where R.RowDecoder == Row {
-      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
-      return try fetchOne(prepared.statement, adapter: prepared.adapter)
+      try fetchOneRow(db, request)
     }
 
     public static func fetchSet<R: FetchRequest>(_ db: Database, _ request: R) throws -> Set<Row>

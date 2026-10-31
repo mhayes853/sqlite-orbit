@@ -1,5 +1,5 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/Core/DatabaseTests.swift by Tests/GRDBReference/grdb_upstream.py.
-// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
 import XCTest
 import SQLiteOrbitGRDB
 
@@ -596,5 +596,10 @@ class DatabaseTests : GRDBTestCase {
         }
     }
     
-
+    func testMaximumStatementArgumentCount() throws {
+        let dbQueue = try makeDatabaseQueue()
+        let count = try dbQueue.read { $0.maximumStatementArgumentCount }
+        // 999 should be safe: https://www.sqlite.org/limits.html
+        XCTAssertGreaterThanOrEqual(count, 999)
+    }
 }
