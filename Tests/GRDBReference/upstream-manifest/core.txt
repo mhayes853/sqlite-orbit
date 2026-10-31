@@ -1,5 +1,5 @@
 # Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the
-# format. QueryInterface, FTS, JSON, and Record/PersistableRecord and Record/TableRecord
+# format. QueryInterface, JSON, and Record/PersistableRecord and Record/TableRecord
 # live in query.txt; everything else in core.txt.
 
 Compilation/CompilationProtocolTests.swift
@@ -264,6 +264,12 @@ Core/TransactionObserver/TruncateOptimizationTests.swift
   - testObservedDropTriggerWithPreparedStatement: missing DatabaseQueue.add
   - testObservedDropTemporaryTrigger: missing DatabaseQueue.add
   - testObservedDropTemporaryTriggerWithPreparedStatement: missing DatabaseQueue.add
+FTS/FTS5CustomTokenizerTests.swift
+FTS/FTS5PatternTests.swift
+FTS/FTS5RecordTests.swift
+FTS/FTS5TableBuilderTests.swift
+FTS/FTS5TokenizerTests.swift
+FTS/FTS5WrapperTokenizerTests.swift
 GRDBCombineTests/DatabaseReaderReadPublisherTests.swift
 GRDBCombineTests/DatabaseRegionObservationPublisherTests.swift
 GRDBCombineTests/DatabaseWriterWritePublisherTests.swift
@@ -463,6 +469,13 @@ x Core/TransactionObserver/TransactionObserverSavepointsTests.swift: missing typ
 x Core/TransactionObserver/TransactionObserverTests.swift: missing type DatabaseEvent
 x Dump/DatabaseDumpTests.swift: no test compiles: missing Database.dumpSQL, missing Database.dumpSQL, missing Database.dumpSQL
 x Dump/DatabaseReaderDumpTests.swift: no test compiles: missing DatabaseQueue.dumpSQL, missing DatabaseQueue.dumpRequest, missing DatabaseQueue.dumpTables
+x FTS/FTS3PatternTests.swift: missing FTS3, missing parameter using:
+x FTS/FTS3RecordTests.swift: missing FTS3, missing parameter using:
+x FTS/FTS3TableBuilderTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
+x FTS/FTS3TokenizerTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
+x FTS/FTS4RecordTests.swift: missing FTS4, missing parameter using:
+x FTS/FTS4TableBuilderTests.swift: no test compiles: missing FTS4, missing FTS4, missing FTS4
+x FTS/Issue1838Tests.swift: no test compiles: missing DatabaseQueue.interrupt, missing DatabaseQueue.interrupt
 x Private/CaseInsensitiveIdentifierTests.swift: no test compiles: missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier
 x Private/DataMemoryTests.swift: no test compiles: missing Row.sqliteStatement, missing Row.sqliteStatement
 x Private/DatabasePoolSchemaCacheTests.swift: no test compiles: missing Database.schemaCache, missing Database.schemaCache, missing Database.schemaCache

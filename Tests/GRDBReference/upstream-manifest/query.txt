@@ -1,13 +1,7 @@
 # Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the
-# format. QueryInterface, FTS, JSON, and Record/PersistableRecord and Record/TableRecord
+# format. QueryInterface, JSON, and Record/PersistableRecord and Record/TableRecord
 # live in query.txt; everything else in core.txt.
 
-FTS/FTS5CustomTokenizerTests.swift
-FTS/FTS5PatternTests.swift
-FTS/FTS5RecordTests.swift
-FTS/FTS5TableBuilderTests.swift
-FTS/FTS5TokenizerTests.swift
-FTS/FTS5WrapperTokenizerTests.swift
 JSON/JSONColumnTests.swift
 JSON/JSONExpressionsTests.swift
   ~ test_JSON_index_and_generated_columns: runtime: XCTAssertEqual failed: ("Optional("CREATE INDEX \"player_on_address\" ON \"player\" (JSON_EXTRACT(\"address\",
@@ -207,13 +201,6 @@ Record/TableRecord/TableRecordUpdateTests.swift
   - testRequestUpdateAndFetchAll_DatabaseComponents_view: missing Configuration.schemaSource
   - testRequestUpdateAndFetchSet_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
 
-x FTS/FTS3PatternTests.swift: missing FTS3, missing parameter using:
-x FTS/FTS3RecordTests.swift: missing FTS3, missing parameter using:
-x FTS/FTS3TableBuilderTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
-x FTS/FTS3TokenizerTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
-x FTS/FTS4RecordTests.swift: missing FTS4, missing parameter using:
-x FTS/FTS4TableBuilderTests.swift: no test compiles: missing FTS4, missing FTS4, missing FTS4
-x FTS/Issue1838Tests.swift: no test compiles: missing DatabaseQueue.interrupt, missing DatabaseQueue.interrupt
 x QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift: no test compiles: cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[B]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[D]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[Record.CInfo]'
 x QueryInterface/Association/AssociationPrefetchingRelationTests.swift: no test compiles: missing SQLAssociationKey, missing type SQLAssociationCardinality, missing type SQLAssociationCardinality
 x QueryInterface/Association/AssociationPrefetchingRowTests.swift: no test compiles: missing Row.prefetchedRows, missing Row.prefetchedRows, missing Row.prefetchedRows

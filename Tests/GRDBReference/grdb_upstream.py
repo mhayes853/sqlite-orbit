@@ -46,11 +46,11 @@ REPO = os.path.dirname(os.path.dirname(HERE))
 CHECKOUT = os.path.join(HERE, ".build", "checkouts", "GRDB.swift")
 UPSTREAM_TESTS = os.path.join(CHECKOUT, "Tests", "GRDBTests")
 MANIFEST_DIR = os.path.join(HERE, "upstream-manifest")
-QUERY_AREAS = {"QueryInterface", "FTS", "JSON"}
+QUERY_AREAS = {"QueryInterface", "JSON"}
 QUERY_PREFIXES = ("Record/PersistableRecord/", "Record/TableRecord/")
 MANIFEST_HEADER = (
     "# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the\n"
-    "# format. QueryInterface, FTS, JSON, and Record/PersistableRecord and Record/TableRecord\n"
+    "# format. QueryInterface, JSON, and Record/PersistableRecord and Record/TableRecord\n"
     "# live in query.txt; everything else in core.txt.\n"
 )
 TARGET = os.path.join(REPO, "Tests", "SQLiteOrbitGRDBUpstreamTests")
