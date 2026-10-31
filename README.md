@@ -79,11 +79,12 @@ when separate runtimes are needed.
 
 ## GRDB compatibility
 
-The experimental `SQLiteOrbitGRDB` product provides common GRDB application APIs through
-`import SQLiteOrbitGRDB`, including records, SQL requests, migrations, and value observation.
-Native queues, pools, and `OrbitIPCDatabase` conform directly to its reader/writer protocols.
-See [the compatibility surface and verification guide](Documentation/GRDBCompatibility.md) for
-examples and current behavior differences.
+The experimental `SQLiteOrbitGRDB` product provides GRDB 7's application API through
+`import SQLiteOrbitGRDB`: records, the query interface and associations, SQL requests, full-text
+search, migrations, dumps, and value observation. Native queues, pools, and `OrbitIPCDatabase`
+conform directly to its reader/writer protocols. GRDB's own test suite is ported verbatim and runs
+against the overlay; see [the compatibility guide](Documentation/GRDBCompatibility.md) for measured
+coverage, examples, and current behavior differences.
 
 ## Raw SQL
 

@@ -73,6 +73,17 @@ writer to provide an `OrbitDatabaseReader.databaseMetadata` snapshot. Custom rea
 Native drivers also expose their native `configuration`. Use `any DatabaseReader` or an
 `AnyDatabaseReader` wrapper when requesting GRDB-shaped configuration properties.
 
+`write` runs the overlay's own transaction on the writer connection (`writeWithoutTransaction` plus
+`inTransaction`), as GRDB does, so its BEGIN/COMMIT statements are traced and
+`afterNextTransaction` callbacks run. Only transactions started through the overlay are visible
+this way: the native core refuses raw `BEGIN`/`COMMIT` SQL outside its managed transactions.
+
+`interrupt()` reaches every connection a queue or pool has opened. `close()` makes later accesses
+fail with `SQLITE_MISUSE` and releases the native driver. `unsafeReentrantRead`/`Write` reuse the
+current access on the same thread. `DatabasePool.makeSnapshot()` opens a dedicated read connection
+outside the pool and keeps its read transaction open on a thread the snapshot owns, so the pool keeps
+writing under WAL while the snapshot sees the state at its creation.
+
 `asyncWrite(_:completion:)` commits or rolls back before calling completion, while still holding
 the writer connection. Completion may access that connection, and the result need not be Sendable.
 `asyncWriteWithoutTransaction(_:)` leaves transaction and SQL error handling to its closure.
@@ -98,24 +109,28 @@ at most one result, even if native access cleanup fails after the callback has r
 
 | Area | Implemented APIs |
 | --- | --- |
-| Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`; callback `asyncRead`, `asyncUnsafeRead`, `asyncWrite`, and `asyncWriteWithoutTransaction`; queue `inDatabase`; explicit transactions and savepoints. |
-| Configuration | Foreign keys, busy timeout/callback, maximum reader count, per-connection `prepareDatabase`, and selection of a native SQLiteLibrary. |
-| SQL | Multi-statement `execute(sql:arguments:)`, `execute(literal:)`, interpolation (including identifiers and SQL fragments), SQL composition/building, positional/named/numbered arguments, checked/unchecked statement arguments, and prepared/cached statements. |
-| Values and rows | DatabaseValue and result codes, scalar conversions, Date/Data/UUID/URL conversions, owned rows, typed/raw column access, case-insensitive lookup, null inspection, row coalescing, lazy cursors, set fetching, cursor transformations/reductions, and cursor-to-collection construction. |
-| Row adapters | Custom RowAdapter conformances and layout protocols, ColumnMapping, RenameColumnAdapter, EmptyRowAdapter, RangeRowAdapter, SuffixRowAdapter, splittingRowAdapters, ScopeAdapter, addingScopes, scopes/scopesTree, unscoped/unadapted, and scoped record decoding. |
-| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, PersistenceContainer, generated IDs, save/insert/update/delete/exists, change dictionaries, change-only updates and returning updates, conflict policies, UPSERT, INSERT/UPDATE/SAVE RETURNING, and persistence callbacks. |
-| Codable | Per-column date/data/UUID encoding and date/data decoding strategies, column name strategies, scalar Codable enums, JSON fields, JSON encoder/decoder customization, and nested records/keyed containers from row scopes. |
-| Queries | SQLRequest, Table, Column/ColumnExpression, SQLSpecificExpressible, bound value expressions, predicates, key/ID filtering, array/SQL/literal selections and predicates, annotations, deferred primary-key selection/ordering/grouping, connection-dependent derivation, ordering, limits/offsets, distinct/group/having, typed ordering reversal, range predicates, SQL function expressions including coalesce, LIKE/ESCAPE, bitwise/unary/null-safe identity operators, compound column assignments, counts, bulk update/delete, and bulk UPDATE/DELETE RETURNING. |
-| Schema | Table/column/index/view creation, generated columns, partial/expression indexes, constraints/defaults/foreign keys, common ALTER operations, schema-qualified table/view/trigger existence, columns (including generated columns), primary keys, indexes, foreign keys, unique-key checks, foreign-key violations/checks, and schema versions. |
-| Migrations | Registration, sync/async migration, callback `asyncMigrate`, migration targets, applied/completed history, superseded checks, deferred foreign-key checks, and development schema reset. History uses `grdb_migrations`. |
-| Observation | Dynamic tracking, inferred/explicit constant regions, callbacks, asynchronous sequences, immediate/main-actor/dispatch-queue scheduling, map/removeDuplicates, event hooks, cancellation, and conditional Combine publishers. |
-| Connection setup | Custom scalar functions, aggregates, named built-in collations, and custom collations, including installation on every pool connection through prepareDatabase. |
-| Maintenance | WAL checkpoints with passive/full/restart/truncate modes, schema selection, and frame counts. |
+| Access | Sync/async `read`, `write`, `unsafeRead`, `writeWithoutTransaction`, reentrant reads/writes, barrier writes; callback `asyncRead`, `asyncUnsafeRead`, `asyncWrite`, `asyncWriteWithoutTransaction`, `asyncBarrierWriteWithoutTransaction`; queue `inDatabase`/`inTransaction`; explicit transactions and GRDB-style savepoints; `interrupt`, `close`, memory release; pool snapshots. |
+| Configuration | Foreign keys, busy mode/callback, read-only databases, WAL journal mode, maximum reader count, `prepareDatabase`, `publicStatementArguments`, `transactionClock`, `schemaSource`, labels and the stored GRDB options, selection of a native SQLiteLibrary. |
+| SQL and statements | Multi-statement execution, `allStatements`, literals and interpolation (identifiers, `columnsOf:`, `tableOf:`, subqueries), SQL composition, positional/named/numbered arguments, checked/unchecked arguments, prepared/cached statements, statement metadata, tracing with GRDB's expanded SQL, GRDB's error descriptions and result codes. |
+| Values and rows | DatabaseValue, scalar and Foundation conversions (including NSNumber, NSString, NSData, NSDate, NSNull, NSURL, NSUUID, Decimal, NSDecimalNumber, CGFloat, DatabaseDateComponents, every GRDB date format), Codable values, owned rows, column-keyed access, prefetched rows, row adapters and scopes, GRDB's concrete cursor types and cursor algebra. |
+| Records | FetchableRecord, EncodableRecord, TableRecord, PersistableRecord, MutablePersistableRecord, the `Record` base class with change tracking, persistence callbacks, conflict policies, UPSERT, RETURNING forms, record-not-found errors, Codable strategies, nested and prefetched Decodable records. |
+| Query interface | GRDB's request protocols, expressions, operators, functions (aggregates with filters, date modifiers, casts, string transforms), selections (`allColumns`, `rowID`, exclusions), subqueries, table aliases, the typed `$0.column` closure DSL, ordering, grouping, bulk updates/deletes with RETURNING, common table expressions, and SQL text that matches GRDB's. |
+| Associations | `belongsTo`, `hasOne`, `hasMany`, `hasOneThrough`, `hasManyThrough`, joins, `joining`/`including` (required, optional, and prefetched `all`), annotations and association aggregates, foreign keys, inflections, row scopes. |
+| Schema | Table/column/index/view creation in GRDB's clause order, generated columns, foreign keys and `belongsTo` columns, alterations, virtual tables, schema introspection (columns, primary keys, indexes, foreign keys, schema IDs), schema sources for views, foreign-key checks. |
+| Full-text search | FTS3, FTS4, and FTS5 table builders, synchronized tables, patterns, tokenizer descriptors, `matching`/`match`, FTS5 query tokenization through `fts5vocab`. |
+| JSON | `JSONColumn`, `SQLJSONExpressible`, `->`/`->>`, and the `Database.json*`/`jsonb*` functions. |
+| Migrations | Registration (including foreign-key-check modes and merged migrations), sync/async/callback migration, targets, history, schema-change detection, development reset. History uses `grdb_migrations`. |
+| Observation | ValueObservation tracking (dynamic and explicit regions), schedulers (`.immediate`, `.mainActor`, `.task`, dispatch queues), `values(in:scheduling:bufferingPolicy:)`, `SharedValueObservation`, `print`, event hooks, `DatabaseRegionObservation`, row-id regions, conditional Combine publishers. |
+| Connection setup | Custom functions, aggregates, collations, their IDs and removal, GRDB's default Unicode functions and collations. |
+| Maintenance and diagnostics | WAL checkpoints, `dumpSQL`/`dumpRequest`/`dumpTables`/`dumpContent`/`dumpSchema` in all five formats. |
 
 Rows fetched by `fetchAll` and `fetchOne` own their values. A row cursor reuses its current `Row`;
 call `copy()` before retaining a row across cursor advances. Connections, cursors, and statements
 must be used within their access closure. The overlay checks connection lifetime and thread
-confinement and closes outstanding statements before returning a borrowed connection.
+confinement and closes outstanding statements before returning a borrowed connection. Read-only
+queries in synchronous accesses step raw statements through the selected library's function table
+(validated, region-reported, and finalized before the access returns), which avoids copying every
+row into owned values.
 
 Observation uses native authorizer/cache metadata. Native writes and overlay writes affect the same
 tracked regions. Explicit constant regions resolve inside the first observation read, avoiding a
@@ -127,162 +142,199 @@ latest value. Scheduling and cancellation belong to each subscriber; iterators h
 buffers. The runtime stops when its last subscriber leaves. Different databases or separately
 constructed definitions use separate runtimes. This intentionally differs from GRDB's default
 per-subscription lifecycle: `willStart` runs once per runtime and `didCancel` runs when the last
-subscriber leaves.
+subscriber leaves. Row-id regions exist at the overlay level for descriptions and region algebra;
+native observation tracks whole tables.
+
+`Database.trace` reports the statements executed through the compatibility `Database`, including
+the transaction statements of overlay-managed transactions, with SQLite's expanded-SQL spelling.
+Statements executed through SQLiteOrbit's native APIs or by triggers are not reported.
 
 UPSERT uses SQLite's atomic `ON CONFLICT DO UPDATE` and reports the rowid of the inserted or
 updated row to insertion callbacks. It supports conflict targets, explicit assignments with the
 `excluded` alias, and the `.noColumnUnlessSpecified` update strategy. Tables without rowids are
 supported. Returning persistence APIs execute SQL `RETURNING`, so defaults and generated columns
 are available and returned values precede changes made by AFTER triggers, as in SQLite and GRDB.
-Both record-returning and selection/statement-fetch forms are available for insert, update, and
-save; updates can restrict columns. Statements are consumed to completion before success callbacks.
 These APIs require a selected engine with the corresponding UPSERT/RETURNING support.
-
-Bulk requests support `updateAll(_:onConflict:_:)` with array or variadic assignments, and
-`TableRecord.updateAll` forwarding. `updateAndFetchAll/Set/Cursor` and
-`deleteAndFetchAll/Set/Cursor` return records using the decoder's `databaseSelection`, independently
-of the request's selection. `deleteAndFetchIds` returns a set of IDs from a single-column primary
-key. `updateAndFetchStatement` and `deleteAndFetchStatement` accept explicit returned selections,
-including expressions and aliases, for scalar or row fetching. Assignments accept `.set(to:)`
-and `+=`, `-=`, `*=`, `/=`, `&=`, `|=`, `<<=`, and `>>=`. Typed `$0.column` closure overloads
-require the unimplemented DatabaseComponents DSL.
 
 Bulk mutations bypass per-record persistence callbacks and use the record type's update conflict
 policy unless explicitly overridden. Native observation and IPC announcements still apply.
-`updateAll` with no assignments returns zero without database access; returning updates require
-nonempty assignments and selections. Preparing a statement or cursor does not execute it.
-Arrays and sets consume the statement to completion. Returned rows have no guaranteed order.
 SQLite performs all matching mutations on the first step of a RETURNING statement; consuming
 one returned row does not limit how many rows are changed. Exhaust or release cursors before
 leaving their database access. Decoding errors do not undo statement changes by themselves;
 letting the error escape a transactional `write` rolls back the transaction.
 
-`DatabaseAggregate` forwards group state and errors to Orbit's native aggregate implementation.
-Aggregate support depends on the selected engine. `Database.checkpoint(_:on:)` uses Orbit's native
-checkpoint implementation, including its busy policy. Invoke it through `writeWithoutTransaction`;
-SQLite may reject a checkpoint with an active transaction or statement. The compatibility default
-schema is `"main"`; explicitly pass `nil` to checkpoint all attached schemas.
-
-Schema inspection follows temporary, main, and attached schema resolution. Expression indexes are
-excluded from `IndexInfo`, matching GRDB 7.11.1's representation. Foreign keys with omitted target
-columns resolve against the destination primary key. Metadata is queried through native SQL access.
-Typed ordering expressions support `reversed()` and NULL placement. Raw ordering SQL cannot be
-reversed; use an SQL expression for reversible ordering.
-
-Row adapters reshape fetched rows without changing the executed SQL. SQL and statement fetching
-accept `adapter:` for rows, records, and scalars (including cursor and set fetching). Scalar fetches
-read the first adapted column. `SQLRequest` accepts a mutable adapter, and `FetchRequest.adapted`
-builds an adapter inside the eventual database access. Chained adaptations resolve against the
-previous column mapping, matching GRDB. `PreparedRequest` carries the statement, bound arguments,
-and adapter; the default preparation hook preserves existing `sql(in:)` request conformances.
+Row adapters reshape fetched rows without changing the executed SQL, and `including(all:)` runs
+GRDB's prefetch queries after the main fetch (`fetchCursor` refuses prefetching, as in GRDB):
 
 ```swift
-let request = SQLRequest<Row>(sql: """
-  SELECT player.id, player.name, team.id, team.name
-  FROM player LEFT JOIN team ON team.id = player.teamId
-  """, adapter: ScopeAdapter(base: EmptyRowAdapter(), scopes: [
-    "player": RangeRowAdapter(0..<2),
-    "team": RangeRowAdapter(2..<4)
-  ]))
+struct Team: Codable, FetchableRecord, PersistableRecord, Sendable {
+  static let players = hasMany(Player.self)  // `player` rows with a `teamId` column
+  var id: Int64
+  var name: String
+}
 
-try database.read { db in
-  if let row = try request.fetchOne(db) {
-    let player: Player = try row.decode(forKey: "player")
-    let team: Team? = try row.decodeIfPresent(forKey: "team")
-    // Use player and its optional joined team.
-  }
+struct TeamInfo: Decodable, FetchableRecord, Sendable {
+  var team: Team
+  var players: [Player]
+}
+
+let infos = try database.read { db in
+  try Team.including(all: Team.players).asRequest(of: TeamInfo.self).fetchAll(db)
 }
 ```
 
-Scopes are case-sensitive. `scopes` looks up direct children, while `scopesTree` and scoped record
-decoding search breadth-first. Optional scoped records are nil for missing or entirely NULL scopes;
-`containsNonNullValue` also examines nested scopes. Synthesized Decodable properties can consume
-scopes, and nested FetchableRecord types retain their own row initializer and decoding strategies.
-A column takes precedence when it shares a coding key with a scope. Plain nested Decodable values
-use their own column names; column decoding strategies do not rename scopes.
+## Measured coverage
 
-`unscoped` removes scopes while retaining the column projection; `unadapted` exposes the original
-columns. Adapted cursors reuse their rows, including scoped views, until copied. `copy`, `fetchOne`,
-and `fetchAll` preserve independent values and nested scopes after the access ends. Equality includes
-scopes. Adapters resolve once per cursor, before stepping, so a failed column mapping or throwing
-adapter does not execute a RETURNING mutation. Out-of-bounds range/suffix adapters are programmer
-errors, as in GRDB. Custom adapters use the public underscored layout protocols; as in GRDB 7.11.1,
-the concrete layout mapping initializer is internal, so they can delegate to built-in adapters.
-These features use only Orbit's existing public API and work with the same drivers and observations.
+Coverage is measured against GRDB 7.11.1 in two ways, both reproducible with
+`Tests/GRDBReference/grdb_upstream.py` (run with `python3 -I`; it uses the GRDB checkout that
+`swift package resolve --package-path Tests/GRDBReference` fetches).
+
+**Public API, by name.** `grdb_upstream.py api` extracts both modules' public symbol graphs and
+matches declarations by path and kind (for example `DatabaseQueue.unsafeRead(_:)`, a method),
+ignoring signatures. Inherited protocol members count for the overlay; deprecated, unavailable, and
+underscored GRDB declarations are excluded.
+
+| Area | Matched | GRDB declarations |
+| --- | ---: | ---: |
+| Core | 919 | 1055 |
+| QueryInterface | 513 | 514 |
+| Record | 200 | 202 |
+| FTS | 86 | 114 |
+| ValueObservation | 59 | 64 |
+| Dump | 55 | 55 |
+| JSON | 31 | 32 |
+| Migration | 16 | 19 |
+| Utils and other | 15 | 18 |
+| **Total** | **1894 (91.4%)** | **2073** |
+
+Before this work the overlay matched 1049 (50.6%).
+
+**GRDB's own test suite.** Every upstream test file is ported verbatim into the Swift 5 target
+`Tests/SQLiteOrbitGRDBUpstreamTests`; only the import line changes. The manifests in
+`Tests/GRDBReference/upstream-manifest/` record, per file, the tests removed because they do not
+compile against the overlay (`-`), the tests skipped at runtime with the failure reason (`~`), the
+tests GRDB itself fails with this SQLite build (`!`), and files not ported (`x`). The same generated
+files run against GRDB itself with GRDB's original harness and no skips.
+
+| Area | Upstream tests | Compiled on Linux | Skipped | Running |
+| --- | ---: | ---: | ---: | ---: |
+| Core | 932 | 722 | 65 | 657 |
+| Record | 732 | 713 | 0 | 713 |
+| QueryInterface | 610 | 597 | 5 | 592 |
+| FTS | 120 | 100 | 1 | 99 |
+| ValueObservation | 119 | 79 | 55 | 24 |
+| Support | 99 | 99 | 0 | 99 |
+| Private | 89 | 23 | 4 | 19 |
+| Dump | 55 | 55 | 0 | 55 |
+| JSON | 54 | 54 | 0 | 54 |
+| Migrations | 35 | 35 | 4 | 31 |
+| Combine (Apple only) | 32 | 0 | 0 | 0 |
+| **Total** | **2877** | **2477** | **134** | **2343** |
+
+Of the 2343 running tests, 2297 pass and 46 are skipped by upstream itself on Linux. GRDB passes all
+2477 compiled tests. 200 of the 227 upstream files are ported. "Compiled on Linux" excludes tests
+that do not compile against the overlay and tests that upstream compiles only on Apple platforms or
+with snapshot support. Type-checking every upstream file verbatim, 173 files and 2527 of 2877 tests
+(87.8%) compile; before this work, 25 files and about 630 tests did.
+
+```sh
+python3 -I Tests/GRDBReference/grdb_upstream.py api        # name-level API coverage
+python3 -I Tests/GRDBReference/grdb_upstream.py typecheck  # verbatim upstream files
+python3 -I Tests/GRDBReference/grdb_upstream.py report     # per-area port status
+python3 -I Tests/GRDBReference/grdb_upstream.py run --verify
+```
+
+After changing the overlay, `autoexclude all` recomputes which tests compile, `sync` regenerates the
+target, and `run --record` (which ignores skips) makes the recorded skips exactly the failures.
 
 ## Compatibility boundaries
 
-This is a supported subset, not complete GRDB protocol or behavior parity:
+The remaining gaps fall into a few groups. Most need a capability the core does not expose; the
+overlay never works around the core's guards.
 
-- Orbit's pool writes remain barriers against that pool's reads. GRDB's pool can overlap reads and
-  writes. Turso's explicitly concurrent write APIs remain native APIs.
-- Pool readers are opened eagerly. `maximumReaderCount` maps to Orbit's fixed reader count.
-- Explicit write transactions support DEFERRED, IMMEDIATE, and EXCLUSIVE through native managed transactions.
-- Values decode through DatabaseValueConvertible; GRDB's optimized StatementColumnConvertible
-  coercions and its custom conformances are not implemented.
-- Ungrouped bulk writes ignore ordering unless a limit is present, matching GRDB. Direct limited
-  writes require SQLite's ENABLE_UPDATE_DELETE_LIMIT compilation option. GRDB 7.11.1 appends
-  RETURNING after LIMIT; engines that reject that grammar also reject these limited returning
-  requests before mutation, even when ordinary limited writes work.
-- Bulk grouping is supported for column expressions that contain a unique key, including unary
-  negation and collated columns. These requests use a key subquery, preserving HAVING, ordering,
-  and limits without requiring UPDATE/DELETE LIMIT support. Composite WITHOUT ROWID keys use tuple
-  subqueries; GRDB 7.11.1 does not implement this case. Other grouped bulk requests are rejected
-  before mutation. The overlay throws an error for invalid grouping where GRDB uses a precondition.
-- Dependencies that expose types from the original GRDB module require corresponding source
-  changes; the overlay defines its own nominal types.
-- Query association/join/prefetch APIs, prefetched row collections, Record class APIs, custom observation
-  reducers, the explicit `SharedValueObservation` API, write-access observations, snapshots, backup, vacuum,
-  explicit close, interrupt, specialized FTS helpers, and broad reactive access APIs remain future work.
-- Explicit nested Codable encoding containers require a custom PersistenceContainer encoder.
-  Decoding supports named row scopes and JSON columns; prefetched collection decoding remains future work.
-- Default Unicode functions/collations supplied by GRDB are not automatically installed.
-- Schema inspection covers ordinary tables/views and common primary keys; advanced schema metadata
-  APIs remain future work.
-- The selected engine must implement the operations used by an application. Turso has different
-  capabilities, including unavailable deferred foreign-key checks. Use immediate migration checks
-  or explicitly disable deferred checks there.
+| Gap | Upstream impact | Cause |
+| --- | --- | --- |
+| `TransactionObserver`, `DatabaseEvent`, `add(transactionObserver:)` | ~90 tests, 34 declarations | The core reports region-level commits only. Per-row events need SQLite's update, commit, and rollback hooks. `DatabaseRegionObservation` covers region-level use. |
+| Pool reads overlapping writes, `spawnConcurrentRead`, `asyncConcurrentRead` | 16 skips, 3 declarations | Orbit's pool writes are barriers against the pool's reads. |
+| Raw `BEGIN`/`COMMIT`, `beginTransaction`, `commit`, `rollback` | ~15 tests | The core refuses transaction SQL outside its managed transactions. Use `inTransaction`, `write`, or savepoints. |
+| ValueObservation value-per-commit expectations | ~45 skips | Orbit's shared observation runtime coalesces commits made while a fetch is pending, and asynchronous schedulers may perform the initial fetch after a write issued right after `start`. |
+| `StatementColumnConvertible`, `init(sqliteStatement:index:)`, `bind(to:at:)`, `Statement.sqliteStatement` | ~70 declarations, 2 files | Native cursors do not lend their raw statements. |
+| FTS5 custom and wrapper tokenizers, `makeTokenizer` | ~40 declarations, 3 files | Requires the `fts5_api` pointer, obtained with `sqlite3_bind_pointer`, which the core's library table lacks. |
+| Backup, `inMemoryCopy`, `temporaryCopy` | ~10 declarations, 4 files | The core's library table has no backup API. |
+| `vacuum`, `vacuum(into:)` | 4 tests | VACUUM's internal transaction control is refused (`SQLITE_AUTH`) outside a managed transaction. |
+| `Database.logError`, `lastErrorCode`, `suspendNotification` | a few declarations | Global SQLite logging and GRDB's suspension notifications have no core counterpart. |
+| GRDB internals | ~60 tests in `Private/`, a few elsewhere | Tests of GRDB's private types (`OrderedDictionary`, `Pool`, schema cache, `SQLGenerationContext`). Not applicable. |
 
-The convenience API audit also covers cursor sequence/iterator initializers, lazy prefix/drop/flatten
-operations, extrema and reductions, and construction of arrays, sets, and dictionaries from cursors.
-Cursor transformations return `AnyCursor`; GRDB's concrete adapter cursor types are not provided.
-The custom `Cursor.forEach` implementation is preserved through mapping, filtering,
-and enumeration; collection construction honors it as well. `Cursor.isEmpty` consumes its first element when present, as in GRDB.
+Other differences:
 
-Primary-key derivations resolve metadata inside the eventual database access. Creating such a
-request does not open a connection or require that the table already exists. Replacing its selection,
-ordering, or grouping also replaces the corresponding deferred derivation. Record change helpers
-compare encoded database values and skip persistence callbacks and SQL when nothing changed.
-
-DDL expressions and view definitions render bound values as SQL literals using the selected
-engine's quoting function. The existing SQL tokenizer distinguishes parameters from quoted text,
-identifiers, and comments. Generated columns and partial/expression indexes require engine support.
-
-The audit deliberately leaves larger SQL/query features (associations, CTEs, JSON/FTS
-DSLs, and custom reducers) for separate work. They are not simple forwarding conveniences even when
-some can be built using the current native API. Vacuum was tested but deferred: SQLite's internal
-transaction control is rejected by Orbit's guard outside a managed transaction (`SQLITE_AUTH`).
-It needs coordinated support in native connection execution; the overlay does not bypass that guard.
-No SQLiteOrbit native public API changes were made for this convenience expansion.
+- `DatabaseQueue(named:)` gives a private in-memory database; named shared in-memory databases need
+  URI opening.
+- `Configuration.acceptsDoubleQuotedStringLiterals`, `qos`, `targetQueue`, and similar options are
+  stored but not enforced (`sqlite3_db_config` is not in the library table), and
+  `maximumStatementArgumentCount` is chosen by SQLite version rather than `sqlite3_limit`.
+- `onConnectionDidOpen`/`onConnectionDidClose` are not provided: the overlay cannot observe a native
+  connection closing.
+- `DatabaseQueue.inDatabase` and queue/pool `unsafeRead` use typed throws, matching GRDB's
+  `rethrows`; with a non-throwing closure, an access failure (such as a closed database) is fatal.
+- `remove(function:)` and `remove(collation:)` replace the registration with one that fails or
+  compares binary, since the core cannot unregister.
+- Region descriptions lowercase identifiers and do not filter views.
+- Pool readers are opened eagerly; `maximumReaderCount` maps to Orbit's fixed reader count.
+- The selected engine must implement the operations used. Turso lacks custom functions, deferred
+  foreign-key checks, FTS, and the C API used by a few upstream tests, which compile only without
+  the Turso trait.
+- Dependencies that expose types from the original GRDB module require source changes; the overlay
+  defines its own nominal types.
 
 Combine code is conditionally compiled on platforms that provide Combine. Linux verification
 covers callbacks and async sequences; Apple-platform compilation and Combine execution require an
 Apple SDK.
 
+## Closing the remaining gaps
+
+Each group above has a concrete route. The core routes need new public API in SQLiteOrbit, which
+this overlay deliberately avoided; the overlay routes need none.
+
+- **TransactionObserver** (largest remaining group): add an optional hooks group to `SQLiteLibrary`
+  (`sqlite3_update_hook`, `sqlite3_commit_hook`, `sqlite3_rollback_hook`, optionally
+  `sqlite3_preupdate_hook`) and a scoped registration on `SQLiteScopedAccess`. The overlay already
+  owns per-connection state and every transaction boundary it starts, so `databaseWillCommit`,
+  `databaseDidCommit`, and extents map directly. An overlay-only alternative is TEMP triggers that
+  call a custom function, but they leak into `sqlite_temp_schema` and must track new tables, so they
+  were not adopted.
+- **Raw transaction SQL**: a core API to begin a managed transaction that ends on a later `COMMIT`/
+  `ROLLBACK` statement on the same access would unlock `beginTransaction`, `commit`, and the raw-SQL
+  transaction tests.
+- **Concurrent pool reads**: let core pool readers proceed during a write (WAL snapshot isolation)
+  instead of waiting at the write barrier; `spawnConcurrentRead` then maps onto a reader that begins
+  its transaction before the writer's next commit.
+- **ValueObservation per-commit delivery**: offer an observation mode that fetches once per commit
+  and performs the initial fetch synchronously in `start`, either in the core or as per-subscription
+  runtimes in the overlay (at the cost of the shared-runtime behavior documented above).
+- **StatementColumnConvertible**: the overlay's raw read path already holds library statement
+  handles, so it can lend `sqliteStatement` to `init(sqliteStatement:index:)` for read-only fetches;
+  binding (`bind(to:at:)`) and write statements would need the core to lend prepared statements.
+- **FTS5 tokenizers, backup, double-quoted strings, argument limits**: add `bindPointer`,
+  `sqlite3_backup_*`, `sqlite3_db_config`, and `sqlite3_limit` entries to the library table.
+- **Vacuum**: a managed `vacuum`/`vacuum(into:)` operation in the core connection that suspends the
+  transaction guard for that statement only.
+- **Small overlay-only items**: `lastErrorCode`/`lastErrorMessage` through the library's error
+  functions, `readQoS`/`writeQoS` storage, `Cursor.dropLast()`, `DatabaseSchemaID.main`/`.temp`/
+  `.attached`, and identifier case in region descriptions.
+
 ## Verification
 
-The package includes maintained fixtures derived from GRDB 7.11.1's argument, database-value,
-Codable encoding, row/adapters, cursor, record-change, and foreign-key violation tests, plus shared application fixtures. Their provenance and
-MIT license are in `Tests/SQLiteOrbitGRDBTests/Upstream`. The same fixtures run against GRDB itself
-in a separate test package, so the main package does not resolve or link GRDB.
-
 ```sh
-swift test --filter SQLiteOrbitGRDBTests
-Tests/GRDBReference/run.sh
-swift test
+swift test                                                   # whole package
+swift test --filter SQLiteOrbitGRDBTests                     # overlay integration tests
+python3 -I Tests/GRDBReference/grdb_upstream.py run --verify # upstream port, one process per class
+Tests/GRDBReference/run.sh                                   # the same tests against GRDB itself
 ```
 
-The additional integration tests exercise native driver access, mixed native/overlay writes,
-transaction rollback, migrations, region tracking, cancellation, pool connection preparation,
-Codable storage, and IPC peer observation. These tests establish compatibility for the covered
-cases; they do not establish compatibility with the entire upstream GRDB test suite.
+A broad `--filter` that matches every upstream test exceeds the kernel's argument-length limit on
+Linux, so use `run --verify` (or no filter) for the upstream target.
+
+`Tests/SQLiteOrbitGRDBTests` holds integration tests for native driver access, mixed native and
+overlay writes, migrations, region tracking, cancellation, pool connection preparation, Codable
+storage, and IPC peer observation, plus shared application fixtures in `Upstream/` that also run
+against GRDB. The compatibility expansion measured above added no SQLiteOrbit (core) public API.

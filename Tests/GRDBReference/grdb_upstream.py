@@ -17,7 +17,7 @@ Subcommands:
                       --verify instead runs each class with its skips, like `swift test`.
   skips LOG           Record failing tests from a `swift test` log as runtime skips.
   api                 Compare GRDB's and the overlay's public symbol graphs by name.
-  report              Summarize the manifest: ported files, removed tests, skipped tests.
+  report              Per-area counts: upstream tests, compiled in the built bundle, skipped.
 
 The manifest (upstream-manifest/*.txt) lists ported upstream files relative to Tests/GRDBTests.
 Indented entries under a file adjust it:
@@ -964,29 +964,32 @@ def collect_symbols(directory, keep_inherited):
 
 
 def cmd_report(args):
+    """Per-area counts from the manifest and the built test bundle's test list."""
     header, entries, declined = read_manifest()
-    total = kept = skipped = 0
-    by_area = collections.defaultdict(collections.Counter)
-    for path, entry in entries.items():
-        tests = test_spans(convert_imports(open(os.path.join(UPSTREAM_TESTS, path)).read()))
-        names = {name for name, _, _ in tests}
-        removed = sum(1 for n in entry.removed if n.split(".")[-1] in names)
-        skip = len(entry.skipped)
-        area = path.split("/")[0]
-        by_area[area]["tests"] += len(tests)
-        by_area[area]["passing"] += len(tests) - removed - skip
-        by_area[area]["files"] += 1
-        total += len(tests)
-        kept += len(tests) - removed
-        skipped += skip
-    all_tests = sum(len(test_spans(open(os.path.join(UPSTREAM_TESTS, p)).read())) for p in all_upstream_files())
+    by_class = class_paths(entries)
+    listing = subprocess.run([xctest_binary(), "--list-tests"], capture_output=True, text=True).stdout
+    tests = re.findall(r"^SQLiteOrbitGRDBUpstreamTests\.(\w+)/(\w+)$", listing, re.M)
+    compiled = collections.Counter()
+    skipped = collections.Counter()
+    for klass, test in tests:
+        path = by_class.get(klass)
+        area = path.split("/")[0] if path else "?"
+        compiled[area] += 1
+        stem = os.path.splitext(os.path.basename(path))[0] if path else ""
+        if path and (test if klass == stem else f"{klass}.{test}") in entries[path].skipped:
+            skipped[area] += 1
+    total = collections.Counter()
+    for path in all_upstream_files():
+        total[path.split("/")[0]] += len(test_spans(open(os.path.join(UPSTREAM_TESTS, path)).read()))
     print(f"ported files: {len(entries)}/{len(all_upstream_files())}; declined: {len(declined)}")
-    print(f"tests in ported files: {total}; compiled: {kept}; skipped at runtime: {skipped}; "
-          f"running: {kept - skipped}")
-    print(f"running tests over the whole upstream suite: {kept - skipped}/{all_tests} "
-          f"({100 * (kept - skipped) / all_tests:.1f}%)")
-    for area, c in sorted(by_area.items(), key=lambda kv: -kv[1]["tests"]):
-        print(f"  {area:18s} {c['passing']:5d}/{c['tests']:5d} running in {c['files']} files")
+    print("area               upstream  compiled  skipped  running")
+    for area in sorted(total, key=lambda a: -total[a]):
+        print(f"  {area:16s} {total[area]:8d} {compiled[area]:9d} {skipped[area]:8d} "
+              f"{compiled[area] - skipped[area]:8d}")
+    t, c, k = sum(total.values()), sum(compiled.values()), sum(skipped.values())
+    print(f"  {'total':16s} {t:8d} {c:9d} {k:8d} {c - k:8d}")
+    print("`running` includes tests that upstream itself skips on this platform; "
+          "`run --verify` reports exact pass counts.")
 
 
 def main():
