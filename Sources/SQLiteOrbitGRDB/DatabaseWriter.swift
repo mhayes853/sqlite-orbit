@@ -121,6 +121,10 @@
 
     @_disfavoredOverload
     public func unsafeRead<T>(_ value: (Database) throws -> T) throws -> T {
+      try performUnsafeRead(value)
+    }
+
+    func performUnsafeRead<T>(_ value: (Database) throws -> T) throws -> T {
       try withoutActuallyEscaping(value) { value in
         let operation = SynchronousTransfer(value: value)
         return try translate {
@@ -308,6 +312,9 @@
     private(set) var native: SQLiteConfiguration
     public var maximumReaderCount = 5
 
+    /// The schema source installed on each connection.
+    public var schemaSource: (any DatabaseSchemaSource)? = nil
+
     /// The clock that provides `Database.transactionDate`.
     public var transactionClock: any TransactionClock = .default
 
@@ -381,10 +388,19 @@
             registry?
               .register(try access.sqliteConnection, library: try access.configuration.library)
             db.connectionState.configuration = configuration
+            if let source = configuration.schemaSource {
+              SchemaSourceStore.setSource(source, for: db.connectionState)
+            }
             db.connectionState.publicStatementArguments = publicStatementArguments
             if readonly {
               try db.execute(sql: "PRAGMA query_only = 1")
             }
+            // Like GRDB, refuse files that are not databases when they are opened.
+            _ =
+              try access.statementCursor(
+                SQLiteOrbit.SQL(text: "SELECT * FROM sqlite_master LIMIT 1", bindings: [])
+              )
+              .next()
           }
         }
       )
@@ -481,8 +497,9 @@
     }
   }
 
-  public final class DatabaseQueue: DatabaseWriter, ConnectionRegistryOwner {
-    public let orbitDatabase: any OrbitObservableDatabaseWriter
+  public final class DatabaseQueue: DatabaseWriter, ConnectionRegistryOwner, ClosableDatabase {
+    let driver: DriverBox
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { driver.current }
     let connectionRegistry = ConnectionRegistry()
     public let path: String
     public let configuration: Configuration
@@ -496,12 +513,14 @@
       self.configuration = configuration
       try configuration.checkReadonlyPath(path)
       let registry = connectionRegistry
-      orbitDatabase = try translate {
-        try SQLiteQueue(
-          path: OrbitDatabasePath(path),
-          configuration: configuration.resolvedNative(registry: registry)
-        )
-      }
+      driver = DriverBox(
+        try translate {
+          try SQLiteQueue(
+            path: OrbitDatabasePath(path),
+            configuration: configuration.resolvedNative(registry: registry)
+          )
+        }
+      )
     }
 
     /// Opens a private in-memory database. Unlike GRDB, queues with the same name do not share
@@ -510,8 +529,17 @@
       try self.init(path: ":memory:", configuration: configuration)
     }
 
-    public func inDatabase<T>(_ body: (Database) throws -> T) throws -> T {
-      try writeWithoutTransaction(body)
+    /// Runs `body` with the connection, outside of a transaction. As in GRDB, a closure that
+    /// does not throw does not make the call throwing; access failures are then fatal.
+    public func inDatabase<T, E: Error>(_ body: (Database) throws(E) -> T) throws(E) -> T {
+      try typedThrows(E.self) {
+        try (self as any DatabaseWriter).writeWithoutTransaction { try body($0) }
+      }
+    }
+
+    /// Runs `value` without a transaction, throwing only what `value` throws.
+    public func unsafeRead<T, E: Error>(_ value: (Database) throws(E) -> T) throws(E) -> T {
+      try typedThrows(E.self) { try performUnsafeRead { try value($0) } }
     }
 
     /// Runs `body` in a transaction, committing or rolling back as the body requests.
@@ -525,9 +553,11 @@
     }
   }
 
-  public final class DatabasePool: DatabaseWriter, ConnectionRegistryOwner {
-    public let orbitDatabase: any OrbitObservableDatabaseWriter
+  public final class DatabasePool: DatabaseWriter, ConnectionRegistryOwner, ClosableDatabase {
+    let driver: DriverBox
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { driver.current }
     let connectionRegistry = ConnectionRegistry()
+    let snapshotCounter = SnapshotCounter()
     public let path: String
     public let configuration: Configuration
 
@@ -536,33 +566,56 @@
       self.configuration = configuration
       try configuration.checkReadonlyPath(path)
       let registry = connectionRegistry
-      orbitDatabase = try translate {
-        try SQLitePool(
-          path: OrbitDatabasePath(path),
-          configuration: configuration.resolvedNative(registry: registry),
-          readerCount: configuration.maximumReaderCount
-        )
-      }
+      driver = DriverBox(
+        try translate {
+          try SQLitePool(
+            path: OrbitDatabasePath(path),
+            configuration: configuration.resolvedNative(registry: registry),
+            readerCount: configuration.maximumReaderCount
+          )
+        }
+      )
     }
   }
 
-  public final class AnyDatabaseReader: DatabaseReader, ConnectionRegistryOwner {
-    public let orbitDatabase: any OrbitObservableDatabaseWriter
+  extension DatabasePool {
+    /// Runs `value` without a transaction, throwing only what `value` throws.
+    public func unsafeRead<T, E: Error>(_ value: (Database) throws(E) -> T) throws(E) -> T {
+      try typedThrows(E.self) { try performUnsafeRead { try value($0) } }
+    }
+  }
+
+  // Rethrows the errors of a typed-throws closure; other failures, such as a closed database,
+  // are fatal, as with GRDB's `rethrows` methods.
+  func typedThrows<T, E: Error>(_ type: E.Type, _ body: () throws -> T) throws(E) -> T {
+    do {
+      return try body()
+    } catch let error as E {
+      throw error
+    } catch {
+      preconditionFailure(String(describing: error))
+    }
+  }
+
+  public final class AnyDatabaseReader: DatabaseReader, ConnectionRegistryOwner, ClosableDatabase {
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { driver.current }
+    let driver: DriverBox
     let connectionRegistry: ConnectionRegistry
 
     public init(_ reader: any DatabaseReader) {
-      orbitDatabase = reader.orbitDatabase
+      driver = (reader as? any ClosableDatabase)?.driver ?? DriverBox(reader.orbitDatabase)
       connectionRegistry =
         (reader as? any ConnectionRegistryOwner)?.connectionRegistry ?? ConnectionRegistry()
     }
   }
 
-  public final class AnyDatabaseWriter: DatabaseWriter, ConnectionRegistryOwner {
-    public let orbitDatabase: any OrbitObservableDatabaseWriter
+  public final class AnyDatabaseWriter: DatabaseWriter, ConnectionRegistryOwner, ClosableDatabase {
+    public var orbitDatabase: any OrbitObservableDatabaseWriter { driver.current }
+    let driver: DriverBox
     let connectionRegistry: ConnectionRegistry
 
     public init(_ writer: any DatabaseWriter) {
-      orbitDatabase = writer.orbitDatabase
+      driver = (writer as? any ClosableDatabase)?.driver ?? DriverBox(writer.orbitDatabase)
       connectionRegistry =
         (writer as? any ConnectionRegistryOwner)?.connectionRegistry ?? ConnectionRegistry()
     }

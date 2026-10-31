@@ -552,7 +552,70 @@ class DatabaseAggregateTests: GRDBTestCase {
         }
     }
     
-
+    func testDeallocationAfterStepError() throws {
+        final class Aggregate : DatabaseAggregate {
+            static var onInit: (() -> ())?
+            static var onDeinit: (() -> ())?
+            init() { Aggregate.onInit?() }
+            deinit { Aggregate.onDeinit?() }
+            func step(_ dbValues: [DatabaseValue]) throws {
+                throw DatabaseError(message: "boo")
+            }
+            func finalize() -> (any DatabaseValueConvertible)? { fatalError() }
+        }
+        var allocationCount = 0
+        var aliveCount = 0
+        Aggregate.onInit = {
+            allocationCount += 1
+            aliveCount += 1
+        }
+        Aggregate.onDeinit = {
+            aliveCount -= 1
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        dbQueue.inDatabase { db in
+            let fn = DatabaseFunction("f", argumentCount: 0, aggregate: Aggregate.self)
+            db.add(function: fn)
+            XCTAssertEqual(allocationCount, 0)
+            XCTAssertEqual(aliveCount, 0)
+            _ = try? db.execute(sql: "SELECT f()")
+            XCTAssertEqual(allocationCount, 1)
+            XCTAssertEqual(aliveCount, 0)
+        }
+    }
     
-
+    func testDeallocationAfterResultError() throws {
+        final class Aggregate : DatabaseAggregate {
+            static var onInit: (() -> ())?
+            static var onDeinit: (() -> ())?
+            init() { Aggregate.onInit?() }
+            deinit { Aggregate.onDeinit?() }
+            func step(_ dbValues: [DatabaseValue]) { }
+            func finalize() throws -> (any DatabaseValueConvertible)? {
+                throw DatabaseError(message: "boo")
+            }
+        }
+        
+        var allocationCount = 0
+        var aliveCount = 0
+        Aggregate.onInit = {
+            allocationCount += 1
+            aliveCount += 1
+        }
+        Aggregate.onDeinit = {
+            aliveCount -= 1
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        dbQueue.inDatabase { db in
+            let fn = DatabaseFunction("f", argumentCount: 0, aggregate: Aggregate.self)
+            db.add(function: fn)
+            XCTAssertEqual(allocationCount, 0)
+            XCTAssertEqual(aliveCount, 0)
+            _ = try? db.execute(sql: "SELECT f()")
+            XCTAssertEqual(allocationCount, 1)
+            XCTAssertEqual(aliveCount, 0)
+        }
+    }
 }

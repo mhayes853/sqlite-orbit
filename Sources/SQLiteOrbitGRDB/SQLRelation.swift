@@ -676,6 +676,12 @@
       let sql = try requestSQL(context)
       let statement = try db.makeStatement(sql: sql)
       statement.arguments = context.arguments
+      // Provably empty requests on tables, such as `Player.none()`, observe nothing.
+      if let filter = try relation.filter?.resolve(db), filter.selectsNoRow,
+        try db.tableExists(relation.tableName)
+      {
+        statement.databaseRegion = DatabaseRegion()
+      }
       return statement
     }
 

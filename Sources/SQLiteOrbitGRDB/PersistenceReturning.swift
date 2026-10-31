@@ -106,9 +106,12 @@
           table: recordType.databaseTableName,
           selection: selection
         )
-        let returned = try fetch(statement)
-        try statement.finishPersistenceExecution()
-        guard db.changesCount > 0 else {
+        let (returned, changes) = try db.countChanges(forTable: recordType.databaseTableName) {
+          let returned = try fetch(statement)
+          try statement.finishPersistenceExecution()
+          return returned
+        }
+        guard changes > 0 else {
           throw try missingRecord(db)
         }
         let updated = PersistenceSuccess(persistenceContainer: container)

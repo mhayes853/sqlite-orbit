@@ -21,6 +21,11 @@
       }
     }
 
+    // Forgets the connections of a closed database, which may be closed at any time.
+    func removeAll() {
+      lock.withLock { connections = [] }
+    }
+
     func interruptAll() {
       for connection in lock.withLock({ connections }) {
         connection.interrupt(connection.pointer)
@@ -49,6 +54,11 @@
       dictionary[key] = box
       return box
     }
+  }
+
+  /// The innermost compatibility access running on the current thread, if any.
+  func currentThreadDatabase() -> Database? {
+    AccessStack.box.entries.last?.db
   }
 
   extension DatabaseReader {
@@ -204,7 +214,7 @@
 
   extension Database: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String {
-      configuration.label ?? "GRDB.Database"
+      connectionState.databaseDescription ?? configuration.label ?? "GRDB.Database"
     }
 
     public var debugDescription: String {
@@ -229,6 +239,109 @@
     ) throws {
       try writeWithoutTransaction { db in
         try db.inTransaction(kind) { try updates(db) }
+      }
+    }
+  }
+#endif
+
+#if canImport(Foundation) && canImport(Dispatch)
+  import Foundation
+  import SQLiteOrbit
+
+  // MARK: - Closing
+
+  /// Holds the native driver of a database until it is closed.
+  final class DriverBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var driver: any OrbitObservableDatabaseWriter
+
+    init(_ driver: any OrbitObservableDatabaseWriter) {
+      self.driver = driver
+    }
+
+    var current: any OrbitObservableDatabaseWriter {
+      lock.withLock { driver }
+    }
+
+    var isClosed: Bool {
+      current is ClosedOrbitDatabase
+    }
+
+    // Releases the native driver, which closes its connections once outstanding accesses end.
+    func close(metadata: SQLiteDatabaseMetadata?) {
+      lock.withLock {
+        guard !(driver is ClosedOrbitDatabase) else { return }
+        driver = ClosedOrbitDatabase(metadata: metadata)
+      }
+    }
+  }
+
+  protocol ClosableDatabase {
+    var driver: DriverBox { get }
+  }
+
+  // The driver of a closed database: every access fails with SQLITE_MISUSE, as in GRDB.
+  final class ClosedOrbitDatabase: OrbitDatabaseWriter, OrbitObservableDatabase, @unchecked Sendable
+  {
+    let databaseMetadata: SQLiteDatabaseMetadata?
+
+    init(metadata: SQLiteDatabaseMetadata?) {
+      databaseMetadata = metadata
+    }
+
+    private var error: SQLiteError {
+      SQLiteError(code: .misuse, message: "Connection is closed")
+    }
+
+    func read<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) async throws -> Result { throw error }
+
+    func readBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadTransaction) throws -> Result
+    ) throws -> Result { throw error }
+
+    func readWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) async throws -> Result { throw error }
+
+    func readWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteReadConnection) throws -> Result
+    ) throws -> Result { throw error }
+
+    func write<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) async throws -> Result { throw error }
+
+    func writeBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteTransaction) throws -> Result
+    ) throws -> Result { throw error }
+
+    func writeWithoutTransaction<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) async throws -> Result { throw error }
+
+    func writeWithoutTransactionBlocking<Result: Sendable>(
+      _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
+    ) throws -> Result { throw error }
+
+    func subscribe(
+      transactionObserver: any OrbitDatabaseTransactionObserver,
+      region: OrbitDatabaseRegion
+    ) throws -> OrbitRegionSubscription { throw error }
+  }
+
+  extension DatabaseReader {
+    /// Closes the database. Later accesses fail with `SQLITE_MISUSE`; closing again does nothing.
+    ///
+    /// The native driver is released, and closes its connections when outstanding accesses and
+    /// observations end. Snapshots close their own connection. Other drivers ignore this call.
+    public func close() throws {
+      if let closable = self as? any ClosableDatabase {
+        (self as? any ConnectionRegistryOwner)?.connectionRegistry.removeAll()
+        closable.driver.close(metadata: orbitDatabase.databaseMetadata)
+      } else if let snapshot = self as? DatabaseSnapshot {
+        try snapshot.close()
       }
     }
   }

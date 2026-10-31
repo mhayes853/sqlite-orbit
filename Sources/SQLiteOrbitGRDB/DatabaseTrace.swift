@@ -13,6 +13,7 @@
     var trace: ((Database.TraceEvent) -> Void)?
     var publicStatementArguments = false
     var configuration: Configuration?
+    var databaseDescription: String?
     var transactionDate: Result<Date, Error>?
     var afterNextTransaction: [(onCommit: (Database) -> Void, onRollback: (Database) -> Void)] = []
 

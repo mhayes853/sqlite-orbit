@@ -15,7 +15,7 @@
     }
 
     public func reindex(collation: CollationName) throws {
-      try execute(sql: "REINDEX " + quoted(collation.rawValue))
+      try execute(sql: "REINDEX " + collation.rawValue)
     }
   }
 

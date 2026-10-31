@@ -5,9 +5,92 @@ import SQLiteOrbitGRDB
 
 class DatabaseAbortedTransactionTests : GRDBTestCase {
     
-
+    func testReadTransactionAbortedByInterrupt() throws {
+        func test(_ dbReader: some DatabaseReader) throws {
+            let semaphore1 = DispatchSemaphore(value: 0)
+            let semaphore2 = DispatchSemaphore(value: 0)
+            
+            let block1 = {
+                do {
+                    try dbReader.read { db in
+                        db.add(function: DatabaseFunction("wait", argumentCount: 0, pure: true) { _ in
+                            semaphore1.signal()
+                            semaphore2.wait()
+                            return nil
+                        })
+                        _ = try Row.fetchAll(db, sql: "SELECT wait()")
+                    }
+                    XCTFail("Expected error")
+                } catch let error as DatabaseError {
+                    XCTAssertEqual(error.resultCode, .SQLITE_INTERRUPT)
+                } catch {
+                    XCTFail("Unexpected error: \(error)")
+                }
+            }
+            let block2 = {
+                semaphore1.wait()
+                dbReader.interrupt()
+                semaphore2.signal()
+            }
+            let blocks = [block1, block2]
+            DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+                blocks[index]()
+            }
+        }
+        
+        try test(DatabaseQueue())
+        try test(makeDatabaseQueue())
+        try test(makeDatabasePool())
+        try test(makeDatabasePool().makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool().makeSnapshotPool())
+#endif
+    }
     
-
+    func testReadTransactionAbortedByInterruptDoesNotPreventFurtherRead() throws {
+        func test(_ dbReader: some DatabaseReader) throws {
+            let semaphore1 = DispatchSemaphore(value: 0)
+            let semaphore2 = DispatchSemaphore(value: 0)
+            
+            let block1 = {
+                try! dbReader.read { db in
+                    db.add(function: DatabaseFunction("wait", argumentCount: 0, pure: true) { _ in
+                        semaphore1.signal()
+                        semaphore2.wait()
+                        return nil
+                    })
+                    let wasInTransaction = db.isInsideTransaction
+                    do {
+                        _ = try Row.fetchAll(db, sql: "SELECT wait()")
+                        XCTFail("Expected error")
+                    } catch let error as DatabaseError {
+                        XCTAssertEqual(error.resultCode, .SQLITE_INTERRUPT)
+                    } catch {
+                        XCTFail("Unexpected error: \(error)")
+                    }
+                    XCTAssertEqual(db.isInsideTransaction, wasInTransaction)
+                    try XCTAssertTrue(Bool.fetchOne(db, sql: "SELECT 1")!)
+                }
+            }
+            let block2 = {
+                semaphore1.wait()
+                dbReader.interrupt()
+                semaphore2.signal()
+            }
+            let blocks = [block1, block2]
+            DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+                blocks[index]()
+            }
+        }
+        
+        try test(DatabaseQueue())
+        try test(makeDatabaseQueue())
+        try test(makeDatabasePool())
+        try test(makeDatabasePool().makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool().makeSnapshotPool())
+#endif
+    }
     
     func testWriteTransactionAbortedByInterrupt() throws {
         func setup<T: DatabaseWriter>(_ dbWriter: T) throws -> T {
@@ -262,5 +345,31 @@ class DatabaseAbortedTransactionTests : GRDBTestCase {
         try test(setup(makeDatabasePool()))
     }
     
-
+    func testReadTransactionRestartHack() throws {
+        // Here we test that the "ROLLBACK; BEGIN TRANSACTION;" hack which
+        // "refreshes" a DatabaseSnaphot works.
+        // See https://github.com/groue/GRDB.swift/issues/619
+        // This hack puts temporarily the transaction in the aborded
+        // state. Here we test that we don't throw SQLITE_ABORT.
+        
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE t(a);")
+        }
+        let snapshot = try dbPool.makeSnapshot()
+        try snapshot.read { db in
+            try db.execute(sql: """
+                ROLLBACK;
+                BEGIN TRANSACTION;
+                """)
+        }
+        try snapshot.read { db in
+            try db.execute(sql: """
+                SELECT * FROM t;
+                ROLLBACK;
+                BEGIN TRANSACTION;
+                SELECT * FROM t;
+                """)
+        }
+    }
 }

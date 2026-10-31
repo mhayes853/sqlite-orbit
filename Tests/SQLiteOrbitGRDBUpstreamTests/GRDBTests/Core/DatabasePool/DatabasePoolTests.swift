@@ -306,16 +306,97 @@ class DatabasePoolTests: GRDBTestCase {
     
     // MARK: - Closing
     
-
+    func testClose() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbPool.write { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        do {
+            try dbPool.read { db in
+                _ = try Row.fetchOne(db, sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbPool.close()
+    }
+    
+    func testCloseAfterUse() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            try db.execute(sql: "SELECT * FROM sqlite_master")
+        }
+        try dbPool.read { db in
+            _ = try Row.fetchOne(db, sql: "SELECT * FROM sqlite_master")
+        }
+        try dbPool.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbPool.write { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        do {
+            try dbPool.read { db in
+                _ = try Row.fetchOne(db, sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbPool.close()
+    }
+    
+    func testCloseAfterCachedStatement() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            _ = try db.cachedStatement(sql: "SELECT * FROM sqlite_master")
+        }
+        try dbPool.read { db in
+            _ = try db.cachedStatement(sql: "SELECT * FROM sqlite_master")
+        }
+        try dbPool.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbPool.write { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        do {
+            try dbPool.read { db in
+                _ = try Row.fetchOne(db, sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbPool.close()
+    }
     
 
     
 
     
-
-    
-
-    
-
+    // Regression test for <https://github.com/groue/GRDB.swift/issues/1612>
+    func test_releaseMemory_after_close() throws {
+        let dbPool = try makeDatabasePool()
+        try dbPool.read { _ in } // Create a reader
+        try dbPool.close()
+        dbPool.releaseMemory()
+    }
 }
 #endif  // !Turso

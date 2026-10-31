@@ -27,7 +27,11 @@
       migrate: @escaping @Sendable (Database) throws -> Void
     ) {
       native.registerMigration(identifier, foreignKeyChecks: foreignKeyChecks) { transaction in
-        try transaction.withScopedAccess { try migrate(Database($0)) }
+        try transaction.withScopedAccess { access in
+          // As in GRDB, migrations see the raw schema, without the schema source.
+          let db = Database(access)
+          try db.withSchemaSource(nil) { try migrate(db) }
+        }
       }
     }
 

@@ -92,6 +92,34 @@
     }
 
     public func primaryKey(_ table: String, in schemaName: String? = nil) throws -> PrimaryKeyInfo {
+      if let source = schemaSource,
+        let schema = try objectSchema(table, types: ["view"], in: schemaName)
+      {
+        let schemaID: DatabaseSchemaID =
+          schema.lowercased() == "main"
+          ? .main : schema.lowercased() == "temp" ? .temp : .attached(schema)
+        if let keyColumns = try source.columnsForPrimaryKey(
+          self,
+          inView: DatabaseObjectID(name: table, schemaID: schemaID)
+        ) {
+          let viewColumns = try columns(in: table, in: schema)
+          let infos = try keyColumns.map { name in
+            guard let info = viewColumns.first(where: { $0.name.lowercased() == name.lowercased() })
+            else {
+              throw DatabaseError(message: "no such column: \(name) in view \(table)")
+            }
+            return info
+          }
+          var info = PrimaryKeyInfo(
+            columns: infos.map(\.name),
+            rowIDColumn: nil,
+            hiddenRowID: false,
+            columnInfos: infos
+          )
+          info.tableHasRowID = false
+          return info
+        }
+      }
       let schema = try requireObjectSchema(table, types: ["table"], in: schemaName)
       let tableColumns = try columns(in: table, in: schema)
       let columns = tableColumns.filter { $0.primaryKeyIndex > 0 }
@@ -111,12 +139,30 @@
       } else {
         keyColumns = columns.map(\.name)
       }
-      return PrimaryKeyInfo(
+      let withoutRowID = try isWithoutRowIDTable(table, in: schema)
+      var info = PrimaryKeyInfo(
         columns: keyColumns,
-        rowIDColumn: integer,
+        rowIDColumn: withoutRowID ? nil : integer,
         hiddenRowID: columns.isEmpty,
         columnInfos: columns.isEmpty ? nil : columns
       )
+      info.tableHasRowID = !withoutRowID
+      return info
+    }
+
+    // Whether a table is declared WITHOUT ROWID, according to its schema SQL.
+    private func isWithoutRowIDTable(_ table: String, in schema: String) throws -> Bool {
+      let sql = try String.fetchOne(
+        self,
+        sql:
+          "SELECT sql FROM \(quoted(schema)).sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE",
+        arguments: [table]
+      )
+      guard let sql, let close = sql.lastIndex(of: ")") else { return false }
+      // Table options follow the closing parenthesis of the column definitions.
+      let options = sql[sql.index(after: close)...].uppercased()
+        .split(whereSeparator: { $0.isWhitespace || $0 == "," || $0 == ";" })
+      return zip(options, options.dropFirst()).contains { $0 == "WITHOUT" && $1 == "ROWID" }
     }
 
     public func indexes(on table: String, in schemaName: String? = nil) throws -> [IndexInfo] {

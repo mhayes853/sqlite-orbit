@@ -113,9 +113,38 @@ class DatabaseQueueTests: GRDBTestCase {
     
 
     
-
+    func testDefaultLabel() throws {
+        let dbQueue = try makeDatabaseQueue()
+        XCTAssertEqual(dbQueue.configuration.label, nil)
+        dbQueue.inDatabase { db in
+            XCTAssertEqual(db.configuration.label, nil)
+            XCTAssertEqual(db.description, "GRDB.DatabaseQueue")
+            
+#if canImport(Darwin)
+            // This test CAN break in future releases: the dispatch queue labels
+            // are documented to be a debug-only tool.
+            let label = String(utf8String: __dispatch_queue_get_label(nil))
+            XCTAssertEqual(label, "GRDB.DatabaseQueue")
+#endif
+        }
+    }
     
-
+    func testCustomLabel() throws {
+        dbConfiguration.label = "Toreador"
+        let dbQueue = try makeDatabaseQueue()
+        XCTAssertEqual(dbQueue.configuration.label, "Toreador")
+        dbQueue.inDatabase { db in
+            XCTAssertEqual(db.configuration.label, "Toreador")
+            XCTAssertEqual(db.description, "Toreador")
+            
+#if canImport(Darwin)
+            // This test CAN break in future releases: the dispatch queue labels
+            // are documented to be a debug-only tool.
+            let label = String(utf8String: __dispatch_queue_get_label(nil))
+            XCTAssertEqual(label, "Toreador")
+#endif
+        }
+    }
     
     func testTargetQueue() throws {
         func test(targetQueue: DispatchQueue) throws {
@@ -362,13 +391,66 @@ class DatabaseQueueTests: GRDBTestCase {
 
     // MARK: - Closing
     
-
+    func testClose() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbQueue.close()
+    }
+    
+    func testCloseAfterUse() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "SELECT * FROM sqlite_master")
+        }
+        try dbQueue.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbQueue.close()
+    }
+    
+    func testCloseWithCachedStatement() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            _ = try db.cachedStatement(sql: "SELECT * FROM sqlite_master")
+        }
+        try dbQueue.close()
+        
+        // After close, access throws SQLITE_MISUSE
+        do {
+            try dbQueue.inDatabase { db in
+                try db.execute(sql: "SELECT * FROM sqlite_master")
+            }
+            XCTFail("Expected Error")
+        } catch DatabaseError.SQLITE_MISUSE { }
+        
+        // After close, closing is a noop
+        try dbQueue.close()
+    }
     
 
     
-
-    
-
-    
-
+    // Regression test for <https://github.com/groue/GRDB.swift/issues/1612>
+    func test_releaseMemory_after_close() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.close()
+        dbQueue.releaseMemory()
+    }
 }

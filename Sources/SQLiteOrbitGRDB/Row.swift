@@ -584,116 +584,6 @@
     }
   }
 
-  public protocol Cursor: AnyObject {
-    associatedtype Element
-
-    func next() throws -> Element?
-
-    func forEach(_ body: (Element) throws -> Void) throws
-  }
-
-  public final class AnyCursor<Element>: Cursor {
-    private let advance: () throws -> Element?
-    private let visit: (((Element) throws -> Void) throws -> Void)?
-
-    public init<C: Cursor>(_ cursor: C) where C.Element == Element {
-      advance = cursor.next
-      visit = cursor.forEach
-    }
-
-    public init(_ advance: @escaping () throws -> Element?) {
-      self.advance = advance
-      visit = nil
-    }
-
-    init(
-      _ advance: @escaping () throws -> Element?,
-      forEach visit: @escaping ((Element) throws -> Void) throws -> Void
-    ) {
-      self.advance = advance
-      self.visit = visit
-    }
-
-    public func forEach(_ body: (Element) throws -> Void) throws {
-      if let visit {
-        try visit(body)
-      } else {
-        while let value = try advance() {
-          try body(value)
-        }
-      }
-    }
-
-    public func next() throws -> Element? {
-      try advance()
-    }
-  }
-
-  extension Cursor {
-    public func map<T>(_ transform: @escaping (Element) throws -> T) -> AnyCursor<T> {
-      AnyCursor(
-        { try self.next().map(transform) },
-        forEach: { body in
-          try self.forEach { try body(transform($0)) }
-        }
-      )
-    }
-
-    public func filter(_ predicate: @escaping (Element) throws -> Bool) -> AnyCursor<Element> {
-      AnyCursor(
-        {
-          while let value = try self.next() {
-            if try predicate(value) {
-              return value
-            }
-          }
-          return nil
-        },
-        forEach: { body in
-          try self.forEach {
-            if try predicate($0) {
-              try body($0)
-            }
-          }
-        }
-      )
-    }
-
-    public func compactMap<T>(_ transform: @escaping (Element) throws -> T?) -> AnyCursor<T> {
-      AnyCursor(
-        {
-          while let value = try self.next() {
-            if let result = try transform(value) {
-              return result
-            }
-          }
-          return nil
-        },
-        forEach: { body in
-          try self.forEach {
-            if let result = try transform($0) {
-              try body(result)
-            }
-          }
-        }
-      )
-    }
-
-    public func forEach(_ body: (Element) throws -> Void) throws {
-      while let value = try next() {
-        try body(value)
-      }
-    }
-
-    public func reduce<T>(_ initial: T, _ nextPartialResult: (T, Element) throws -> T) throws -> T {
-      var result = initial
-      while let value = try next() {
-        result = try nextPartialResult(result, value)
-      }
-      return result
-    }
-  }
-
   extension DatabaseValueConvertible {
     public static func fetchCursor(
       _ db: Database,
@@ -701,8 +591,10 @@
       arguments: StatementArguments = StatementArguments(),
       adapter: (any RowAdapter)? = nil
     ) throws -> AnyCursor<Self> {
-      try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter)
-        .map { try $0.decode(Self.self, at: 0) }
+      AnyCursor(
+        try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter)
+          .map { try $0.decode(Self.self, at: 0) }
+      )
     }
 
     public static func fetchAll(
@@ -742,8 +634,10 @@
     )
       throws -> AnyCursor<Self>
     {
-      try Row.fetchCursor(statement, arguments: arguments, adapter: adapter)
-        .map { try $0.decode(Self.self, at: 0) }
+      AnyCursor(
+        try Row.fetchCursor(statement, arguments: arguments, adapter: adapter)
+          .map { try $0.decode(Self.self, at: 0) }
+      )
     }
 
     public static func fetchAll(

@@ -59,7 +59,29 @@ class FTS5PatternTests: GRDBTestCase {
         }
     }
     
-
+    func testInvalidFTS5Pattern() throws {
+        let dbQueue = try makeDatabaseQueue()
+        dbQueue.inDatabase { db in
+            let invalidRawPatterns = ["", "?!", "^", "NOT", "(", "AND", "OR", "\"", "missing:foo"]
+            for rawPattern in invalidRawPatterns {
+                do {
+                    _ = try FTS5Pattern(rawPattern: rawPattern, allowedColumns: ["title"])
+                    XCTFail("Expected pattern to be invalid: \(String(reflecting: rawPattern))")
+                } catch is DatabaseError {
+                } catch {
+                    XCTFail("Expected DatabaseError, not \(error)")
+                }
+                
+                do {
+                    _ = try db.makeFTS5Pattern(rawPattern: rawPattern, forTable: "books")
+                    XCTFail("Expected pattern to be invalid: \(String(reflecting: rawPattern))")
+                } catch is DatabaseError {
+                } catch {
+                    XCTFail("Expected DatabaseError, not \(error)")
+                }
+            }
+        }
+    }
     
     func testFTS5PatternWithAnyToken() throws {
         let wrongInputs = ["", "*", "^", " ", "(", "()", "\"", "?!"]

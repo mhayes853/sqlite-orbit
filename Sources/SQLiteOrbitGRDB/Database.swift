@@ -60,6 +60,7 @@
     }
 
     public func execute(sql: String, arguments: StatementArguments = StatementArguments()) throws {
+      let originalCount = arguments.values.count
       try translate {
         var remaining = sql
         var arguments = arguments
@@ -68,7 +69,17 @@
           guard let text = part.statement else {
             break
           }
-          let bound = try bindArguments(arguments, sql: text, allowRemaining: true)
+          let bound: (values: [DatabaseValue], consumed: Int)
+          do {
+            bound = try bindArguments(arguments, sql: text, allowRemaining: true)
+          } catch let error as DatabaseError where arguments.namedValues.isEmpty {
+            // GRDB reports positional argument mismatches with their count.
+            throw DatabaseError(
+              resultCode: error.extendedResultCode,
+              message: "wrong number of statement arguments: \(arguments.values.count)",
+              sql: text
+            )
+          }
           let cursor = try access.statementCursor(
             SQLiteOrbit.SQL(text: text, bindings: bound.values.map(\.orbitValue))
           )
@@ -86,6 +97,12 @@
           deliverRegionChanges()
         }
         if !arguments.values.isEmpty {
+          if arguments.namedValues.isEmpty {
+            throw DatabaseError(
+              resultCode: .SQLITE_MISUSE,
+              message: "wrong number of statement arguments: \(originalCount)"
+            )
+          }
           throw DatabaseError(
             resultCode: .SQLITE_MISUSE,
             message: "unused statement arguments",
@@ -182,6 +199,11 @@
           deliverRegionChanges()
         } catch is DatabaseRollback {
           traceTransactionStatement("ROLLBACK TRANSACTION")
+        } catch let error as SQLiteError where error.sql == "COMMIT" {
+          // A failed commit is reported with GRDB's statement text.
+          traceTransactionStatement("COMMIT TRANSACTION")
+          traceTransactionStatement("ROLLBACK TRANSACTION")
+          throw SQLiteError(code: error.code, message: error.message, sql: "COMMIT TRANSACTION")
         } catch {
           traceTransactionStatement("ROLLBACK TRANSACTION")
           throw error
@@ -317,6 +339,9 @@
     private func rawSelect(sql: String, values: [DatabaseValue]) throws -> RawSelectStatement? {
       guard let rawStatements else { return nil }
       let keyword = sql.drop { $0.isWhitespace }.prefix(6).uppercased()
+      if keyword == "PRAGMA" {
+        return try rawPragma(sql: sql, values: values, statements: rawStatements)
+      }
       guard keyword.hasPrefix("SELECT") || keyword.hasPrefix("WITH") || keyword.hasPrefix("VALUES")
       else { return nil }
       if transactionWasOpen, !(try access.isInsideTransaction) {
@@ -328,8 +353,43 @@
       }
       let info = try access.statementInfo(sql)
       guard info.isReadOnly, info.parameterCount == values.count else { return nil }
-      let raw = try RawSelectStatement(access: access, sql: sql, values: values, region: info)
+      let raw = try RawSelectStatement(
+        access: access,
+        sql: sql,
+        values: values,
+        region: info.readRegion
+      )
       rawStatements.append(raw)
+      return raw
+    }
+
+    // Pragmas that only query the connection or the schema. GRDB runs them in reads, while
+    // SQLiteOrbit's read guard refuses every pragma it cannot prove read-only.
+    private static let queryPragmas: Set<String> = [
+      "application_id", "auto_vacuum", "busy_timeout", "cache_size", "collation_list",
+      "compile_options", "data_version", "database_list", "defer_foreign_keys", "encoding",
+      "foreign_key_list", "foreign_keys", "freelist_count", "function_list", "index_info",
+      "index_list", "index_xinfo", "journal_mode", "page_count", "page_size", "query_only",
+      "recursive_triggers", "schema_version", "synchronous", "table_info", "table_list",
+      "table_xinfo", "temp_store", "user_version"
+    ]
+
+    private func rawPragma(sql: String, values: [DatabaseValue], statements: RawStatementList)
+      throws -> RawSelectStatement?
+    {
+      guard !sql.contains("=") else { return nil }
+      let body = sql.drop { $0.isWhitespace }.dropFirst(6).drop { $0.isWhitespace }
+      let name = body.prefix { $0.isLetter || $0 == "_" || $0 == "." || $0.isNumber }
+        .split(separator: ".").last.map { $0.lowercased() }
+      guard let name, Self.queryPragmas.contains(name) else { return nil }
+      // Pragmas with an argument set values, except the introspection pragmas.
+      let introspection: Set<String> = [
+        "foreign_key_list", "index_info", "index_list", "index_xinfo", "table_info", "table_list",
+        "table_xinfo"
+      ]
+      if body.contains("("), !introspection.contains(name) { return nil }
+      let raw = try RawSelectStatement(access: access, sql: sql, values: values, region: .empty)
+      statements.append(raw)
       return raw
     }
 
@@ -377,24 +437,34 @@
       access: SQLiteScopedAccess,
       sql: String,
       values: [DatabaseValue],
-      region: SQLiteStatementInfo
+      region: OrbitDatabaseRegion
     )
       throws
     {
       self.access = access
       self.sql = sql
-      library = try access.configuration.library
-      connection = try access.sqliteConnection
-      readRegion = region.readRegion
-      columnNames = region.columnNames
+      let library = try access.configuration.library
+      let connection = try access.sqliteConnection
+      self.library = library
+      self.connection = connection
+      readRegion = region
       var statement: OpaquePointer?
       let code = sql.withCString {
         library.statements.preparation.prepare(connection, $0, -1, 0, &statement, nil)
       }
       guard code == 0, let statement else {
         if let statement { _ = library.statements.execution.finalize(statement) }
-        throw error(code)
+        let extended = library.connections.extendedErrorCode(connection)
+        throw SQLiteError(
+          code: SQLiteResultCode(rawValue: extended != 0 ? extended : code),
+          message: library.connections.errorMessage(connection).map { String(cString: $0) },
+          sql: sql
+        )
       }
+      columnNames = (0..<library.columns.count(statement))
+        .map {
+          library.columns.name(statement, $0).map { String(cString: $0) } ?? ""
+        }
       pointer = statement
       for (offset, value) in values.enumerated() {
         let index = Int32(offset + 1)
@@ -512,6 +582,9 @@
 
     /// The primary key columns, or nil for the hidden rowid of a table without primary key.
     public var columnInfos: [ColumnInfo]?
+
+    /// Whether the table has a rowid: false for views and WITHOUT ROWID tables.
+    public internal(set) var tableHasRowID = true
 
     public var isRowID: Bool {
       rowIDColumn != nil || hiddenRowID
@@ -692,7 +765,16 @@
   }
 
   public final class Statement {
-    let database: Database
+    // The database of the access that prepared the statement. As in GRDB, a statement can run
+    // again in a later access on the same thread, which then provides the connection.
+    private let preparingDatabase: Database
+    var database: Database {
+      if (try? preparingDatabase.access.checkAccess()) == nil, let current = currentThreadDatabase()
+      {
+        return current
+      }
+      return preparingDatabase
+    }
     let cached: Bool
     public let sql: String
 
@@ -710,7 +792,12 @@
       columnNames.count
     }
 
-    public let databaseRegion: DatabaseRegion
+    /// The region read by the statement. Requests can extend it, for example with the tables of
+    /// prefetched associations, and executing the statement reports the extension as read.
+    public internal(set) var databaseRegion: DatabaseRegion
+
+    // The region SQLite reports for the statement itself.
+    private let compiledRegion: DatabaseRegion
 
     /// Whether the statement does not write to the database.
     public let isReadonly: Bool
@@ -719,12 +806,13 @@
     var dumpedRow: Row?
 
     init(database: Database, sql: String, cached: Bool) throws {
-      self.database = database
+      preparingDatabase = database
       self.sql = trimmedSQLStatement(sql)
       self.cached = cached
       let info = try translate { try database.access.statementInfo(sql) }
       columnNames = info.columnNames
       databaseRegion = DatabaseRegion(info.readRegion)
+      compiledRegion = databaseRegion
       isReadonly = info.isReadOnly
     }
 
@@ -758,6 +846,12 @@
         unchecked: arguments == nil && unchecked,
         adapter: adapter
       )
+      if databaseRegion != compiledRegion {
+        try translate { try database.access.notifyReads(in: databaseRegion.native) }
+        if let recorded = database.regionRecorder {
+          database.regionRecorder = recorded.union(databaseRegion)
+        }
+      }
       persistenceCursors?.append(cursor)
       return cursor
     }

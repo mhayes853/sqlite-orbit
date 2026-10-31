@@ -448,9 +448,7 @@
       try dumpStatements(allStatements(literal: sql), format: format, to: &dumpStream)
     }
 
-    /// Prints the results of a request.
-    ///
-    /// Prefetched associations are not dumped.
+    /// Prints the results of a request, then the rows of its prefetched associations.
     public func dumpRequest(
       _ request: some FetchRequest,
       format: some DumpFormat = .debug(),
@@ -531,6 +529,18 @@
     ) throws {
       let prepared = try request.makePreparedRequest(self, forSingleResult: false)
       try dumpStatements(AnyCursor([prepared.statement]), format: format, to: &stream)
+      // Dump the requests of prefetched associations, after the base rows.
+      if let supplementaryFetch = prepared.supplementaryFetch {
+        let rows = try Row.fetchAllRows(self, request)
+        try withoutActuallyEscaping(
+          { (request: QueryInterfaceRequest<Row>, keyPath: [String]) in
+            stream.write("\n")
+            stream.writeln(keyPath.joined(separator: "."))
+            try self.dumpRequest(request, format: format, to: &stream)
+          },
+          do: { willExecute in try supplementaryFetch(self, rows, willExecute) }
+        )
+      }
     }
 
     private func dumpTables(

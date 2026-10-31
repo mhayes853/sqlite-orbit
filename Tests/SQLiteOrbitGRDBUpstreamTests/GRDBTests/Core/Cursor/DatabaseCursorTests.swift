@@ -213,7 +213,14 @@ class DatabaseCursorTests: GRDBTestCase {
 //        sqlite3_close_v2(connection)
     }
     
-
+    // This test passes if it compiles
+    func testAssociatedType() throws {
+        func accept(_ cursor: some DatabaseCursor<String>) { }
+        func useCursor(_ db: Database) throws {
+            let cursor = try String.fetchCursor(db, sql: "SELECT 'foo'")
+            accept(cursor)
+        }
+    }
     
     // For profiling tests
     let profilingSQL = """
@@ -276,13 +283,41 @@ class DatabaseCursorTests: GRDBTestCase {
         }
     }
     
-
+    // Profiling test
+    func testFastDatabaseValueCursorStep() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.read { db in
+            let cursor: FastDatabaseValueCursor<Int> = try Int.fetchCursor(db, sql: profilingSQL)
+            while let _ = try cursor.next() { }
+        }
+    }
     
-
+    // Profiling test
+    func testFastDatabaseValueCursorForEach() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.read { db in
+            let cursor: FastDatabaseValueCursor<Int> = try Int.fetchCursor(db, sql: profilingSQL)
+            try cursor.forEach { _ in }
+        }
+    }
     
-
+    // Profiling test
+    func testFastNullableDatabaseValueCursorStep() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.read { db in
+            let cursor: FastDatabaseValueCursor<Int?> = try Optional<Int>.fetchCursor(db, sql: profilingSQL)
+            while let _ = try cursor.next() { }
+        }
+    }
     
-
+    // Profiling test
+    func testFastNullableDatabaseValueCursorForEach() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.read { db in
+            let cursor: FastDatabaseValueCursor<Int?> = try Optional<Int>.fetchCursor(db, sql: profilingSQL)
+            try cursor.forEach { _ in }
+        }
+    }
     
     // Profiling test
     func testRecordCursorStep() throws {

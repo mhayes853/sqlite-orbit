@@ -3,6 +3,8 @@
 
   public typealias RecordCursor<Record> = AnyCursor<Record>
   public typealias DatabaseValueCursor<Value> = AnyCursor<Value>
+  /// The cursor of values fetched with optimized decoding, in GRDB.
+  public typealias FastDatabaseValueCursor<Value> = AnyCursor<Value>
 
   extension DatabaseValueConvertible {
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
@@ -14,7 +16,7 @@
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
-      try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) }
+      AnyCursor(try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) })
     }
 
     @_disfavoredOverload
@@ -67,7 +69,9 @@
     )
       throws -> AnyCursor<Self>
     {
-      try Row.fetchCursor(statement, arguments: arguments, adapter: adapter).map(Self.init(row:))
+      AnyCursor(
+        try Row.fetchCursor(statement, arguments: arguments, adapter: adapter).map(Self.init(row:))
+      )
     }
 
     public static func fetchAll(
@@ -94,7 +98,7 @@
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
-      try Row.fetchCursor(db, request).map(Self.init(row:))
+      AnyCursor(try Row.fetchCursor(db, request).map(Self.init(row:)))
     }
 
     public static func fetchCursor(_ db: Database, _ literal: SQL) throws -> AnyCursor<Self> {
@@ -317,20 +321,10 @@
       try all().fetchCursor(db)
     }
 
-    public func filter<S: Sequence>(keys: S) -> QueryInterfaceRequest<RowDecoder>
-    where S.Element: DatabaseValueConvertible {
-      all().filter(keys: keys)
-    }
-
+    @_disfavoredOverload
     public func filter<S: Sequence>(ids: S) -> QueryInterfaceRequest<RowDecoder>
     where S.Element: DatabaseValueConvertible {
       all().filter(ids: ids)
-    }
-
-    public func filter(key: [String: (any DatabaseValueConvertible)?]) -> QueryInterfaceRequest<
-      RowDecoder
-    > {
-      all().filter(key: key)
     }
 
     public func filter(keys: [[String: (any DatabaseValueConvertible)?]]) -> QueryInterfaceRequest<
@@ -353,7 +347,7 @@
       all().selecting(selections)
     }
 
-    public func select<T>(_ selections: any SQLSelectable..., as type: T.Type)
+    public func select<T>(_ selections: any SQLSelectable..., as type: T.Type = T.self)
       -> QueryInterfaceRequest<T>
     {
       all().asRequest(of: type).selecting(selections)
@@ -381,7 +375,7 @@
     public static func fetchCursor<R: FetchRequest>(_ db: Database, _ request: R) throws
       -> AnyCursor<Self> where R.RowDecoder == Self
     {
-      try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) }
+      AnyCursor(try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) })
     }
 
     public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Self]
@@ -407,7 +401,7 @@
     public static func fetchCursor<R: FetchRequest>(_ db: Database, _ request: R) throws
       -> AnyCursor<Self> where R.RowDecoder == Self
     {
-      try Row.fetchCursor(db, request).map(Self.init(row:))
+      AnyCursor(try Row.fetchCursor(db, request).map(Self.init(row:)))
     }
 
     public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Self]

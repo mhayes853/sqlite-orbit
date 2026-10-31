@@ -184,19 +184,34 @@
 
   public struct DatabaseRegion: Hashable, Sendable, DatabaseRegionConvertible {
     let native: OrbitDatabaseRegion
+    // Rows of tables restricted to some rowids, keyed by lowercased table name. Observation uses
+    // the table-level native region; rowids refine descriptions, equality, and intersections.
+    let rowIDs: [String: Set<Int64>]
 
     public init() {
       native = .empty
+      rowIDs = [:]
     }
 
-    init(_ native: OrbitDatabaseRegion) {
+    init(_ native: OrbitDatabaseRegion, rowIDs: [String: Set<Int64>] = [:]) {
       self.native = native
+      self.rowIDs = rowIDs
     }
 
     public init(table: String, columns: [String]? = nil) {
       native =
         columns.map { OrbitDatabaseRegion(columns: $0, in: table) }
         ?? OrbitDatabaseRegion(table: table)
+      rowIDs = [:]
+    }
+
+    /// The region of some rows of a table.
+    public init(table: String, rowIds: Set<Int64>) {
+      if rowIds.isEmpty {
+        self.init()
+      } else {
+        self.init(OrbitDatabaseRegion(table: table), rowIDs: [table.lowercased(): rowIds])
+      }
     }
 
     public static let fullDatabase = Self(.fullDatabase)
@@ -209,17 +224,59 @@
       self
     }
 
+    // The lowercased names of the main-schema tables of a native region.
+    private static func tables(of native: OrbitDatabaseRegion) -> Set<String> {
+      Set(
+        (RegionDescription(native.serialized())?.tables ?? [])
+          .filter { $0.schema == "main" }
+          .map { $0.name.lowercased() }
+      )
+    }
+
     public func union(_ other: Self) -> Self {
-      Self(native.union(other.native))
+      let native = native.union(other.native)
+      if native.isFullDatabase { return Self(native) }
+      var rowIDs: [String: Set<Int64>] = [:]
+      let lhsTables = Self.tables(of: self.native)
+      let rhsTables = Self.tables(of: other.native)
+      for table in Self.tables(of: native) {
+        let lhs = lhsTables.contains(table) ? (self.rowIDs[table] ?? nil) : Set()
+        let rhs = rhsTables.contains(table) ? (other.rowIDs[table] ?? nil) : Set()
+        // A side that covers the table without a restriction covers all rows.
+        if let lhs, let rhs {
+          rowIDs[table] = lhs.union(rhs)
+        }
+      }
+      return Self(native, rowIDs: rowIDs)
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-      lhs.native == rhs.native
+      lhs.native == rhs.native && lhs.rowIDs == rhs.rowIDs
+    }
+
+    public func hash(into hasher: inout Hasher) {
+      hasher.combine(native)
+      hasher.combine(rowIDs)
     }
 
     /// The region common to both regions.
     public func intersection(_ other: Self) -> Self {
-      Self(native.intersection(other.native))
+      var native = native.intersection(other.native)
+      var rowIDs: [String: Set<Int64>] = [:]
+      for table in Self.tables(of: native) {
+        switch (self.rowIDs[table], other.rowIDs[table]) {
+        case (nil, nil): break
+        case (let ids?, nil), (nil, let ids?): rowIDs[table] = ids
+        case (let lhs?, let rhs?):
+          let ids = lhs.intersection(rhs)
+          if ids.isEmpty {
+            native = native.subtracting(OrbitDatabaseRegion(table: table))
+          } else {
+            rowIDs[table] = ids
+          }
+        }
+      }
+      return Self(native, rowIDs: rowIDs)
     }
 
     /// Whether a change in `other` affects this region.
@@ -240,10 +297,13 @@
       return tables.tables
         .map { table in
           let name = table.schema == "main" ? table.name : table.schema + "." + table.name
-          if table.includesUnspecifiedColumns {
-            return name + "(*)"
+          var description =
+            table.includesUnspecifiedColumns
+            ? name + "(*)" : name + "(" + table.columns.sorted().joined(separator: ",") + ")"
+          if table.schema == "main", let ids = rowIDs[table.name.lowercased()] {
+            description += "[" + ids.sorted().map(String.init).joined(separator: ",") + "]"
           }
-          return name + "(" + table.columns.sorted().joined(separator: ",") + ")"
+          return description
         }
         .sorted()
         .joined(separator: ",")
@@ -335,8 +395,7 @@
 
   extension QueryInterfaceRequest: DatabaseRegionConvertible {
     public func databaseRegion(_ db: Database) throws -> DatabaseRegion {
-      let sql = try sql(in: db)
-      return try SQLRequest<Row>(literal: sql).databaseRegion(db)
+      try makePreparedRequest(db, forSingleResult: false).statement.databaseRegion
     }
   }
 

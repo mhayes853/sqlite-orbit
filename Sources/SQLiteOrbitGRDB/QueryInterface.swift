@@ -57,7 +57,7 @@
     }
 
     public func fetchCursor(_ db: Database) throws -> AnyCursor<RowDecoder> {
-      try Row.fetchCursor(db, self).map { try decodeRow($0, as: RowDecoder.self) }
+      AnyCursor(try Row.fetchCursor(db, self).map { try decodeRow($0, as: RowDecoder.self) })
     }
 
     public func fetchAll(_ db: Database) throws -> [RowDecoder] {
@@ -201,9 +201,20 @@
         .makePreparedRequest(db)
       let associations = relation.prefetchedAssociations
       if !associations.isEmpty {
+        // Observe the tables of prefetched associations, even before any row is fetched.
+        if !prepared.statement.databaseRegion.isEmpty {
+          prepared.statement.databaseRegion = try prepared.statement.databaseRegion
+            .union(relation.prefetchedRegion(db))
+        }
         let relation = relation
-        prepared.supplementaryFetch = { db, rows in
-          try prefetch(db, associations: associations, from: relation, into: rows)
+        prepared.supplementaryFetch = { db, rows, willExecute in
+          try prefetch(
+            db,
+            associations: associations,
+            from: relation,
+            into: rows,
+            willExecute: willExecute
+          )
         }
       }
       return prepared
@@ -506,7 +517,7 @@
       let rows = try Array(
         fetchCursor(prepared.statement, adapter: prepared.adapter).map { $0.copy() }
       )
-      try prepared.supplementaryFetch?(db, rows)
+      try prepared.supplementaryFetch?(db, rows, nil)
       return rows
     }
 
@@ -516,7 +527,7 @@
       guard let row = try fetchOne(prepared.statement, adapter: prepared.adapter) else {
         return nil
       }
-      try prepared.supplementaryFetch?(db, [row])
+      try prepared.supplementaryFetch?(db, [row], nil)
       return row
     }
   }

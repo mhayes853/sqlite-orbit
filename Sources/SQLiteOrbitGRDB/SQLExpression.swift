@@ -672,6 +672,22 @@
       }
     }
 
+    /// Whether a filter provably selects no row (`WHERE 0`, `WHERE NULL`).
+    var selectsNoRow: Bool {
+      switch node {
+      case .value(let value):
+        return value.isNull || value == false.databaseValue
+      case .associative(let op, let expressions) where op == .and:
+        return expressions.contains(where: \.selectsNoRow)
+      case .associative(let op, let expressions) where op == .or:
+        return expressions.allSatisfy(\.selectsNoRow)
+      case .collated(let e, _):
+        return e.selectsNoRow
+      default:
+        return false
+      }
+    }
+
     var isConstantInRequest: Bool {
       switch node {
       case .value:
@@ -738,10 +754,12 @@
 
     /// Columns that are NOT NULL for any existing row, used to test joined rows for existence.
     func existenceCheckColumns(_ table: String) throws -> [String] {
-      if try tableExists(table) {
-        let key = try primaryKey(table)
+      // Tables, and views whose primary key is defined by the schema source, check their
+      // primary key. Other views check all columns.
+      let isTable = try tableExists(table)
+      if isTable || schemaSource != nil, let key = try? primaryKey(table) {
         if let column = key.rowIDColumn { return [column] }
-        if try tableHasRowID(table) { return [Column.rowID.name] }
+        if try isTable && tableHasRowID(table) { return [Column.rowID.name] }
         return key.columns
       }
       return try columns(in: table).map(\.name)

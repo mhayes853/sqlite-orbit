@@ -138,6 +138,18 @@
       }
     }
 
+    /// Runs `updates` and counts the changed rows. Views count total changes, so that changes
+    /// performed by INSTEAD OF triggers are counted, as in GRDB.
+    func countChanges<T>(forTable table: String, _ updates: () throws -> T) throws -> (T, Int) {
+      if try viewExists(table) {
+        let previous = try untracedTotalChanges()
+        let result = try updates()
+        return (result, try untracedTotalChanges() - previous)
+      }
+      let result = try updates()
+      return (result, changesCount)
+    }
+
     /// `total_changes()` without tracing the query.
     func untracedTotalChanges() throws -> Int {
       try translate {

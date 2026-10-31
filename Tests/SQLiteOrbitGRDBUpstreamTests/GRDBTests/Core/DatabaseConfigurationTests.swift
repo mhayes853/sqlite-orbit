@@ -6,9 +6,93 @@ import SQLiteOrbitGRDB
 class DatabaseConfigurationTests: GRDBTestCase {
     // MARK: - prepareDatabase
     
-
+    func testPrepareDatabase() throws {
+        // prepareDatabase is called when connection opens
+        let connectionCountMutex = Mutex(0)
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in
+            connectionCountMutex.increment()
+        }
+        
+        connectionCountMutex.store(0)
+        _ = try DatabaseQueue(configuration: configuration)
+        XCTAssertEqual(connectionCountMutex.load(), 1)
+        
+        connectionCountMutex.store(0)
+        _ = try makeDatabaseQueue(configuration: configuration)
+        XCTAssertEqual(connectionCountMutex.load(), 1)
+        
+        connectionCountMutex.store(0)
+        let pool = try makeDatabasePool(configuration: configuration)
+        XCTAssertEqual(connectionCountMutex.load(), 1) // writer
+        
+        connectionCountMutex.store(0)
+        try pool.read { _ in }
+        XCTAssertEqual(connectionCountMutex.load(), 1) // 1st reader
+        
+        connectionCountMutex.store(0)
+        try pool.makeSnapshot().read { _ in }
+        XCTAssertEqual(connectionCountMutex.load(), 1) // snapshot
+        
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        connectionCountMutex.store(0)
+        let snapshotPool = try pool.makeSnapshotPool()
+        XCTAssertEqual(connectionCountMutex.load(), 1) // snapshot
+        try snapshotPool.read { _ in }
+        XCTAssertEqual(connectionCountMutex.load(), 2) // 1st reader
+#endif
+    }
     
-
+    func testPrepareDatabaseError() throws {
+        struct TestError: Error { }
+        let errorMutex: Mutex<TestError?> = Mutex(nil)
+        
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in
+            if let error = errorMutex.load() {
+                throw error
+            }
+        }
+        
+        // TODO: what about in-memory DatabaseQueue???
+        
+        do {
+            errorMutex.store(TestError())
+            _ = try makeDatabaseQueue(configuration: configuration)
+            XCTFail("Expected TestError")
+        } catch is TestError { }
+        
+        do {
+            errorMutex.store(TestError())
+            _ = try makeDatabasePool(configuration: configuration)
+            XCTFail("Expected TestError")
+        } catch is TestError { }
+        
+        do {
+            errorMutex.store(nil)
+            let pool = try makeDatabasePool(configuration: configuration)
+            
+            do {
+                errorMutex.store(TestError())
+                try pool.read { _ in }
+                XCTFail("Expected TestError")
+            } catch is TestError { }
+            
+            do {
+                errorMutex.store(TestError())
+                _ = try pool.makeSnapshot()
+                XCTFail("Expected TestError")
+            } catch is TestError { }
+            
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+            do {
+                errorMutex.store(TestError())
+                _ = try pool.makeSnapshotPool()
+                XCTFail("Expected TestError")
+            } catch is TestError { }
+#endif
+        }
+    }
     
     // MARK: - acceptsDoubleQuotedStringLiterals
     

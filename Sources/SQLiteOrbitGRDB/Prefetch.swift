@@ -67,7 +67,8 @@
     _ db: Database,
     associations: [_SQLAssociation],
     from origin: SQLRelation,
-    into rows: [Row]
+    into rows: [Row],
+    willExecute: WillExecuteSupplementaryRequest? = nil
   ) throws {
     guard let firstRow = rows.first else { return }
     for association in associations {
@@ -119,6 +120,7 @@
         request = prefetchRequest(association, filter: filter, pivotColumns: pivotColumns)
       }
 
+      try willExecute?(request, association.keyPath)
       let prefetched = try request.fetchAll(db)
       var groups: [[DatabaseValue]: [Row]] = [:]
       if let first = prefetched.first {
@@ -184,6 +186,7 @@
           pivotColumns: mapping.rightColumns
         )
         let statement = try SQLQueryGenerator(relation: request.relation).makeStatement(db)
+        guard !statement.databaseRegion.isEmpty else { continue }
         region = try region.union(statement.databaseRegion)
           .union(request.relation.prefetchedRegion(db))
       }
@@ -194,7 +197,12 @@
   extension QueryInterfaceRequest {
     /// The region of the requests of prefetched associations (`including(all:)`).
     func prefetchedRegion(_ db: Database) throws -> DatabaseRegion {
-      try relation.prefetchedRegion(db)
+      if let filter = try relation.filter?.resolve(db), filter.selectsNoRow,
+        try db.tableExists(relation.source.tableName)
+      {
+        return DatabaseRegion()
+      }
+      return try relation.prefetchedRegion(db)
     }
   }
 #endif

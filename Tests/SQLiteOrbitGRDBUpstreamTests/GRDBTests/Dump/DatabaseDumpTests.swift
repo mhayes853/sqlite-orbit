@@ -1148,7 +1148,69 @@ final class DatabaseDumpTests: GRDBTestCase {
         }
     }
     
-
+    func test_dumpTables_single_view_with_schema_source() throws {
+        struct SchemaSource: DatabaseSchemaSource {
+            func columnsForPrimaryKey(_ db: Database, inView view: DatabaseObjectID) throws -> [String]? {
+                ["teamId", "name"]
+            }
+        }
+        dbConfiguration.schemaSource = SchemaSource()
+        
+        try makeRugbyDatabase().write { db in
+            try db.create(view: "playerName", as: Player
+                .orderByPrimaryKey()
+                .filter { $0.teamId != nil }
+                .select { [$0.teamId, $0.name] })
+            
+            do {
+                // Default order: use the view ordering
+                do {
+                    // Default format
+                    let stream = TestStream()
+                    try db.dumpTables(["playerName"], to: stream)
+                    XCTAssertEqual(stream.output, """
+                    FRA|Antoine Dupond
+                    ENG|Owen Farrell
+                    
+                    """)
+                }
+                do {
+                    // Custom format
+                    let stream = TestStream()
+                    try db.dumpTables(["playerName"], format: .json(), to: stream)
+                    XCTAssertEqual(stream.output, """
+                    [{"teamId":"FRA","name":"Antoine Dupond"},
+                    {"teamId":"ENG","name":"Owen Farrell"}]
+                    
+                    """)
+                }
+            }
+            
+            do {
+                // Stable order (primary key)
+                do {
+                    // Default format
+                    let stream = TestStream()
+                    try db.dumpTables(["playerName"], stableOrder: true, to: stream)
+                    XCTAssertEqual(stream.output, """
+                    ENG|Owen Farrell
+                    FRA|Antoine Dupond
+                    
+                    """)
+                }
+                do {
+                    // Custom format
+                    let stream = TestStream()
+                    try db.dumpTables(["playerName"], format: .json(), stableOrder: true, to: stream)
+                    XCTAssertEqual(stream.output, """
+                    [{"teamId":"ENG","name":"Owen Farrell"},
+                    {"teamId":"FRA","name":"Antoine Dupond"}]
+                    
+                    """)
+                }
+            }
+        }
+    }
 
     func test_dumpTables_multiple() throws {
         try makeRugbyDatabase().read { db in

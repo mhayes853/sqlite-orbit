@@ -203,7 +203,10 @@
       arguments: StatementArguments = StatementArguments(),
       adapter: (any RowAdapter)? = nil
     ) throws -> AnyCursor<Self> {
-      try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter).map(Self.init(row:))
+      AnyCursor(
+        try Row.fetchCursor(db, sql: sql, arguments: arguments, adapter: adapter)
+          .map(Self.init(row:))
+      )
     }
 
     public static func fetchAll(_ db: Database, _ literal: SQL) throws -> [Self] {

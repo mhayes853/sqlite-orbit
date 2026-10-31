@@ -5,15 +5,252 @@ import SQLiteOrbitGRDB
 
 class DatabaseRegionTests : GRDBTestCase {
     
-
+    func testRegionEquatable() {
+        // An array of distinct selection infos
+        let regions = [
+            DatabaseRegion.fullDatabase,
+            DatabaseRegion(),
+            DatabaseRegion(table: "foo"),
+            DatabaseRegion(table: "foo", columns: ["a", "b"]),
+            DatabaseRegion(table: "foo", columns: ["b", "c"]),
+            DatabaseRegion(table: "foo", rowIds: [1, 2]),
+            DatabaseRegion(table: "foo", rowIds: [2, 3]),
+            DatabaseRegion(table: "bar")]
+        
+        for (i1, s1) in regions.enumerated() {
+            for (i2, s2) in regions.enumerated() {
+                if i1 == i2 {
+                    XCTAssertEqual(s1, s2)
+                } else {
+                    XCTAssertNotEqual(s1, s2)
+                }
+            }
+        }
+        
+        // Case insensitivity
+        XCTAssertEqual(
+            DatabaseRegion(table: "foo"),
+            DatabaseRegion(table: "FOO"))
+        XCTAssertEqual(
+            DatabaseRegion(table: "foo", columns: ["a", "b"]),
+            DatabaseRegion(table: "FOO", columns: ["A", "B"]))
+    }
     
-
+    func testRegionUnion() {
+        let regions = [
+            DatabaseRegion.fullDatabase,
+            DatabaseRegion(),
+            DatabaseRegion(table: "foo"),
+            DatabaseRegion(table: "foo", columns: ["a", "b"]),
+            DatabaseRegion(table: "foo", columns: ["b", "c"]),
+            DatabaseRegion(table: "foo", rowIds: [1, 2]),
+            DatabaseRegion(table: "foo", rowIds: [2, 3]),
+            DatabaseRegion(table: "bar")]
+        
+        var unions: [DatabaseRegion] = []
+        for s1 in regions {
+            for s2 in regions {
+                unions.append(s1.union(s2))
+            }
+        }
+        
+        XCTAssertEqual(unions.map(\.description), [
+            "full database",
+            "full database",
+            "full database",
+            "full database",
+            "full database",
+            "full database",
+            "full database",
+            "full database",
+            
+            "full database",
+            "empty",
+            "foo(*)",
+            "foo(a,b)",
+            "foo(b,c)",
+            "foo(*)[1,2]",
+            "foo(*)[2,3]",
+            "bar(*)",
+            
+            "full database",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "bar(*),foo(*)",
+            
+            "full database",
+            "foo(a,b)",
+            "foo(*)",
+            "foo(a,b)",
+            "foo(a,b,c)",
+            "foo(*)",
+            "foo(*)",
+            "bar(*),foo(a,b)",
+            
+            "full database",
+            "foo(b,c)",
+            "foo(*)",
+            "foo(a,b,c)",
+            "foo(b,c)",
+            "foo(*)",
+            "foo(*)",
+            "bar(*),foo(b,c)",
+            
+            "full database",
+            "foo(*)[1,2]",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)[1,2]",
+            "foo(*)[1,2,3]",
+            "bar(*),foo(*)[1,2]",
+            
+            "full database",
+            "foo(*)[2,3]",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)",
+            "foo(*)[1,2,3]",
+            "foo(*)[2,3]",
+            "bar(*),foo(*)[2,3]",
+            
+            "full database",
+            "bar(*)",
+            "bar(*),foo(*)",
+            "bar(*),foo(a,b)",
+            "bar(*),foo(b,c)",
+            "bar(*),foo(*)[1,2]",
+            "bar(*),foo(*)[2,3]",
+            "bar(*)"])
+    }
     
-
+    func testRegionUnionOfColumnsAndRows() {
+        let regions = [
+            DatabaseRegion(table: "foo", columns: ["a"]).intersection(DatabaseRegion(table: "foo", rowIds: [1])),
+            DatabaseRegion(table: "foo", columns: ["b"]).intersection(DatabaseRegion(table: "foo", rowIds: [2])),
+            ]
+        
+        var unions: [DatabaseRegion] = []
+        for s1 in regions {
+            for s2 in regions {
+                unions.append(s1.union(s2))
+            }
+        }
+        
+        XCTAssertEqual(unions.map(\.description), ["foo(a)[1]", "foo(a,b)[1,2]", "foo(a,b)[1,2]", "foo(b)[2]"])
+    }
     
-
+    func testRegionIntersection() {
+        let regions = [
+            DatabaseRegion.fullDatabase,
+            DatabaseRegion(),
+            DatabaseRegion(table: "foo"),
+            DatabaseRegion(table: "foo", columns: ["a", "b"]),
+            DatabaseRegion(table: "foo", columns: ["b", "c"]),
+            DatabaseRegion(table: "foo", rowIds: [1, 2]),
+            DatabaseRegion(table: "foo", rowIds: [2, 3]),
+            DatabaseRegion(table: "bar")]
+        
+        var intersection: [DatabaseRegion] = []
+        for s1 in regions {
+            for s2 in regions {
+                intersection.append(s1.intersection(s2))
+            }
+        }
+        
+        XCTAssertEqual(intersection.map(\.description), [
+            "full database",
+            "empty",
+            "foo(*)",
+            "foo(a,b)",
+            "foo(b,c)",
+            "foo(*)[1,2]",
+            "foo(*)[2,3]",
+            "bar(*)",
+            
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            
+            "foo(*)",
+            "empty",
+            "foo(*)",
+            "foo(a,b)",
+            "foo(b,c)",
+            "foo(*)[1,2]",
+            "foo(*)[2,3]",
+            "empty",
+            
+            "foo(a,b)",
+            "empty",
+            "foo(a,b)",
+            "foo(a,b)",
+            "foo(b)",
+            "foo(a,b)[1,2]",
+            "foo(a,b)[2,3]",
+            "empty",
+            
+            "foo(b,c)",
+            "empty",
+            "foo(b,c)",
+            "foo(b)",
+            "foo(b,c)",
+            "foo(b,c)[1,2]",
+            "foo(b,c)[2,3]",
+            "empty",
+            
+            "foo(*)[1,2]",
+            "empty",
+            "foo(*)[1,2]",
+            "foo(a,b)[1,2]",
+            "foo(b,c)[1,2]",
+            "foo(*)[1,2]",
+            "foo(*)[2]",
+            "empty",
+            
+            "foo(*)[2,3]",
+            "empty",
+            "foo(*)[2,3]",
+            "foo(a,b)[2,3]",
+            "foo(b,c)[2,3]",
+            "foo(*)[2]",
+            "foo(*)[2,3]",
+            "empty",
+            
+            "bar(*)",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "empty",
+            "bar(*)"])
+    }
     
-
+    func testRegionIntersectionOfColumnsAndRows() {
+        let regions = [
+            DatabaseRegion(table: "foo", columns: ["a"]).intersection(DatabaseRegion(table: "foo", rowIds: [1])),
+            DatabaseRegion(table: "foo", columns: ["b"]).intersection(DatabaseRegion(table: "foo", rowIds: [2])),
+            ]
+        
+        var intersection: [DatabaseRegion] = []
+        for s1 in regions {
+            for s2 in regions {
+                intersection.append(s1.intersection(s2))
+            }
+        }
+        
+        XCTAssertEqual(intersection.map(\.description), ["foo(a)[1]", "empty", "empty", "foo(b)[2]"])
+    }
     
     func testSelectStatement_rowid() throws {
         let dbQueue = try makeDatabaseQueue()

@@ -725,7 +725,41 @@ class DatabaseMigratorTests : GRDBTestCase {
         try migrator.migrate(dbQueue)
     }
     
-
+    func testHasSchemaChangesWorksWithReadonlyConfig() throws {
+        // 1st version of the migrator
+        var migrator1 = DatabaseMigrator()
+        migrator1.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+            }
+        }
+        
+        // 2nd version of the migrator
+        var migrator2 = DatabaseMigrator()
+        migrator2.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+                t.column("score", .integer) // <- schema change, because reasons (development)
+            }
+        }
+        
+        let dbName = ProcessInfo.processInfo.globallyUniqueString
+        let dbQueue = try makeDatabaseQueue(filename: dbName)
+        
+        try XCTAssertFalse(dbQueue.read(migrator1.hasSchemaChanges))
+        try migrator1.migrate(dbQueue)
+        try XCTAssertFalse(dbQueue.read(migrator1.hasSchemaChanges))
+        try dbQueue.close()
+        
+        // check that the migrator doesn't fail for a readonly connection
+        dbConfiguration.readonly = true
+        let readonlyQueue = try makeDatabaseQueue(filename: dbName)
+        
+        try XCTAssertFalse(readonlyQueue.read(migrator1.hasSchemaChanges))
+        try XCTAssertTrue(readonlyQueue.read(migrator2.hasSchemaChanges))
+    }
     
     func testEraseDatabaseOnSchemaChange() throws {
         // 1st version of the migrator
@@ -1122,9 +1156,62 @@ class DatabaseMigratorTests : GRDBTestCase {
         } catch DatabaseError.SQLITE_CONSTRAINT_FOREIGNKEY { }
     }
     
-
+    func test_schemaSource_is_disabled_during_migrations() throws {
+        struct SchemaSource: DatabaseSchemaSource {
+            func columnsForPrimaryKey(_ db: Database, inView view: DatabaseObjectID) throws -> [String]? {
+                ["id"]
+            }
+        }
+        
+        dbConfiguration.schemaSource = SchemaSource()
+        let dbQueue = try makeDatabaseQueue()
+        var migrator = DatabaseMigrator()
+        
+        do {
+            migrator.registerMigration("A") { db in
+                try db.execute(sql: "CREATE VIEW myView as SELECT 1 AS id")
+                // Cache is empty, and schemaSource is disabled.
+                XCTAssertNil(db.schemaSource)
+                XCTAssertThrowsError(try db.primaryKey("myView"))
+            }
+            try migrator.migrate(dbQueue)
+        }
+        
+        try dbQueue.inDatabase { db in
+            // Cache was cleared, and schemaSource is active.
+            XCTAssertNotNil(db.schemaSource)
+            XCTAssertNoThrow(try db.primaryKey("myView"))
+        }
+        
+        do {
+            migrator.registerMigration("B") { db in
+                // Cache was cleared again, and schemaSource is disabled.
+                XCTAssertNil(db.schemaSource)
+                XCTAssertThrowsError(try db.primaryKey("myView"))
+            }
+            try migrator.migrate(dbQueue)
+        }
+    }
     
-
+    func test_schemaSource_can_be_restored_during_migrations() throws {
+        struct SchemaSource: DatabaseSchemaSource {
+            func columnsForPrimaryKey(_ db: Database, inView view: DatabaseObjectID) throws -> [String]? {
+                ["id"]
+            }
+        }
+        
+        dbConfiguration.schemaSource = SchemaSource()
+        let dbQueue = try makeDatabaseQueue()
+        var migrator = DatabaseMigrator()
+        
+        migrator.registerMigration("A") { db in
+            try db.execute(sql: "CREATE VIEW myView as SELECT 1 AS id")
+            try db.withSchemaSource(SchemaSource()) {
+                XCTAssertNoThrow(try db.primaryKey("myView"))
+            }
+        }
+        try migrator.migrate(dbQueue)
+    }
     
     func test_merged_migrations_named_like_the_last() throws {
         // Original migrator

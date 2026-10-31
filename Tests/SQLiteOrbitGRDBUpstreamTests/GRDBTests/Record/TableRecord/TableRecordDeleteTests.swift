@@ -51,7 +51,18 @@ private struct CitizenshipView : TableRecord {
 
 // Schema source
 
-
+private struct ViewSchemaSource: DatabaseSchemaSource {
+    func columnsForPrimaryKey(_ db: Database, inView view: DatabaseObjectID) throws -> [String]? {
+        switch view.name {
+        case "personsView":
+            return ["id"]
+        case "citizenshipsView":
+            return ["personId", "countryIsoCode"]
+        default:
+            return nil
+        }
+    }
+}
 
 class TableRecordDeleteTests: GRDBTestCase {
     
@@ -174,7 +185,46 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
 
-
+    func testSingleColumnPrimaryKey_view() throws {
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            var deleted = try PersonView.deleteOne(db, key: 1)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1")
+            XCTAssertFalse(deleted)
+            
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [1, "Arthur", "arthur@example.com"])
+            deleted = try PersonView.deleteOne(db, key: 1)
+            XCTAssertTrue(deleted)
+            XCTAssertEqual(try PersonView.fetchCount(db), 0)
+            
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [1, "Arthur", "arthur@example.com"])
+            deleted = try PersonView.deleteOne(db, id: 1)
+            XCTAssertTrue(deleted)
+            XCTAssertEqual(try PersonView.fetchCount(db), 0)
+            
+            do {
+                try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [1, "Arthur", "arthur@example.com"])
+                try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [2, "Barbara", "barbara@example.com"])
+                try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [3, "Craig", "craig@example.com"])
+                let deletedCount = try PersonView.deleteAll(db, keys: [2, 3, 4])
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (2, 3, 4)")
+                XCTAssertEqual(deletedCount, 2)
+                XCTAssertEqual(try PersonView.fetchCount(db), 1)
+            }
+            
+            do {
+                try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [2, "Barbara", "barbara@example.com"])
+                try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [3, "Craig", "craig@example.com"])
+                let deletedCount = try PersonView.deleteAll(db, ids: [2, 3, 4])
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (2, 3, 4)")
+                XCTAssertEqual(deletedCount, 2)
+                XCTAssertEqual(try PersonView.fetchCount(db), 1)
+            }
+        }
+    }
 
     func testMultipleColumnPrimaryKey_table() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -197,7 +247,29 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
 
-
+    func testMultipleColumnPrimaryKey_view() throws {
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            var deleted = try CitizenshipView.deleteOne(db, key: ["personId": 1, "countryIsoCode": "FR"])
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"citizenshipsView\" WHERE (\"personId\" = 1) AND (\"countryIsoCode\" = 'FR')")
+            XCTAssertFalse(deleted)
+            
+            try db.execute(sql: "INSERT INTO citizenshipsView (personId, countryIsoCode) VALUES (?, ?)", arguments: [1, "FR"])
+            deleted = try CitizenshipView.deleteOne(db, key: ["personId": 1, "countryIsoCode": "FR"])
+            XCTAssertTrue(deleted)
+            XCTAssertEqual(try CitizenshipView.fetchCount(db), 0)
+            
+            try db.execute(sql: "INSERT INTO citizenshipsView (personId, countryIsoCode) VALUES (?, ?)", arguments: [1, "FR"])
+            try db.execute(sql: "INSERT INTO citizenshipsView (personId, countryIsoCode) VALUES (?, ?)", arguments: [1, "US"])
+            try db.execute(sql: "INSERT INTO citizenshipsView (personId, countryIsoCode) VALUES (?, ?)", arguments: [2, "US"])
+            let deletedCount = try CitizenshipView.deleteAll(db, keys: [["personId": 1, "countryIsoCode": "FR"], ["personId": 1, "countryIsoCode": "US"], ["personId": 1, "countryIsoCode": "DE"]])
+            XCTAssertEqual(deletedCount, 2)
+            XCTAssertEqual(try CitizenshipView.fetchCount(db), 1)
+        }
+    }
 
     func testUniqueIndex() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -241,7 +313,29 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
-
+    func testImplicitUniqueIndexOnSingleColumnPrimaryKey_view() throws {
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            var deleted = try PersonView.deleteOne(db, key: ["id": 1])
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1")
+            XCTAssertFalse(deleted)
+            
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [1, "Arthur", "arthur@example.com"])
+            deleted = try PersonView.deleteOne(db, key: ["id": 1])
+            XCTAssertTrue(deleted)
+            XCTAssertEqual(try PersonView.fetchCount(db), 0)
+            
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [1, "Arthur", "arthur@example.com"])
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [2, "Barbara", "barbara@example.com"])
+            try db.execute(sql: "INSERT INTO personsView (id, name, email) VALUES (?, ?, ?)", arguments: [3, "Craig", "craig@example.com"])
+            let deletedCount = try PersonView.deleteAll(db, keys: [["id": 2], ["id": 3], ["id": 4]])
+            XCTAssertEqual(deletedCount, 2)
+            XCTAssertEqual(try PersonView.fetchCount(db), 1)
+        }
+    }
     
     func testRequestDeleteAll_table() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -296,7 +390,61 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
+    func testRequestDeleteAll_view() throws {
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inDatabase { db in
+            try PersonView.deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\"")
+            
+            try PersonView.filter { $0.name == "Arthur" }.deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"name\" = 'Arthur'")
+            
+            try PersonView.filter(key: 1).deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1")
+            
+            try PersonView.filter(keys: [1, 2]).deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (1, 2)")
+            
+            try PersonView.filter(id: 1).deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1")
+            
+            try PersonView.filter(ids: [1, 2]).deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (1, 2)")
+            
+            try PersonView.filter(sql: "id = 1").deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE id = 1")
+            
+            try PersonView.filter(sql: "id = 1").filter { $0.name == "Arthur" }.deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE (id = 1) AND (\"name\" = 'Arthur')")
 
+            try PersonView.select { $0.name }.deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\"")
+            
+            try PersonView.order { $0.name }.deleteAll(db)
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\"")
+            
+            if try String.fetchCursor(db, sql: "PRAGMA COMPILE_OPTIONS").contains("ENABLE_UPDATE_DELETE_LIMIT") {
+                try PersonView.limit(1).deleteAll(db)
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" LIMIT 1")
+                
+                try PersonView.order { $0.name }.deleteAll(db)
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\"")
+                
+                try PersonView.order { $0.name }.limit(1).deleteAll(db)
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" ORDER BY \"name\" LIMIT 1")
+                
+                try PersonView.order { $0.name }.limit(1, offset: 2).reversed().deleteAll(db)
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" ORDER BY \"name\" DESC LIMIT 1 OFFSET 2")
+                
+                try PersonView.limit(1, offset: 2).reversed().deleteAll(db)
+                XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" LIMIT 1 OFFSET 2")
+            }
+        }
+    }
     
     func testRequestDeleteAndFetchStatement_table() throws {
 #if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
@@ -417,7 +565,58 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
+    func testRequestDeleteAndFetchCursor_view() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inDatabase { db in
+            _ = try PersonView.all().deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" RETURNING *")
+            
+            _ = try PersonView.all().deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" RETURNING *")
+            
+            _ = try PersonView.filter { $0.name == "Arthur" }.deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"name\" = 'Arthur' RETURNING *")
+            
+            _ = try PersonView.filter(key: 1).deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1 RETURNING *")
+            
+            _ = try PersonView.filter(keys: [1, 2]).deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (1, 2) RETURNING *")
+            
+            _ = try PersonView.filter(id: 1).deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" = 1 RETURNING *")
+            
+            _ = try PersonView.filter(ids: [1, 2]).deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE \"id\" IN (1, 2) RETURNING *")
+            
+            _ = try PersonView.filter(sql: "id = 1").deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE id = 1 RETURNING *")
+            
+            _ = try PersonView.filter(sql: "id = 1").filter { $0.name == "Arthur" }.deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" WHERE (id = 1) AND (\"name\" = 'Arthur') RETURNING *")
 
+            _ = try PersonView.select { $0.name }.deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" RETURNING *")
+            
+            _ = try PersonView.order { $0.name }.deleteAndFetchCursor(db).next()
+            XCTAssertEqual(self.lastSQLQuery, "DELETE FROM \"personsView\" RETURNING *")
+            
+            // No test for LIMIT ... RETURNING ... since this is not supported by SQLite
+        }
+    }
     
     func testRequestDeleteAndFetchArray_table() throws {
 #if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
@@ -447,7 +646,35 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
+    func testRequestDeleteAndFetchArray_view() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try PersonView(id: 1, name: "Arthur", email: "arthur@example.com").insert(db)
+            try PersonView(id: 2, name: "Barbara", email: "barbara@example.com").insert(db)
+            try PersonView(id: 3, name: "Craig", email: "craig@example.com").insert(db)
 
+            let request = PersonView.filter { $0.id != 2 }
+            let deletePersons = try request
+                .deleteAndFetchAll(db)
+                .sorted(by: { $0.id < $1.id })
+            XCTAssertEqual(deletePersons, [
+                PersonView(id: 1, name: "Arthur", email: "arthur@example.com"),
+                PersonView(id: 3, name: "Craig", email: "craig@example.com"),
+            ])
+        }
+    }
     
     func testRequestDeleteAndFetchSet_table() throws {
 #if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
@@ -475,7 +702,33 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
+    func testRequestDeleteAndFetchSet_view() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try PersonView(id: 1, name: "Arthur", email: "arthur@example.com").insert(db)
+            try PersonView(id: 2, name: "Barbara", email: "barbara@example.com").insert(db)
+            try PersonView(id: 3, name: "Craig", email: "craig@example.com").insert(db)
 
+            let request = PersonView.filter { $0.id != 2 }
+            let deletePersons = try request.deleteAndFetchSet(db)
+            XCTAssertEqual(deletePersons, [
+                PersonView(id: 1, name: "Arthur", email: "arthur@example.com"),
+                PersonView(id: 3, name: "Craig", email: "craig@example.com"),
+            ])
+        }
+    }
     
     func testRequestDeleteAndFetchIds_table() throws {
 #if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
@@ -500,7 +753,30 @@ class TableRecordDeleteTests: GRDBTestCase {
         }
     }
     
+    func testRequestDeleteAndFetchIds_view() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("RETURNING clause is not available")
+        }
+#endif
+        // Views need a schema source
+        dbConfiguration.schemaSource = ViewSchemaSource()
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try PersonView(id: 1, name: "Arthur", email: "arthur@example.com").insert(db)
+            try PersonView(id: 2, name: "Barbara", email: "barbara@example.com").insert(db)
+            try PersonView(id: 3, name: "Craig", email: "craig@example.com").insert(db)
 
+            let request = PersonView.filter { $0.id != 2 }
+            let deletedIds = try request.deleteAndFetchIds(db)
+            XCTAssertEqual(deletedIds, [1, 3])
+        }
+    }
     
     // TODO: duplicate test with views?
     func testJoinedRequestDeleteAll() throws {

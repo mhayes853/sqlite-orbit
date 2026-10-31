@@ -467,7 +467,16 @@ class DatabaseTests : GRDBTestCase {
         }
     }
 
-
+    func testDatabaseCanBeUsedOutsideOfDatabaseQueueBlockAsLongAsTheQueueIsCorrect() throws {
+        let dbQueue = try makeDatabaseQueue()
+        var database: Database? = nil
+        dbQueue.inDatabase { db in
+            database = db
+        }
+        try dbQueue.inDatabase { _ in
+            try database!.execute(sql: "CREATE TABLE persons (name TEXT)")
+        }
+    }
 
     func testFailedCommitIsRollbacked() throws {
         let dbQueue = try makeDatabaseQueue()

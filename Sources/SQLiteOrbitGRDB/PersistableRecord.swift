@@ -218,8 +218,10 @@
       else {
         return false
       }
-      try statement.execute()
-      return db.changesCount > 0
+      let (_, changes) = try db.countChanges(forTable: type(of: self).databaseTableName) {
+        try statement.execute()
+      }
+      return changes > 0
     }
 
     public func exists(_ db: Database) throws -> Bool {

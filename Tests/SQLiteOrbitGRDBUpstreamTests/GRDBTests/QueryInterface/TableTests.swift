@@ -24,7 +24,139 @@ class TableTests: GRDBTestCase {
         _ = Table<C>("ignored")
     }
     
-
+    func test_request_derivation() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+            }
+            try db.execute(sql: "INSERT INTO player VALUES (1, 'Alice')")
+            
+            do {
+                let t = Table("player")
+                try assertEqualSQL(db, t.all(), """
+                    SELECT * FROM "player"
+                    """)
+                try assertEqualSQL(db, t.none(), """
+                    SELECT * FROM "player" WHERE 0
+                    """)
+                try assertEqualSQL(db, t.select(Column("id"), Column("name")), """
+                    SELECT "id", "name" FROM "player"
+                    """)
+                try assertEqualSQL(db, t.select([Column("id"), Column("name")]), """
+                    SELECT "id", "name" FROM "player"
+                    """)
+                try assertEqualSQL(db, t.select(.allColumns), """
+                    SELECT * FROM "player"
+                    """)
+                try assertEqualSQL(db, t.select(.allColumns(excluding: ["name"])), """
+                    SELECT "id" FROM "player"
+                    """)
+                try assertEqualSQL(db, t.select(sql: "id, ?", arguments: ["O'Brien"]), """
+                    SELECT id, 'O''Brien' FROM "player"
+                    """)
+                try assertEqualSQL(db, t.select(literal: "id, \("O'Brien")"), """
+                    SELECT id, 'O''Brien' FROM "player"
+                    """)
+                try XCTAssertEqual(t.select(Column("id"), as: Int64.self).fetchOne(db), 1)
+                try XCTAssertEqual(t.select(Column("id")).fetchOne(db), 1)
+                try XCTAssertEqual(t.selectPrimaryKey().fetchOne(db), 1)
+                try XCTAssertEqual(t.selectPrimaryKey(as: Int64.self).fetchOne(db), 1)
+                try XCTAssertEqual(t.selectPrimaryKey(as: Row.self).fetchOne(db), ["id": 1])
+                try XCTAssertEqual(t.select([Column("name")], as: String.self).fetchOne(db), "Alice")
+                try XCTAssertEqual(t.select([Column("name")]).fetchOne(db), "Alice")
+                try XCTAssertEqual(t.select(sql: "id", as: Int64.self).fetchOne(db), 1)
+                try XCTAssertEqual(t.select(sql: "id").fetchOne(db), 1)
+                try XCTAssertEqual(t.select(literal: "name", as: String.self).fetchOne(db), "Alice")
+                try XCTAssertEqual(t.select(literal: "name").fetchOne(db), "Alice")
+                try assertEqualSQL(db, t.annotated(with: Column.rowID), """
+                    SELECT *, "rowid" FROM "player"
+                    """)
+                try assertEqualSQL(db, t.annotated(with: [Column.rowID]), """
+                    SELECT *, "rowid" FROM "player"
+                    """)
+                try assertEqualSQL(db, t.filter(Column("id") > 10), """
+                    SELECT * FROM "player" WHERE "id" > 10
+                    """)
+                try assertEqualSQL(db, t.filter(key: 1), """
+                    SELECT * FROM "player" WHERE "id" = 1
+                    """)
+                try assertEqualSQL(db, t.filter(keys: [1, 2, 3]), """
+                    SELECT * FROM "player" WHERE "id" IN (1, 2, 3)
+                    """)
+                try assertEqualSQL(db, t.filter(key: ["id": 1]), """
+                    SELECT * FROM "player" WHERE "id" = 1
+                    """)
+                try assertEqualSQL(db, t.filter(keys: [["id": 1], ["id": 2]]), """
+                    SELECT * FROM "player" WHERE ("id" = 1) OR ("id" = 2)
+                    """)
+                try assertEqualSQL(db, t.filter(sql: "name = ?", arguments: ["O'Brien"]), """
+                    SELECT * FROM "player" WHERE name = 'O''Brien'
+                    """)
+                try assertEqualSQL(db, t.filter(literal: "name = \("O'Brien")"), """
+                    SELECT * FROM "player" WHERE name = 'O''Brien'
+                    """)
+                try assertEqualSQL(db, t.order(Column("id"), Column("name").desc), """
+                    SELECT * FROM "player" ORDER BY "id", "name" DESC
+                    """)
+                try assertEqualSQL(db, t.order([Column("id"), Column("name").desc]), """
+                    SELECT * FROM "player" ORDER BY "id", "name" DESC
+                    """)
+                try assertEqualSQL(db, t.orderByPrimaryKey(), """
+                    SELECT * FROM "player" ORDER BY "id"
+                    """)
+                try assertEqualSQL(db, t.order(sql: "IFNULL(name, ?)", arguments: ["O'Brien"]), """
+                    SELECT * FROM "player" ORDER BY IFNULL(name, 'O''Brien')
+                    """)
+                try assertEqualSQL(db, t.order(literal: "IFNULL(name, \("O'Brien"))"), """
+                    SELECT * FROM "player" ORDER BY IFNULL(name, 'O''Brien')
+                    """)
+                try assertEqualSQL(db, t.limit(1), """
+                    SELECT * FROM "player" LIMIT 1
+                    """)
+                try assertEqualSQL(db, t.limit(1, offset: 3), """
+                    SELECT * FROM "player" LIMIT 1 OFFSET 3
+                    """)
+                try assertEqualSQL(db, t.aliased(TableAlias(name: "p")), """
+                    SELECT "p".* FROM "player" "p"
+                    """)
+                try assertEqualSQL(db, t.with(CommonTableExpression(named: "cte", literal: "SELECT \("O'Brien")")), """
+                    WITH "cte" AS (SELECT 'O''Brien') SELECT * FROM "player"
+                    """)
+            }
+            
+            do {
+                struct Player: Identifiable { var id: Int64 }
+                let t = Table<Player>("player")
+                
+                try assertEqualSQL(db, t.filter(id: 1), """
+                    SELECT * FROM "player" WHERE "id" = 1
+                    """)
+                try assertEqualSQL(db, t.filter(ids: [1, 2, 3]), """
+                    SELECT * FROM "player" WHERE "id" IN (1, 2, 3)
+                    """)
+                
+                try XCTAssertEqual(t.selectID().fetchOne(db), 1)
+            }
+            
+            do {
+                struct Player: Identifiable { var id: Int64? }
+                let t = Table<Player>("player")
+                
+                try assertEqualSQL(db, t.filter(id: 1), """
+                    SELECT * FROM "player" WHERE "id" = 1
+                    """)
+                try assertEqualSQL(db, t.filter(id: nil), """
+                    SELECT * FROM "player" WHERE 0
+                    """)
+                try assertEqualSQL(db, t.filter(ids: [1, 2, 3]), """
+                    SELECT * FROM "player" WHERE "id" IN (1, 2, 3)
+                    """)
+                
+                try XCTAssertEqual(t.selectID().fetchOne(db), 1)
+            }
+        }
+    }
     
     func test_fetchCount() throws {
         try makeDatabaseQueue().write { db in

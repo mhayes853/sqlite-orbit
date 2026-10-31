@@ -1,10 +1,13 @@
 #if canImport(Foundation) && canImport(Dispatch)
+  /// Called before a supplementary request (such as a prefetch) runs, with the association key path.
+  typealias WillExecuteSupplementaryRequest = (QueryInterfaceRequest<Row>, [String]) throws -> Void
+
   /// A statement with bound arguments and an optional row adapter.
   public struct PreparedRequest {
     public var statement: Statement
     public var adapter: (any RowAdapter)?
     /// Fetches associated rows (`including(all:)`) into the rows fetched by the statement.
-    var supplementaryFetch: ((Database, [Row]) throws -> Void)?
+    var supplementaryFetch: ((Database, [Row], WillExecuteSupplementaryRequest?) throws -> Void)?
 
     public init(statement: Statement, adapter: (any RowAdapter)? = nil) {
       self.statement = statement

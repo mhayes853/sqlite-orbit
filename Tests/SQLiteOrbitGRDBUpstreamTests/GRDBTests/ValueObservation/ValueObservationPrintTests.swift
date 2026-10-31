@@ -25,13 +25,155 @@ class ValueObservationPrintTests: GRDBTestCase {
     
     // MARK: - Readonly
     
-
+    func test_readonly_success_asynchronousScheduling() throws {
+        let dbPool = try makeDatabasePool(filename: "test")
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE player(id INTEGER PRIMARY KEY)")
+        }
+        
+        func test(_ dbReader: some DatabaseReader) throws {
+            let logger = TestStream()
+            let observation = ValueObservation
+                .trackingConstantRegion { try Int.fetchOne($0, sql: "SELECT MAX(id) FROM player") }
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            let cancellable = observation.start(
+                in: dbReader,
+                scheduling: .async(onQueue: .main),
+                onError: { _ in },
+                onChange: { _ in expectation.fulfill() })
+            withExtendedLifetime(cancellable) {
+                waitForExpectations(timeout: 1, handler: nil)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "value: nil"])
+            }
+        }
+        
+        var config = dbConfiguration!
+        config.readonly = true
+        try test(makeDatabaseQueue(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshotPool())
+#endif
+    }
     
-
+    func test_readonly_success_immediateScheduling() throws {
+        let dbPool = try makeDatabasePool(filename: "test")
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE player(id INTEGER PRIMARY KEY)")
+        }
+        
+        func test(_ dbReader: some DatabaseReader) throws {
+            let logger = TestStream()
+            let observation = ValueObservation
+                .trackingConstantRegion { try Int.fetchOne($0, sql: "SELECT MAX(id) FROM player") }
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            let cancellable = observation.start(
+                in: dbReader,
+                scheduling: .immediate,
+                onError: { _ in },
+                onChange: { _ in expectation.fulfill() })
+            withExtendedLifetime(cancellable) {
+                waitForExpectations(timeout: 1, handler: nil)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "value: nil"])
+            }
+        }
+        
+        var config = dbConfiguration!
+        config.readonly = true
+        try test(makeDatabaseQueue(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshotPool())
+#endif
+    }
     
-
+    func test_readonly_failure_asynchronousScheduling() throws {
+        struct TestError: Error { }
+        let dbPool = try makeDatabasePool(filename: "test")
+        // workaround Xcode 14.1 compiler (???) bug: database is not in the WAL
+        // mode unless the pool is used.
+        try dbPool.write { _ in }
+        
+        func test(_ dbReader: some DatabaseReader) throws {
+            let logger = TestStream()
+            let observation = ValueObservation
+                .trackingConstantRegion { _ in throw TestError() }
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            let cancellable = observation.start(
+                in: dbReader,
+                scheduling: .async(onQueue: .main),
+                onError: { _ in expectation.fulfill() },
+                onChange: { _ in })
+            withExtendedLifetime(cancellable) {
+                waitForExpectations(timeout: 1, handler: nil)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "failure: TestError()"])
+            }
+        }
+        
+        var config = dbConfiguration!
+        config.readonly = true
+        try test(makeDatabaseQueue(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshotPool())
+#endif
+    }
     
-
+    func test_readonly_failure_immediateScheduling() throws {
+        struct TestError: Error { }
+        let dbPool = try makeDatabasePool(filename: "test")
+        // workaround Xcode 14.1 compiler (???) bug: database is not in the WAL
+        // mode unless the pool is used.
+        try dbPool.write { _ in }
+        
+        func test(_ dbReader: some DatabaseReader) throws {
+            let logger = TestStream()
+            let observation = ValueObservation
+                .trackingConstantRegion { _ in throw TestError() }
+                .print(to: logger)
+            
+            let expectation = self.expectation(description: "")
+            let cancellable = observation.start(
+                in: dbReader,
+                scheduling: .immediate,
+                onError: { _ in expectation.fulfill() },
+                onChange: { _ in })
+            withExtendedLifetime(cancellable) {
+                waitForExpectations(timeout: 1, handler: nil)
+                XCTAssertEqual(logger.strings, [
+                    "start",
+                    "fetch",
+                    "failure: TestError()"])
+            }
+        }
+        
+        var config = dbConfiguration!
+        config.readonly = true
+        try test(makeDatabaseQueue(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config))
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshot())
+#if SQLITE_ENABLE_SNAPSHOT && !SQLITE_DISABLE_SNAPSHOT
+        try test(makeDatabasePool(filename: "test", configuration: config).makeSnapshotPool())
+#endif
+    }
     
     // MARK: - Writeonly
     

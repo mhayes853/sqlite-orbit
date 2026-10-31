@@ -1,25 +1,8 @@
 #if canImport(Foundation) && canImport(Dispatch)
   import Foundation
 
-  public struct ColumnType: RawRepresentable, Hashable, Sendable {
-    public let rawValue: String
-
-    public init(rawValue: String) {
-      self.rawValue = rawValue
-    }
-
-    public static let integer = Self(rawValue: "INTEGER")
-    public static let text = Self(rawValue: "TEXT")
-    public static let blob = Self(rawValue: "BLOB")
-    public static let real = Self(rawValue: "REAL")
-    public static let double = Self(rawValue: "DOUBLE")
-    public static let numeric = Self(rawValue: "NUMERIC")
-    public static let boolean = Self(rawValue: "BOOLEAN")
-    public static let date = Self(rawValue: "DATE")
-    public static let datetime = Self(rawValue: "DATETIME")
-    public static let any = Self(rawValue: "ANY")
-    public static let jsonText = Self(rawValue: "TEXT")
-  }
+  /// The type of a column, as in `Database.ColumnType`.
+  public typealias ColumnType = Database.ColumnType
 
   public struct TableOptions: OptionSet, Sendable {
     public let rawValue: Int
@@ -35,7 +18,27 @@
   }
 
   extension Database {
-    public typealias ColumnType = SQLiteOrbitGRDB.ColumnType
+    /// An SQL column type, used in table definitions.
+    public struct ColumnType: RawRepresentable, Hashable, Sendable {
+      public let rawValue: String
+
+      public init(rawValue: String) {
+        self.rawValue = rawValue
+      }
+
+      public static let integer = Self(rawValue: "INTEGER")
+      public static let text = Self(rawValue: "TEXT")
+      public static let blob = Self(rawValue: "BLOB")
+      public static let real = Self(rawValue: "REAL")
+      public static let double = Self(rawValue: "DOUBLE")
+      public static let numeric = Self(rawValue: "NUMERIC")
+      public static let boolean = Self(rawValue: "BOOLEAN")
+      public static let date = Self(rawValue: "DATE")
+      public static let datetime = Self(rawValue: "DATETIME")
+      public static let any = Self(rawValue: "ANY")
+      public static let jsonText = Self(rawValue: "TEXT")
+      public static let jsonb = Self(rawValue: "BLOB")
+    }
 
     public enum ForeignKeyAction: String, Sendable {
       case cascade = "CASCADE"
