@@ -20,6 +20,7 @@ let package = Package(
         .swiftLanguageMode(.v5),
         .enableUpcomingFeature("InferSendableFromCaptures"),
         .enableUpcomingFeature("GlobalActorIsolatedTypesUsability"),
+        .define("SQLITE_ENABLE_FTS5"),
       ]
     ),
   ]

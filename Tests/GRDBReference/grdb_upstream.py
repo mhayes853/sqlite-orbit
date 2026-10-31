@@ -417,7 +417,7 @@ def swiftc_command(sources, modules):
         "swiftc", "-typecheck", "-swift-version", "5",
         "-enable-upcoming-feature", "InferSendableFromCaptures",
         "-enable-upcoming-feature", "GlobalActorIsolatedTypesUsability",
-        "-D", "SWIFT_PACKAGE",
+        "-D", "SWIFT_PACKAGE", "-D", "SQLITE_ENABLE_FTS5",
         "-I", modules,
         "-Xcc", f"-fmodule-map-file={REPO}/Sources/CSQLite3/module.modulemap",
         "-Xcc", f"-fmodule-map-file={REPO}/Sources/CLinuxEvents/module.modulemap",

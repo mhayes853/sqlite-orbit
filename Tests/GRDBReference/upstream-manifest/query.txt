@@ -162,6 +162,7 @@ Record/PersistableRecord/MutablePersistableRecordPersistenceConflictPolicyTests.
 Record/PersistableRecord/MutablePersistableRecordTests.swift
   - testRecordErrorRecordNotFoundDescription: missing RecordError.description
   - test_insertAndFetch_fetch_select: extra trailing closure passed in call
+  - testIssue1820: missing FTS5
 Record/PersistableRecord/PersistableRecordTests.swift
   - testStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
   - testOptionalStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'

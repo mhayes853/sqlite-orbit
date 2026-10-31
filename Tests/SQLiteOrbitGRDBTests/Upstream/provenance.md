@@ -1,86 +1,30 @@
-# GRDB verification fixtures
+# Shared GRDB application fixtures
 
-Upstream: groue/GRDB.swift tag v7.11.1, commit
-b83108d10f42680d78f23fe4d4d80fc88dab3212, under the accompanying MIT license.
+These fixtures are not copied from GRDB. They are application scenarios written for the overlay,
+compiled against both SQLiteOrbitGRDB and GRDB 7.11.1 (`Tests/GRDBReference/run.sh`) so that GRDB
+itself confirms each expectation. GRDB's own test suite is ported separately, verbatim, into
+`Tests/SQLiteOrbitGRDBUpstreamTests` (see `Tests/GRDBReference/grdb_upstream.py`); earlier partial
+copies of upstream files that used to live here were removed once the full upstream files were
+ported and passing.
 
-The import changes to SQLiteOrbitGRDB, and trailing whitespace is removed. GRDBTestCase supplies
-in-memory queues and temporary file-backed pools instead of the upstream general harness. The
-callback writer test class has an unchecked Sendable conformance for Swift 6 XCTest's
-main-actor expectation wait. XCTest runs these synchronous test bodies on the main thread.
-Test bodies retain their upstream assertions.
+GRDBTestCase supplies in-memory queues and temporary file-backed pools. The fixtures check callback
+order, save fallback, bounded bulk writes, composite keys, intersecting filters, transaction modes,
+set/key fetching, request reversal, RETURNING values and callbacks, UPSERT, schema resolution,
+aggregates, WAL checkpoints, request conveniences, deferred derivation, record changes, DDL value
+quoting, schema builders, collations, SQL composition, null inspection, row reuse and copying,
+bitwise and unary operators, optional comparisons, null-safe identity, LIKE/ESCAPE, expression
+initialization, SQL coalescing, commit/rollback completion, deferred commit errors, non-Sendable and
+optional results, partial writes outside transactions, callback scheduling, nontransactional reads,
+migration callbacks, and row adapters with scoped records.
 
-- Core/Statement/StatementArgumentsTests.swift: all 17 tests.
-- Core/DatabaseValueTests.swift: all 5 tests.
-- Record/PersistableRecord/DatabaseColumnEncodingStrategyTests.swift: all 2 tests.
-- Record/PersistableRecord/DatabaseDataEncodingStrategyTests.swift: 3 encoding tests; query/trace tests
-  after the Filter section are outside this fixture.
-- Record/PersistableRecord/DatabaseDateEncodingStrategyTests.swift: 8 encoding tests; query/trace
-  tests after the Filter section are outside this fixture.
-- Record/PersistableRecord/DatabaseUUIDEncodingStrategyTests.swift: 3 encoding tests.
-- Core/Row/RowFromDictionaryLiteralTests.swift: 12 column order, duplicate names, count, lookup,
-  values, copy, equality, description, and coalescing tests. Row-adapter/scoping and specialized
-  conversion cases are excluded.
-- Core/Row/RowFromDictionaryTests.swift, RowFromStatementTests.swift, and
-  RowCopiedFromStatementTests.swift: one coalescing test each.
-- Core/Row/RowAdapterTests.swift: 28 upstream tests covering mapped values and order, case-insensitive
-  lookup, direct/nested scopes, scope merging, ranges/suffixes, cursor copies, equality, chained
-  requests, renaming, and descriptions. The harness uses GRDBTestCase instead of RowTestCase;
-  three specialized conversion-helper tests and the unsafe-data test are excluded.
-- Core/Row/RowFetchTests.swift: 8 upstream SQL/statement/request fetch cursor/all/one/set tests,
-  including interpolation and adaptation. Error-formatting/function-failure tests and cursor
-  DatabaseRegion.description (outside the overlay surface) are excluded.
-- Core/DatabaseWriterTests.swift: 4 callback write tests, each exercising queues and pools.
-- Core/Cursor: all tests in AnyCursorTests, CursorTests, DropFirstCursorTests,
-  DropWhileCursorTests, EnumeratedCursorTests, FilterCursorTests, FlattenCursorTests, MapCursorTests,
-  PrefixCursorTests, and PrefixWhileCursorTests (52 tests). DatabaseCursorTests requires specialized
-  cursor/profiling APIs and is outside this fixture.
-- Core/ForeignKeyInfoTests.swift: 5 foreign-key violation/check tests, including unknown/main schema
-  resolution and rich error messages. Attached-file tests use a different upstream harness.
-- Record/PersistableRecord/MutablePersistableRecordChangesTests.swift: 4 tests for unchanged records
-  and change dictionaries on classes/structs. SQL-trace and Record-class tests are outside this fixture.
+BulkPersistenceTests.swift uses GRDB's Record/TableRecord/TableRecordUpdateTests.swift and
+TableRecordDeleteTests.swift as references. RowAdapterSurfaceTests.swift covers all adapted
+fetching families, scoped required/optional records, nested Decodable values, custom adapters
+through the public layout protocols, and adaptation of RETURNING results before mutation.
 
-Source files: https://github.com/groue/GRDB.swift/tree/v7.11.1/Tests/GRDBTests
+Native-only behavior (observation lifecycles shared per definition and database, IPC, Turso,
+composite WITHOUT ROWID grouping that GRDB does not implement) is tested outside this directory.
+The shared XCTest factories use SQLite-specific configuration, including trusted-schema control, so
+their overlay runs use system SQLite or SQLCipher.
 
-PersistenceCallbackTests.swift, ScopedWriteTests.swift, ExpandedSurfaceTests.swift, and
-ConvenienceSurfaceTests.swift, SmallConvenienceTests.swift, AsyncWriteSurfaceTests.swift, and
-AsyncReadAndMigrationTests.swift, and BulkPersistenceTests.swift, and RowAdapterSurfaceTests.swift
-are additional shared application fixtures, not copied upstream.
-They check callback order, save fallback, bounded bulk writes,
-composite keys, intersecting filters, transaction modes, set/key fetching, request reversal,
-RETURNING values and callbacks, UPSERT, schema resolution, aggregates, WAL checkpoints, request
-conveniences, deferred derivation, record changes, DDL value quoting, schema builders, collations,
-and SQL composition. The small convenience and callback fixtures additionally check null
-inspection, row reuse/copying, bitwise and unary operators, optional comparisons, null-safe
-identity, LIKE/ESCAPE, expression initialization, SQL coalescing, commit/rollback completion,
-deferred commit errors, non-Sendable and optional results, and partial writes outside transactions.
-The read/migration fixtures check callback scheduling, nontransactional reads, migration completion
-with write access, chained and already-applied migrations, migration rollback/history, and SQL errors.
-They use GRDB's unsafe-read contract and migration callback scenarios as their reference.
-BulkPersistenceTests.swift uses Record/TableRecord/TableRecordUpdateTests.swift and
-TableRecordDeleteTests.swift as references for assignment overloads, conflict defaults/overrides,
-returning records and explicit selections, prepared statement/cursor execution, decoding failures,
-trigger/generated values, unique-key grouping, view counts, virtual tables, and engine-dependent
-limits. These are shared application fixtures, not copied upstream test bodies. The native-only
-bulk tests additionally cover rejected grouping, resolver evaluation counts, scope checks, IPC
-observation with partial cursors, and composite WITHOUT ROWID grouping (unsupported by GRDB).
-Observation lifecycle tests live outside this shared fixture directory because Orbit shares runtimes by definition and database, whereas
-GRDB starts separate runtimes by default.
-
-RowAdapterSurfaceTests.swift adds shared scenarios for all adapted fetching families, scoped
-required/optional records, nested Decodable values and keyed containers, custom record initializers,
-column/scope precedence, decoding strategies, breadth-first lookup, custom adapters through public
-layout protocols, splitting remainders, cursor view reuse/copying, preparation metadata and errors,
-and adaptation of RETURNING results before mutation. RowAdapterNativeTests.swift additionally covers
-legacy/custom request preparation, single-result hints, layout resolution counts, empty scalar
-projections, cached-cursor cleanup, request conversion, native scope lifetime, and queue/pool/IPC/Turso
-observations. Those native-specific tests are outside the reference fixture directory.
-The shared XCTest factories use SQLite-specific configuration, including trusted-schema control,
-so their overlay runs use system SQLite or SQLCipher. Turso validation uses the native-driver suite,
-which exercises adapted requests, scoped records, RETURNING, and observations without that setup.
-
-Run these 227 identical test bodies against GRDB itself with:
-
-    Tests/GRDBReference/run.sh
-
-The runner generates an ignored reference Sources directory with @testable imports so the original
-encoding tests can construct GRDB's internal PersistenceContainer initializer.
+The MIT license in this directory covers GRDB material referenced by these fixtures.

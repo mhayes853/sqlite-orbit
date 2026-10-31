@@ -255,7 +255,10 @@ let packageTargets: [Target] =
         .swiftLanguageMode(.v5),
         .enableUpcomingFeature("InferSendableFromCaptures"),
         .enableUpcomingFeature("GlobalActorIsolatedTypesUsability"),
-        .define("Turso", .when(traits: ["Turso"]))
+        .define("Turso", .when(traits: ["Turso"])),
+        // GRDB's tests gate FTS5 cases on this. The system SQLite and SQLCipher builds ship FTS5.
+        .define("SQLITE_ENABLE_FTS5", .when(traits: ["SystemSQLite"])),
+        .define("SQLITE_ENABLE_FTS5", .when(traits: ["SQLCipher"]))
       ]
     ),
     .testTarget(

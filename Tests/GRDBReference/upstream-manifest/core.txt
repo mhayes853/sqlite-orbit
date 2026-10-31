@@ -3,6 +3,9 @@
 # live in query.txt; everything else in core.txt.
 
 Compilation/CompilationProtocolTests.swift
+  - UserFTS5Tokenizer: missing type FTS5Tokenization
+  - UserFTS5CustomTokenizer: missing type FTS5Tokenization
+  - UserFTS5WrapperTokenizer: missing type FTS5Tokenizer
   - UserStatementColumnConvertible1: missing type SQLiteStatement
   - UserStatementColumnConvertible2: missing type SQLiteStatement
   - UserStatementColumnConvertible3: missing type SQLiteStatement
@@ -264,12 +267,6 @@ Core/TransactionObserver/TruncateOptimizationTests.swift
   - testObservedDropTriggerWithPreparedStatement: missing DatabaseQueue.add
   - testObservedDropTemporaryTrigger: missing DatabaseQueue.add
   - testObservedDropTemporaryTriggerWithPreparedStatement: missing DatabaseQueue.add
-FTS/FTS5CustomTokenizerTests.swift
-FTS/FTS5PatternTests.swift
-FTS/FTS5RecordTests.swift
-FTS/FTS5TableBuilderTests.swift
-FTS/FTS5TokenizerTests.swift
-FTS/FTS5WrapperTokenizerTests.swift
 GRDBCombineTests/DatabaseReaderReadPublisherTests.swift
 GRDBCombineTests/DatabaseRegionObservationPublisherTests.swift
 GRDBCombineTests/DatabaseWriterWritePublisherTests.swift
@@ -475,6 +472,12 @@ x FTS/FTS3TableBuilderTests.swift: no test compiles: missing FTS3, missing FTS3,
 x FTS/FTS3TokenizerTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
 x FTS/FTS4RecordTests.swift: missing FTS4, missing parameter using:
 x FTS/FTS4TableBuilderTests.swift: no test compiles: missing FTS4, missing FTS4, missing FTS4
+x FTS/FTS5CustomTokenizerTests.swift: no test compiles: missing type FTS5Tokenizer, missing type FTS5Tokenizer, missing type FTS5Tokenizer
+x FTS/FTS5PatternTests.swift: missing FTS5, missing parameter using:
+x FTS/FTS5RecordTests.swift: missing FTS5, missing parameter using:
+x FTS/FTS5TableBuilderTests.swift: no test compiles: missing FTS5, missing FTS5, missing FTS5
+x FTS/FTS5TokenizerTests.swift: no test compiles: missing FTS5, missing FTS5, missing FTS5
+x FTS/FTS5WrapperTokenizerTests.swift: no test compiles: missing type FTS5Tokenizer, missing type FTS5Tokenizer, missing type FTS5Tokenizer
 x FTS/Issue1838Tests.swift: no test compiles: missing DatabaseQueue.interrupt, missing DatabaseQueue.interrupt
 x Private/CaseInsensitiveIdentifierTests.swift: no test compiles: missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier
 x Private/DataMemoryTests.swift: no test compiles: missing Row.sqliteStatement, missing Row.sqliteStatement
