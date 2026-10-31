@@ -24,6 +24,6 @@ done
 for support in GRDBTestCase.swift Mutex.swift AsyncSemaphore.swift; do
   cp "$upstream/$support" "$reference_dir/Upstream/Support/$support"
 done
-cp "$upstream/Betty.jpeg" "$reference_dir/Upstream/Resources/Betty.jpeg"
+install -m 644 "$upstream/Betty.jpeg" "$upstream/ValueObservation/Issue1383.sqlite" "$reference_dir/Upstream/Resources/"
 
 swift test --package-path "$reference_dir" "$@"

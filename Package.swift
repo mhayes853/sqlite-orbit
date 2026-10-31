@@ -250,7 +250,7 @@ let packageTargets: [Target] =
       name: "SQLiteOrbitGRDBUpstreamTests",
       dependencies: ["SQLiteOrbitGRDB"],
       exclude: ["LICENSE"],
-      resources: [.copy("Resources/Betty.jpeg")],
+      resources: [.copy("Resources/Betty.jpeg"), .copy("Resources/Issue1383.sqlite")],
       swiftSettings: [
         .swiftLanguageMode(.v5),
         .enableUpcomingFeature("InferSendableFromCaptures"),

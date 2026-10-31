@@ -15,7 +15,7 @@ let package = Package(
       name: "GRDBUpstreamReferenceTests",
       dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
       path: "Upstream",
-      resources: [.copy("Resources/Betty.jpeg")],
+      resources: [.copy("Resources/Betty.jpeg"), .copy("Resources/Issue1383.sqlite")],
       swiftSettings: [
         .swiftLanguageMode(.v5),
         .enableUpcomingFeature("InferSendableFromCaptures"),

@@ -1,0 +1,23 @@
+// Generated from GRDB 7.11.1 Tests/GRDBTests/Private/RecordUniqueIndexTests.swift by Tests/GRDBReference/grdb_upstream.py.
+// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+import XCTest
+import SQLiteOrbitGRDB
+
+private struct Person : FetchableRecord, TableRecord {
+    static let databaseTableName = "persons"
+    init(row: Row) {
+    }
+}
+
+class RecordUniqueIndexTests: GRDBTestCase {
+    
+    func testKeyFilterAcceptsUniqueIndex() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "CREATE TABLE persons (id INTEGER PRIMARY KEY, name TEXT, email TEXT UNIQUE)")
+            
+            _ = try Person.filter(keys: [["id": nil]]).fetchOne(db)
+            _ = try Person.filter(keys: [["email": nil]]).fetchOne(db)
+        }
+    }
+}

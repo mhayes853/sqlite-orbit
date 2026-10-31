@@ -1,0 +1,437 @@
+// Generated from GRDB 7.11.1 Tests/GRDBTests/Record/PersistableRecord/MutablePersistableRecordChangesTests.swift by Tests/GRDBReference/grdb_upstream.py.
+// Do not edit: change Tests/GRDBReference/upstream-manifest.txt and run `sync`.
+import XCTest
+import SQLiteOrbitGRDB
+
+private struct Player: FetchableRecord, MutablePersistableRecord, Codable {
+    static let databaseTableName = "players"
+    
+    var id: Int64?
+    var name: String?
+    var score: Int?
+    var creationDate: Date?
+    
+    init(id: Int64? = nil, name: String? = nil, score: Int? = nil, creationDate: Date? = nil) {
+        self.id = id
+        self.name = name
+        self.score = score
+        self.creationDate = creationDate
+    }
+    
+    mutating func willInsert(_ db: Database) throws {
+        if creationDate == nil {
+           creationDate = Date()
+        }
+    }
+    
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
+}
+
+class MutablePersistableRecordChangesTests: GRDBTestCase {
+    override func setup(_ dbWriter: some DatabaseWriter) throws {
+        try dbWriter.write { db in
+            try db.create(table: "players") { t in
+                t.primaryKey("id", .integer)
+                t.column("name", .text)
+                t.column("score", .integer)
+                t.column("creationDate", .datetime)
+            }
+        }
+    }
+    
+    func testDegenerateDatabaseEqualsWithSelf() throws {
+        struct DegenerateRecord: MutablePersistableRecord {
+            static let databaseTableName = "degenerated"
+            func encode(to container: inout PersistenceContainer) {
+            }
+        }
+        let record = DegenerateRecord()
+        XCTAssertTrue(record.databaseEquals(record))
+        try XCTAssertTrue(record.databaseChanges(from: record).isEmpty)
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            // table must exist
+            try db.create(table: DegenerateRecord.databaseTableName) { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            let totalChangesCount = db.totalChangesCount
+            try XCTAssertFalse(record.updateChanges(db, from: record))
+            XCTAssertEqual(db.totalChangesCount, totalChangesCount)
+        }
+    }
+    
+    func testDatabaseEqualsWithSelf() throws {
+        do {
+            let player = Player(id: nil, name: nil, score: nil, creationDate: nil)
+            XCTAssertTrue(player.databaseEquals(player))
+            try XCTAssertTrue(player.databaseChanges(from: player).isEmpty)
+            
+            let dbQueue = try makeDatabaseQueue()
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertFalse(player.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount)
+            }
+        }
+        do {
+            let player = Player(id: 1, name: "foo", score: 42, creationDate: Date())
+            XCTAssertTrue(player.databaseEquals(player))
+            try XCTAssertTrue(player.databaseChanges(from: player).isEmpty)
+            
+            let dbQueue = try makeDatabaseQueue()
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertFalse(player.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount)
+            }
+        }
+    }
+
+    func testRecordValueChange() throws {
+        let dbQueue = try makeDatabaseQueue()
+        var player = Player(id: 1, name: "Arthur", score: nil, creationDate: nil)
+        try dbQueue.inDatabase { db in
+            try player.insert(db)
+        }
+        
+        do {
+            // non-nil vs. non-nil
+            var newPlayer = player
+            newPlayer.name = "Bobby"
+            
+            XCTAssertFalse(newPlayer.databaseEquals(player))
+            let changes = try newPlayer.databaseChanges(from: player)
+            XCTAssertEqual(changes.count, 1)
+            XCTAssertEqual(changes["name"]!, "Arthur".databaseValue)
+            
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"players\" SET \"name\"=\'Bobby\' WHERE \"id\"=1")
+            }
+        }
+        do {
+            // non-nil vs. nil
+            var newPlayer = player
+            newPlayer.name = nil
+            
+            XCTAssertFalse(newPlayer.databaseEquals(player))
+            let changes = try newPlayer.databaseChanges(from: player)
+            XCTAssertEqual(changes.count, 1)
+            XCTAssertEqual(changes["name"]!, "Arthur".databaseValue)
+            
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"players\" SET \"name\"=NULL WHERE \"id\"=1")
+            }
+        }
+        do {
+            // nil vs. non-nil
+            var newPlayer = player
+            newPlayer.score = 41
+            
+            XCTAssertFalse(newPlayer.databaseEquals(player))
+            let changes = try newPlayer.databaseChanges(from: player)
+            XCTAssertEqual(changes.count, 1)
+            XCTAssertEqual(changes["score"]!, .null)
+            
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"players\" SET \"score\"=41 WHERE \"id\"=1")
+            }
+        }
+        do {
+            // multiple changes
+            var newPlayer = player
+            newPlayer.name = "Bobby"
+            newPlayer.score = 41
+            
+            XCTAssertFalse(newPlayer.databaseEquals(player))
+            let changes = try newPlayer.databaseChanges(from: player)
+            XCTAssertEqual(changes.count, 2)
+            XCTAssertEqual(changes["name"]!, "Arthur".databaseValue)
+            XCTAssertEqual(changes["score"]!, .null)
+
+            try dbQueue.inDatabase { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: player))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                let fetchedPlayer = try Player.fetchOne(db, key: player.id)
+                XCTAssertEqual(fetchedPlayer?.name, newPlayer.name)
+                XCTAssertEqual(fetchedPlayer?.score, newPlayer.score)
+            }
+        }
+    }
+
+
+    
+
+    
+    func testUpdateChangesWithNonRecordClass() throws {
+        class MyRecord: Codable, PersistableRecord {
+            var id: Int64?
+            var firstName: String?
+            var lastName: String?
+            
+            init(id: Int64?, firstName: String?, lastName: String?) {
+                self.id = id
+                self.firstName = firstName
+                self.lastName = lastName
+            }
+            
+            func didInsert(_ inserted: InsertionSuccess) {
+                id = inserted.rowID
+            }
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write { db in
+            try db.create(table: "myRecord") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("firstName", .text)
+                t.column("lastName", .text)
+            }
+            
+            var record = MyRecord(id: nil, firstName: "Arthur", lastName: "Smith")
+            try record.insert(db)
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) { _ in }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Arthur"
+                }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = nil
+                }
+                XCTAssertEqual(record.firstName, nil)
+                XCTAssertEqual(record.lastName, "Smith")
+                XCTAssertTrue(modified)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"myRecord\" SET \"firstName\"=NULL WHERE \"id\"=1")
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Bob"
+                    $0.lastName = "Johnson"
+                }
+                XCTAssertEqual(record.firstName, "Bob")
+                XCTAssertEqual(record.lastName, "Johnson")
+                XCTAssertTrue(modified)
+                XCTAssertTrue([
+                    "UPDATE \"myRecord\" SET \"firstName\"=\'Bob\', \"lastName\"=\'Johnson\' WHERE \"id\"=1",
+                    "UPDATE \"myRecord\" SET \"lastName\"=\'Johnson\', \"firstName\"=\'Bob\' WHERE \"id\"=1"]
+                    .contains(lastSQLQuery))
+            }
+        }
+    }
+    
+    func testUpdateChangesWithMutableStruct() throws {
+        struct MyRecord: Codable, MutablePersistableRecord {
+            var id: Int64?
+            var firstName: String?
+            var lastName: String?
+            
+            mutating func didInsert(_ inserted: InsertionSuccess) {
+                id = inserted.rowID
+            }
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write { db in
+            try db.create(table: "myRecord") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("firstName", .text)
+                t.column("lastName", .text)
+            }
+            
+            var record = MyRecord(id: nil, firstName: "Arthur", lastName: "Smith")
+            try record.insert(db)
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) { _ in }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Arthur"
+                }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = nil
+                }
+                XCTAssertEqual(record.firstName, nil)
+                XCTAssertEqual(record.lastName, "Smith")
+                XCTAssertTrue(modified)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"myRecord\" SET \"firstName\"=NULL WHERE \"id\"=1")
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Bob"
+                    $0.lastName = "Johnson"
+                }
+                XCTAssertEqual(record.firstName, "Bob")
+                XCTAssertEqual(record.lastName, "Johnson")
+                XCTAssertTrue(modified)
+                XCTAssertTrue([
+                    "UPDATE \"myRecord\" SET \"firstName\"=\'Bob\', \"lastName\"=\'Johnson\' WHERE \"id\"=1",
+                    "UPDATE \"myRecord\" SET \"lastName\"=\'Johnson\', \"firstName\"=\'Bob\' WHERE \"id\"=1"]
+                    .contains(lastSQLQuery))
+            }
+        }
+    }
+    
+    func testUpdateChangesWithImmutableStruct() throws {
+        struct MyRecord: Codable, PersistableRecord {
+            var id: Int64
+            var firstName: String?
+            var lastName: String?
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.write { db in
+            try db.create(table: "myRecord") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("firstName", .text)
+                t.column("lastName", .text)
+            }
+            
+            var record = MyRecord(id: 1, firstName: "Arthur", lastName: "Smith")
+            try record.insert(db)
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) { _ in }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Arthur"
+                }
+                XCTAssertFalse(modified)
+                XCTAssert(sqlQueries.isEmpty)
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = nil
+                }
+                XCTAssertEqual(record.firstName, nil)
+                XCTAssertEqual(record.lastName, "Smith")
+                XCTAssertTrue(modified)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"myRecord\" SET \"firstName\"=NULL WHERE \"id\"=1")
+            }
+            
+            do {
+                clearSQLQueries()
+                let modified = try record.updateChanges(db) {
+                    $0.firstName = "Bob"
+                    $0.lastName = "Johnson"
+                }
+                XCTAssertEqual(record.firstName, "Bob")
+                XCTAssertEqual(record.lastName, "Johnson")
+                XCTAssertTrue(modified)
+                XCTAssertTrue([
+                    "UPDATE \"myRecord\" SET \"firstName\"=\'Bob\', \"lastName\"=\'Johnson\' WHERE \"id\"=1",
+                    "UPDATE \"myRecord\" SET \"lastName\"=\'Johnson\', \"firstName\"=\'Bob\' WHERE \"id\"=1"]
+                    .contains(lastSQLQuery))
+            }
+        }
+    }
+    
+    func testDatabaseChangesWithClass() throws {
+        class Player: Encodable, EncodableRecord {
+            var id: Int64
+            var name: String
+            var score: Int
+            
+            init(id: Int64, name: String, score: Int) {
+                self.id = id
+                self.name = name
+                self.score = score
+            }
+        }
+        
+        var player = Player(id: 1, name: "Arthur", score: 1000)
+        do {
+            let changes = try player.databaseChanges { _ in }
+            XCTAssert(changes.isEmpty)
+        }
+        do {
+            let changes = try player.databaseChanges {
+                $0.name = "Barbara"
+            }
+            XCTAssertEqual(changes, ["name": "Arthur".databaseValue])
+        }
+        do {
+            let changes = try player.databaseChanges {
+                $0.name = "Craig"
+                $0.score = 200
+            }
+            XCTAssertEqual(changes, ["name": "Barbara".databaseValue, "score": 1000.databaseValue])
+        }
+    }
+    
+    func testDatabaseChangesWithStruct() throws {
+        struct Player: Encodable, EncodableRecord {
+            var id: Int64
+            var name: String
+            var score: Int
+        }
+        
+        var player = Player(id: 1, name: "Arthur", score: 1000)
+        do {
+            let changes = try player.databaseChanges { _ in }
+            XCTAssert(changes.isEmpty)
+        }
+        do {
+            let changes = try player.databaseChanges {
+                $0.name = "Barbara"
+            }
+            XCTAssertEqual(changes, ["name": "Arthur".databaseValue])
+        }
+        do {
+            let changes = try player.databaseChanges {
+                $0.name = "Craig"
+                $0.score = 200
+            }
+            XCTAssertEqual(changes, ["name": "Barbara".databaseValue, "score": 1000.databaseValue])
+        }
+    }
+}
