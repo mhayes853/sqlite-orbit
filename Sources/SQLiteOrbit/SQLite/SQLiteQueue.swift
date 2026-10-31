@@ -25,6 +25,17 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The database this driver's connection is open on.
   public let path: OrbitDatabasePath
 
+  /// The configuration supplied when opening this driver.
+  public let configuration: SQLiteConfiguration
+
+  /// The queue has one read connection.
+  public var readerCount: Int { 1 }
+
+  /// The immutable opening settings, available without borrowing a connection.
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    SQLiteDatabaseMetadata(path: path, configuration: configuration, readerCount: readerCount)
+  }
+
   private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
@@ -40,6 +51,7 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   ) throws {
     self.connection = try SQLiteSerialConnection(path: path, configuration: configuration)
     self.path = path
+    self.configuration = configuration
   }
 
   /// Runs `body` in a read transaction on the driver's one connection.

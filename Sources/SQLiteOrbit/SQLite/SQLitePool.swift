@@ -46,6 +46,16 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The database this pool's connections are open on.
   public let path: OrbitDatabasePath
 
+  /// The configuration supplied when opening this driver.
+  public let configuration: SQLiteConfiguration
+  /// The number of read connections opened by this pool.
+  public let readerCount: Int
+
+  /// The immutable opening settings, available without borrowing a connection.
+  public var databaseMetadata: SQLiteDatabaseMetadata? {
+    SQLiteDatabaseMetadata(path: path, configuration: configuration, readerCount: readerCount)
+  }
+
   private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
@@ -89,6 +99,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       writerSetups: [.sql("SELECT count(*) FROM sqlite_schema")]
     )
     self.path = path
+    self.configuration = configuration
+    self.readerCount = readerCount
   }
 
   /// Runs `body` in a read transaction on one of the pool's readers.

@@ -1,0 +1,31 @@
+// Generated from GRDB 7.11.1 Tests/GRDBTests/FTS/Issue1838Tests.swift by Tests/GRDBReference/grdb_upstream.py.
+// Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
+import SQLiteOrbitGRDB
+import XCTest
+
+class Issue1838Tests: GRDBTestCase {
+    /// Regression test for <https://github.com/groue/GRDB.swift/issues/1838>.
+    ///
+    /// This test passes since <https://github.com/groue/GRDB.swift/pull/1839>
+    /// which workarounds the SQLite bug described at
+    /// <https://sqlite.org/forum/forumpost/95413eb410>.
+    func test_interrupted_rollback() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "CREATE VIRTUAL TABLE documents USING FTS5(content)")
+            try db.inTransaction {
+                try db.execute(sql: "INSERT INTO documents(content) VALUES ('Document')")
+                dbQueue.interrupt()
+                return .rollback
+            }
+        }
+        
+        let documentCount = try dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM documents")!
+        }
+        XCTAssertEqual(documentCount, 0)
+    }
+    
+
+}

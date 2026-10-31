@@ -11,6 +11,12 @@
 /// }
 /// ```
 public protocol OrbitDatabaseReader: Sendable {
+  /// The driver's immutable opening settings, available without borrowing a connection.
+  ///
+  /// Built-in drivers provide a snapshot. Custom readers may return `nil` when their settings
+  /// are unavailable or cannot be represented by a single snapshot.
+  var databaseMetadata: SQLiteDatabaseMetadata? { get }
+
   /// Runs `body` in a read transaction.
   ///
   /// The transaction sees one consistent snapshot for its whole duration.
@@ -73,6 +79,11 @@ public protocol OrbitDatabaseReader: Sendable {
   func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result
+}
+
+extension OrbitDatabaseReader {
+  /// Custom readers do not expose opening settings by default.
+  public var databaseMetadata: SQLiteDatabaseMetadata? { nil }
 }
 
 /// A native SQLite database that lends read and write transactions.

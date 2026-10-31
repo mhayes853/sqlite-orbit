@@ -1,0 +1,75 @@
+# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the
+# format. QueryInterface, JSON, and Record/PersistableRecord and Record/TableRecord
+# live in query.txt; everything else in core.txt.
+
+JSON/JSONColumnTests.swift
+JSON/JSONExpressionsTests.swift
+QueryInterface/Association/AssociationAggregateTests.swift
+QueryInterface/Association/AssociationBelongsToDecodableRecordTests.swift
+QueryInterface/Association/AssociationBelongsToFetchableRecordTests.swift
+QueryInterface/Association/AssociationBelongsToRowScopeTests.swift
+QueryInterface/Association/AssociationBelongsToSQLDerivationTests.swift
+QueryInterface/Association/AssociationBelongsToSQLTests.swift
+QueryInterface/Association/AssociationChainRowScopesTests.swift
+QueryInterface/Association/AssociationChainSQLTests.swift
+QueryInterface/Association/AssociationHasManyOrderingTests.swift
+QueryInterface/Association/AssociationHasManyRowScopeTests.swift
+QueryInterface/Association/AssociationHasManySQLTests.swift
+QueryInterface/Association/AssociationHasManyThroughOrderingTests.swift
+QueryInterface/Association/AssociationHasManyThroughRowScopeTests.swift
+QueryInterface/Association/AssociationHasManyThroughSQLTests.swift
+QueryInterface/Association/AssociationHasOneSQLDerivationTests.swift
+QueryInterface/Association/AssociationHasOneSQLTests.swift
+QueryInterface/Association/AssociationHasOneThroughDecodableRecordTests.swift
+QueryInterface/Association/AssociationHasOneThroughFetchableRecordTests.swift
+QueryInterface/Association/AssociationHasOneThroughRowScopeTests.swift
+QueryInterface/Association/AssociationHasOneThroughSQLDerivationTests.swift
+QueryInterface/Association/AssociationHasOneThroughSQLTests.swift
+QueryInterface/Association/AssociationParallelDecodableRecordTests.swift
+QueryInterface/Association/AssociationParallelRowScopesTests.swift
+QueryInterface/Association/AssociationParallelSQLTests.swift
+QueryInterface/Association/AssociationPrefetchingCodableRecordTests.swift
+QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift
+QueryInterface/Association/AssociationPrefetchingObservationTests.swift
+  ~ testIncludingAllHasManyWithCompoundPrimaryKey: runtime: XCTAssertTrue failed - compoundprimarykey(name,pk1,pk2)
+QueryInterface/Association/AssociationPrefetchingRowTests.swift
+QueryInterface/Association/AssociationPrefetchingSQLTests.swift
+QueryInterface/Association/AssociationRowScopeSearchTests.swift
+QueryInterface/Association/AssociationTableAliasTestsSQLTests.swift
+QueryInterface/ColumnExpressionTests.swift
+  ~ testCodingKeysAsColumnExpression: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
+  ~ testColumnsDerivedFromCodingKeys: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
+  ~ testRawColumnExpression: runtime: XCTAssertEqual failed: ("player(id,name,score)") is not equal to ("player(id,name,score)[1]") -
+  ~ testRawRepresentableColumnExpression: runtime: XCTAssertEqual failed: ("player(id,name,score)") is not equal to ("player(id,name,score)[1]") -
+QueryInterface/CommonTableExpressionTests.swift
+QueryInterface/DerivableRequestTests.swift
+QueryInterface/FetchableRecord+QueryInterfaceRequestTests.swift
+QueryInterface/ForeignKeyDefinitionTests.swift
+QueryInterface/QueryInterfaceExpressionsTests.swift
+  - testFastPrimaryKeyExpression: internal API fastPrimaryKey
+QueryInterface/QueryInterfaceExtensibilityTests.swift
+QueryInterface/QueryInterfacePromiseTests.swift
+QueryInterface/QueryInterfaceRequestTests.swift
+QueryInterface/Record+QueryInterfaceRequestTests.swift
+QueryInterface/TableDefinitionTests.swift
+QueryInterface/TableRecord+QueryInterfaceRequestTests.swift
+QueryInterface/TableTests.swift
+QueryInterface/VirtualTableModuleTests.swift
+Record/PersistableRecord/DatabaseColumnEncodingStrategyTests.swift
+Record/PersistableRecord/DatabaseDataEncodingStrategyTests.swift
+Record/PersistableRecord/DatabaseDateEncodingStrategyTests.swift
+Record/PersistableRecord/DatabaseUUIDEncodingStrategyTests.swift
+Record/PersistableRecord/MutablePersistableRecordChangesTests.swift
+Record/PersistableRecord/MutablePersistableRecordEncodableTests.swift
+Record/PersistableRecord/MutablePersistableRecordPersistenceConflictPolicyTests.swift
+  - testReplacePolicy: missing type TransactionObserver
+Record/PersistableRecord/MutablePersistableRecordTests.swift
+Record/PersistableRecord/PersistableRecordTests.swift
+Record/PersistableRecord/RecordMappedOnMutableViewTests.swift
+Record/TableRecord/TableRecordDeleteTests.swift
+Record/TableRecord/TableRecordTests.swift
+Record/TableRecord/TableRecordUpdateTests.swift
+
+x QueryInterface/Association/AssociationPrefetchingRelationTests.swift: no test compiles: missing SQLAssociationKey, missing type SQLAssociationCardinality, missing type SQLAssociationCardinality
+x QueryInterface/SQLExpressionIsConstantTests.swift: no test compiles: missing parameter tableName:, missing parameter tableName:, missing parameter tableName:
+x QueryInterface/SQLIdentifyingColumnsTests.swift: no test compiles: missing parameter tableName:

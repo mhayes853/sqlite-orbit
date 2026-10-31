@@ -1,0 +1,404 @@
+# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the
+# format. QueryInterface, JSON, and Record/PersistableRecord and Record/TableRecord
+# live in query.txt; everything else in core.txt.
+
+Compilation/CompilationProtocolTests.swift
+  - UserFTS5Tokenizer: missing type FTS5Tokenizer
+  - UserFTS5CustomTokenizer: missing type FTS5CustomTokenizer
+  - UserFTS5WrapperTokenizer: missing type FTS5WrapperTokenizer
+  - UserStatementColumnConvertible1: missing type SQLiteStatement
+  - UserStatementColumnConvertible2: missing type SQLiteStatement
+  - UserStatementColumnConvertible3: missing type StatementColumnConvertible
+  - UserStatementColumnConvertible4: missing type StatementColumnConvertible
+  - UserTransactionObserver: missing type TransactionObserver
+Compilation/CompilationSubClassTests.swift
+Core/ColumnInfoTests.swift
+  - testIssue1124: missing type TransactionObserver
+Core/Cursor/AnyCursorTests.swift
+Core/Cursor/CursorTests.swift
+Core/Cursor/DatabaseCursorTests.swift
+Core/Cursor/DropFirstCursorTests.swift
+Core/Cursor/DropWhileCursorTests.swift
+Core/Cursor/EnumeratedCursorTests.swift
+Core/Cursor/FilterCursorTests.swift
+Core/Cursor/FlattenCursorTests.swift
+Core/Cursor/MapCursorTests.swift
+Core/Cursor/PrefixCursorTests.swift
+Core/Cursor/PrefixWhileCursorTests.swift
+Core/DatabaseAbortedTransactionTests.swift
+  ~ testTransactionAbortedByConflictPreventsFurtherDatabaseAccess: runtime: XCTAssertEqual failed: ("Optional("\nINSERT INTO t (a) VALUES (1);")") is not equal to ("Optional("INSERT INTO
+  ~ testTransactionAbortedByUser: runtime: XCTAssertEqual failed: ("ResultCode(rawValue: 21)") is not equal to ("ResultCode(rawValue: 4)") -
+  ~ testWriteTransactionAbortedByInterruptPreventsFurtherDatabaseAccess: runtime: failed - Expected error
+  ~ testReadTransactionAbortedByInterrupt: runtime: failed - Expected error
+  ~ testReadTransactionAbortedByInterruptDoesNotPreventFurtherRead: runtime: failed - Expected error
+  ~ testReadTransactionRestartHack: runtime: threw error "SQLite error 4: transaction was aborted - while executing `BEGIN TRANSACTION`"
+Core/DatabaseAfterNextTransactionCommitTests.swift
+  ~ testTransactionCompletions: runtime: XCTAssertEqual failed: ("0") is not equal to ("1") - ; CREATE TABLE t(a)
+Core/DatabaseAggregateTests.swift
+Core/DatabaseCollationTests.swift
+Core/DatabaseConfigurationTests.swift
+  ~ testAcceptsDoubleQuotedStringLiteralsFalse: runtime: failed - Expected error
+  ~ testPrepareDatabase: runtime: XCTAssertEqual failed: ("6") is not equal to ("1") -
+  ~ testPrepareDatabaseError: runtime: failed - Expected TestError
+Core/DatabaseErrorTests.swift
+Core/DatabaseFunctionTests.swift
+Core/DatabaseLogErrorTests.swift
+Core/DatabasePool/DatabasePoolCollationTests.swift
+Core/DatabasePool/DatabasePoolConcurrencyTests.swift
+  - testWriteWithoutTransactionDoesNotOpenATransaction: missing Database.beginTransaction
+  - testLongRunningReadTransaction: missing Database.beginTransaction
+  - testDefaultLabel: call can throw but is not marked with 'try'
+  - testCustomLabel: call can throw but is not marked with 'try'
+  - testAsyncConcurrentReadOpensATransaction: missing DatabasePool.asyncConcurrentRead
+  - testAsyncConcurrentReadOutsideOfTransaction: missing DatabasePool.asyncConcurrentRead
+  - testAsyncConcurrentReadError: missing DatabasePool.asyncConcurrentRead
+  ~ testDatabasePoolFundamental1: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:43: Fatal error: 'try!' expression un
+  ~ testDatabasePoolFundamental2: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:120: Fatal error: 'try!' expression u
+  ~ testDatabasePoolFundamental3: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:170: Fatal error: 'try!' expression u
+  ~ testReadBlockIsolationStartingWithRead: runtime: hangs (timed out)
+  ~ testReadBlockIsolationStartingWithSelect: runtime: hangs (timed out)
+  ~ testReadBlockIsolationStartingWithWrite: runtime: hangs (timed out)
+  ~ testReadMethodIsolationOfStatement: runtime: hangs (timed out)
+  ~ testReadMethodIsolationOfStatementWithCheckpoint: runtime: hangs (timed out)
+  ~ testUnsafeReadMethodIsolationOfBlock: runtime: hangs (timed out)
+  ~ testUnsafeReadMethodIsolationOfStatement: runtime: hangs (timed out)
+  ~ testUnsafeReadMethodIsolationOfStatementWithCheckpoint: runtime: hangs (timed out)
+  ~ testReadError: runtime: failed - Expected error
+  ~ testTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueueReadOnly: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
+  ~ testReadBlockIsolationStartingWithWriteTransaction: runtime: hangs (timed out)
+Core/DatabasePool/DatabasePoolFunctionTests.swift
+Core/DatabasePool/DatabasePoolReadOnlyTests.swift
+  ~ testConcurrentRead: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
+Core/DatabasePool/DatabasePoolTests.swift
+  - testCloseFailedDueToWriter: missing lastSQLiteDiagnostic
+  - testCloseFailedDueToReader: missing lastSQLiteDiagnostic
+Core/DatabaseQueue/DatabaseQueueConcurrencyTests.swift
+Core/DatabaseQueue/DatabaseQueueInMemoryTests.swift
+  ~ test_shared_in_memory_databases_are_shared_by_name: runtime: XCTAssertTrue failed -
+Core/DatabaseQueue/DatabaseQueueReadOnlyTests.swift
+Core/DatabaseQueue/DatabaseQueueTests.swift
+  - testAllowsUnsafeTransactions: missing Database.beginTransaction
+  - testFailedClose: missing lastSQLiteDiagnostic
+  ~ testTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueueReadOnly: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
+  ~ testAddRemoveCollation: runtime: failed - Expected Error
+  ~ testDefaultLabel: runtime: XCTAssertEqual failed: ("GRDB.Database") is not equal to ("GRDB.DatabaseQueue") -
+Core/DatabaseReaderTests.swift
+  - testBackup: missing some DatabaseReader.backup
+  ~ testAddCollation: runtime: threw error "could not decode Int from "foo" at column str"
+  ~ testReadCanAccessTaskLocal: runtime: XCTAssertEqual failed: ("2A1C6755-DE7A-4D02-AF7F-D094CDF7572B") is not equal to ("70ABADBB-A1C3-4055-96DA-509A
+  ~ testUnsafeReadCanAccessTaskLocal: runtime: XCTAssertEqual failed: ("7F9FAD0E-3AEC-4F06-B009-F123EEBEF995") is not equal to ("89C7A68D-82E2-4013-9BD6-35EB
+  ~ testUnsafeReentrantReadIsReentrant: runtime: crashes: SQLiteOrbitGRDB/DatabaseSnapshot.swift:190: Fatal error: Database methods are not reentrant.
+  ~ test_cursor_iteration_from_read_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_cursor_iteration_from_unsafeRead_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_read_is_cancelled_by_Task_cancellation_performed_before_database_access: runtime: failed - Should not be executed
+  ~ test_statement_execution_from_read_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_statement_execution_from_unsafeRead_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_successful_read_is_not_cancelled_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_successful_unsafeRead_is_not_cancelled_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_unsafeRead_is_cancelled_by_Task_cancellation_performed_before_database_access: runtime: failed - Should not be executed
+Core/DatabaseRegionObservationTests.swift
+Core/DatabaseSavepointTests.swift
+  - Observer: missing type TransactionObserver
+  - testReleaseTopLevelSavepoint: missing DatabaseQueue.add
+  - testRollbackTopLevelSavepoint: missing DatabaseQueue.add
+  - testNestedSavepoint: missing DatabaseQueue.add
+  - testSubsequentSavepoints: missing DatabaseQueue.add
+  - testSubsequentSavepointsWithErrors: missing DatabaseQueue.add
+  ~ testIsInsideTransaction: runtime: threw error "SQLite error 23 with statement `BEGIN DEFERRED TRANSACTION`: not authorized"
+  ~ testIsInsideTransactionWithImplicitRollback: runtime: threw error "SQLite error 23 with statement `BEGIN TRANSACTION`: not authorized"
+Core/DatabaseSchemaSourceTests.swift
+Core/DatabaseSnapshotPoolTests.swift
+Core/DatabaseSnapshotTests.swift
+  - testSnapshotCreatedFromTransactionObserver: missing type TransactionObserver
+  - testDefaultLabel: call can throw but is not marked with 'try'
+  - testCustomLabel: call can throw but is not marked with 'try'
+  - testSnapshotSchemaCache: missing Database.schemaCache
+  - testFailedClose: missing lastSQLiteDiagnostic
+  ~ testSnapshotIsImmutable: runtime: crashes: process exited
+Core/DatabaseTests.swift
+  - testImplicitTransactionManagement: missing Database.beginTransaction
+  - testExplicitTransactionManagement: missing Database.beginTransaction
+  ~ testReadOnlyTransaction: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
+  ~ testDatabaseCanBeUsedOutsideOfDatabaseQueueBlockAsLongAsTheQueueIsCorrect: runtime: threw error "SQLite error 21: database access outlived its closure"
+Core/DatabaseTraceTests.swift
+Core/DatabaseValueConvertible/DatabaseTimestampTests.swift
+Core/DatabaseValueConvertible/DatabaseValueConvertibleDecodableTests.swift
+Core/DatabaseValueConvertible/DatabaseValueConvertibleEncodableTests.swift
+Core/DatabaseValueConvertible/DatabaseValueConvertibleFetchTests.swift
+Core/DatabaseValueConvertible/DatabaseValueConvertibleSubclassTests.swift
+Core/DatabaseValueTests.swift
+Core/DatabaseWriterTests.swift
+  - testEraseAndVacuum: missing some DatabaseWriter.vacuum
+  - testVacuumInto: missing some DatabaseWriter.vacuum
+  - testIssue424Minimal: missing DatabaseQueue.backup
+  - testAsyncAwait_writeWithoutTransaction: missing Database.beginTransaction
+  - testAsyncAwait_barrierWriteWithoutTransaction: missing Database.beginTransaction
+  - testAsyncAwait_vacuum: missing T.vacuum
+  - testAsyncAwait_vacuumInto: missing T.vacuum
+  - test_cancellation_does_not_prevent_rollback: missing Database.beginTransaction
+  ~ test_cursor_iteration_from_writeWithoutTransaction_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_cursor_iteration_from_write_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_statement_execution_from_writeWithoutTransaction_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_statement_execution_from_write_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_write_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_cursor_iteration_from_barrierWriteWithoutTransaction_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_statement_execution_from_barrierWriteWithoutTransaction_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+Core/FetchRequestTests.swift
+Core/ForeignKeyInfoTests.swift
+Core/IndexInfoTests.swift
+  ~ testColumnsThatUniquelyIdentityRows_with_view_and_schema_source: runtime: XCTAssertTrue failed -
+Core/NumericOverflowTests.swift
+Core/PrimaryKeyInfoTests.swift
+  ~ testView: runtime: XCTAssertEqual failed: ("Optional("no such table: items")") is not equal to ("Optional("database view items ha
+  ~ test_custom_schemaSource_empty_result: runtime: failed - Expected Error
+  ~ test_custom_schemaSource_nil_result: runtime: XCTAssertEqual failed: ("Optional("no such table: playerView")") is not equal to ("Optional("database view pla
+Core/ResultCodeTests.swift
+Core/Row/RowAdapterTests.swift
+Core/Row/RowCopiedFromStatementTests.swift
+Core/Row/RowFetchTests.swift
+Core/Row/RowFromDictionaryLiteralTests.swift
+Core/Row/RowFromDictionaryTests.swift
+Core/Row/RowFromStatementTests.swift
+Core/SQLLiteralTests.swift
+  - testSQLLiteralInterpolation2: internal API elements
+  - testIsEmpty: no exact matches in call to initializer
+Core/SQLRequestTests.swift
+  ~ testCachedSQLRequest: runtime: XCTAssertTrue failed -
+Core/SchedulingWatchdogTests.swift
+  - testSchedulingWatchdog: missing SchedulingWatchdog
+Core/Statement/SelectStatementTests.swift
+  - testStatementCursor: internal API makeCursor
+  - testStatementCursorStepFailure: missing type StatementCursor
+  - testRegion: no exact matches in call to instance method 'add'
+Core/Statement/StatementArgumentsTests.swift
+Core/Statement/UpdateStatementTests.swift
+  - test_SQLITE_STATIC_then_SQLITE_TRANSIENT: missing Statement.sqliteStatement
+  - test_SQLITE_STATIC: missing Statement.sqliteStatement
+  - test_SQLITE_TRANSIENT_due_to_high_number_of_arguments: missing Statement.sqliteStatement
+  - test_SQLITE_TRANSIENT: missing Statement.sqliteStatement
+Core/TransactionDateTests.swift
+  ~ testTransactionDateInsideTransaction_commit: runtime: threw error "SQLite error 23: not authorized - while executing `BEGIN`"
+  ~ testTransactionDateInsideTransaction_rollback: runtime: threw error "SQLite error 23: not authorized - while executing `BEGIN`"
+  ~ testTransactionDateInsideTransaction_rollbackingError: runtime: threw error "SQLite error 23: not authorized - while executing `BEGIN`"
+Core/TransactionObserver/TruncateOptimizationTests.swift
+  - DeletionObserver: missing type TransactionObserver
+  - UniversalObserver: missing type TransactionObserver
+  - testExecuteDelete: missing DatabaseQueue.add
+  - testExecuteDeleteCaseSensitivity: missing type TransactionObserver
+  - testExecuteDeleteWithPreparedStatement: missing DatabaseQueue.add
+  - testExecuteDeleteWithCachedPreparedStatement: no exact matches in call to instance method 'add'
+  - testObservedDropTable: missing DatabaseQueue.add
+  - testObservedDropTableWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropTemporaryTable: missing DatabaseQueue.add
+  - testObservedDropTemporaryTableWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropVirtualTable: missing DatabaseQueue.add
+  - testObservedDropVirtualTableWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropView: missing DatabaseQueue.add
+  - testObservedDropViewWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropTemporaryView: missing DatabaseQueue.add
+  - testObservedDropTemporaryViewWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropIndex: missing DatabaseQueue.add
+  - testObservedDropIndexViewWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropTemporaryIndex: missing DatabaseQueue.add
+  - testObservedDropTemporaryIndexViewWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropTrigger: missing DatabaseQueue.add
+  - testObservedDropTriggerWithPreparedStatement: missing DatabaseQueue.add
+  - testObservedDropTemporaryTrigger: missing DatabaseQueue.add
+  - testObservedDropTemporaryTriggerWithPreparedStatement: missing DatabaseQueue.add
+Dump/DatabaseDumpTests.swift
+Dump/DatabaseReaderDumpTests.swift
+FTS/FTS3PatternTests.swift
+FTS/FTS3RecordTests.swift
+FTS/FTS3TableBuilderTests.swift
+FTS/FTS3TokenizerTests.swift
+FTS/FTS4RecordTests.swift
+FTS/FTS4TableBuilderTests.swift
+  ~ testFTS4Compression: runtime: threw error "SQLite error 1: not an error - while executing `INSERT INTO documents (content) VALUES (?)`"
+FTS/FTS5PatternTests.swift
+FTS/FTS5RecordTests.swift
+FTS/FTS5TableBuilderTests.swift
+FTS/FTS5TokenizerTests.swift
+  - testTokenize: missing Database.makeTokenizer
+  - testTokenize_Unicode61TokenizerCategories: missing Database.makeTokenizer
+FTS/Issue1838Tests.swift
+  ! test_interrupted_commit: GRDB 7.11.1 fails it with this SQLite build (the write commits)
+Migrations/DatabaseMigratorTests.swift
+  ~ testForeignKeyViolation: runtime: threw error "Migration "foreignKeyError" was rolled back because it violates foreign key constraints: row 2 of
+  ~ testMigrationFailureTriggersRollback: runtime: threw error "Migration "foreignKeyError" was rolled back because it violates foreign key constraints: row 1 of
+  ~ test_merged_migrations_named_like_the_last: runtime: XCTAssertEqual failed: ("["v1", "v2", "v5", "v3", "v4"]") is not equal to ("["v1", "v4", "v5"]") -
+  ~ test_merged_migrations_named_like_the_last_that_includes_itself_in_the_list_of_merged_migrations: runtime: XCTAssertEqual failed: ("["v1", "v2", "v5", "v3", "v4"]") is not equal to ("["v1", "v4", "v5"]") -
+Private/DatabasePoolReleaseMemoryTests.swift
+  - testDatabasePoolDeinitClosesAllConnections: missing Configuration.onConnectionDidOpen
+  - test_DatabasePool_releaseMemory_closes_reader_connections: missing Configuration.onConnectionDidOpen
+  - test_DatabasePool_releaseMemory_closes_reader_connections_when_persistentReadOnlyConnections_is_false: missing Configuration.onConnectionDidOpen
+  - test_DatabasePool_releaseMemory_does_not_close_reader_connections_when_persistentReadOnlyConnections_is_true: missing Configuration.onConnectionDidOpen
+  - testBlocksRetainConnection: missing Configuration.onConnectionDidOpen
+Private/DatabaseQueueReleaseMemoryTests.swift
+  - testDatabaseQueueDeinitClosesConnection: missing Configuration.onConnectionDidOpen
+  - testBlocksRetainConnection: missing Configuration.onConnectionDidOpen
+Private/DatabaseQueueSchemaCacheTests.swift
+  - testCache: missing Database.schemaCache
+  - testCacheInvalidationWithCursor: missing Database.schemaCache
+  - testTempCache: missing Database.schemaCache
+  - testMainShadowedByTemp: missing Database.schemaCache
+Private/DatabaseRegionTests.swift
+  - testUpdateStatement: missing Statement.invalidatesDatabaseSchemaCache
+  - testRowIdNameInUpdateStatement: missing Statement.authorizerEventKinds
+  - testInsertStatement: missing Statement.invalidatesDatabaseSchemaCache
+  - testDeleteStatement: missing Statement.invalidatesDatabaseSchemaCache
+  - testUpdateStatementInvalidatesDatabaseSchemaCache: missing Statement.invalidatesDatabaseSchemaCache
+  - testRegionIsModifiedByDatabaseEvent: missing DatabaseEventKind
+  ~ testSelectStatement: runtime: XCTAssertEqual failed: ("bar(fooid),foo(id,name)") is not equal to ("bar(fooId),foo(id,name)") -
+  ~ testDatabaseRegionOfJoinedRequests: runtime: XCTAssertEqual failed: ("a(id,name),b(aid,id,name),c(aid,id,name)") is not equal to ("a(id,name)[1],b(aid,id,n
+  ~ testRegionRowIds: runtime: XCTAssertEqual failed: ("foo(a,id)") is not equal to ("empty") -
+  ~ testDatabaseRegionOfDerivedRequests: runtime: XCTAssertEqual failed: ("foo(a,id)") is not equal to ("foo(a,id)[1,2,3]") -
+Private/RecordUniqueIndexTests.swift
+Record/FetchableRecord/DatabaseDataDecodingStrategyTests.swift
+  - testCustom: missing RowDecodingError.impl
+Record/FetchableRecord/FetchableRecordDecodableTests.swift
+  - testStructWithData: missing RowDecodingError.impl
+  - testStructWithDate: missing RowDecodingError.impl
+  - testDatabaseColumnDecodingStrategy_useDefaultKeys: missing RowDecodingError.impl
+  - testDatabaseColumnDecodingStrategy_convertFromSnakeCase: missing RowDecodingError.impl
+  - testDatabaseColumnDecodingStrategy_custom: missing RowDecodingError.impl
+  - test_allKeys_and_containsKey: internal API setRows
+Record/FetchableRecord/FetchableRecordTests.swift
+Record/JoinSupportTests.swift
+Record/Record/RecordEditedTests.swift
+Record/Record/RecordInitializersTests.swift
+Record/Record/RecordMinimalNonOptionalPrimaryKeySingleTests.swift
+  - test_static_selectPrimaryKey: missing MinimalSingle
+  - test_static_selectID: missing MinimalSingle
+  - test_request_selectPrimaryKey: missing MinimalSingle
+  - test_request_selectID: missing MinimalSingle
+Record/Record/RecordMinimalPrimaryKeyRowIDTests.swift
+Record/Record/RecordMinimalPrimaryKeySingleTests.swift
+Record/Record/RecordPersistenceConflictPolicy.swift
+Record/Record/RecordPrimaryKeyHiddenRowIDTests.swift
+Record/Record/RecordPrimaryKeyMultipleTests.swift
+Record/Record/RecordPrimaryKeyNoneTests.swift
+Record/Record/RecordPrimaryKeyRowIDTests.swift
+Record/Record/RecordPrimaryKeySingleTests.swift
+Record/Record/RecordPrimaryKeySingleWithReplaceConflictResolutionTests.swift
+Record/Record/RecordSubClassTests.swift
+Record/Record/RecordWithColumnNameManglingTests.swift
+Record/SingletonRecordTest.swift
+Record/SingletonUserDefaultsTest.swift
+Support/CGFloatTests.swift
+Support/Foundation/FoundationDataTests.swift
+Support/Foundation/FoundationDateComponentsTests.swift
+Support/Foundation/FoundationDateTests.swift
+Support/Foundation/FoundationDecimalTests.swift
+Support/Foundation/FoundationNSDataTests.swift
+Support/Foundation/FoundationNSDateTests.swift
+Support/Foundation/FoundationNSDecimalNumberTests.swift
+Support/Foundation/FoundationNSNullTests.swift
+Support/Foundation/FoundationNSNumberTests.swift
+Support/Foundation/FoundationNSStringTests.swift
+Support/Foundation/FoundationNSURLTests.swift
+Support/Foundation/FoundationNSUUIDTests.swift
+Support/Foundation/FoundationURLTests.swift
+Support/Foundation/FoundationUUIDTests.swift
+Support/Foundation/Row+FoundationTests.swift
+Support/Foundation/StatementArguments+FoundationTests.swift
+ValueObservation/SharedValueObservationTests.swift
+  ~ test_async_observationLifetime: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+  ~ test_async_observationLifetime_early_release: runtime: hangs (timed out)
+  ~ test_async_whileObserved: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+  ~ test_task_observationLifetime: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+  ~ test_task_whileObserved: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationCountTests.swift
+  ~ testCount: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCountWithRemoveDuplicates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationDatabaseValueConvertibleTests.swift
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testAllOptional: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOneOptional: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationFetchTests.swift
+  ~ testCaseInsensitivityForFetch: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCaseInsensitivityForTable: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCaseInsensitivityForUpdates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testFetch: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicatesBy: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicatesBy2: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationMapTests.swift
+  ~ testMap: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationPrintTests.swift
+  ~ test_concurrent_success_asynchronousScheduling: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+  ~ test_concurrent_success_immediateScheduling: runtime: crashes: process exited
+  ~ test_handleEvents: runtime: hangs (timed out)
+  ~ test_varyingRegion: runtime: hangs (timed out)
+  ~ test_writeonly_lateFailure_asynchronousScheduling: runtime: XCTAssertEqual failed: ("["start", "fetch", "tracked region: player(*)", "value: nil", "fetch", "database did
+  ~ test_writeonly_lateFailure_immediateScheduling: runtime: XCTAssertEqual failed: ("["start", "fetch", "tracked region: player(*)", "value: nil", "fetch", "database did
+  ~ test_writeonly_success_asynchronousScheduling: runtime: hangs (timed out)
+  ~ test_writeonly_success_immediateScheduling: runtime: hangs (timed out)
+  ~ test_readonly_failure_asynchronousScheduling: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations:
+  ~ test_readonly_failure_immediateScheduling: runtime: hangs (timed out)
+  ~ test_readonly_success_asynchronousScheduling: runtime: XCTAssertEqual failed: ("["start", "fetch", "tracked region: player(*)", "value: nil"]") is not equal to ("["s
+  ~ test_readonly_success_immediateScheduling: runtime: hangs (timed out)
+ValueObservation/ValueObservationQueryInterfaceRequestTests.swift
+  ~ testAllRecordsWithPrefetchedRows: runtime: XCTAssertNotNil failed -
+  ~ testOneRecordWithPrefetchedRows: runtime: XCTAssertNotNil failed -
+  ~ testAllRowsWithPrefetchedRows: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOneRowWithPrefetchedRows: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationReadonlyTests.swift
+  ~ testReadOnlyObservation: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testWriteObservation: runtime: XCTAssertNotNil failed -
+  ~ testWriteObservationFailsByDefaultWithErrorHandling: runtime: XCTAssertEqual failed: ("Optional("a read-only query may write; run it in a write transaction instead")") is n
+  ~ testWriteObservationIsWrappedInSavepointWithErrorHandling: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
+ValueObservation/ValueObservationRecordTests.swift
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationRecorderTests.swift
+ValueObservation/ValueObservationRegionRecordingTests.swift
+  - testRecordingSelectedRegion: missing Database.recordingSelection
+  ~ testVaryingRegionTrackingAsyncScheduling: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations: notification
+  ~ testVaryingRegionTrackingImmediateScheduling: runtime: Asynchronous wait failed - Exceeded timeout of 1.0 seconds, with unfulfilled expectations: notification
+ValueObservation/ValueObservationRowTests.swift
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testFTS4Observation: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testJoinedFTS4Observation: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testSynchronizedFTS4Observation: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationTests.swift
+  - testCancellableInvalidation1: missing AnyValueReducer
+  - testCancellableInvalidation2: missing AnyValueReducer
+  - testIssue1746: missing type TransactionObserver
+  ~ testAllowedSnapshotOptimizationWithAsyncScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
+  ~ testDisallowedSnapshotOptimizationWithAsyncScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
+  ~ testAllowedSnapshotOptimizationWithImmediateScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
+  ~ testDisallowedSnapshotOptimizationWithImmediateScheduler: runtime: crashes: process exited
+  ~ testPragmaTableOptimization: runtime: XCTAssertEqual failed: ("Optional("full database")") is not equal to ("Optional("t(id,name)[1]")") -
+  ~ testTrackingExplicitRegion: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testViewOptimization: runtime: XCTAssertEqual failed: ("t(id,name),v(id,name)") is not equal to ("t(id,name)") -
+
+x Core/DatabasePool/DatabasePoolBackupTests.swift: missing type BackupTestCase
+x Core/DatabaseQueue/DatabaseQueueBackupTests.swift: missing type BackupTestCase
+x Core/DatabaseQueue/DatabaseQueueInMemoryCopyTests.swift: no test compiles: missing DatabaseQueue.inMemoryCopy, missing DatabaseQueue.inMemoryCopy, missing DatabaseQueue.inMemoryCopy
+x Core/DatabaseQueue/DatabaseQueueTemporaryCopyTests.swift: no test compiles: missing DatabaseQueue.temporaryCopy, missing DatabaseQueue.temporaryCopy, missing DatabaseQueue.temporaryCopy
+x Core/DatabaseSuspensionTests.swift: no test compiles: missing DatabaseQueue.suspend, missing DatabaseQueue.suspend, missing DatabaseQueue.suspend
+x Core/DatabaseValueConversionErrorTests.swift: no test compiles: missing RowDecodingError.impl, missing RowDecodingError.impl, missing RowDecodingError.impl
+x Core/DatabaseValueConversionTests.swift: no test compiles: missing T.fetchOne, missing assertDecoding, missing assertDecoding
+x Core/DatabaseValueConvertible/RawRepresentable+DatabaseValueConvertibleTests.swift: missing type StatementBinding, missing type StatementColumnConvertible, type 'Wrapper<RawValue>' does not conform to protocol 'SQLExpressible'
+x Core/StatementColumnConvertibleFetchTests.swift: no test compiles: missing type SQLiteStatement, missing Fetched, missing type Fetched
+x Core/TransactionObserver/DatabaseEventObservationStrategyTest.swift: no test compiles: missing type TransactionObserver, missing DatabaseQueue.add, missing DatabaseQueue.add
+x Core/TransactionObserver/TransactionObserverSavepointsTests.swift: missing type DatabaseEvent
+x Core/TransactionObserver/TransactionObserverTests.swift: missing type DatabaseEvent
+x FTS/FTS5CustomTokenizerTests.swift: no test compiles: missing type FTS5CustomTokenizer, missing type FTS5CustomTokenizer, missing type FTS5CustomTokenizer
+x FTS/FTS5WrapperTokenizerTests.swift: no test compiles: missing type FTS5WrapperTokenizer, missing type FTS5WrapperTokenizer, missing type FTS5WrapperTokenizer
+x Private/CaseInsensitiveIdentifierTests.swift: no test compiles: missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier
+x Private/DataMemoryTests.swift: no test compiles: missing Row.sqliteStatement, missing Row.sqliteStatement
+x Private/DatabasePoolSchemaCacheTests.swift: no test compiles: missing Database.schemaCache, missing Database.schemaCache, missing Database.schemaCache
+x Private/DatabaseValueConvertibleEscapingTests.swift: no test compiles: internal API quotedSQL, internal API quotedSQL, internal API quotedSQL
+x Private/InflectionsTests.swift: no test compiles: internal API startIndexOfLastWord, internal API digitlessRadical, internal API pluralized
+x Private/OrderedDictionaryTests.swift: no test compiles: missing type OrderedDictionary, missing type OrderedDictionary, missing type OrderedDictionary
+x Private/PoolTests.swift: no test compiles: missing Pool, cannot infer contextual base in reference to member 'reuse', cannot infer contextual base in reference to member 'reuse'
+x Private/SQLExpressionLiteralTests.swift: no test compiles: missing SQLGenerationContext, missing SQLGenerationContext
+x Private/UtilsTests.swift: no test compiles: missing throwingFirstError
+x Record/FetchableRecord/DatabaseDateDecodingStrategyTests.swift: no test compiles: missing RowDecodingError.impl, missing RowDecodingError.impl, missing RowDecodingError.impl
