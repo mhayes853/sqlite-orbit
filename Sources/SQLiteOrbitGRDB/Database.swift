@@ -18,6 +18,7 @@
     }
 
     let access: SQLiteScopedAccess
+    var _connectionState: DatabaseConnectionState?
 
     init(_ access: SQLiteScopedAccess) {
       self.access = access
@@ -64,7 +65,9 @@
           let cursor = try access.statementCursor(
             SQLiteOrbit.SQL(text: text, bindings: bound.values.map(\.orbitValue))
           )
+          let trace = traceStatement(sql: text, values: bound.values)
           while try cursor.next() != nil {}
+          trace?.finish()
           arguments.consume(bound.consumed)
           remaining = part.remainder
         }
@@ -114,13 +117,22 @@
         case .exclusive: .exclusive
         }
       try translate {
+        traceTransactionStatement(
+          "BEGIN \(String(describing: kind ?? .immediate).uppercased()) TRANSACTION"
+        )
         do {
           try access.transaction(mode: mode) { _ in
             if try body() == .rollback {
               throw DatabaseRollback()
             }
           }
-        } catch is DatabaseRollback {}
+          traceTransactionStatement("COMMIT")
+        } catch is DatabaseRollback {
+          traceTransactionStatement("ROLLBACK")
+        } catch {
+          traceTransactionStatement("ROLLBACK")
+          throw error
+        }
       }
     }
 
@@ -161,7 +173,9 @@
           cached: cached
         )
         do {
-          return try RowCursor(cursor, sql: sql, arguments: arguments, adapter: adapter)
+          let rows = try RowCursor(cursor, sql: sql, arguments: arguments, adapter: adapter)
+          rows.trace = { [unowned self] in self.traceStatement(sql: sql, values: bound.values) }
+          return rows
         } catch {
           try? cursor.close()
           throw error
@@ -232,9 +246,19 @@
       try? cursor.close()
     }
 
+    // Starts the statement trace on the first step, as SQLite does.
+    var trace: (() -> StatementTrace?)?
+    private var activeTrace: StatementTrace?
+
     public func next() throws -> Row? {
-      try translate {
+      if let trace {
+        self.trace = nil
+        activeTrace = trace()
+      }
+      return try translate {
         guard let columns = try cursor.next() else {
+          activeTrace?.finish()
+          activeTrace = nil
           return nil
         }
         baseRow.columns = columns.map { ($0.0, DatabaseValue($0.1)) }

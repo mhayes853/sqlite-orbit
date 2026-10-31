@@ -1,0 +1,14 @@
+# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the format.
+
+Core/Cursor/MapCursorTests.swift
+Core/DatabaseValueTests.swift
+Core/Row/RowFetchTests.swift
+  - testStatementInformationFromCursor: missing DatabaseRegion.description
+  ~ testFetchAllCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no 
+  ~ testFetchAllStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai
+  ~ testFetchCursorCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no 
+  ~ testFetchCursorStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw(), NULL`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error
+  ~ testFetchOneCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no 
+  ~ testFetchOneStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai
+  ~ testFetchSetCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no 
+  ~ testFetchSetStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai

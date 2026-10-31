@@ -334,6 +334,12 @@
 
     public init(library: SQLiteLibrary) {
       native = SQLiteConfiguration(library: library, busyPolicy: .timeout(.zero))
+      // Runs before every other setup, so a reused connection handle starts without state.
+      native.setups.append(
+        SQLiteSetup { connection in
+          try connection.withScopedAccess { DatabaseConnectionState.reset(try $0.sqliteConnection) }
+        }
+      )
     }
 
     #if BuiltInSQLite
