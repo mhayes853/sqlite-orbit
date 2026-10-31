@@ -693,23 +693,267 @@ class DatabaseMigratorTests : GRDBTestCase {
         try XCTAssertFalse(dbQueue.read(migrator3.hasBeenSuperseded))
     }
     
-
+    // Regression test for https://github.com/groue/GRDB.swift/issues/741
+    func testEraseDatabaseOnSchemaChangeDoesNotDeadLockOnTargetQueue() throws {
+        dbConfiguration.targetQueue = DispatchQueue(label: "target")
+        let dbQueue = try makeDatabaseQueue()
+        
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = true
+        migrator.registerMigration("1", migrate: { _ in })
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+        
+        migrator.registerMigration("2", migrate: { _ in })
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+    }
+    
+    // Regression test for https://github.com/groue/GRDB.swift/issues/741
+    func testEraseDatabaseOnSchemaChangeDoesNotDeadLockOnWriteTargetQueue() throws {
+        dbConfiguration.writeTargetQueue = DispatchQueue(label: "writerTarget")
+        let dbQueue = try makeDatabaseQueue()
+        
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = true
+        migrator.registerMigration("1", migrate: { _ in })
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+        
+        migrator.registerMigration("2", migrate: { _ in })
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+    }
     
 
     
-
+    func testEraseDatabaseOnSchemaChange() throws {
+        // 1st version of the migrator
+        var migrator1 = DatabaseMigrator()
+        migrator1.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+            }
+        }
+        
+        // 2nd version of the migrator
+        var migrator2 = DatabaseMigrator()
+        migrator2.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+                t.column("score", .integer) // <- schema change, because reasons (development)
+            }
+        }
+        migrator2.registerMigration("2") { db in
+            try db.execute(sql: "INSERT INTO player (id, name, score) VALUES (NULL, 'Arthur', 1000)")
+        }
+        
+        // Apply 1st migrator
+        let dbQueue = try makeDatabaseQueue()
+        try migrator1.migrate(dbQueue)
+        
+        // Test than 2nd migrator can't run...
+        do {
+            try migrator2.migrate(dbQueue)
+            XCTFail("Expected DatabaseError")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_ERROR)
+            XCTAssertEqual(error.message, "table player has no column named score")
+        }
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1"])
+        
+        // ... unless database gets erased
+        migrator2.eraseDatabaseOnSchemaChange = true
+        try XCTAssertTrue(dbQueue.read(migrator2.hasSchemaChanges))
+        try migrator2.migrate(dbQueue)
+        try XCTAssertFalse(dbQueue.read(migrator2.hasSchemaChanges))
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1", "2"])
+    }
     
+    func testManualEraseDatabaseOnSchemaChange() throws {
+        // 1st version of the migrator
+        var migrator1 = DatabaseMigrator()
+        migrator1.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+            }
+        }
+        
+        // 2nd version of the migrator
+        var migrator2 = DatabaseMigrator()
+        migrator2.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+                t.column("score", .integer) // <- schema change, because reasons (development)
+            }
+        }
+        migrator2.registerMigration("2") { db in
+            try db.execute(sql: "INSERT INTO player (id, name, score) VALUES (NULL, 'Arthur', 1000)")
+        }
+        
+        // Apply 1st migrator
+        let dbQueue = try makeDatabaseQueue()
+        try migrator1.migrate(dbQueue)
+        
+        // Test than 2nd migrator can't run...
+        do {
+            try migrator2.migrate(dbQueue)
+            XCTFail("Expected DatabaseError")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_ERROR)
+            XCTAssertEqual(error.message, "table player has no column named score")
+        }
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1"])
+        
+        // ... unless database gets erased
+        if try dbQueue.read(migrator2.hasSchemaChanges) {
+            try dbQueue.erase()
+        }
+        try migrator2.migrate(dbQueue)
+        try XCTAssertFalse(dbQueue.read(migrator2.hasSchemaChanges))
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1", "2"])
+    }
 
+    func testEraseDatabaseOnSchemaChangeWithConfiguration() throws {
+        // 1st version of the migrator
+        var migrator1 = DatabaseMigrator()
+        migrator1.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+            }
+            try db.execute(sql: "INSERT INTO player (id, name) VALUES (NULL, testFunction())")
+        }
+        
+        // 2nd version of the migrator
+        var migrator2 = DatabaseMigrator()
+        migrator2.registerMigration("1") { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+                t.column("score", .integer) // <- schema change
+            }
+            try db.execute(sql: "INSERT INTO player (id, name, score) VALUES (NULL, testFunction(), 1000)")
+        }
+        migrator2.registerMigration("2") { db in
+            try db.execute(sql: "INSERT INTO player (id, name, score) VALUES (NULL, testFunction(), 2000)")
+        }
+        
+        // Apply 1st migrator
+        dbConfiguration.prepareDatabase { db in
+            let function = DatabaseFunction("testFunction", argumentCount: 0, pure: true) { _ in "Arthur" }
+            db.add(function: function)
+        }
+        let dbQueue = try makeDatabaseQueue()
+        try migrator1.migrate(dbQueue)
+        
+        // Test than 2nd migrator can't run...
+        do {
+            try migrator2.migrate(dbQueue)
+            XCTFail("Expected DatabaseError")
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_ERROR)
+            XCTAssertEqual(error.message, "table player has no column named score")
+        }
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1"])
+        
+        // ... unless database gets erased
+        migrator2.eraseDatabaseOnSchemaChange = true
+        try XCTAssertTrue(dbQueue.read(migrator2.hasSchemaChanges))
+        try migrator2.migrate(dbQueue)
+        try XCTAssertFalse(dbQueue.read(migrator2.hasSchemaChanges))
+        try XCTAssertEqual(dbQueue.read(migrator2.appliedMigrations), ["1", "2"])
+    }
     
-
-
-
+    func testEraseDatabaseOnSchemaChangeDoesNotEraseDatabaseOnAddedMigration() throws {
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = true
+        
+        let mutex = Mutex(0)
+        migrator.registerMigration("1") { db in
+            let value = mutex.increment()
+            try db.execute(sql: """
+                CREATE TABLE t1(id INTEGER PRIMARY KEY);
+                INSERT INTO t1(id) VALUES (?)
+                """, arguments: [value])
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        
+        // 1st migration
+        try migrator.migrate(dbQueue)
+        try XCTAssertEqual(dbQueue.read { try Int.fetchOne($0, sql: "SELECT id FROM t1") }, 1)
+        
+        // 2nd migration does not erase database
+        migrator.registerMigration("2") { db in
+            try db.execute(sql: """
+                CREATE TABLE t2(id INTEGER PRIMARY KEY);
+                """)
+        }
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+        try XCTAssertEqual(dbQueue.read { try Int.fetchOne($0, sql: "SELECT id FROM t1") }, 1)
+        try XCTAssertTrue(dbQueue.read { try $0.tableExists("t2") })
+    }
     
-
+    // Regression test for <https://github.com/groue/GRDB.swift/issues/1360>
+    func testEraseDatabaseOnSchemaChangeIgnoresInternalSchemaObjects() throws {
+        // Given a migrator with eraseDatabaseOnSchemaChange
+        var migrator = DatabaseMigrator()
+        migrator.eraseDatabaseOnSchemaChange = true
+        migrator.registerMigration("1") { db in
+            try db.execute(sql: "CREATE TABLE t(id INTEGER PRIMARY KEY)")
+        }
+        let dbQueue = try makeDatabaseQueue()
+        try migrator.migrate(dbQueue)
+        
+        // When we add an internal schema object (sqlite_stat1)
+        try dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO t DEFAULT VALUES;
+                ANALYZE;
+                """)
+            try XCTAssertTrue(db.tableExists("sqlite_stat1"))
+        }
+        
+        // Then 2nd migration does not erase database
+        try XCTAssertFalse(dbQueue.read(migrator.hasSchemaChanges))
+        try migrator.migrate(dbQueue)
+        try XCTAssertEqual(dbQueue.read { try Int.fetchOne($0, sql: "SELECT id FROM t") }, 1)
+    }
     
-
-    
-
+    func testEraseDatabaseOnSchemaChangeWithRenamedMigration() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        // 1st migration
+        var migrator1 = DatabaseMigrator()
+        migrator1.registerMigration("1") { db in
+            try db.execute(sql: """
+                CREATE TABLE t1(id INTEGER PRIMARY KEY);
+                INSERT INTO t1(id) VALUES (1)
+                """)
+        }
+        try migrator1.migrate(dbQueue)
+        try XCTAssertEqual(dbQueue.read { try Int.fetchOne($0, sql: "SELECT id FROM t1") }, 1)
+        
+        // 2nd migration does not erase database
+        var migrator2 = DatabaseMigrator()
+        migrator2.eraseDatabaseOnSchemaChange = true
+        migrator2.registerMigration("2") { db in
+            try db.execute(sql: """
+                CREATE TABLE t1(id INTEGER PRIMARY KEY);
+                INSERT INTO t1(id) VALUES (2)
+                """)
+        }
+        try XCTAssertTrue(dbQueue.read(migrator2.hasSchemaChanges))
+        try migrator2.migrate(dbQueue)
+        try XCTAssertFalse(dbQueue.read(migrator2.hasSchemaChanges))
+        try XCTAssertEqual(dbQueue.read { try Int.fetchOne($0, sql: "SELECT id FROM t1") }, 2)
+    }
     
     func testMigrations() throws {
         do {

@@ -1,7 +1,8 @@
 #if canImport(Foundation) && canImport(Dispatch)
+  import Foundation
   import SQLiteOrbit
 
-  public struct ResultCode: RawRepresentable, Hashable, Sendable {
+  public struct ResultCode: RawRepresentable, Hashable, Sendable, CustomStringConvertible {
     public let rawValue: Int32
 
     public init(rawValue: Int32) {
@@ -11,7 +12,46 @@
     public var primaryResultCode: Self {
       Self(rawValue: rawValue & 0xff)
     }
+
+    var isPrimary: Bool { self == primaryResultCode }
+
+    /// Matches primary codes against any extended code that shares them.
+    public static func ~= (pattern: Self, code: Self) -> Bool {
+      pattern.isPrimary ? pattern == code.primaryResultCode : pattern == code
+    }
+
+    /// The English description SQLite's `sqlite3_errstr` returns for this code.
+    var errorString: String? {
+      switch rawValue {
+      case 516: return "abort due to ROLLBACK"
+      case 100: return "another row available"
+      case 101: return "no more rows available"
+      default:
+        let primary = Int(rawValue & 0xff)
+        if primary < resultCodeMessages.count, let message = resultCodeMessages[primary] {
+          return message
+        }
+        return "unknown error"
+      }
+    }
+
+    public var description: String {
+      errorString.map { "\(rawValue) (\($0))" } ?? "\(rawValue)"
+    }
   }
+
+  // The messages of `sqlite3_errstr`, indexed by primary result code.
+  private let resultCodeMessages: [String?] = [
+    "not an error", "SQL logic error", nil, "access permission denied", "query aborted",
+    "database is locked", "database table is locked", "out of memory",
+    "attempt to write a readonly database", "interrupted", "disk I/O error",
+    "database disk image is malformed", "unknown operation", "database or disk is full",
+    "unable to open database file", "locking protocol", nil, "database schema has changed",
+    "string or blob too big", "constraint failed", "datatype mismatch",
+    "bad parameter or other API misuse", nil, "authorization denied", nil,
+    "column index out of range", "file is not a database", "notification message",
+    "warning message"
+  ]
 
   public struct DatabaseError: Error, Sendable, CustomStringConvertible {
     public let extendedResultCode: ResultCode
@@ -23,25 +63,54 @@
     public let message: String?
     public let sql: String?
     public let arguments: StatementArguments?
+    var publicStatementArguments: Bool
 
     public init(
       resultCode: ResultCode = .SQLITE_ERROR,
       message: String? = nil,
       sql: String? = nil,
-      arguments: StatementArguments? = nil
+      arguments: StatementArguments? = nil,
+      publicStatementArguments: Bool = false
     ) {
       self.extendedResultCode = resultCode
-      self.message = message
+      self.message = message ?? resultCode.errorString
       self.sql = sql
       self.arguments = arguments
+      self.publicStatementArguments = publicStatementArguments
     }
 
-    init(_ error: SQLiteError, arguments: StatementArguments? = nil) {
+    init(
+      _ error: SQLiteError,
+      arguments: StatementArguments? = nil,
+      publicStatementArguments: Bool = false
+    ) {
+      var code = ResultCode(rawValue: error.code.rawValue)
+      var message = error.message
+      // A DatabaseError thrown by a custom function keeps its code and message, as when GRDB
+      // reports it with `sqlite3_result_error_code`.
+      if let functionError = FunctionErrorSlot.take(), code.primaryResultCode == .SQLITE_ERROR,
+        message == functionError.reportedMessage
+      {
+        code = functionError.extendedResultCode
+        message = functionError.message
+      }
       self.init(
-        resultCode: .init(rawValue: error.code.rawValue),
-        message: error.message,
-        sql: error.sql,
-        arguments: arguments
+        resultCode: code,
+        message: message,
+        sql: error.sql.map(trimmedSQLStatement),
+        arguments: arguments,
+        publicStatementArguments: publicStatementArguments
+      )
+    }
+
+    /// The same error with statement arguments, used when a statement fails while running.
+    func with(arguments: StatementArguments, publicStatementArguments: Bool) -> Self {
+      DatabaseError(
+        resultCode: extendedResultCode,
+        message: message,
+        sql: sql,
+        arguments: self.arguments ?? arguments,
+        publicStatementArguments: publicStatementArguments
       )
     }
 
@@ -50,8 +119,88 @@
     }
 
     public var description: String {
-      "SQLite error \(resultCode.rawValue)" + (sql.map { " with statement `\($0)`" } ?? "")
-        + (message.map { ": \($0)" } ?? "")
+      describe(includingArguments: publicStatementArguments)
+    }
+
+    /// The description, including statement arguments even when they are not public.
+    public var expandedDescription: String {
+      describe(includingArguments: true)
+    }
+
+    private func describe(includingArguments: Bool) -> String {
+      var description = "SQLite error \(resultCode.rawValue)"
+      if let message {
+        description += ": \(message)"
+      }
+      if let sql {
+        description += " - while executing `\(trimmedSQLStatement(sql))`"
+      }
+      if includingArguments, let arguments, !arguments.isEmpty {
+        description += " with arguments \(arguments)"
+      }
+      return description
+    }
+  }
+
+  extension DatabaseError: CustomNSError {
+    public static var errorDomain: String { "GRDB.DatabaseError" }
+
+    public var errorCode: Int { Int(extendedResultCode.rawValue) }
+
+    public var errorUserInfo: [String: Any] {
+      var userInfo = [NSLocalizedDescriptionKey: description]
+      if let message {
+        userInfo[NSLocalizedFailureReasonErrorKey] = message
+      }
+      return userInfo
+    }
+  }
+
+  // Removes surrounding whitespace and statement separators, as GRDB reports statement SQL.
+  func trimmedSQLStatement(_ sql: String) -> String {
+    sql.trimmingCharacters(in: sqlStatementSeparators)
+  }
+
+  private let sqlStatementSeparators = CharacterSet(charactersIn: ";")
+    .union(
+      .whitespacesAndNewlines
+    )
+
+  // Custom functions report errors through SQLite as a message only. The overlay remembers the
+  // last DatabaseError thrown by a function on this thread so the failing statement can report
+  // its original code, as GRDB does.
+  enum FunctionErrorSlot {
+    private final class Box {
+      var error: DatabaseError?
+    }
+
+    private static let key = "SQLiteOrbitGRDB.FunctionErrorSlot"
+
+    private static var box: Box {
+      let dictionary = Thread.current.threadDictionary
+      if let box = dictionary[key] as? Box {
+        return box
+      }
+      let box = Box()
+      dictionary[key] = box
+      return box
+    }
+
+    static func store(_ error: DatabaseError) {
+      box.error = error
+    }
+
+    static func take() -> DatabaseError? {
+      let box = box
+      defer { box.error = nil }
+      return box.error
+    }
+  }
+
+  extension DatabaseError {
+    // The message given to SQLite for this error when a custom function throws it.
+    var reportedMessage: String {
+      message ?? description
     }
   }
 
@@ -75,7 +224,7 @@
     guard let error = error as? DatabaseError else {
       return false
     }
-    return code.rawValue < 256 ? error.resultCode == code : error.extendedResultCode == code
+    return code ~= error.extendedResultCode
   }
 
   // GRDB and SQLite expose these exact constant names.

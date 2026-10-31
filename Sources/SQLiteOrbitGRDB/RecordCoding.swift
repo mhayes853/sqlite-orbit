@@ -221,6 +221,16 @@
     }
   }
 
+  /// Decodes Decodable records from rows, as the default `FetchableRecord` initializer does.
+  public class FetchableRecordDecoder {
+    public init() {}
+
+    /// Returns a record decoded from a row with the record's decoding strategies.
+    public func decode<T: FetchableRecord & Decodable>(_ type: T.Type, from row: Row) throws -> T {
+      try T(from: RecordDecoder(row: row, record: T.self))
+    }
+  }
+
   extension FetchableRecord where Self: TableRecord {
     public static func fetchAll(_ db: Database) throws -> [Self] {
       try all().fetchAll(db)
@@ -558,11 +568,11 @@
       )
     }
 
+    // As in GRDB, a single value container at the record level decodes values from the whole
+    // row: FetchableRecord types use their row initializer, other types decode keyed columns, and
+    // scalars read the first column.
     func singleValueContainer() throws -> any SingleValueDecodingContainer {
-      throw DecodingError.typeMismatch(
-        Any.self,
-        .init(codingPath: codingPath, debugDescription: "records require keyed columns")
-      )
+      RecordSingleValueContainer(decoder: self)
     }
 
     func column(_ key: any CodingKey) -> String? {
@@ -593,7 +603,35 @@
         )
       }
       let value: DatabaseValue = row[index]
+      if let decoded = try decodeColumnScalar(type, value: value, column: column, record: record) {
+        return decoded
+      }
+      // JSON-encoded arrays and objects use the record's per-column decoder. Scalar Codable enums
+      // use a scalar decoder so a SQL string isn't mistaken for a JSON document.
+      if let text = String.fromDatabaseValue(value), text.first == "{" || text.first == "[" {
+        return try record.databaseJSONDecoder(for: column).decode(type, from: Data(text.utf8))
+      }
+      return try T(
+        from: ColumnDecoder(
+          value: value,
+          path: codingPath + [key],
+          userInfo: userInfo,
+          column: column,
+          record: record
+        )
+      )
+    }
+  }
 
+  // Decodes dates, data, and DatabaseValueConvertible values with the column's strategies.
+  // Returns nil for other types.
+  private func decodeColumnScalar<T>(
+    _ type: T.Type,
+    value: DatabaseValue,
+    column: String,
+    record: any FetchableRecord.Type
+  ) throws -> T? {
+    do {
       func mismatch() -> RowDecodingError {
         RowDecodingError(column: column, databaseValue: value, type: type)
       }
@@ -635,12 +673,44 @@
         }
         return decoded
       }
-      // JSON-encoded arrays and objects use the record's per-column decoder. Scalar Codable enums
-      // use a scalar decoder so a SQL string isn't mistaken for a JSON document.
-      if let text = String.fromDatabaseValue(value), text.first == "{" || text.first == "[" {
-        return try record.databaseJSONDecoder(for: column).decode(type, from: Data(text.utf8))
+      return nil
+    }
+  }
+
+  private struct RecordSingleValueContainer: SingleValueDecodingContainer {
+    let decoder: RecordDecoder
+
+    var codingPath: [any CodingKey] { decoder.codingPath }
+
+    func decodeNil() -> Bool {
+      !decoder.row.containsNonNullValue
+    }
+
+    func decode<T: Decodable>(_ type: T.Type) throws -> T {
+      if let recordType = type as? any FetchableRecord.Type {
+        return try recordType.init(row: decoder.row) as! T
       }
-      return try T(from: ColumnDecoder(value: value, path: codingPath + [key], userInfo: userInfo))
+      if type is any DatabaseValueConvertible.Type || type == Date.self || type == Data.self,
+        let column = decoder.row.columnNames.first
+      {
+        let value = decoder.row.databaseValues[0]
+        if let decoded = try decodeColumnScalar(
+          type,
+          value: value,
+          column: column,
+          record: decoder.record
+        ) {
+          return decoded
+        }
+      }
+      return try T(
+        from: RecordDecoder(
+          row: decoder.row,
+          record: decoder.record,
+          codingPath: decoder.codingPath,
+          columnDecodingStrategy: .useDefaultKeys
+        )
+      )
     }
   }
 
@@ -710,6 +780,8 @@
     let value: DatabaseValue
     let path: [any CodingKey]
     let userInfo: [CodingUserInfoKey: Any]
+    var column: String? = nil
+    var record: (any FetchableRecord.Type)? = nil
 
     var codingPath: [any CodingKey] {
       path
@@ -732,12 +804,20 @@
     }
 
     func decode<T: Decodable>(_ type: T.Type) throws -> T {
-      guard let convertible = type as? any DatabaseValueConvertible.Type,
-        let decoded = convertible.fromDatabaseValue(value) as? T
-      else {
-        throw mismatch(type)
+      if let column, let record {
+        // Nested single values keep the column's date and data strategies.
+        if let decoded = try decodeColumnScalar(type, value: value, column: column, record: record)
+        {
+          return decoded
+        }
+      } else if let convertible = type as? any DatabaseValueConvertible.Type {
+        guard let decoded = convertible.fromDatabaseValue(value) as? T else {
+          throw mismatch(type)
+        }
+        return decoded
       }
-      return decoded
+      // A single value wrapping another single value, such as a struct around a string.
+      return try T(from: self)
     }
 
     private func decodeValue<T: DatabaseValueConvertible>(_ type: T.Type) throws -> T {

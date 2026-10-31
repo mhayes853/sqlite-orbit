@@ -20,9 +20,25 @@ class FoundationUUIDTests: GRDBTestCase {
         XCTAssertEqual(decodedUUID, expectedUUID)
     }
     
-
+    private func assertRoundTrip(_ uuid: UUID) throws {
+        let string = uuid.uuidString
+        var uuid_t = uuid.uuid
+        let data = withUnsafeBytes(of: &uuid_t) {
+            Data(bytes: $0.baseAddress!, count: $0.count)
+        }
+        try assert(string, isDecodedAs: uuid)
+        try assert(string.lowercased(), isDecodedAs: uuid)
+        try assert(string.uppercased(), isDecodedAs: uuid)
+        try assert(uuid, isDecodedAs: uuid)
+        try assert(uuid as NSUUID, isDecodedAs: uuid)
+        try assert(data, isDecodedAs: uuid)
+    }
     
-
+    func testSuccess() throws {
+        try assertRoundTrip(UUID(uuidString: "56e7d8d3-e9e4-48b6-968e-8d102833af00")!)
+        try assertRoundTrip(UUID())
+        try assert("abcdefghijklmnop".data(using: .utf8)!, isDecodedAs: UUID(uuidString: "61626364-6566-6768-696A-6B6C6D6E6F70"))
+    }
     
     func testFailure() throws {
         try assert(nil, isDecodedAs: nil)

@@ -11,10 +11,8 @@ Compilation/CompilationProtocolTests.swift
   - UserVirtualTableModule1: missing type VirtualTableConfiguration
   - UserVirtualTableModule2: missing type VirtualTableConfiguration
 Compilation/CompilationSubClassTests.swift
-  - UserRecord: initializer does not override a designated initializer from its superclass
 Core/ColumnInfoTests.swift
-  - testColumnInfo: missing ColumnInfo.isNotNull
-  - testViews: missing ColumnInfo.isNotNull
+  - testColumnInfo: missing ColumnInfo.columnType
   - testIssue1124: missing type TransactionObserver
 Core/Cursor/AnyCursorTests.swift
 Core/Cursor/CursorTests.swift
@@ -24,8 +22,6 @@ Core/Cursor/DatabaseCursorTests.swift
   - testFastDatabaseValueCursorForEach: missing type FastDatabaseValueCursor
   - testFastNullableDatabaseValueCursorStep: missing type FastDatabaseValueCursor
   - testFastNullableDatabaseValueCursorForEach: missing type FastDatabaseValueCursor
-  ~ testStepDatabaseError: runtime: XCTAssertEqual failed: ("1") is not equal to ("173") -
-  ~ testStepError: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null
 Core/Cursor/DropFirstCursorTests.swift
 Core/Cursor/DropWhileCursorTests.swift
 Core/Cursor/EnumeratedCursorTests.swift
@@ -43,57 +39,31 @@ Core/DatabaseAbortedTransactionTests.swift
   - testReadTransactionRestartHack: missing DatabasePool.makeSnapshot
   ~ testTransactionAbortedByConflictPreventsFurtherDatabaseAccess: runtime: XCTAssertEqual failed: ("Optional("\nINSERT INTO t (a) VALUES (1);")") is not equal to ("Optional("INSERT INTO
   ~ testTransactionAbortedByUser: runtime: XCTAssertEqual failed: ("ResultCode(rawValue: 21)") is not equal to ("ResultCode(rawValue: 4)") -
+Core/DatabaseAfterNextTransactionCommitTests.swift
+  ~ testTransactionCompletions: runtime: XCTAssertEqual failed: ("0") is not equal to ("1") - ; CREATE TABLE t(a)
 Core/DatabaseAggregateTests.swift
   - testDeallocationAfterStepError: call can throw but is not marked with 'try'
   - testDeallocationAfterResultError: call can throw but is not marked with 'try'
-  ~ testAggregateArgumentInt64: runtime: crashes the test process
-  ~ testAggregateOfOneArgument: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f()`: wrong number of arguments to function f()
-  ~ testAggregateOfTwoArguments: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f()`: wrong number of arguments to function f()
-  ~ testAggregateResultThrowingDatabaseErrorWithCode: runtime: XCTAssertEqual failed: ("1") is not equal to ("123") -
-  ~ testAggregateResultThrowingDatabaseErrorWithMessage: runtime: XCTAssertEqual failed: ("Optional("SQLite error 1: custom error message")") is not equal to ("Optional("custom
-  ~ testAggregateResultThrowingDatabaseErrorWithMessageAndCode: runtime: XCTAssertEqual failed: ("1") is not equal to ("123") -
-  ~ testAggregateStepThrowingCustomError: runtime: crashes the test process
-  ~ testAggregateStepThrowingDatabaseErrorWithCode: runtime: crashes the test process
-  ~ testAggregateStepThrowingDatabaseErrorWithMessage: runtime: crashes the test process
-  ~ testAggregateStepThrowingDatabaseErrorWithMessageAndCode: runtime: crashes the test process
-  ~ testAggregateWithoutArgument: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f(1)`: wrong number of arguments to function f(
 Core/DatabaseCollationTests.swift
   - testDefaultCollations: missing DatabaseCollation.unicodeCompare
+Core/DatabaseConfigurationTests.swift
+  - testPrepareDatabase: missing DatabasePool.makeSnapshot
+  - testPrepareDatabaseError: missing DatabasePool.makeSnapshot
+  ~ testAcceptsDoubleQuotedStringLiteralsFalse: runtime: failed - Expected error
 Core/DatabaseErrorTests.swift
-  - testDatabaseErrorInTransaction: missing DatabaseQueue.inTransaction
-  - testDatabaseErrorInTopLevelSavepoint: missing DatabaseError.expandedDescription
-  - testDatabaseErrorThrownByUpdateStatementContainSQLAndNoPrivateArguments: missing DatabaseError.expandedDescription
-  - testDatabaseErrorThrownByUpdateStatementContainSQLAndPublicArguments: missing Configuration.publicStatementArguments
-  - testDatabaseErrorThrownByExecuteMultiStatementContainSQL: missing DatabaseError.expandedDescription
-  - testExtendedResultCodesAreActivated: missing TableDefinition.belongsTo
-  ~ testDatabaseErrorMessage: runtime: XCTAssertNotNil failed -
 Core/DatabaseFunctionTests.swift
   - testDefaultFunctions: missing DatabaseFunction.capitalize
-  ~ testFunctionArgumentInt64: runtime: crashes the test process
-  ~ testFunctionOfOneArgument: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f()`: wrong number of arguments to function f()
-  ~ testFunctionOfTwoArguments: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f()`: wrong number of arguments to function f()
-  ~ testFunctionThrowingDatabaseErrorWithCode: runtime: XCTAssertEqual failed: ("1") is not equal to ("123") -
-  ~ testFunctionThrowingDatabaseErrorWithMessage: runtime: XCTAssertEqual failed: ("Optional("SQLite error 1: custom error message")") is not equal to ("Optional("custom
-  ~ testFunctionThrowingDatabaseErrorWithMessageAndCode: runtime: XCTAssertEqual failed: ("1") is not equal to ("123") -
-  ~ testFunctionWithoutArgument: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT f(1)`: wrong number of arguments to function f(
 Core/DatabaseLogErrorTests.swift
 Core/DatabasePool/DatabasePoolCollationTests.swift
 Core/DatabasePool/DatabasePoolConcurrencyTests.swift
   - testWriteWithoutTransactionDoesNotOpenATransaction: missing Database.beginTransaction
-  - testReadError: missing Configuration.readonlyBusyMode
   - testReadBlockIsolationStartingWithWriteTransaction: missing DatabasePool.writeInTransaction
-  - testLongRunningReadTransaction: missing Configuration.allowsUnsafeTransactions
-  - testDefaultLabel: missing Database.configuration
-  - testCustomLabel: missing Configuration.label
-  - testTargetQueue: missing Configuration.targetQueue
-  - testWriteTargetQueue: missing Configuration.targetQueue
-  - testWriteTargetQueueReadOnly: missing Configuration.readonly
+  - testLongRunningReadTransaction: missing Database.beginTransaction
+  - testDefaultLabel: missing Database.description
+  - testCustomLabel: missing Database.description
   - testAsyncConcurrentReadOpensATransaction: missing DatabasePool.asyncConcurrentRead
   - testAsyncConcurrentReadOutsideOfTransaction: missing DatabasePool.asyncConcurrentRead
-  - testAsyncConcurrentReadError: missing Configuration.readonlyBusyMode
-  - testBarrierLocksReads: missing DatabasePool.barrierWriteWithoutTransaction
-  - testBarrierIsLockedByOneUnfinishedRead: missing DatabasePool.barrierWriteWithoutTransaction
-  - openReadOnlyDatabase: missing Configuration.readonly
+  - testAsyncConcurrentReadError: missing DatabasePool.asyncConcurrentRead
   ~ testDatabasePoolFundamental1: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:43: Fatal error: 'try!' expression un
   ~ testDatabasePoolFundamental2: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:120: Fatal error: 'try!' expression u
   ~ testDatabasePoolFundamental3: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolConcurrencyTests.swift:170: Fatal error: 'try!' expression u
@@ -102,42 +72,45 @@ Core/DatabasePool/DatabasePoolConcurrencyTests.swift
   ~ testReadBlockIsolationStartingWithWrite: runtime: hangs (timed out)
   ~ testReadMethodIsolationOfStatement: runtime: hangs (timed out)
   ~ testReadMethodIsolationOfStatementWithCheckpoint: runtime: hangs (timed out)
-  ~ testReadOpensATransaction: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `BEGIN DEFERRED TRANSACTION`: cannot start a transactio
   ~ testUnsafeReadMethodIsolationOfBlock: runtime: hangs (timed out)
   ~ testUnsafeReadMethodIsolationOfStatement: runtime: hangs (timed out)
   ~ testUnsafeReadMethodIsolationOfStatementWithCheckpoint: runtime: hangs (timed out)
-  ~ testWriteOpensATransaction: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `BEGIN DEFERRED TRANSACTION`: cannot start a transactio
+  ~ testReadError: runtime: failed - Expected error
+  ~ testTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueueReadOnly: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
 Core/DatabasePool/DatabasePoolFunctionTests.swift
+Core/DatabasePool/DatabasePoolReadOnlyTests.swift
+  ~ testConcurrentRead: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
 Core/DatabasePool/DatabasePoolTests.swift
-  - testJournalModeConfiguration: missing Configuration.journalMode
   - testClose: missing DatabasePool.close
   - testCloseAfterUse: missing DatabasePool.close
   - testCloseAfterCachedStatement: missing DatabasePool.close
   - testCloseFailedDueToWriter: missing DatabasePool.close
   - testCloseFailedDueToReader: missing DatabasePool.close
   - test_releaseMemory_after_close: missing DatabasePool.close
-  ~ testDatabasePoolCreatesWalShmFromIssue1383: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabasePoolTests.swift:90: Fatal error: Unexpectedly found nil while un
+  ~ testJournalModeConfiguration: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
+Core/DatabaseQueue/DatabaseQueueConcurrencyTests.swift
 Core/DatabaseQueue/DatabaseQueueInMemoryTests.swift
-  - test_shared_in_memory_database: labels (named:) instead of (path:)
-  - test_shared_in_memory_databases_are_shared_by_name: labels (named:) instead of (path:)
+  ~ test_shared_in_memory_databases_are_shared_by_name: runtime: XCTAssertTrue failed -
+Core/DatabaseQueue/DatabaseQueueReadOnlyTests.swift
+  ~ testReadOnlyDatabaseCanNotBeModified: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/DatabaseQueueReadOnlyTests.swift:37: Fatal error: Unexpectedly found nil
 Core/DatabaseQueue/DatabaseQueueTests.swift
-  - testJournalModeConfiguration: missing Configuration.journalMode
   - testAddRemoveFunction: missing Database.remove
   - testAddRemoveCollation: missing Database.remove
-  - testAllowsUnsafeTransactions: missing Configuration.allowsUnsafeTransactions
-  - testDefaultLabel: missing Configuration.label
-  - testCustomLabel: missing Configuration.label
-  - testTargetQueue: missing Configuration.targetQueue
-  - testWriteTargetQueue: missing Configuration.targetQueue
-  - testWriteTargetQueueReadOnly: missing Configuration.readonly
-  - test_busy_timeout_does_not_prevent_SQLITE_BUSY_when_write_lock_is_acquired_by_other_connection: missing Configuration.journalMode
-  - test_busy_timeout_does_not_prevent_SQLITE_BUSY_when_write_lock_was_acquired_by_other_connection: missing Configuration.journalMode
+  - testAllowsUnsafeTransactions: missing Database.beginTransaction
+  - testDefaultLabel: missing Database.description
+  - testCustomLabel: missing Database.description
   - testClose: missing DatabaseQueue.close
   - testCloseAfterUse: missing DatabaseQueue.close
   - testCloseWithCachedStatement: missing DatabaseQueue.close
   - testFailedClose: missing DatabaseQueue.close
   - test_releaseMemory_after_close: missing DatabaseQueue.close
   ~ testInvalidFileFormat: runtime: failed - Expected error
+  ~ testJournalModeConfiguration: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
+  ~ testTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueue: runtime: crashes: process exited
+  ~ testWriteTargetQueueReadOnly: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
 Core/DatabaseReaderTests.swift
   - testReadCanRead: missing DatabasePool.makeSnapshot
   - testAsyncAwait_ReadCanRead: missing DatabasePool.makeSnapshot
@@ -164,6 +137,10 @@ Core/DatabaseReaderTests.swift
   - test_statement_execution_from_unsafeRead_is_cancelled_by_Task_cancellation_performed_after_database_access: missing DatabasePool.makeSnapshot
   - test_cursor_iteration_from_unsafeRead_is_interrupted_by_Task_cancellation_performed_after_database_access: missing DatabasePool.makeSnapshot
   - test_cancellation_does_not_impact_other_tasks: missing DatabasePool.makeSnapshot
+Core/DatabaseRegionObservationTests.swift
+  - testDatabaseRegionObservation_FullDatabase: reference to member 'fullDatabase' cannot be resolved without a contextual type
+  - testDatabaseRegionObservation_ImmediateCancellation: reference to member 'fullDatabase' cannot be resolved without a contextual type
+  - test_DatabaseRegionObservation_is_triggered_by_explicit_change_notification: cannot convert value of type 'Table<Row>' to expected argument type '[any DatabaseRegionConvertible]'
 Core/DatabaseSavepointTests.swift
   - Observer: missing type DatabaseEvent
   - testReleaseTopLevelSavepoint: missing DatabaseQueue.add
@@ -176,77 +153,37 @@ Core/DatabaseSavepointTests.swift
 Core/DatabaseSnapshotPoolTests.swift
 Core/DatabaseTests.swift
   - testDatabaseCanBeUsedOutsideOfDatabaseQueueBlockAsLongAsTheQueueIsCorrect: call can throw but is not marked with 'try'
-  - testFailedCommitIsRollbacked: missing DatabaseQueue.inTransaction
   - testImplicitTransactionManagement: missing Database.beginTransaction
   - testExplicitTransactionManagement: missing Database.beginTransaction
-  - testReadOnly: missing Database.readOnly
-  - testReadOnlyTransaction: missing Database.readOnly
   - testMaximumStatementArgumentCount: missing Database.maximumStatementArgumentCount
+  ~ testFailedCommitIsRollbacked: runtime: XCTAssertEqual failed: ("COMMIT") is not equal to ("COMMIT TRANSACTION") -
+  ~ testReadOnlyTransaction: runtime: threw error "SQLite error 8: attempt to write a readonly database - while executing `BEGIN IMMEDIATE TRANSACTI
 Core/DatabaseTraceTests.swift
-  - testTraceFromConfigurationWithPublicStatementArguments: missing Configuration.publicStatementArguments
 Core/DatabaseValueConvertible/DatabaseTimestampTests.swift
 Core/DatabaseValueConvertible/DatabaseValueConvertibleDecodableTests.swift
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable1: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable2: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable3: type 'ValueWrapper' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable4: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable5: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable6: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable7: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodable8: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
-  - testDatabaseValueConvertibleImplementationDerivedFromDecodableWithCustomJsonDecoder: type 'Value' does not conform to protocol 'DatabaseValueConvertible'
+Core/DatabaseValueConvertible/DatabaseValueConvertibleEncodableTests.swift
 Core/DatabaseValueConvertible/DatabaseValueConvertibleFetchTests.swift
-  - testFetchCursor: generic parameter 'RowDecoder' could not be inferred
-  - testFetchCursorStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchCursorCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAll: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAllStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAllCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSet: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSetStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSetCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOne: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOneStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOneCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchCursor: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchCursorStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchCursorCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchAll: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchAllStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchAllCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchSet: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchSetStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchSetCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchOne: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchOneStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testOptionalFetchOneCompilationFailure: generic parameter 'RowDecoder' could not be inferred
 Core/DatabaseValueConvertible/DatabaseValueConvertibleSubclassTests.swift
 Core/DatabaseValueTests.swift
 Core/DatabaseWriterTests.swift
   - testDatabaseQueueUnsafeReentrantWrite: missing DatabaseQueue.unsafeReentrantWrite
   - testDatabasePoolUnsafeReentrantWrite: missing DatabasePool.unsafeReentrantWrite
   - testEraseAndVacuum: missing some DatabaseWriter.vacuum
-  - testVacuumInto: missing Database.sqliteLibVersionNumber
+  - testVacuumInto: missing some DatabaseWriter.vacuum
   - testIssue424Minimal: missing DatabaseQueue.backup
   - testAsyncAwait_writeWithoutTransaction: missing Database.beginTransaction
-  - testAsyncAwait_barrierWriteWithoutTransaction: missing T.barrierWriteWithoutTransaction
+  - testAsyncAwait_barrierWriteWithoutTransaction: missing Database.beginTransaction
   - testAsyncAwait_vacuum: missing T.vacuum
-  - testAsyncAwait_vacuumInto: missing Database.sqliteLibVersionNumber
-  - test_barrierWriteWithoutTransaction_can_access_task_local: missing T.barrierWriteWithoutTransaction
-  - test_barrierWriteWithoutTransaction_is_cancelled_by_Task_cancellation_performed_before_database_access: missing some DatabaseWriter.barrierWriteWithoutTransaction
-  - test_successful_barrierWriteWithoutTransaction_is_not_cancelled_by_Task_cancellation_performed_after_database_access: missing some DatabaseWriter.barrierWriteWithoutTransaction
-  - test_statement_execution_from_barrierWriteWithoutTransaction_is_cancelled_by_Task_cancellation_performed_after_database_access: missing some DatabaseWriter.barrierWriteWithoutTransaction
-  - test_cursor_iteration_from_barrierWriteWithoutTransaction_is_interrupted_by_Task_cancellation_performed_after_database_access: missing some DatabaseWriter.barrierWriteWithoutTransaction
+  - testAsyncAwait_vacuumInto: missing T.vacuum
   - test_cancellation_does_not_prevent_rollback: missing Database.beginTransaction
   ~ test_cursor_iteration_from_writeWithoutTransaction_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
   ~ test_cursor_iteration_from_write_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
   ~ test_statement_execution_from_writeWithoutTransaction_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
   ~ test_statement_execution_from_write_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
   ~ test_write_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
+  ~ test_cursor_iteration_from_barrierWriteWithoutTransaction_is_interrupted_by_Task_cancellation_performed_after_database_access: runtime: XCTAssertTrue failed -
+  ~ test_statement_execution_from_barrierWriteWithoutTransaction_is_cancelled_by_Task_cancellation_performed_after_database_access: runtime: failed - Expected error
 Core/FetchRequestTests.swift
-  - testRequestAsSQLExpression: operator function '>' requires that 'SQLRequest<Int>' conform to 'SQLSpecificExpressible'
-  - testRequestAsSQLCollection: missing SQLRequest.contains
-  - testRequestInterpolation: instance method 'appendInterpolation' requires that 'SQLRequest<Int>' conform to 'SQLExpressible'
 Core/ForeignKeyInfoTests.swift
   - testForeignKeys: 'ForeignKeyInfo' initializer is inaccessible due to 'internal' protection level
   - testSpecifiedMainSchema: 'ForeignKeyInfo' initializer is inaccessible due to 'internal' protection level
@@ -256,94 +193,52 @@ Core/ForeignKeyInfoTests.swift
 Core/IndexInfoTests.swift
   - testColumnsThatUniquelyIdentityRows_with_view_and_schema_source: missing type DatabaseObjectID
 Core/NumericOverflowTests.swift
-  ~ testHighInt32FromDoubleOverflows: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/NumericOverflowTests.swift:35: Fatal error: Unexpectedly found nil while
-  ~ testLowInt32FromDoubleOverflows: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/NumericOverflowTests.swift:40: Fatal error: Unexpectedly found nil while
 Core/PrimaryKeyInfoTests.swift
-  - testHiddenRowID: missing PrimaryKeyInfo.columnInfos
-  - testIntegerPrimaryKey: missing PrimaryKeyInfo.columnInfos
-  - testIntegerPrimaryKey2: missing PrimaryKeyInfo.columnInfos
-  - testNonRowIDPrimaryKey: missing PrimaryKeyInfo.columnInfos
-  - testCompoundPrimaryKey: missing PrimaryKeyInfo.columnInfos
-  - testNonRowIDPrimaryKeyWithoutRowID: missing PrimaryKeyInfo.columnInfos
-  - testCompoundPrimaryKeyWithoutRowID: missing PrimaryKeyInfo.columnInfos
-  - testSpecifiedMainSchema: missing PrimaryKeyInfo.columnInfos
-  - testSpecifiedSchemaWithTableNameCollisions: missing PrimaryKeyInfo.columnInfos
-  - testUnspecifiedSchemaWithTableNameCollisions: missing PrimaryKeyInfo.columnInfos
-  - testUnspecifiedSchemaFindsAttachedDatabase: missing PrimaryKeyInfo.columnInfos
+  - testHiddenRowID: missing PrimaryKeyInfo.tableHasRowID
+  - testIntegerPrimaryKey: missing PrimaryKeyInfo.tableHasRowID
+  - testIntegerPrimaryKey2: missing PrimaryKeyInfo.tableHasRowID
+  - testNonRowIDPrimaryKey: missing PrimaryKeyInfo.tableHasRowID
+  - testCompoundPrimaryKey: missing PrimaryKeyInfo.tableHasRowID
+  - testNonRowIDPrimaryKeyWithoutRowID: missing PrimaryKeyInfo.tableHasRowID
+  - testCompoundPrimaryKeyWithoutRowID: missing PrimaryKeyInfo.tableHasRowID
+  - testSpecifiedMainSchema: missing PrimaryKeyInfo.tableHasRowID
+  - testSpecifiedSchemaWithTableNameCollisions: missing PrimaryKeyInfo.tableHasRowID
+  - testUnspecifiedSchemaWithTableNameCollisions: missing PrimaryKeyInfo.tableHasRowID
+  - testUnspecifiedSchemaFindsAttachedDatabase: missing PrimaryKeyInfo.tableHasRowID
   - test_custom_schemaSource_nil_result: missing type DatabaseObjectID
   - test_custom_schemaSource_empty_result: missing type DatabaseObjectID
   - test_custom_schemaSource_custom_primary_key: missing type DatabaseObjectID
   ~ testView: runtime: XCTAssertEqual failed: ("Optional("no such table: items")") is not equal to ("Optional("database view items ha
 Core/ResultCodeTests.swift
-  ~ testResultCodeMatch: runtime: XCTAssertTrue failed -
-  ~ testResultCodeSwitch: runtime: failed -
+Core/Row/RowAdapterTests.swift
+Core/Row/RowCopiedFromStatementTests.swift
 Core/Row/RowFetchTests.swift
-  - testStatementInformationFromCursor: missing DatabaseRegion.description
-  ~ testFetchAllCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no
-  ~ testFetchAllStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai
-  ~ testFetchCursorCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no
-  ~ testFetchCursorStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw(), NULL`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error
-  ~ testFetchOneCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no
-  ~ testFetchOneStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai
-  ~ testFetchSetCompilationFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM nonExistingTable`: no such table: nonExistingTable") is not equal to ("SQLite error 1: no
-  ~ testFetchSetStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT throw()`: Error Domain=Custom Code=57005 "(null)"") is not equal to ("SQLite error 1: Error Domai
+Core/Row/RowFromDictionaryLiteralTests.swift
+Core/Row/RowFromDictionaryTests.swift
+Core/Row/RowFromStatementTests.swift
 Core/SQLLiteralTests.swift
-  - testQualifiedSQLLiteral: missing Player.aliased
-  - testSelectableInterpolation: instance method 'appendInterpolation' requires that 'AllColumns' conform to 'SQLExpressible'
-  - testTableInterpolation: instance method 'appendInterpolation' requires that 'Table<Row>' conform to 'SQLExpressible'
-  - testTableSelectionInterpolation: extraneous argument label 'columnsOf:' in call
-  - testExpressibleInterpolation: cannot convert value of type 'Column' to expected argument type 'Int'
-  - testAliasedExpressionInterpolation: missing DatabaseValue.forKey
-  - testCodingKeyInterpolation: failed to produce diagnostic for expression; please submit a bug report (https://swift.org/contributing/#reporting-bugs)
-  - testCodingKeyColumnInterpolation: missing StatementArguments.isEmpty
-  - testExpressibleSequenceInterpolation: cannot convert value of type 'Set<Int>' to expected argument type 'SQL'
-  - testOrderingTermInterpolation: missing StatementArguments.isEmpty
-  - testSQLLiteralInterpolation2: cannot convert value of type 'String.SubSequence' (aka 'Substring') to expected argument type 'SQL'
-  - testSQLRequestInterpolation: instance method 'appendInterpolation' requires that 'SQLRequest<Int>' conform to 'SQLExpressible'
-  - testQueryInterfaceRequestInterpolation: instance method 'appendInterpolation' requires that 'QueryInterfaceRequest<Player>' conform to 'SQLExpressible'
-  - testJoinedQueryInterfaceRequestInterpolation: missing TableDefinition.belongsTo
-  - testPlusOperatorWithInterpolation: instance member 'allColumns' cannot be used on type '(any DatabaseValueConvertible)?'
-  - testPlusEqualOperatorWithInterpolation: instance member 'allColumns' cannot be used on type '(any DatabaseValueConvertible)?'
-  - testAppendLiteralWithInterpolation: instance member 'allColumns' cannot be used on type '(any DatabaseValueConvertible)?'
-  - testAppendRawSQLWithInterpolation: instance member 'allColumns' cannot be used on type '(any DatabaseValueConvertible)?'
-  - testQualifiedSQLInterpolation: missing Player.aliased
-  - testCollationInterpolation: reference to member 'nocase' cannot be resolved without a contextual type
+  - testSQLLiteralInterpolation2: internal API elements
+  - testCollationInterpolation: generic parameter 'some TableRecord' could not be inferred
   - testIsEmpty: no exact matches in call to initializer
-  - testProtocolResolution: missing SQL.desc
 Core/SQLRequestTests.swift
   - testSQLRequest: generic parameter 'RowDecoder' could not be inferred
   - testNotCachedSQLRequest: generic parameter 'RowDecoder' could not be inferred
   - testCachedSQLRequest: generic parameter 'RowDecoder' could not be inferred
-  - testSQLInterpolation: missing StatementArguments.isEmpty
 Core/SchedulingWatchdogTests.swift
   - testSchedulingWatchdog: missing SchedulingWatchdog
 Core/Statement/SelectStatementTests.swift
   - testStatementCursor: internal API makeCursor
   - testStatementCursorStepFailure: missing type StatementCursor
   - testConsumeMultipleStatements: missing Database.allStatements
-  - testRegion: missing DatabaseRegion.description
-  ~ testCachedSelectStatementStepFailure: runtime: XCTAssertEqual failed: ("SQLite error 1: boom") is not equal to ("boom") -
-  ~ testDatabaseErrorThrownBySelectStatementContainSQL: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `SELECT * FROM blah`: no such table: blah") is not equa
+  - testRegion: no exact matches in call to instance method 'add'
 Core/Statement/StatementArgumentsTests.swift
 Core/Statement/UpdateStatementTests.swift
-  - testTrailingSemicolonAndWhiteSpaceIsAcceptedAndOptional: missing DatabaseQueue.inTransaction
-  - testArrayStatementArguments: missing DatabaseQueue.inTransaction
-  - testStatementArgumentsSetterWithArray: missing DatabaseQueue.inTransaction
-  - testDictionaryStatementArguments: missing DatabaseQueue.inTransaction
-  - testStatementArgumentsSetterWithDictionary: missing DatabaseQueue.inTransaction
-  - testExecuteMultipleStatementWithNamedArguments: missing DatabaseQueue.inTransaction
-  - testExecuteMultipleStatementWithReusedNamedArguments: missing DatabaseQueue.inTransaction
-  - testExecuteMultipleStatementWithPositionalArguments: missing DatabaseQueue.inTransaction
-  - testExecuteMultipleStatementWithTooManyArguments: missing DatabaseQueue.inTransaction
-  - testExecuteMultipleStatementWithTooFewArguments: missing DatabaseQueue.inTransaction
   - test_SQLITE_STATIC_then_SQLITE_TRANSIENT: missing Statement.sqliteStatement
   - test_SQLITE_STATIC: missing Statement.sqliteStatement
   - test_SQLITE_TRANSIENT_due_to_high_number_of_arguments: missing databaseQuestionMarks
   - test_SQLITE_TRANSIENT: missing Statement.sqliteStatement
-  ~ testDatabaseErrorThrownByUpdateStatementContainSQL: runtime: XCTAssertEqual failed: ("SQLite error 1 with statement `UPDATE blah SET id = 12`: no such table: blah") is not
-  ~ testMultipleStatementsWithSecondOneInvalidError: runtime: XCTAssertEqual failed: ("ResultCode(rawValue: 1)") is not equal to ("ResultCode(rawValue: 21)") -
-  ~ testMultipleValidStatementsError: runtime: XCTAssertEqual failed: ("ResultCode(rawValue: 1)") is not equal to ("ResultCode(rawValue: 21)") -
-  ~ testStatementSQL: runtime: XCTAssertEqual failed: (" INSERT INTO persons (name, age) VALUES ('Arthur', ?) ; ") is not equal to ("INSERT I
+  ~ testExecuteMultipleStatementWithTooFewArguments: runtime: XCTAssertEqual failed: ("missing statement argument") is not equal to ("wrong number of statement arguments: 0
+  ~ testExecuteMultipleStatementWithTooManyArguments: runtime: XCTAssertEqual failed: ("unused statement arguments") is not equal to ("wrong number of statement arguments: 1
 Core/TransactionObserver/TruncateOptimizationTests.swift
   - DeletionObserver: missing type DatabaseEventKind
   - UniversalObserver: missing type DatabaseEventKind
@@ -375,15 +270,7 @@ GRDBCombineTests/DatabaseWriterWritePublisherTests.swift
 GRDBCombineTests/Support.swift
 GRDBCombineTests/ValueObservationPublisherTests.swift
 Migrations/DatabaseMigratorTests.swift
-  - testEraseDatabaseOnSchemaChangeDoesNotDeadLockOnTargetQueue: missing Configuration.targetQueue
-  - testEraseDatabaseOnSchemaChangeDoesNotDeadLockOnWriteTargetQueue: missing Configuration.writeTargetQueue
-  - testHasSchemaChangesWorksWithReadonlyConfig: missing DatabaseMigrator.hasSchemaChanges
-  - testEraseDatabaseOnSchemaChange: missing DatabaseMigrator.hasSchemaChanges
-  - testManualEraseDatabaseOnSchemaChange: missing DatabaseMigrator.hasSchemaChanges
-  - testEraseDatabaseOnSchemaChangeWithConfiguration: missing DatabaseMigrator.hasSchemaChanges
-  - testEraseDatabaseOnSchemaChangeDoesNotEraseDatabaseOnAddedMigration: missing DatabaseMigrator.hasSchemaChanges
-  - testEraseDatabaseOnSchemaChangeIgnoresInternalSchemaObjects: missing DatabaseMigrator.hasSchemaChanges
-  - testEraseDatabaseOnSchemaChangeWithRenamedMigration: missing DatabaseMigrator.hasSchemaChanges
+  - testHasSchemaChangesWorksWithReadonlyConfig: missing DatabaseQueue.close
   - test_schemaSource_is_disabled_during_migrations: missing type DatabaseObjectID
   - test_schemaSource_can_be_restored_during_migrations: missing type DatabaseObjectID
   - test_merged_migrations_named_like_the_last: missing parameter merging:
@@ -391,8 +278,6 @@ Migrations/DatabaseMigratorTests.swift
   - test_merged_migrations_with_a_new_name: missing parameter merging:
   ~ testForeignKeyViolation: runtime: threw error "Migration "foreignKeyError" was rolled back because it violates foreign key constraints: row 2 of
   ~ testMigrationFailureTriggersRollback: runtime: threw error "Migration "foreignKeyError" was rolled back because it violates foreign key constraints: row 1 of
-  ~ testMigrationForeignKeyChecks: runtime: threw error "Migration "A" was rolled back because it violates foreign key constraints: row 1 of child refers
-  ~ test_disablingDeferredForeignKeyChecks_applies_to_newly_registered_migrations_only: runtime: threw error "Migration "A" was rolled back because it violates foreign key constraints: row 1 of child refers
 Private/DatabasePoolReleaseMemoryTests.swift
   - testDatabasePoolDeinitClosesAllConnections: missing Configuration.onConnectionDidOpen
   - test_DatabasePool_releaseMemory_closes_reader_connections: missing Configuration.onConnectionDidOpen
@@ -410,93 +295,85 @@ Private/DatabaseQueueSchemaCacheTests.swift
 Private/DatabaseRegionTests.swift
   - testRegionEquatable: missing parameter rowIds:
   - testRegionUnion: missing parameter rowIds:
-  - testRegionUnionOfColumnsAndRows: missing DatabaseRegion.intersection
+  - testRegionUnionOfColumnsAndRows: missing parameter rowIds:
   - testRegionIntersection: missing parameter rowIds:
-  - testRegionIntersectionOfColumnsAndRows: missing DatabaseRegion.intersection
-  - testSelectStatement_rowid: missing DatabaseRegion.description
-  - testSelectStatement: missing DatabaseRegion.description
-  - testRegionRowIds: missing DatabaseRegion.description
-  - testDatabaseRegionOfJoinedRequests: missing hasOne
+  - testRegionIntersectionOfColumnsAndRows: missing parameter rowIds:
   - testDatabaseRegionOfDerivedRequests: missing AnyFetchRequest
   - testUpdateStatement: missing Statement.invalidatesDatabaseSchemaCache
-  - testRowIdNameInSelectStatement: missing Database.sqliteLibVersionNumber
   - testRowIdNameInUpdateStatement: missing Statement.authorizerEventKinds
   - testInsertStatement: missing Statement.invalidatesDatabaseSchemaCache
   - testDeleteStatement: missing Statement.invalidatesDatabaseSchemaCache
   - testUpdateStatementInvalidatesDatabaseSchemaCache: missing Statement.invalidatesDatabaseSchemaCache
-  - testRegionIsModifiedByDatabaseEvent: missing DatabaseRegion.description
+  - testRegionIsModifiedByDatabaseEvent: missing DatabaseEventKind
+  ~ testSelectStatement: runtime: XCTAssertEqual failed: ("bar(fooid),foo(id,name)") is not equal to ("bar(fooId),foo(id,name)") -
+  ~ testDatabaseRegionOfJoinedRequests: runtime: XCTAssertEqual failed: ("a(id,name),b(aid,id,name),c(aid,id,name)") is not equal to ("a(id,name)[1],b(aid,id,n
+  ~ testRegionRowIds: runtime: XCTAssertEqual failed: ("foo(a,id)") is not equal to ("empty") -
 Private/RecordUniqueIndexTests.swift
 Record/FetchableRecord/DatabaseDataDecodingStrategyTests.swift
   - testCustom: missing RowDecodingError.impl
 Record/FetchableRecord/FetchableRecordDecodableTests.swift
   - testStructWithData: missing RowDecodingError.impl
   - testStructWithDate: missing RowDecodingError.impl
-  - testNonOptionalNestedArrayStruct: missing DatabaseQueue.inTransaction
-  - testArrayOfDetachedRowsAsData: missing Row.withUnsafeData
-  - testCursorRowsAsData: missing Row.withUnsafeData
-  - testDatabaseColumnDecodingStrategy_useDefaultKeys: missing FetchableRecordDecoder
-  - testDatabaseColumnDecodingStrategy_convertFromSnakeCase: missing FetchableRecordDecoder
-  - testDatabaseColumnDecodingStrategy_custom: missing FetchableRecordDecoder
+  - testNonOptionalNestedArrayStruct: cannot convert value of type 'Database' to expected argument type 'Statement'
+  - testDatabaseColumnDecodingStrategy_useDefaultKeys: missing RowDecodingError.impl
+  - testDatabaseColumnDecodingStrategy_convertFromSnakeCase: missing RowDecodingError.impl
+  - testDatabaseColumnDecodingStrategy_custom: missing RowDecodingError.impl
   - testRecord1: generic parameter 'RowDecoder' could not be inferred
   - testRecord2: generic parameter 'RowDecoder' could not be inferred
   - testCustomizedRecord1: generic parameter 'RowDecoder' could not be inferred
   - testCustomizedRecord2: generic parameter 'RowDecoder' could not be inferred
-  - testMissingKeys1: missing FetchableRecordDecoder
-  - testMissingKeys2: missing FetchableRecordDecoder
-  - testRootKeyDecodingError: missing FetchableRecordDecoder
-  - test_allKeys_and_containsKey: missing FetchableRecordDecoder
-  - test_decodeNil_and_containsKey: missing FetchableRecordDecoder
-  - test_decodeNil_when_scope_and_column_have_the_same_name: missing FetchableRecordDecoder
-  - testStructWithCustomizedRowInitializer: missing FetchableRecordDecoder
-  ~ testNonTrivialSingleValueDecodableProperty: runtime: threw error "DecodingError.typeMismatch: expected value of type NestedValue. Path: value. Debug description: i
-  ~ testSingleValueContainer: runtime: threw error "DecodingError.typeMismatch: expected value of type Any. Debug description: records require keyed
-  ~ testSingleValueContainerWithFetchableRecord: runtime: threw error "DecodingError.typeMismatch: expected value of type Any. Debug description: records require keyed
-  ~ testSingleValueDataProperty: runtime: XCTAssertEqual failed: ("3 bytes") is not equal to ("3 bytes") -
-  ~ testSingleValueDateProperty: runtime: threw error "DecodingError.typeMismatch: expected value of type Date. Path: value. Debug description: invalid
+  - test_allKeys_and_containsKey: missing Row.prefetchedRows
+  ~ testMissingKeys1: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testRootKeyDecodingError: runtime: XCTAssertEqual failed: ("missing database column") is not equal to ("No such key: b or c") -
 Record/FetchableRecord/FetchableRecordTests.swift
-  - testFetchCursor: generic parameter 'RowDecoder' could not be inferred
-  - testFetchCursorStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchCursorCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAll: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAllStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchAllCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSet: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSetStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchSetCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOne: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOneStepFailure: generic parameter 'RowDecoder' could not be inferred
-  - testFetchOneCompilationFailure: generic parameter 'RowDecoder' could not be inferred
+Record/JoinSupportTests.swift
+  - FlatModel: missing T1.numberOfSelectedColumns
+  - CodableFlatModel: missing T1.numberOfSelectedColumns
+  - CodableNestedModel: missing T1.numberOfSelectedColumns
+  - testNumberOfSelectedColumns: missing T.numberOfSelectedColumns
+  - testSplittingRowAdapters: missing T1.numberOfSelectedColumns
+  - testFlatModel: missing FlatModel
+  - testFlatModelFromHierarchicalRequest: missing FlatModel
+  - testCodableFlatModel: missing CodableFlatModel
+  - testCodableFlatModelFromHierarchicalRequest: missing CodableFlatModel
+  - testCodableNestedModel: missing CodableNestedModel
+Record/Record/RecordEditedTests.swift
+  ~ testUpdateChanges: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"persons\" S
+Record/Record/RecordInitializersTests.swift
+Record/Record/RecordMinimalNonOptionalPrimaryKeySingleTests.swift
+  - test_static_selectPrimaryKey: missing MinimalSingle
+  - test_static_selectID: missing MinimalSingle
+  - test_request_selectPrimaryKey: missing MinimalSingle
+  - test_request_selectID: missing MinimalSingle
+Record/Record/RecordMinimalPrimaryKeyRowIDTests.swift
+Record/Record/RecordMinimalPrimaryKeySingleTests.swift
+Record/Record/RecordPersistenceConflictPolicy.swift
+Record/Record/RecordPrimaryKeyHiddenRowIDTests.swift
+  - testRowIdIsSelectedByDefault: cannot convert value of type 'Database' to expected argument type 'Statement'
+Record/Record/RecordPrimaryKeyMultipleTests.swift
+Record/Record/RecordPrimaryKeyNoneTests.swift
+Record/Record/RecordPrimaryKeyRowIDTests.swift
+Record/Record/RecordPrimaryKeySingleTests.swift
+Record/Record/RecordPrimaryKeySingleWithReplaceConflictResolutionTests.swift
+Record/Record/RecordSubClassTests.swift
+Record/Record/RecordWithColumnNameManglingTests.swift
+Support/CGFloatTests.swift
 Support/Foundation/FoundationDataTests.swift
+Support/Foundation/FoundationDateComponentsTests.swift
 Support/Foundation/FoundationDateTests.swift
-  - testDateFromJulianDayNumber: no exact matches in call to initializer
-  - testJulianDaySQLFunction: no exact matches in call to initializer
-  - testDateTimeSQLFunction: no exact matches in call to initializer
-  ~ testDateAcceptsFormatIso8601YMD_HM: runtime: threw error "could not decode Date from "2015-07-22T01:02" at column creationDate"
-  ~ testDateAcceptsFormatIso8601YMD_HMS: runtime: threw error "could not decode Date from "2015-07-22T01:02:03" at column creationDate"
-  ~ testDateAcceptsFormatIso8601YMD_HMSS: runtime: threw error "could not decode Date from "2015-07-22T01:02:03.00456" at column creationDate"
-  ~ testDateAcceptsFormatYMD_HM: runtime: threw error "could not decode Date from "2015-07-22 01:02" at column creationDate"
-  ~ testDateAcceptsFormatYMD_HMSS: runtime: XCTAssertTrue failed -
-  ~ testDateAcceptsFormatYMD_HMSSZ: runtime: threw error "could not decode Date from "2015-07-22 01:02:03.00456+01:15" at column creationDate"
-  ~ testDateAcceptsFormatYMD_HMSZ: runtime: threw error "could not decode Date from "2015-07-22 01:02:03+01:15" at column creationDate"
-  ~ testDateAcceptsFormatYMD_HMZ: runtime: threw error "could not decode Date from "2015-07-22 01:02+01:15" at column creationDate"
+Support/Foundation/FoundationDecimalTests.swift
+Support/Foundation/FoundationNSDataTests.swift
 Support/Foundation/FoundationNSDateTests.swift
-  - testNSDate: missing NSDate.fetchOne
-  - testNSDateFromUnparsableString: missing NSDate.fromDatabaseValue
-  - testNSDateDoesNotAcceptFormatHM: missing NSDate.fromDatabaseValue
-  - testNSDateDoesNotAcceptFormatHMS: missing NSDate.fromDatabaseValue
-  - testNSDateDoesNotAcceptFormatHMSS: missing NSDate.fromDatabaseValue
-  - testNSDateAcceptsFormatYMD: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatYMD_HM: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatYMD_HMS: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatYMD_HMSS: missing NSDate.fetchOne
-  - testNSDateAcceptsTimestamp: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatIso8601YMD_HM: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatIso8601YMD_HMS: missing NSDate.fetchOne
-  - testNSDateAcceptsFormatIso8601YMD_HMSS: missing NSDate.fetchOne
+Support/Foundation/FoundationNSDecimalNumberTests.swift
+Support/Foundation/FoundationNSNullTests.swift
+Support/Foundation/FoundationNSNumberTests.swift
+Support/Foundation/FoundationNSStringTests.swift
+Support/Foundation/FoundationNSURLTests.swift
+Support/Foundation/FoundationNSUUIDTests.swift
 Support/Foundation/FoundationURLTests.swift
 Support/Foundation/FoundationUUIDTests.swift
-  - assertRoundTrip: argument type 'NSUUID' does not conform to expected type 'DatabaseValueConvertible'
-  - testSuccess: missing assertRoundTrip
+Support/Foundation/Row+FoundationTests.swift
+Support/Foundation/StatementArguments+FoundationTests.swift
 ValueObservation/SharedValueObservationTests.swift
   - testInitFromAnyDatabaseReader: missing ValueObservation.shared
   - testInitFromAnyDatabaseWriter: missing ValueObservation.shared
@@ -511,108 +388,91 @@ ValueObservation/SharedValueObservationTests.swift
   - test_task_whileObserved: missing type SharedValueObservation
   - testAsyncAwait_mainQueue: missing ValueObservation.shared
   - testAsyncAwait_task: missing ValueObservation.shared
+ValueObservation/ValueObservationCountTests.swift
+  ~ testCount: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCountWithRemoveDuplicates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationDatabaseValueConvertibleTests.swift
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testAllOptional: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOneOptional: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationFetchTests.swift
+  ~ testCaseInsensitivityForFetch: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCaseInsensitivityForTable: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testCaseInsensitivityForUpdates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testFetch: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicates: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicatesBy: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testRemoveDuplicatesBy2: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+ValueObservation/ValueObservationMapTests.swift
+  ~ testMap: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testMapPreservesConfiguration: runtime: XCTAssertEqual failed: ("false") is not equal to ("true") -
+ValueObservation/ValueObservationQueryInterfaceRequestTests.swift
+  - testOneRowWithPrefetchedRows: type 'Any' cannot conform to 'Equatable'
+  - testAllRowsWithPrefetchedRows: type 'Any' cannot conform to 'Equatable'
+  ~ testAllRecordsWithPrefetchedRows: runtime: XCTAssertNotNil failed -
+  ~ testOneRecordWithPrefetchedRows: runtime: XCTAssertNotNil failed -
+ValueObservation/ValueObservationReadonlyTests.swift
+  ~ testReadOnlyObservation: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testWriteObservation: runtime: XCTAssertNotNil failed -
+  ~ testWriteObservationFailsByDefaultWithErrorHandling: runtime: XCTAssertEqual failed: ("Optional("a read-only query may write; run it in a write transaction instead")") is n
+  ~ testWriteObservationIsWrappedInSavepointWithErrorHandling: runtime: threw error "SQLite error 8: a read-only query may write; run it in a write transaction instead - while execut
+ValueObservation/ValueObservationRecordTests.swift
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
 ValueObservation/ValueObservationRecorderTests.swift
+ValueObservation/ValueObservationRegionRecordingTests.swift
+  - testRecordingSelectedRegion: missing Database.recordingSelection
+  - testVaryingRegionTrackingImmediateScheduling: missing parameter willTrackRegion:
+  - testVaryingRegionTrackingAsyncScheduling: missing parameter willTrackRegion:
+ValueObservation/ValueObservationRowTests.swift
+  - testFTS4Observation: missing FTS4
+  - testSynchronizedFTS4Observation: missing FTS4
+  - testJoinedFTS4Observation: missing FTS4
+  ~ testAll: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
+  ~ testOne: runtime: Asynchronous wait failed - Exceeded timeout of 5.0 seconds, with unfulfilled expectations:
 ValueObservation/ValueObservationTests.swift
-  - testStartFromAnyDatabaseReader: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testStartFromAnyDatabaseWriter: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
   - testValuesFromAnyDatabaseWriter: missing type AsyncValueObservation
-  - testImmediateError: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testErrorCompletesTheObservation: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testViewOptimization: missing DatabaseRegion.description
+  - testViewOptimization: missing parameter willTrackRegion:
   - testPragmaTableOptimization: missing parameter willTrackRegion:
-  - testTrackingExplicitRegion: missing assertValueObservation
-  - testDisallowedSnapshotOptimizationWithImmediateScheduler: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testAllowedSnapshotOptimizationWithImmediateScheduler: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - test_ValueObservation_is_triggered_by_explicit_change_notification: missing Database.notifyChanges
-  - testCancellableLifetime: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testCancellableExplicitCancellation: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
+  - testTrackingExplicitRegion: argument type 'Table<Row>' does not conform to expected type 'DatabaseRegionConvertible'
+  - test_ValueObservation_is_triggered_by_explicit_change_notification: instance method 'notifyChanges(in:)' requires that 'Table<Row>' conform to 'DatabaseRegionConvertible'
   - testCancellableInvalidation1: missing AnyValueReducer
   - testCancellableInvalidation2: missing AnyValueReducer
-  - testIssue1550: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
   - testIssue1209: missing some DatabaseWriter.close
-  - testIssue1383: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testIssue1383_async: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testIssue1383_createWal: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
-  - testIssue1500: call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context
   - testIssue1746: missing type TransactionObserver
   ~ testAllowedSnapshotOptimizationWithAsyncScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
   ~ testDisallowedSnapshotOptimizationWithAsyncScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
+  ~ testAllowedSnapshotOptimizationWithImmediateScheduler: runtime: Asynchronous wait failed - Exceeded timeout of 2.0 seconds, with unfulfilled expectations:
+  ~ testDisallowedSnapshotOptimizationWithImmediateScheduler: runtime: crashes: process exited
 
-x Core/DatabaseAfterNextTransactionCommitTests.swift: no test compiles: missing Database.afterNextTransaction, missing Database.afterNextTransaction, missing assertTransaction_registerBefore
-x Core/DatabaseConfigurationTests.swift: no test compiles: missing DatabasePool.makeSnapshot, missing DatabasePool.makeSnapshot, missing Configuration.acceptsDoubleQuotedStringLiterals
 x Core/DatabasePool/DatabasePoolBackupTests.swift: missing type BackupTestCase
-x Core/DatabasePool/DatabasePoolReadOnlyTests.swift: no test compiles: missing Configuration.readonly, missing Configuration.readonly
 x Core/DatabaseQueue/DatabaseQueueBackupTests.swift: missing type BackupTestCase
-x Core/DatabaseQueue/DatabaseQueueConcurrencyTests.swift: 'BusyCallback' is not a member type of class 'SQLiteOrbitGRDB.Database'
-x Core/DatabaseQueue/DatabaseQueueInMemoryCopyTests.swift: no test compiles: missing DatabaseQueue.inMemoryCopy, missing DatabaseQueue.inMemoryCopy, missing Configuration.readonly
-x Core/DatabaseQueue/DatabaseQueueReadOnlyTests.swift: no test compiles: missing Configuration.readonly, missing Configuration.readonly
-x Core/DatabaseQueue/DatabaseQueueTemporaryCopyTests.swift: no test compiles: missing DatabaseQueue.temporaryCopy, missing DatabaseQueue.temporaryCopy, missing Configuration.readonly
-x Core/DatabaseRegionObservationTests.swift: no test compiles: missing DatabaseRegionObservation, missing DatabaseRegionObservation, missing DatabaseRegionObservation
+x Core/DatabaseQueue/DatabaseQueueInMemoryCopyTests.swift: no test compiles: missing DatabaseQueue.inMemoryCopy, missing DatabaseQueue.inMemoryCopy, missing DatabaseQueue.inMemoryCopy
+x Core/DatabaseQueue/DatabaseQueueTemporaryCopyTests.swift: no test compiles: missing DatabaseQueue.temporaryCopy, missing DatabaseQueue.temporaryCopy, missing DatabaseQueue.temporaryCopy
 x Core/DatabaseSchemaSourceTests.swift: no test compiles: missing type DatabaseObjectID, missing type DatabaseObjectID
 x Core/DatabaseSnapshotTests.swift: no test compiles: missing DatabasePool.makeSnapshot, missing DatabasePool.makeSnapshot, missing type DatabaseSnapshot
 x Core/DatabaseSuspensionTests.swift: no test compiles: missing DatabaseQueue.suspend, missing DatabaseQueue.suspend, missing DatabaseQueue.suspend
 x Core/DatabaseValueConversionErrorTests.swift: no test compiles: missing RowDecodingError.impl, missing RowDecodingError.impl, missing RowDecodingError.impl
-x Core/DatabaseValueConversionTests.swift: no test compiles: missing T.fetchOne, missing DatabaseQueue.inTransaction, missing DatabaseQueue.inTransaction
-x Core/DatabaseValueConvertible/DatabaseValueConvertibleEncodableTests.swift: no test compiles: type 'Value' does not conform to protocol 'DatabaseValueConvertible', type 'Value' does not conform to protocol 'DatabaseValueConvertible', type 'Wrapper' does not conform to protocol 'DatabaseValueConvertible'
+x Core/DatabaseValueConversionTests.swift: no test compiles: missing T.fetchOne, missing assertDecoding, missing assertDecoding
 x Core/DatabaseValueConvertible/RawRepresentable+DatabaseValueConvertibleTests.swift: missing type StatementBinding, missing type StatementColumnConvertible, type 'Wrapper<RawValue>' does not conform to protocol 'SQLExpressible'
-x Core/Row/RowAdapterTests.swift: missing type RowTestCase
-x Core/Row/RowCopiedFromStatementTests.swift: missing type RowTestCase
-x Core/Row/RowFromDictionaryLiteralTests.swift: missing type RowTestCase
-x Core/Row/RowFromDictionaryTests.swift: missing type RowTestCase
-x Core/Row/RowFromStatementTests.swift: missing type RowTestCase
 x Core/StatementColumnConvertibleFetchTests.swift: no test compiles: missing type SQLiteStatement, missing type FastDatabaseValueCursor, missing type FastDatabaseValueCursor
 x Core/TransactionDateTests.swift: no test compiles: missing Configuration.transactionClock, missing Configuration.transactionClock, missing Configuration.transactionClock
 x Core/TransactionObserver/DatabaseEventObservationStrategyTest.swift: no test compiles: missing type DatabaseEventObservationStrategy, missing DatabaseQueue.add, missing DatabaseQueue.add
 x Core/TransactionObserver/TransactionObserverSavepointsTests.swift: missing type DatabaseEvent
 x Core/TransactionObserver/TransactionObserverTests.swift: missing type DatabaseEvent
-x Dump/DatabaseDumpTests.swift: no test compiles: missing belongsTo, missing hasMany, missing Database.dumpSQL
+x Dump/DatabaseDumpTests.swift: no test compiles: missing Database.dumpSQL, missing Database.dumpSQL, missing Database.dumpSQL
 x Dump/DatabaseReaderDumpTests.swift: no test compiles: missing DatabaseQueue.dumpSQL, missing DatabaseQueue.dumpRequest, missing DatabaseQueue.dumpTables
 x Private/CaseInsensitiveIdentifierTests.swift: no test compiles: missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier, missing CaseInsensitiveIdentifier
 x Private/DataMemoryTests.swift: no test compiles: missing Row.sqliteStatement, missing Row.sqliteStatement
 x Private/DatabasePoolSchemaCacheTests.swift: no test compiles: missing Database.schemaCache, missing Database.schemaCache, missing Database.schemaCache
-x Private/DatabaseValueConvertibleEscapingTests.swift: no test compiles: missing SQLExpression.quotedSQL, missing SQLExpression.quotedSQL, missing SQLExpression.quotedSQL
-x Private/InflectionsTests.swift: missing Inflections, missing type Inflections
+x Private/DatabaseValueConvertibleEscapingTests.swift: no test compiles: internal API quotedSQL, internal API quotedSQL, internal API quotedSQL
+x Private/InflectionsTests.swift: no test compiles: internal API startIndexOfLastWord, internal API digitlessRadical, internal API pluralized
 x Private/OrderedDictionaryTests.swift: no test compiles: missing type OrderedDictionary, missing type OrderedDictionary, missing type OrderedDictionary
 x Private/PoolTests.swift: no test compiles: missing Pool, cannot infer contextual base in reference to member 'reuse', cannot infer contextual base in reference to member 'reuse'
 x Private/SQLExpressionLiteralTests.swift: no test compiles: missing SQLGenerationContext, missing SQLGenerationContext
 x Private/UtilsTests.swift: no test compiles: missing throwingFirstError
 x Record/FetchableRecord/DatabaseDateDecodingStrategyTests.swift: no test compiles: missing RowDecodingError.impl, missing RowDecodingError.impl, missing RowDecodingError.impl
-x Record/JoinSupportTests.swift: extraneous argument label 'columnsOf:' in call, cannot convert value of type 'T1.Type' to expected argument type 'SQL'
-x Record/Record/RecordEditedTests.swift: missing Person
-x Record/Record/RecordInitializersTests.swift: missing type Record
-x Record/Record/RecordMinimalNonOptionalPrimaryKeySingleTests.swift: missing MinimalNonOptionalPrimaryKeySingle
-x Record/Record/RecordMinimalPrimaryKeyRowIDTests.swift: missing MinimalRowID
-x Record/Record/RecordMinimalPrimaryKeySingleTests.swift: missing MinimalSingle
-x Record/Record/RecordPersistenceConflictPolicy.swift: missing type Record
-x Record/Record/RecordPrimaryKeyHiddenRowIDTests.swift: missing Person
-x Record/Record/RecordPrimaryKeyMultipleTests.swift: missing Citizenship
-x Record/Record/RecordPrimaryKeyNoneTests.swift: missing Item
-x Record/Record/RecordPrimaryKeyRowIDTests.swift: missing Person
-x Record/Record/RecordPrimaryKeySingleTests.swift: missing Pet
-x Record/Record/RecordPrimaryKeySingleWithReplaceConflictResolutionTests.swift: missing Email
-x Record/Record/RecordSubClassTests.swift: missing Person
-x Record/Record/RecordWithColumnNameManglingTests.swift: missing BadlyMangledStuff
-x Record/SingletonRecordTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing parameter onConflict:, missing createEmptyAppConfigurationTable
-x Record/SingletonUserDefaultsTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing parameter onConflict:, missing createEmptyAppConfigurationTable
-x Support/CGFloatTests.swift: no test compiles: cannot convert value of type 'CGFloat' to expected element type '(any DatabaseValueConvertible)?'
-x Support/Foundation/FoundationDateComponentsTests.swift: no test compiles: missing DatabaseDateComponents, missing DatabaseDateComponents, missing DatabaseDateComponents
-x Support/Foundation/FoundationDecimalTests.swift: no test compiles: missing Decimal.databaseValue, missing Decimal.fetchOne, missing Decimal.databaseValue
-x Support/Foundation/FoundationNSDataTests.swift: no test compiles: missing NSData.fetchOne, missing NSData.databaseValue, missing NSData.fromDatabaseValue
-x Support/Foundation/FoundationNSDecimalNumberTests.swift: no test compiles: missing NSDecimalNumber.databaseValue, missing NSDecimalNumber.fetchOne, missing NSDecimalNumber.databaseValue
-x Support/Foundation/FoundationNSNullTests.swift: no test compiles: missing NSNull.databaseValue, missing NSNull.fromDatabaseValue, missing NSNull.fromDatabaseValue
-x Support/Foundation/FoundationNSNumberTests.swift: no test compiles: missing NSNumber.databaseValue, missing NSNumber.fetchOne, missing NSNumber.databaseValue
-x Support/Foundation/FoundationNSStringTests.swift: no test compiles: missing NSString.fetchOne, missing NSString.databaseValue, missing NSString.fromDatabaseValue
-x Support/Foundation/FoundationNSURLTests.swift: no test compiles: missing NSURL.fetchOne, missing NSURL.databaseValue, missing NSURL.fromDatabaseValue
-x Support/Foundation/FoundationNSUUIDTests.swift: no test compiles: missing NSUUID.fetchOne, argument type 'NSUUID' does not conform to expected type 'DatabaseValueConvertible', missing assertRoundTrip
-x Support/Foundation/Row+FoundationTests.swift: no test compiles: cannot convert value of type '[AnyHashable : Any]' to expected argument type '[String : (any DatabaseValueConvertible)?]', cannot convert value of type '[AnyHashable : Any]' to expected argument type '[String : (any DatabaseValueConvertible)?]'
-x Support/Foundation/StatementArguments+FoundationTests.swift: no test compiles: missing DatabaseQueue.inTransaction, cannot convert value of type '[Any]' to expected argument type '[(any DatabaseValueConvertible)?]', missing DatabaseQueue.inTransaction
-x ValueObservation/ValueObservationCountTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation
-x ValueObservation/ValueObservationDatabaseValueConvertibleTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation, missing assertValueObservation
-x ValueObservation/ValueObservationFetchTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation, missing assertValueObservation
-x ValueObservation/ValueObservationMapTests.swift: no test compiles: missing assertValueObservation, missing ValueObservation.requiresWriteAccess
-x ValueObservation/ValueObservationPrintTests.swift: no test compiles: missing DatabaseRegion.description, missing ValueObservation.print, missing ValueObservation.print
-x ValueObservation/ValueObservationQueryInterfaceRequestTests.swift: missing TableDefinition.belongsTo, cannot infer contextual base in reference to member 'cascade'
-x ValueObservation/ValueObservationReadonlyTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation, missing ValueObservation.requiresWriteAccess
-x ValueObservation/ValueObservationRecordTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation
-x ValueObservation/ValueObservationRegionRecordingTests.swift: no test compiles: missing Database.recordingSelection, call to main actor-isolated instance method 'start(in:scheduling:onError:onChange:)' in a synchronous nonisolated context, missing parameter willTrackRegion:
-x ValueObservation/ValueObservationRowTests.swift: no test compiles: missing assertValueObservation, missing assertValueObservation, missing assertValueObservation
+x Record/SingletonRecordTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing argument for parameter 'key' in call, missing argument for parameter 'key' in call
+x Record/SingletonUserDefaultsTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing argument for parameter 'key' in call, missing argument for parameter 'key' in call
+x ValueObservation/ValueObservationPrintTests.swift: no test compiles: missing ValueObservation.print, missing ValueObservation.print, missing ValueObservation.print

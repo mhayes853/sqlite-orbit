@@ -71,82 +71,118 @@
     }
   }
 
+  /// An SQL literal: raw SQL text and arguments mixed with query-interface components.
+  ///
+  /// Components such as expressions and subqueries are rendered when the literal is built
+  /// for a database, so that they can be qualified with table aliases and resolve schema
+  /// information.
   public struct SQL: Sendable, ExpressibleByStringInterpolation {
-    public var sql: String
-    public var arguments: StatementArguments
+    enum Element: Sendable {
+      case sql(String, StatementArguments)
+      case expression(SQLExpression)
+      case selection(SQLSelection)
+      case ordering(SQLOrdering)
+      case subquery(SQLSubquery)
+
+      var isEmpty: Bool {
+        if case .sql(let text, _) = self { return text.isEmpty }
+        return false
+      }
+
+      func sql(_ context: SQLGenerationContext) throws -> String {
+        switch self {
+        case .sql(let text, let arguments):
+          try context.appendLiteralArguments(arguments)
+          return text
+        case .expression(let expression):
+          return try expression.sql(context)
+        case .selection(let selection):
+          return try selection.sql(context)
+        case .ordering(let ordering):
+          return try ordering.sql(context)
+        case .subquery(let subquery):
+          return try subquery.sql(context)
+        }
+      }
+
+      func qualified(with alias: TableAliasBase) -> Element {
+        switch self {
+        case .sql, .subquery: return self
+        case .expression(let expression): return .expression(expression.qualified(with: alias))
+        case .selection(let selection): return .selection(selection.qualified(with: alias))
+        case .ordering(let ordering): return .ordering(ordering.qualified(with: alias))
+        }
+      }
+    }
+
+    private(set) var elements: [Element]
+
+    init(elements: [Element]) {
+      self.elements = elements
+    }
 
     public init(sql: String, arguments: StatementArguments = StatementArguments()) {
-      self.sql = sql
-      self.arguments = arguments
+      self.init(elements: [.sql(sql, arguments)])
     }
 
     public init(_ expression: some SQLSpecificExpressible) {
-      self = expression.sqlExpression.literal
+      self.init(elements: [.expression(expression.sqlExpression)])
     }
 
     public init(stringLiteral value: String) {
       self.init(sql: value)
     }
 
-    public init(stringInterpolation: StringInterpolation) {
-      self.init(
-        sql: stringInterpolation.sql,
-        arguments: stringInterpolation.arguments
-      )
+    public init(stringInterpolation: SQLInterpolation) {
+      self.init(elements: stringInterpolation.elements)
     }
 
-    public struct StringInterpolation: StringInterpolationProtocol {
-      var sql = ""
-      var arguments = StatementArguments()
+    public typealias StringInterpolation = SQLInterpolation
 
-      public init(literalCapacity: Int, interpolationCount: Int) {
-        sql.reserveCapacity(literalCapacity)
-      }
+    /// The SQL text, rendered without a database connection.
+    ///
+    /// Components that need schema information (such as subqueries that select primary
+    /// keys) require `build(_:)` instead.
+    public var sql: String {
+      contextFreeBuild().sql
+    }
 
-      public mutating func appendLiteral(_ literal: String) {
-        sql += literal
-      }
-
-      public mutating func appendInterpolation(_ value: (any DatabaseValueConvertible)?) {
-        sql += "?"
-        arguments += StatementArguments([value])
-      }
-
-      public mutating func appendInterpolation(identifier: String) {
-        sql += quoted(identifier)
-      }
-
-      public mutating func appendInterpolation(
-        sql text: String,
-        arguments: StatementArguments = StatementArguments()
-      ) {
-        appendInterpolation(SQL(sql: text, arguments: arguments))
-      }
-
-      public mutating func appendInterpolation(literal: SQL) {
-        appendInterpolation(literal)
-      }
-
-      public mutating func appendInterpolation(_ literal: SQL) {
-        sql += literal.sql
-        arguments += literal.arguments
-      }
-
-      public mutating func appendInterpolation(_ expression: some SQLExpressible) {
-        appendInterpolation(expression.sqlExpression.literal)
-      }
+    /// The arguments of the SQL text, rendered without a database connection.
+    public var arguments: StatementArguments {
+      contextFreeBuild().arguments
     }
 
     public var isEmpty: Bool {
-      sql.isEmpty
+      elements.allSatisfy(\.isEmpty)
     }
 
+    /// Returns the SQL text and arguments of the literal.
     public func build(_ db: Database) throws -> (sql: String, arguments: StatementArguments) {
-      (sql, arguments)
+      let context = SQLGenerationContext(db)
+      let sql = try self.sql(context)
+      return (sql, context.arguments)
+    }
+
+    func contextFreeBuild() -> (sql: String, arguments: StatementArguments) {
+      let context = SQLGenerationContext(nil)
+      do {
+        let sql = try self.sql(context)
+        return (sql, context.arguments)
+      } catch {
+        preconditionFailure("SQL literal requires a database connection: \(error)")
+      }
+    }
+
+    func sql(_ context: SQLGenerationContext) throws -> String {
+      try elements.map { try $0.sql(context) }.joined()
+    }
+
+    func qualified(with alias: TableAliasBase) -> SQL {
+      SQL(elements: elements.map { $0.qualified(with: alias) })
     }
 
     public mutating func append(literal: SQL) {
-      self = self + literal
+      elements += literal.elements
     }
 
     public mutating func append(sql: String, arguments: StatementArguments = StatementArguments()) {
@@ -158,7 +194,173 @@
     }
 
     public static func + (lhs: Self, rhs: Self) -> Self {
-      .init(sql: lhs.sql + rhs.sql, arguments: lhs.arguments + rhs.arguments)
+      SQL(elements: lhs.elements + rhs.elements)
+    }
+  }
+
+  /// The string interpolation of SQL literals.
+  public struct SQLInterpolation: StringInterpolationProtocol, Sendable {
+    var elements: [SQL.Element] = []
+
+    public init(literalCapacity: Int, interpolationCount: Int) {
+      elements.reserveCapacity(interpolationCount * 2 + 1)
+    }
+
+    public mutating func appendLiteral(_ literal: String) {
+      if literal.isEmpty { return }
+      elements.append(.sql(literal, StatementArguments()))
+    }
+
+    public mutating func appendInterpolation(
+      sql text: String,
+      arguments: StatementArguments = StatementArguments()
+    ) {
+      elements.append(.sql(text, arguments))
+    }
+
+    public mutating func appendInterpolation(_ literal: SQL) {
+      elements += literal.elements
+    }
+
+    public mutating func appendInterpolation(literal: SQL) {
+      elements += literal.elements
+    }
+
+    public mutating func appendInterpolation(identifier: String) {
+      appendLiteral(quoted(identifier))
+    }
+
+    public mutating func appendInterpolation<S: StringProtocol>(_ string: S) {
+      elements.append(.expression(String(string).sqlExpression))
+    }
+
+    public mutating func appendInterpolation(_ table: (some TableRecord).Type) {
+      appendLiteral(quoted(table.databaseTableName))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(_ table: any TableRecord.Type) {
+      appendLiteral(quoted(table.databaseTableName))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation<T>(_ table: Table<T>) {
+      appendLiteral(quoted(table.tableName))
+    }
+
+    public mutating func appendInterpolation(tableOf record: some TableRecord) {
+      appendInterpolation(type(of: record))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(tableOf record: any TableRecord) {
+      appendInterpolation(type(of: record))
+    }
+
+    public mutating func appendInterpolation(
+      columnsOf recordType: (some TableRecord).Type,
+      tableAlias: String? = nil
+    ) {
+      let alias = TableAliasBase(
+        tableName: recordType.databaseTableName,
+        userName: tableAlias ?? recordType.databaseTableName
+      )
+      for (index, selection) in recordType.databaseSelection.enumerated() {
+        if index > 0 { appendLiteral(", ") }
+        elements.append(.selection(selection.sqlSelection.qualified(with: alias)))
+      }
+    }
+
+    public mutating func appendInterpolation(_ selection: some SQLSelectable) {
+      elements.append(.selection(selection.sqlSelection))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(_ selection: (any SQLSelectable)?) {
+      if let selection {
+        elements.append(.selection(selection.sqlSelection))
+      } else {
+        appendLiteral("NULL")
+      }
+    }
+
+    public mutating func appendInterpolation(_ ordering: some SQLOrderingTerm) {
+      elements.append(.ordering(ordering.sqlOrdering))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(_ ordering: any SQLOrderingTerm) {
+      elements.append(.ordering(ordering.sqlOrdering))
+    }
+
+    public mutating func appendInterpolation(
+      _ expressible: some SQLExpressible & SQLSelectable & SQLOrderingTerm
+    ) {
+      elements.append(.expression(expressible.sqlExpression))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(_ expressible: (any SQLExpressible)?) {
+      if let expressible {
+        elements.append(.expression(expressible.sqlExpression))
+      } else {
+        appendLiteral("NULL")
+      }
+    }
+
+    public mutating func appendInterpolation(_ key: some CodingKey) {
+      appendInterpolation(Column(key.stringValue))
+    }
+
+    public mutating func appendInterpolation(
+      _ key: some CodingKey & SQLExpressible & SQLSelectable & SQLOrderingTerm
+    ) {
+      appendInterpolation(Column(key.stringValue))
+    }
+
+    @_disfavoredOverload
+    public mutating func appendInterpolation(_ key: any CodingKey) {
+      appendInterpolation(Column(key.stringValue))
+    }
+
+    public mutating func appendInterpolation(
+      _ subquery: some SQLSubqueryable & SQLExpressible & SQLSelectable & SQLOrderingTerm
+    ) {
+      elements.append(.subquery(subquery.sqlSubquery))
+    }
+
+    public mutating func appendInterpolation(_ sequence: some Sequence<some SQLExpressible>) {
+      appendExpressions(sequence.map(\.sqlExpression))
+    }
+
+    public mutating func appendInterpolation(_ sequence: some Sequence<any SQLExpressible>) {
+      appendExpressions(sequence.map(\.sqlExpression))
+    }
+
+    public mutating func appendInterpolation<S>(_ expressible: S)
+    where S: SQLExpressible, S: Sequence, S.Element: SQLExpressible {
+      elements.append(.expression(expressible.sqlExpression))
+    }
+
+    public mutating func appendInterpolation(_ collation: DatabaseCollation) {
+      appendLiteral(collation.name)
+    }
+
+    public mutating func appendInterpolation(_ collation: Database.CollationName) {
+      appendLiteral(collation.rawValue)
+    }
+
+    private mutating func appendExpressions(_ expressions: [SQLExpression]) {
+      if expressions.isEmpty {
+        appendLiteral("(SELECT NULL WHERE NULL)")
+        return
+      }
+      appendLiteral("(")
+      for (index, expression) in expressions.enumerated() {
+        if index > 0 { appendLiteral(",") }
+        elements.append(.expression(expression))
+      }
+      appendLiteral(")")
     }
   }
 
@@ -166,6 +368,7 @@
     // Schema statements cannot bind parameters. Reuse the SQL tokenizer so question marks in
     // strings, identifiers, and comments remain untouched; let the selected engine quote values.
     func expandedSQL(in db: Database) throws -> String {
+      let (sql, arguments) = try build(db)
       var parameters: [(Range<Int>, Int)] = []
       let values = try bindArguments(
         arguments,
@@ -176,9 +379,7 @@
       guard !parameters.isEmpty else {
         return sql
       }
-      let literals = try values.map {
-        try String.fetchOne(db, sql: "SELECT quote(?)", arguments: [$0])!
-      }
+      let literals = try values.map { try db.quotedLiteral($0) }
       var bytes = Array(sql.utf8)
       for (range, slot) in parameters.reversed() {
         bytes.replaceSubrange(range, with: literals[slot].utf8)
@@ -191,6 +392,17 @@
     public func joined(separator: String = "") -> SQL {
       SQLiteOrbitGRDB.joined(Array(self), separator: separator)
     }
+  }
+
+  func joined(_ fragments: [SQL], separator: String) -> SQL {
+    var elements: [SQL.Element] = []
+    for (index, fragment) in fragments.enumerated() {
+      if index > 0 && !separator.isEmpty {
+        elements.append(.sql(separator, StatementArguments()))
+      }
+      elements += fragment.elements
+    }
+    return SQL(elements: elements)
   }
 
   // Resolve SQLite parameter slots without changing the SQL text (and therefore result column

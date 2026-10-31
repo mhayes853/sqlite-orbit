@@ -1,8 +1,16 @@
 #if canImport(Foundation) && canImport(Dispatch)
+  import SQLiteOrbit
+
   extension QueryInterfaceRequest {
+    private var updateConflictResolution: Database.ConflictResolution {
+      (RowDecoder.self as? any MutablePersistableRecord.Type)?
+        .persistenceConflictPolicy.conflictResolutionForUpdate ?? .abort
+    }
+
     @discardableResult
     public func deleteAll(_ db: Database) throws -> Int {
-      try executeMutation(db, statement: mutationStatement(db))
+      let statement = try SQLQueryGenerator(relation: relation).makeDeleteStatement(db)
+      return try executeMutation(db, statement: statement)
     }
 
     @discardableResult
@@ -11,11 +19,17 @@
       onConflict conflict: Database.ConflictResolution? = nil,
       _ assignments: [ColumnAssignment]
     ) throws -> Int {
-      guard !assignments.isEmpty else { return 0 }
-      return try executeMutation(
-        db,
-        statement: mutationStatement(db, assignments: assignments, conflict: conflict)
-      )
+      guard !assignments.isEmpty,
+        let statement = try SQLQueryGenerator(relation: relation)
+          .makeUpdateStatement(
+            db,
+            conflict: conflict ?? updateConflictResolution,
+            assignments: assignments
+          )
+      else {
+        return 0
+      }
+      return try executeMutation(db, statement: statement)
     }
 
     @discardableResult
@@ -30,9 +44,9 @@
     private func executeMutation(_ db: Database, statement: Statement) throws -> Int {
       // SQLite's changes() excludes INSTEAD OF triggers. GRDB counts total changes for views,
       // while keeping changes() for tables (notably virtual tables with shadow-table writes).
-      let previous = try db.viewExists(table) ? db.totalChangesCount : nil
+      let previous = try db.viewExists(table) ? db.untracedTotalChanges() : nil
       try statement.execute()
-      return previous.map { db.totalChangesCount - $0 } ?? db.changesCount
+      return try previous.map { try db.untracedTotalChanges() - $0 } ?? db.changesCount
     }
 
     public func updateAndFetchStatement(
@@ -43,19 +57,101 @@
     ) throws -> Statement {
       precondition(!assignments.isEmpty, "Invalid empty assignments")
       precondition(!selection.isEmpty, "Invalid empty selection")
-      return try mutationStatement(
-        db,
-        assignments: assignments,
-        conflict: conflict,
-        selection: selection
-      )
+      guard
+        let statement = try SQLQueryGenerator(relation: relation)
+          .makeUpdateStatement(
+            db,
+            conflict: conflict ?? updateConflictResolution,
+            assignments: assignments,
+            selection: selection
+          )
+      else {
+        throw DatabaseError(resultCode: .SQLITE_MISUSE, message: "Invalid empty assignments")
+      }
+      return statement
     }
 
     public func deleteAndFetchStatement(_ db: Database, selection: [any SQLSelectable]) throws
       -> Statement
     {
       precondition(!selection.isEmpty, "Invalid empty selection")
-      return try mutationStatement(db, selection: selection)
+      return try SQLQueryGenerator(relation: relation).makeDeleteStatement(db, selection: selection)
+    }
+  }
+
+  extension QueryInterfaceRequest where RowDecoder: TableRecord {
+    @discardableResult
+    public func updateAll(
+      _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      assignment: (RowDecoder.DatabaseComponents) throws -> ColumnAssignment
+    ) throws -> Int {
+      try updateAll(db, onConflict: conflict, [assignment(RowDecoder.databaseComponents)])
+    }
+
+    @discardableResult
+    public func updateAll(
+      _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      assignments: (RowDecoder.DatabaseComponents) throws -> [ColumnAssignment]
+    ) throws -> Int {
+      try updateAll(db, onConflict: conflict, assignments(RowDecoder.databaseComponents))
+    }
+
+    public func deleteAndFetchStatement(
+      _ db: Database,
+      select: (RowDecoder.DatabaseComponents) throws -> [any SQLSelectable]
+    ) throws -> Statement {
+      try deleteAndFetchStatement(db, selection: select(RowDecoder.databaseComponents))
+    }
+
+    public func updateAndFetchStatement(
+      _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      assignments: (RowDecoder.DatabaseComponents) throws -> [ColumnAssignment],
+      select: (RowDecoder.DatabaseComponents) throws -> [any SQLSelectable]
+    ) throws -> Statement {
+      try updateAndFetchStatement(
+        db,
+        onConflict: conflict,
+        assignments(RowDecoder.databaseComponents),
+        selection: select(RowDecoder.databaseComponents)
+      )
+    }
+  }
+
+  extension Database {
+    /// The SQL literal of a value (`'O''Brien'`, `X'666F6F'`), quoted by SQLite without tracing.
+    func quotedLiteral(_ value: DatabaseValue) throws -> String {
+      if value.isNull { return "NULL" }
+      return try translate {
+        let cursor = try access.statementCursor(
+          SQLiteOrbit.SQL(text: "SELECT QUOTE(?)", bindings: [value.orbitValue])
+        )
+        defer { try? cursor.close() }
+        guard let quoted = try cursor.next()?.first?.value,
+          let string = String.fromDatabaseValue(DatabaseValue(quoted))
+        else {
+          return "NULL"
+        }
+        return string
+      }
+    }
+
+    /// `total_changes()` without tracing the query.
+    func untracedTotalChanges() throws -> Int {
+      try translate {
+        let cursor = try access.statementCursor(
+          SQLiteOrbit.SQL(text: "SELECT total_changes()", bindings: [])
+        )
+        defer { try? cursor.close() }
+        guard let value = try cursor.next()?.first?.value,
+          let count = Int.fromDatabaseValue(DatabaseValue(value))
+        else {
+          return 0
+        }
+        return count
+      }
     }
   }
 
@@ -138,6 +234,29 @@
       _ assignments: ColumnAssignment...
     ) throws -> Int {
       try updateAll(db, onConflict: conflict, assignments)
+    }
+
+    @discardableResult
+    public static func updateAll(
+      _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      assignment: (DatabaseComponents) throws -> ColumnAssignment
+    ) throws -> Int {
+      try updateAll(db, onConflict: conflict, [assignment(databaseComponents)])
+    }
+
+    @discardableResult
+    public static func updateAll(
+      _ db: Database,
+      onConflict conflict: Database.ConflictResolution? = nil,
+      assignments: (DatabaseComponents) throws -> [ColumnAssignment]
+    ) throws -> Int {
+      try updateAll(db, onConflict: conflict, assignments(databaseComponents))
+    }
+
+    @discardableResult
+    public static func deleteAll(_ db: Database) throws -> Int {
+      try all().deleteAll(db)
     }
   }
 

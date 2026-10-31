@@ -31,7 +31,22 @@ class UpdateStatementTests : GRDBTestCase {
         try migrator.migrate(dbWriter)
     }
     
-
+    func testTrailingSemicolonAndWhiteSpaceIsAcceptedAndOptional() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Arthur');").execute()
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Barbara')\n \t").execute()
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Craig'); ; ;").execute()
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Daniel');\n \t").execute()
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Eugene')\r\n").execute()
+            try db.makeStatement(sql: "INSERT INTO persons (name) VALUES ('Fiona')\u{000C}" /* \f */).execute()
+            return .commit
+        }
+        try dbQueue.inDatabase { db in
+            let names = try String.fetchAll(db, sql: "SELECT name FROM persons ORDER BY name")
+            XCTAssertEqual(names, ["Arthur", "Barbara", "Craig", "Daniel", "Eugene", "Fiona"])
+        }
+    }
     
     func testStatementSQL() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -45,13 +60,115 @@ class UpdateStatementTests : GRDBTestCase {
         }
     }
     
+    func testArrayStatementArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inTransaction { db in
+            
+            let statement = try db.makeStatement(sql: "INSERT INTO persons (name, age) VALUES (?, ?)")
+            let persons: [[(any DatabaseValueConvertible)?]] = [
+                ["Arthur", 41],
+                ["Barbara", nil],
+                ]
+            for person in persons {
+                try statement.execute(arguments: StatementArguments(person))
+            }
+            
+            return .commit
+        }
+        
+        try dbQueue.inDatabase { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM persons ORDER BY name")
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows[0]["name"] as String, "Arthur")
+            XCTAssertEqual(rows[0]["age"] as Int, 41)
+            XCTAssertEqual(rows[1]["name"] as String, "Barbara")
+            XCTAssertTrue((rows[1]["age"] as DatabaseValue).isNull)
+        }
+    }
 
+    func testStatementArgumentsSetterWithArray() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inTransaction { db in
+            
+            let statement = try db.makeStatement(sql: "INSERT INTO persons (name, age) VALUES (?, ?)")
+            let persons: [[(any DatabaseValueConvertible)?]] = [
+                ["Arthur", 41],
+                ["Barbara", nil],
+                ]
+            for person in persons {
+                statement.arguments = StatementArguments(person)
+                try statement.execute()
+            }
+            
+            return .commit
+        }
+        
+        try dbQueue.inDatabase { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM persons ORDER BY name")
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows[0]["name"] as String, "Arthur")
+            XCTAssertEqual(rows[0]["age"] as Int, 41)
+            XCTAssertEqual(rows[1]["name"] as String, "Barbara")
+            XCTAssertTrue((rows[1]["age"] as DatabaseValue).isNull)
+        }
+    }
 
+    func testDictionaryStatementArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inTransaction { db in
+            
+            let statement = try db.makeStatement(sql: "INSERT INTO persons (name, age) VALUES (:name, :age)")
+            let persons: [[String: (any DatabaseValueConvertible)?]] = [
+                ["name": "Arthur", "age": 41],
+                ["name": "Barbara", "age": nil],
+                ]
+            for person in persons {
+                try statement.execute(arguments: StatementArguments(person))
+            }
+            
+            return .commit
+        }
+        
+        try dbQueue.inDatabase { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM persons ORDER BY name")
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows[0]["name"] as String, "Arthur")
+            XCTAssertEqual(rows[0]["age"] as Int, 41)
+            XCTAssertEqual(rows[1]["name"] as String, "Barbara")
+            XCTAssertTrue((rows[1]["age"] as DatabaseValue).isNull)
+        }
+    }
 
-
-
-
-
+    func testStatementArgumentsSetterWithDictionary() throws {
+        let dbQueue = try makeDatabaseQueue()
+        
+        try dbQueue.inTransaction { db in
+            
+            let statement = try db.makeStatement(sql: "INSERT INTO persons (name, age) VALUES (:name, :age)")
+            let persons: [[String: (any DatabaseValueConvertible)?]] = [
+                ["name": "Arthur", "age": 41],
+                ["name": "Barbara", "age": nil],
+                ]
+            for person in persons {
+                statement.arguments = StatementArguments(person)
+                try statement.execute()
+            }
+            
+            return .commit
+        }
+        
+        try dbQueue.inDatabase { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM persons ORDER BY name")
+            XCTAssertEqual(rows.count, 2)
+            XCTAssertEqual(rows[0]["name"] as String, "Arthur")
+            XCTAssertEqual(rows[0]["age"] as Int, 41)
+            XCTAssertEqual(rows[1]["name"] as String, "Barbara")
+            XCTAssertTrue((rows[1]["age"] as DatabaseValue).isNull)
+        }
+    }
 
     func testUpdateStatementAcceptsSelectQueries() throws {
         // This test makes sure we do not introduce any regression for
@@ -138,15 +255,120 @@ class UpdateStatementTests : GRDBTestCase {
         }
     }
     
+    func testExecuteMultipleStatementWithNamedArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.execute(sql: """
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age1);
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age2);
+                """, arguments: ["age1": 41, "age2": 32])
+            XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT age FROM persons ORDER BY age"), [32, 41])
+            return .rollback
+        }
+        
+        try dbQueue.inTransaction { db in
+            try db.execute(sql: """
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age1);
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age2);
+                """, arguments: [41, 32])
+            XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT age FROM persons ORDER BY age"), [32, 41])
+            return .rollback
+        }
+    }
 
-
-
+    func testExecuteMultipleStatementWithReusedNamedArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.execute(sql: """
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age);
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age);
+                """, arguments: ["age": 41])
+            XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT age FROM persons"), [41, 41])
+            return .rollback
+        }
+        
+        try dbQueue.inTransaction { db in
+            try db.execute(sql: """
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age);
+                INSERT INTO persons (name, age) VALUES ('Arthur', :age);
+                """, arguments: ["age": 41])
+            XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT age FROM persons"), [41, 41])
+            return .rollback
+        }
+    }
     
-
+    func testExecuteMultipleStatementWithPositionalArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.execute(sql: """
+                INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                """, arguments: [41, 32])
+            XCTAssertEqual(try Int.fetchAll(db, sql: "SELECT age FROM persons ORDER BY age"), [32, 41])
+            return .rollback
+        }
+    }
     
-
+    func testExecuteMultipleStatementWithTooManyArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            do {
+                try db.execute(sql: "", arguments: [1])
+                XCTFail()
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_MISUSE)
+                XCTAssertEqual(error.message!, "wrong number of statement arguments: 1")
+                XCTAssertEqual(error.description, "SQLite error 21: wrong number of statement arguments: 1")
+            }
+            return .rollback
+        }
+        
+        try dbQueue.inTransaction { db in
+            do {
+                try db.execute(sql: """
+                    INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                    INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                    """, arguments: [41, 32, 666])
+                XCTFail()
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_MISUSE)
+                XCTAssertEqual(error.message!, "wrong number of statement arguments: 3")
+                XCTAssertEqual(error.description, "SQLite error 21: wrong number of statement arguments: 3")
+            }
+            
+            // Both statements were run
+            let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM persons")!
+            XCTAssertEqual(count, 2)
+            
+            return .rollback
+        }
+    }
     
-
+    func testExecuteMultipleStatementWithTooFewArguments() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            do {
+                try db.execute(sql: """
+                    INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                    INSERT INTO persons (name, age) VALUES ('Arthur', ?);
+                    """, arguments: [41])
+                XCTFail()
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_MISUSE)
+                XCTAssertEqual(error.message!, "wrong number of statement arguments: 0")
+                XCTAssertEqual(error.description, """
+                    SQLite error 21: wrong number of statement arguments: 0 \
+                    - while executing `INSERT INTO persons (name, age) VALUES ('Arthur', ?)`
+                    """)
+            }
+            
+            // First statement did run
+            let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM persons")!
+            XCTAssertEqual(count, 1)
+            
+            return .rollback
+        }
+    }
 
     func testDatabaseErrorThrownByUpdateStatementContainSQL() throws {
         let dbQueue = try makeDatabaseQueue()

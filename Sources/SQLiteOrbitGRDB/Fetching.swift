@@ -9,16 +9,19 @@
       try fetchCursor(db, sql: literal.sql, arguments: literal.arguments)
     }
 
+    @_disfavoredOverload
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
       try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) }
     }
 
+    @_disfavoredOverload
     public static func fetchAll(_ db: Database, _ request: some FetchRequest) throws -> [Self] {
       try Array(fetchCursor(db, request))
     }
 
+    @_disfavoredOverload
     public static func fetchOne(_ db: Database, _ request: some FetchRequest) throws -> Self? {
       let prepared = try request.makePreparedRequest(db, forSingleResult: true)
       return try fetchOne(prepared.statement, adapter: prepared.adapter)
@@ -39,6 +42,7 @@
       Set(try fetchAll(db, literal))
     }
 
+    @_disfavoredOverload
     public static func fetchSet(_ db: Database, _ request: some FetchRequest) throws -> Set<Self> {
       Set(try fetchAll(db, request))
     }
@@ -85,6 +89,7 @@
       try Row.fetchOne(statement, arguments: arguments, adapter: adapter).map(Self.init(row:))
     }
 
+    @_disfavoredOverload
     public static func fetchCursor(_ db: Database, _ request: some FetchRequest) throws
       -> AnyCursor<Self>
     {
@@ -110,6 +115,7 @@
       Set(try fetchAll(db, literal))
     }
 
+    @_disfavoredOverload
     public static func fetchSet(_ db: Database, _ request: some FetchRequest) throws -> Set<Self> {
       Set(try fetchAll(db, request))
     }
@@ -143,6 +149,7 @@
       Set(try fetchAll(db, literal))
     }
 
+    @_disfavoredOverload
     public static func fetchSet(_ db: Database, _ request: some FetchRequest) throws -> Set<Row> {
       Set(try fetchAll(db, request))
     }
@@ -363,6 +370,84 @@
   extension Table where RowDecoder == Row {
     public func fetchCursor(_ db: Database) throws -> RowCursor {
       try all().fetchCursor(db)
+    }
+  }
+
+  // Requests whose RowDecoder is the fetched type, so that `SQLRequest(sql:)` infers it, as in
+  // GRDB. The unconstrained overloads above accept requests of other decoders.
+  extension DatabaseValueConvertible {
+    public static func fetchCursor<R: FetchRequest>(_ db: Database, _ request: R) throws
+      -> AnyCursor<Self> where R.RowDecoder == Self
+    {
+      try Row.fetchCursor(db, request).map { try $0.decode(Self.self, at: 0) }
+    }
+
+    public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Self]
+    where R.RowDecoder == Self {
+      try Array(fetchCursor(db, request))
+    }
+
+    public static func fetchOne<R: FetchRequest>(_ db: Database, _ request: R) throws -> Self?
+    where R.RowDecoder == Self {
+      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
+      return try fetchOne(prepared.statement, adapter: prepared.adapter)
+    }
+  }
+
+  extension DatabaseValueConvertible where Self: Hashable {
+    public static func fetchSet<R: FetchRequest>(_ db: Database, _ request: R) throws -> Set<Self>
+    where R.RowDecoder == Self {
+      Set(try fetchAll(db, request))
+    }
+  }
+
+  extension FetchableRecord {
+    public static func fetchCursor<R: FetchRequest>(_ db: Database, _ request: R) throws
+      -> AnyCursor<Self> where R.RowDecoder == Self
+    {
+      try Row.fetchCursor(db, request).map(Self.init(row:))
+    }
+
+    public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Self]
+    where R.RowDecoder == Self {
+      try Array(Row.fetchCursor(db, request).map { try Self(row: $0.copy()) })
+    }
+
+    public static func fetchOne<R: FetchRequest>(_ db: Database, _ request: R) throws -> Self?
+    where R.RowDecoder == Self {
+      try Row.fetchOne(db, request).map(Self.init(row:))
+    }
+  }
+
+  extension FetchableRecord where Self: Hashable {
+    public static func fetchSet<R: FetchRequest>(_ db: Database, _ request: R) throws -> Set<Self>
+    where R.RowDecoder == Self {
+      Set(try fetchAll(db, request))
+    }
+  }
+
+  extension Row {
+    public static func fetchCursor<R: FetchRequest>(_ db: Database, _ request: R) throws
+      -> RowCursor where R.RowDecoder == Row
+    {
+      let prepared = try request.makePreparedRequest(db, forSingleResult: false)
+      return try fetchCursor(prepared.statement, adapter: prepared.adapter)
+    }
+
+    public static func fetchAll<R: FetchRequest>(_ db: Database, _ request: R) throws -> [Row]
+    where R.RowDecoder == Row {
+      try Array(fetchCursor(db, request).map { $0.copy() })
+    }
+
+    public static func fetchOne<R: FetchRequest>(_ db: Database, _ request: R) throws -> Row?
+    where R.RowDecoder == Row {
+      let prepared = try request.makePreparedRequest(db, forSingleResult: true)
+      return try fetchOne(prepared.statement, adapter: prepared.adapter)
+    }
+
+    public static func fetchSet<R: FetchRequest>(_ db: Database, _ request: R) throws -> Set<Row>
+    where R.RowDecoder == Row {
+      Set(try fetchAll(db, request))
     }
   }
 #endif

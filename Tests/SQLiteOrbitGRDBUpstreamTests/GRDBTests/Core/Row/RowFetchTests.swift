@@ -5,7 +5,19 @@ import SQLiteOrbitGRDB
 
 class RowFetchTests: GRDBTestCase {
 
-
+    func testStatementInformationFromCursor() throws {
+        // Test that cursor provides statement information
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            let request: SQLRequest<Row> = "SELECT \("Arthur") AS firstName, \("Martin") AS lastName"
+            let cursor = try request.fetchCursor(db)
+            XCTAssertEqual(cursor.sql, "SELECT ? AS firstName, ? AS lastName")
+            XCTAssertEqual(cursor.arguments, ["Arthur", "Martin"])
+            XCTAssertEqual(cursor.columnCount, 2)
+            XCTAssertEqual(cursor.columnNames, ["firstName", "lastName"])
+            XCTAssertEqual(cursor.databaseRegion.description, "empty")
+        }
+    }
     
     func testFetchCursor() throws {
         let dbQueue = try makeDatabaseQueue()

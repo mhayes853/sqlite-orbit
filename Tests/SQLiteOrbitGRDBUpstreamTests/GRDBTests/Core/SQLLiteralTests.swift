@@ -135,7 +135,35 @@ class SQLLiteralTests: GRDBTestCase {
         }
     }
     
-
+    func testQualifiedSQLLiteral() throws {
+        struct Player: TableRecord { }
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.column("name", .text)
+                t.column("createdAt", .datetime)
+            }
+            
+            do {
+                // Test of SQL.init(_:) documentation (plus qualification)
+                let columnLiteral = SQL(Column("name"))
+                let suffixLiteral = SQL("O'Brien".databaseValue)
+                let literal = [columnLiteral, suffixLiteral].joined(separator: " || ")
+                let request = Player.aliased(TableAlias(name: "p")).select(literal)
+                try assertEqualSQL(db, request, """
+                    SELECT "p"."name" || 'O''Brien' FROM "player" "p"
+                    """)
+            }
+            
+            do {
+                // Test qualification of interpolated literal
+                let literal: SQL = "\(Column("name")) || 'foo'"
+                let request = Player.aliased(TableAlias(name: "p")).select(literal)
+                try assertEqualSQL(db, request, """
+                    SELECT "p"."name" || 'foo' FROM "player" "p"
+                    """)
+            }
+        }
+    }
 }
 
 extension SQLLiteralTests {
@@ -175,13 +203,245 @@ extension SQLLiteralTests {
         }
     }
     
-
+    func testSelectableInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            do {
+                // Non-existential
+                let query: SQL = """
+                    SELECT \(AllColumns())
+                    FROM player
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT *
+                    FROM player
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                // Existential
+                let query: SQL = """
+                    SELECT \(AllColumns() as any SQLSelectable)
+                    FROM player
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT *
+                    FROM player
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                // Existential
+                let query: SQL = """
+                    SELECT \(nil as (any SQLSelectable)?)
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT NULL
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+        }
+    }
     
-
+    func testTableInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            struct Player: TableRecord { }
+            do {
+                // Table
+                let table = Table("player")
+                let query: SQL = """
+                    SELECT *
+                    FROM \(table)
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT *
+                    FROM "player"
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                // Non-existential
+                let query: SQL = """
+                    SELECT *
+                    FROM \(Player.self)
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT *
+                    FROM "player"
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                // Non-existential
+                let query: SQL = """
+                    INSERT INTO \(tableOf: Player()) DEFAULT VALUES
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    INSERT INTO "player" DEFAULT VALUES
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                // Existential
+                let query: SQL = """
+                    INSERT INTO \(tableOf: Player() as any TableRecord) DEFAULT VALUES
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    INSERT INTO "player" DEFAULT VALUES
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+        }
+    }
     
-
+    func testTableSelectionInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            struct Player: TableRecord { }
+            struct AltPlayer: TableRecord {
+                static let databaseTableName: String = "player"
+                static var databaseSelection: [any SQLSelectable] {
+                    [Column("id"), Column("name")]
+                }
+            }
+            struct RestrictedPlayer: TableRecord {
+                static let databaseTableName: String = "player"
+                static var databaseSelection: [any SQLSelectable] {
+                    [.allColumns(excluding: ["name"])]
+                }
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text)
+                t.column("score", .integer)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: Player.self)
+                    FROM player
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "player".*
+                    FROM player
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: Player.self, tableAlias: "p")
+                    FROM player p
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "p".*
+                    FROM player p
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: AltPlayer.self)
+                    FROM player
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "player"."id", "player"."name"
+                    FROM player
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: AltPlayer.self, tableAlias: "p")
+                    FROM player p
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "p"."id", "p"."name"
+                    FROM player p
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: RestrictedPlayer.self)
+                    FROM player
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "player"."id", "player"."score"
+                    FROM player
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+            do {
+                let query: SQL = """
+                    SELECT \(columnsOf: RestrictedPlayer.self, tableAlias: "p")
+                    FROM player p
+                    """
+                
+                let (sql, arguments) = try query.build(db)
+                XCTAssertEqual(sql, """
+                    SELECT "p"."id", "p"."score"
+                    FROM player p
+                    """)
+                XCTAssert(arguments.isEmpty)
+            }
+        }
+    }
     
-
+    func testExpressibleInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            let a = Column("a")
+            let b = Column("b")
+            let integer: Int = 1
+            let optionalInteger: Int? = 2
+            let nilInteger: Int? = nil
+            let query: SQL = """
+                SELECT
+                \(a),
+                \(a + 1),
+                \(2 * (a + 1)),
+                \(a < b),
+                \(integer),
+                \(optionalInteger),
+                \(nilInteger),
+                \(a == nilInteger)
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT
+                "a",
+                "a" + ?,
+                ? * ("a" + ?),
+                "a" < "b",
+                ?,
+                ?,
+                NULL,
+                "a" IS NULL
+                """)
+            XCTAssertEqual(arguments, [1, 2, 1, 1, 2])
+        }
+    }
     
     func testDatabaseValueConvertibleInterpolation() throws {
         try makeDatabaseQueue().inDatabase { db in
@@ -223,15 +483,100 @@ extension SQLLiteralTests {
         }
     }
     
-
+    func testAliasedExpressionInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            let query: SQL = """
+                SELECT \(Column("name").forKey("foo")), \(1.databaseValue.forKey("bar"))
+                FROM player
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT "name" AS "foo", ? AS "bar"
+                FROM player
+                """)
+            XCTAssertEqual(arguments, [1])
+        }
+    }
     
-
+    func testCodingKeyInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            enum CodingKeys: String, CodingKey {
+                case name
+            }
+            let query: SQL = """
+                SELECT \(CodingKeys.name)
+                FROM player
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT "name"
+                FROM player
+                """)
+            XCTAssert(arguments.isEmpty)
+        }
+    }
     
-
+    func testCodingKeyColumnInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            enum CodingKeys: String, CodingKey, ColumnExpression {
+                case name
+            }
+            let query: SQL = """
+                SELECT \(CodingKeys.name)
+                FROM player
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT "name"
+                FROM player
+                """)
+            XCTAssert(arguments.isEmpty)
+        }
+    }
     
-
+    func testExpressibleSequenceInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            let set: Set = [1]
+            let array = ["foo", "bar", "baz"]
+            let expressions: [any SQLExpressible] = [Column("a"), Column("b") + 2]
+            let query: SQL = """
+                SELECT * FROM player
+                WHERE teamId IN \(set)
+                AND name IN \(array)
+                AND c IN \(expressions)
+                AND d IN \([])
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player
+                WHERE teamId IN (?)
+                AND name IN (?,?,?)
+                AND c IN ("a","b" + ?)
+                AND d IN (SELECT NULL WHERE NULL)
+                """)
+            XCTAssertEqual(arguments, [1, "foo", "bar", "baz", 2])
+        }
+    }
     
-
+    func testOrderingTermInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            let query: SQL = """
+                SELECT * FROM player
+                ORDER BY \(Column("name").desc)
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player
+                ORDER BY "name" DESC
+                """)
+            XCTAssert(arguments.isEmpty)
+        }
+    }
     
     func testSQLLiteralInterpolation() throws {
         try makeDatabaseQueue().inDatabase { db in
@@ -252,27 +597,297 @@ extension SQLLiteralTests {
     
 
     
-
+    func testSQLRequestInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            let subquery: SQLRequest<Int> = "SELECT MAX(score) - \(10) FROM player"
+            let query: SQL = """
+                SELECT * FROM player
+                WHERE score = (\(subquery))
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player
+                WHERE score = (SELECT MAX(score) - ? FROM player)
+                """)
+            XCTAssertEqual(arguments, [10])
+        }
+    }
+    
+    func testQueryInterfaceRequestInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("score", .integer)
+            }
+            struct Player: TableRecord { }
+            let subquery = Player.select(max(Column("score")) - 10)
+            let query: SQL = """
+                SELECT * FROM player
+                WHERE score = (\(subquery))
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player
+                WHERE score = (SELECT MAX("score") - ? FROM "player")
+                """)
+            XCTAssertEqual(arguments, [10])
+        }
+    }
+    
+    func testJoinedQueryInterfaceRequestInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.belongsTo("team")
+                t.column("score", .integer)
+            }
+            struct Player: TableRecord { }
+            struct Team: TableRecord { }
+            let subquery = Player
+                .select(max(Column("score")) - 10)
+                .joining(required: Player.belongsTo(Team.self))
+            let query: SQL = """
+                SELECT * FROM player
+                WHERE score = (\(subquery))
+                """
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player
+                WHERE score = (SELECT MAX("player"."score") - ? FROM "player" JOIN "team" ON "team"."id" = "player"."teamId")
+                """)
+            XCTAssertEqual(arguments, [10])
+        }
+    }
+    
+    func testPlusOperatorWithInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            var query: SQL = "SELECT \(.allColumns) "
+            query = query + "FROM player "
+            query = query + "WHERE id = \(1)"
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player WHERE id = ?
+                """)
+            XCTAssertEqual(arguments, [1])
+        }
+    }
+    
+    func testPlusEqualOperatorWithInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            var query: SQL = "SELECT \(.allColumns) "
+            query += "FROM player "
+            query += "WHERE id = \(1)"
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player WHERE id = ?
+                """)
+            XCTAssertEqual(arguments, [1])
+        }
+    }
+    
+    func testAppendLiteralWithInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            var query: SQL = "SELECT \(.allColumns) "
+            query.append(literal: "FROM player ")
+            query.append(literal: "WHERE id = \(1)")
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player WHERE id = ?
+                """)
+            XCTAssertEqual(arguments, [1])
+        }
+    }
+    
+    func testAppendRawSQLWithInterpolation() throws {
+        try makeDatabaseQueue().inDatabase { db in
+            var query: SQL = "SELECT \(.allColumns) "
+            query.append(sql: "FROM player ")
+            query.append(sql: "WHERE score > \(1000) ")
+            query.append(sql: "AND \("name") = :name", arguments: ["name": "Arthur"])
+            
+            let (sql, arguments) = try query.build(db)
+            XCTAssertEqual(sql, """
+                SELECT * FROM player WHERE score > 1000 AND name = :name
+                """)
+            XCTAssertEqual(arguments, ["name": "Arthur"])
+        }
+    }
+    
+    func testQualifiedSQLInterpolation() throws {
+        struct Player: TableRecord { }
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.column("name", .text)
+                t.column("createdAt", .datetime)
+            }
+            let nameColumn = Column("name")
+            let baseRequest = Player.aliased(TableAlias(name: "p"))
+            
+            do {
+                let alteredNameLiteral = SQL("\(nameColumn) || \("O'Brien")")
+                let request = baseRequest.select(literal: alteredNameLiteral)
+                try assertEqualSQL(db, request, """
+                    SELECT "p"."name" || 'O''Brien' FROM "player" "p"
+                    """)
+            }
+            
+            do {
+                let alteredNameLiteral = SQL("\(nameColumn) || \("O'Brien")")
+                let alteredNameColumn = alteredNameLiteral.forKey("alteredName")
+                let request = baseRequest.select(alteredNameColumn)
+                try assertEqualSQL(db, request, """
+                    SELECT "p"."name" || 'O''Brien' AS "alteredName" FROM "player" "p"
+                    """)
+            }
+            
+            do {
+                let subquery: SQLRequest<String> = "SELECT MAX(\(nameColumn)) FROM \(Player.self)"
+                let conditionLiteral = SQL("\(nameColumn) = (\(subquery))")
+                let request = baseRequest.filter(literal: conditionLiteral)
+                try assertEqualSQL(db, request, """
+                    SELECT "p".* FROM "player" "p" WHERE "p"."name" = (SELECT MAX("name") FROM "player")
+                    """)
+            }
+            
+            do {
+                // Test of documentation
+                let date = "2020-01-23"
+                let createdAt = Column("createdAt")
+                let creationDate = SQL("DATE(\(createdAt))")
+                let request = Player.filter(creationDate == date)
+                try assertEqualSQL(db, request, """
+                    SELECT * FROM "player" WHERE (DATE("createdAt")) = '2020-01-23'
+                    """)
+            }
+            
+            do {
+                // Here we test that users can define functions that return
+                // literal expressions (existential variant).
+                func date(_ value: any SQLExpressible) -> SQLExpression {
+                    SQL("DATE(\(value))").sqlExpression
+                }
+                let createdAt = Column("createdAt")
+                let request = Player.filter(date(createdAt) == "2020-01-23")
+                try assertEqualSQL(db, request, """
+                    SELECT * FROM "player" WHERE (DATE("createdAt")) = '2020-01-23'
+                    """)
+            }
+            
+            do {
+                // Here we test that users can define functions that return
+                // literal expressions (generic variant).
+                func date(_ value: some SQLExpressible) -> SQLExpression {
+                    SQL("DATE(\(value))").sqlExpression
+                }
+                let createdAt = Column("createdAt")
+                let request = Player.filter(date(createdAt) == "2020-01-23")
+                try assertEqualSQL(db, request, """
+                    SELECT * FROM "player" WHERE (DATE("createdAt")) = '2020-01-23'
+                    """)
+            }
+            
+            do {
+                // Here we test that users can still define functions that
+                // return literal expressions with the previously
+                // supported technique (existential variant).
+                func date(_ value: any SQLExpressible) -> SQLExpression {
+                    SQL("DATE(\(value.sqlExpression))").sqlExpression
+                }
+                let createdAt = Column("createdAt")
+                let request = Player.filter(date(createdAt) == "2020-01-23")
+                try assertEqualSQL(db, request, """
+                    SELECT * FROM "player" WHERE (DATE("createdAt")) = '2020-01-23'
+                    """)
+            }
+            
+            do {
+                // Here we test that users can still define functions that
+                // return literal expressions with the previously
+                // supported technique (generic variant).
+                func date(_ value: some SQLExpressible) -> SQLExpression {
+                    SQL("DATE(\(value.sqlExpression))").sqlExpression
+                }
+                let createdAt = Column("createdAt")
+                let request = Player.filter(date(createdAt) == "2020-01-23")
+                try assertEqualSQL(db, request, """
+                    SELECT * FROM "player" WHERE (DATE("createdAt")) = '2020-01-23'
+                    """)
+            }
+        }
+    }
     
 
     
 
     
+    func testProtocolResolution() throws {
+        // SQL can feed ordering, selection, and expressions.
+        acceptOrderingTerm_generic(SQL(""))
+        acceptSelectable_generic(SQL(""))
+        acceptSpecificExpressible_generic(SQL(""))
+        acceptExpressible_generic(SQL(""))
 
-    
+        acceptOrderingTerm_existential(SQL(""))
+        acceptSelectable_existential(SQL(""))
+        acceptSpecificExpressible_existential(SQL(""))
+        acceptExpressible_existential(SQL(""))
+        
+        // SQL can build complex expressions and orderings
+        _ = SQL("") + 1
+        _ = SQL("").desc
+        
+        // Swift String literals are interpreted as String, even when SQL
+        // is an accepted type.
+        //
+        // should not compile: XCTAssertEqual(acceptOrderingTerm_generic(""), String(describing: String.self))
+        // should not compile: XCTAssertEqual(acceptSelectable_generic(""), String(describing: String.self))
+        // should not compile: XCTAssertEqual(acceptSpecificExpressible_generic(""), String(describing: String.self))
+        XCTAssertEqual(acceptExpressible_generic(""), String(describing: String.self))
+        // should not compile: XCTAssertEqual(acceptOrderingTerm_existential(""), String(describing: String.self))
+        // should not compile: XCTAssertEqual(acceptSelectable_existential(""), String(describing: String.self))
+        // should not compile: XCTAssertEqual(acceptSpecificExpressible_existential(""), String(describing: String.self))
+        XCTAssertEqual(acceptExpressible_existential(""), String(describing: String.self))
 
-    
+        // When a literal can be interpreted as an ordering, a selection, or an
+        // expression, then the expression interpretation is favored.
+        // This test targets TableAlias subscript.
+        //
+        // should not compile: XCTAssertEqual(overloaded_generic(""), "a")
+        XCTAssertEqual(overloaded_generic(SQL("")), "SQLSpecificExpressible")
+        // should not compile: XCTAssertEqual(overloaded_existential(""), "a")
+        XCTAssertEqual(overloaded_existential(SQL("")), "SQLSpecificExpressible")
 
-    
-
-    
-
-    
-
-    
-
-    
-
+        // In practice:
+        try makeDatabaseQueue().write { db in
+            struct Player: TableRecord { }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name")
+                t.column("score")
+            }
+            let statement = try Player
+                .select(SQL("id"), SQL("score").forKey("theScore"))
+                .filter(SQL("name = \("O'Brien")") && SQL("score > 1000"))
+                .order(SQL("score ASC"), SQL("name").desc)
+                .makePreparedRequest(db)
+                .statement
+            XCTAssertEqual(statement.sql, """
+                SELECT id, score AS "theScore" \
+                FROM "player" \
+                WHERE (name = ?) AND (score > 1000) ORDER BY score ASC, name DESC
+                """)
+            XCTAssertEqual(statement.arguments, ["O'Brien"])
+        }
+    }
 }
 
 // Support for testProtocolResolution()

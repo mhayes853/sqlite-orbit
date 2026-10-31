@@ -13,27 +13,6 @@
     public static let allColumns = Self(rawValue: 1)
   }
 
-  /// A named table reference used to qualify expressions, including UPSERT's excluded row.
-  public struct TableAlias<RowDecoder>: Sendable {
-    let name: String
-
-    public init(name: String) {
-      self.name = name
-    }
-
-    public subscript(_ column: some ColumnExpression) -> SQLExpression {
-      self[column.name]
-    }
-
-    public subscript(_ column: String) -> SQLExpression {
-      SQLExpression(sql: quoted(name) + "." + quoted(column))
-    }
-  }
-
-  extension Column {
-    public static let rowID = Column("rowid")
-  }
-
   extension MutablePersistableRecord {
     mutating func upsertReturning<T>(
       _ db: Database,
@@ -45,84 +24,81 @@
     ) throws -> T {
       try withSaveCallbacks(db) { record in
         let inserted = try record.withInsertCallbacks(db) { container in
-          let key = try db.primaryKey(Self.databaseTableName)
+          let table = Self.databaseTableName
+          let key = try db.primaryKey(table)
+          let hasRowID = try db.tableHasRowID(table)
           guard !container.isEmpty else {
             throw DatabaseError(
               resultCode: .SQLITE_MISUSE,
-              message: "upsert requires an encoded column"
+              message: "\(Self.self): invalid empty persistence container"
             )
           }
-          let hasRowID: Bool
-          if key.rowIDColumn != nil || key.hiddenRowID {
-            hasRowID = true
-          } else {
-            do {
-              _ = try db.access.statementInfo(
-                "SELECT rowid FROM \(quoted(Self.databaseTableName)) LIMIT 0"
-              )
-              hasRowID = true
-            } catch let error as SQLiteOrbit.SQLiteError
-              where error.message?.range(of: "no such column") != nil
-            {
-              hasRowID = false
-            }
-          }
+          let columns = container.fields.map(\.0)
+          var sql =
+            "INSERT INTO \(quoted(table)) (\(columns.map(quoted).joined(separator: ", "))) VALUES ("
+            + Array(repeating: "?", count: columns.count).joined(separator: ",") + ")"
+          var arguments = StatementArguments(container.fields.map(\.1))
+          sql +=
+            target.isEmpty
+            ? " ON CONFLICT" : " ON CONFLICT(\(target.map(quoted).joined(separator: ", ")))"
+          sql += " DO UPDATE SET "
           let excluded = TableAlias<Self>(name: "excluded")
           var updates = assignments?(excluded) ?? []
           if strategy.contains(.allColumns) {
-            let excludedColumns = Set((key.columns + target).map { $0.lowercased() })
-            for (column, _) in container.fields {
-              if !excludedColumns.contains(column.lowercased())
-                && !updates.contains(where: {
-                  $0.column.caseInsensitiveCompare(column) == .orderedSame
-                })
+            let skipped = Set((key.columns + target).map { $0.lowercased() })
+            for column in columns {
+              let lowercased = column.lowercased()
+              if skipped.contains(lowercased)
+                || updates.contains(where: { $0.columnName.lowercased() == lowercased })
               {
-                updates.append(Column(column).set(to: excluded[column]))
+                continue
               }
+              updates.append(Column(column).set(to: excluded[column]))
             }
           }
-          if updates.isEmpty {
-            // A harmless update still returns the existing row and its id on conflict.
-            let column = key.columns[0]
-            updates = [Column(column).set(to: Column(column))]
-          }
-          var sql = insertionSQL(
-            table: Self.databaseTableName,
-            container: container,
-            conflict: .abort
-          )
-          sql =
-            sql
-            + SQL(
-              sql: " ON CONFLICT"
-                + (target.isEmpty ? "" : " (" + target.map(quoted).joined(separator: ", ") + ")")
-                + " DO UPDATE SET "
-            )
-            + joined(
-              updates.map { SQL(sql: quoted($0.column) + " = ") + $0.value },
-              separator: ", "
-            )
-          var returning = selection.map(\.sqlSelection)
+          let context = SQLGenerationContext(db)
+          let updateSQL = try updates.compactMap { try $0.sql(context) }.joined(separator: ", ")
+          var returning = selection
           if hasRowID {
-            returning.append(Column.rowID.sqlSelection)
+            returning.append(Column.rowID)
           }
+          if updateSQL.isEmpty {
+            if !returning.isEmpty {
+              // Update something, so that RETURNING produces a row on conflict.
+              let column = quoted(key.columns[0])
+              sql += "\(column) = \(column)"
+            }
+          } else {
+            sql += updateSQL
+            arguments = arguments &+ context.arguments
+          }
+          let statement = try returningStatement(
+            db,
+            sql: SQL(sql: sql, arguments: arguments),
+            table: table,
+            selection: returning
+          )
+          let rows = try Row.fetchAll(statement)
+          var rowID: Int64 = 0
+          let returned: T
           if returning.isEmpty {
-            returning = [SQL(sql: "1")]
+            returned = try decode(Row())
+          } else {
+            guard let row = rows.first else {
+              throw DatabaseError(message: "Insertion failed")
+            }
+            if hasRowID {
+              rowID = try row.decode(Int64.self, at: row.count - 1)
+            }
+            returned = try decode(row)
           }
-          sql = sql + SQL(sql: " RETURNING ") + joined(returning, separator: ", ")
-          let rows = try Row.fetchAll(db, sql)
-          guard let row = rows.first else {
-            throw DatabaseError(message: "Insertion failed")
-          }
-          let rowID: Int64 = hasRowID ? try row.decode(Int64.self, at: row.count - 1) : 0
-          let returned = try decode(row)
           var saved = container
-          if let column = key.rowIDColumn {
+          if hasRowID, let column = key.rowIDColumn {
             saved[column] = rowID
           }
           let result = InsertionSuccess(
             rowID: rowID,
-            rowIDColumn: key.rowIDColumn,
+            rowIDColumn: hasRowID ? key.rowIDColumn : nil,
             persistenceContainer: saved
           )
           return (result, returned)

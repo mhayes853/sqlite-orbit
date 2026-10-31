@@ -229,5 +229,77 @@ extension DatabaseDataEncodingStrategyTests {
         }
     }
     
-
+    func testDeleteID() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "t") { $0.primaryKey("id", .blob) }
+            
+            do {
+                try Table<RecordWithData<StrategyDeferredToData>>("t").deleteOne(db, id: testedDatas[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = x'666f6f'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithData<StrategyDeferredToData>>("t").deleteAll(db, ids: testedDatas)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (x'666f6f', x'')
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithData<StrategyTextUTF8>>("t").deleteOne(db, id: testedDatas[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = 'foo'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithData<StrategyTextUTF8>>("t").deleteAll(db, ids: testedDatas)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('foo', '')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalData<StrategyDeferredToData>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalData<StrategyDeferredToData>>("t").deleteOne(db, id: testedDatas[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = x'666f6f'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalData<StrategyDeferredToData>>("t").deleteAll(db, ids: testedDatas)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (x'666f6f', x'')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalData<StrategyTextUTF8>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalData<StrategyTextUTF8>>("t").deleteOne(db, id: testedDatas[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = 'foo'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalData<StrategyTextUTF8>>("t").deleteAll(db, ids: testedDatas)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('foo', '')
+                    """)
+            }
+        }
+    }
 }

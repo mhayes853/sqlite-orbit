@@ -29,16 +29,22 @@
       fetch: (Statement) throws -> T
     ) throws -> (InsertionSuccess, T) {
       try withInsertCallbacks(db) { container in
+        // Resolve schema information before executing, as GRDB does.
+        let column = try db.primaryKey(Self.databaseTableName).rowIDColumn
         let sql = insertionSQL(
           table: Self.databaseTableName,
           container: container,
           conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForInsert
         )
-        let statement = try returningStatement(db, sql: sql, selection: selection)
+        let statement = try returningStatement(
+          db,
+          sql: sql,
+          table: Self.databaseTableName,
+          selection: selection
+        )
         let returned = try fetch(statement)
         try statement.finishPersistenceExecution()
         let rowID = db.lastInsertedRowID
-        let column = try db.primaryKey(Self.databaseTableName).rowIDColumn
         var saved = container
         if let column {
           saved[column] = rowID
@@ -92,7 +98,12 @@
           columns: columns,
           conflict: conflict ?? Self.persistenceConflictPolicy.conflictResolutionForUpdate
         )
-        let statement = try returningStatement(db, sql: sql, selection: selection)
+        let statement = try returningStatement(
+          db,
+          sql: sql,
+          table: Self.databaseTableName,
+          selection: selection
+        )
         let returned = try fetch(statement)
         try statement.finishPersistenceExecution()
         guard db.changesCount > 0 else {
@@ -200,12 +211,15 @@
     container: PersistenceContainer,
     conflict: Database.ConflictResolution
   ) -> SQL {
-    let prefix = "INSERT OR \(conflict.rawValue.uppercased()) INTO \(quoted(table))"
+    let prefix =
+      conflict == .abort
+      ? "INSERT INTO \(quoted(table))"
+      : "INSERT OR \(conflict.sqlName) INTO \(quoted(table))"
     guard !container.isEmpty else {
       return SQL(sql: prefix + " DEFAULT VALUES")
     }
     let columns = container.fields.map { quoted($0.0) }.joined(separator: ", ")
-    let values = Array(repeating: "?", count: container.count).joined(separator: ", ")
+    let values = Array(repeating: "?", count: container.count).joined(separator: ",")
     return SQL(
       sql: prefix + " (\(columns)) VALUES (\(values))",
       arguments: StatementArguments(container.fields.map(\.1))
@@ -219,34 +233,56 @@
     columns: Set<String>,
     conflict: Database.ConflictResolution
   ) throws -> SQL {
-    let key = try primaryKeyValues(db, table: table, container: container)
-    guard key.values.allSatisfy({ !$0.isNull }) else {
-      throw RecordError.recordNotFound(databaseTableName: table, key: key)
+    let keyColumns = try db.primaryKey(table).columns
+    let keyValues = keyColumns.map { container[$0]?.databaseValue ?? .null }
+    guard keyValues.contains(where: { !$0.isNull }) else {
+      throw RecordError.recordNotFound(
+        databaseTableName: table,
+        key: Dictionary(uniqueKeysWithValues: zip(keyColumns, keyValues))
+      )
     }
-    let fields = container.fields.filter { field in
-      columns.contains { $0.caseInsensitiveCompare(field.0) == .orderedSame }
-        && !key.keys.contains { $0.caseInsensitiveCompare(field.0) == .orderedSame }
+    // Update requested columns present in the container, except primary key columns, in
+    // table column order.
+    let requested = Set(columns.map { $0.lowercased() })
+      .intersection(container.fields.map { $0.0.lowercased() })
+      .subtracting(keyColumns.map { $0.lowercased() })
+    var updated = try db.columns(in: table).map(\.name)
+      .filter { requested.contains($0.lowercased()) }
+    if updated.isEmpty {
+      // Update something, so that the change is observable.
+      updated = keyColumns
     }
-    let assignments =
-      fields.isEmpty
-      ? [quoted(key.keys.sorted()[0]) + " = " + quoted(key.keys.sorted()[0])]
-      : fields.map { quoted($0.0) + " = ?" }
-    let orderedKey = key.sorted { $0.key < $1.key }
-    let predicate = orderedKey.map { quoted($0.key) + " = ?" }.joined(separator: " AND ")
+    let values = updated.map { container[$0]?.databaseValue ?? .null }
+    let assignments = updated.map { quoted($0) + "=?" }.joined(separator: ", ")
+    let predicate = keyColumns.map { quoted($0) + "=?" }.joined(separator: " AND ")
+    let prefix =
+      conflict == .abort
+      ? "UPDATE \(quoted(table))" : "UPDATE OR \(conflict.sqlName) \(quoted(table))"
     return SQL(
-      sql:
-        "UPDATE OR \(conflict.rawValue.uppercased()) \(quoted(table)) SET \(assignments.joined(separator: ", ")) WHERE \(predicate)",
-      arguments: StatementArguments(fields.map(\.1) + orderedKey.map(\.value))
+      sql: prefix + " SET \(assignments) WHERE \(predicate)",
+      arguments: StatementArguments(values + keyValues)
     )
   }
 
-  func returningStatement(_ db: Database, sql: SQL, selection: [any SQLSelectable]) throws
-    -> Statement
-  {
-    let sql =
-      selection.isEmpty
-      ? sql : sql + SQL(sql: " RETURNING ") + joined(selection.map(\.sqlSelection), separator: ", ")
-    let statement = try db.makeStatement(literal: sql)
+  /// Appends a RETURNING clause qualified with the persisted table.
+  func returningStatement(
+    _ db: Database,
+    sql: SQL,
+    table: String,
+    selection: [any SQLSelectable]
+  ) throws -> Statement {
+    var (text, arguments) = try sql.build(db)
+    if !selection.isEmpty {
+      let alias = TableAliasBase(tableName: table)
+      let context = SQLGenerationContext(db, aliases: [alias])
+      text +=
+        try " RETURNING "
+        + selection.map { try $0.sqlSelection.qualified(with: alias).sql(context) }
+        .joined(separator: ", ")
+      arguments = arguments &+ context.arguments
+    }
+    let statement = try db.makeStatement(sql: text)
+    statement.arguments = arguments
     statement.persistenceCursors = []
     return statement
   }

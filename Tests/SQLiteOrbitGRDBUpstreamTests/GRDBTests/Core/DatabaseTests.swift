@@ -469,15 +469,102 @@ class DatabaseTests : GRDBTestCase {
 
 
 
-
+    func testFailedCommitIsRollbacked() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+            try db.execute(sql: "CREATE TABLE child (parentID INTEGER NOT NULL REFERENCES parent(id))")
+        }
+        
+        do {
+            try dbQueue.inTransaction { db in
+                do {
+                    try db.execute(sql: "PRAGMA defer_foreign_keys = ON")
+                    try db.execute(sql: "INSERT INTO child (parentID) VALUES (1)")
+                } catch {
+                    XCTFail()
+                }
+                return .commit
+            }
+            XCTFail()
+        } catch let error as DatabaseError {
+            XCTAssertEqual(error.resultCode, .SQLITE_CONSTRAINT)
+            XCTAssertEqual(error.message!, "FOREIGN KEY constraint failed")
+            XCTAssertEqual(error.sql!, "COMMIT TRANSACTION")
+            XCTAssertEqual(error.description, "SQLite error 19: FOREIGN KEY constraint failed - while executing `COMMIT TRANSACTION`")
+        }
+        
+        // Make sure we can open another transaction
+        try dbQueue.inTransaction { db in .commit }
+    }
     
 
 
 
     
-
+    func testReadOnly() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: "CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            
+            // Write access OK
+            try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+            
+            try db.readOnly {
+                do {
+                    try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                    XCTFail()
+                } catch let error as DatabaseError {
+                    XCTAssertEqual(error.resultCode, .SQLITE_READONLY)
+                }
+                
+                // Reentrancy
+                try db.readOnly {
+                    do {
+                        try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                        XCTFail()
+                    } catch let error as DatabaseError {
+                        XCTAssertEqual(error.resultCode, .SQLITE_READONLY)
+                    }
+                }
+                
+                // Still read-only
+                do {
+                    try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+                    XCTFail()
+                } catch let error as DatabaseError {
+                    XCTAssertEqual(error.resultCode, .SQLITE_READONLY)
+                }
+            }
+            
+            // Write access OK
+            try db.execute(sql: "INSERT INTO t DEFAULT VALUES")
+        }
+    }
     
-
+    func testReadOnlyTransaction() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            do {
+                clearSQLQueries()
+                try db.inSavepoint { .commit }
+                try db.inTransaction { .commit }
+                try db.inTransaction(.immediate) { .commit }
+                XCTAssertEqual(Set(sqlQueries), ["BEGIN IMMEDIATE TRANSACTION", "COMMIT TRANSACTION"])
+            }
+            
+            try db.readOnly {
+                clearSQLQueries()
+                try db.inSavepoint { .commit }
+                try db.inTransaction { .commit }
+                XCTAssertEqual(Set(sqlQueries), ["BEGIN DEFERRED TRANSACTION", "COMMIT TRANSACTION"])
+                do {
+                    try db.inTransaction(.immediate) { .commit }
+                    XCTFail("Expected error")
+                } catch DatabaseError.SQLITE_READONLY { }
+            }
+        }
+    }
     
     func testCheckpoint() throws {
         do {

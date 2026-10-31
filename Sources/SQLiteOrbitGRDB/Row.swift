@@ -21,6 +21,9 @@
     ExpressibleByDictionaryLiteral
   {
     private var storedColumns: [(String, DatabaseValue)] = []
+    // Whether the row was fetched from the database, rather than built from values.
+    var storedIsFetched = false
+    var isFetched: Bool { base?.isFetched ?? storedIsFetched }
     private let base: Row?
     private let adapter: (any _LayoutedRowAdapter)?
     private let mapping: _LayoutedColumnMapping?
@@ -138,6 +141,59 @@
       self[column.name]
     }
 
+    public subscript(_ column: some ColumnExpression) -> (any DatabaseValueConvertible)? {
+      self[column.name]
+    }
+
+    /// Decodes the value of a column.
+    public func decode<T: DatabaseValueConvertible>(
+      _ type: T.Type = T.self,
+      forColumn column: some ColumnExpression
+    ) throws -> T {
+      try decode(type, forColumn: column.name)
+    }
+
+    /// Calls `body` with the data of a column, or nil for NULL. Text is accessed as UTF-8 data.
+    public func withUnsafeData<T>(atIndex index: Int, _ body: (Data?) throws -> T) throws -> T {
+      let value = column(at: index).1
+      switch value.storage {
+      case .null: return try body(nil)
+      case .blob(let data): return try body(data)
+      case .string(let string): return try body(Data(string.utf8))
+      default:
+        throw RowDecodingError(column: column(at: index).0, databaseValue: value, type: Data.self)
+      }
+    }
+
+    /// Calls `body` with the data of a column, or nil for a missing column or NULL.
+    public func withUnsafeData<T>(named name: String, _ body: (Data?) throws -> T) throws -> T {
+      guard let index = index(ofColumn: name) else { return try body(nil) }
+      return try withUnsafeData(atIndex: index, body)
+    }
+
+    /// Calls `body` with the data of a column, or nil for a missing column or NULL.
+    public func withUnsafeData<T>(
+      at column: some ColumnExpression,
+      _ body: (Data?) throws -> T
+    ) throws -> T {
+      try withUnsafeData(named: column.name, body)
+    }
+
+    /// Returns the data of a column, or nil for NULL.
+    public func dataNoCopy(atIndex index: Int) -> Data? {
+      self[index] as Data?
+    }
+
+    /// Returns the data of a column, or nil for a missing column or NULL.
+    public func dataNoCopy(named name: String) -> Data? {
+      self[name] as Data?
+    }
+
+    /// Returns the data of a column, or nil for a missing column or NULL.
+    public func dataNoCopy(_ column: some ColumnExpression) -> Data? {
+      self[column.name] as Data?
+    }
+
     public var description: String {
       "[" + columns.map { $0.0 + ":" + $0.1.description }.joined(separator: " ") + "]"
     }
@@ -201,7 +257,9 @@
       if let base, let adapter {
         return Row(base: base.copy(), adapter: adapter)
       }
-      return Row(storedColumns)
+      let row = Row(storedColumns)
+      row.storedIsFetched = storedIsFetched
+      return row
     }
 
     public func decode<T: DatabaseValueConvertible>(_ type: T.Type = T.self, at index: Int) throws

@@ -135,7 +135,26 @@ class DatabaseTraceTests : GRDBTestCase {
         }
     }
     
-
+    func testTraceFromConfigurationWithPublicStatementArguments() throws {
+        let eventsMutex: Mutex<[String]> = Mutex([])
+        var configuration = Configuration()
+        configuration.publicStatementArguments = true
+        configuration.prepareDatabase { db in
+            db.trace { event in
+                eventsMutex.withLock { $0.append("SQL: \(event)") }
+            }
+        }
+        let dbQueue = try makeDatabaseQueue(configuration: configuration)
+        try dbQueue.inDatabase { db in
+            try db.execute(sql: """
+                CREATE table t(a);
+                INSERT INTO t (a) VALUES (?)
+                """, arguments: [1])
+            XCTAssertEqual(eventsMutex.load().suffix(2), [
+                "SQL: CREATE table t(a)",
+                "SQL: INSERT INTO t (a) VALUES (1)"])
+        }
+    }
     
     func testStopTrace() throws {
         let dbQueue = try makeDatabaseQueue()

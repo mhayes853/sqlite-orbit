@@ -261,7 +261,42 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
         }
     }
     
-
+    func testReadError() throws {
+        // Necessary for this test to run as quickly as possible
+        dbConfiguration.readonlyBusyMode = .immediateError
+        let dbPool = try makeDatabasePool()
+        
+        // Block 1                          Block 2
+        // PRAGMA locking_mode=EXCLUSIVE
+        // CREATE TABLE
+        // >
+        let s1 = DispatchSemaphore(value: 0)
+        //                                  dbPool.read // throws
+        
+        let block1 = { () in
+            try! dbPool.writeWithoutTransaction { db in
+                try db.execute(sql: "PRAGMA locking_mode=EXCLUSIVE")
+                try db.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+                s1.signal()
+            }
+        }
+        let block2 = { () in
+            _ = s1.wait(timeout: .distantFuture)
+            do {
+                try dbPool.read { _ in }
+                XCTFail("Expected error")
+            } catch let error as DatabaseError {
+                XCTAssertEqual(error.resultCode, .SQLITE_BUSY)
+                XCTAssertEqual(error.message!, "database is locked")
+            } catch {
+                XCTFail("Expected DatabaseError")
+            }
+        }
+        let blocks = [block1, block2]
+        DispatchQueue.concurrentPerform(iterations: blocks.count) { index in
+            blocks[index]()
+        }
+    }
     
     func testConcurrentRead() throws {
         let dbPool = try makeDatabasePool()
@@ -746,11 +781,75 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     
 
     
-
+    func testTargetQueue() throws {
+        func test(targetQueue: DispatchQueue) throws {
+            dbConfiguration.targetQueue = targetQueue
+            let dbPool = try makeDatabasePool()
+            try dbPool.write { _ in
+                dispatchPrecondition(condition: .onQueue(targetQueue))
+            }
+            try dbPool.read { _ in
+                dispatchPrecondition(condition: .onQueue(targetQueue))
+            }
+        }
+        
+        // background queue
+        try test(targetQueue: .global(qos: .background))
+        
+        // main queue
+        let expectation = self.expectation(description: "main")
+        DispatchQueue.global(qos: .default).async {
+            try! test(targetQueue: .main)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2, handler: nil)
+    }
     
-
+    func testWriteTargetQueue() throws {
+        func test(targetQueue: DispatchQueue, writeTargetQueue: DispatchQueue) throws {
+            dbConfiguration.targetQueue = targetQueue
+            dbConfiguration.writeTargetQueue = writeTargetQueue
+            let dbPool = try makeDatabasePool()
+            try dbPool.write { _ in
+                dispatchPrecondition(condition: .onQueue(writeTargetQueue))
+            }
+            try dbPool.read { _ in
+                dispatchPrecondition(condition: .onQueue(targetQueue))
+            }
+        }
+        
+        // background queue
+        try test(targetQueue: .global(qos: .background), writeTargetQueue: DispatchQueue(label: "writer"))
+        
+        // main queue
+        let expectation = self.expectation(description: "main")
+        DispatchQueue.global(qos: .default).async {
+            try! test(targetQueue: .main, writeTargetQueue: .main)
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2, handler: nil)
+    }
     
-
+    func testWriteTargetQueueReadOnly() throws {
+        // Create a database before we perform read-only accesses
+        _ = try makeDatabasePool(filename: "test")
+        
+        func test(targetQueue: DispatchQueue, writeTargetQueue: DispatchQueue) throws {
+            dbConfiguration.readonly = true
+            dbConfiguration.targetQueue = targetQueue
+            dbConfiguration.writeTargetQueue = writeTargetQueue // unused
+            let dbPool = try makeDatabasePool(filename: "test")
+            try dbPool.write { _ in
+                // Not on writeTargetQueue because read-only
+                dispatchPrecondition(condition: .onQueue(targetQueue))
+            }
+            try dbPool.read { _ in
+                dispatchPrecondition(condition: .onQueue(targetQueue))
+            }
+        }
+        
+        try test(targetQueue: .global(qos: .background), writeTargetQueue: DispatchQueue(label: "writer"))
+    }
 
     func testQoS() throws {
 #if !canImport(Darwin)
@@ -804,9 +903,89 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     
     // MARK: - Barrier
     
-
+    func testBarrierLocksReads() throws {
+        let expectation = self.expectation(description: "lock")
+        expectation.isInverted = true
+        
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        var fetchedValue: Int?
+        let s1 = DispatchSemaphore(value: 0)
+        let s2 = DispatchSemaphore(value: 0)
+        let s3 = DispatchSemaphore(value: 0)
+        
+        DispatchQueue.global().async {
+            try! dbPool.barrierWriteWithoutTransaction { db in
+                try db.execute(sql: "INSERT INTO items (id) VALUES (NULL)")
+                s1.signal()
+                s2.wait()
+            }
+        }
+        
+        DispatchQueue.global().async {
+            // Wait for barrier to start
+            s1.wait()
+            
+            fetchedValue = try! dbPool.read { db in
+                try Int.fetchOne(db, sql: "SELECT id FROM items")!
+            }
+            expectation.fulfill()
+            s3.signal()
+        }
+        
+        // Assert that read is blocked
+        waitForExpectations(timeout: 1)
+        
+        // Release barrier
+        s2.signal()
+        
+        // Wait for read to complete
+        s3.wait()
+        XCTAssertEqual(fetchedValue, 1)
+    }
     
-
+    func testBarrierIsLockedByOneUnfinishedRead() throws {
+        let expectation = self.expectation(description: "lock")
+        expectation.isInverted = true
+        
+        let dbPool = try makeDatabasePool()
+        try dbPool.write { db in
+            try db.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        
+        let s1 = DispatchSemaphore(value: 0)
+        let s2 = DispatchSemaphore(value: 0)
+        let s3 = DispatchSemaphore(value: 0)
+        let s4 = DispatchSemaphore(value: 0)
+        
+        DispatchQueue.global().async {
+            try! dbPool.read { _ in
+                s1.signal()
+                s2.signal()
+                s3.wait()
+            }
+        }
+        
+        DispatchQueue.global().async {
+            // Wait for read to start
+            s1.wait()
+            
+            try! dbPool.barrierWriteWithoutTransaction { _ in }
+            expectation.fulfill()
+            s4.signal()
+        }
+        
+        // Assert that barrier is blocked
+        waitForExpectations(timeout: 1)
+        
+        // Release read
+        s3.signal()
+        
+        // Wait for barrier to complete
+        s4.wait()
+    }
     
     // MARK: - Concurrent opening
     
@@ -899,5 +1078,21 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
 #endif
     }
     
-
+    // Test for sample code in Documentation.docc/DatabaseSharing.md.
+    // This test passes if this method compiles
+    private func openReadOnlyDatabase(at databaseURL: URL) throws -> DatabasePool? {
+        do {
+            var configuration = Configuration()
+            configuration.readonly = true
+            return try DatabasePool(path: databaseURL.path, configuration: configuration)
+        } catch {
+            if FileManager.default.fileExists(atPath: databaseURL.path) {
+                // Something went wrong
+                throw error
+            } else {
+                // Database file does not exist
+                return nil
+            }
+        }
+    }
 }

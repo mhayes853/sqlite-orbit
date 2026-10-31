@@ -12,14 +12,43 @@
 
   private struct AggregateBridge<Aggregate: DatabaseAggregate>: SQLiteAggregateAccumulator {
     var aggregate = Aggregate()
+    // SQLite still finalizes a group after a failed step; GRDB does not call `finalize` then.
+    var stepError: (any Error)?
 
     mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
-      try aggregate.step((0..<arguments.count).map { DatabaseValue(arguments[$0]) })
+      guard stepError == nil else { return }
+      do {
+        try aggregate.step((0..<arguments.count).map { DatabaseValue(arguments[$0]) })
+      } catch {
+        stepError = error
+        throw reportedFunctionError(error)
+      }
     }
 
     func finish() throws -> OrbitDatabaseValue {
-      try aggregate.finalize()?.databaseValue.orbitValue ?? .null
+      if let stepError {
+        throw reportedFunctionError(stepError)
+      }
+      do {
+        return try aggregate.finalize()?.databaseValue.orbitValue ?? .null
+      } catch {
+        throw reportedFunctionError(error)
+      }
     }
+  }
+
+  // SQLite receives the description of a thrown error as its message. A DatabaseError reports
+  // only its message, and its code is recovered when the statement fails.
+  private struct FunctionErrorMessage: Error, CustomStringConvertible {
+    let description: String
+  }
+
+  private func reportedFunctionError(_ error: any Error) -> any Error {
+    guard let error = error as? DatabaseError else {
+      return error
+    }
+    FunctionErrorSlot.store(error)
+    return FunctionErrorMessage(description: error.reportedMessage)
   }
 
   public struct DatabaseFunction: Sendable {
@@ -45,7 +74,11 @@
           flags: pure ? [.deterministic] : []
         ) { arguments in
           let values = (0..<arguments.count).map { DatabaseValue(arguments[$0]) }
-          return try function(values)?.databaseValue.orbitValue ?? .null
+          do {
+            return try function(values)?.databaseValue.orbitValue ?? .null
+          } catch {
+            throw reportedFunctionError(error)
+          }
         }
       }
     }

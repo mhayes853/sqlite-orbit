@@ -12,6 +12,17 @@
     var traceOptions: Database.TracingOptions = []
     var trace: ((Database.TraceEvent) -> Void)?
     var publicStatementArguments = false
+    var configuration: Configuration?
+    var afterNextTransaction: [(onCommit: (Database) -> Void, onRollback: (Database) -> Void)] = []
+
+    func transactionDidEnd(_ db: Database, committed: Bool) {
+      guard !afterNextTransaction.isEmpty else { return }
+      let callbacks = afterNextTransaction
+      afterNextTransaction = []
+      for callback in callbacks {
+        committed ? callback.onCommit(db) : callback.onRollback(db)
+      }
+    }
 
     static let lock = NSLock()
     nonisolated(unsafe) static var states: [UInt: DatabaseConnectionState] = [:]

@@ -21,8 +21,12 @@ upstream="$reference_dir/.build/checkouts/GRDB.swift/Tests/GRDBTests"
     -e 's/^\(\s*\)import CSQLite3$/\1import GRDBSQLite/' \
     "$tests_dir/SQLiteOrbitGRDBUpstreamTests/GRDBTests/$file" > "$reference_dir/Upstream/GRDBTests/$file"
 done
-for support in GRDBTestCase.swift Mutex.swift AsyncSemaphore.swift; do
-  cp "$upstream/$support" "$reference_dir/Upstream/Support/$support"
+# Each support file the port uses has an upstream original.
+for support in "$tests_dir"/SQLiteOrbitGRDBUpstreamTests/Support/*.swift; do
+  name="$(basename -- "$support")"
+  [ "$name" = UpstreamSkips.swift ] && continue
+  original="$(cd "$upstream" && find . -name "$name" | head -n 1)"
+  install -m 644 "$upstream/$original" "$reference_dir/Upstream/Support/$name"
 done
 install -m 644 "$upstream/Betty.jpeg" "$upstream/ValueObservation/Issue1383.sqlite" "$reference_dir/Upstream/Resources/"
 

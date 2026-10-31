@@ -8,409 +8,216 @@ FTS/FTS5RecordTests.swift
 FTS/FTS5TableBuilderTests.swift
 FTS/FTS5TokenizerTests.swift
 FTS/FTS5WrapperTokenizerTests.swift
+JSON/JSONColumnTests.swift
+JSON/JSONExpressionsTests.swift
+  ~ test_JSON_index_and_generated_columns: runtime: XCTAssertEqual failed: ("Optional("CREATE INDEX \"player_on_address\" ON \"player\" (JSON_EXTRACT(\"address\",
+QueryInterface/Association/AssociationAggregateTests.swift
+  ~ testAnnotatedWithHasManyCustomAverage: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyCustomCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyCustomMax: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyCustomMin: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyCustomSum: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyCustomTotal: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultAverage: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultMax: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultMaxJoiningRequired: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultMax_Swift61: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultMin: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultSum: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyDefaultTotal: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyMultipleCount: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyMultipleCustomAggregates: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyMultipleDefaultAggregates: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+  ~ testAnnotatedWithHasManyThroughDefaultCount: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testIfNullOperator: runtime: threw error "DecodingError.keyNotFound: Key 'team' not found in keyed decoding container. Debug description: m
+QueryInterface/Association/AssociationBelongsToDecodableRecordTests.swift
+  ~ testAnnotatedWithOptional: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testAnnotatedWithRequired: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testRequestRefining: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+  ~ testRequestRefining_swift61: runtime: threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Debug description:
+QueryInterface/Association/AssociationBelongsToFetchableRecordTests.swift
+  ~ testIncludingOptional_ColumnDecodingStrategy: runtime: threw error "DecodingError.keyNotFound: Key 'xplayer' not found in keyed decoding container. Debug description
+  ~ testIncludingRequired_ColumnDecodingStrategy: runtime: threw error "DecodingError.keyNotFound: Key 'xplayer' not found in keyed decoding container. Debug description
+QueryInterface/Association/AssociationBelongsToRowScopeTests.swift
+QueryInterface/Association/AssociationBelongsToSQLDerivationTests.swift
+QueryInterface/Association/AssociationBelongsToSQLTests.swift
+  - testRecordsFilteredByNonExistingAssociatedRecord: missing type DatabaseObjectID
+QueryInterface/Association/AssociationChainRowScopesTests.swift
+QueryInterface/Association/AssociationChainSQLTests.swift
+QueryInterface/Association/AssociationHasManyOrderingTests.swift
+  ~ testIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllDecodedAsOptional: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testReorderedIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationHasManyRowScopeTests.swift
+QueryInterface/Association/AssociationHasManySQLTests.swift
+QueryInterface/Association/AssociationHasManyThroughOrderingTests.swift
+  ~ testIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testReorderedIncludingAll: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationHasManyThroughRowScopeTests.swift
+  ~ testDiscussion1274: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationHasManyThroughSQLTests.swift
+QueryInterface/Association/AssociationHasOneSQLDerivationTests.swift
+QueryInterface/Association/AssociationHasOneSQLTests.swift
+QueryInterface/Association/AssociationHasOneThroughDecodableRecordTests.swift
+  ~ testIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testIncludingOptionalIncludingRequiredPivot: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+QueryInterface/Association/AssociationHasOneThroughFetchableRecordTests.swift
+QueryInterface/Association/AssociationHasOneThroughRowScopeTests.swift
+QueryInterface/Association/AssociationHasOneThroughSQLDerivationTests.swift
+QueryInterface/Association/AssociationHasOneThroughSQLTests.swift
+QueryInterface/Association/AssociationParallelDecodableRecordTests.swift
+  ~ testParallelTwoIncludingOptional: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testParallelTwoIncludingRequired: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+QueryInterface/Association/AssociationParallelRowScopesTests.swift
+QueryInterface/Association/AssociationParallelSQLTests.swift
 QueryInterface/Association/AssociationPrefetchingCodableRecordTests.swift
-  - testIncludingAllHasMany: missing A.including
-  - testIncludingAllHasManyScalar: missing A.including
-  - testIncludingAllHasManyIncludingAllHasMany: missing A.including
-  - testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: missing A.including
-  - testIncludingAllHasManyThroughHasManyUsingHasMany: missing A.including
-  - testIncludingOptionalBelongsToIncludingAllHasMany: missing B.including
-  - testJoiningOptionalHasOneThroughIncludingAllHasMany: missing D.joining
-  - testSelfJoin: missing hasMany
-  - testIncludingAllHasMany_ColumnDecodingStrategy: missing XA.including
   ~ testMissingIncludingAllHasMany: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyScalar: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyThroughHasManyUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasMany_ColumnDecodingStrategy: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testSelfJoin: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationPrefetchingObservationTests.swift
+  ~ testIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
+  ~ testIncludingAllHasManyIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
+  ~ testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
+  ~ testIncludingAllHasManyThroughHasManyUsingHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2)
+  ~ testIncludingAllHasManyWithCompoundPrimaryKey: runtime: XCTAssertTrue failed - compoundprimarykey(name,pk1,pk2)
+  ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: XCTAssertTrue failed - a(cola1,cola2),b(colb1,colb2,colb3)
+  ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: XCTAssertTrue failed - a(*),c(colc1,colc2),d(cold1,cold2,cold3)
+QueryInterface/Association/AssociationPrefetchingSQLTests.swift
+  ~ testAssociationFilteredByOtherAssociation: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testCTE: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testDistinct: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyIncludingAllHasManyWithCompoundForeignKey: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyIncludingRequiredOrOptionalHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyScalar: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyThroughBelongsToUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyThroughHasManyUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyThroughHasOneUsingHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingAllHasManyWithCompoundForeignKey: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingOptionalBelongsToIncludingOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingOptionalHasOneIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testIncludingOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testJoiningOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testJoiningOptionalBelongsToJoiningOptionalBelongsToIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testJoiningOptionalHasOneIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testJoiningOptionalHasOneThroughIncludingAllHasMany: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+  ~ testAggregate: runtime: threw error "SQLite error 21: Not implemented: prefetching associations with including(all:)"
+QueryInterface/Association/AssociationRowScopeSearchTests.swift
+  ~ testDecodableWithCustomRowDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testFlatDecodableRecordDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+  ~ testNestedDecodableRecordDecoding: runtime: threw error "DecodingError.keyNotFound: Key 'a' not found in keyed decoding container. Debug description: miss
+QueryInterface/Association/AssociationTableAliasTestsSQLTests.swift
+QueryInterface/ColumnExpressionTests.swift
+  - testRawColumnExpression: no exact matches in call to subscript
+  - testRawRepresentableColumnExpression: cannot convert value of type 'Player.Columns' to expected argument type 'String'
+  ~ testCodingKeysAsColumnExpression: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
+  ~ testColumnsDerivedFromCodingKeys: runtime: XCTAssertEqual failed: ("player(full_name,id,score)") is not equal to ("player(full_name,id,score)[1]") -
+QueryInterface/CommonTableExpressionTests.swift
+  ~ testChatWithLatestMessage: runtime: threw error "DecodingError.keyNotFound: Key 'chat' not found in keyed decoding container. Debug description: m
 QueryInterface/FetchableRecord+QueryInterfaceRequestTests.swift
   - testFetch: cannot convert value of type 'Database' to expected argument type 'Statement'
-  ~ FetchableRecordQueryInterfaceRequestTests.testAll: runtime: XCTAssertEqual failed: ("Optional("SELECT * FROM \"readers\"")") is not equal to ("Optional("SELECT * FROM \"r
-  ~ FetchableRecordQueryInterfaceRequestTests.testAlternativeFetch: runtime: XCTAssertEqual failed: ("Optional("SELECT * FROM \"readers\"")") is not equal to ("Optional("SELECT * FROM \"r
+QueryInterface/ForeignKeyDefinitionTests.swift
 QueryInterface/QueryInterfaceExpressionsTests.swift
-  - testContains: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testContainsCollated: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testCollatedContains: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testSubqueryContains: missing QueryInterfaceRequest.contains
-  - testSubqueryExists: missing argument for parameter 'name' in call
-  - testGreaterThan: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testGreaterThanWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testGreaterThanOrEqual: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testGreaterThanOrEqualWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testLessThan: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testLessThanWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testLessThanOrEqual: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testLessThanOrEqualWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testEqual: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testEqualWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testSubqueryEqual: operator function '==' requires that 'QueryInterfaceRequest<Reader>' conform to 'SQLExpressible'
-  - testSubqueryWithOuterAlias: missing TableDefinition.belongsTo
-  - testNotEqual: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testNotEqualWithCollation: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testNotEqualWithSwiftNotOperator: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testIs: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testIsWithCollation: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testIsNot: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testIsNotWithCollation: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testIsNotWithSwiftNotOperator: type '(_) -> SQLExpression' cannot conform to 'SQLExpressible'
-  - testLogicalOperators: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testJoinedOperatorAnd: instance method 'filter' requires that 'QueryFragment' conform to 'SQLExpressible'
-  - testJoinedOperatorOr: instance method 'filter' requires that 'QueryFragment' conform to 'SQLExpressible'
-  - testStringFunctions: missing Column.capitalized
-  - testPrefixMinusOperator: type '(_) -> Float16' cannot conform to 'SQLExpressible'
-  - testInfixSubtractOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testInfixAddOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testJoinedAddOperator: labels (operator:) instead of (separator:)
-  - testInfixMultiplyOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testJoinedMultiplyOperator: labels (operator:) instead of (separator:)
-  - testInfixDivideOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testCompoundArithmeticExpression: type '(_) -> Double' cannot conform to 'SQLExpressible'
-  - testPrefixBitwiseNotOperator: type '(_) -> Self' cannot conform to 'SQLExpressible'
-  - testInfixLeftShiftOperator: type '(_) -> Self' cannot conform to 'SQLExpressible'
-  - testInfixRightShiftOperator: type '(_) -> Self' cannot conform to 'SQLExpressible'
-  - testInfixBitwiseAndOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testJoinedBitwiseAndOperator: labels (operator:) instead of (separator:)
-  - testInfixBitwiseOrOperator: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testJoinedBitwiseOrOperator: labels (operator:) instead of (separator:)
-  - testIfNull: type '(_) -> Int' cannot conform to 'SQLExpressible'
-  - testCountExpression: no exact matches in call to instance method 'select'
-  - testAvgExpression: no exact matches in call to instance method 'select'
-  - testAvgExpression_filter: no exact matches in call to instance method 'select'
-  - testCastExpression: missing cast
-  - testCoalesceExpression: no exact matches in call to instance method 'select'
-  - testLengthExpression: no exact matches in call to instance method 'select'
-  - testMultiArgumentMinExpression: cannot convert value of type 'Int' to expected argument type '[any SQLSelectable]'
-  - testAggregateMinExpression: no exact matches in call to instance method 'select'
-  - testAggregateMinExpression_filter: missing parameter filter:
-  - testMultiArgumentMaxExpression: cannot convert value of type 'Int' to expected argument type '[any SQLSelectable]'
-  - testAggregateMaxExpression: no exact matches in call to instance method 'select'
-  - testAggregateMaxExpression_filter: missing parameter filter:
-  - testSumExpression: no exact matches in call to instance method 'select'
-  - testSumExpression_filter: no exact matches in call to instance method 'select'
-  - testTotalExpression: no exact matches in call to instance method 'select'
-  - testTotalExpression_filter: no exact matches in call to instance method 'select'
-  - testLikeOperator: type '(_) -> _' cannot conform to 'SQLExpressible'
-  - testConcatOperator: cannot convert value of type 'FlattenSequence<[Column]>' to expected argument type '[any SQLSelectable]'
-  - testCustomFunction: no exact matches in call to instance method 'select'
-  - testFastPrimaryKeyExpression: missing SQLExpression.fastPrimaryKey
+  - testFastPrimaryKeyExpression: internal API fastPrimaryKey
+  ~ testCustomFunction: runtime: XCTAssertEqual failed: ("SELECT "avgOf"("age", 1, 2) FROM "readers"") is not equal to ("SELECT avgOf("age", 1,
+  ~ testStringFunctions: runtime: crashes: SQLiteOrbitGRDBUpstreamTests/GRDBTestCase.swift:217: Fatal error: 'try!' expression unexpectedly rais
 QueryInterface/QueryInterfaceExtensibilityTests.swift
-  ~ testCast: runtime: XCTAssertEqual failed: ("Optional("SELECT CAST(\"text\" AS BLOB) FROM \"records\"")") is not equal to ("Option
+QueryInterface/QueryInterfacePromiseTests.swift
 QueryInterface/QueryInterfaceRequestTests.swift
-  - testFetchCount: no exact matches in call to instance method 'order'
-  - testIssue1357: missing Column.detached
-  - testSelect: no exact matches in call to instance method 'select'
-  - testSelectionCustomKey: no exact matches in call to instance method 'select'
-  - testAnnotated: trailing closure passed to parameter of type '[any SQLSelectable]' that does not accept a closure
-  - testAnnotatedWithForeignColumn: missing TableDefinition.belongsTo
-  - testMultipleSelect: no exact matches in call to instance method 'select'
-  - testSelectAs: closure passed to parameter of type '[any SQLSelectable]' that does not accept a closure
-  - testSelectAsTypeInference: cannot convert value of type 'QueryInterfaceRequest<Reader>' to type 'QueryInterfaceRequest<String>' in coercion
-  - testDistinct: no exact matches in call to instance method 'select'
-  - testGroup: no exact matches in call to instance method 'group'
-  - testMultipleGroup: no exact matches in call to instance method 'group'
-  - testHaving: no exact matches in call to instance method 'group'
-  - testMultipleHaving: no exact matches in call to instance method 'group'
-  - testSort: no exact matches in call to instance method 'order'
-  - testSortWithCollation: no exact matches in call to instance method 'order'
-  - testMultipleSort: no exact matches in call to instance method 'order'
-  - testReverse: no exact matches in call to instance method 'order'
-  - testReverseWithCollation: no exact matches in call to instance method 'order'
-  - testMultipleReverse: no exact matches in call to instance method 'order'
-  ~ testFetchOneLimitOptimization: runtime: XCTAssertEqual failed: ("Optional("SELECT * FROM \"readers\" WHERE \"id\" IN (1)")") is not equal to ("Optiona
-  ~ testFetchRowFromRequest: runtime: XCTAssertEqual failed: ("Optional("SELECT * FROM \"readers\"")") is not equal to ("Optional("SELECT * FROM \"r
-  ~ testFilterLiteral: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
-  ~ testFilterLiteralWithNamedArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
-  ~ testFilterLiteralWithPositionalArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
-  ~ testFilterOnView: runtime: XCTAssertEqual failed: ("Optional("SELECT * FROM \"v\" WHERE (\"id\" = 1)")") is not equal to ("Optional("SELE
-  ~ testHavingLiteral: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" GROUP BY "name" HAVING (min(age) > 18)") is not equal to ("SE
-  ~ testHavingLiteralWithNamedArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" GROUP BY "name" HAVING (min(age) > 18)") is not equal to ("SE
-  ~ testHavingLiteralWithPositionalArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" GROUP BY "name" HAVING (min(age) > 18)") is not equal to ("SE
-  ~ testIsEmpty: runtime: XCTAssertEqual failed: ("Optional("SELECT NOT EXISTS(SELECT * FROM \"readers\")")") is not equal to ("Optional
+QueryInterface/Record+QueryInterfaceRequestTests.swift
 QueryInterface/TableDefinitionTests.swift
   - testTableCreationOptions: extra trailing closure passed in call
-  - testStrictTableCreationOption: missing Database.sqliteLibVersionNumber
-  - testColumnLiteral: extraneous argument label 'sql:' in call
-  - testAutoIncrementedPrimaryKey: missing DatabaseQueue.inTransaction
-  - testColumnPrimaryKeyOptions: missing DatabaseQueue.inTransaction
-  - testColumnCollation: missing DatabaseQueue.inTransaction
-  - testColumnGeneratedAs: missing DatabaseQueue.inTransaction
-  - testTablePrimaryKey: missing DatabaseQueue.inTransaction
-  - testTableForeignKey: trailing closure passed to parameter of type '[String]' that does not accept a closure
-  - testAutoReferences: no exact matches in call to instance method 'primaryKey'
-  - testAlterTable: missing TableAlteration.addColumn
-  - testAlterTableRenameColumn: missing Database.sqliteLibVersionNumber
-  - testAlterTableRenameColumnInvalidatesSchemaCache: missing Database.sqliteLibVersionNumber
-  - testAlterTableDropColumn: missing Database.sqliteLibVersionNumber
-  - testAlterTableDropColumnInvalidatesSchemaCache: missing Database.sqliteLibVersionNumber
   - testReindex: reference to member 'localizedCompare' cannot be resolved without a contextual type
   - testCreateView: generic parameter 'RowDecoder' could not be inferred
   - testCreateViewOptions: generic parameter 'RowDecoder' could not be inferred
   - testDropView: generic parameter 'RowDecoder' could not be inferred
-  ~ testAlterTableAddAutoReferencingForeignKey: runtime: XCTAssertEqual failed: ("Optional("ALTER TABLE \"hiddenRowIdTable\" ADD COLUMN \"ref\" REFERENCES \"hiddenRowI
-  ~ testAlterTableAddGeneratedVirtualColumn: runtime: XCTAssertEqual failed: ("ALTER TABLE "test" ADD COLUMN "f" GENERATED ALWAYS AS (e) VIRTUAL") is not equal to (
-  ~ testColumnCheck: runtime: XCTAssertEqual failed: ("CREATE TABLE "test" ("a" INTEGER CHECK (("a" > 0)), "b" INTEGER CHECK (b <> 2), "c" I
-  ~ testColumnDefault: runtime: XCTAssertEqual failed: ("CREATE TABLE "test" ("a" INTEGER DEFAULT 1, "b" INTEGER DEFAULT 1.0, "c" INTEGER DEFA
-  ~ testColumnIndexed: runtime: XCTAssertEqual failed: ("CREATE INDEX "test_on_a" ON "test" ("a")") is not equal to ("CREATE INDEX "test_on_a"
-  ~ testColumnIndexedInheritsIfNotExistsFlag: runtime: XCTAssertEqual failed: ("CREATE INDEX IF NOT EXISTS "test_on_a" ON "test" ("a")") is not equal to ("CREATE IND
-  ~ testColumnNotNull: runtime: XCTAssertEqual failed: ("CREATE TABLE "test" ("a" INTEGER NOT NULL, "b" INTEGER NOT NULL ON CONFLICT ABORT, "c
-  ~ testColumnReference: runtime: XCTAssertEqual failed: ("CREATE TABLE "child" ("parentName" TEXT REFERENCES "parent" ON DELETE CASCADE ON UPDA
-  ~ testColumnUnique: runtime: XCTAssertEqual failed: ("CREATE TABLE "test" ("a" INTEGER UNIQUE, "b" INTEGER UNIQUE ON CONFLICT ABORT, "c" IN
   ~ testCreateIndex: runtime: XCTAssertEqual failed: ("CREATE INDEX "test_on_a" ON "test" ("a")") is not equal to ("CREATE INDEX "test_on_a"
   ~ testCreateIndexOn: runtime: XCTAssertEqual failed: ("CREATE INDEX "index_test_on_a" ON "test" ("a")") is not equal to ("CREATE INDEX "inde
   ~ testCreatePartialIndex: runtime: XCTAssertEqual failed: ("CREATE UNIQUE INDEX IF NOT EXISTS "test_on_a_b" ON "test" ("a", "b") WHERE ("a" = 1)"
-  ~ testTableCheck: runtime: XCTAssertEqual failed: ("CREATE TABLE "test" ("a" INTEGER, "b" INTEGER, CHECK (a + b < 10), CHECK ((("a" + "b"
 QueryInterface/TableRecord+QueryInterfaceRequestTests.swift
-  - testFetchCount: no exact matches in call to static method 'order'
-  - testSelect: no exact matches in call to static method 'select'
-  - testMultipleSelect: no exact matches in call to instance method 'select'
-  - testSort: no exact matches in call to static method 'order'
-  - testMultipleSort: no exact matches in call to static method 'order'
-  - testExists: missing DatabaseQueue.inTransaction
-  - testExistsIdentifiable: missing DatabaseQueue.inTransaction
-  ~ TableRecordQueryInterfaceRequestTests.testFilterLiteral: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
-  ~ TableRecordQueryInterfaceRequestTests.testFilterLiteralWithNamedArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
-  ~ TableRecordQueryInterfaceRequestTests.testFilterLiteralWithPositionalArguments: runtime: XCTAssertEqual failed: ("SELECT * FROM "readers" WHERE (id <> 1)") is not equal to ("SELECT * FROM "readers" W
 QueryInterface/TableTests.swift
-  - test_request_derivation: missing CommonTableExpression
-  - test_association_belongsTo_Table: missing Table.belongsTo
-  - test_association_belongsTo_TableRecord: missing Table.belongsTo
-  - test_association_hasOne_Table: missing Table.hasOne
-  - test_association_hasOne_TableRecord: missing Table.hasOne
-  - test_association_hasMany_Table: missing Table.hasMany
-  - test_association_hasMany_TableRecord: missing Table.hasMany
-  - test_association_to_CommonTableExpression: missing CommonTableExpression
-  - test_association_hasOneThrough: missing Table.hasOne
-  - test_association_hasManyThrough: missing Table.hasMany
-  - test_association_aggregates: missing Table.hasMany
-  - test_delete: missing Table.deleteOne
-  - test_updateAll: missing Table.updateAll
-  - test_updateAll_DatabaseComponents: missing Table.updateAll
-  - test_exists: missing Table.exists
+  - test_request_derivation: failed to produce diagnostic for expression; please submit a bug report (https://swift.org/contributing/#reporting-bugs)
 Record/PersistableRecord/DatabaseColumnEncodingStrategyTests.swift
 Record/PersistableRecord/DatabaseDataEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'666f6f')") is not equal to ("SELECT * FROM "t" WHE
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'666f6f')") is not equal to ("SELECT * FROM "t" WHE
 Record/PersistableRecord/DatabaseDateEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679')") is not equal to ("SELEC
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679')") is not equal to ("SELEC
 Record/PersistableRecord/DatabaseUUIDEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70')") is not equal
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70')") is not equal
 Record/PersistableRecord/MutablePersistableRecordChangesTests.swift
-  - testDatabaseEqualsWithDifferentTypesAndDifferentWidth: missing DatabaseQueue.inTransaction
-  - testUpdateChangesWithRecord: missing type Record
+  - testUpdateChangesWithRecord: cannot convert value of type 'MyRecord.Columns' to expected argument type 'String'
   ~ testRecordValueChange: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"players\" S
-  ~ testUpdateChangesWithImmutableStruct: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
-  ~ testUpdateChangesWithMutableStruct: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
-  ~ testUpdateChangesWithNonRecordClass: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
+  ~ testDatabaseEqualsWithDifferentTypesAndDifferentWidth: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"players\" S
 Record/PersistableRecord/MutablePersistableRecordEncodableTests.swift
-  - testTrivialProperty: missing DatabaseQueue.inTransaction
-  - testTrivialSingleValueEncodableProperty: missing DatabaseQueue.inTransaction
-  - testNonTrivialSingleValueEncodableProperty: missing DatabaseQueue.inTransaction
-  - testEncodableRawRepresentableProperty: missing DatabaseQueue.inTransaction
-  - testDatabaseValueConvertibleProperty: missing DatabaseQueue.inTransaction
-  - testStructWithDate: missing DatabaseValue.Storage.value
-  - testStructWithURL: missing DatabaseValue.Storage.value
-  - testStructWithUUID: missing DatabaseValue.Storage.value
   ~ testCustomizedRecord: runtime: XCTAssertEqual failed: ("[context:"GRDB root" key:NULL nestedKeyed:"{\"context\":\"JSON nested: nestedKeyed\",
   ~ testRecord: runtime: XCTAssertEqual failed: ("[context:NULL key:NULL nestedKeyed:"{\"name\":\"foo\"}" nestedSingle:"bar,key:nil,con
   ~ testSingleValueContainer: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
   ~ testSingleValueContainerWithEncodableRecord: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
 Record/PersistableRecord/MutablePersistableRecordPersistenceConflictPolicyTests.swift
   - testReplacePolicy: missing type TransactionObserver
-  ~ testAbortPolicy: runtime: XCTAssertTrue failed -
-  ~ testDefaultPolicy: runtime: XCTAssertTrue failed -
-  ~ testFailPolicy: runtime: XCTAssertTrue failed -
-  ~ testIgnorePolicy: runtime: XCTAssertTrue failed -
-  ~ testMixedPolicy: runtime: XCTAssertTrue failed -
-  ~ testPolicyOverride: runtime: XCTAssertTrue failed -
-  ~ testRollbackPolicy: runtime: XCTAssertTrue failed -
 Record/PersistableRecord/MutablePersistableRecordTests.swift
   - testRecordErrorRecordNotFoundDescription: missing RecordError.description
   - test_insertAndFetch_fetch_select: extra trailing closure passed in call
-  - test_updateAndFetch_selection_fetch: missing any SQLSelectable.allColumns
-  - test_updateAndFetch_columns_selection_fetch: missing any SQLSelectable.allColumns
-  - test_updateChangesAndFetch_selection_fetch_modify: missing any SQLSelectable.allColumns
-  - test_upsertAndFetch_do_update_set_where_with_default_strategy: missing Column.noOverwrite
-  ~ testPartialUpdateMutablePersistableRecordPerson: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"persons\" SET \"id\" = \"id\" WHERE \"id\" = 1")") is not
-  ~ testPartiallyEncodedRecord: runtime: XCTAssertTrue failed -
-  ~ testUpdateMutablePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdateMutablePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdateMutablePersistableRecordPerson: runtime: XCTAssertTrue failed -
-  ~ test_insertAndFetch_as: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING *
-  ~ test_insertAndFetch_selection_fetch: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING "score"
-  ~ test_saveAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_saveAndFetch_selection_fetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsert: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"player\" (\"id\", \"name\", \"score\") VALUES (NULL,
-  ~ test_upsertAndFetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_do_update_set_where_with_noColumnUnlessSpecified_strategy: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"vocabulary\" (\"word\", \"kind\", \"isTainted\") VAL
-  ~ test_upsert_WITHOUT_ROWID_optimization: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"myRecord\" (\"id\", \"name\", \"score\") VALUES (\'1
 Record/PersistableRecord/PersistableRecordTests.swift
-  - testOptionalNestedStruct: missing DatabaseValue.Storage.value
-  - testOptionalNestedStructNil: missing DatabaseValue.Storage.value
-  - testOptionalNestedArrayStruct: missing DatabaseValue.Storage.value
-  - testOptionalNestedArrayStructNil: missing DatabaseValue.Storage.value
-  - testNonOptionalNestedStruct: missing DatabaseValue.Storage.value
-  - testNonOptionalNestedArrayStruct: missing DatabaseValue.Storage.value
   - testStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
   - testOptionalStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
   - test_insertAndFetch_selection_fetch_column_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns: missing any SQLSelectable.allColumns
   - test_insertAndFetch_selection_fetch_allColumns_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns_excluding: missing any SQLSelectable.allColumns
   - test_insertAndFetch_selection_fetch_allColumns_excluding_DatabaseComponents: extra trailing closure passed in call
-  - test_saveAndFetch_selection_fetch_allColumns: missing any SQLSelectable.allColumns
-  - test_saveAndFetch_selection_fetch_allColumns_excluding: missing any SQLSelectable.allColumns
-  - test_upsertAndFetch_do_update_set_where_with_default_strategy: missing Column.noOverwrite
-  - test_UpsertUpdateStrategy_documentation: global function 'max' requires that 'Column' conform to 'Comparable'
-  ~ testPartialUpdatePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"isoCode\" = \"isoCode\" WHERE \"isoCode
-  ~ testPartialUpdatePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testPartialUpdatePersistableRecordPersonClass: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"persons\" SET \"id\" = \"id\" WHERE \"id\" = 1")") is not
-  ~ testUpdatePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdatePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdatePersistableRecordPersonClass: runtime: XCTAssertTrue failed -
-  ~ test_insertAndFetch_as: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING *
-  ~ test_insertAndFetch_selection_fetch_column: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING "score"
-  ~ test_saveAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_saveAndFetch_selection_fetch_column: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsert: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"player\" (\"id\", \"name\", \"score\") VALUES (NULL,
-  ~ test_upsertAndFetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_do_update_set_where_with_noColumnUnlessSpecified_strategy: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"vocabulary\" (\"word\", \"kind\", \"isTainted\") VAL
-  ~ test_upsert_WITHOUT_ROWID_optimization: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"myRecord\" (\"id\", \"name\", \"score\") VALUES (\'1
+Record/PersistableRecord/RecordMappedOnMutableViewTests.swift
+  - SchemaSource: missing type DatabaseObjectID
+  - test_read_only_primary_key: missing Configuration.schemaSource
+  - test_CRUD: missing Configuration.schemaSource
+  - test_fetch_by_primary_key: missing Configuration.schemaSource
+  - test_stable_order: missing Configuration.schemaSource
+  - test_team_has_one_captain_request: missing Configuration.schemaSource
+  - test_captain_belongs_to_team_request: missing Configuration.schemaSource
 Record/TableRecord/TableRecordDeleteTests.swift
   - ViewSchemaSource: missing type DatabaseObjectID
   - testSingleColumnPrimaryKey_view: missing Configuration.schemaSource
   - testMultipleColumnPrimaryKey_view: missing Configuration.schemaSource
   - testImplicitUniqueIndexOnSingleColumnPrimaryKey_view: missing Configuration.schemaSource
-  - testRequestDeleteAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestDeleteAll_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchStatement_table: labels (_:select:) instead of (_:selection:)
-  - testRequestDeleteAndFetchStatement_view: labels (_:select:) instead of (_:selection:)
-  - testRequestDeleteAndFetchCursor_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestDeleteAndFetchCursor_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchArray_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestDeleteAndFetchArray_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchSet_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestDeleteAndFetchSet_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchIds_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestDeleteAndFetchIds_view: missing Configuration.schemaSource
-  - testJoinedRequestDeleteAll: missing TableDefinition.belongsTo
-  - testJoinedRequestDeleteAndFetch: missing TableDefinition.belongsTo
-  ~ testGroupedRequestDeleteAll: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"player\" WHERE \"id\" IN (SELECT \"id\" FROM \"player\" GROUP
-  ~ testGroupedRequestDeleteAndFetchCursor: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"player\" WHERE \"id\" IN (SELECT \"id\" FROM \"player\" GROUP
-  ~ testImplicitRowIDPrimaryKey: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"hackers\" WHERE \"rowid\" IN (1)")") is not equal to ("Option
-  ~ testImplicitUniqueIndexOnSingleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE (((\"id\" = 1)))")") is not equal to ("Option
-  ~ testMultipleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"citizenships\" WHERE (((\"countryIsoCode\" = \'FR\') AND (\"p
-  ~ testSingleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE \"id\" IN (1)")") is not equal to ("Optional(
-  ~ testUniqueIndex: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE (((\"email\" = \'arthur@example.com\')))")")
+Record/TableRecord/TableRecordTests.swift
+  ~ testCrossAttachedDatabaseAssociation: runtime: XCTAssertEqual threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Deb
+  ~ testRecordInAttachedDatabase: runtime: XCTAssertEqual threw error "DecodingError.keyNotFound: Key 'player' not found in keyed decoding container. Deb
 Record/TableRecord/TableRecordUpdateTests.swift
   - ViewSchemaSource: missing type DatabaseObjectID
-  - incrementScore: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testRequestUpdateAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
   - testRequestUpdateAll_view: missing Configuration.schemaSource
-  - testRequestUpdateAll_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
   - testRequestUpdateAll_DatabaseComponents_view: missing Configuration.schemaSource
-  - testRequestUpdateAndFetchStatement_table: missing any SQLSelectable.allColumns
-  - testRequestUpdateAndFetchStatement_view: missing any SQLSelectable.allColumns
-  - testRequestUpdateAndFetchStatement_DatabaseComponents_table: extra trailing closure passed in call
-  - testRequestUpdateAndFetchStatement_DatabaseComponents_view: extra trailing closure passed in call
-  - testRequestUpdateAndFetchCursor_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchCursor_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchCursor_DatabaseComponents_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchCursor_DatabaseComponents_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchAll_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchAll_DatabaseComponents_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchAll_DatabaseComponents_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchSet: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchSet_DatabaseComponents: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testNilAssignment_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testComplexAssignment_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentSubtractAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentAddAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentMultiplyAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentDivideAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentBitwiseAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentBitwiseOrAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentLeftShiftAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentRightShiftAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testMultipleAssignments_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testUpdateAllWithoutAssignmentDoesNotAccessTheDatabase_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testUpdateAllReturnsNumberOfUpdatedRows: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testUpdateAllReturnsNumberOfUpdatedRows_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testQueryInterfaceExtension: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testConflictPolicyAbort_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testConflictPolicyIgnore_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testConflictPolicyIgnoreWithTable: missing Table.updateAll
-  - testConflictPolicyIgnoreWithTable_DatabaseComponents: missing Table.updateAll
-  - testConflictPolicyCustom_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testJoinedRequestUpdate: missing TableDefinition.belongsTo
-  - testJoinedRequestUpdate_DatabaseComponents: missing TableDefinition.belongsTo
-  - testGroupedRequestUpdate_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  ~ testAssignmentAddAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" + 1)")") is not equal
-  ~ testAssignmentBitwiseAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" & 1)")") is not equal
-  ~ testAssignmentBitwiseOrAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" | 1)")") is not equal
-  ~ testAssignmentDivideAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" / 1)")") is not equal
-  ~ testAssignmentLeftShiftAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" << 1)")") is not equa
-  ~ testAssignmentMultiplyAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" * 1)")") is not equal
-  ~ testAssignmentRightShiftAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" >> 1)")") is not equa
-  ~ testAssignmentSubtractAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" - 1)")") is not equal
-  ~ testComplexAssignment: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" * (\"bonus\" + 1))")"
-  ~ testConflictPolicyAbort: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0")") is not equal to ("Optional
-  ~ testConflictPolicyCustom: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0")") is not equal to ("Optional
-  ~ testGroupedRequestUpdate: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0 WHERE \"id\" IN (SELECT \"id\"
-  ~ testMultipleAssignments: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0, \"bonus\" = 1")") is not equa
-  ~ testNilAssignment: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = NULL")") is not equal to ("Optio
+  - testRequestUpdateAndFetchCursor_view: missing Configuration.schemaSource
+  - testRequestUpdateAndFetchCursor_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
+  - testRequestUpdateAndFetchCursor_DatabaseComponents_view: missing Configuration.schemaSource
+  - testRequestUpdateAndFetchAll_view: missing Configuration.schemaSource
+  - testRequestUpdateAndFetchAll_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
+  - testRequestUpdateAndFetchAll_DatabaseComponents_view: missing Configuration.schemaSource
+  - testRequestUpdateAndFetchSet_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' that does not accept a closure
 
 x FTS/FTS3PatternTests.swift: missing FTS3, missing parameter using:
-x FTS/FTS3RecordTests.swift: type 'Book' does not conform to protocol 'FetchableRecord', missing any SQLSelectable.allColumns, missing any SQLSelectable.rowID
+x FTS/FTS3RecordTests.swift: missing FTS3, missing parameter using:
 x FTS/FTS3TableBuilderTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
 x FTS/FTS3TokenizerTests.swift: no test compiles: missing FTS3, missing FTS3, missing FTS3
-x FTS/FTS4RecordTests.swift: type 'Book' does not conform to protocol 'FetchableRecord', missing any SQLSelectable.allColumns, missing any SQLSelectable.rowID
+x FTS/FTS4RecordTests.swift: missing FTS4, missing parameter using:
 x FTS/FTS4TableBuilderTests.swift: no test compiles: missing FTS4, missing FTS4, missing FTS4
 x FTS/Issue1838Tests.swift: no test compiles: missing DatabaseQueue.interrupt, missing DatabaseQueue.interrupt
-x JSON/JSONColumnTests.swift: no test compiles: missing JSONColumn, missing JSONColumn, missing JSONColumn
-x JSON/JSONExpressionsTests.swift: missing Database.sqliteLibVersionNumber
-x QueryInterface/Association/AssociationAggregateTests.swift: missing Player, missing Team, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationBelongsToDecodableRecordTests.swift: missing Player, missing type Player, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationBelongsToFetchableRecordTests.swift: missing Player, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationBelongsToRowScopeTests.swift: missing Player, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationBelongsToSQLDerivationTests.swift: no test compiles: missing belongsTo, missing hasOne, missing any SQLSelectable.allColumns
-x QueryInterface/Association/AssociationBelongsToSQLTests.swift: no test compiles: missing ForeignKey, missing ForeignKey, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationChainRowScopesTests.swift: missing A, missing B, missing C
-x QueryInterface/Association/AssociationChainSQLTests.swift: no test compiles: missing belongsTo, missing hasOne, missing belongsTo
-x QueryInterface/Association/AssociationHasManyOrderingTests.swift: missing Team, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasManyRowScopeTests.swift: no test compiles: missing hasMany, missing hasMany, missing hasMany
-x QueryInterface/Association/AssociationHasManySQLTests.swift: no test compiles: missing ForeignKey, missing ForeignKey, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasManyThroughOrderingTests.swift: missing PlayerRole, missing Team, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasManyThroughRowScopeTests.swift: no test compiles: missing belongsTo, missing belongsTo, missing belongsTo
-x QueryInterface/Association/AssociationHasManyThroughSQLTests.swift: missing type Association, expected 'var' keyword in property declaration, consecutive declarations on a line must be separated by ';'
-x QueryInterface/Association/AssociationHasOneSQLDerivationTests.swift: no test compiles: missing hasOne, missing belongsTo, missing any SQLSelectable.allColumns
-x QueryInterface/Association/AssociationHasOneSQLTests.swift: no test compiles: missing ForeignKey, missing ForeignKey, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasOneThroughDecodableRecordTests.swift: missing A, missing B, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasOneThroughFetchableRecordTests.swift: missing A, missing B, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasOneThroughRowScopeTests.swift: missing A, missing B, missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasOneThroughSQLDerivationTests.swift: missing TableDefinition.belongsTo
-x QueryInterface/Association/AssociationHasOneThroughSQLTests.swift: missing type AssociationToOne, expected 'var' keyword in property declaration, consecutive declarations on a line must be separated by ';'
-x QueryInterface/Association/AssociationParallelDecodableRecordTests.swift: missing A, missing B, missing D
-x QueryInterface/Association/AssociationParallelRowScopesTests.swift: missing A, missing B, missing D
-x QueryInterface/Association/AssociationParallelSQLTests.swift: no test compiles: missing belongsTo, missing hasOne, missing belongsTo
-x QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift: no test compiles: missing A.including, missing A.including, missing A.including
-x QueryInterface/Association/AssociationPrefetchingObservationTests.swift: no test compiles: missing DatabaseRegion.description, missing A.including, missing CompoundPrimaryKey.including
+x QueryInterface/Association/AssociationPrefetchingFetchableRecordTests.swift: no test compiles: cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[B]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[D]', cannot convert value of type '(any DatabaseValueConvertible)?' to expected argument type '[Record.CInfo]'
 x QueryInterface/Association/AssociationPrefetchingRelationTests.swift: no test compiles: missing SQLAssociationKey, missing type SQLAssociationCardinality, missing type SQLAssociationCardinality
-x QueryInterface/Association/AssociationPrefetchingRowTests.swift: no test compiles: missing A.including, missing A.including, missing A.including
-x QueryInterface/Association/AssociationPrefetchingSQLTests.swift: no test compiles: missing A.including, missing A.including, missing Parent.including
-x QueryInterface/Association/AssociationRowScopeSearchTests.swift: missing A, missing B
-x QueryInterface/Association/AssociationTableAliasTestsSQLTests.swift: no test compiles: missing belongsTo, missing hasOne, generic parameter 'RowDecoder' could not be inferred
-x QueryInterface/ColumnExpressionTests.swift: no test compiles: missing DatabaseRegion.description, missing DatabaseRegion.description, missing DatabaseRegion.description
-x QueryInterface/CommonTableExpressionTests.swift: no test compiles: missing type CommonTableExpression, missing CommonTableExpression, missing CommonTableExpression
+x QueryInterface/Association/AssociationPrefetchingRowTests.swift: no test compiles: missing Row.prefetchedRows, missing Row.prefetchedRows, missing Row.prefetchedRows
 x QueryInterface/DerivableRequestTests.swift: expressions are not allowed at the top level
-x QueryInterface/ForeignKeyDefinitionTests.swift: no test compiles: missing TableDefinition.belongsTo, missing TableDefinition.belongsTo, missing TableDefinition.belongsTo
-x QueryInterface/QueryInterfacePromiseTests.swift: missing TableDefinition.belongsTo
-x QueryInterface/Record+QueryInterfaceRequestTests.swift: no test compiles: property does not override any property from its superclass, missing Reader.insert
-x QueryInterface/SQLExpressionIsConstantTests.swift: no test compiles: labels (tableName:) instead of (name:), labels (tableName:) instead of (name:), labels (tableName:) instead of (name:)
-x QueryInterface/SQLIdentifyingColumnsTests.swift: no test compiles: labels (tableName:) instead of (name:)
+x QueryInterface/SQLExpressionIsConstantTests.swift: no test compiles: missing parameter tableName:, missing parameter tableName:, missing parameter tableName:
+x QueryInterface/SQLIdentifyingColumnsTests.swift: no test compiles: missing parameter tableName:
 x QueryInterface/VirtualTableModuleTests.swift: no test compiles: missing type VirtualTableConfiguration, missing type VirtualTableConfiguration, missing parameter using:
-x Record/PersistableRecord/RecordMappedOnMutableViewTests.swift: expected declaration
-x Record/TableRecord/TableRecordTests.swift: missing type Record, property does not override any property from its superclass

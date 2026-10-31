@@ -304,5 +304,115 @@ extension DatabaseUUIDEncodingStrategyTests {
         }
     }
     
-
+    func testDeleteID() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "t") { $0.primaryKey("id", .blob) }
+            let uuids = [
+                UUID(uuidString: "61626364-6566-6768-696A-6B6C6D6E6F70")!,
+                UUID(uuidString: "56e7d8d3-e9e4-48b6-968e-8d102833af00")!,
+            ]
+            
+            do {
+                try Table<RecordWithUUID<StrategyDeferredToUUID>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = x'6162636465666768696a6b6c6d6e6f70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithUUID<StrategyDeferredToUUID>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70', x'56e7d8d3e9e448b6968e8d102833af00')
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithUUID<StrategyUppercaseString>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '61626364-6566-6768-696A-6B6C6D6E6F70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithUUID<StrategyUppercaseString>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('61626364-6566-6768-696A-6B6C6D6E6F70', '56E7D8D3-E9E4-48B6-968E-8D102833AF00')
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithUUID<StrategyLowercaseString>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '61626364-6566-6768-696a-6b6c6d6e6f70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithUUID<StrategyLowercaseString>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('61626364-6566-6768-696a-6b6c6d6e6f70', '56e7d8d3-e9e4-48b6-968e-8d102833af00')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalUUID<StrategyDeferredToUUID>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyDeferredToUUID>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = x'6162636465666768696a6b6c6d6e6f70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyDeferredToUUID>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70', x'56e7d8d3e9e448b6968e8d102833af00')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalUUID<StrategyUppercaseString>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyUppercaseString>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '61626364-6566-6768-696A-6B6C6D6E6F70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyUppercaseString>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('61626364-6566-6768-696A-6B6C6D6E6F70', '56E7D8D3-E9E4-48B6-968E-8D102833AF00')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalUUID<StrategyLowercaseString>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyLowercaseString>>("t").deleteOne(db, id: uuids[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '61626364-6566-6768-696a-6b6c6d6e6f70'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalUUID<StrategyLowercaseString>>("t").deleteAll(db, ids: uuids)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('61626364-6566-6768-696a-6b6c6d6e6f70', '56e7d8d3-e9e4-48b6-968e-8d102833af00')
+                    """)
+            }
+        }
+    }
 }

@@ -339,5 +339,77 @@ extension DatabaseDateEncodingStrategyTests {
         }
     }
     
-
+    func testDeleteID() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "t") { $0.primaryKey("id", .datetime) }
+            
+            do {
+                try Table<RecordWithDate<StrategyDeferredToDate>>("t").deleteOne(db, id: testedDates[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '1969-12-20 13:39:05.679'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithDate<StrategyDeferredToDate>>("t").deleteAll(db, ids: testedDates)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679', '1970-01-02 10:17:36.789', '2001-01-01 00:00:00.000', '2001-01-02 10:17:36.789')
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithDate<StrategyTimeIntervalSinceReferenceDate>>("t").deleteOne(db, id: testedDates[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = -979294854.321
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithDate<StrategyTimeIntervalSinceReferenceDate>>("t").deleteAll(db, ids: testedDates)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (-979294854.321, -978183743.211, 0.0, 123456.789)
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalDate<StrategyDeferredToDate>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalDate<StrategyDeferredToDate>>("t").deleteOne(db, id: testedDates[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = '1969-12-20 13:39:05.679'
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalDate<StrategyDeferredToDate>>("t").deleteAll(db, ids: testedDates)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679', '1970-01-02 10:17:36.789', '2001-01-01 00:00:00.000', '2001-01-02 10:17:36.789')
+                    """)
+            }
+            
+            do {
+                clearSQLQueries()
+                try Table<RecordWithOptionalDate<StrategyTimeIntervalSinceReferenceDate>>("t").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+            
+            do {
+                try Table<RecordWithOptionalDate<StrategyTimeIntervalSinceReferenceDate>>("t").deleteOne(db, id: testedDates[0])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" = -979294854.321
+                    """)
+            }
+            
+            do {
+                try Table<RecordWithOptionalDate<StrategyTimeIntervalSinceReferenceDate>>("t").deleteAll(db, ids: testedDates)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "t" WHERE "id" IN (-979294854.321, -978183743.211, 0.0, 123456.789)
+                    """)
+            }
+        }
+    }
 }

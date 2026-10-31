@@ -171,7 +171,103 @@ class MutablePersistableRecordChangesTests: GRDBTestCase {
         }
     }
 
+    func testDatabaseEqualsWithDifferentTypesAndDifferentWidth() throws {
+        // Mangle column case as well, for fun ;-)
+        struct NarrowPlayer: MutablePersistableRecord, Codable {
+            static let databaseTableName = "players"
+            var ID: Int64?
+            var NAME: String?
+        }
+        
+        let dbQueue = try makeDatabaseQueue()
+        
+        do {
+            var oldPlayer = NarrowPlayer(ID: 1, NAME: "Arthur")
+            let newPlayer = Player(id: 1, name: "Arthur", score: 41, creationDate: nil)
+            
+            let changes = try newPlayer.databaseChanges(from: oldPlayer)
+            XCTAssertEqual(changes.count, 1)
+            XCTAssertEqual(changes["score"]!, .null)
+            
+            try dbQueue.inTransaction { db in
+                try oldPlayer.insert(db)
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: oldPlayer))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"players\" SET \"score\"=41 WHERE \"id\"=1")
+                return .rollback
+            }
+        }
+        
+        do {
+            var oldPlayer = NarrowPlayer(ID: 1, NAME: "Bobby")
+            let newPlayer = Player(id: 1, name: "Arthur", score: 42, creationDate: nil)
+            
+            let changes = try newPlayer.databaseChanges(from: oldPlayer)
+            XCTAssertEqual(changes.count, 2)
+            XCTAssertEqual(changes["name"]!, "Bobby".databaseValue)
+            XCTAssertEqual(changes["score"]!, .null)
+            
+            try dbQueue.inTransaction { db in
+                try oldPlayer.insert(db)
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: oldPlayer))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                let fetchedPlayer = try Player.fetchOne(db, key: newPlayer.id)
+                XCTAssertEqual(fetchedPlayer?.name, newPlayer.name)
+                XCTAssertEqual(fetchedPlayer?.score, newPlayer.score)
+                return .rollback
+            }
+        }
+        
+        do {
+            let oldPlayer = Player(id: 1, name: "Arthur", score: 42, creationDate: nil)
+            let newPlayer = NarrowPlayer(ID: 1, NAME: "Arthur")
+            
+            let changes = try newPlayer.databaseChanges(from: oldPlayer)
+            XCTAssertTrue(changes.isEmpty)
+            
+            try dbQueue.inTransaction { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertFalse(newPlayer.updateChanges(db, from: oldPlayer))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount)
+                return .rollback
+            }
+        }
+        
+        do {
+            let oldPlayer = Player(id: 1, name: "Arthur", score: nil, creationDate: nil)
+            let newPlayer = NarrowPlayer(ID: 1, NAME: "Arthur")
+            
+            let changes = try newPlayer.databaseChanges(from: oldPlayer)
+            XCTAssertTrue(changes.isEmpty)
+            
+            try dbQueue.inTransaction { db in
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertFalse(newPlayer.updateChanges(db, from: oldPlayer))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount)
+                return .rollback
+            }
+        }
 
+        do {
+            var oldPlayer = Player(id: 1, name: "Arthur", score: nil, creationDate: nil)
+            let newPlayer = NarrowPlayer(ID: 1, NAME: "Bobby")
+            
+            let changes = try newPlayer.databaseChanges(from: oldPlayer)
+            XCTAssertEqual(changes.count, 1)
+            XCTAssertEqual(changes["NAME"]!, "Arthur".databaseValue)
+            
+            try dbQueue.inTransaction { db in
+                try oldPlayer.insert(db)
+                let totalChangesCount = db.totalChangesCount
+                try XCTAssertTrue(newPlayer.updateChanges(db, from: oldPlayer))
+                XCTAssertEqual(db.totalChangesCount, totalChangesCount + 1)
+                XCTAssertEqual(lastSQLQuery, "UPDATE \"players\" SET \"name\"='Bobby' WHERE \"id\"=1")
+                return .rollback
+            }
+        }
+    }
     
 
     

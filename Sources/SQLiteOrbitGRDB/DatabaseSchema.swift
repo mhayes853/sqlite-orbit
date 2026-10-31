@@ -103,7 +103,12 @@
       } else {
         keyColumns = columns.map(\.name)
       }
-      return PrimaryKeyInfo(columns: keyColumns, rowIDColumn: integer, hiddenRowID: columns.isEmpty)
+      return PrimaryKeyInfo(
+        columns: keyColumns,
+        rowIDColumn: integer,
+        hiddenRowID: columns.isEmpty,
+        columnInfos: columns.isEmpty ? nil : columns
+      )
     }
 
     public func indexes(on table: String, in schemaName: String? = nil) throws -> [IndexInfo] {

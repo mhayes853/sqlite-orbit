@@ -194,34 +194,59 @@
     @discardableResult
     public func delete(_ db: Database) throws -> Bool {
       try willDelete(db)
-      let container = try PersistenceContainer(self)
-      let key = try primaryKeyValues(db, table: Self.databaseTableName, container: container)
       var deleted: Bool?
       try aroundDelete(db) {
-        let request = QueryInterfaceRequest<Row>(table: Self.databaseTableName)
-          .filter(key: key.mapValues { $0 as (any DatabaseValueConvertible)? })
-        let result = try request.deleteAll(db) > 0
+        guard deleted == nil else { throw callbackMisuse("aroundDelete") }
+        let result = try deleteWithoutCallbacks(db)
         deleted = result
         return result
       }
       guard let deleted else {
-        throw DatabaseError(resultCode: .SQLITE_MISUSE, message: "aroundDelete did not delete")
+        throw callbackMisuse("aroundDelete")
       }
       didDelete(deleted: deleted)
       return deleted
     }
 
-    public func exists(_ db: Database) throws -> Bool {
-      let key = try primaryKeyValues(
-        db,
-        table: Self.databaseTableName,
-        container: PersistenceContainer(self)
-      )
-      guard key.values.allSatisfy({ !$0.isNull }) else {
+    private func deleteWithoutCallbacks(_ db: Database) throws -> Bool {
+      guard
+        let statement = try primaryKeyStatement(
+          db,
+          prefix: "DELETE FROM \(quoted(Self.databaseTableName)) WHERE ",
+          suffix: ""
+        )
+      else {
         return false
       }
-      return try QueryInterfaceRequest<Row>(table: Self.databaseTableName)
-        .filter(key: key.mapValues { $0 as (any DatabaseValueConvertible)? }).fetchCount(db) > 0
+      try statement.execute()
+      return db.changesCount > 0
+    }
+
+    public func exists(_ db: Database) throws -> Bool {
+      guard
+        let statement = try primaryKeyStatement(
+          db,
+          prefix: "SELECT EXISTS (SELECT 1 FROM \(quoted(Self.databaseTableName)) WHERE ",
+          suffix: ")"
+        )
+      else {
+        return false
+      }
+      return try Bool.fetchOne(statement) ?? false
+    }
+
+    /// A statement filtered on the record's primary key, or nil when the key is NULL.
+    private func primaryKeyStatement(_ db: Database, prefix: String, suffix: String) throws
+      -> Statement?
+    {
+      let container = try PersistenceContainer(self)
+      let columns = try db.primaryKey(Self.databaseTableName).columns
+      let values = columns.map { container[$0]?.databaseValue ?? .null }
+      if values.allSatisfy(\.isNull) { return nil }
+      let predicate = columns.map { quoted($0) + "=?" }.joined(separator: " AND ")
+      let statement = try db.makeStatement(sql: prefix + predicate + suffix)
+      statement.setUncheckedArguments(StatementArguments(values))
+      return statement
     }
 
     public mutating func updateChanges(

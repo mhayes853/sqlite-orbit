@@ -6,6 +6,31 @@
     var databaseValue: DatabaseValue { get }
 
     static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self?
+
+    /// The decoder of values stored as JSON, for Decodable types.
+    static func databaseJSONDecoder() -> JSONDecoder
+
+    /// The encoder of values stored as JSON, for Encodable types.
+    static func databaseJSONEncoder() -> JSONEncoder
+  }
+
+  extension DatabaseValueConvertible {
+    public static func databaseJSONDecoder() -> JSONDecoder {
+      let decoder = JSONDecoder()
+      decoder.dataDecodingStrategy = .base64
+      decoder.dateDecodingStrategy = .millisecondsSince1970
+      decoder.nonConformingFloatDecodingStrategy = .throw
+      return decoder
+    }
+
+    public static func databaseJSONEncoder() -> JSONEncoder {
+      let encoder = JSONEncoder()
+      encoder.dataEncodingStrategy = .base64
+      encoder.dateEncodingStrategy = .millisecondsSince1970
+      encoder.nonConformingFloatEncodingStrategy = .throw
+      encoder.outputFormatting = .sortedKeys
+      return encoder
+    }
   }
 
   extension DatabaseValueConvertible {
@@ -22,6 +47,17 @@
       case double(Double)
       case string(String)
       case blob(Data)
+
+      /// Returns `Int64`, `Double`, `String`, `Data` or nil.
+      public var value: (any DatabaseValueConvertible)? {
+        switch self {
+        case .null: nil
+        case .int64(let n): n
+        case .double(let d): d
+        case .string(let s): s
+        case .blob(let data): data
+        }
+      }
     }
 
     public let storage: Storage
@@ -232,21 +268,11 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Date? {
-      if let number = Double.fromDatabaseValue(dbValue) {
-        return Date(timeIntervalSince1970: number)
+      if let components = DatabaseDateComponents.fromDatabaseValue(dbValue) {
+        return Date(databaseDateComponents: components)
       }
-      guard let string = String.fromDatabaseValue(dbValue) else {
-        return nil
-      }
-      for format in [
-        "yyyy-MM-dd HH:mm:ss.SSS", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd",
-        "yyyy-MM-dd'T'HH:mm:ss.SSSXXXXX", "yyyy-MM-dd'T'HH:mm:ssXXXXX"
-      ] {
-        let formatter = dateFormatter()
-        formatter.dateFormat = format
-        if let date = formatter.date(from: string) {
-          return date
-        }
+      if let timestamp = Double.fromDatabaseValue(dbValue) {
+        return Date(timeIntervalSince1970: timestamp)
       }
       return nil
     }
@@ -261,6 +287,19 @@
     return formatter
   }
 
+  // GRDB reads integers exactly and doubles after rounding toward zero, when representable.
+  private func integer<T: FixedWidthInteger>(from dbValue: DatabaseValue) -> T? {
+    switch dbValue.storage {
+    case .int64(let n):
+      return T(exactly: n)
+    case .double(let n):
+      guard n >= Double(Int64.min), n < Double(Int64.max) else { return nil }
+      return T(exactly: Int64(n))
+    default:
+      return nil
+    }
+  }
+
   extension Int: DatabaseValueConvertible {
     public var databaseValue: DatabaseValue {
       guard let value = Int64(exactly: self) else {
@@ -270,11 +309,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -287,11 +322,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -304,11 +335,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -321,11 +348,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -338,11 +361,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -355,11 +374,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -372,11 +387,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -389,11 +400,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -406,11 +413,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 
@@ -423,11 +426,7 @@
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
-      switch dbValue.storage {
-      case .int64(let n): Self(exactly: n)
-      case .double(let n): Self(exactly: n)
-      default: nil
-      }
+      integer(from: dbValue)
     }
   }
 

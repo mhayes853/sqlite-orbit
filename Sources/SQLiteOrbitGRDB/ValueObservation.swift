@@ -43,6 +43,18 @@
 
   public protocol ValueObservationScheduler: OrbitValueObservationScheduler {}
 
+  extension ValueObservationScheduler {
+    /// Whether the initial value is delivered synchronously when observation starts.
+    public func immediateInitialValue() -> Bool {
+      immediateInitialValue(from: nil)
+    }
+
+    /// Schedules an observation callback.
+    public func schedule(_ action: @escaping @Sendable () -> Void) {
+      schedule(from: nil, action)
+    }
+  }
+
   public protocol ValueObservationMainActorScheduler: ValueObservationScheduler {}
 
   public struct AsyncValueObservationScheduler: ValueObservationScheduler {
@@ -93,7 +105,9 @@
     }
   }
 
-  extension ValueObservationMainActorScheduler where Self == MainActorValueObservationScheduler {
+  // Declared on the base protocol so that `.immediate` also resolves in generic scheduler
+  // contexts, as in GRDB.
+  extension ValueObservationScheduler where Self == MainActorValueObservationScheduler {
     public static var immediate: Self {
       Self(immediate: true)
     }
@@ -133,6 +147,104 @@
     public func union(_ other: Self) -> Self {
       Self(native.union(other.native))
     }
+
+    /// The region common to both regions.
+    public func intersection(_ other: Self) -> Self {
+      Self(native.intersection(other.native))
+    }
+
+    /// Whether a change in `other` affects this region.
+    public func isModified(by other: Self) -> Bool {
+      native.overlaps(other.native)
+    }
+  }
+
+  extension DatabaseRegion: CustomStringConvertible {
+    /// GRDB's description: `full database`, `empty`, or tables with their columns, such as
+    /// `player(id,name),team(*)`. Identifiers are lowercased by SQLiteOrbit.
+    public var description: String {
+      guard let tables = RegionDescription(native.serialized()) else {
+        return native.isFullDatabase ? "full database" : "empty"
+      }
+      if tables.includesUnspecifiedTables { return "full database" }
+      if tables.tables.isEmpty { return "empty" }
+      return tables.tables
+        .map { table in
+          let name = table.schema == "main" ? table.name : table.schema + "." + table.name
+          if table.includesUnspecifiedColumns {
+            return name + "(*)"
+          }
+          return name + "(" + table.columns.sorted().joined(separator: ",") + ")"
+        }
+        .sorted()
+        .joined(separator: ",")
+    }
+  }
+
+  // Reads SQLiteOrbit's documented, versioned binary region format.
+  private struct RegionDescription {
+    struct Table {
+      var schema: String
+      var name: String
+      var includesUnspecifiedColumns: Bool
+      var columns: [String]
+    }
+
+    var includesUnspecifiedTables = false
+    var tables: [Table] = []
+
+    init?(_ bytes: [UInt8]) {
+      var offset = 0
+      func byte() -> UInt8? {
+        guard offset < bytes.count else { return nil }
+        defer { offset += 1 }
+        return bytes[offset]
+      }
+      func count() -> Int? {
+        var value = 0
+        var shift = 0
+        while let byte = byte() {
+          value |= Int(byte & 0x7f) << shift
+          if byte & 0x80 == 0 { return value }
+          shift += 7
+          if shift > 56 { return nil }
+        }
+        return nil
+      }
+      guard byte() == 0, byte() == 1, let flags = byte(), let stringCount = count() else {
+        return nil
+      }
+      includesUnspecifiedTables = flags & 1 != 0
+      var strings: [String] = []
+      for _ in 0..<stringCount {
+        guard let length = count(), offset + length <= bytes.count else { return nil }
+        strings.append(String(decoding: bytes[offset..<(offset + length)], as: UTF8.self))
+        offset += length
+      }
+      func string() -> String? {
+        guard let index = count(), index < strings.count else { return nil }
+        return strings[index]
+      }
+      guard let tableCount = count() else { return nil }
+      for _ in 0..<tableCount {
+        guard let schema = string(), let name = string(), let flags = byte(),
+          let columnCount = count()
+        else { return nil }
+        var columns: [String] = []
+        for _ in 0..<columnCount {
+          guard let column = string() else { return nil }
+          columns.append(column)
+        }
+        tables.append(
+          Table(
+            schema: schema,
+            name: name,
+            includesUnspecifiedColumns: flags & 1 != 0,
+            columns: columns
+          )
+        )
+      }
+    }
   }
 
   public protocol DatabaseRegionConvertible: Sendable {
@@ -168,6 +280,10 @@
   public struct ValueObservation<Reducer: ValueReducer>: Sendable {
     let native: OrbitValueObservation<Reducer.Value>
 
+    /// Whether the observation would fetch with write access. SQLiteOrbit observations always
+    /// fetch in read-only transactions, so fetches cannot write even when this is true.
+    public var requiresWriteAccess = false
+
     init(_ native: OrbitValueObservation<Reducer.Value>) {
       self.native = native
     }
@@ -192,8 +308,32 @@
       )
     }
 
+    /// Observes changes in the given regions, which are resolved when observation starts.
+    public static func tracking<Value: Sendable>(
+      region: any DatabaseRegionConvertible,
+      _ otherRegions: any DatabaseRegionConvertible...,
+      fetch: @escaping @Sendable (Database) throws -> Value
+    ) -> Self where Reducer == ValueReducers.Fetch<Value> {
+      tracking(regions: [region] + otherRegions, fetch: fetch)
+    }
+
+    /// Observes changes in the given regions, which are resolved when observation starts.
+    public static func tracking<Value: Sendable>(
+      regions: [any DatabaseRegionConvertible],
+      fetch: @escaping @Sendable (Database) throws -> Value
+    ) -> Self where Reducer == ValueReducers.Fetch<Value> {
+      constantRegions(regions, fetch: fetch)
+    }
+
     public static func trackingConstantRegion<Value: Sendable>(
       _ regions: any DatabaseRegionConvertible...,
+      fetch: @escaping @Sendable (Database) throws -> Value
+    ) -> Self where Reducer == ValueReducers.Fetch<Value> {
+      constantRegions(regions, fetch: fetch)
+    }
+
+    private static func constantRegions<Value: Sendable>(
+      _ regions: [any DatabaseRegionConvertible],
       fetch: @escaping @Sendable (Database) throws -> Value
     ) -> Self where Reducer == ValueReducers.Fetch<Value> {
       Self(
@@ -212,7 +352,7 @@
       )
     }
 
-    @MainActor
+    @preconcurrency @MainActor
     public func start(
       in reader: any DatabaseReader,
       scheduling scheduler: some ValueObservationMainActorScheduler = .mainActor,

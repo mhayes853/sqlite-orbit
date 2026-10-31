@@ -212,31 +212,657 @@ class TableTests: GRDBTestCase {
         }
     }
     
-
+    func test_association_belongsTo_Table() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            let player = Table("player")
+            let association = player.belongsTo(Table("team"))
+            try assertEqualSQL(db, player.including(optional: association), """
+                SELECT "player".*, "team".* \
+                FROM "player" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.including(required: association), """
+                SELECT "player".*, "team".* \
+                FROM "player" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.joining(optional: association), """
+                SELECT "player".* \
+                FROM "player" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.joining(required: association), """
+                SELECT "player".* \
+                FROM "player" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+        }
+    }
     
-
+    func test_association_belongsTo_TableRecord() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            struct Team: TableRecord { }
+            let player = Table("player")
+            let association = player.belongsTo(Team.self)
+            try assertEqualSQL(db, player.including(optional: association), """
+                SELECT "player".*, "team".* \
+                FROM "player" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.including(required: association), """
+                SELECT "player".*, "team".* \
+                FROM "player" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.joining(optional: association), """
+                SELECT "player".* \
+                FROM "player" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, player.joining(required: association), """
+                SELECT "player".* \
+                FROM "player" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+        }
+    }
     
-
+    func test_association_hasOne_Table() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            let team = Table("team")
+            let association = team.hasOne(Table("player"))
+            try assertEqualSQL(db, team.including(optional: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.including(required: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(optional: association), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(required: association), """
+                SELECT "team".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+        }
+    }
     
-
+    func test_association_hasOne_TableRecord() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            struct Player: TableRecord { }
+            let team = Table("team")
+            let association = team.hasOne(Player.self)
+            try assertEqualSQL(db, team.including(optional: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.including(required: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(optional: association), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(required: association), """
+                SELECT "team".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+        }
+    }
     
-
+    func test_association_hasMany_Table() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            let team = Table("team")
+            let association = team.hasMany(Table("player"))
+            try assertEqualSQL(db, team.including(optional: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.including(required: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(optional: association), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(required: association), """
+                SELECT "team".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            _ = team.including(all: association) // TODO: test
+        }
+    }
     
-
+    func test_association_hasMany_TableRecord() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            struct Player: TableRecord { }
+            let team = Table("team")
+            let association = team.hasMany(Player.self)
+            try assertEqualSQL(db, team.including(optional: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.including(required: association), """
+                SELECT "team".*, "player".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(optional: association), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            try assertEqualSQL(db, team.joining(required: association), """
+                SELECT "team".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id"
+                """)
+            _ = team.including(all: association) // TODO: test
+        }
+    }
     
-
+    func test_association_to_CommonTableExpression() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            let player = Table("player")
+            let cte = CommonTableExpression(named: "teamBis", request: Table("team").all())
+            let association = player.association(to: cte, on: { $0["teamID"] == $1["id"] })
+            try assertEqualSQL(db, player.with(cte).including(optional: association), """
+                WITH "teamBis" AS (SELECT * FROM "team") \
+                SELECT "player".*, "teamBis".* \
+                FROM "player" \
+                LEFT JOIN "teamBis" ON "player"."teamID" = "teamBis"."id"
+                """)
+            try assertEqualSQL(db, player.with(cte).including(required: association), """
+                WITH "teamBis" AS (SELECT * FROM "team") \
+                SELECT "player".*, "teamBis".* \
+                FROM "player" \
+                JOIN "teamBis" ON "player"."teamID" = "teamBis"."id"
+                """)
+            try assertEqualSQL(db, player.with(cte).joining(optional: association), """
+                WITH "teamBis" AS (SELECT * FROM "team") \
+                SELECT "player".* \
+                FROM "player" \
+                LEFT JOIN "teamBis" ON "player"."teamID" = "teamBis"."id"
+                """)
+            try assertEqualSQL(db, player.with(cte).joining(required: association), """
+                WITH "teamBis" AS (SELECT * FROM "team") \
+                SELECT "player".* \
+                FROM "player" \
+                JOIN "teamBis" ON "player"."teamID" = "teamBis"."id"
+                """)
+        }
+    }
     
-
+    func test_association_hasOneThrough() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            try db.create(table: "award") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("playerID", .integer).references("player")
+            }
+            
+            let team = Table("team")
+            let player = Table("player")
+            let award = Table("award")
+            let association = award.hasOne(
+                Row.self,
+                through: award.belongsTo(player),
+                using: player.belongsTo(team))
+            try assertEqualSQL(db, award.including(optional: association), """
+                SELECT "award".*, "team".* \
+                FROM "award" \
+                LEFT JOIN "player" ON "player"."id" = "award"."playerID" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, award.including(required: association), """
+                SELECT "award".*, "team".* \
+                FROM "award" \
+                JOIN "player" ON "player"."id" = "award"."playerID" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, award.joining(optional: association), """
+                SELECT "award".* \
+                FROM "award" \
+                LEFT JOIN "player" ON "player"."id" = "award"."playerID" \
+                LEFT JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+            try assertEqualSQL(db, award.joining(required: association), """
+                SELECT "award".* \
+                FROM "award" \
+                JOIN "player" ON "player"."id" = "award"."playerID" \
+                JOIN "team" ON "team"."id" = "player"."teamID"
+                """)
+        }
+    }
     
-
+    func test_association_hasManyThrough() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            try db.create(table: "award") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("playerID", .integer).references("player")
+            }
+            
+            let team = Table("team")
+            let player = Table("player")
+            let award = Table("award")
+            let association = team.hasMany(
+                Row.self,
+                through: team.hasMany(player),
+                using: player.hasMany(award))
+            try assertEqualSQL(db, team.including(optional: association), """
+                SELECT "team".*, "award".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id" \
+                LEFT JOIN "award" ON "award"."playerID" = "player"."id"
+                """)
+            try assertEqualSQL(db, team.including(required: association), """
+                SELECT "team".*, "award".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id" \
+                JOIN "award" ON "award"."playerID" = "player"."id"
+                """)
+            try assertEqualSQL(db, team.joining(optional: association), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id" \
+                LEFT JOIN "award" ON "award"."playerID" = "player"."id"
+                """)
+            try assertEqualSQL(db, team.joining(required: association), """
+                SELECT "team".* \
+                FROM "team" \
+                JOIN "player" ON "player"."teamID" = "team"."id" \
+                JOIN "award" ON "award"."playerID" = "player"."id"
+                """)
+            _ = team.including(all: association) // TODO: test
+        }
+    }
     
-
+    func test_association_aggregates() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "team") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("teamID", .integer).references("team")
+            }
+            
+            let team = Table("team")
+            let association = team.hasMany(Table("player"))
+            try assertEqualSQL(db, team.annotated(with: association.count, association.max(Column("id"))), """
+                SELECT "team".*, COUNT(DISTINCT "player"."id") AS "playerCount", MAX("player"."id") AS "maxPlayerId" \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id" \
+                GROUP BY "team"."id"
+                """)
+            try assertEqualSQL(db, team.annotated(with: [association.count, association.max(Column("id"))]), """
+                SELECT "team".*, COUNT(DISTINCT "player"."id") AS "playerCount", MAX("player"."id") AS "maxPlayerId" \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id" \
+                GROUP BY "team"."id"
+                """)
+            try assertEqualSQL(db, team.having(association.isEmpty), """
+                SELECT "team".* \
+                FROM "team" \
+                LEFT JOIN "player" ON "player"."teamID" = "team"."id" \
+                GROUP BY "team"."id" \
+                HAVING COUNT(DISTINCT "player"."id") = 0
+                """)
+        }
+    }
     
+    func test_delete() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("a").unique()
+                t.column("b")
+                t.column("c")
+                t.uniqueKey(["b", "c"])
+            }
+            try db.create(table: "country") { t in
+                t.primaryKey("code", .text)
+            }
+            try db.create(table: "document") { t in
+                t.column("a")
+            }
 
+            // Use Table<Void> when we want to make sure the generic type is not used.
+            
+            do {
+                try Table<Void>("player").deleteAll(db)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player"
+                    """)
+                
+                try Table<Void>("player").all().deleteAll(db)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player"
+                    """)
+            }
+            
+            do {
+                try Table<Void>("player").deleteOne(db, key: 1)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE "id" = 1
+                    """)
+                
+                try Table<Void>("country").deleteOne(db, key: "FR")
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" = 'FR'
+                    """)
+                
+                try Table<Void>("document").deleteOne(db, key: 1)
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "document" WHERE "rowid" = 1
+                    """)
+            }
+            
+            do {
+                try Table<Void>("player").deleteOne(db, key: ["a": "foo"])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE "a" = 'foo'
+                    """)
+                
+                try Table<Void>("player").deleteOne(db, key: ["b": "bar", "c": "baz"])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE ("b" = 'bar') AND ("c" = 'baz')
+                    """)
+            }
+
+            do {
+                try Table<Void>("player").deleteAll(db, keys: [1, 2])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE "id" IN (1, 2)
+                    """)
+                
+                try Table<Void>("country").deleteAll(db, keys: ["FR", "DE"])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" IN ('FR', 'DE')
+                    """)
+                
+                try Table<Void>("document").deleteAll(db, keys: [1, 2])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "document" WHERE "rowid" IN (1, 2)
+                    """)
+            }
+            
+            do {
+                try Table<Void>("player").deleteAll(db, keys: [["a": "toto"], ["a": "titi"]])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE ("a" = 'toto') OR ("a" = 'titi')
+                    """)
+                
+                try Table<Void>("player").deleteAll(db, keys: [["b": "toto", "c": "titi"], ["b": "tata", "c": "tonton"]])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "player" WHERE (("b" = 'toto') AND ("c" = 'titi')) OR (("b" = 'tata') AND ("c" = 'tonton'))
+                    """)
+            }
+            
+            do {
+                // Non-optional ID
+                struct Country: Identifiable { var id: String }
+                
+                try Table<Country>("country").deleteOne(db, id: "FR")
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" = 'FR'
+                    """)
+                
+                try Table<Country>("country").deleteAll(db, ids: ["FR", "DE"])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" IN ('FR', 'DE')
+                    """)
+            }
+            
+            do {
+                // Optional ID
+                struct Country: Identifiable { var id: String? }
+                
+                try Table<Country>("country").deleteOne(db, id: "FR")
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" = 'FR'
+                    """)
+                
+                clearSQLQueries()
+                try Table<Country>("country").deleteOne(db, id: nil)
+                XCTAssertNil(lastSQLQuery) // Database not hit
+                
+                try Table<Country>("country").deleteAll(db, ids: ["FR", "DE"])
+                XCTAssertEqual(lastSQLQuery, """
+                    DELETE FROM "country" WHERE "code" IN ('FR', 'DE')
+                    """)
+            }
+        }
+    }
     
-
+    func test_updateAll() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("score", .integer)
+            }
+            let assignment = Column("score").set(to: 0)
+            
+            // Use Table<Void> when we want to make sure the generic type is not used.
+            
+            do {
+                try Table<Void>("player").updateAll(db, assignment)
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE "player" SET "score" = 0
+                    """)
+            }
+            do {
+                try Table<Void>("player").updateAll(db, [assignment])
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE "player" SET "score" = 0
+                    """)
+            }
+            do {
+                try Table<Void>("player").updateAll(db, onConflict: .ignore, assignment)
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE OR IGNORE "player" SET "score" = 0
+                    """)
+            }
+        }
+    }
     
+    func test_updateAll_DatabaseComponents() throws {
+        struct Player: TableRecord {
+            enum Columns {
+                static let score = Column("score")
+            }
+        }
+        
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("score", .integer)
+            }
+            
+            do {
+                try Table<Player>("player").updateAll(db) { $0.score.set(to: 0) }
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE "player" SET "score" = 0
+                    """)
+            }
+            do {
+                try Table<Player>("player").updateAll(db) { [$0.score.set(to: 0)] }
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE "player" SET "score" = 0
+                    """)
+            }
+            do {
+                try Table<Player>("player").updateAll(db, onConflict: .ignore) { $0.score.set(to: 0) }
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE OR IGNORE "player" SET "score" = 0
+                    """)
+            }
+            do {
+                try Table<Player>("player").updateAll(db, onConflict: .ignore) { [$0.score.set(to: 0)] }
+                XCTAssertEqual(self.lastSQLQuery, """
+                    UPDATE OR IGNORE "player" SET "score" = 0
+                    """)
+            }
+        }
+    }
 
+    func test_exists() throws {
+        try makeDatabaseQueue().write { db in
+            try db.create(table: "player") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("a").unique()
+                t.column("b")
+                t.column("c")
+                t.uniqueKey(["b", "c"])
+            }
+            try db.create(table: "country") { t in
+                t.primaryKey("code", .text)
+            }
+            try db.create(table: "document") { t in
+                t.column("a")
+            }
 
+            // Use Table<Void> when we want to make sure the generic type is not used.
+            
+            do {
+                try XCTAssertFalse(Table<Void>("player").exists(db, key: 1))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "player" WHERE "id" = 1)
+                    """)
+                
+                try XCTAssertFalse(Table<Void>("country").exists(db, key: "FR"))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "country" WHERE "code" = 'FR')
+                    """)
+                
+                try XCTAssertFalse(Table<Void>("document").exists(db, key: 1))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "document" WHERE "rowid" = 1)
+                    """)
+            }
+            
+            do {
+                try XCTAssertFalse(Table<Void>("player").exists(db, key: ["a": "foo"]))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "player" WHERE "a" = 'foo')
+                    """)
+                
+                try XCTAssertFalse(Table<Void>("player").exists(db, key: ["b": "bar", "c": "baz"]))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "player" WHERE ("b" = 'bar') AND ("c" = 'baz'))
+                    """)
+            }
 
+            do {
+                // Non-optional ID
+                struct Country: Identifiable { var id: String }
+                
+                try XCTAssertFalse(Table<Country>("country").exists(db, id: "FR"))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "country" WHERE "code" = 'FR')
+                    """)
+            }
+            
+            do {
+                // Optional ID
+                struct Country: Identifiable { var id: String? }
+                
+                try XCTAssertFalse(Table<Country>("country").exists(db, id: "FR"))
+                XCTAssertEqual(lastSQLQuery, """
+                    SELECT EXISTS (SELECT * FROM "country" WHERE "code" = 'FR')
+                    """)
+                
+                clearSQLQueries()
+                try XCTAssertFalse(Table<Country>("country").exists(db, id: nil))
+                XCTAssertNil(lastSQLQuery) // Database not hit
+            }
+        }
+    }
 }

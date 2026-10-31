@@ -201,26 +201,28 @@
       }
     }
 
+    // Writes run in a transaction managed by the overlay, as GRDB's `inTransaction`, so that
+    // transaction statements are traced and `afterNextTransaction` callbacks run.
     @_disfavoredOverload
     public func write<T>(_ updates: (Database) throws -> T) throws -> T {
-      try withoutActuallyEscaping(updates) { updates in
-        let operation = SynchronousTransfer(value: updates)
-        return try translate {
-          try orbitDatabase.writeBlocking { transaction in
-            try transaction.withScopedAccess {
-              SynchronousTransfer(value: try operation.value(Database($0)))
-            }
-          }
-          .value
+      try writeWithoutTransaction { db in
+        var result: T?
+        try db.inTransaction {
+          result = try updates(db)
+          return .commit
         }
+        return result!
       }
     }
 
     public func write<T: Sendable>(_ updates: @Sendable (Database) throws -> T) async throws -> T {
-      try await translate {
-        try await orbitDatabase.write { transaction in
-          try transaction.withScopedAccess { try updates(Database($0)) }
+      try await writeWithoutTransaction { db in
+        var result: T?
+        try db.inTransaction {
+          result = try updates(db)
+          return .commit
         }
+        return result!
       }
     }
 
@@ -247,6 +249,20 @@
           try connection.withScopedAccess { try updates(Database($0)) }
         }
       }
+    }
+
+    /// Runs `updates` outside a transaction, while no read runs. SQLiteOrbit's writes are
+    /// already barriers against the reads of their pool, so this is `writeWithoutTransaction`.
+    @_disfavoredOverload
+    public func barrierWriteWithoutTransaction<T>(_ updates: (Database) throws -> T) throws -> T {
+      try writeWithoutTransaction(updates)
+    }
+
+    /// Runs `updates` outside a transaction, while no read runs.
+    public func barrierWriteWithoutTransaction<T: Sendable>(
+      _ updates: @Sendable (Database) throws -> T
+    ) async throws -> T {
+      try await writeWithoutTransaction(updates)
     }
 
     public func erase() throws {
@@ -291,6 +307,89 @@
   public struct Configuration: Sendable {
     private(set) var native: SQLiteConfiguration
     public var maximumReaderCount = 5
+
+    /// Whether statement arguments appear in error descriptions and trace events.
+    public var publicStatementArguments = false
+
+    /// Whether connections refuse writes. Opening a missing database file fails with
+    /// `SQLITE_CANTOPEN`; writes fail with `SQLITE_READONLY` (through `PRAGMA query_only`).
+    public var readonly = false
+
+    /// A label for the database, used for diagnostics.
+    public var label: String? = nil
+
+    /// The journal mode of database queues.
+    public var journalMode: JournalModeConfiguration = .default
+
+    /// GRDB disables double-quoted string literals by default. SQLiteOrbit has no access to
+    /// `sqlite3_db_config`, so this value is recorded but connections keep SQLite's default.
+    public var acceptsDoubleQuotedStringLiterals = false
+
+    /// Whether accesses may leave transactions open. SQLiteOrbit always refuses this.
+    public var allowsUnsafeTransactions = false
+
+    /// Recorded for source compatibility; SQLiteOrbit schedules accesses itself.
+    public var qos: DispatchQoS = .default
+
+    /// Recorded for source compatibility; SQLiteOrbit schedules accesses itself.
+    public var targetQueue: DispatchQueue? = nil
+
+    /// Recorded for source compatibility; SQLiteOrbit schedules accesses itself.
+    public var writeTargetQueue: DispatchQueue? = nil
+
+    /// Recorded for source compatibility; pool readers are always open.
+    public var persistentReadOnlyConnections = false
+
+    /// The busy mode of read-only pool connections, when it differs from `busyMode`.
+    /// Recorded for source compatibility; all connections use `busyMode`.
+    public var readonlyBusyMode: Database.BusyMode? = nil
+
+    /// Recorded for source compatibility.
+    public var observesSuspensionNotifications = false
+
+    /// Recorded for source compatibility.
+    public var automaticMemoryManagement = false
+
+    /// Journal modes of database queues.
+    public enum JournalModeConfiguration: Sendable {
+      /// The default journal mode of SQLite.
+      case `default`
+      /// Write-ahead logging.
+      case wal
+    }
+
+    /// The native configuration, with the GRDB-only options applied to each connection.
+    var resolvedNative: SQLiteConfiguration {
+      var native = native
+      if journalMode == .wal {
+        native.journalMode = .wal
+      }
+      let configuration = self
+      let publicStatementArguments = publicStatementArguments
+      let readonly = readonly
+      native.setups.append(
+        SQLiteSetup { connection in
+          try connection.withScopedAccess { access in
+            let db = Database(access)
+            db.connectionState.configuration = configuration
+            db.connectionState.publicStatementArguments = publicStatementArguments
+            if readonly {
+              try db.execute(sql: "PRAGMA query_only = 1")
+            }
+          }
+        }
+      )
+      return native
+    }
+
+    // GRDB opens read-only databases without creating them.
+    func checkReadonlyPath(_ path: String) throws {
+      let databasePath = OrbitDatabasePath(path)
+      guard readonly, !databasePath.isPrivateToConnection,
+        !FileManager.default.fileExists(atPath: databasePath.sqlitePath)
+      else { return }
+      throw DatabaseError(resultCode: .SQLITE_CANTOPEN)
+    }
 
     public var foreignKeysEnabled: Bool {
       get {
@@ -366,7 +465,7 @@
     public enum BusyMode: Sendable {
       case immediateError
       case timeout(TimeInterval)
-      case callback(@Sendable (Int) -> Bool)
+      case callback(Database.BusyCallback)
     }
   }
 
@@ -382,13 +481,30 @@
     public init(path: String, configuration: Configuration) throws {
       self.path = path
       self.configuration = configuration
+      try configuration.checkReadonlyPath(path)
       orbitDatabase = try translate {
-        try SQLiteQueue(path: OrbitDatabasePath(path), configuration: configuration.native)
+        try SQLiteQueue(path: OrbitDatabasePath(path), configuration: configuration.resolvedNative)
       }
+    }
+
+    /// Opens a private in-memory database. Unlike GRDB, queues with the same name do not share
+    /// a database: SQLiteOrbit does not open shared-cache memory databases.
+    public convenience init(named name: String?, configuration: Configuration) throws {
+      try self.init(path: ":memory:", configuration: configuration)
     }
 
     public func inDatabase<T>(_ body: (Database) throws -> T) throws -> T {
       try writeWithoutTransaction(body)
+    }
+
+    /// Runs `body` in a transaction, committing or rolling back as the body requests.
+    public func inTransaction(
+      _ kind: Database.TransactionKind? = nil,
+      _ body: (Database) throws -> Database.TransactionCompletion
+    ) throws {
+      try writeWithoutTransaction { db in
+        try db.inTransaction(kind) { try body(db) }
+      }
     }
   }
 
@@ -400,10 +516,11 @@
     public init(path: String, configuration: Configuration) throws {
       self.path = path
       self.configuration = configuration
+      try configuration.checkReadonlyPath(path)
       orbitDatabase = try translate {
         try SQLitePool(
           path: OrbitDatabasePath(path),
-          configuration: configuration.native,
+          configuration: configuration.resolvedNative,
           readerCount: configuration.maximumReaderCount
         )
       }
@@ -434,6 +551,11 @@
 
       public convenience init(path: String) throws {
         try self.init(path: path, configuration: Configuration())
+      }
+
+      /// Opens a private in-memory database; see `init(named:configuration:)`.
+      public convenience init(named name: String?) throws {
+        try self.init(named: name, configuration: Configuration())
       }
     }
 

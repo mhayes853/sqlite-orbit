@@ -9,11 +9,12 @@ Subcommands:
   autoexclude FILE.. | all | ported [--only REGEX]
                       Port FILE, removing the tests (and helper declarations) that do not
                       compile against the overlay. Recomputed from scratch on every run.
-  run [--record] [--only REGEX]
+  run [--record | --verify] [--only REGEX]
                       Run the built upstream tests in isolated processes (one per class, then
                       one per test for classes that crash or hang) and summarize; with
                       --record, make the area's runtime skips exactly the failing tests.
                       Runs ignore skips (GRDB_UPSTREAM_RUN_SKIPPED), so fixed tests show up.
+                      --verify instead runs each class with its skips, like `swift test`.
   skips LOG           Record failing tests from a `swift test` log as runtime skips.
   api                 Compare GRDB's and the overlay's public symbol graphs by name.
   report              Summarize the manifest: ported files, removed tests, skipped tests.
@@ -696,9 +697,11 @@ def xctest_binary():
     return path
 
 
-def run_xctest(binary, selector, timeout):
+def run_xctest(binary, selector, timeout, run_skipped=True):
     try:
-        env = dict(os.environ, GRDB_UPSTREAM_RUN_SKIPPED="1")
+        env = dict(os.environ)
+        if run_skipped:
+            env["GRDB_UPSTREAM_RUN_SKIPPED"] = "1"
         result = subprocess.run([binary, selector], capture_output=True, text=True, timeout=timeout,
                                 errors="replace", env=env)
         return result.returncode, result.stdout + result.stderr
@@ -731,6 +734,8 @@ def class_paths(entries):
 def cmd_run(args):
     only = take_only(args)
     record = "--record" in args
+    if "--verify" in args:
+        return verify(only)
     binary = xctest_binary()
     listing = subprocess.run([binary, "--list-tests"], capture_output=True, text=True).stdout
     tests = re.findall(r"^SQLiteOrbitGRDBUpstreamTests\.(\w+)/(\w+)$", listing, re.M)
@@ -812,6 +817,34 @@ def cmd_run(args):
         with open(os.environ["GRDB_RUN_REPORT"], "w") as f:
             for key in tests:
                 f.write(f"{outcomes.get(key, 'missing')}\t{key[0]}.{key[1]}\n")
+
+
+def verify(only):
+    """Runs every class with the compiled-in skips, as `swift test` would, one process each."""
+    binary = xctest_binary()
+    listing = subprocess.run([binary, "--list-tests"], capture_output=True, text=True).stdout
+    classes = sorted(set(re.findall(r"^SQLiteOrbitGRDBUpstreamTests\.(\w+)/", listing, re.M)))
+    from concurrent.futures import ThreadPoolExecutor
+
+    def run_class(klass):
+        code, log = run_xctest(binary, f"SQLiteOrbitGRDBUpstreamTests.{klass}", 600, run_skipped=False)
+        return klass, code, log
+
+    totals = collections.Counter()
+    bad = []
+    with ThreadPoolExecutor(max_workers=max(2, (os.cpu_count() or 4) // 2)) as pool:
+        for klass, code, log in pool.map(run_class, classes):
+            outcomes, messages, _ = parse_results(log)
+            totals.update(outcomes.values())
+            if code != 0:
+                bad.append((klass, "timeout" if code is None else f"exit {code}",
+                            next(iter(messages.values()), "")))
+    print(f"upstream verify: passed {totals['passed']}, skipped {totals['skipped']}, "
+          f"failed {totals['failed']}, failing classes {len(bad)}")
+    for klass, why, message in bad:
+        print(f"  {klass}: {why} {message[:150]}")
+    if bad:
+        sys.exit(1)
 
 
 def cmd_skips(args):

@@ -25,9 +25,59 @@ class TableDefinitionTests: GRDBTestCase {
     
 
 
-
+    func testStrictTableCreationOption() throws {
+        guard Database.sqliteLibVersionNumber >= 3037000 else {
+            throw XCTSkip("STRICT tables are not available")
+        }
+        #if !GRDBCUSTOMSQLITE && !SQLITE_HAS_CODEC
+        guard #available(iOS 15.4, macOS 12.4, tvOS 15.4, watchOS 8.5, *) else {
+            throw XCTSkip("STRICT tables are not available")
+        }
+        #endif
+        
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test3", options: [.strict]) { t in
+                t.primaryKey("id", .integer)
+                t.column("a", .integer)
+                t.column("b", .real)
+                t.column("c", .text)
+                t.column("d", .blob)
+                t.column("e", .any)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test3" (\
+                "id" INTEGER PRIMARY KEY, \
+                "a" INTEGER, \
+                "b" REAL, \
+                "c" TEXT, \
+                "d" BLOB, \
+                "e" ANY\
+                ) STRICT
+                """)
+            
+            do {
+                try db.execute(sql: "INSERT INTO test3 (id, a) VALUES (1, 'foo')")
+                XCTFail("Expected DatabaseError.SQLITE_CONSTRAINT_DATATYPE")
+            } catch DatabaseError.SQLITE_CONSTRAINT_DATATYPE {
+            }
+        }
+    }
     
-
+    func testColumnLiteral() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            // Simple table creation
+            try db.create(table: "test") { t in
+                t.column(sql: "a TEXT")
+                t.column(literal: "b TEXT DEFAULT \("O'Brien")")
+            }
+            
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (a TEXT, b TEXT DEFAULT 'O''Brien')
+                """)
+        }
+    }
     
     func testUntypedColumn() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -44,9 +94,58 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testAutoIncrementedPrimaryKey() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.autoIncrementedPrimaryKey("id")
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "id" INTEGER PRIMARY KEY AUTOINCREMENT\
+                )
+                """)
+            return .rollback
+        }
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.autoIncrementedPrimaryKey("id", onConflict: .fail)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "id" INTEGER PRIMARY KEY ON CONFLICT FAIL AUTOINCREMENT\
+                )
+                """)
+            return .rollback
+        }
+    }
     
-
+    func testColumnPrimaryKeyOptions() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.primaryKey("id", .integer, onConflict: .fail)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "id" INTEGER PRIMARY KEY ON CONFLICT FAIL\
+                )
+                """)
+            return .rollback
+        }
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                // legacy api
+                t.column("id", .integer).primaryKey(autoincrement: true)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "id" INTEGER PRIMARY KEY AUTOINCREMENT\
+                )
+                """)
+            return .rollback
+        }
+    }
     
     func testColumnNotNull() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -180,7 +279,34 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testColumnCollation() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.column("name", .text).collate(.nocase)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "name" TEXT COLLATE NOCASE\
+                )
+                """)
+            return .rollback
+        }
+        
+        try dbQueue.inTransaction { db in
+            let collation = DatabaseCollation("foo") { (lhs, rhs) in .orderedSame }
+            db.add(collation: collation)
+            try db.create(table: "test") { t in
+                t.column("name", .text).collate(collation)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "name" TEXT COLLATE foo\
+                )
+                """)
+            return .rollback
+        }
+    }
     
     func testColumnReference() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -209,9 +335,116 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testColumnGeneratedAs() throws {
+#if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
+        guard Database.sqliteLibVersionNumber >= 3031000 else {
+            throw XCTSkip("Generated columns are not available")
+        }
+#else
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("Generated columns are not available")
+        }
+#endif
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.column("a", .integer)
+                t.column("b", .integer)
+                t.column("c", .text)
+                t.column("d", .integer).generatedAs(sql: "a*abs(b)", .virtual)
+                t.column("e", .text).generatedAs(sql: "substr(c,b,b+1)", .stored)
+                t.column("f").generatedAs(sql: "e")
+                t.column("g").generatedAs(Column("a") * 2)
+                t.column("h").generatedAs("O'Brien")
+            }
+            
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "a" INTEGER, \
+                "b" INTEGER, \
+                "c" TEXT, \
+                "d" INTEGER GENERATED ALWAYS AS (a*abs(b)) VIRTUAL, \
+                "e" TEXT GENERATED ALWAYS AS (substr(c,b,b+1)) STORED, \
+                "f" GENERATED ALWAYS AS (e) VIRTUAL, \
+                "g" GENERATED ALWAYS AS ("a" * 2) VIRTUAL, \
+                "h" GENERATED ALWAYS AS ('O''Brien') VIRTUAL\
+                )
+                """)
+            return .rollback
+        }
+    }
     
-
+    func testTablePrimaryKey() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                // Legacy api
+                t.primaryKey(["a", "b"])
+                t.column("a", .text)
+                t.column("b", .text)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "a" TEXT, \
+                "b" TEXT, \
+                PRIMARY KEY ("a", "b")\
+                )
+                """)
+            return .rollback
+        }
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.column("regular1")
+                t.primaryKey {
+                    t.column("a", .text)
+                    t.column("b", .text)
+                }
+                t.column("regular2")
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "regular1", \
+                "a" TEXT NOT NULL, \
+                "b" TEXT NOT NULL, \
+                "regular2", \
+                PRIMARY KEY ("a", "b")\
+                )
+                """)
+            return .rollback
+        }
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                // Legacy api
+                t.primaryKey(["a", "b"], onConflict: .fail)
+                t.column("a", .text)
+                t.column("b", .text)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "a" TEXT, \
+                "b" TEXT, \
+                PRIMARY KEY ("a", "b") ON CONFLICT FAIL\
+                )
+                """)
+            return .rollback
+        }
+        try dbQueue.inTransaction { db in
+            try db.create(table: "test") { t in
+                t.primaryKey(onConflict: .fail) {
+                    t.column("a", .text).defaults(to: "O'Reilly")
+                    t.column("b", .text)
+                }
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test" (\
+                "a" TEXT NOT NULL DEFAULT 'O''Reilly', \
+                "b" TEXT NOT NULL, \
+                PRIMARY KEY ("a", "b") ON CONFLICT FAIL\
+                )
+                """)
+            return .rollback
+        }
+    }
     
     func testTableUniqueKey() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -235,7 +468,33 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testTableForeignKey() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "parent") { t in
+                t.primaryKey {
+                    t.column("a", .text)
+                    t.column("b", .text)
+                }
+            }
+            try db.create(table: "child") { t in
+                t.foreignKey(["c", "d"], references: "parent", onDelete: .cascade, onUpdate: .cascade)
+                t.foreignKey(["d", "e"], references: "parent", columns: ["b", "a"], onDelete: .restrict, deferred: true)
+                t.column("c", .text)
+                t.column("d", .text)
+                t.column("e", .text)
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "child" (\
+                "c" TEXT, \
+                "d" TEXT, \
+                "e" TEXT, \
+                FOREIGN KEY ("c", "d") REFERENCES "parent"("a", "b") ON DELETE CASCADE ON UPDATE CASCADE, \
+                FOREIGN KEY ("d", "e") REFERENCES "parent"("b", "a") ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED\
+                )
+                """)
+        }
+    }
     
     func testTableCheck() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -314,7 +573,108 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
+    func testAutoReferences() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test1") { t in
+                t.primaryKey("id", .integer)
+                t.column("id2", .integer).references("test1")
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test1" (\
+                "id" INTEGER PRIMARY KEY, \
+                "id2" INTEGER REFERENCES "test1"("id")\
+                )
+                """)
 
+            try db.create(table: "test2_legacy") { t in
+                // Legacy api
+                t.column("id", .integer)
+                t.column("id2", .integer).references("test2_legacy")
+                t.primaryKey(["id"])
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test2_legacy" (\
+                "id" INTEGER, \
+                "id2" INTEGER REFERENCES "test2_legacy"("id"), \
+                PRIMARY KEY ("id")\
+                )
+                """)
+            
+            try db.create(table: "test2") { t in
+                t.column("id2", .integer).references("test2")
+                t.primaryKey {
+                    t.column("id", .integer)
+                }
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test2" (\
+                "id2" INTEGER REFERENCES "test2"("id"), \
+                "id" INTEGER NOT NULL, \
+                PRIMARY KEY ("id")\
+                )
+                """)
+            
+            try db.create(table: "test3Legacy") { t in
+                t.column("a", .integer)
+                t.column("b", .integer)
+                t.column("c", .integer)
+                t.column("d", .integer)
+                t.foreignKey(["c", "d"], references: "test3Legacy")
+                t.primaryKey(["a", "b"])
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test3Legacy" (\
+                "a" INTEGER, \
+                "b" INTEGER, \
+                "c" INTEGER, \
+                "d" INTEGER, \
+                PRIMARY KEY ("a", "b"), \
+                FOREIGN KEY ("c", "d") REFERENCES "test3Legacy"("a", "b")\
+                )
+                """)
+
+            try db.create(table: "test3") { t in
+                t.column("c", .integer)
+                t.column("d", .integer)
+                t.foreignKey(["c", "d"], references: "test3")
+                t.primaryKey {
+                    t.column("a", .integer)
+                    t.column("b", .integer)
+                }
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test3" (\
+                "c" INTEGER, \
+                "d" INTEGER, \
+                "a" INTEGER NOT NULL, \
+                "b" INTEGER NOT NULL, \
+                PRIMARY KEY ("a", "b"), \
+                FOREIGN KEY ("c", "d") REFERENCES "test3"("a", "b")\
+                )
+                """)
+
+            try db.create(table: "test4") { t in
+                t.column("parent", .integer).references("test4")
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test4" (\
+                "parent" INTEGER REFERENCES "test4"("rowid")\
+                )
+                """)
+            
+            try db.create(table: "test5") { t in
+                t.column("parent", .integer)
+                t.foreignKey(["parent"], references: "test5")
+            }
+            assertEqualSQL(lastSQLQuery!, """
+                CREATE TABLE "test5" (\
+                "parent" INTEGER, \
+                FOREIGN KEY ("parent") REFERENCES "test5"("rowid")\
+                )
+                """)
+        }
+    }
     
     func testRenameTable() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -333,7 +693,34 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testAlterTable() throws {
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test") { t in
+                t.column("a", .text)
+            }
+            try db.create(table: "alt") { t in
+                t.column("a", .text)
+            }
+            
+            clearSQLQueries()
+            try db.alter(table: "test") { t in
+                t.add(column: "b", .text)
+                t.add(column: "c", .integer).notNull().defaults(to: 1)
+                t.add(column: "d", .text).references("alt")
+                t.add(column: "e")
+                t.addColumn(sql: "f TEXT")
+                t.addColumn(literal: "g TEXT DEFAULT \("O'Brien")")
+            }
+            
+            assertEqualSQL(sqlQueries[sqlQueries.count - 6], "ALTER TABLE \"test\" ADD COLUMN \"b\" TEXT")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 5], "ALTER TABLE \"test\" ADD COLUMN \"c\" INTEGER NOT NULL DEFAULT 1")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 4], "ALTER TABLE \"test\" ADD COLUMN \"d\" TEXT REFERENCES \"alt\"(\"rowid\")")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 3], "ALTER TABLE \"test\" ADD COLUMN \"e\"")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 2], "ALTER TABLE \"test\" ADD COLUMN f TEXT")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 1], "ALTER TABLE \"test\" ADD COLUMN g TEXT DEFAULT 'O''Brien'")
+        }
+    }
     
     func testAlterTableAddAutoReferencingForeignKey() throws {
         let dbQueue = try makeDatabaseQueue()
@@ -384,9 +771,46 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
 
+    func testAlterTableRenameColumn() throws {
+        guard Database.sqliteLibVersionNumber >= 3025000 else {
+            throw XCTSkip("ALTER TABLE RENAME COLUMN is not available")
+        }
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test") { t in
+                t.column("a", .text)
+            }
+            
+            clearSQLQueries()
+            try db.alter(table: "test") { t in
+                t.rename(column: "a", to: "b")
+                t.add(column: "c")
+                t.rename(column: "c", to: "d")
+            }
+            
+            assertEqualSQL(sqlQueries[sqlQueries.count - 3], "ALTER TABLE \"test\" RENAME COLUMN \"a\" TO \"b\"")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 2], "ALTER TABLE \"test\" ADD COLUMN \"c\"")
+            assertEqualSQL(sqlQueries[sqlQueries.count - 1], "ALTER TABLE \"test\" RENAME COLUMN \"c\" TO \"d\"")
+        }
+    }
 
-
-
+    func testAlterTableRenameColumnInvalidatesSchemaCache() throws {
+        guard Database.sqliteLibVersionNumber >= 3025000 else {
+            throw XCTSkip("ALTER TABLE RENAME COLUMN is not available")
+        }
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test") { t in
+                t.column("a", .text)
+            }
+            try XCTAssertEqual(db.columns(in: "test").map(\.name), ["a"])
+            
+            try db.alter(table: "test") { t in
+                t.rename(column: "a", to: "b")
+            }
+            try XCTAssertEqual(db.columns(in: "test").map(\.name), ["b"])
+        }
+    }
     
     func testAlterTableAddGeneratedVirtualColumn() throws {
 #if GRDBCUSTOMSQLITE || SQLITE_HAS_CODEC
@@ -424,9 +848,53 @@ class TableDefinitionTests: GRDBTestCase {
         }
     }
     
-
+    func testAlterTableDropColumn() throws {
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("ALTER TABLE DROP COLUMN is not available")
+        }
+        #if !GRDBCUSTOMSQLITE && !SQLITE_HAS_CODEC
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("ALTER TABLE DROP COLUMN is not available")
+        }
+        #endif
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test") { t in
+                t.column("a", .text)
+                t.column("b", .text)
+            }
+            
+            clearSQLQueries()
+            try db.alter(table: "test") { t in
+                t.drop(column: "b")
+            }
+            assertEqualSQL(lastSQLQuery!, "ALTER TABLE \"test\" DROP COLUMN \"b\"")
+        }
+    }
     
-
+    func testAlterTableDropColumnInvalidatesSchemaCache() throws {
+        guard Database.sqliteLibVersionNumber >= 3035000 else {
+            throw XCTSkip("ALTER TABLE DROP COLUMN is not available")
+        }
+        #if !GRDBCUSTOMSQLITE && !SQLITE_HAS_CODEC
+        guard #available(iOS 15, macOS 12, tvOS 15, watchOS 8, *) else {
+            throw XCTSkip("ALTER TABLE DROP COLUMN is not available")
+        }
+        #endif
+        let dbQueue = try makeDatabaseQueue()
+        try dbQueue.inDatabase { db in
+            try db.create(table: "test") { t in
+                t.column("a", .text)
+                t.column("b", .text)
+            }
+            try XCTAssertEqual(db.columns(in: "test").map(\.name), ["a", "b"])
+            
+            try db.alter(table: "test") { t in
+                t.drop(column: "b")
+            }
+            try XCTAssertEqual(db.columns(in: "test").map(\.name), ["a"])
+        }
+    }
     
     func testDropTable() throws {
         let dbQueue = try makeDatabaseQueue()
