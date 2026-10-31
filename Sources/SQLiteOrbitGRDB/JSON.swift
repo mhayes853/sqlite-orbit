@@ -109,7 +109,7 @@
     /// already JSON are wrapped in `JSON()` (or `JSONB()` on SQLite 3.45+).
     var jsonBuilderExpression: SQLExpression {
       guard prefersJSON, !isJSONValue else { return self }
-      return .function(Database.sqliteLibVersionNumber >= 3_045_000 ? "JSONB" : "JSON", [self])
+      return .function(builtInSQLiteVersionNumber >= 3_045_000 ? "JSONB" : "JSON", [self])
     }
   }
 

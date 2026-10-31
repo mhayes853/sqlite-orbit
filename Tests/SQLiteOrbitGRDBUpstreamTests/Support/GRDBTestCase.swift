@@ -89,6 +89,32 @@ class GRDBTestCase: XCTestCase {
     {
       throw XCTSkip(reason)
     }
+    if let reason = environmentSkipReason(upstreamTestKey) {
+      throw XCTSkip(reason)
+    }
+  }
+
+  // Upstream tests whose outcome depends on the SQLite build rather than on the overlay. These
+  // cannot live in the manifest, whose skips are recomputed on the development machine.
+  private func environmentSkipReason(_ key: String) -> String? {
+    switch key {
+    case "Issue1838Tests.test_interrupted_rollback":
+      // GRDB works around this FTS5 bug by resetting every prepared statement through
+      // `sqlite3_next_stmt`, which the core's library table does not expose. SQLite 3.54 passes;
+      // 3.45 leaves the connection interrupted after the rollback.
+      if Database.sqliteLibVersionNumber < 3_054_000 {
+        return
+          "SQLite \(Database.sqliteLibVersionNumber) keeps FTS5's interrupted state after a rollback"
+      }
+    case "DatabaseConfigurationTests.testAcceptsDoubleQuotedStringLiteralsTrue":
+      // The overlay cannot enable SQLITE_DBCONFIG_DQS_DML, and SQLCipher is built without it.
+      #if SQLCipher
+        return "SQLCipher is built without double-quoted string literals"
+      #endif
+    default:
+      break
+    }
+    return nil
   }
 
   // "Class.testName" on Linux; "-[Class testName]" on Apple platforms.

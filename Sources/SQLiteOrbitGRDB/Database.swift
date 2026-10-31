@@ -260,6 +260,19 @@
         SQLiteConfiguration.default.library.runtime.versionNumber()
       }
     #endif
+  }
+
+  // The built-in SQLite's version, or 0 when the package links none (custom libraries only), so
+  // version-dependent SQL generation falls back to the most widely supported spelling.
+  var builtInSQLiteVersionNumber: CInt {
+    #if BuiltInSQLite
+      Database.sqliteLibVersionNumber
+    #else
+      0
+    #endif
+  }
+
+  extension Database {
 
     /// The configuration of the database that opened this connection.
     public var configuration: Configuration {

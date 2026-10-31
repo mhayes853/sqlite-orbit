@@ -68,7 +68,7 @@
 
   extension NSUUID: DatabaseValueConvertible {
     public var databaseValue: DatabaseValue {
-      UUID(uuidString: uuidString)!.databaseValue
+      Foundation.UUID(uuidString: uuidString)!.databaseValue
     }
 
     public static func fromDatabaseValue(_ dbValue: DatabaseValue) -> Self? {
@@ -76,7 +76,7 @@
       case .blob(let data) where data.count != 16:
         return nil
       case .blob, .string:
-        return UUID.fromDatabaseValue(dbValue)
+        return Foundation.UUID.fromDatabaseValue(dbValue)
           .flatMap { NSUUID(uuidString: $0.uuidString) as? Self }
       default:
         return nil
