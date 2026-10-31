@@ -308,7 +308,7 @@
         configuration.register(function: $repeated)
 
         let database = try OrbitIPCDatabase(
-          path: .file(directory.appendingPathComponent("db.sqlite")),
+          path: OrbitDatabasePath(directory.appendingPathComponent("db.sqlite").path),
           configuration: configuration,
           coordination: .init(directory: directory)
         )

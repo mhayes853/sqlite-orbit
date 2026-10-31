@@ -171,7 +171,7 @@
         var configuration = SQLiteConfiguration.default
         configuration.isForeignKeysEnabled = false
         let pool = try SQLitePool(
-          path: .file(directory.appendingPathComponent("db.sqlite")),
+          path: OrbitDatabasePath(directory.appendingPathComponent("db.sqlite").path),
           configuration: configuration,
           readerCount: 2
         )
