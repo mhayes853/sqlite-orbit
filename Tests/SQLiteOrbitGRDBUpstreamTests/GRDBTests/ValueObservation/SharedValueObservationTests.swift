@@ -120,7 +120,7 @@ class SharedValueObservationTests: GRDBTestCase {
         XCTAssertEqual(log.flush(), ["cancel"])
     }
     
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func test_immediate_publisher() throws {
         let dbQueue = try makeDatabaseQueue()
         try dbQueue.write { db in
@@ -393,7 +393,7 @@ class SharedValueObservationTests: GRDBTestCase {
         XCTAssertTrue(log.flush().contains("cancel")) // Ignore eventual notification of value: 3
     }
     
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func test_async_publisher() throws {
         let dbQueue = try makeDatabaseQueue()
         try dbQueue.write { db in
@@ -613,7 +613,7 @@ class SharedValueObservationTests: GRDBTestCase {
         XCTAssertEqual(log.flush(), ["cancel"])
     }
     
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func test_task_publisher() throws {
         let dbQueue = try makeDatabaseQueue()
         try dbQueue.write { db in
@@ -739,7 +739,7 @@ class SharedValueObservationTests: GRDBTestCase {
         XCTAssertEqual(log.flush(), [])
     }
 
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func test_error_recovery_observationLifetime() throws {
         let dbQueue = try makeDatabaseQueue()
         try dbQueue.write { db in
@@ -793,7 +793,7 @@ class SharedValueObservationTests: GRDBTestCase {
     }
 #endif
     
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func test_error_recovery_whileObserved() throws {
         let dbQueue = try makeDatabaseQueue()
         try dbQueue.write { db in

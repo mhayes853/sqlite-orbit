@@ -911,7 +911,7 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     }
 
     func testQoS() throws {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("__dispatch_get_global_queue unavailable")
 #else
         func test(qos: DispatchQoS) throws {
@@ -1049,7 +1049,7 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     // MARK: - Concurrent opening
     
     func testConcurrentOpening() throws {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("NSFileCoordinator unavailable")
 #else
         for _ in 0..<50 {
@@ -1083,7 +1083,7 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     // Test for sample code in Documentation.docc/DatabaseSharing.md.
     // This test passes if this method compiles
     private func openSharedDatabase(at databaseURL: URL) throws -> DatabasePool {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("NSFileCoordinator unavailable")
 #else
         let coordinator = NSFileCoordinator(filePresenter: nil)
@@ -1116,7 +1116,7 @@ class DatabasePoolConcurrencyTests: GRDBTestCase {
     // Test for sample code in Documentation.docc/DatabaseSharing.md.
     // This test passes if this method compiles
     private func openSharedReadOnlyDatabase(at databaseURL: URL) throws -> DatabasePool? {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("NSFileCoordinator unavailable")
 #else
         let coordinator = NSFileCoordinator(filePresenter: nil)

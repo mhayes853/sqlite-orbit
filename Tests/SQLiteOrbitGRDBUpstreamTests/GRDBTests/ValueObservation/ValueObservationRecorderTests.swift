@@ -1,6 +1,6 @@
 // Generated from GRDB 7.11.1 Tests/GRDBTests/ValueObservation/ValueObservationRecorderTests.swift by Tests/GRDBReference/grdb_upstream.py.
 // Do not edit: change Tests/GRDBReference/upstream-manifest/ and run `sync`.
-#if canImport(Darwin)
+#if (canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
 import Dispatch
 import XCTest
 

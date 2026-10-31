@@ -70,7 +70,11 @@ SUPPORT_FILES = [
     "Core/BackupTestCase.swift",
     "FailureTestCase.swift",
 ]
-NEVER_PORTED_DIRS = ["GRDBCombineTests/CombineExpectations/", "GRDBCipher/"]
+# Combine tests and SQLCipher fixtures are Apple- or codec-specific and cannot be verified here.
+NEVER_PORTED_DIRS = ["GRDBCombineTests/", "GRDBCipher/"]
+# Upstream sections compiled only on Apple platforms. Ports are verified on Linux, so these
+# sections compile as if the condition were false everywhere.
+APPLE_ONLY_CONDITIONS = ["canImport(Combine)", "canImport(Darwin)", "canImport(CoreGraphics)"]
 
 
 # MARK: - Manifest
@@ -335,9 +339,18 @@ def convert_imports(text):
     return text
 
 
+def disable_apple_only_sections(text):
+    for condition in APPLE_ONLY_CONDITIONS:
+        text = re.sub(r"^(\s*#(?:if|elseif)\b.*?)" + re.escape(condition),
+                      lambda m: m.group(1) + "(" + condition + " && GRDB_UPSTREAM_APPLE_ONLY)",
+                      text, flags=re.M)
+    return text
+
+
 def ported_source(path, entry):
     text = open(os.path.join(UPSTREAM_TESTS, path)).read()
     text = convert_imports(text)
+    text = disable_apple_only_sections(text)
     if entry is not None and (entry.removed or entry.pinned):
         text = remove_declarations(text, list(entry.pinned) + list(entry.removed))
     banner = (

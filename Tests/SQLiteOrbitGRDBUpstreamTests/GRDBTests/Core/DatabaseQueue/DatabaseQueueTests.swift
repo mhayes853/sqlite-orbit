@@ -120,7 +120,7 @@ class DatabaseQueueTests: GRDBTestCase {
             XCTAssertEqual(db.configuration.label, nil)
             XCTAssertEqual(db.description, "GRDB.DatabaseQueue")
             
-#if canImport(Darwin)
+#if (canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
             // This test CAN break in future releases: the dispatch queue labels
             // are documented to be a debug-only tool.
             let label = String(utf8String: __dispatch_queue_get_label(nil))
@@ -137,7 +137,7 @@ class DatabaseQueueTests: GRDBTestCase {
             XCTAssertEqual(db.configuration.label, "Toreador")
             XCTAssertEqual(db.description, "Toreador")
             
-#if canImport(Darwin)
+#if (canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
             // This test CAN break in future releases: the dispatch queue labels
             // are documented to be a debug-only tool.
             let label = String(utf8String: __dispatch_queue_get_label(nil))
@@ -216,7 +216,7 @@ class DatabaseQueueTests: GRDBTestCase {
     }
 
     func testQoS() throws {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("__dispatch_get_global_queue not available on non-Darwin platforms")
 #else
         func test(qos: DispatchQoS) throws {

@@ -218,7 +218,7 @@ class DatabaseErrorTests: GRDBTestCase {
     }
     
     func testNSErrorBridging() throws {
-#if !canImport(Darwin)
+#if !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("NSError bridging not available on non-Darwin platforms")
 #else
         let dbQueue = try makeDatabaseQueue()

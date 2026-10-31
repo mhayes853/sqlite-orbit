@@ -12,7 +12,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testEmptyMigratorSync() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -27,7 +27,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testEmptyMigratorAsync() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -51,7 +51,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testEmptyMigratorPublisher() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -68,7 +68,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testNonEmptyMigratorSync() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -116,7 +116,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testNonEmptyMigratorAsync() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -171,7 +171,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testNonEmptyMigratorPublisher() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -227,7 +227,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
 
     func testEmptyMigratorPublisherIsAsynchronous() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -253,7 +253,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testNonEmptyMigratorPublisherIsAsynchronous() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {
@@ -280,7 +280,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testMigratorPublisherDefaultScheduler() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test<Writer: DatabaseWriter>(writer: Writer) {
@@ -309,7 +309,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
     
     func testMigratorPublisherCustomScheduler() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test<Writer: DatabaseWriter>(writer: Writer) {
@@ -339,7 +339,7 @@ class DatabaseMigratorTests : GRDBTestCase {
     }
 
     func testMigrateUpTo() throws {
-#if !canImport(Combine)
+#if !(canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
         throw XCTSkip("Combine not supported on this platform")
 #else
         func test(writer: some DatabaseWriter) throws {

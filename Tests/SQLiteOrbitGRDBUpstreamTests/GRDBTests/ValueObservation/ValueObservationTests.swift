@@ -839,7 +839,7 @@ class ValueObservationTests: GRDBTestCase {
     }
 
     // MARK: - Async Await
-#if canImport(Combine)
+#if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     
     func testAsyncAwait_values_prefix() async throws {
         func test(_ writer: some DatabaseWriter) async throws {

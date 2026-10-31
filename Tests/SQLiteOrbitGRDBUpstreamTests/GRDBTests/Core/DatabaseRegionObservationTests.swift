@@ -6,7 +6,7 @@ import SQLiteOrbitGRDB
 class DatabaseRegionObservationTests: GRDBTestCase {
     // Test passes if it compiles.
     // See <https://github.com/groue/GRDB.swift/issues/1541>
-    #if canImport(Combine)
+    #if (canImport(Combine) && GRDB_UPSTREAM_APPLE_ONLY)
     func testAnyDatabaseWriter(writer: any DatabaseWriter) throws {
         let observation = DatabaseRegionObservation(tracking: .fullDatabase)
         

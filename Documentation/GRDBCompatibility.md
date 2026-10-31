@@ -228,13 +228,15 @@ files run against GRDB itself with GRDB's original harness and no skips.
 | Dump | 55 | 55 | 0 | 55 |
 | JSON | 54 | 54 | 0 | 54 |
 | Migrations | 35 | 35 | 4 | 31 |
-| Combine (Apple only) | 32 | 0 | 0 | 0 |
+| Combine (Apple only, not ported) | 32 | 0 | 0 | 0 |
 | **Total** | **2877** | **2477** | **134** | **2343** |
 
 Of the 2343 running tests, 2297 pass and 46 are skipped by upstream itself on Linux. GRDB passes all
 2477 compiled tests. 200 of the 227 upstream files are ported. "Compiled on Linux" excludes tests
 that do not compile against the overlay and tests that upstream compiles only on Apple platforms or
-with snapshot support. Type-checking every upstream file verbatim, 173 files and 2527 of 2877 tests
+with snapshot support. The port compiles upstream's Apple-only sections (`canImport(Combine)`,
+`canImport(Darwin)`, `canImport(CoreGraphics)`) as absent on every platform, since they cannot be
+verified on Linux. Type-checking every upstream file verbatim, 173 files and 2527 of 2877 tests
 (87.8%) compile; before this work, 25 files and about 630 tests did.
 
 ```sh

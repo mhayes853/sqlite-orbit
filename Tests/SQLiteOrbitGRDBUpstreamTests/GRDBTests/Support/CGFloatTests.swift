@@ -3,9 +3,9 @@
 import XCTest
 import SQLiteOrbitGRDB
 
-#if canImport(CoreGraphics)
+#if (canImport(CoreGraphics) && GRDB_UPSTREAM_APPLE_ONLY)
 import CoreGraphics
-#elseif !canImport(Darwin)
+#elseif !(canImport(Darwin) && GRDB_UPSTREAM_APPLE_ONLY)
 import Foundation
 #endif
 
