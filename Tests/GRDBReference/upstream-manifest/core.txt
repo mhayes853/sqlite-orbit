@@ -1,5 +1,6 @@
 # Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the
-# format. QueryInterface, FTS, and JSON live in query.txt; everything else in core.txt.
+# format. QueryInterface, FTS, JSON, and Record/PersistableRecord and Record/TableRecord
+# live in query.txt; everything else in core.txt.
 
 Compilation/CompilationProtocolTests.swift
   - UserStatementColumnConvertible1: missing type SQLiteStatement
@@ -465,186 +466,6 @@ Record/FetchableRecord/FetchableRecordTests.swift
   - testFetchOne: generic parameter 'RowDecoder' could not be inferred
   - testFetchOneStepFailure: generic parameter 'RowDecoder' could not be inferred
   - testFetchOneCompilationFailure: generic parameter 'RowDecoder' could not be inferred
-Record/PersistableRecord/DatabaseColumnEncodingStrategyTests.swift
-Record/PersistableRecord/DatabaseDataEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'666f6f')") is not equal to ("SELECT * FROM "t" WHE
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'666f6f')") is not equal to ("SELECT * FROM "t" WHE
-Record/PersistableRecord/DatabaseDateEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679')") is not equal to ("SELEC
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN ('1969-12-20 13:39:05.679')") is not equal to ("SELEC
-Record/PersistableRecord/DatabaseUUIDEncodingStrategyTests.swift
-  - testDeleteID: missing Table.deleteOne
-  ~ testFilterID: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70')") is not equal
-  ~ testFilterKey: runtime: XCTAssertEqual failed: ("SELECT * FROM "t" WHERE "id" IN (x'6162636465666768696a6b6c6d6e6f70')") is not equal
-Record/PersistableRecord/MutablePersistableRecordChangesTests.swift
-  - testDatabaseEqualsWithDifferentTypesAndDifferentWidth: missing DatabaseQueue.inTransaction
-  - testUpdateChangesWithRecord: missing type Record
-  ~ testRecordValueChange: runtime: XCTAssertEqual failed: ("Optional("SELECT total_changes()")") is not equal to ("Optional("UPDATE \"players\" S
-  ~ testUpdateChangesWithImmutableStruct: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
-  ~ testUpdateChangesWithMutableStruct: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
-  ~ testUpdateChangesWithNonRecordClass: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"myRecord\" SET \"firstName\" = NULL WHERE \"id\" = 1")")
-Record/PersistableRecord/MutablePersistableRecordEncodableTests.swift
-  - testTrivialProperty: missing DatabaseQueue.inTransaction
-  - testTrivialSingleValueEncodableProperty: missing DatabaseQueue.inTransaction
-  - testNonTrivialSingleValueEncodableProperty: missing DatabaseQueue.inTransaction
-  - testEncodableRawRepresentableProperty: missing DatabaseQueue.inTransaction
-  - testDatabaseValueConvertibleProperty: missing DatabaseQueue.inTransaction
-  - testStructWithDate: missing DatabaseValue.Storage.value
-  - testStructWithURL: missing DatabaseValue.Storage.value
-  - testStructWithUUID: missing DatabaseValue.Storage.value
-  ~ testCustomizedRecord: runtime: XCTAssertEqual failed: ("[context:"GRDB root" key:NULL nestedKeyed:"{\"context\":\"JSON nested: nestedKeyed\",
-  ~ testRecord: runtime: XCTAssertEqual failed: ("[context:NULL key:NULL nestedKeyed:"{\"name\":\"foo\"}" nestedSingle:"bar,key:nil,con
-  ~ testSingleValueContainer: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
-  ~ testSingleValueContainerWithEncodableRecord: runtime: threw error "EncodingError.invalidValue: SQLiteOrbitGRDBUpstreamTests.MutablePersistableRecordEncodableTests.(
-Record/PersistableRecord/MutablePersistableRecordPersistenceConflictPolicyTests.swift
-  - testReplacePolicy: missing type TransactionObserver
-  ~ testAbortPolicy: runtime: XCTAssertTrue failed -
-  ~ testDefaultPolicy: runtime: XCTAssertTrue failed -
-  ~ testFailPolicy: runtime: XCTAssertTrue failed -
-  ~ testIgnorePolicy: runtime: XCTAssertTrue failed -
-  ~ testMixedPolicy: runtime: XCTAssertTrue failed -
-  ~ testPolicyOverride: runtime: XCTAssertTrue failed -
-  ~ testRollbackPolicy: runtime: XCTAssertTrue failed -
-Record/PersistableRecord/MutablePersistableRecordTests.swift
-  - testRecordErrorRecordNotFoundDescription: missing RecordError.description
-  - test_insertAndFetch_fetch_select: extra trailing closure passed in call
-  - test_updateAndFetch_selection_fetch: missing any SQLSelectable.allColumns
-  - test_updateAndFetch_columns_selection_fetch: missing any SQLSelectable.allColumns
-  - test_updateChangesAndFetch_selection_fetch_modify: missing any SQLSelectable.allColumns
-  - test_upsertAndFetch_do_update_set_where_with_default_strategy: missing Column.noOverwrite
-  ~ testPartialUpdateMutablePersistableRecordPerson: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"persons\" SET \"id\" = \"id\" WHERE \"id\" = 1")") is not
-  ~ testPartiallyEncodedRecord: runtime: XCTAssertTrue failed -
-  ~ testUpdateMutablePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdateMutablePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdateMutablePersistableRecordPerson: runtime: XCTAssertTrue failed -
-  ~ test_insertAndFetch_as: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING *
-  ~ test_insertAndFetch_selection_fetch: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING "score"
-  ~ test_saveAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_saveAndFetch_selection_fetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsert: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"player\" (\"id\", \"name\", \"score\") VALUES (NULL,
-  ~ test_upsertAndFetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_do_update_set_where_with_noColumnUnlessSpecified_strategy: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"vocabulary\" (\"word\", \"kind\", \"isTainted\") VAL
-  ~ test_upsert_WITHOUT_ROWID_optimization: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"myRecord\" (\"id\", \"name\", \"score\") VALUES (\'1
-Record/PersistableRecord/PersistableRecordTests.swift
-  - testOptionalNestedStruct: missing DatabaseValue.Storage.value
-  - testOptionalNestedStructNil: missing DatabaseValue.Storage.value
-  - testOptionalNestedArrayStruct: missing DatabaseValue.Storage.value
-  - testOptionalNestedArrayStructNil: missing DatabaseValue.Storage.value
-  - testNonOptionalNestedStruct: missing DatabaseValue.Storage.value
-  - testNonOptionalNestedArrayStruct: missing DatabaseValue.Storage.value
-  - testStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
-  - testOptionalStringStoredInArray: cannot convert value of type 'Database' to expected argument type 'Statement'
-  - test_insertAndFetch_selection_fetch_column_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns: missing any SQLSelectable.allColumns
-  - test_insertAndFetch_selection_fetch_allColumns_DatabaseComponents: extra trailing closure passed in call
-  - test_insertAndFetch_selection_fetch_allColumns_excluding: missing any SQLSelectable.allColumns
-  - test_insertAndFetch_selection_fetch_allColumns_excluding_DatabaseComponents: extra trailing closure passed in call
-  - test_saveAndFetch_selection_fetch_allColumns: missing any SQLSelectable.allColumns
-  - test_saveAndFetch_selection_fetch_allColumns_excluding: missing any SQLSelectable.allColumns
-  - test_upsertAndFetch_do_update_set_where_with_default_strategy: missing Column.noOverwrite
-  - test_UpsertUpdateStrategy_documentation: global function 'max' requires that 'Column' conform to 'Comparable'
-  ~ testPartialUpdatePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"isoCode\" = \"isoCode\" WHERE \"isoCode
-  ~ testPartialUpdatePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testPartialUpdatePersistableRecordPersonClass: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"persons\" SET \"id\" = \"id\" WHERE \"id\" = 1")") is not
-  ~ testUpdatePersistableRecordCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdatePersistableRecordCustomizedCountry: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"countries\" SET \"name\" = \'France Métropolitaine\' WHER
-  ~ testUpdatePersistableRecordPersonClass: runtime: XCTAssertTrue failed -
-  ~ test_insertAndFetch_as: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING *
-  ~ test_insertAndFetch_selection_fetch_column: runtime: XCTAssertTrue failed - INSERT OR ABORT INTO "player" ("id", "name") VALUES (NULL, 'Arthur') RETURNING "score"
-  ~ test_saveAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_saveAndFetch_selection_fetch_column: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsert: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"player\" (\"id\", \"name\", \"score\") VALUES (NULL,
-  ~ test_upsertAndFetch: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_as: runtime: XCTAssertTrue failed - PRAGMA database_list
-  ~ test_upsertAndFetch_do_update_set_where_with_noColumnUnlessSpecified_strategy: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"vocabulary\" (\"word\", \"kind\", \"isTainted\") VAL
-  ~ test_upsert_WITHOUT_ROWID_optimization: runtime: XCTAssertEqual failed: ("Optional("INSERT OR ABORT INTO \"myRecord\" (\"id\", \"name\", \"score\") VALUES (\'1
-Record/TableRecord/TableRecordDeleteTests.swift
-  - ViewSchemaSource: missing type DatabaseObjectID
-  - testSingleColumnPrimaryKey_view: missing Configuration.schemaSource
-  - testMultipleColumnPrimaryKey_view: missing Configuration.schemaSource
-  - testImplicitUniqueIndexOnSingleColumnPrimaryKey_view: missing Configuration.schemaSource
-  - testRequestDeleteAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestDeleteAll_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchStatement_table: labels (_:select:) instead of (_:selection:)
-  - testRequestDeleteAndFetchStatement_view: labels (_:select:) instead of (_:selection:)
-  - testRequestDeleteAndFetchCursor_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestDeleteAndFetchCursor_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchArray_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestDeleteAndFetchArray_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchSet_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestDeleteAndFetchSet_view: missing Configuration.schemaSource
-  - testRequestDeleteAndFetchIds_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestDeleteAndFetchIds_view: missing Configuration.schemaSource
-  - testJoinedRequestDeleteAll: missing TableDefinition.belongsTo
-  - testJoinedRequestDeleteAndFetch: missing TableDefinition.belongsTo
-  ~ testGroupedRequestDeleteAll: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"player\" WHERE \"id\" IN (SELECT \"id\" FROM \"player\" GROUP
-  ~ testGroupedRequestDeleteAndFetchCursor: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"player\" WHERE \"id\" IN (SELECT \"id\" FROM \"player\" GROUP
-  ~ testImplicitRowIDPrimaryKey: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"hackers\" WHERE \"rowid\" IN (1)")") is not equal to ("Option
-  ~ testImplicitUniqueIndexOnSingleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE (((\"id\" = 1)))")") is not equal to ("Option
-  ~ testMultipleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"citizenships\" WHERE (((\"countryIsoCode\" = \'FR\') AND (\"p
-  ~ testSingleColumnPrimaryKey_table: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE \"id\" IN (1)")") is not equal to ("Optional(
-  ~ testUniqueIndex: runtime: XCTAssertEqual failed: ("Optional("DELETE FROM \"persons\" WHERE (((\"email\" = \'arthur@example.com\')))")")
-Record/TableRecord/TableRecordUpdateTests.swift
-  - ViewSchemaSource: missing type DatabaseObjectID
-  - incrementScore: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testRequestUpdateAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAll_view: missing Configuration.schemaSource
-  - testRequestUpdateAll_DatabaseComponents_table: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testRequestUpdateAll_DatabaseComponents_view: missing Configuration.schemaSource
-  - testRequestUpdateAndFetchStatement_table: missing any SQLSelectable.allColumns
-  - testRequestUpdateAndFetchStatement_view: missing any SQLSelectable.allColumns
-  - testRequestUpdateAndFetchStatement_DatabaseComponents_table: extra trailing closure passed in call
-  - testRequestUpdateAndFetchStatement_DatabaseComponents_view: extra trailing closure passed in call
-  - testRequestUpdateAndFetchCursor_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchCursor_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchCursor_DatabaseComponents_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchCursor_DatabaseComponents_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchAll_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchAll_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchAll_DatabaseComponents_table: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchAll_DatabaseComponents_view: missing Database.sqliteLibVersionNumber
-  - testRequestUpdateAndFetchSet: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testRequestUpdateAndFetchSet_DatabaseComponents: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testNilAssignment_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testComplexAssignment_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentSubtractAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentAddAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentMultiplyAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentDivideAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentBitwiseAndAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentBitwiseOrAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentLeftShiftAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testAssignmentRightShiftAssign_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testMultipleAssignments_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testUpdateAllWithoutAssignmentDoesNotAccessTheDatabase_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testUpdateAllReturnsNumberOfUpdatedRows: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testUpdateAllReturnsNumberOfUpdatedRows_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testQueryInterfaceExtension: type '(_) -> Bool' cannot conform to 'SQLExpressible'
-  - testConflictPolicyAbort_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testConflictPolicyIgnore_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testConflictPolicyIgnoreWithTable: missing Table.updateAll
-  - testConflictPolicyIgnoreWithTable_DatabaseComponents: missing Table.updateAll
-  - testConflictPolicyCustom_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  - testJoinedRequestUpdate: missing TableDefinition.belongsTo
-  - testJoinedRequestUpdate_DatabaseComponents: missing TableDefinition.belongsTo
-  - testGroupedRequestUpdate_DatabaseComponents: trailing closure passed to parameter of type '[ColumnAssignment]' (aka 'Array<SQLAssignment>') that does not accept a closure
-  ~ testAssignmentAddAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" + 1)")") is not equal
-  ~ testAssignmentBitwiseAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" & 1)")") is not equal
-  ~ testAssignmentBitwiseOrAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" | 1)")") is not equal
-  ~ testAssignmentDivideAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" / 1)")") is not equal
-  ~ testAssignmentLeftShiftAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" << 1)")") is not equa
-  ~ testAssignmentMultiplyAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" * 1)")") is not equal
-  ~ testAssignmentRightShiftAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" >> 1)")") is not equa
-  ~ testAssignmentSubtractAndAssign: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" - 1)")") is not equal
-  ~ testComplexAssignment: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = (\"score\" * (\"bonus\" + 1))")"
-  ~ testConflictPolicyAbort: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0")") is not equal to ("Optional
-  ~ testConflictPolicyCustom: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0")") is not equal to ("Optional
-  ~ testGroupedRequestUpdate: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0 WHERE \"id\" IN (SELECT \"id\"
-  ~ testMultipleAssignments: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = 0, \"bonus\" = 1")") is not equa
-  ~ testNilAssignment: runtime: XCTAssertEqual failed: ("Optional("UPDATE OR ABORT \"player\" SET \"score\" = NULL")") is not equal to ("Optio
 Support/Foundation/FoundationDataTests.swift
 Support/Foundation/FoundationDateTests.swift
   - testDateFromJulianDayNumber: no exact matches in call to initializer
@@ -757,7 +578,6 @@ x Private/SQLExpressionLiteralTests.swift: no test compiles: missing SQLGenerati
 x Private/UtilsTests.swift: no test compiles: missing throwingFirstError
 x Record/FetchableRecord/DatabaseDateDecodingStrategyTests.swift: no test compiles: missing RowDecodingError.impl, missing RowDecodingError.impl, missing RowDecodingError.impl
 x Record/JoinSupportTests.swift: extraneous argument label 'columnsOf:' in call, cannot convert value of type 'T1.Type' to expected argument type 'SQL'
-x Record/PersistableRecord/RecordMappedOnMutableViewTests.swift: expected declaration
 x Record/Record/RecordEditedTests.swift: missing Person
 x Record/Record/RecordInitializersTests.swift: missing type Record
 x Record/Record/RecordMinimalNonOptionalPrimaryKeySingleTests.swift: missing MinimalNonOptionalPrimaryKeySingle
@@ -774,7 +594,6 @@ x Record/Record/RecordSubClassTests.swift: missing Person
 x Record/Record/RecordWithColumnNameManglingTests.swift: missing BadlyMangledStuff
 x Record/SingletonRecordTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing parameter onConflict:, missing createEmptyAppConfigurationTable
 x Record/SingletonUserDefaultsTest.swift: no test compiles: cannot convert value of type 'Database' to expected argument type 'Statement', missing parameter onConflict:, missing createEmptyAppConfigurationTable
-x Record/TableRecord/TableRecordTests.swift: missing type Record, property does not override any property from its superclass
 x Support/CGFloatTests.swift: no test compiles: cannot convert value of type 'CGFloat' to expected element type '(any DatabaseValueConvertible)?'
 x Support/Foundation/FoundationDateComponentsTests.swift: no test compiles: missing DatabaseDateComponents, missing DatabaseDateComponents, missing DatabaseDateComponents
 x Support/Foundation/FoundationDecimalTests.swift: no test compiles: missing Decimal.databaseValue, missing Decimal.fetchOne, missing Decimal.databaseValue

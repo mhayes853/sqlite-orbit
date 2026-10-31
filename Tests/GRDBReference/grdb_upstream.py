@@ -46,9 +46,11 @@ CHECKOUT = os.path.join(HERE, ".build", "checkouts", "GRDB.swift")
 UPSTREAM_TESTS = os.path.join(CHECKOUT, "Tests", "GRDBTests")
 MANIFEST_DIR = os.path.join(HERE, "upstream-manifest")
 QUERY_AREAS = {"QueryInterface", "FTS", "JSON"}
+QUERY_PREFIXES = ("Record/PersistableRecord/", "Record/TableRecord/")
 MANIFEST_HEADER = (
     "# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the\n"
-    "# format. QueryInterface, FTS, and JSON live in query.txt; everything else in core.txt.\n"
+    "# format. QueryInterface, FTS, JSON, and Record/PersistableRecord and Record/TableRecord\n"
+    "# live in query.txt; everything else in core.txt.\n"
 )
 TARGET = os.path.join(REPO, "Tests", "SQLiteOrbitGRDBUpstreamTests")
 GENERATED = os.path.join(TARGET, "GRDBTests")
@@ -82,8 +84,8 @@ class Entry:
 def manifest_file(path):
     """Each upstream area belongs to one manifest file, so concurrent edits of different areas
     never write the same file."""
-    area = path.split("/")[0]
-    return os.path.join(MANIFEST_DIR, "query.txt" if area in QUERY_AREAS else "core.txt")
+    query = path.split("/")[0] in QUERY_AREAS or path.startswith(QUERY_PREFIXES)
+    return os.path.join(MANIFEST_DIR, "query.txt" if query else "core.txt")
 
 
 def read_manifest():
