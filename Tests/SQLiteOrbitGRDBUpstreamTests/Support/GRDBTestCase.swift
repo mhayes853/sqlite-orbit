@@ -83,7 +83,10 @@ class GRDBTestCase: XCTestCase {
 
   override func setUpWithError() throws {
     try super.setUpWithError()
-    if let reason = upstreamSkips[upstreamTestKey] {
+    // `grdb_upstream.py run` sets this to find skipped tests that now pass.
+    if ProcessInfo.processInfo.environment["GRDB_UPSTREAM_RUN_SKIPPED"] == nil,
+      let reason = upstreamSkips[upstreamTestKey]
+    {
       throw XCTSkip(reason)
     }
   }

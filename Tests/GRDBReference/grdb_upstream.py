@@ -6,16 +6,19 @@ Subcommands:
   sync                Regenerate Tests/SQLiteOrbitGRDBUpstreamTests/GRDBTests from the manifest.
   typecheck [REGEX]   Type-check every upstream test file (verbatim, with the port's harness)
                       against the built overlay and summarize which files and tests compile.
-  autoexclude FILE..  Add FILE to the manifest, removing the tests (and helper declarations)
-                      that do not compile against the overlay.
-  run [--record]      Run the built upstream tests in isolated processes (one per class, then
+  autoexclude FILE.. | all | ported [--only REGEX]
+                      Port FILE, removing the tests (and helper declarations) that do not
+                      compile against the overlay. Recomputed from scratch on every run.
+  run [--record] [--only REGEX]
+                      Run the built upstream tests in isolated processes (one per class, then
                       one per test for classes that crash or hang) and summarize; with
-                      --record, add failing tests to the manifest as runtime skips.
+                      --record, make the area's runtime skips exactly the failing tests.
+                      Runs ignore skips (GRDB_UPSTREAM_RUN_SKIPPED), so fixed tests show up.
   skips LOG           Record failing tests from a `swift test` log as runtime skips.
   api                 Compare GRDB's and the overlay's public symbol graphs by name.
   report              Summarize the manifest: ported files, removed tests, skipped tests.
 
-The manifest (upstream-manifest.txt) lists ported upstream files relative to Tests/GRDBTests.
+The manifest (upstream-manifest/*.txt) lists ported upstream files relative to Tests/GRDBTests.
 Indented entries under a file adjust it:
 
   - NAME: reason   removes declarations named NAME (tests or helpers) before compilation
@@ -41,7 +44,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 CHECKOUT = os.path.join(HERE, ".build", "checkouts", "GRDB.swift")
 UPSTREAM_TESTS = os.path.join(CHECKOUT, "Tests", "GRDBTests")
-MANIFEST = os.path.join(HERE, "upstream-manifest.txt")
+MANIFEST_DIR = os.path.join(HERE, "upstream-manifest")
+QUERY_AREAS = {"QueryInterface", "FTS", "JSON"}
+MANIFEST_HEADER = (
+    "# Upstream GRDB 7.11.1 test files ported to SQLiteOrbitGRDB. See grdb_upstream.py for the\n"
+    "# format. QueryInterface, FTS, and JSON live in query.txt; everything else in core.txt.\n"
+)
 TARGET = os.path.join(REPO, "Tests", "SQLiteOrbitGRDBUpstreamTests")
 GENERATED = os.path.join(TARGET, "GRDBTests")
 SUPPORT = os.path.join(TARGET, "Support")
@@ -71,56 +79,70 @@ class Entry:
         self.skipped = collections.OrderedDict()
 
 
+def manifest_file(path):
+    """Each upstream area belongs to one manifest file, so concurrent edits of different areas
+    never write the same file."""
+    area = path.split("/")[0]
+    return os.path.join(MANIFEST_DIR, "query.txt" if area in QUERY_AREAS else "core.txt")
+
+
 def read_manifest():
     entries = collections.OrderedDict()
     declined = collections.OrderedDict()
-    header = []
-    current = None
-    if not os.path.exists(MANIFEST):
-        return header, entries, declined
-    for raw in open(MANIFEST):
-        line = raw.rstrip("\n")
-        if not line.strip():
-            continue
-        if line.startswith("#"):
-            if not entries and not declined:
-                header.append(line)
-            continue
-        if line.startswith("x "):
-            path, _, reason = line[2:].partition(": ")
-            declined[path.strip()] = reason.strip()
-            current = None
-            continue
-        if line.startswith((" ", "\t")):
-            item = line.strip()
-            kind, rest = item[0], item[1:].strip()
-            name, _, reason = rest.partition(": ")
-            if current is None or kind not in "-~":
-                sys.exit(f"manifest: unexpected line {line!r}")
-            (current.removed if kind == "-" else current.skipped)[name.strip()] = reason.strip()
-            continue
-        current = Entry(line.strip())
-        entries[current.path] = current
-    return header, entries, declined
+    read_manifest.originals = {}
+    for manifest in sorted(glob.glob(os.path.join(MANIFEST_DIR, "*.txt"))):
+        text = open(manifest).read()
+        read_manifest.originals[manifest] = text
+        current = None
+        for line in text.split("\n"):
+            if not line.strip() or line.startswith("#"):
+                continue
+            if line.startswith("x "):
+                path, _, reason = line[2:].partition(": ")
+                declined[path.strip()] = reason.strip()
+                current = None
+                continue
+            if line.startswith((" ", "\t")):
+                item = line.strip()
+                kind, rest = item[0], item[1:].strip()
+                name, _, reason = rest.partition(": ")
+                if current is None or kind not in "-~":
+                    sys.exit(f"{manifest}: unexpected line {line!r}")
+                (current.removed if kind == "-" else current.skipped)[name.strip()] = reason.strip()
+                continue
+            current = Entry(line.strip())
+            entries[current.path] = current
+    return None, entries, declined
+
+
+def atomic_write(path, text):
+    tmp = path + f".tmp{os.getpid()}"
+    with open(tmp, "w") as out:
+        out.write(text)
+    os.replace(tmp, path)
 
 
 def write_manifest(header, entries, declined):
-    with open(MANIFEST, "w") as out:
-        for line in header:
-            out.write(line + "\n")
-        if header:
-            out.write("\n")
-        for path in sorted(entries):
-            entry = entries[path]
-            out.write(path + "\n")
-            for name, reason in entry.removed.items():
-                out.write(f"  - {name}: {reason}\n")
-            for name, reason in entry.skipped.items():
-                out.write(f"  ~ {name}: {reason}\n")
-        if declined:
-            out.write("\n")
-            for path in sorted(declined):
-                out.write(f"x {path}: {declined[path]}\n")
+    """Writes only the manifest files whose rendering differs from what was read."""
+    os.makedirs(MANIFEST_DIR, exist_ok=True)
+    files = collections.defaultdict(list)
+    for path in sorted(entries):
+        entry = entries[path]
+        lines = [path]
+        lines += [f"  - {n}: {r}" for n, r in entry.removed.items()]
+        lines += [f"  ~ {n}: {r}" for n, r in entry.skipped.items()]
+        files[manifest_file(path)].append("\n".join(lines))
+    declined_lines = collections.defaultdict(list)
+    for path in sorted(declined):
+        declined_lines[manifest_file(path)].append(f"x {path}: {declined[path]}")
+    originals = getattr(read_manifest, "originals", {})
+    for manifest in set(files) | set(declined_lines) | set(originals):
+        body = MANIFEST_HEADER + "\n" + "\n".join(files[manifest]) + "\n"
+        if declined_lines[manifest]:
+            body += "\n" + "\n".join(declined_lines[manifest]) + "\n"
+        rendered_from_read = originals.get(manifest)
+        if body != rendered_from_read:
+            atomic_write(manifest, body)
 
 
 # MARK: - Swift source surgery
@@ -287,13 +309,20 @@ def remove_declarations(text, names):
         if not found:
             raise LookupError(name)
         spans.extend(found)
-    for start, end in sorted(set(spans), reverse=True):
+    # Nested declarations can share a name (a test and a local helper); keep outermost spans.
+    merged = []
+    for start, end in sorted(set(spans)):
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    for start, end in reversed(merged):
         text = text[:start] + text[end:]
     return text
 
 
 def convert_imports(text):
-    text = re.sub(r"^(\s*)@testable import GRDB$", r"\1import SQLiteOrbitGRDB", text, flags=re.M)
+    text = re.sub(r"^(\s*)@testable import GRDB\b.*$", r"\1import SQLiteOrbitGRDB", text, flags=re.M)
     text = re.sub(r"^(\s*)import GRDB$", r"\1import SQLiteOrbitGRDB", text, flags=re.M)
     text = re.sub(r"^(\s*)import (?:GRDBSQLite|SQLite3)$", r"\1import CSQLite3", text, flags=re.M)
     return text
@@ -341,17 +370,19 @@ def check_checkout():
 def cmd_sync(args):
     check_checkout()
     header, entries, declined = read_manifest()
-    for old in glob.glob(os.path.join(GENERATED, "**", "*.swift"), recursive=True):
-        os.remove(old)
+    wanted = {}
     for path, entry in entries.items():
-        dest = os.path.join(GENERATED, path)
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
         try:
-            source = ported_source(path, entry)
+            wanted[os.path.join(GENERATED, path)] = ported_source(path, entry)
         except LookupError as error:
             sys.exit(f"{path}: no declaration named {error}")
-        with open(dest, "w") as out:
-            out.write(source)
+    for old in glob.glob(os.path.join(GENERATED, "**", "*.swift"), recursive=True):
+        if old not in wanted:
+            os.remove(old)
+    for dest, source in wanted.items():
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if not os.path.exists(dest) or open(dest).read() != source:
+            atomic_write(dest, source)
     for root, dirs, files in os.walk(GENERATED, topdown=False):
         if not os.listdir(root):
             os.rmdir(root)
@@ -361,14 +392,15 @@ def cmd_sync(args):
             klass = os.path.splitext(os.path.basename(path))[0]
             key = name if "." in name else f"{klass}.{name}"
             lines.append(f"  {swift_string(key)}: {swift_string(reason)},")
-    with open(SKIPS, "w") as out:
-        out.write("// Generated by Tests/GRDBReference/grdb_upstream.py from upstream-manifest.txt.\n")
-        out.write("// Upstream tests that compile against SQLiteOrbitGRDB but are skipped at runtime.\n")
-        out.write("let upstreamSkips: [String: String] = [\n")
-        out.write("\n".join(sorted(lines)) + ("\n" if lines else ""))
-        if not lines:
-            out.write(":\n")
-        out.write("]\n")
+    skips = (
+        "// Generated by Tests/GRDBReference/grdb_upstream.py from upstream-manifest/.\n"
+        "// Upstream tests that compile against SQLiteOrbitGRDB but are skipped at runtime.\n"
+        "let upstreamSkips: [String: String] = [\n"
+        + ("\n".join(sorted(lines)) + "\n" if lines else ":\n")
+        + "]\n"
+    )
+    if not os.path.exists(SKIPS) or open(SKIPS).read() != skips:
+        atomic_write(SKIPS, skips)
     print(f"generated {len(entries)} files")
 
 
@@ -518,14 +550,27 @@ def summarize_error(message):
     return re.sub(r"\s*\[#\w+\]$", "", message)
 
 
+def take_only(args):
+    """Extracts `--only REGEX`, which restricts a command to matching upstream paths."""
+    if "--only" in args:
+        i = args.index("--only")
+        pattern = re.compile(args[i + 1])
+        del args[i:i + 2]
+        return pattern
+    return None
+
+
 def cmd_autoexclude(args):
     """Recomputes the removed tests of each file from scratch; runtime skips are kept."""
     check_checkout()
+    only = take_only(args)
     header, entries, declined = read_manifest()
     if args == ["all"]:
         args = all_upstream_files()
     elif args == ["ported"]:
         args = list(entries)
+    if only:
+        args = [a for a in args if only.search(a)]
     modules = modules_dir(args)
     workdir = tempfile.mkdtemp(prefix="grdb-autoexclude-")
     from concurrent.futures import ThreadPoolExecutor
@@ -651,8 +696,9 @@ def xctest_binary():
 
 def run_xctest(binary, selector, timeout):
     try:
+        env = dict(os.environ, GRDB_UPSTREAM_RUN_SKIPPED="1")
         result = subprocess.run([binary, selector], capture_output=True, text=True, timeout=timeout,
-                                errors="replace")
+                                errors="replace", env=env)
         return result.returncode, result.stdout + result.stderr
     except subprocess.TimeoutExpired as error:
         out = (error.stdout or b"") + (error.stderr or b"")
@@ -671,11 +717,24 @@ def parse_results(log):
     return outcomes, messages, started
 
 
+def class_paths(entries):
+    by_class = {}
+    for path in entries:
+        source = open(os.path.join(UPSTREAM_TESTS, path)).read()
+        for klass in re.findall(r"class\s+(\w+)\s*:", source):
+            by_class.setdefault(klass, path)
+    return by_class
+
+
 def cmd_run(args):
+    only = take_only(args)
     record = "--record" in args
     binary = xctest_binary()
     listing = subprocess.run([binary, "--list-tests"], capture_output=True, text=True).stdout
     tests = re.findall(r"^SQLiteOrbitGRDBUpstreamTests\.(\w+)/(\w+)$", listing, re.M)
+    if only:
+        by_class = class_paths(read_manifest()[1])
+        tests = [t for t in tests if t[0] in by_class and only.search(by_class[t[0]])]
     classes = sorted({c for c, _ in tests})
     from concurrent.futures import ThreadPoolExecutor
     outcomes, messages = {}, {}
@@ -719,13 +778,21 @@ def cmd_run(args):
     failed = sorted(k for k in tests if outcomes.get(k) in ("failed", None))
     for klass, test in failed[:40]:
         print(f"  FAIL {klass}.{test}: {messages.get((klass, test), '')[:150]}")
-    if record and failed:
+    if record:
         header, entries, declined = read_manifest()
-        by_class = {}
-        for path in entries:
-            source = open(os.path.join(UPSTREAM_TESTS, path)).read()
-            for klass in re.findall(r"class\s+(\w+)\s*:", source):
-                by_class.setdefault(klass, path)
+        by_class = class_paths(entries)
+        # The run ignores skips, so the failures replace the skips of every class that ran.
+        ran = {by_class.get(k) for k, _ in tests}
+        removed = 0
+        for path in ran:
+            if path in entries:
+                klasses = {k for k, p in by_class.items() if p == path}
+                ran_tests = {t if k == os.path.splitext(os.path.basename(path))[0] else f"{k}.{t}"
+                             for k, t in tests if k in klasses}
+                for name in list(entries[path].skipped):
+                    if name in ran_tests and (name.split(".")[0] if "." in name else os.path.splitext(os.path.basename(path))[0], name.split(".")[-1]) not in failed:
+                        del entries[path].skipped[name]
+                        removed += 1
         added = 0
         for klass, test in failed:
             path = by_class.get(klass)
@@ -738,7 +805,7 @@ def cmd_run(args):
                 entries[path].skipped[name] = "runtime: " + reason
                 added += 1
         write_manifest(header, entries, declined)
-        print(f"recorded {added} skips; run `sync` and rebuild")
+        print(f"recorded {added} new skips, removed {removed} passing skips; run `sync` and rebuild")
     if os.environ.get("GRDB_RUN_REPORT"):
         with open(os.environ["GRDB_RUN_REPORT"], "w") as f:
             for key in tests:
