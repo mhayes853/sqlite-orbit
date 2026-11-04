@@ -825,6 +825,62 @@
       }
     }
 
+    @Test
+    func sqlQuantizedDistancesPreserveUndefinedScoresAndSupportRanking() async throws {
+      try await withTestDatabaseFile("turso-vectors") { file in
+        let database = try file.tursoPool()
+        try await database.write { transaction in
+          try transaction.execute(
+            "CREATE TABLE turso_quantized_embeddings (key INTEGER PRIMARY KEY, embedding BLOB NOT NULL)"
+          )
+          // Finite JSON components can overflow the engine's Float32 quantization scale.
+          // Insert through SQL to bypass Swift's validation of quantization parameters.
+          try transaction.execute(
+            """
+            INSERT INTO turso_quantized_embeddings
+            VALUES (1, vector8('[-3e38,3e38]')), (2, vector8('[1,2]'))
+            """
+          )
+        }
+        let candidate = try Quantized8Vector(quantizing: [1, 2])
+        try await database.read { transaction in
+          let rows = try TursoQuantizedEmbedding.order(by: \.key)
+            .select {
+              (
+                TursoVec.distanceL2($0.embedding, to: candidate),
+                TursoVec.distanceDot($0.embedding, to: candidate)
+              )
+            }
+            .fetchAll(transaction)
+          #expect(rows.count == 2)
+          #expect(rows[0].0 == nil)
+          #expect(rows[0].1 == nil)
+          #expect(rows[1].0 == 0)
+          #expect(rows[1].1 != nil)
+          #expect(
+            try TursoQuantizedEmbedding
+              .where { TursoVec.distanceL2($0.embedding, to: candidate).isNot(nil) }
+              .select(\.key).fetchAll(transaction) == [2]
+          )
+          #expect(
+            try TursoQuantizedEmbedding
+              .order {
+                TursoVec.distanceL2($0.embedding, to: candidate)
+                  .ifnull(Double.greatestFiniteMagnitude).asc()
+              }
+              .select(\.key).fetchAll(transaction) == [2, 1]
+          )
+          #expect(
+            try TursoQuantizedEmbedding.select {
+              TursoVec.distanceDot($0.embedding, to: candidate)
+                .ifnull(Double.greatestFiniteMagnitude)
+            }
+            .fetchAll(transaction).contains(Double.greatestFiniteMagnitude)
+          )
+        }
+      }
+    }
+
     // The helpers target Rust Turso. Keep the engine's unsupported libSQL functions explicit
     // using raw SQL; upstream intentionally provides no libSQL query helpers.
     @Test(arguments: ["vector16", "vectorb16", "vector_top_k"])
@@ -890,6 +946,13 @@
     var float8: Quantized8Vector
     @Column(as: [Bool].TursoBytesRepresentation.self)
     var bits: [Bool]
+  }
+
+  @Table("turso_quantized_embeddings")
+  private struct TursoQuantizedEmbedding {
+    @Column(primaryKey: true)
+    var key: Int
+    var embedding: Quantized8Vector
   }
 
   @Table("turso_sparse_embeddings")

@@ -1000,7 +1000,7 @@ on Intel Macs.
 
 Orbit uses the `CSQLiteVec`, `StructuredQueriesSQLiteVecCore`, and `StructuredQueriesTursoVecCore`
 products, without building or linking SQLiteData/GRDB. The dependency is temporarily pinned to
-commit `0479516` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
+commit `fdae0bd` from [sqlite-vec-data PR #9](https://github.com/mhayes853/sqlite-vec-data/pull/9).
 Orbit leaves out sqlite-vec-data's default `SQLiteVecStaticAPI` trait, so Vec reaches SQLite through
 the API table of the library that opened each connection instead of the linked `sqlite3_*`
 symbols. Another package that enables the trait for sqlite-vec-data enables it for Orbit too, and
@@ -1052,12 +1052,17 @@ let nearest = try await database.read { transaction in
 Use `TursoVec` for the bundled Rust engine. Tables need only
 `@Table`; execute the table creation SQL separately. Fixed-size models validate dimensions when
 decoding; `F32_BLOB(3)` gives the column BLOB affinity without enforcing dimensions in the engine.
+Likewise, `as:` selects a decoder that checks dimensions when fetched; composing the expression
+into another function or inserting its result does not run that decoder.
 For variable-size models, use `[Float]` with `@Column(as: [Float].VectorBytesRepresentation.self)`.
 Convert JSON explicitly before distance
 comparisons, for example `TursoVec.distanceL2(column, to: TursoVec.vector32("[1,0,0]"))`.
 
-Floating distances decode as `Double?`, since undefined results can be NULL. The native functions
-reject NULL inputs, so wrap a nullable column or optional argument in `whenPresent`. Its closure
+Numeric L2 and dot distances (including Quantized8), cosine, and Jaccard decode as `Double?`,
+since computations that produce NaN become SQL NULL. SQL quantization can produce nonfinite
+parameters even from finite inputs, without invoking Swift constructor validation. Binary dot and
+Hamming distances remain nonoptional. The native functions reject NULL inputs, so wrap a nullable
+column or optional argument in `whenPresent`. Its closure
 receives a nonoptional expression, and a `CASE` guard returns NULL without calling the function.
 Ascending order puts NULL first, so filter before ranking, and compare against an optional value:
 
@@ -1073,9 +1078,10 @@ let near = try await database.read { transaction in
 }
 ```
 
-`.isNot(nil)` filters out missing scores, and `.ifnull(_:)` supplies a fallback. A zero fallback
-ranks a missing vector as an exact match. Turso reports a zero-norm cosine as 1, while SQLiteVec
-returns NULL.
+`.isNot(nil)` filters out missing or undefined scores, and `.ifnull(_:)` supplies a fallback.
+For ascending L2 ranking, use `.ifnull(Double.greatestFiniteMagnitude)` to put undefined scores
+last. A zero fallback ranks an undefined score as an exact match. Turso reports a zero-norm cosine
+as 1, while SQLiteVec returns NULL.
 
 The bundled Rust Turso engine supports `vector`/`vector32`, `vector64`, `vector8`, `vector1bit`,
 `vector32Sparse`, JSON extraction, cosine/L2/dot/Jaccard distances, and dense concatenation and
