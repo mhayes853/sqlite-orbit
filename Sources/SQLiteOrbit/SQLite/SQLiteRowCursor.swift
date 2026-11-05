@@ -1,3 +1,7 @@
+#if Foundation
+  import _SQLiteOrbitFoundation
+#endif
+
 /// A cursor over the rows a statement produces.
 ///
 /// The cursor holds a statement lent by the connection's cache and gives it back when it goes out
@@ -330,6 +334,39 @@ public struct SQLiteRow: OrbitDatabaseRow, ~Copyable, ~Escapable {
     // Each value is read in the storage class SQLite reports, so reading it never converts it, and
     // a later decode of the same column sees what it would have seen anyway.
     return columnReader._withUnsafeGuaranteedRef { $0.value(statement, at: Int32(index)) }
+  }
+
+  /// Converts a column, reading ISO timestamp dates directly from SQLite's UTF-8 buffer.
+  @inlinable
+  @inline(__always)
+  public subscript<Value: ConvertibleFromOrbitDatabaseValue>(
+    index: Int,
+    as type: Value.Type
+  ) -> Value {
+    get throws {
+      precondition(index: index)
+      #if Foundation
+        if Value.self == Date.self || Value.self == Date?.self {
+          let storage = columnReader._withUnsafeGuaranteedRef {
+            $0.columns.type(statement, Int32(index))
+          }
+          if storage == SQLiteColumnType.text.rawValue,
+            let date = try? columnReader._withUnsafeGuaranteedRef({
+              try $0.withUTF8(statement, at: Int32(index), Date.init(orbitISO8601UTF8:))
+            })
+          {
+            if Value.self == Date.self { return date as! Value }
+            return Optional(date) as! Value
+          }
+          if storage == SQLiteColumnType.null.rawValue, Value.self == Date?.self {
+            return Optional<Date>.none as! Value
+          }
+          // The value-based conversion preserves the column context and conversion error for
+          // malformed text and other storage classes. Only the successful path borrows text.
+        }
+      #endif
+      return try orbitConvertedValue(at: index, as: type)
+    }
   }
 
   /// Finds a column by its exact UTF-8 name using a mapping shared by this cursor's rows.

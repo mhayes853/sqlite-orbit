@@ -89,6 +89,77 @@
       }
     }
 
+    #if BuiltInSQLite
+      @Test
+      func typedRowsReadTheSameDatesAsStoredValues() async throws {
+        let database = try inMemoryDatabase()
+        for (text, _) in Self.pinned + [
+          ("2018-04-20 14:47:12.345\0trailing", nil)
+        ] {
+          let expected = try? Date(orbitDatabaseValue: .text(text))
+          try await database.read { transaction in
+            let sql: SQL = "SELECT \(text) AS timestamp"
+            if let expected {
+              let date = try transaction.fetchOne(sql, as: Date.self)
+              let optional = try transaction.fetchOne(sql, as: Date?.self)
+              let named = try transaction.fetchOne(sql) {
+                try $0[column: "timestamp", as: Date.self]
+              }
+              #expect(
+                date?.timeIntervalSinceReferenceDate.bitPattern
+                  == expected.timeIntervalSinceReferenceDate.bitPattern
+              )
+              #expect(optional == .some(expected))
+              #expect(named == expected)
+            } else {
+              let error = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+                try transaction.fetchOne(sql, as: Date.self)
+              }
+              let optionalError = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+                try transaction.fetchOne(sql, as: Date?.self)
+              }
+              for error in [error, optionalError] {
+                #expect(error?.columnIndex == 0)
+                #expect(error?.columnName == "timestamp")
+                let conversion = error?.underlyingError as? OrbitDatabaseValueConversionError
+                #expect(conversion?.value == .text(text))
+                #expect(conversion?.reason == "the text is not an ISO 8601 timestamp")
+              }
+            }
+          }
+        }
+      }
+
+      @Test
+      func typedDatesKeepNullAndStorageClassConversions() async throws {
+        let database = try inMemoryDatabase()
+        try await database.read { transaction in
+          let optional = try transaction.fetchOne("SELECT NULL", as: Date?.self)
+          #expect(optional == .some(nil))
+          for value: OrbitDatabaseValue in [.null, .integer(0), .real(0), .blob([0])] {
+            let sql: SQL = "SELECT \(value) AS timestamp"
+            let error = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+              try transaction.fetchOne(sql, as: Date.self)
+            }
+            #expect(error?.columnIndex == 0)
+            #expect(error?.columnName == "timestamp")
+            let conversion = error?.underlyingError as? OrbitDatabaseValueConversionError
+            #expect(conversion?.value == value)
+            if value != .null {
+              #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+                try transaction.fetchOne(sql, as: Date?.self)
+              }
+            }
+          }
+          // Numeric wrappers still read numeric storage, independently of ISO date decoding.
+          let unix = try transaction.fetchOne("SELECT 0", as: OrbitUnixTimeDate.self)
+          let julian = try transaction.fetchOne("SELECT 2440587.5", as: OrbitJulianDayDate.self)
+          #expect(unix?.date == Date(timeIntervalSince1970: 0))
+          #expect(julian?.date == Date(timeIntervalSince1970: 0))
+        }
+      }
+    #endif
+
     // Whether this Foundation's ISO 8601 parser is swift-foundation's, which the pins record.
     private static var isFoundationAsPinned: Bool {
       #if canImport(Darwin)

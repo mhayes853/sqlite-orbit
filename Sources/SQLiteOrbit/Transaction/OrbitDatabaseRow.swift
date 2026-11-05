@@ -43,6 +43,12 @@ public protocol OrbitDatabaseRow: ~Copyable, ~Escapable {
   ///   process.
   subscript(index: Int) -> OrbitDatabaseValue { get }
 
+  /// Converts a column to a type. Drivers may decode directly from their storage instead of
+  /// first constructing an owned value. The default converts through ``OrbitDatabaseValue``.
+  subscript<Value: ConvertibleFromOrbitDatabaseValue>(index: Int, as type: Value.Type) -> Value {
+    get throws
+  }
+
   /// The value of the first column with a name, or `nil` when the row has no such column.
   ///
   /// Names are compared exactly, and the columns are searched from left to right.
@@ -134,14 +140,23 @@ extension OrbitDatabaseRow where Self: ~Copyable, Self: ~Escapable {
     as type: Value.Type
   ) -> Value {
     get throws {
-      // Always inlined, so that a caller converting to a concrete type gets the conversion
-      // specialized even when its row type is generic, as a row initializer's is. Otherwise every
-      // column read calls the conversion through `Value`'s witness table.
-      do {
-        return try Value(orbitDatabaseValue: self[index])
-      } catch {
-        throw orbitColumnDecodingError(at: index, decoding: Value.self, error)
-      }
+      try orbitConvertedValue(at: index, as: type)
+    }
+  }
+
+  @inlinable
+  @inline(__always)
+  func orbitConvertedValue<Value: ConvertibleFromOrbitDatabaseValue>(
+    at index: Int,
+    as type: Value.Type
+  ) throws -> Value {
+    // Always inlined, so that a caller converting to a concrete type gets the conversion
+    // specialized even when its row type is generic, as a row initializer's is. Otherwise every
+    // column read calls the conversion through `Value`'s witness table.
+    do {
+      return try Value(orbitDatabaseValue: self[index])
+    } catch {
+      throw orbitColumnDecodingError(at: index, decoding: Value.self, error)
     }
   }
 
