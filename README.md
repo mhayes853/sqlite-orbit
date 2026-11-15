@@ -968,9 +968,11 @@ later, and watchOS 26 or later.
 SQLiteVec's signed Int8 vectors use `[Int8].Int8BytesRepresentation`, or
 `FixedEmbeddingVector<N, Int8>.Int8BytesRepresentation` to validate dimensions. Both conform to
 `OrbitDatabaseValueConvertible` and store one raw byte per component, with no scale or shift,
-unlike Turso's `Quantized8Vector`. Blob subtypes do not survive binding, so SQL tags bound codes
-with `vec_int8`, and structured inserts use `Vec.int8(codes)`. `Vec.quantizeInt8` produces codes
-from float32 components in [-1, 1]:
+unlike Turso's `TursoQuantized8Vector`. Structured queries bind these codes as `vec_int8(?)`, so
+record inserts and query arguments need no explicit tag. Raw SQL binds an untagged blob, so wrap
+it in `vec_int8(...)` there. vec0 cannot update Int8 or bit vectors in place
+([sqlite-vec#53](https://github.com/asg017/sqlite-vec/issues/53)); delete and reinsert the row.
+`Vec.quantizeInt8` produces codes from float32 components in [-1, 1]:
 
 ```swift
 @Table("int8_embeddings")
@@ -985,8 +987,11 @@ try await database.write { transaction in
   try transaction.execute(
     "CREATE VIRTUAL TABLE int8_embeddings USING vec0(embedding int8[3], label text)"
   )
-  try Int8Embedding.insert { ($0.embedding, $0.label) } values: { (Vec.int8(codes), "example") }
+  try Int8Embedding.insert { Int8Embedding(embedding: [-128, 0, 127], label: "example") }
     .execute(transaction)
+  try transaction.execute(
+    "INSERT INTO int8_embeddings(embedding, label) VALUES (vec_int8(\(codes)), 'raw')"
+  )
 }
 let nearest = try await database.read { transaction in
   try Int8Embedding.where { $0.embedding.match(codes) }.order { $0.distance }.limit(5)
@@ -1085,17 +1090,17 @@ as 1, while SQLiteVec returns NULL.
 
 The bundled Rust Turso engine supports `vector`/`vector32`, `vector64`, `vector8`, `vector1bit`,
 `vector32Sparse`, JSON extraction, cosine/L2/dot/Jaccard distances, and dense concatenation and
-slicing. Compressed columns store `Quantized8Vector` or `SparseFloat32Vector` directly:
+slicing. Compressed columns store `TursoQuantized8Vector` or `TursoSparseFloat32Vector` directly:
 
 ```swift
 @Table("encoded_documents")
 struct EncodedDocument {
-  var embedding: Quantized8Vector
-  var lexicalEmbedding: SparseFloat32Vector
+  var embedding: TursoQuantized8Vector
+  var lexicalEmbedding: TursoSparseFloat32Vector
 }
 
-let compressed = try Quantized8Vector(quantizing: [0, 127.5, 255])
-let sparse = try SparseFloat32Vector(dimensions: 6, indices: [2, 5], values: [1.5, 2.5])
+let compressed = try TursoQuantized8Vector(quantizing: [0, 127.5, 255])
+let sparse = try TursoSparseFloat32Vector(dimensions: 6, indices: [2, 5], values: [1.5, 2.5])
 let dense = compressed.decodedValues()
 let denseSparse = sparse.denseValues()
 
@@ -1104,29 +1109,30 @@ let inline = try embedding.quantized8()
 let sized = try embedding.sparseFloat32()
 ```
 
-`Quantized8Vector` preserves its unsigned byte codes, scale, and shift. Quantization happens only
-when explicitly requested. `SparseFloat32Vector` preserves its dimension count, indices, and
-stored values without allocating a dense array during decoding. For fixed dimensions, use
-`InlineQuantized8Vector<N>` or `SizedSparseFloat32Vector<N>`. All four encoded types also conform
-to `OrbitDatabaseValueConvertible`: raw SQL binds and reads the original bytes without
+`TursoQuantized8Vector` preserves its unsigned byte codes, scale, and shift. Quantization happens
+only when explicitly requested. `TursoSparseFloat32Vector` preserves its dimension count, indices,
+and stored values without allocating a dense array during decoding. For fixed dimensions, use
+`FixedTursoQuantized8Vector<N>` or `FixedTursoSparseFloat32Vector<N>`. All four encoded types also
+conform to `OrbitDatabaseValueConvertible`: raw SQL binds and reads the original bytes without
 requantizing or expanding them. Invalid constructor components throw `TursoVectorError`;
 match its extensible `code` (`.invalidQuantization` or `.invalidSparseComponents`) and use `reason`
-for diagnostics. Malformed serialized bytes throw `VectorDecodingError`.
+for diagnostics. Malformed serialized bytes throw `VectorDecodingError.invalidBytes(reason:)`,
+whose reason names the length or metadata mismatch.
 
 `BinaryEmbeddingVector<N>` stores packed logical bits. `packedBytes` omits database metadata;
-use `.TursoBytesRepresentation` for Turso or `.PackedBitsRepresentation` for SQLiteVec, which
+use `.TursoBinaryBytesRepresentation` for Turso or `.PackedBitsRepresentation` for SQLiteVec, which
 requires dimensions divisible by eight. `TursoVec.distanceHamming` returns the number of differing
 bits as a `Double`, agreeing with the local vector's `hammingDistance(to:)` integer result.
 Binary cosine distance uses the same native SQL function. `TursoVec` helpers only accept Turso's
 encodings, so structured queries use `.TursoFloat64BytesRepresentation` for `EmbeddingVector64`
-and `.TursoBytesRepresentation` for binary vectors; raw float64, Float16, and packed-bit
+and `.TursoBinaryBytesRepresentation` for binary vectors; raw float64, Float16, and packed-bit
 representations do not compile with them. Upstream now focuses on SQLiteVec and Rust Turso: libSQL
 helpers and the bfloat16 vector type have been removed, and Float16 vectors only serialize.
 
 `TursoVec.concat` accepts two dense float32 or float64 vectors. `TursoVec.slice` also supports
 sparse float32 and uses a zero-based inclusive start and exclusive end. Both return array
-representations for dense vectors and `SparseFloat32Vector` for sparse vectors by default; use
-`as:` for fixed-size results. Binary vectors support cosine, dot,
+representations for dense vectors and `TursoSparseFloat32Vector` for sparse vectors by default;
+use `as:` for fixed-size results. Binary vectors support cosine, dot,
 and Jaccard distances, but not L2.
 
 The bundled engine does not implement libSQL's `vector16`, `vectorb16`, `libsql_vector_idx`, or

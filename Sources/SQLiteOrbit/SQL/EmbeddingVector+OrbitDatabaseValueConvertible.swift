@@ -48,7 +48,8 @@
   extension FixedEmbeddingVector: ConvertibleFromOrbitDatabaseRow where Scalar: VectorScalar {}
 
   // SQLiteVec's signed Int8 vectors are raw bytes without scale or shift metadata, unlike Turso's
-  // `Quantized8Vector`. SQL still needs `vec_int8` to tag a bound blob before SQLiteVec uses it.
+  // `TursoQuantized8Vector`. Orbit binds them as untagged blobs, so raw SQL still needs `vec_int8`;
+  // StructuredQueries renders them as `vec_int8(?)` itself.
   extension [Int8].Int8BytesRepresentation: OrbitDatabaseValueConvertible {}
 
   @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)

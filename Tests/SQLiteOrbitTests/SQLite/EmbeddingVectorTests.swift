@@ -220,16 +220,14 @@
             let near = try BinaryEmbeddingVector<16>(packedBytes: [0x85, 0x02])
             let vector = BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: exact)
             try await database.write { transaction in
+              // Bound packed bits render as `vec_bit(?)`, so record inserts reach bit columns.
+              try SQLiteBinaryEmbedding.insert {
+                SQLiteBinaryEmbedding(embedding: near, label: "near")
+              }
+              .execute(transaction)
               try SQLiteBinaryEmbedding.insert {
                 ($0.embedding, $0.label)
               } values: {
-                (
-                  Vec.bit(
-                    BinaryEmbeddingVector<16>.PackedBitsRepresentation(queryOutput: near),
-                    as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self
-                  ),
-                  "near"
-                )
                 (
                   Vec.bit(vector, as: BinaryEmbeddingVector<16>.PackedBitsRepresentation.self),
                   "exact"
@@ -446,7 +444,8 @@
               try SQLiteInt8Embedding.insert {
                 ($0.embedding, $0.label)
               } values: {
-                (Vec.int8(exact, as: Codes.self), "exact")
+                // Bound Int8 codes render as `vec_int8(?)`, so they need no explicit tag.
+                (exact, "exact")
                 (Vec.quantizeInt8(floats, as: Codes.self), "quantized")
               }
               .execute(transaction)

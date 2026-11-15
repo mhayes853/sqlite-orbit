@@ -93,16 +93,16 @@
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
         let values = (0..<dimensions).map { Float($0 * 10) }
-        let float8 = try Quantized8Vector(quantizing: values)
+        let float8 = try TursoQuantized8Vector(quantizing: values)
         let bits = (0..<dimensions).map { $0.isMultiple(of: 2) }
-        let binary = [Bool].TursoBytesRepresentation(queryOutput: bits)
-        let opposite = [Bool].TursoBytesRepresentation(queryOutput: bits.map { !$0 })
+        let binary = [Bool].TursoBinaryBytesRepresentation(queryOutput: bits)
+        let opposite = [Bool].TursoBinaryBytesRepresentation(queryOutput: bits.map { !$0 })
         let json = "[" + values.map(String.init(describing:)).joined(separator: ",") + "]"
         let binaryJSON = "[" + bits.map { $0 ? "1" : "-1" }.joined(separator: ",") + "]"
         try await database.read { transaction in
           let decodedVector = try #sql(
             "SELECT \(TursoVec.vector8(json))",
-            as: Quantized8Vector.self
+            as: TursoQuantized8Vector.self
           )
           .fetchOne(transaction)
           let encoded = try #require(decodedVector)
@@ -116,7 +116,7 @@
           #expect(
             try #sql(
               "SELECT \(TursoVec.vector1bit(binaryJSON))",
-              as: [Bool].TursoBytesRepresentation.self
+              as: [Bool].TursoBinaryBytesRepresentation.self
             )
             .fetchOne(transaction) == bits
           )
@@ -180,7 +180,7 @@
             TursoVec.distanceJaccard(left, to: right).queryFragment
           ]
         case "float8":
-          let left = try Quantized8Vector(quantizing: [1, 0, 0])
+          let left = try TursoQuantized8Vector(quantizing: [1, 0, 0])
           let right = TursoVec.vector8("[1,1,0]")
           distances = [
             TursoVec.distanceCosine(left, to: right).queryFragment,
@@ -189,7 +189,7 @@
             TursoVec.distanceJaccard(left, to: right).queryFragment
           ]
         case "sparse":
-          let left = try SparseFloat32Vector(compressing: [1, 0, 0])
+          let left = try TursoSparseFloat32Vector(compressing: [1, 0, 0])
           let right = TursoVec.vector32Sparse("[1,1,0]")
           distances = [
             TursoVec.distanceCosine(left, to: right).queryFragment,
@@ -226,7 +226,7 @@
     func sparseColumnsRoundTripSwiftAndEngineBytes(_ values: [Float]) async throws {
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
-        let sparse = try SparseFloat32Vector(compressing: values)
+        let sparse = try TursoSparseFloat32Vector(compressing: values)
         let json = "[" + values.map(String.init(describing:)).joined(separator: ",") + "]"
         try await database.write { transaction in
           try transaction.execute(
@@ -256,18 +256,18 @@
           )
           let sliced = try #sql(
             "SELECT \(TursoVec.slice(sparse, from: 2, to: 8))",
-            as: SparseFloat32Vector.self
+            as: TursoSparseFloat32Vector.self
           )
           .fetchOne(transaction)
           #expect(sliced?.denseValues() == Array(values[2..<8]))
           if #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) {
             #expect(
               try #sql(
-                "SELECT \(TursoVec.vector32Sparse(json, as: SizedSparseFloat32Vector<9>.self))",
-                as: SizedSparseFloat32Vector<9>.self
+                "SELECT \(TursoVec.vector32Sparse(json, as: FixedTursoSparseFloat32Vector<9>.self))",
+                as: FixedTursoSparseFloat32Vector<9>.self
               )
               .fetchOne(transaction)
-                == SizedSparseFloat32Vector<9>(compressing: EmbeddingVector<9> { values[$0] })
+                == FixedTursoSparseFloat32Vector<9>(compressing: EmbeddingVector<9> { values[$0] })
             )
           }
         }
@@ -419,7 +419,7 @@
         let row = TursoEncodedEmbedding(
           key: 1,
           float64: [1, -2, 0.5],
-          float8: try Quantized8Vector(quantizing: [0, 127, 255]),
+          float8: try TursoQuantized8Vector(quantizing: [0, 127, 255]),
           bits: [true, false, true]
         )
         try await database.write { transaction in
@@ -456,7 +456,7 @@
           )
           let double = [Double].TursoFloat64BytesRepresentation(queryOutput: row.float64)
           let float8 = row.float8
-          let binary = [Bool].TursoBytesRepresentation(queryOutput: row.bits)
+          let binary = [Bool].TursoBinaryBytesRepresentation(queryOutput: row.bits)
           let distances =
             try TursoEncodedEmbedding.select {
               (
@@ -484,14 +484,14 @@
       }
       try await withTestDatabaseFile("turso-vectors") { file in
         let database = try file.tursoPool()
-        let quantized = try Quantized8Vector(codes: [10, 20, 30], scale: 2, shift: 1)
-        let sparse = try SparseFloat32Vector(
+        let quantized = try TursoQuantized8Vector(codes: [10, 20, 30], scale: 2, shift: 1)
+        let sparse = try TursoSparseFloat32Vector(
           dimensions: 6,
           indices: [0, 2, 5],
           values: [-0.0, 1.5, 2.5]
         )
-        let inline = try InlineQuantized8Vector<3>(vectorBytes: quantized.vectorBytes)
-        let sized = try SizedSparseFloat32Vector<6>(vectorBytes: sparse.vectorBytes)
+        let inline = try FixedTursoQuantized8Vector<3>(vectorBytes: quantized.vectorBytes)
+        let sized = try FixedTursoSparseFloat32Vector<6>(vectorBytes: sparse.vectorBytes)
         try await database.write {
           try $0.execute(
             "CREATE TABLE encoded_values (quantized BLOB, sparse BLOB, inline_quantized BLOB, sized_sparse BLOB)"
@@ -503,10 +503,10 @@
         let result = try await database.read {
           try $0.fetchOne("SELECT * FROM encoded_values") {
             (
-              try $0[0, as: Quantized8Vector.self],
-              try $0[1, as: SparseFloat32Vector.self],
-              try $0[2, as: InlineQuantized8Vector<3>.self],
-              try $0[3, as: SizedSparseFloat32Vector<6>.self]
+              try $0[0, as: TursoQuantized8Vector.self],
+              try $0[1, as: TursoSparseFloat32Vector.self],
+              try $0[2, as: FixedTursoQuantized8Vector<3>.self],
+              try $0[3, as: FixedTursoSparseFloat32Vector<6>.self]
             )
           }
         }
@@ -524,8 +524,8 @@
           let rows = try #sql(
             "SELECT * FROM encoded_values",
             as: (
-              Quantized8Vector, SparseFloat32Vector, InlineQuantized8Vector<3>,
-              SizedSparseFloat32Vector<6>
+              TursoQuantized8Vector, TursoSparseFloat32Vector, FixedTursoQuantized8Vector<3>,
+              FixedTursoSparseFloat32Vector<6>
             )
             .self
           )
@@ -539,11 +539,11 @@
           }
           #expect(
             try #sql(
-              "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<3>.self))",
-              as: InlineQuantized8Vector<3>.self
+              "SELECT \(TursoVec.vector8("[0,127,255]", as: FixedTursoQuantized8Vector<3>.self))",
+              as: FixedTursoQuantized8Vector<3>.self
             )
             .fetchOne(transaction)
-              == InlineQuantized8Vector<3>(
+              == FixedTursoQuantized8Vector<3>(
                 quantizing: EmbeddingVector<3> { [Float(0), 127, 255][$0] }
               )
           )
@@ -557,8 +557,8 @@
           )
           #expect(throws: VectorDecodingError.dimensionMismatch(expected: 2, actual: 3)) {
             try #sql(
-              "SELECT \(TursoVec.vector8("[0,127,255]", as: InlineQuantized8Vector<2>.self))",
-              as: InlineQuantized8Vector<2>.self
+              "SELECT \(TursoVec.vector8("[0,127,255]", as: FixedTursoQuantized8Vector<2>.self))",
+              as: FixedTursoQuantized8Vector<2>.self
             )
             .fetchOne(transaction)
           }
@@ -614,8 +614,8 @@
           )
           .fetchOne(transaction)
           let bits = try #sql(
-            "SELECT \(TursoVec.vector1bit("[1,-1,1]", as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self))",
-            as: BinaryEmbeddingVector<3>.TursoBytesRepresentation.self
+            "SELECT \(TursoVec.vector1bit("[1,-1,1]", as: BinaryEmbeddingVector<3>.TursoBinaryBytesRepresentation.self))",
+            as: BinaryEmbeddingVector<3>.TursoBinaryBytesRepresentation.self
           )
           .fetchOne(transaction)
           #expect(stored == vector)
@@ -637,7 +637,7 @@
         let database = try file.tursoPool()
         let dense = EmbeddingVector<9>([1, -1, 1, -1, -1, -1, -1, 1, 1])
         let binary = BinaryEmbeddingVector<9>(quantizing: dense)
-        let query = BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: binary)
+        let query = BinaryEmbeddingVector<9>.TursoBinaryBytesRepresentation(queryOutput: binary)
         let neighbor = try BinaryEmbeddingVector<9>(packedBytes: [0x85, 0x00])
         #expect(binary.packedBytes == [0x85, 0x01])
         try await database.write { transaction in
@@ -652,10 +652,10 @@
               2,
               TursoVec.vector1bit(
                 dense,
-                as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self
+                as: BinaryEmbeddingVector<9>.TursoBinaryBytesRepresentation.self
               )
             )
-            (3, BinaryEmbeddingVector<9>.TursoBytesRepresentation(queryOutput: neighbor))
+            (3, BinaryEmbeddingVector<9>.TursoBinaryBytesRepresentation(queryOutput: neighbor))
           }
           .execute(transaction)
         }
@@ -669,7 +669,7 @@
             .fetchAll(transaction)
           #expect(distances == rows.map { Double($0.embedding.hammingDistance(to: binary)) })
           #expect(distances == [0, 0, 1])
-          let variable = [Bool].TursoBytesRepresentation(queryOutput: Array(neighbor))
+          let variable = [Bool].TursoBinaryBytesRepresentation(queryOutput: Array(neighbor))
           #expect(
             try #sql("SELECT \(TursoVec.distanceHamming(query, to: variable))", as: Double.self)
               .fetchOne(transaction) == 1
@@ -684,8 +684,11 @@
           // Nine and ten logical dimensions have the same packed byte count. Turso's metadata
           // must still reject decoding a nine-dimensional value as ten dimensions.
           #expect(throws: VectorDecodingError.dimensionMismatch(expected: 10, actual: 9)) {
-            try #sql("SELECT \(query)", as: BinaryEmbeddingVector<10>.TursoBytesRepresentation.self)
-              .fetchOne(transaction)
+            try #sql(
+              "SELECT \(query)",
+              as: BinaryEmbeddingVector<10>.TursoBinaryBytesRepresentation.self
+            )
+            .fetchOne(transaction)
           }
         }
       }
@@ -704,24 +707,24 @@
         try await database.read { transaction throws -> Void in
           #expect(
             try #sql(
-              "SELECT \(TursoVec.vector8(dense, as: InlineQuantized8Vector<3>.self))",
-              as: InlineQuantized8Vector<3>.self
+              "SELECT \(TursoVec.vector8(dense, as: FixedTursoQuantized8Vector<3>.self))",
+              as: FixedTursoQuantized8Vector<3>.self
             )
             .fetchOne(transaction) == quantized
           )
           #expect(
             try #sql(
-              "SELECT \(TursoVec.vector32Sparse(dense, as: SizedSparseFloat32Vector<3>.self))",
-              as: SizedSparseFloat32Vector<3>.self
+              "SELECT \(TursoVec.vector32Sparse(dense, as: FixedTursoSparseFloat32Vector<3>.self))",
+              as: FixedTursoSparseFloat32Vector<3>.self
             )
             .fetchOne(transaction) == sparse
           )
           #expect(
-            try transaction.fetchOne("SELECT \(quantized)", as: InlineQuantized8Vector<3>.self)
+            try transaction.fetchOne("SELECT \(quantized)", as: FixedTursoQuantized8Vector<3>.self)
               == quantized
           )
           #expect(
-            try transaction.fetchOne("SELECT \(sparse)", as: SizedSparseFloat32Vector<3>.self)
+            try transaction.fetchOne("SELECT \(sparse)", as: FixedTursoSparseFloat32Vector<3>.self)
               == sparse
           )
         }
@@ -842,7 +845,7 @@
             """
           )
         }
-        let candidate = try Quantized8Vector(quantizing: [1, 2])
+        let candidate = try TursoQuantized8Vector(quantizing: [1, 2])
         try await database.read { transaction in
           let rows = try TursoQuantizedEmbedding.order(by: \.key)
             .select {
@@ -943,8 +946,8 @@
     var key: Int
     @Column(as: [Double].TursoFloat64BytesRepresentation.self)
     var float64: [Double]
-    var float8: Quantized8Vector
-    @Column(as: [Bool].TursoBytesRepresentation.self)
+    var float8: TursoQuantized8Vector
+    @Column(as: [Bool].TursoBinaryBytesRepresentation.self)
     var bits: [Bool]
   }
 
@@ -952,14 +955,14 @@
   private struct TursoQuantizedEmbedding {
     @Column(primaryKey: true)
     var key: Int
-    var embedding: Quantized8Vector
+    var embedding: TursoQuantized8Vector
   }
 
   @Table("turso_sparse_embeddings")
   private struct TursoSparseEmbedding {
     @Column(primaryKey: true)
     var key: Int
-    var embedding: SparseFloat32Vector
+    var embedding: TursoSparseFloat32Vector
   }
 
   @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
@@ -967,7 +970,7 @@
   private struct TursoBinaryEmbedding {
     @Column(primaryKey: true)
     var key: Int
-    @Column(as: BinaryEmbeddingVector<9>.TursoBytesRepresentation.self)
+    @Column(as: BinaryEmbeddingVector<9>.TursoBinaryBytesRepresentation.self)
     var embedding: BinaryEmbeddingVector<9>
   }
 #endif

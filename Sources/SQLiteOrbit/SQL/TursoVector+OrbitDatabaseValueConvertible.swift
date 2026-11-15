@@ -31,12 +31,12 @@
   extension TursoFloat32BytesRepresentation: OrbitDatabaseValueConvertible {}
   extension TursoFloat64BytesRepresentation: OrbitDatabaseValueConvertible {}
 
-  extension Quantized8Vector: OrbitDatabaseValueConvertible {}
-  extension SparseFloat32Vector: OrbitDatabaseValueConvertible {}
+  extension TursoQuantized8Vector: OrbitDatabaseValueConvertible {}
+  extension TursoSparseFloat32Vector: OrbitDatabaseValueConvertible {}
 
   @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
-  extension InlineQuantized8Vector: OrbitDatabaseValueConvertible {}
+  extension FixedTursoQuantized8Vector: OrbitDatabaseValueConvertible {}
 
   @available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *)
-  extension SizedSparseFloat32Vector: OrbitDatabaseValueConvertible {}
+  extension FixedTursoSparseFloat32Vector: OrbitDatabaseValueConvertible {}
 #endif
