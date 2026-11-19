@@ -17,7 +17,8 @@ public struct OrbitRowMacro: ExtensionMacro {
     }
     let rowType = context.makeUniqueName("Row")
 
-    var properties: [(name: TokenSyntax, type: TypeSyntax, column: String)] = []
+    // A property reads one named column, or a group of columns sharing a prefix as a nested row.
+    var properties: [(name: TokenSyntax, type: TypeSyntax, column: String, isNested: Bool)] = []
     for member in declaration.memberBlock.members {
       if let initializer = member.decl.as(InitializerDeclSyntax.self),
         initializer.signature.parameterClause.parameters.count == 1,
@@ -81,6 +82,7 @@ public struct OrbitRowMacro: ExtensionMacro {
       }
       var columnName = identifier.text.trimmingBackticks
       var didRename = false
+      var isNested = false
       for element in property.attributes {
         guard let attribute = element.as(AttributeSyntax.self) else {
           throw rowDiagnostic(
@@ -88,7 +90,8 @@ public struct OrbitRowMacro: ExtensionMacro {
             "'@OrbitRow' does not support conditional property attributes"
           )
         }
-        guard macroName(attribute) == "OrbitColumn" else {
+        let name = macroName(attribute)
+        guard name == "OrbitColumn" || name == "OrbitColumns" else {
           throw rowDiagnostic(
             at: attribute,
             "'@OrbitRow' does not support property wrappers or other property attributes; use a handwritten conformance"
@@ -97,8 +100,16 @@ public struct OrbitRowMacro: ExtensionMacro {
         guard !didRename else {
           throw rowDiagnostic(
             at: attribute,
-            "a property can have only one '@OrbitColumn' attribute"
+            isNested || name == "OrbitColumns"
+              ? "a property can have only one '@OrbitColumn' or '@OrbitColumns' attribute"
+              : "a property can have only one '@OrbitColumn' attribute"
           )
+        }
+        if name == "OrbitColumns" {
+          columnName = try columnsPrefix(of: attribute)
+          didRename = true
+          isNested = true
+          continue
         }
         guard case .argumentList(let arguments) = attribute.arguments,
           arguments.count == 1, let argument = arguments.first, argument.label == nil,
@@ -112,7 +123,7 @@ public struct OrbitRowMacro: ExtensionMacro {
         columnName = name
         didRename = true
       }
-      properties.append((identifier, propertyType, columnName))
+      properties.append((identifier, propertyType, columnName, isNested))
     }
     let access =
       declaration.modifiers
@@ -136,11 +147,13 @@ public struct OrbitRowMacro: ExtensionMacro {
       .joined(separator: ", ")
     let conformance = protocols.isEmpty ? "" : ": \(conformances)"
     let assignments = properties.map {
-      "self.\($0.name.trimmedDescription) = try row[column: \(StringLiteralExprSyntax(content: $0.column)), as: \($0.type.trimmedDescription).self]"
+      "self.\($0.name.trimmedDescription) = try row[\($0.isNested ? "columns" : "column"): \(StringLiteralExprSyntax(content: $0.column)), as: \($0.type.trimmedDescription).self]"
     }
-    let mappings = properties.map {
-      "case \\Self.\($0.name.trimmedDescription): return \(StringLiteralExprSyntax(content: $0.column))"
-    }
+    // A nested row spans several columns, so its key path maps to no single column name.
+    let mappings = properties.filter { !$0.isNested }
+      .map {
+        "case \\Self.\($0.name.trimmedDescription): return \(StringLiteralExprSyntax(content: $0.column))"
+      }
     let result: DeclSyntax = """
       extension \(type.trimmed)\(raw: conformance) {
         \(raw: access)init<\(rowType): SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
@@ -175,23 +188,60 @@ public struct OrbitColumnMacro: PeerMacro {
     providingPeersOf declaration: some DeclSyntaxProtocol,
     in context: some MacroExpansionContext
   ) throws -> [DeclSyntax] {
-    let enclosingType = context.lexicalContext.first {
-      $0.is(StructDeclSyntax.self) || $0.is(ClassDeclSyntax.self) || $0.is(EnumDeclSyntax.self)
-    }?
-    .as(StructDeclSyntax.self)
-    guard let property = declaration.as(VariableDeclSyntax.self),
-      isStoredInstanceProperty(property),
-      let enclosingType,
-      enclosingType.attributes.contains(where: {
-        $0.as(AttributeSyntax.self).map { macroName($0) == "OrbitRow" } ?? false
-      })
-    else {
-      throw rowDiagnostic(
-        at: node,
-        "'@OrbitColumn' requires a stored instance property inside an '@OrbitRow' struct"
-      )
-    }
+    try validateColumnMarker(node, named: "OrbitColumn", on: declaration, in: context)
     return []
+  }
+}
+
+/// Marks a property of the enclosing OrbitRow macro as a nested row read from a group of columns.
+public struct OrbitColumnsMacro: PeerMacro {
+  public static func expansion(
+    of node: AttributeSyntax,
+    providingPeersOf declaration: some DeclSyntaxProtocol,
+    in context: some MacroExpansionContext
+  ) throws -> [DeclSyntax] {
+    // The enclosing '@OrbitRow' reads the prefix, and reports it when it is malformed.
+    try validateColumnMarker(node, named: "OrbitColumns", on: declaration, in: context)
+    return []
+  }
+}
+
+/// The literal prefix of an `@OrbitColumns` attribute, which is empty when it has no arguments.
+private func columnsPrefix(of attribute: AttributeSyntax) throws -> String {
+  guard let arguments = attribute.arguments else { return "" }
+  guard case .argumentList(let list) = arguments,
+    list.count == 1, let argument = list.first, argument.label?.text == "prefix",
+    let prefix = argument.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+  else {
+    throw rowDiagnostic(
+      at: attribute,
+      "'@OrbitColumns' takes no arguments or one string literal 'prefix'"
+    )
+  }
+  return prefix
+}
+
+private func validateColumnMarker(
+  _ node: AttributeSyntax,
+  named name: String,
+  on declaration: some DeclSyntaxProtocol,
+  in context: some MacroExpansionContext
+) throws {
+  let enclosingType = context.lexicalContext.first {
+    $0.is(StructDeclSyntax.self) || $0.is(ClassDeclSyntax.self) || $0.is(EnumDeclSyntax.self)
+  }?
+  .as(StructDeclSyntax.self)
+  guard let property = declaration.as(VariableDeclSyntax.self),
+    isStoredInstanceProperty(property),
+    let enclosingType,
+    enclosingType.attributes.contains(where: {
+      $0.as(AttributeSyntax.self).map { macroName($0) == "OrbitRow" } ?? false
+    })
+  else {
+    throw rowDiagnostic(
+      at: node,
+      "'@\(name)' requires a stored instance property inside an '@OrbitRow' struct"
+    )
   }
 }
 

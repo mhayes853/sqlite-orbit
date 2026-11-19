@@ -6,6 +6,7 @@ struct SQLiteOrbitPlugin: CompilerPlugin {
   let providingMacros: [Macro.Type] = [
     SQLiteLibraryMacro.self,
     OrbitRowMacro.self,
-    OrbitColumnMacro.self
+    OrbitColumnMacro.self,
+    OrbitColumnsMacro.self
   ]
 }
