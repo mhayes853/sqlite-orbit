@@ -116,19 +116,11 @@ struct OrbitDatabaseColumnScope: OrbitDatabaseRow {
     do {
       return try Value(orbitDatabaseRow: self)
     } catch let error as OrbitDatabaseColumnDecodingError {
-      if let index = error.columnIndex {
-        guard columns.indices.contains(index) else { throw error }
-        throw OrbitDatabaseColumnDecodingError(
-          columnIndex: columns[index].baseIndex,
-          columnName: prefix + columns[index].name,
-          reason: error.reason,
-          sql: error.sql,
-          underlyingError: error.underlyingError
-        )
-      }
       throw OrbitDatabaseColumnDecodingError(
+        columnIndex: error.columnIndex.flatMap {
+          columns.indices.contains($0) ? columns[$0].baseIndex : nil
+        },
         // "?" stands for a property with no mapped column, which no prefix makes more precise.
-        columnIndex: nil,
         columnName: error.columnName == "?" ? "?" : prefix + error.columnName,
         reason: error.reason,
         sql: error.sql,

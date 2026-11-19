@@ -100,9 +100,7 @@ public struct OrbitRowMacro: ExtensionMacro {
         guard !didRename else {
           throw rowDiagnostic(
             at: attribute,
-            isNested || name == "OrbitColumns"
-              ? "a property can have only one '@OrbitColumn' or '@OrbitColumns' attribute"
-              : "a property can have only one '@OrbitColumn' attribute"
+            "a property can have only one '@OrbitColumn' or '@OrbitColumns' attribute"
           )
         }
         if name == "OrbitColumns" {
