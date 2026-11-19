@@ -10,7 +10,8 @@ import Testing
         type: OrbitRowMacro.self,
         conformances: ["ConvertibleFromOrbitDatabaseRow", "OrbitDatabaseRowColumns"]
       ),
-      "OrbitColumn": MacroSpec(type: OrbitColumnMacro.self)
+      "OrbitColumn": MacroSpec(type: OrbitColumnMacro.self),
+      "OrbitColumns": MacroSpec(type: OrbitColumnsMacro.self)
     ],
     indentationWidth: .spaces(2)
   )
@@ -144,6 +145,96 @@ struct OrbitRowMacroTests {
         }
       }
       """
+    }
+  }
+
+  @Test
+  func synthesizesNestedRowReadsAndLeavesThemOutOfTheColumnMapping() {
+    assertMacro {
+      """
+      @OrbitRow
+      struct ReminderWithList {
+        @OrbitColumns let reminder: Reminder
+        @OrbitColumns(prefix: "list_") var list: RemindersList?
+        let total: Int
+      }
+      """
+    } expansion: {
+      """
+      struct ReminderWithList {
+        let reminder: Reminder
+        var list: RemindersList?
+        let total: Int
+      }
+
+      extension ReminderWithList: SQLiteOrbit.ConvertibleFromOrbitDatabaseRow, SQLiteOrbit.OrbitDatabaseRowColumns {
+        init<__macro_local_3RowfMu_: SQLiteOrbit.OrbitDatabaseRow & ~Copyable & ~Escapable>(
+          orbitDatabaseRow row: borrowing __macro_local_3RowfMu_
+        ) throws {
+          self.reminder = try row[columns: "", as: Reminder.self]
+          self.list = try row[columns: "list_", as: RemindersList?.self]
+          self.total = try row[column: "total", as: Int.self]
+        }
+
+        static func orbitColumnName(for keyPath: Swift.PartialKeyPath<Self>) -> Swift.String? {
+          switch keyPath {
+          case \\Self.total:
+            return "total"
+          default:
+            return nil
+          }
+        }
+      }
+      """
+    }
+  }
+
+  @Test
+  func rejectsMalformedAndConflictingNestedRowMarkers() {
+    assertMacro {
+      #"""
+      @OrbitRow
+      struct Summary {
+        @OrbitColumns("list_") let list: RemindersList
+      }
+      @OrbitRow
+      struct Interpolated {
+        @OrbitColumns(prefix: "list_\(suffix)") let list: RemindersList
+      }
+      @OrbitRow
+      struct Conflicting {
+        @OrbitColumn("list") @OrbitColumns(prefix: "list_") let list: RemindersList
+      }
+      struct Outside {
+        @OrbitColumns(prefix: "list_") let list: RemindersList
+      }
+      """#
+    } diagnostics: {
+      #"""
+      @OrbitRow
+      struct Summary {
+        @OrbitColumns("list_") let list: RemindersList
+        ┬─────────────────────
+        ╰─ 🛑 '@OrbitColumns' takes no arguments or one string literal 'prefix'
+      }
+      @OrbitRow
+      struct Interpolated {
+        @OrbitColumns(prefix: "list_\(suffix)") let list: RemindersList
+        ┬──────────────────────────────────────
+        ╰─ 🛑 '@OrbitColumns' takes no arguments or one string literal 'prefix'
+      }
+      @OrbitRow
+      struct Conflicting {
+        @OrbitColumn("list") @OrbitColumns(prefix: "list_") let list: RemindersList
+                             ┬─────────────────────────────
+                             ╰─ 🛑 a property can have only one '@OrbitColumn' or '@OrbitColumns' attribute
+      }
+      struct Outside {
+        @OrbitColumns(prefix: "list_") let list: RemindersList
+        ┬─────────────────────────────
+        ╰─ 🛑 '@OrbitColumns' requires a stored instance property inside an '@OrbitRow' struct
+      }
+      """#
     }
   }
 

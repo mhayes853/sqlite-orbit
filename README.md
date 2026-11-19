@@ -181,6 +181,36 @@ Key paths check property names and value types at compile time; the SQL projecti
 runtime. Named and key-path reads share the same cached column lookup. Handwritten types may
 implement `OrbitDatabaseRowColumns` independently of `ConvertibleFromOrbitDatabaseRow`.
 
+A join decodes into the row types of its tables. A property marked `@OrbitColumns` is itself a
+row, read from the result columns whose names start with a prefix, under their names with the
+prefix removed:
+
+```swift
+@OrbitRow
+struct ReminderWithList {
+  @OrbitColumns let reminder: Reminder
+  @OrbitColumns(prefix: "list_") let list: RemindersList?
+}
+
+let rows = try await database.read { transaction in
+  try transaction.fetchAll(
+    """
+    SELECT r.id, r.title, l.id AS list_id, l.name AS list_name
+    FROM reminders r LEFT JOIN lists l ON l.id = r.list_id
+    """,
+    as: ReminderWithList.self
+  )
+}
+```
+
+Without a prefix, the property reads the same columns as the enclosing struct. An optional property
+is `nil` when every column with the prefix is `NULL`, as in a `LEFT JOIN` that matched nothing; a
+matched row whose columns are all `NULL` reads as `nil` too. Prefixes are string literals matched
+byte for byte, and a prefix no column has throws, even for an optional property. Nested rows may
+nest further, and their prefixes add up. A failure names the column of the outermost row, such as
+`list_name`. Outside the macro, `try row[columns: "list_", as: RemindersList?.self]` reads the
+same way.
+
 `@OrbitRow` maps SQL result columns into values, including projections, joins, aggregates, and
 `RETURNING` results. For typed inserts, updates, and upserts, use Structured Queries' `@Table`
 models and write builders with `try Table.insert { ... }.execute(transaction)` or
