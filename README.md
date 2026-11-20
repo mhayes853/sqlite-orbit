@@ -235,6 +235,37 @@ returns it to the connection's cache, so preparing the same SQL in a later trans
 nothing. Each run reports what it reads and changes to observers, exactly like running the SQL
 through the transaction.
 
+With the `StructuredQueries` trait, a write transaction also inserts `@Table` records without
+building the query builder's statement for every row. `prepareInsert` builds a table's `INSERT`
+once and binds each run's values straight from the row; `insert` and `insert(contentsOf:)` do the
+same with a plan kept for each table and a statement from the connection's cache:
+
+```swift
+try await database.write { transaction in
+  let id = try transaction.insert(reminder)
+  try transaction.insert(contentsOf: reminders)
+  try transaction.insert(tag, onConflict: .ignore)
+
+  var insert = try transaction.prepareInsert(Reminder.Draft.self)
+  for draft in drafts { try insert.execute(draft) }
+
+  var add = try transaction.prepareInsert(Reminder.self) { ($0.title, $0.listID) }
+  try add.execute("Buy milk", listID)
+
+  var save = try transaction.prepareInsert(Reminder.self, onConflict: .update)
+  try save.execute(contentsOf: incoming)
+}
+```
+
+A run writes the same SQL and values `Table.insert` would, and returns the new row's rowid.
+`.replace` is `INSERT OR REPLACE`; `.ignore` is `ON CONFLICT DO NOTHING`, which skips a row that
+conflicts on a unique column but still fails one that breaks `NOT NULL` or `CHECK`; `.update`
+updates the conflicting row's written columns, matched on the primary key, and a partial insert
+that updates must list the key. A run that skips or updates a row returns `nil` and leaves
+`lastInsertedRowID` as it was. `execute(contentsOf:)` and `insert(contentsOf:)` insert all of their
+rows or none, in a savepoint that nests inside the caller's, and return how many rows they inserted
+or updated.
+
 `SQL` runs one statement. A script of several, such as a schema, runs with `executeScript`, which
 takes a plain `String` and binds nothing:
 

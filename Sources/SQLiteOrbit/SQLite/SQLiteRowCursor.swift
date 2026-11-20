@@ -109,6 +109,45 @@ public struct SQLiteRowCursor: OrbitDatabaseRowCursor, ~Copyable, ~Escapable {
     if compiledStatement != nil { authorizer.activeCursors += 1 }
   }
 
+  // A cursor over a statement lent by the cache for `query`, whose parameters `bind` binds from
+  // the caller's own values rather than from values carried in the query. `query` holds no values
+  // of its own.
+  @_lifetime(borrow statements)
+  init(
+    _ query: SQL,
+    binding bind: (OpaquePointer, UnsafePointer<SQLiteLibrary>) throws -> Void,
+    connection: OpaquePointer,
+    library: UnsafePointer<SQLiteLibrary>,
+    statements: borrowing SQLiteStatementCache,
+    authorizer: SQLiteAuthorizerDispatcher,
+    observations: SQLiteConnectionEvents,
+    connectionState: SQLiteConnectionState?
+  ) throws {
+    let (compiledStatement, loan) = try statements.checkOut(query, requiresReadOnly: false)
+    if let compiledStatement {
+      do {
+        try bind(compiledStatement.pointer, library)
+      } catch {
+        // The statement never reached a cursor, so nothing else will give it back.
+        statements.checkIn(compiledStatement, loan: loan)
+        throw error
+      }
+    }
+    self.library = library
+    self.connection = connection
+    self.sql = loan.sql
+    self.statements = copy statements
+    self.loan = loan
+    self.prepared = nil
+    self.preparedRun = 0
+    self.compiledStatement = compiledStatement
+    self.authorizer = authorizer
+    self.authorizationGeneration = authorizer.generation
+    self.connectionState = connectionState
+    self.observations = observations
+    if compiledStatement != nil { authorizer.activeCursors += 1 }
+  }
+
   // A run of a prepared statement, whose values are already bound. The authorization generation
   // is the one the statement was prepared under, so a run on the far side of an authorization
   // scope boundary is refused just as a cursor carried across one is.

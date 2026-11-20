@@ -148,7 +148,7 @@ public struct SQLitePreparedStatement: ~Copyable, ~Escapable {
   // Readies the statement for a run's arguments, and returns it, or `nil` when the SQL holds no
   // statement. A run's cursor resets the statement when it is destroyed, but Swift may destroy it
   // only after the next run has begun, so a statement still partway through a run is reset here.
-  private func beginRun() -> OpaquePointer? {
+  func beginRun() -> OpaquePointer? {
     guard let state else { return nil }
     let statement = state.statement.pointer
     if state.needsReset {
@@ -177,6 +177,20 @@ public struct SQLitePreparedStatement: ~Copyable, ~Escapable {
     guard let statement = beginRun() else { return }
     for (offset, value) in bindings.enumerated() {
       try bind(value, to: statement, at: Int32(offset + 1), library: library)
+    }
+  }
+
+  // Runs the statement to completion with its parameters bound by `bind`, for a caller that binds
+  // straight from its own values rather than from an argument list. `bind` must bind every
+  // parameter, since a run does not clear the values the run before it bound.
+  mutating func execute(
+    binding bind: (OpaquePointer, UnsafePointer<SQLiteLibrary>) throws -> Void
+  ) throws {
+    if let statement = beginRun() {
+      try bind(statement, library)
+    }
+    try withOrbitCursor(runCursor()) { cursor in
+      while try cursor.next() != nil {}
     }
   }
 

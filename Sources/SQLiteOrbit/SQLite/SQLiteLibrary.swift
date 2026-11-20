@@ -325,6 +325,14 @@ extension SQLiteLibrary {
         OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
         UnsafeMutablePointer<Int32>?
       ) -> Int32
+    /// Replaces the rowid ``lastInsertedRowID`` reports: `sqlite3_set_last_insert_rowid`, or `nil`
+    /// for a build without it, such as Turso.
+    ///
+    /// ``SQLitePreparedUpsert`` sets a value no insert reports before each run, so that a run
+    /// that inserts nothing is told apart from one that does. Without this it compares the rowid
+    /// before and after the run, which mistakes an insert for a skipped row in the rare case that
+    /// the new row's rowid equals the one reported before it.
+    public var setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)?
     /// Creates a connection operation group.
     ///
     /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
@@ -347,7 +355,8 @@ extension SQLiteLibrary {
         @convention(c) (
           OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
           UnsafeMutablePointer<Int32>?
-        ) -> Int32
+        ) -> Int32,
+      setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)? = nil
     ) {
       self.open = open
       self.close = close
@@ -360,6 +369,7 @@ extension SQLiteLibrary {
       self.lastInsertedRowID = lastInsertedRowID
       self.isAutocommit = isAutocommit
       self.walCheckpoint = walCheckpoint
+      self.setLastInsertedRowID = setLastInsertedRowID
     }
   }
 
@@ -860,14 +870,15 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
           fileSharing: .multipleProcesses
         )
         library.extensions = .appleSystem
-        return library
       #else
-        return configured(
+        var library = configured(
           #sqliteLibrary(apis: [.standard, .autoExtensions]),
           name: "system SQLite",
           fileSharing: .multipleProcesses
         )
       #endif
+      library.connections.setLastInsertedRowID = sqlite3_set_last_insert_rowid
+      return library
     }()
   }
 #endif
@@ -875,17 +886,24 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
 #if SQLCipher
   extension SQLiteLibrary {
     /// The package's SQLCipher library, including its codec operations.
-    public static let sqlCipher = configured(
-      #sqliteLibrary(apis: [.standard, .encryption, .autoExtensions]),
-      name: "SQLCipher",
-      fileSharing: .multipleProcesses
-    )
+    public static let sqlCipher: Self = {
+      var library = configured(
+        #sqliteLibrary(apis: [.standard, .encryption, .autoExtensions]),
+        name: "SQLCipher",
+        fileSharing: .multipleProcesses
+      )
+      library.connections.setLastInsertedRowID = sqlite3_set_last_insert_rowid
+      return library
+    }()
   }
 #endif
 
 #if Turso
   extension SQLiteLibrary {
     /// Turso's local SQLite-compatible Rust engine.
+    ///
+    /// Turso has no `sqlite3_set_last_insert_rowid`, so its
+    /// ``Connections/setLastInsertedRowID`` is `nil`.
     public static let turso = configured(
       #sqliteLibrary(module: "TursoSQLite3", apis: []),
       name: "Turso",

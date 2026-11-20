@@ -475,8 +475,9 @@ final class SQLiteStatementCache {
 }
 
 /// A statement the connection runs to control itself rather than for the application: beginning
-/// and ending transactions, and switching `query_only`. Each is kept compiled for the life of the
-/// connection, since every access runs some of them.
+/// and ending transactions, switching `query_only`, and the savepoint that makes a bulk insert
+/// atomic. Each is kept compiled for the life of the connection, since every access runs some of
+/// them.
 enum SQLiteControlStatement: Int, CaseIterable {
   case beginDeferred
   case beginImmediate
@@ -486,6 +487,9 @@ enum SQLiteControlStatement: Int, CaseIterable {
   case rollback
   case queryOnly
   case writable
+  case beginBulkInsert
+  case endBulkInsert
+  case undoBulkInsert
 
   var sql: String {
     switch self {
@@ -499,6 +503,13 @@ enum SQLiteControlStatement: Int, CaseIterable {
     // keyword as a different expression kind than the pragma implementation accepts.
     case .queryOnly: "PRAGMA query_only = 1"
     case .writable: "PRAGMA query_only = 0"
+    // Savepoints nest by name, and `RELEASE` and `ROLLBACK TO` act on the innermost one with
+    // theirs, so a caller's own savepoints around a bulk insert, whatever they are called, are
+    // left as they were. Between its savepoint statements the insert runs only its own
+    // statement, so no savepoint of a caller's can come between them.
+    case .beginBulkInsert: "SAVEPOINT sqlite_orbit_bulk_insert"
+    case .endBulkInsert: "RELEASE sqlite_orbit_bulk_insert"
+    case .undoBulkInsert: "ROLLBACK TO sqlite_orbit_bulk_insert"
     }
   }
 
