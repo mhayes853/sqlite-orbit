@@ -40,6 +40,60 @@ func insertRecordStructuredQueriesBenchmarks() {
     }
   }
 
+  // One `prepareInsert`, built once from the table's columns and run with each record.
+  Benchmark("InsertRecordStructuredQueries/OrbitPrepared") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          var insert = try transaction.prepareInsert(TableItem.self)
+          for i in 0..<Fixture.insertedRowCount {
+            try insert.execute(TableItem(i))
+          }
+        }
+      }
+    }
+  }
+
+  // `transaction.insert(_:)` for each record: the table's cached plan and the connection's cached
+  // statement, with nothing prepared by the caller.
+  Benchmark("InsertRecordStructuredQueries/OrbitInsert") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          for i in 0..<Fixture.insertedRowCount {
+            try transaction.insert(TableItem(i))
+          }
+        }
+      }
+    }
+  }
+
+  // `transaction.insert(contentsOf:)` over every record, made lazily as it is read.
+  Benchmark("InsertRecordStructuredQueries/OrbitContentsOfLazy") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          _ = try transaction.insert(
+            contentsOf: (0..<Fixture.insertedRowCount).lazy.map { TableItem($0) }
+          )
+        }
+      }
+    }
+  }
+
+  // The same over an array, built inside the measurement as the lazy records are.
+  Benchmark("InsertRecordStructuredQueries/OrbitContentsOfArray") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          _ = try transaction.insert(
+            contentsOf: (0..<Fixture.insertedRowCount).map { TableItem($0) }
+          )
+        }
+      }
+    }
+  }
+
   // The same, with every statement prepared anew.
   Benchmark("InsertRecordStructuredQueries/OrbitUncached") { benchmark in
     try measureInsert(benchmark, open: openOrbitConnection) { owner in

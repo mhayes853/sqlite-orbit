@@ -63,6 +63,23 @@ func insertPositionalValuesBenchmarks() {
     }
   }
 
+  // A partial `prepareInsert` listing all ten columns, with each run's values type checked against
+  // them.
+  Benchmark("InsertPositionalValues/OrbitPreparedInsert") { benchmark in
+    try measureInsert(benchmark, open: openOrbitConnection) { owner in
+      try owner.withWriteConnection { connection in
+        try connection.transaction { transaction in
+          var insert = try transaction.prepareInsert(TableItem.self) {
+            ($0.i0, $0.i1, $0.i2, $0.i3, $0.i4, $0.i5, $0.i6, $0.i7, $0.i8, $0.i9)
+          }
+          for i in 0..<Fixture.insertedRowCount {
+            try insert.execute(i, i, i, i, i, i, i, i, i, i)
+          }
+        }
+      }
+    }
+  }
+
   Benchmark("InsertPositionalValues/OrbitUncached") { benchmark in
     try measureInsert(benchmark, open: openOrbitConnection) { owner in
       try owner.withWriteConnection { connection in
