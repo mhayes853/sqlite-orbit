@@ -89,11 +89,16 @@
     /// - Parameter rows: The records or drafts to insert.
     /// - Returns: The number of rows inserted.
     /// - Throws: A ``SQLiteError`` when an insert fails.
+    @inlinable
     @discardableResult
     public borrowing func insert<Row: Table>(contentsOf rows: some Sequence<Row>) throws -> Int {
-      let plan = try SQLiteInsertPlans.records(Row.self, code: 0, conflict: .none)
-      var statement = try preparedStatement(for: plan)
-      return try statement.runInserts(plan, contentsOf: rows)
+      // Inlined, so that the sequence is stepped, and its rows bound, in code specialized for
+      // them.
+      var iterator = rows.makeIterator()
+      var next = iterator.next()
+      return try insertEach(Row.self, onConflict: nil) {
+        try $0.bind(next: &next, from: &iterator)
+      }
     }
 
     /// Inserts records or drafts, replacing any rows they conflict with, all or none, and returns
@@ -108,18 +113,17 @@
     ///   - conflict: What to do with a row one conflicts with.
     /// - Returns: The number of rows inserted. A row deleted to make room is not counted.
     /// - Throws: A ``SQLiteError`` when an insert fails.
+    @inlinable
     @discardableResult
     public borrowing func insert<Row: Table>(
       contentsOf rows: some Sequence<Row>,
       onConflict conflict: SQLiteInsertConflict
     ) throws -> Int {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict.code,
-        conflict: conflict.conflict
-      )
-      var statement = try preparedStatement(for: plan)
-      return try statement.runInserts(plan, contentsOf: rows)
+      var iterator = rows.makeIterator()
+      var next = iterator.next()
+      return try insertEach(Row.self, onConflict: conflict) {
+        try $0.bind(next: &next, from: &iterator)
+      }
     }
 
     /// Inserts records or drafts, or skips or updates the rows they conflict with, all or none,
@@ -134,10 +138,43 @@
     ///   - conflict: What to do with a row one conflicts with.
     /// - Returns: The number of rows inserted or updated. A skipped row is not counted.
     /// - Throws: A ``SQLiteError`` when an insert fails.
+    @inlinable
     @discardableResult
     public borrowing func insert<Row: Table>(
       contentsOf rows: some Sequence<Row>,
       onConflict conflict: SQLiteUpsertConflict<Row>
+    ) throws -> Int {
+      var iterator = rows.makeIterator()
+      var next = iterator.next()
+      return try insertEach(Row.self, onConflict: conflict) {
+        try $0.bind(next: &next, from: &iterator)
+      }
+    }
+
+    // What `insert(contentsOf:)` and `insert(contentsOf:onConflict:)` with an insert conflict
+    // run, with each row bound by `step`.
+    @usableFromInline
+    borrowing func insertEach<Row: Table>(
+      _ table: Row.Type,
+      onConflict conflict: SQLiteInsertConflict?,
+      each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
+    ) throws -> Int {
+      let plan = try SQLiteInsertPlans.records(
+        Row.self,
+        code: conflict?.code ?? 0,
+        conflict: conflict?.conflict ?? .none
+      )
+      var statement = try preparedStatement(for: plan)
+      return try statement.runInserts(plan, each: step)
+    }
+
+    // What `insert(contentsOf:onConflict:)` with an upsert conflict runs, with each row bound by
+    // `step`.
+    @usableFromInline
+    borrowing func insertEach<Row: Table>(
+      _ table: Row.Type,
+      onConflict conflict: SQLiteUpsertConflict<Row>,
+      each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
     ) throws -> Int {
       let plan = try SQLiteInsertPlans.records(
         Row.self,
@@ -145,7 +182,7 @@
         conflict: conflict.conflict
       )
       var statement = try preparedStatement(for: plan)
-      return try statement.runInserts(plan, contentsOf: rows)
+      return try statement.runInserts(plan, each: step)
     }
 
     // Runs a plan's statement once, straight from the connection's cache, without the prepared
@@ -154,7 +191,11 @@
       try withOrbitCursor(
         SQLiteRowCursor(
           plan.query,
-          binding: { statement, library in try plan.bind(row, to: statement, library: library) },
+          binding: { statement, library in
+            var arguments = SQLiteInsertArguments(plan: plan, library: library)
+            arguments.begin(statement)
+            try withUnsafePointer(to: row) { try arguments.bind(row: $0) }
+          },
           connection: base.connection,
           library: base.library,
           statements: base.statements,

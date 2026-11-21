@@ -74,9 +74,19 @@
     ///   is whatever SQLite reported before the run.
     /// - Throws: A ``SQLiteError`` when the insert fails, or whatever a value throws converting
     ///   to one SQLite stores.
+    @inlinable
     @discardableResult
     public mutating func execute(_ input: repeat each Input) throws -> Int64 {
-      try statement.runInsert(plan, repeat each input)
+      // Inlined, so that the values are gathered into one row in code specialized for their
+      // types.
+      let row = (repeat each input)
+      return try withUnsafePointer(to: row) { try run(row: $0) }
+    }
+
+    // What `execute(_:)` runs, with the row at `row`.
+    @usableFromInline
+    mutating func run(row: UnsafeRawPointer) throws -> Int64 {
+      try statement.runInsert(plan, row: row)
       return statement.lastInsertedRowID
     }
 
@@ -99,11 +109,24 @@
     ///   not counted.
     /// - Throws: A ``SQLiteError`` when an insert fails, or whatever a value throws converting
     ///   to one SQLite stores.
+    @inlinable
     @discardableResult
     public mutating func execute(contentsOf inputs: some Sequence<(repeat each Input)>) throws
       -> Int
     {
-      try statement.runInserts(plan, contentsOf: inputs)
+      // Inlined, so that the sequence is stepped, and its elements bound, in code specialized
+      // for them. The iterator is read one element ahead, which tells the last element apart.
+      var iterator = inputs.makeIterator()
+      var next = iterator.next()
+      return try execute(each: { try $0.bind(next: &next, from: &iterator) })
+    }
+
+    // What `execute(contentsOf:)` runs, with each element bound by `step`.
+    @usableFromInline
+    mutating func execute(
+      each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
+    ) throws -> Int {
+      try statement.runInserts(plan, each: step)
     }
   }
 
@@ -168,9 +191,19 @@
     /// - Throws: A ``SQLiteError`` when the insert fails, such as for a `NOT NULL` column left
     ///   without a value, which no conflict clause skips, or whatever a value throws converting to
     ///   one SQLite stores.
+    @inlinable
     @discardableResult
     public mutating func execute(_ input: repeat each Input) throws -> Int64? {
-      try statement.runUpsert(plan, repeat each input)
+      // Inlined, so that the values are gathered into one row in code specialized for their
+      // types.
+      let row = (repeat each input)
+      return try withUnsafePointer(to: row) { try run(row: $0) }
+    }
+
+    // What `execute(_:)` runs, with the row at `row`.
+    @usableFromInline
+    mutating func run(row: UnsafeRawPointer) throws -> Int64? {
+      try statement.runUpsert(plan, row: row)
     }
 
     /// Inserts a row for each element, or skips or updates the row it conflicts with, all or
@@ -190,11 +223,24 @@
     /// - Returns: The number of rows inserted or updated. A skipped row is not counted.
     /// - Throws: A ``SQLiteError`` when an insert fails, or whatever a value throws converting
     ///   to one SQLite stores.
+    @inlinable
     @discardableResult
     public mutating func execute(contentsOf inputs: some Sequence<(repeat each Input)>) throws
       -> Int
     {
-      try statement.runInserts(plan, contentsOf: inputs)
+      // Inlined, so that the sequence is stepped, and its elements bound, in code specialized
+      // for them. The iterator is read one element ahead, which tells the last element apart.
+      var iterator = inputs.makeIterator()
+      var next = iterator.next()
+      return try execute(each: { try $0.bind(next: &next, from: &iterator) })
+    }
+
+    // What `execute(contentsOf:)` runs, with each element bound by `step`.
+    @usableFromInline
+    mutating func execute(
+      each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
+    ) throws -> Int {
+      try statement.runInserts(plan, each: step)
     }
   }
 

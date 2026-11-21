@@ -27,21 +27,21 @@
     // reading it, so every run of the plan hands over this same query.
     let query: SQL
 
-    // One binder for each value a run is given, in order: a record insert's one record, or a
+    // What binds each value a run is given, in order: a record insert's one record, or a
     // partial insert's one value per listed column.
-    let binders: [SQLiteInsertBinder]
+    let slots: SQLiteInsertSlots
 
-    let parameterCount: Int
+    var parameterCount: Int { slots.parameterCount }
 
     // Builds the SQL Structured Queries renders for `INSERT INTO <table> (<columns>) VALUES (…)`
     // with `conflict`, with a parameter in place of each value.
     init<Row: Table>(
       _ table: Row.Type,
       columnNames: [String],
-      binders: [SQLiteInsertBinder],
+      slots: consuming SQLiteInsertSlots,
       conflict: Conflict
     ) throws {
-      let parameterCount = binders.reduce(0) { $0 + $1.parameterCount }
+      let parameterCount = slots.parameterCount
       guard parameterCount == columnNames.count, !columnNames.isEmpty else {
         throw SQLiteError(
           code: .misuse,
@@ -99,8 +99,7 @@
       }
       self.sql = SQL(fragment: query).text
       self.query = SQL(text: sql)
-      self.binders = binders
-      self.parameterCount = parameterCount
+      self.slots = slots
     }
 
     // A plan that writes every writable column of a record or draft, generated columns aside, as
@@ -109,52 +108,97 @@
       let columns = Row.TableColumns.writableColumns
       var names: [String] = []
       names.reserveCapacity(columns.count)
-      var binders: [SQLiteColumnBinder<Row>] = []
-      binders.reserveCapacity(columns.count)
+      var slots = SQLiteInsertSlotList()
       for column in columns {
         names.append(column.name)
-        binders.append(try sqliteColumnBinder(column, of: Row.self))
+        slots.appendColumn(column, of: Row.self)
       }
-      try self.init(
-        table,
-        columnNames: names,
-        binders: [SQLiteRecordBinder(columns: binders)],
-        conflict: conflict
-      )
+      try self.init(table, columnNames: names, slots: SQLiteInsertSlots(slots), conflict: conflict)
     }
 
     // A plan that writes only the listed columns, each from a run's argument, as
     // `Table.insert { ($0.a, $0.b) } values: { (a, b) }` does.
+    //
+    // A run is handed its arguments as one tuple, so each argument is read at its offset in the
+    // tuple. Swift lays a tuple out as it lays out a struct with the same fields, each at the
+    // first offset after the one before it that suits its alignment, which is how the offsets
+    // are worked out.
     convenience init<Row: Table, each Column: _TableColumnExpression>(
       _ table: Row.Type,
       columns: (Row.TableColumns) -> (repeat each Column),
       conflict: Conflict
     ) throws {
       var names: [String] = []
-      var binders: [SQLiteInsertBinder] = []
+      var slots = SQLiteInsertSlotList()
       for column in repeat each columns(Row.columns) {
-        let binder = try sqliteArgumentBinder(for: column)
+        try slots.appendArgument(for: column)
         names.append(contentsOf: column._names)
-        binders.append(binder)
       }
-      try self.init(table, columnNames: names, binders: binders, conflict: conflict)
+      // Reading an argument at the wrong offset would read memory as the wrong type, so the
+      // layout worked out is checked against the one Swift reports, once, as the plan is built.
+      precondition(
+        slots.argumentsSize == MemoryLayout<(repeat (each Column).Value.QueryOutput)>.size,
+        "An insert's arguments are not laid out as its plan expects."
+      )
+      try self.init(table, columnNames: names, slots: SQLiteInsertSlots(slots), conflict: conflict)
+    }
+  }
+
+  // Binds a run's row to a plan's statement: a record, or a partial insert's arguments as one
+  // tuple, lent by its address.
+  //
+  // The public entry points are inlined into their callers, which gather a run's values into a
+  // tuple, and lend its address, in code specialized for the values' types. Code generic over a
+  // parameter pack copies every value it steps through, and looks up the pack's tuple type, for
+  // every row, which costs more than binding the values does, and Swift does not specialize a
+  // step through a pack even where every type is known. Gathering a tuple it does specialize, to
+  // a few stores. The plan, which is not generic, binds the row from its address.
+  @usableFromInline
+  struct SQLiteInsertArguments {
+    // What a step of a bulk insert found: no element, the last one, or one with more after it.
+    @usableFromInline
+    enum Element {
+      case none
+      case last
+      case more
     }
 
-    // Binds a run's values, one for each binder, from the first parameter on.
-    @inline(__always)
-    func bind<each Input>(
-      _ input: repeat each Input,
-      to statement: OpaquePointer,
-      library: UnsafePointer<SQLiteLibrary>
-    ) throws {
-      var binder = 0
-      var index: Int32 = 1
-      for value in repeat each input {
-        index = try withUnsafePointer(to: value) { value in
-          try binders[binder].bind(value, to: statement, at: index, library: library)
-        }
-        binder += 1
-      }
+    // The plan's slots, which the run that makes these arguments keeps alive by holding the plan.
+    private let slots: UnsafeBufferPointer<SQLiteInsertSlot>
+    private let library: UnsafePointer<SQLiteLibrary>
+    private var statement: OpaquePointer?
+
+    init(plan: SQLiteInsertPlan, library: UnsafePointer<SQLiteLibrary>) {
+      self.slots = plan.slots.buffer
+      self.library = library
+    }
+
+    // Readies the arguments for a run of `statement`, or for none when the SQL holds no
+    // statement, whose runs bind nothing.
+    mutating func begin(_ statement: OpaquePointer?) {
+      self.statement = statement
+    }
+
+    // Binds the element `next` holds, as a bulk insert's step, and reads the one after it into
+    // `next`, which is how the step tells the last element apart.
+    @inlinable
+    func bind<Elements: IteratorProtocol>(
+      next: inout Elements.Element?,
+      from iterator: inout Elements
+    ) throws -> Element {
+      guard let element = next else { return .none }
+      next = iterator.next()
+      try withUnsafePointer(to: element) { try bind(row: $0) }
+      if case .none = next { return .last }
+      return .more
+    }
+
+    // Binds the row at `row`, which must be of the type the plan was built for: the record, or
+    // the tuple of a partial insert's arguments.
+    @usableFromInline
+    func bind(row: UnsafeRawPointer) throws {
+      guard let statement else { return }
+      _ = try SQLiteInsertSlots.bind(slots, row: row, from: 1, to: statement, library: library)
     }
   }
 
@@ -162,10 +206,301 @@
     names.map { "\(quote: $0)" }
   }
 
+  // MARK: - Slots
+
+  // One parameter a run binds, or one binder that binds one or more, read from a value at
+  // `offset` bytes into the value a run is given.
+  //
+  // A column whose representation is one of the common built-in types is bound straight from
+  // memory with SQLite's own bind function for it, which skips converting the stored value to
+  // its representation, then to a `QueryBinding`, and then to an `OrbitDatabaseValue`, the three
+  // steps that cost the most of a row's binds. Each binds exactly what those steps would.
+  // Anything else, such as a custom representation, is bound by a binder through those steps.
+  struct SQLiteInsertSlot {
+    enum Kind: UInt8 {
+      case int
+      case int8
+      case int16
+      case int32
+      case int64
+      case uint8
+      case uint16
+      case uint32
+      case bool
+      case double
+      case float
+      case text
+      case blob
+      case binder
+    }
+
+    var offset: Int
+
+    // Held without a retain, since the slots own their binders, so that a run touches no
+    // reference count to reach one.
+    var binder: Unmanaged<SQLiteInsertBinder>?
+
+    var kind: Kind
+
+    // Whether the value is an `Optional` of the kind's type, which binds `NULL` for `nil`.
+    var isOptional: Bool
+
+    // The kind for a representation bound straight from memory, or `nil` for one only a binder
+    // binds. The representation is matched exactly, so a type that merely stores a built-in,
+    // such as a tagged or JSON one, still goes through its own binding.
+    static func primitive<Member: QueryBindable>(_: Member.Type) -> (Kind, isOptional: Bool)? {
+      // A built-in type reads its stored value as itself, which is what lets it be read from
+      // memory as the type it is.
+      guard Member.QueryOutput.self == Member.self else { return nil }
+      for (type, optionalType, kind) in primitives {
+        if Member.self == type { return (kind, false) }
+        if Member.self == optionalType { return (kind, true) }
+      }
+      return nil
+    }
+
+    // Read only when a plan is built. UInt64 is left to its binder, which refuses a value too
+    // large for SQLite's integers.
+    private static var primitives: [(Any.Type, Any.Type, Kind)] {
+      [
+        (Int.self, Int?.self, .int),
+        (Int64.self, Int64?.self, .int64),
+        (String.self, String?.self, .text),
+        (Double.self, Double?.self, .double),
+        (Bool.self, Bool?.self, .bool),
+        ([UInt8].self, [UInt8]?.self, .blob),
+        (Int32.self, Int32?.self, .int32),
+        (Int16.self, Int16?.self, .int16),
+        (Int8.self, Int8?.self, .int8),
+        (UInt32.self, UInt32?.self, .uint32),
+        (UInt16.self, UInt16?.self, .uint16),
+        (UInt8.self, UInt8?.self, .uint8),
+        (Float.self, Float?.self, .float)
+      ]
+    }
+
+    @inline(__always)
+    func bind(
+      _ base: UnsafeRawPointer,
+      index: inout Int32,
+      to statement: OpaquePointer,
+      library: UnsafePointer<SQLiteLibrary>
+    ) throws {
+      let value = base + offset
+      let index32 = index
+      let code: Int32
+      switch kind {
+      case .binder:
+        index = try binder.unsafelyUnwrapped._withUnsafeGuaranteedRef {
+          try $0.bind(value, to: statement, at: index32, library: library)
+        }
+        return
+      case .int:
+        code = bindInteger(read(Int.self, value), index32, statement, library)
+      case .int8:
+        code = bindInteger(read(Int8.self, value), index32, statement, library)
+      case .int16:
+        code = bindInteger(read(Int16.self, value), index32, statement, library)
+      case .int32:
+        code = bindInteger(read(Int32.self, value), index32, statement, library)
+      case .int64:
+        code = bindInteger(read(Int64.self, value), index32, statement, library)
+      case .uint8:
+        code = bindInteger(read(UInt8.self, value), index32, statement, library)
+      case .uint16:
+        code = bindInteger(read(UInt16.self, value), index32, statement, library)
+      case .uint32:
+        code = bindInteger(read(UInt32.self, value), index32, statement, library)
+      case .bool:
+        // The query builder binds a Bool as `.bool`, which is lowered to the integer 1 or 0.
+        code = bindInteger(read(Bool.self, value).map { $0 ? 1 : 0 }, index32, statement, library)
+      case .double:
+        code = bindReal(read(Double.self, value), index32, statement, library)
+      case .float:
+        // The query builder widens a Float to a Double, as this does.
+        code = bindReal(read(Float.self, value).map(Double.init), index32, statement, library)
+      case .text:
+        if let string = read(String.self, value) {
+          code = bindText(string, to: statement, at: index32, library: library)
+        } else {
+          code = library.pointee.bindings.null(statement, index32)
+        }
+      case .blob:
+        if let bytes = read([UInt8].self, value) {
+          code = bindBlob(bytes, to: statement, at: index32, library: library)
+        } else {
+          code = library.pointee.bindings.null(statement, index32)
+        }
+      }
+      try checkBound(code)
+      index = index32 + 1
+    }
+
+    @inline(__always)
+    private func read<T>(_: T.Type, _ value: UnsafeRawPointer) -> T? {
+      isOptional
+        ? value.assumingMemoryBound(to: T?.self).pointee
+        : value.assumingMemoryBound(to: T.self).pointee
+    }
+  }
+
+  @inline(__always)
+  private func bindInteger(
+    _ value: (some BinaryInteger)?,
+    _ index: Int32,
+    _ statement: OpaquePointer,
+    _ library: UnsafePointer<SQLiteLibrary>
+  ) -> Int32 {
+    guard let value else { return library.pointee.bindings.null(statement, index) }
+    return library.pointee.bindings.int64(statement, index, Int64(value))
+  }
+
+  @inline(__always)
+  private func bindReal(
+    _ value: Double?,
+    _ index: Int32,
+    _ statement: OpaquePointer,
+    _ library: UnsafePointer<SQLiteLibrary>
+  ) -> Int32 {
+    guard let value else { return library.pointee.bindings.null(statement, index) }
+    return library.pointee.bindings.double(statement, index, value)
+  }
+
+  // The slots of a plan or column group as they are worked out, before they are laid out for
+  // runs.
+  struct SQLiteInsertSlotList {
+    fileprivate var slots: [SQLiteInsertSlot] = []
+    fileprivate var binders: [SQLiteInsertBinder] = []
+    fileprivate var parameterCount = 0
+
+    // The size of a partial insert's arguments, as a tuple, so far.
+    fileprivate(set) var argumentsSize = 0
+
+    // A value whose representation is `Member`, stored at `offset`.
+    mutating func appendValue<Member: QueryBindable>(_: Member.Type, at offset: Int) {
+      if let (kind, isOptional) = SQLiteInsertSlot.primitive(Member.self) {
+        slots.append(SQLiteInsertSlot(offset: offset, kind: kind, isOptional: isOptional))
+        parameterCount += 1
+      } else {
+        appendBinder(SQLiteValueBinder<Member>(), at: offset)
+      }
+    }
+
+    mutating func appendBinder(_ binder: SQLiteInsertBinder, at offset: Int) {
+      binders.append(binder)
+      slots.append(
+        SQLiteInsertSlot(
+          offset: offset,
+          binder: Unmanaged.passUnretained(binder),
+          kind: .binder,
+          isOptional: false
+        )
+      )
+      parameterCount += binder.parameterCount
+    }
+
+    // Opens a record's column once, extracting its key path, which a column builds anew each
+    // time it is asked for one. A column stored in the record itself is read at its offset,
+    // which a key path to a stored property of a struct reports, rather than walking the key
+    // path for every row.
+    mutating func appendColumn<Record>(_ column: any TableColumnExpression, of _: Record.Type) {
+      func open<Root, Member>(_ column: some TableColumnExpression<Root, Member>) {
+        let keyPath = column.keyPath
+        if let keyPath = keyPath as? KeyPath<Record, Member.QueryOutput> {
+          if let offset = MemoryLayout<Record>.offset(of: keyPath) {
+            appendValue(Member.self, at: offset)
+          } else {
+            appendBinder(SQLiteKeyPathColumnBinder<Record, Member>(keyPath: keyPath), at: 0)
+          }
+        } else {
+          appendBinder(SQLiteCastingColumnBinder<Record, Root, Member>(keyPath: keyPath), at: 0)
+        }
+      }
+      open(column)
+    }
+
+    // A listed column's value: one value for a column, or one for each column of a column
+    // group. Anything else, such as an optional column group, has no single value per column, so
+    // it is refused.
+    mutating func appendArgument<Column: _TableColumnExpression>(for column: Column) throws {
+      typealias Argument = Column.Value.QueryOutput
+      let alignment = MemoryLayout<Argument>.alignment
+      let offset = (argumentsSize + alignment - 1) / alignment * alignment
+      if let bindable = Column.Value.self as? any QueryBindable.Type {
+        func open<Value: QueryBindable>(_: Value.Type) {
+          appendValue(Value.self, at: offset)
+        }
+        open(bindable)
+      } else if let group = Column.Value.self as? any Table.Type {
+        func open<Group: Table>(_: Group.Type) {
+          var columns = SQLiteInsertSlotList()
+          for column in Group.TableColumns.allColumns {
+            columns.appendColumn(column, of: Group.self)
+          }
+          appendBinder(SQLiteGroupBinder<Group>(columns: SQLiteInsertSlots(columns)), at: offset)
+        }
+        open(group)
+      } else {
+        let names = column._names.map { "\"\($0)\"" }.joined(separator: ", ")
+        throw SQLiteError(
+          code: .misuse,
+          message: """
+            an insert cannot bind \(names), of type \(Column.Value.self), as one value per column
+            """
+        )
+      }
+      argumentsSize = offset + MemoryLayout<Argument>.size
+    }
+  }
+
+  // The slots a run walks, laid out in memory of their own, so that walking them retains
+  // nothing, as walking an array of them, or of binder objects, would for each row.
+  struct SQLiteInsertSlots: ~Copyable {
+    private let slots: UnsafeMutableBufferPointer<SQLiteInsertSlot>
+
+    // Keeps the binders alive, which the slots reference without retaining.
+    private let binders: [SQLiteInsertBinder]
+
+    let parameterCount: Int
+
+    init(_ list: SQLiteInsertSlotList) {
+      slots = .allocate(capacity: list.slots.count)
+      _ = slots.initialize(from: list.slots)
+      binders = list.binders
+      parameterCount = list.parameterCount
+    }
+
+    deinit {
+      slots.deallocate()
+    }
+
+    var buffer: UnsafeBufferPointer<SQLiteInsertSlot> {
+      UnsafeBufferPointer(slots)
+    }
+
+    // Binds every slot from the row at `row`, from the parameter at `index` on, and returns the
+    // index of the parameter after the last.
+    @inline(__always)
+    static func bind(
+      _ slots: UnsafeBufferPointer<SQLiteInsertSlot>,
+      row: UnsafeRawPointer,
+      from index: Int32,
+      to statement: OpaquePointer,
+      library: UnsafePointer<SQLiteLibrary>
+    ) throws -> Int32 {
+      var index = index
+      for slot in slots {
+        try slot.bind(row, index: &index, to: statement, library: library)
+      }
+      return index
+    }
+  }
+
   // MARK: - Binders
 
-  // Binds one of a run's values: a record, or one listed column's value. The value is lent by
-  // address, typed by the plan that made the binder, so binding it copies nothing.
+  // Binds a value no slot binds from memory: one in a custom representation, a column reached
+  // through a key path, or a column group. The value is lent by address, typed by the plan that
+  // made the binder, so binding it copies nothing.
   class SQLiteInsertBinder {
     let parameterCount: Int
 
@@ -185,32 +520,8 @@
     }
   }
 
-  // Binds every column of a record from its own key path.
-  final class SQLiteRecordBinder<Record>: SQLiteInsertBinder {
-    let columns: [SQLiteColumnBinder<Record>]
-
-    init(columns: [SQLiteColumnBinder<Record>]) {
-      self.columns = columns
-      super.init(parameterCount: columns.count)
-    }
-
-    override func bind(
-      _ value: UnsafeRawPointer,
-      to statement: OpaquePointer,
-      at index: Int32,
-      library: UnsafePointer<SQLiteLibrary>
-    ) throws -> Int32 {
-      let record = value.assumingMemoryBound(to: Record.self)
-      var index = index
-      for column in columns {
-        try column.bind(record, to: statement, at: index, library: library)
-        index += 1
-      }
-      return index
-    }
-  }
-
-  // Binds one listed column's value, which the column's type binds as a single value.
+  // Binds a value stored as its representation's output, which the representation binds as a
+  // single value, as the query builder would.
   final class SQLiteValueBinder<Value: QueryBindable>: SQLiteInsertBinder {
     init() {
       super.init(parameterCount: 1)
@@ -236,11 +547,12 @@
   // Binds one listed column group's value, a column for each of the group's columns, as the
   // query builder renders a group's value.
   final class SQLiteGroupBinder<Group: Table>: SQLiteInsertBinder {
-    let record: SQLiteRecordBinder<Group>
+    let columns: SQLiteInsertSlots
 
-    init(record: SQLiteRecordBinder<Group>) {
-      self.record = record
-      super.init(parameterCount: record.parameterCount)
+    init(columns: consuming SQLiteInsertSlots) {
+      let parameterCount = columns.parameterCount
+      self.columns = columns
+      super.init(parameterCount: parameterCount)
     }
 
     override func bind(
@@ -251,142 +563,61 @@
     ) throws -> Int32 {
       let output = value.assumingMemoryBound(to: Group.QueryOutput.self)
       return try withUnsafePointer(to: Group(queryOutput: output.pointee)) { group in
-        try record.bind(group, to: statement, at: index, library: library)
+        try SQLiteInsertSlots.bind(
+          columns.buffer,
+          row: UnsafeRawPointer(group),
+          from: index,
+          to: statement,
+          library: library
+        )
       }
     }
   }
 
-  // Binds one column of a record.
-  class SQLiteColumnBinder<Record> {
-    func bind(
-      _ record: UnsafePointer<Record>,
-      to statement: OpaquePointer,
-      at index: Int32,
-      library: UnsafePointer<SQLiteLibrary>
-    ) throws {
-      fatalError("A subclass binds its column.")
-    }
-  }
-
-  // Reads a column stored in the record itself at its offset, which a key path to a stored
-  // property of a struct reports, rather than walking the key path for every row.
-  final class SQLiteStoredColumnBinder<Record, Member: QueryBindable>: SQLiteColumnBinder<Record> {
-    let offset: Int
-
-    init(offset: Int) {
-      self.offset = offset
-    }
-
-    override func bind(
-      _ record: UnsafePointer<Record>,
-      to statement: OpaquePointer,
-      at index: Int32,
-      library: UnsafePointer<SQLiteLibrary>
-    ) throws {
-      let value = UnsafeRawPointer(record).advanced(by: offset)
-        .assumingMemoryBound(to: Member.QueryOutput.self)
-      try sqliteBind(
-        Member(queryOutput: value.pointee).queryBinding,
-        to: statement,
-        at: index,
-        library
-      )
-    }
-  }
-
-  // Reads a column through its key path, converts it to the column's representation, and binds
-  // that as the query builder would.
-  final class SQLiteKeyPathColumnBinder<Record, Member: QueryBindable>:
-    SQLiteColumnBinder<Record>
-  {
+  // Reads a record's column through its key path, converts it to the column's representation,
+  // and binds that as the query builder would.
+  final class SQLiteKeyPathColumnBinder<Record, Member: QueryBindable>: SQLiteInsertBinder {
     let keyPath: KeyPath<Record, Member.QueryOutput>
 
     init(keyPath: KeyPath<Record, Member.QueryOutput>) {
       self.keyPath = keyPath
+      super.init(parameterCount: 1)
     }
 
     override func bind(
-      _ record: UnsafePointer<Record>,
+      _ value: UnsafeRawPointer,
       to statement: OpaquePointer,
       at index: Int32,
       library: UnsafePointer<SQLiteLibrary>
-    ) throws {
+    ) throws -> Int32 {
+      let record = value.assumingMemoryBound(to: Record.self)
       let member = Member(queryOutput: record.pointee[keyPath: keyPath])
       try sqliteBind(member.queryBinding, to: statement, at: index, library)
+      return index + 1
     }
   }
 
-  // A column whose key path starts from another type than the record it is bound from, which the
-  // query builder casts the record to, as this does.
-  final class SQLiteCastingColumnBinder<Record, Root, Member: QueryBindable>:
-    SQLiteColumnBinder<Record>
-  {
+  // A record's column whose key path starts from another type than the record it is bound from,
+  // which the query builder casts the record to, as this does.
+  final class SQLiteCastingColumnBinder<Record, Root, Member: QueryBindable>: SQLiteInsertBinder {
     let keyPath: KeyPath<Root, Member.QueryOutput>
 
     init(keyPath: KeyPath<Root, Member.QueryOutput>) {
       self.keyPath = keyPath
+      super.init(parameterCount: 1)
     }
 
     override func bind(
-      _ record: UnsafePointer<Record>,
+      _ value: UnsafeRawPointer,
       to statement: OpaquePointer,
       at index: Int32,
       library: UnsafePointer<SQLiteLibrary>
-    ) throws {
+    ) throws -> Int32 {
+      let record = value.assumingMemoryBound(to: Record.self)
       let member = Member(queryOutput: (record.pointee as! Root)[keyPath: keyPath])
       try sqliteBind(member.queryBinding, to: statement, at: index, library)
+      return index + 1
     }
-  }
-
-  // Opens a column once, extracting its key path, which a column builds anew each time it is
-  // asked for one.
-  private func sqliteColumnBinder<Record>(
-    _ column: any TableColumnExpression,
-    of record: Record.Type
-  ) throws -> SQLiteColumnBinder<Record> {
-    func open<Root, Member>(
-      _ column: some TableColumnExpression<Root, Member>
-    ) -> SQLiteColumnBinder<Record> {
-      let keyPath = column.keyPath
-      if let keyPath = keyPath as? KeyPath<Record, Member.QueryOutput> {
-        if let offset = MemoryLayout<Record>.offset(of: keyPath) {
-          return SQLiteStoredColumnBinder<Record, Member>(offset: offset)
-        }
-        return SQLiteKeyPathColumnBinder<Record, Member>(keyPath: keyPath)
-      }
-      return SQLiteCastingColumnBinder<Record, Root, Member>(keyPath: keyPath)
-    }
-    return open(column)
-  }
-
-  // The binder for a listed column's value: one value for a column, or one for each column of a
-  // column group. Anything else, such as an optional column group, has no single value per
-  // column, so it is refused.
-  private func sqliteArgumentBinder<Column: _TableColumnExpression>(
-    for column: Column
-  ) throws -> SQLiteInsertBinder {
-    if let bindable = Column.Value.self as? any QueryBindable.Type {
-      func open<Value: QueryBindable>(_: Value.Type) -> SQLiteInsertBinder {
-        SQLiteValueBinder<Value>()
-      }
-      return open(bindable)
-    }
-    if let group = Column.Value.self as? any Table.Type {
-      func open<Group: Table>(_: Group.Type) throws -> SQLiteInsertBinder {
-        let columns = try Group.TableColumns.allColumns.map {
-          try sqliteColumnBinder($0, of: Group.self)
-        }
-        return SQLiteGroupBinder(record: SQLiteRecordBinder(columns: columns))
-      }
-      return try open(group)
-    }
-    let names = column._names.map { "\"\($0)\"" }.joined(separator: ", ")
-    throw SQLiteError(
-      code: .misuse,
-      message: """
-        an insert cannot bind \(names), of type \(Column.Value.self), as one value per column
-        """
-    )
   }
 
   @inline(__always)
@@ -492,26 +723,30 @@
       library.pointee.connections.lastInsertedRowID(connection)
     }
 
-    mutating func runInsert<each Input>(
-      _ plan: SQLiteInsertPlan,
-      _ input: repeat each Input
-    ) throws {
-      try execute { statement, library in
-        try plan.bind(repeat each input, to: statement, library: library)
-      }
+    // Runs the insert once, as `execute(binding:)` runs a statement, with the row at `row`: the
+    // record, or the tuple of a partial insert's arguments.
+    mutating func runInsert(_ plan: SQLiteInsertPlan, row: UnsafeRawPointer) throws {
+      var arguments = SQLiteInsertArguments(plan: plan, library: library)
+      arguments.begin(beginRun())
+      try arguments.bind(row: row)
+      try runBound()
     }
 
-    mutating func runUpsert<each Input>(
-      _ plan: SQLiteInsertPlan,
-      _ input: repeat each Input
-    ) throws -> Int64? {
+    mutating func runUpsert(_ plan: SQLiteInsertPlan, row: UnsafeRawPointer) throws -> Int64? {
       try sqliteInsertedRowID(on: connection, library: library) {
-        try runInsert(plan, repeat each input)
+        try runInsert(plan, row: row)
       }
     }
 
-    // Runs the insert once for each element, all or none, and returns the sum of the rows each
-    // run changed.
+    // Steps a run whose values are bound to completion.
+    private mutating func runBound() throws {
+      try withOrbitCursor(runCursor()) { cursor in
+        while try cursor.next() != nil {}
+      }
+    }
+
+    // Runs the insert once for each element `step` binds, all or none, and returns the sum of
+    // the rows each run changed.
     //
     // One statement is atomic on its own, so a single element runs as it is. More are run inside
     // a savepoint, released after the last and rolled back to when any fails, so that a failure
@@ -519,43 +754,39 @@
     // transaction wrote before stays. The savepoint statements are kept compiled by the
     // connection, as its transaction statements are, since compiling and finalizing them would
     // cost as much as several rows.
-    mutating func runInserts<each Input>(
+    //
+    // `step` binds the next element and says whether another follows it, which the caller knows
+    // by reading one element ahead, so that a single element is run without a savepoint. The
+    // elements come from a closure rather than a sequence, so that the public entry points,
+    // which are inlined into their callers, step the caller's sequence and bind its elements in
+    // code specialized for them. Code generic over the sequence steps it through its protocol,
+    // which for a lazy one allocates for every element.
+    mutating func runInserts(
       _ plan: SQLiteInsertPlan,
-      contentsOf inputs: some Sequence<(repeat each Input)>
+      each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
     ) throws -> Int {
-      // Code this generic steps an array's iterator through its protocol, which allocates for
-      // every element, so storage that can be lent is read by index instead.
-      let count = try inputs.withContiguousStorageIfAvailable { buffer in
-        var index = 0
-        return try runInserts(plan) { () -> (repeat each Input)? in
-          guard index < buffer.count else { return nil }
-          defer { index += 1 }
-          return buffer[index]
-        }
-      }
-      if let count { return count }
-      var iterator = inputs.makeIterator()
-      return try runInserts(plan) { iterator.next() }
-    }
-
-    private mutating func runInserts<each Input>(
-      _ plan: SQLiteInsertPlan,
-      next: () -> (repeat each Input)?
-    ) throws -> Int {
-      guard let first = next() else { return 0 }
-      guard let second = next() else {
-        try runInsert(plan, repeat each first)
+      var arguments = SQLiteInsertArguments(plan: plan, library: library)
+      arguments.begin(beginRun())
+      switch try step(arguments) {
+      case .none:
+        return 0
+      case .last:
+        try runBound()
         return changesCount
+      case .more:
+        break
       }
       try statements.execute(.beginBulkInsert)
       do {
-        try runInsert(plan, repeat each first)
+        try runBound()
         var count = changesCount
-        try runInsert(plan, repeat each second)
-        count += changesCount
-        while let element = next() {
-          try runInsert(plan, repeat each element)
+        while true {
+          arguments.begin(beginRun())
+          let element = try step(arguments)
+          if case .none = element { break }
+          try runBound()
           count += changesCount
+          if case .last = element { break }
         }
         try statements.execute(.endBulkInsert)
         return count

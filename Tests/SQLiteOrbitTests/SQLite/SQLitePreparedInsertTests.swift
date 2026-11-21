@@ -179,6 +179,200 @@
       )
     }
 
+    // Built-in representations are bound straight from memory, and the rest through their own
+    // binding, so these hold both paths, for every built-in and its optional, to what the query
+    // builder binds.
+    @Test
+    func builtInColumnsBindWhatTheQueryBuilderBinds() async throws {
+      try expectSameInserts(
+        primitives,
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.insert { row } },
+        plan: { transaction, row in
+          var insert = try transaction.prepareInsert(Primitives.self)
+          try insert.execute(row)
+        }
+      )
+      try expectSameInserts(
+        primitives,
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.upsert { row } },
+        plan: { transaction, row in
+          let rowID = try transaction.insert(row, onConflict: .update)
+          #expect(rowID == Int64(row.id))
+        }
+      )
+      try expectSameInserts(
+        primitives.map(Primitives.Draft.init) + [Primitives.Draft(primitives[1], id: nil)],
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.insert { row } },
+        plan: { transaction, row in try transaction.insert(row) }
+      )
+    }
+
+    // A partial insert reads each argument at its offset in the tuple of a run's arguments, so
+    // these mix sizes and alignments, optionals and a column group, whose offsets each depend on
+    // the arguments before them.
+    @Test
+    func partialInsertsBindMixedArgumentsWhatTheQueryBuilderBinds() async throws {
+      let rows = primitives.map {
+        (
+          $0.int8, $0.int64, $0.flag, $0.optionalInt8, $0.text, $0.optionalUInt16, $0.double,
+          $0.coordinates, $0.optionalBytes, $0.float, $0.doubled, $0.optionalFlag
+        )
+      }
+      try expectSameInserts(
+        rows,
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in
+          Primitives.insert {
+            (
+              $0.int8, $0.int64, $0.flag, $0.optionalInt8, $0.text, $0.optionalUInt16, $0.double,
+              $0.coordinates, $0.optionalBytes, $0.float, $0.doubled, $0.optionalFlag
+            )
+          } values: {
+            (
+              row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
+              row.11
+            )
+          }
+        },
+        plan: { transaction, row in
+          var insert = try transaction.prepareInsert(Primitives.self) {
+            (
+              $0.int8, $0.int64, $0.flag, $0.optionalInt8, $0.text, $0.optionalUInt16, $0.double,
+              $0.coordinates, $0.optionalBytes, $0.float, $0.doubled, $0.optionalFlag
+            )
+          }
+          try insert.execute(
+            row.0,
+            row.1,
+            row.2,
+            row.3,
+            row.4,
+            row.5,
+            row.6,
+            row.7,
+            row.8,
+            row.9,
+            row.10,
+            row.11
+          )
+        }
+      )
+      try expectSameInserts(
+        primitives.map { ($0.optionalText, $0.uint8, $0.optionalDoubled, $0.bytes) },
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in
+          Primitives.insert {
+            ($0.optionalText, $0.uint8, $0.optionalDoubled, $0.bytes)
+          } values: {
+            (row.0, row.1, row.2, row.3)
+          }
+        },
+        plan: { transaction, row in
+          var insert = try transaction.prepareInsert(Primitives.self) {
+            ($0.optionalText, $0.uint8, $0.optionalDoubled, $0.bytes)
+          }
+          try insert.execute(row.0, row.1, row.2, row.3)
+        }
+      )
+    }
+
+    // A bulk run binds each element through the same plan as a single run, from an element the
+    // caller's sequence lends, so the rows it writes are the ones the query builder writes for
+    // each element in turn.
+    @Test
+    func bulkRunsWriteWhatTheQueryBuilderWrites() async throws {
+      let partialRows = primitives.map { ($0.int16, $0.optionalText, $0.coordinates, $0.uint32) }
+      func expectSameRows(
+        _ plan: (borrowing SQLiteWriteTransaction) throws -> Int,
+        _ built: [QueryFragment],
+        sourceLocation: SourceLocation = #_sourceLocation
+      ) throws {
+        var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+        try owner.write { try $0.executeScript(primitivesSchema) }
+        let (planned, expected) = try owner.write { transaction in
+          let select: SQL = "SELECT * FROM primitives ORDER BY rowid"
+          func written(_ transaction: borrowing SQLiteWriteTransaction) throws
+            -> [[OrbitDatabaseValue]]
+          {
+            try transaction.fetchAll(select) { row in (0..<row.columnCount).map { row[$0] } }
+          }
+          let count = try plan(transaction)
+          #expect(count == built.count, sourceLocation: sourceLocation)
+          let planned = try written(transaction)
+          try transaction.execute("DELETE FROM primitives")
+          for fragment in built { try transaction.execute(SQL(fragment: fragment)) }
+          return (planned, try written(transaction))
+        }
+        #expect(planned == expected, sourceLocation: sourceLocation)
+        #expect(!planned.isEmpty, sourceLocation: sourceLocation)
+      }
+      let records = primitives.map { row in Primitives.insert { row }.query }
+      try expectSameRows({ try $0.insert(contentsOf: primitives) }, records)
+      try expectSameRows({ try $0.insert(contentsOf: primitives.lazy.map { $0 }) }, records)
+      try expectSameRows(
+        { transaction in
+          var insert = try transaction.prepareInsert(Primitives.self, onConflict: .update)
+          return try insert.execute(contentsOf: AnySequence(primitives))
+        },
+        records
+      )
+      try expectSameRows(
+        { transaction in
+          var insert = try transaction.prepareInsert(Primitives.self) {
+            ($0.int16, $0.optionalText, $0.coordinates, $0.uint32)
+          }
+          return try insert.execute(contentsOf: partialRows.lazy.map { $0 })
+        },
+        partialRows.map { row in
+          Primitives.insert {
+            ($0.int16, $0.optionalText, $0.coordinates, $0.uint32)
+          } values: {
+            (row.0, row.1, row.2, row.3)
+          }
+          .query
+        }
+      )
+    }
+
+    @Test
+    func onlyBuiltInRepresentationsBindStraightFromMemory() {
+      #expect(SQLiteInsertSlot.primitive(Int.self)?.0 == .int)
+      #expect(SQLiteInsertSlot.primitive(Int.self)?.isOptional == false)
+      #expect(SQLiteInsertSlot.primitive(String?.self)?.0 == .text)
+      #expect(SQLiteInsertSlot.primitive(String?.self)?.isOptional == true)
+      #expect(SQLiteInsertSlot.primitive([UInt8]?.self)?.0 == .blob)
+      // Custom representations convert what is stored before binding it, and UInt64 refuses a
+      // value too large for SQLite, so each goes through its own binding.
+      #expect(SQLiteInsertSlot.primitive(Priority.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(Priority?.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(Doubled.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(Date.UnixTimeRepresentation.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(UUID.BytesRepresentation.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(Data.self) == nil)
+      #expect(SQLiteInsertSlot.primitive(UInt64.self) == nil)
+    }
+
+    @Test
+    func anUnsignedValueTooLargeForSQLiteIsRefused() async throws {
+      let database = try inMemoryDatabase()
+      try await database.write { transaction in
+        try transaction.executeScript(primitivesSchema)
+        var row = primitives[0]
+        row.uint64 = .max
+        var insert = try transaction.prepareInsert(Primitives.self)
+        #expect(throws: (any Error).self) { try insert.execute(row) }
+        #expect(try Primitives.all.fetchCount(transaction) == 0)
+      }
+    }
+
     @Test
     func partialUpsertsUpdateOnlyTheListedColumns() async throws {
       let database = try await remindersDatabase()
@@ -728,6 +922,162 @@
       priority: .low,
       optionalPriority: .high,
       unsigned: 0
+    )
+  ]
+
+  // Binds a value other than the one it stores, as a custom representation may, which only its
+  // own binding knows to do.
+  private struct Doubled: QueryBindable, RawRepresentable, Equatable {
+    var rawValue: Int
+    var queryBinding: QueryBinding { .int(Int64(rawValue) * 2) }
+  }
+
+  @Table("primitives")
+  private struct Primitives: Equatable {
+    let id: Int
+    var int8: Int8
+    var int16: Int16
+    var int32: Int32
+    var int64: Int64
+    var uint8: UInt8
+    var uint16: UInt16
+    var uint32: UInt32
+    var uint64: UInt64
+    var float: Float
+    var double: Double
+    var flag: Bool
+    var text: String
+    var bytes: [UInt8]
+    var optionalInt: Int?
+    var optionalInt8: Int8?
+    var optionalInt16: Int16?
+    var optionalInt32: Int32?
+    var optionalInt64: Int64?
+    var optionalUInt8: UInt8?
+    var optionalUInt16: UInt16?
+    var optionalUInt32: UInt32?
+    var optionalFloat: Float?
+    var optionalDouble: Double?
+    var optionalFlag: Bool?
+    var optionalText: String?
+    var optionalBytes: [UInt8]?
+    var doubled: Doubled
+    var optionalDoubled: Doubled?
+    var coordinates: Coordinates
+  }
+
+  extension Primitives.Draft {
+    fileprivate init(_ record: Primitives, id: Int?) {
+      self.init(record)
+      self.id = id
+    }
+  }
+
+  private let primitivesSchema = """
+    CREATE TABLE primitives (
+      id INTEGER PRIMARY KEY, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float,
+      double, flag, text, bytes, optionalInt, optionalInt8, optionalInt16, optionalInt32,
+      optionalInt64, optionalUInt8, optionalUInt16, optionalUInt32, optionalFloat, optionalDouble,
+      optionalFlag, optionalText, optionalBytes, doubled, optionalDoubled, latitude, longitude
+    )
+    """
+
+  private let primitives = [
+    Primitives(
+      id: 1,
+      int8: .min,
+      int16: .min,
+      int32: .min,
+      int64: .min,
+      uint8: .max,
+      uint16: .max,
+      uint32: .max,
+      uint64: UInt64(Int64.max),
+      float: 1.1,
+      double: -.greatestFiniteMagnitude,
+      flag: true,
+      text: "héllo \"wörld\"\n",
+      bytes: [0, 1, 254, 255],
+      optionalInt: .max,
+      optionalInt8: .max,
+      optionalInt16: -2,
+      optionalInt32: .max,
+      optionalInt64: .max,
+      optionalUInt8: 0,
+      optionalUInt16: 7,
+      optionalUInt32: 1,
+      optionalFloat: -0.25,
+      optionalDouble: 0.1,
+      optionalFlag: false,
+      optionalText: "",
+      optionalBytes: [],
+      doubled: Doubled(rawValue: 21),
+      optionalDoubled: Doubled(rawValue: -4),
+      coordinates: Coordinates(latitude: 1.5, longitude: -2.25)
+    ),
+    Primitives(
+      id: 2,
+      int8: 0,
+      int16: 1,
+      int32: -1,
+      int64: 0,
+      uint8: 0,
+      uint16: 0,
+      uint32: 0,
+      uint64: 0,
+      float: -.infinity,
+      double: 0,
+      flag: false,
+      text: "",
+      bytes: [],
+      optionalInt: nil,
+      optionalInt8: nil,
+      optionalInt16: nil,
+      optionalInt32: nil,
+      optionalInt64: nil,
+      optionalUInt8: nil,
+      optionalUInt16: nil,
+      optionalUInt32: nil,
+      optionalFloat: nil,
+      optionalDouble: nil,
+      optionalFlag: nil,
+      optionalText: nil,
+      optionalBytes: nil,
+      doubled: Doubled(rawValue: 0),
+      optionalDoubled: nil,
+      coordinates: Coordinates(latitude: 0, longitude: 0)
+    ),
+    Primitives(
+      id: 3,
+      int8: 5,
+      int16: 300,
+      int32: 70_000,
+      int64: 1 << 40,
+      uint8: 9,
+      uint16: 600,
+      uint32: 80_000,
+      uint64: 1 << 50,
+      float: .pi,
+      double: .pi,
+      flag: true,
+      text: String(repeating: "long text ", count: 20),
+      bytes: Array(repeating: 7, count: 100),
+      optionalInt: -1,
+      optionalInt8: -1,
+      optionalInt16: .max,
+      optionalInt32: -70_000,
+      optionalInt64: -(1 << 40),
+      optionalUInt8: .max,
+      optionalUInt16: .max,
+      optionalUInt32: .max,
+      optionalFloat: .greatestFiniteMagnitude,
+      optionalDouble: -.infinity,
+      optionalFlag: true,
+      optionalText: "set",
+      optionalBytes: [1],
+      doubled: Doubled(rawValue: .max / 4),
+      optionalDoubled: Doubled(rawValue: 1),
+      coordinates: Coordinates(latitude: -90, longitude: 180)
     )
   ]
 
