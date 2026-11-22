@@ -179,9 +179,8 @@
       )
     }
 
-    // Built-in representations are bound straight from memory, and the rest through their own
-    // binding, so these hold both paths, for every built-in and its optional, to what the query
-    // builder binds.
+    // Every built-in type and its optional, and a representation that binds something other
+    // than what it stores, held to what the query builder binds for each.
     @Test
     func builtInColumnsBindWhatTheQueryBuilderBinds() async throws {
       try expectSameInserts(
@@ -340,24 +339,6 @@
           .query
         }
       )
-    }
-
-    @Test
-    func onlyBuiltInRepresentationsBindStraightFromMemory() {
-      #expect(SQLiteInsertSlot.primitive(Int.self)?.0 == .int)
-      #expect(SQLiteInsertSlot.primitive(Int.self)?.isOptional == false)
-      #expect(SQLiteInsertSlot.primitive(String?.self)?.0 == .text)
-      #expect(SQLiteInsertSlot.primitive(String?.self)?.isOptional == true)
-      #expect(SQLiteInsertSlot.primitive([UInt8]?.self)?.0 == .blob)
-      // Custom representations convert what is stored before binding it, and UInt64 refuses a
-      // value too large for SQLite, so each goes through its own binding.
-      #expect(SQLiteInsertSlot.primitive(Priority.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(Priority?.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(Doubled.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(Date.UnixTimeRepresentation.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(UUID.BytesRepresentation.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(Data.self) == nil)
-      #expect(SQLiteInsertSlot.primitive(UInt64.self) == nil)
     }
 
     @Test

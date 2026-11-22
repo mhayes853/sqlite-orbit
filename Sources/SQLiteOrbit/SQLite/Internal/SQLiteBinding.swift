@@ -30,7 +30,16 @@ func bind(
   let code: Int32
   switch value {
   case .blob(let bytes):
-    code = bindBlob(bytes, to: statement, at: index, library: library)
+    code = bytes.withUnsafeBytes { buffer in
+      // A null pointer binds SQL NULL, so an empty blob needs a pointer that is merely unread.
+      guard let baseAddress = buffer.baseAddress else {
+        var empty: UInt8 = 0
+        return withUnsafeBytes(of: &empty) {
+          library.pointee.bindings.blob(statement, index, $0.baseAddress, 0)
+        }
+      }
+      return library.pointee.bindings.blob(statement, index, baseAddress, Int32(buffer.count))
+    }
   case .real(let double):
     code = library.pointee.bindings.double(statement, index, double)
   case .integer(let integer):
@@ -40,37 +49,12 @@ func bind(
   case .text(let string):
     code = bindText(string, to: statement, at: index, library: library)
   }
-  try checkBound(code)
-}
-
-// Throws for a bind that SQLite refused. Shared with the insert plans' binders, which bind
-// straight from memory, so a refused bind reads the same whichever path made it.
-@inline(__always)
-func checkBound(_ code: Int32) throws {
   guard code == SQLiteResultCode.ok.rawValue else {
     throw SQLiteError(code: SQLiteResultCode(rawValue: code), message: "could not bind parameter")
   }
 }
 
-func bindBlob(
-  _ bytes: [UInt8],
-  to statement: OpaquePointer,
-  at index: Int32,
-  library: UnsafePointer<SQLiteLibrary>
-) -> Int32 {
-  bytes.withUnsafeBytes { buffer in
-    // A null pointer binds SQL NULL, so an empty blob needs a pointer that is merely unread.
-    guard let baseAddress = buffer.baseAddress else {
-      var empty: UInt8 = 0
-      return withUnsafeBytes(of: &empty) {
-        library.pointee.bindings.blob(statement, index, $0.baseAddress, 0)
-      }
-    }
-    return library.pointee.bindings.blob(statement, index, baseAddress, Int32(buffer.count))
-  }
-}
-
-func bindText(
+private func bindText(
   _ string: String,
   to statement: OpaquePointer,
   at index: Int32,
