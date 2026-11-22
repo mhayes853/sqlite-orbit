@@ -18,6 +18,7 @@
 
     @Test
     func recordInsertsRunWhatTheQueryBuilderRuns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       try expectSameInserts(
         everything,
         schema: everythingSchema,
@@ -32,6 +33,7 @@
 
     @Test
     func draftInsertsRunWhatTheQueryBuilderRuns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let drafts =
         everything.map(Everything.Draft.init) + [Everything.Draft(everything[0], id: nil)]
       try expectSameInserts(
@@ -48,6 +50,7 @@
 
     @Test
     func upsertsRunWhatTheQueryBuilderRuns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       try expectSameInserts(
         everything,
         schema: everythingSchema,
@@ -72,6 +75,7 @@
 
     @Test
     func columnGroupsGeneratedColumnsAndSchemasRunWhatTheQueryBuilderRuns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let places = [
         Place(id: 1, name: "Home", coordinates: Coordinates(latitude: 1.5, longitude: -2.25)),
         Place(id: 2, name: "Work", coordinates: Coordinates(latitude: 0, longitude: 0))
@@ -125,6 +129,7 @@
 
     @Test
     func partialInsertsRunWhatTheQueryBuilderRuns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let rows = everything.map { ($0.text, $0.date, $0.uuidBytes, $0.optionalPriority, $0.tags) }
       try expectSameInserts(
         rows,
@@ -183,6 +188,7 @@
     // than what it stores, held to what the query builder binds for each.
     @Test
     func builtInColumnsBindWhatTheQueryBuilderBinds() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       try expectSameInserts(
         primitives,
         schema: primitivesSchema,
@@ -217,6 +223,7 @@
     // the arguments before them.
     @Test
     func partialInsertsBindMixedArgumentsWhatTheQueryBuilderBinds() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let rows = primitives.map {
         (
           $0.int8, $0.int64, $0.flag, $0.optionalInt8, $0.text, $0.optionalUInt16, $0.double,
@@ -288,6 +295,7 @@
     // each element in turn.
     @Test
     func bulkRunsWriteWhatTheQueryBuilderWrites() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let partialRows = primitives.map { ($0.int16, $0.optionalText, $0.coordinates, $0.uint32) }
       func expectSameRows(
         _ plan: (borrowing SQLiteWriteTransaction) throws -> Int,
@@ -343,6 +351,7 @@
 
     @Test
     func anUnsignedValueTooLargeForSQLiteIsRefused() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try inMemoryDatabase()
       try await database.write { transaction in
         try transaction.executeScript(primitivesSchema)
@@ -356,6 +365,7 @@
 
     @Test
     func partialUpsertsUpdateOnlyTheListedColumns() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         try transaction.insert(Reminder(id: 1, title: "Milk", listID: 1, code: "m"))
@@ -385,6 +395,7 @@
 
     @Test
     func ignoreSkipsConflictsButNotOtherConstraints() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         var insert = try transaction.prepareInsert(Tag.self, onConflict: .ignore)
@@ -406,6 +417,7 @@
 
     @Test
     func updateWritesTheNewValuesAndDraftsWithoutAKeyInsert() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         var save = try transaction.prepareInsert(Reminder.self, onConflict: .update)
@@ -442,6 +454,7 @@
 
     @Test
     func aPartialUpdateMustWriteThePrimaryKey() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         let error = #expect(throws: SQLiteError.self) {
@@ -453,6 +466,7 @@
 
     @Test
     func replaceDeletesConflictingRowsAndTheirCascadedChildren() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       let recorder = TransactionEventRecorder()
       try await database.write { transaction in
@@ -488,6 +502,7 @@
     // and after each run instead, which tells these runs apart all the same.
     @Test(arguments: [true, false])
     func runsReturnRowidsAndLeaveTheLastRowidAsSQLiteWould(canSetRowid: Bool) async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase(canSetRowid: canSetRowid)
       try await database.write { transaction in
         var insert = try transaction.prepareInsert(Reminder.Draft.self)
@@ -516,6 +531,7 @@
 
     @Test
     func bulkRunsCountWhatTheyInsertOrUpdate() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         let rows = (1...3).map { Reminder(id: $0, title: "\($0)", listID: 1, code: "\($0)") }
@@ -550,6 +566,7 @@
 
     @Test
     func aFailedBulkRunLeavesNoneOfItsRowsAndKeepsEarlierOnes() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         try transaction.insert(Reminder(id: 1, title: "Kept", listID: 1))
@@ -581,6 +598,7 @@
 
     @Test
     func bulkRunsNestInsideTheCallersSavepoints() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         try transaction.execute("SAVEPOINT outer")
@@ -607,6 +625,7 @@
 
     @Test
     func conveniencesInsertWithEachConflictClause() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         // Each result is bound before it is checked, since `#expect` cannot see a call on the
@@ -654,6 +673,7 @@
 
     @Test
     func conveniencesReuseOnePlanPerTableAndConflictClause() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
         let first = try transaction.prepareInsert(Reminder.self).sql
@@ -673,6 +693,7 @@
 
     @Test
     func theUsageExampleCompiles() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       let reminders = [Reminder(id: 10, title: "Milk", listID: 1)]
       let drafts = [Reminder.Draft(title: "Eggs", listID: 1)]
@@ -701,6 +722,7 @@
 
   // MARK: - Helpers
 
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   private func prepareTitleUpsert(_ transaction: borrowing SQLiteWriteTransaction) throws {
     var upsert = try transaction.prepareInsert(Reminder.self, onConflict: .update) { $0.title }
     try upsert.execute("Unreachable")

@@ -238,7 +238,9 @@ through the transaction.
 With the `StructuredQueries` trait, a write transaction also inserts `@Table` records without
 building the query builder's statement for every row. `prepareInsert` builds a table's `INSERT`
 once and binds each run's values straight from the row; `insert` and `insert(contentsOf:)` do the
-same with a plan kept for each table and a statement from the connection's cache:
+same with a plan kept for each table and a statement from the connection's cache. A prepared
+insert's type is generic over its values as a parameter pack, so `prepareInsert` needs iOS 17,
+macOS 14, tvOS 17 or watchOS 10; `insert` and `insert(contentsOf:)` run everywhere:
 
 ```swift
 try await database.write { transaction in

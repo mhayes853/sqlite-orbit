@@ -38,6 +38,7 @@
   /// nonescapable, as a ``SQLitePreparedStatement`` is, whose statement it runs: it reports what it
   /// changes to observers, and refuses to run across an authorization scope boundary, in the same
   /// way.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   public struct SQLitePreparedInsert<Row: Table, each Input>: ~Copyable, ~Escapable {
     /// The SQL each run executes, with a parameter for each value.
     ///
@@ -154,6 +155,7 @@
   ///
   /// The upsert is valid until the transaction that prepared it ends, and is noncopyable and
   /// nonescapable, as a ``SQLitePreparedStatement`` is, whose statement it runs.
+  @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
   public struct SQLitePreparedUpsert<Row: Table, each Input>: ~Copyable, ~Escapable {
     /// The SQL each run executes, with a parameter for each value.
     ///
@@ -335,6 +337,7 @@
     /// - Returns: An insert valid until this transaction ends.
     /// - Throws: A ``SQLiteError`` when the statement cannot be compiled.
     @_lifetime(borrow self)
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public borrowing func prepareInsert<Row: Table>(
       _ table: Row.Type,
       onConflict conflict: SQLiteInsertConflict? = nil
@@ -362,6 +365,7 @@
     /// - Returns: An upsert valid until this transaction ends.
     /// - Throws: A ``SQLiteError`` when the statement cannot be compiled.
     @_lifetime(borrow self)
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public borrowing func prepareInsert<Row: Table>(
       _ table: Row.Type,
       onConflict conflict: SQLiteUpsertConflict<Row>
@@ -394,6 +398,7 @@
     ///   ``SQLiteResultCode/misuse`` for a column whose value is not one value per column, such
     ///   as an optional column group.
     @_lifetime(borrow self)
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public borrowing func prepareInsert<
       Row: Table,
       V1: _TableColumnExpression,
@@ -435,6 +440,7 @@
     ///   ``SQLiteResultCode/misuse`` for an update that does not list the primary key, or for a
     ///   column whose value is not one value per column.
     @_lifetime(borrow self)
+    @available(iOS 17, macOS 14, tvOS 17, watchOS 10, *)
     public borrowing func prepareInsert<
       Row: Table,
       V1: _TableColumnExpression,
