@@ -315,8 +315,23 @@
             }
             #expect(count == 1)
           }
-          // The last connection to close checkpoints the log into the database and removes it.
-          #expect(!FileManager.default.fileExists(atPath: log))
+          // The last connection to close checkpoints the log into the database, so the database
+          // file alone holds the rows: a copy of it without the log reads them. SQLite then
+          // removes the log, except where it keeps it after a checkpoint, as Apple's own build
+          // does with persistent WAL on by default.
+          #if !canImport(Darwin)
+            #expect(!FileManager.default.fileExists(atPath: log))
+          #endif
+          let copy = file.directory.appending(component: "copy.sqlite")
+          try FileManager.default.copyItem(at: file.url, to: copy)
+          var copyHandle = try SQLiteConnection(
+            path: OrbitDatabasePath(copy.path),
+            configuration: .default
+          )
+          let copiedCount = try copyHandle.read { transaction in
+            try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+          }
+          #expect(copiedCount == 1)
           var handle = try SQLiteConnection(path: file.path, configuration: .default)
           let count = try handle.read { transaction in
             try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
