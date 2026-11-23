@@ -54,9 +54,9 @@ public protocol OrbitDatabaseReadTransaction: ~Copyable, ~Escapable {
   /// over SQL that may write.
   ///
   /// The methods built on this one reuse prepared statements unless passed `cached: false`.
-  /// Native SQLite drivers keep a connection's most recently used statements, up to
-  /// ``SQLiteConfiguration/maximumCachedStatements``. Pass `false` for SQL that runs only once, so
-  /// it does not take the place of a statement that is run again.
+  /// Native SQLite drivers keep a connection's statements, up to
+  /// ``SQLiteConfiguration/maximumCachedStatements``, which sets no limit by default. Pass `false`
+  /// for SQL that runs only once, so it does not stay in the cache.
   ///
   /// ```swift
   /// try await database.read { transaction in

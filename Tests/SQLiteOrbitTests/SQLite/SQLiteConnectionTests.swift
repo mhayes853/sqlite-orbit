@@ -204,11 +204,11 @@
   }
 
   @Test
-  func theDefaultStatementCacheHoldsSixtyFourStatements() throws {
-    #expect(SQLiteConfiguration.default.maximumCachedStatements == 64)
+  func theDefaultStatementCacheHasNoLimit() throws {
+    #expect(SQLiteConfiguration.default.maximumCachedStatements == .max)
     let connection = try openInMemory()
-    try use((0..<100).map { "SELECT \($0)" }, on: connection)
-    #expect(connection.statements.idleStatementCount == 64)
+    try use((0..<500).map { "SELECT \($0)" }, on: connection)
+    #expect(connection.statements.idleStatementCount == 500)
   }
 
   @Test(.libraryHooks)

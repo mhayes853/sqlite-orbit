@@ -90,9 +90,8 @@ groups run 7 iterations each.
   its readers.
 - `MemoryPoolReleased`: the same, then `releaseMemory()`.
 - `MemoryStatements64`, `MemoryStatements500`: a connection or queue after 64 or 500 distinct
-  lookups through its statement cache. Orbit's cache keeps at most 64 idle statements by default
-  (`maximumCachedStatements`), and GRDB's keeps every one; the `SQLite` rows keep every statement
-  they prepare.
+  lookups through its statement cache. Orbit's and GRDB's caches keep every statement by default,
+  and the `SQLite` rows keep every statement they prepare.
 - `MemoryStatementsReleased`: 500 statements, then `releaseMemory()`, which finalizes them.
 
 Every suite also reports the bytes allocated (`Malloc (bytes total)`).
