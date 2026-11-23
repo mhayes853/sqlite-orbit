@@ -53,6 +53,23 @@
       }
     }
 
+    @Test
+    func readersOpenOffTheCooperativePool() async throws {
+      // More readers opening at once than the cooperative pool has threads. Opening on the
+      // awaiting task's thread would leave none to notice they had all started.
+      let count = ProcessInfo.processInfo.activeProcessorCount + 4
+      let opening = TestGate()
+      let setup = SQLiteSetup { _ in try opening.enter() }
+      try await withConnectionPool(readerCount: count, readerSetups: [setup]) { pool in
+        let reads = (0..<count).map { _ in Task { try await pool.withReadConnection(countItems) } }
+        try await opening.waitUntilEntered(count)
+        #expect(pool.readerCounts == (count, 0))
+        opening.open()
+        for read in reads { #expect(try await read.value == 0) }
+        #expect(pool.readerCounts == (count, count))
+      }
+    }
+
     // MARK: - Failing to open
 
     @Test(arguments: [false, true])

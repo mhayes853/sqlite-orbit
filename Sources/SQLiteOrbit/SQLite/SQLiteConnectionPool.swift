@@ -92,16 +92,22 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     // through a reader an explicit error.
     let allReaderSetups: [SQLiteSetup] = [.sql("PRAGMA query_only = 1")] + readerSetups
     self.path = path
+    let openReader: @Sendable (SQLiteSerialConnection.Executor?) throws -> SQLiteSerialConnection = {
+      executor in
+      try SQLiteSerialConnection(
+        path: path,
+        configuration: readerConfiguration,
+        flags: [.readOnly, .noMutex],
+        setups: allReaderSetups,
+        suspension: nil,
+        executor: executor
+      )
+    }
     self.scheduler = SQLitePoolScheduler(
       maximumReaders: readerCount,
-      openReader: {
-        try SQLiteSerialConnection(
-          path: path,
-          configuration: readerConfiguration,
-          flags: [.readOnly, .noMutex],
-          setups: allReaderSetups,
-          suspension: nil
-        )
+      openReader: { try openReader(nil) },
+      openReaderAsynchronously: {
+        try await SQLiteSerialConnection.openOnOwnExecutor(path: path, openReader)
       },
       writers: writers
     )
@@ -109,7 +115,8 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     self.suspended = Lock(false)
   }
 
-  /// Lends a reader, waiting behind earlier barrier writes. May open a new reader.
+  /// Lends a reader, waiting behind earlier barrier writes. May open a new reader, on that
+  /// reader's own executor rather than the calling task's thread.
   public func withReadConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {

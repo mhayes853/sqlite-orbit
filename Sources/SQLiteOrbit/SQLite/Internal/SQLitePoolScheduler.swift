@@ -74,7 +74,8 @@ final class SQLitePoolWriterBarrier: OrbitDatabaseWriterBarrier {
 ///
 /// Writers are open from the start. Readers open on demand, up to a maximum: a read that finds no
 /// idle reader while fewer are open is granted a slot and opens its reader outside the lock, so
-/// that opening one holds up no other access.
+/// that opening one holds up no other access. An asynchronous read opens it on the reader's own
+/// executor, never on a cooperative thread; a blocking read opens it on its calling thread.
 ///
 /// ``releaseMemory()`` starts a new reader generation. A reader of an older generation, lent out
 /// or still opening at the time, is closed rather than kept when its read ends.
@@ -96,7 +97,7 @@ final class SQLitePoolScheduler: Sendable {
 
   private enum Grant: Sendable {
     case lease(Lease)
-    /// Room for one more reader, which the read opens itself.
+    /// Room for one more reader, which the read opens.
     case readerSlot(id: Int, readerGeneration: UInt32, blockingHolder: ThreadID?)
   }
 
@@ -149,22 +150,27 @@ final class SQLitePoolScheduler: Sendable {
 
   private let state: Lock<State>
   private let openReader: @Sendable () throws -> SQLiteSerialConnection
+  private let openReaderAsynchronously: @Sendable () async throws -> SQLiteSerialConnection
   /// Every writer, whether idle or lent out.
   let writers: [SQLiteSerialConnection]
 
   /// - Parameters:
   ///   - maximumReaders: The most readers open at once.
-  ///   - openReader: Opens one reader, on the task or thread of the read that needs it.
+  ///   - openReader: Opens one reader for a blocking read, on the read's calling thread.
+  ///   - openReaderAsynchronously: Opens one reader for an asynchronous read, without blocking
+  ///     the read's cooperative thread.
   ///   - writers: The writers, already open.
   init(
     maximumReaders: Int,
     openReader: @escaping @Sendable () throws -> SQLiteSerialConnection,
+    openReaderAsynchronously: @escaping @Sendable () async throws -> SQLiteSerialConnection,
     writers: [SQLiteSerialConnection]
   ) {
     precondition(maximumReaders > 0)
     precondition(!writers.isEmpty)
     self.state = Lock(State(maximumReaders: maximumReaders, idleWriters: writers))
     self.openReader = openReader
+    self.openReaderAsynchronously = openReaderAsynchronously
     self.writers = writers
   }
 
@@ -236,12 +242,41 @@ final class SQLitePoolScheduler: Sendable {
     } onCancel: {
       cancel(request.id)
     }
-    // A slot granted to a task cancelled since goes back rather than opening a reader for it.
-    if case .readerSlot(_, _, let blockingHolder) = grant, Task.isCancelled {
-      giveBackReaderSlot(blockingHolder: blockingHolder)
-      throw CancellationError()
+    switch grant {
+    case .lease(let lease):
+      return lease
+    case .readerSlot(let id, let readerGeneration, let blockingHolder):
+      return try await openReader(
+        id: id,
+        readerGeneration: readerGeneration,
+        blockingHolder: blockingHolder
+      )
     }
-    return try lease(for: grant)
+  }
+
+  /// Opens the reader of an asynchronous read granted a slot, on the reader's own executor. A
+  /// reader that fails to open gives its slot back.
+  private func openReader(
+    id: Int,
+    readerGeneration: UInt32,
+    blockingHolder: ThreadID?
+  ) async throws -> Lease {
+    // The slot already counts against the maximum, so opening needs no lock.
+    do {
+      // A slot granted to a task cancelled since goes back rather than opening a reader for it.
+      // Opening checks again once it is on the executor.
+      try Task.checkCancellation()
+      return Lease(
+        id: id,
+        kind: .read,
+        readerGeneration: readerGeneration,
+        connection: try await openReaderAsynchronously(),
+        blockingHolder: blockingHolder
+      )
+    } catch {
+      giveBackReaderSlot(blockingHolder: blockingHolder)
+      throw error
+    }
   }
 
   private func acquireBlocking(_ kind: Kind) throws -> Lease {
@@ -258,8 +293,8 @@ final class SQLitePoolScheduler: Sendable {
     return try lease(for: grant)
   }
 
-  /// Returns the lease granted, opening the reader of a read granted a slot. A reader that fails
-  /// to open gives its slot back.
+  /// Returns the lease granted to a blocking access, opening the reader of a read granted a slot on
+  /// the calling thread. A reader that fails to open gives its slot back.
   private func lease(for grant: Grant) throws -> Lease {
     switch grant {
     case .lease(let lease):
