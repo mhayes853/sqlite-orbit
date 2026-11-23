@@ -333,6 +333,20 @@ extension SQLiteLibrary {
     /// before and after the run, which mistakes an insert for a skipped row in the rare case that
     /// the new row's rowid equals the one reported before it.
     public var setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)?
+    /// Frees as much of a connection's memory as it can rebuild on demand, such as the unused
+    /// pages of its page cache: `sqlite3_db_release_memory`, or `nil` for a build without it, such
+    /// as Turso.
+    ///
+    /// ``SQLiteReadConnection/releaseMemory()`` and the other `releaseMemory` methods call this
+    /// when it is present, and otherwise only finalize the connection's idle cached statements.
+    /// ``sqliteLibrary(module:apis:)`` leaves it `nil`, so a table built by the macro sets it
+    /// itself:
+    ///
+    /// ```swift
+    /// var library = #sqliteLibrary(module: "MySQLite")
+    /// library.connections.releaseMemory = { MySQLite.sqlite3_db_release_memory($0) }
+    /// ```
+    public var releaseMemory: (@convention(c) (OpaquePointer?) -> Int32)?
     /// Creates a connection operation group.
     ///
     /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
@@ -356,7 +370,8 @@ extension SQLiteLibrary {
           OpaquePointer?, UnsafePointer<CChar>?, Int32, UnsafeMutablePointer<Int32>?,
           UnsafeMutablePointer<Int32>?
         ) -> Int32,
-      setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)? = nil
+      setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)? = nil,
+      releaseMemory: (@convention(c) (OpaquePointer?) -> Int32)? = nil
     ) {
       self.open = open
       self.close = close
@@ -370,6 +385,7 @@ extension SQLiteLibrary {
       self.isAutocommit = isAutocommit
       self.walCheckpoint = walCheckpoint
       self.setLastInsertedRowID = setLastInsertedRowID
+      self.releaseMemory = releaseMemory
     }
   }
 
@@ -878,6 +894,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
         )
       #endif
       library.connections.setLastInsertedRowID = sqlite3_set_last_insert_rowid
+      library.connections.releaseMemory = sqlite3_db_release_memory
       return library
     }()
   }
@@ -893,6 +910,7 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
         fileSharing: .multipleProcesses
       )
       library.connections.setLastInsertedRowID = sqlite3_set_last_insert_rowid
+      library.connections.releaseMemory = sqlite3_db_release_memory
       return library
     }()
   }
@@ -902,8 +920,8 @@ public struct SQLiteConnectionAccess: ~Copyable, ~Escapable {
   extension SQLiteLibrary {
     /// Turso's local SQLite-compatible Rust engine.
     ///
-    /// Turso has no `sqlite3_set_last_insert_rowid`, so its
-    /// ``Connections/setLastInsertedRowID`` is `nil`.
+    /// Turso has no `sqlite3_set_last_insert_rowid` or `sqlite3_db_release_memory`, so its
+    /// ``Connections/setLastInsertedRowID`` and ``Connections/releaseMemory`` are `nil`.
     public static let turso = configured(
       #sqliteLibrary(module: "TursoSQLite3", apis: []),
       name: "Turso",

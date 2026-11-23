@@ -586,8 +586,21 @@
           try await driver.write { transaction in
             try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
           }
+          // Only the writer opens with the pool; three reads held at once open the readers.
+          #expect(counter.opened == 1)
+          let gate = TestGate()
+          let reads = (0..<3).map { _ in Task { try await driver.read { _ in try gate.enter() } } }
+          try await gate.waitUntilEntered(3)
+          gate.open()
+          for read in reads { try await read.value }
           #expect(counter.opened == 4)
           #expect(counter.closed == 0)
+
+          // Releasing memory closes the readers, and reads open them again.
+          await driver.releaseMemory()
+          #expect(counter.closed == 3)
+          _ = try await driver.read { _ in }
+          #expect(counter.opened == 5)
         }
 
         // Nothing else holds these connections, so every one of them must have been closed. A driver

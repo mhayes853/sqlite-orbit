@@ -7,6 +7,7 @@
     /// The database is opened by ``SQLitePool``, so it runs in WAL mode with concurrent
     /// readers and a single writer, and every connection waits by a busy policy — without one, a
     /// write that overlaps another process's write fails outright rather than waiting its turn.
+    /// The pool opens its readers as reads need them, and ``releaseMemory()`` closes them again.
     ///
     /// - Parameters:
     ///   - path: The path of the SQLite database file. In-memory databases cannot be shared between

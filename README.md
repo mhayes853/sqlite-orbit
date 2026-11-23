@@ -367,7 +367,8 @@ let titles = try await database.read { transaction in
 Two ordinary SQLite drivers provide process-local access, and the multiprocess-capable pool backs
 `OrbitIPCDatabase`:
 
-- `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
+- `SQLitePool` runs the database in WAL mode with one writer and up to a set number of readers,
+  each opened the first time a read needs it.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
   queued behind it, so a read issued after a write observes it. Waiting suspends rather than
   blocking a thread.
@@ -379,8 +380,34 @@ Each connection runs on a serial executor of its own, a dispatch queue on Apple 
 Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
 Connection settings belong to `SQLiteConfiguration`; pool sizes are initializer parameters.
-`SQLitePool(path: configuration: readerCount:)` defaults to five readers and always uses one writer.
+`SQLitePool(path: configuration: readerCount:)` defaults to at most five readers and always uses
+one writer.
 `TursoPool` accepts both `readerCount` and `writerCount`, defaulting to five readers and four writers.
+
+### Releasing memory
+
+Every driver conforms to `OrbitMemoryReleasing`. `releaseMemory()` frees what a database can
+rebuild on demand: the prepared statements it keeps idle for reuse, the unused pages of SQLite's
+page caches, and, in a pool, its readers. Idle readers close right away and readers in use close
+when their read ends; later reads open readers again as they need them. A release never holds up
+other accesses, runs no SQL, and works while a database is suspended. `OrbitIPCDatabase` passes
+the call on to its pool and frees memory in this process only.
+
+Nothing calls it automatically. Call it when the system asks for memory back, for example:
+
+```swift
+NotificationCenter.default.addObserver(
+  forName: UIApplication.didReceiveMemoryWarningNotification,
+  object: nil,
+  queue: nil
+) { _ in
+  Task { await database.releaseMemory() }
+}
+```
+
+A database held as `any OrbitDatabaseWriter` can be cast to `any OrbitMemoryReleasing`.
+`SQLiteReadConnection`, `SQLiteWriteConnection`, and `SQLiteConnection` also have a synchronous
+`releaseMemory()` that releases a single connection from inside an access.
 
 ### Suspending a shared database
 

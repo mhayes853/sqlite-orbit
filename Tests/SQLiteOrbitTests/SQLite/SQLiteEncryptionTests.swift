@@ -120,7 +120,12 @@
     configuration.key = SQLiteKey.passphrase("open sesame")
 
     try await withPooledDatabase(configuration: configuration, readerCount: 3) { database in
-      _ = try await database.read { _ in }
+      // Readers open as reads need them, so three reads held at once open all three.
+      let gate = TestGate()
+      let reads = (0..<3).map { _ in Task { try await database.read { _ in try gate.enter() } } }
+      try await gate.waitUntilEntered(3)
+      gate.open()
+      for read in reads { try await read.value }
     }
 
     // A reader that opened unkeyed would find the file unreadable, so the writer being keyed is

@@ -49,7 +49,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   private let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
-  /// Opens `path` as a WAL database with one writer and `readerCount` readers.
+  /// Opens `path` as a WAL database with one writer and at most `readerCount` readers.
   ///
   /// ```swift
   /// var configuration = SQLiteConfiguration.default
@@ -63,10 +63,12 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// - Parameters:
   ///   - path: The database file. A database private to its connection cannot be pooled.
   ///   - configuration: The settings applied to every connection.
-  ///   - readerCount: The number of reader connections to open. Must be greater than zero.
+  ///   - readerCount: The most reader connections open at once. Must be greater than zero. Each
+  ///     reader opens the first time a read needs it, and an error opening it is thrown by that
+  ///     read.
   /// - Precondition: `readerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-  ///   ``SQLiteError`` when a connection cannot be opened or configured, including one with
+  ///   ``SQLiteError`` when the writer cannot be opened or configured, including one with
   ///   `SQLITE_BUSY` when another process holds a lock on the database for longer than
   ///   `configuration`'s busy policy waits.
   public init(
@@ -289,6 +291,34 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   }
 }
 
+extension SQLitePool: OrbitMemoryReleasing {
+  /// Closes the pool's readers and frees the memory its writer can rebuild on demand.
+  ///
+  /// Idle readers close right away, and a reader in use closes when its read ends, without the
+  /// call waiting for it. Reads after the call open readers again as they need them. The writer
+  /// stays open: it finalizes the statements it keeps idle and frees the unused pages of its page
+  /// cache, between its accesses, so the release holds up no read or write. The call returns once
+  /// the writer has released, which, while a write is running, is when that write ends. It runs
+  /// even while the pool is suspended.
+  ///
+  /// ```swift
+  /// let driver = try SQLitePool(path: .file(url))
+  /// // On a memory warning:
+  /// await driver.releaseMemory()
+  /// ```
+  ///
+  /// It runs no SQL, so it never fails, and cancelling the waiting task does not stop it.
+  public func releaseMemory() async {
+    await pool.releaseMemory()
+  }
+
+  /// How many readers are open, and how many of them are idle.
+  var readerCounts: (open: Int, idle: Int) { pool.readerCounts }
+
+  /// How many accesses are waiting for a connection.
+  var waitingAccessCount: Int { pool.waitingAccessCount }
+}
+
 #if BuiltInSQLite
   extension SQLitePool {
     /// Opens a pooled database using the SQLite this package was linked against.
@@ -299,10 +329,12 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
     ///
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
-    ///   - readerCount: The number of reader connections to open. Must be greater than zero.
+    ///   - readerCount: The most reader connections open at once. Must be greater than zero. Each
+    ///     reader opens the first time a read needs it, and an error opening it is thrown by that
+    ///     read.
     /// - Precondition: `readerCount` must be greater than zero.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-    ///   ``SQLiteError`` when a connection cannot be opened.
+    ///   ``SQLiteError`` when the writer cannot be opened.
     public convenience init(path: OrbitDatabasePath, readerCount: Int = 5) throws {
       try self.init(path: path, configuration: .default, readerCount: readerCount)
     }

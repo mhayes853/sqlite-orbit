@@ -6,6 +6,9 @@
 /// `writerConfiguration`'s ``SQLiteConfiguration/journalMode``, which the writers apply before
 /// any reader opens. Readers are opened read-only and never apply a journal mode.
 ///
+/// The writers open with the pool. Readers open as reads need them, up to `readerCount` at once,
+/// and stay open for the reads after, until ``releaseMemory()`` closes them.
+///
 /// ```swift
 /// var writerConfiguration = SQLiteConfiguration.default
 /// writerConfiguration.journalMode = .wal
@@ -33,9 +36,15 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   // of a partially initialized `Mutex` when a throw follows its default value.
   private let suspended: Lock<Bool>
 
-  /// Opens writable connections first, then the read-only connections for the same database.
+  /// Opens the writable connections, and prepares to open read-only connections for the same
+  /// database as reads need them.
   ///
-  /// Both connection counts must be positive. Readers are opened read-only, and the pool runs
+  /// Both connection counts must be positive. The writers open here, so a configuration they
+  /// cannot apply fails this initializer. No reader opens here: a read that finds every open
+  /// reader busy opens another, until `readerCount` are open, and later reads wait for one of
+  /// those. Opening runs on the task or thread of the read that needs the reader, without holding
+  /// up the other accesses, and an error opening it is thrown by that read alone; the next read
+  /// that needs a reader tries again. Readers are opened read-only, and the pool runs
   /// `PRAGMA query_only = 1` on each of them itself, so raw SQL that attempts a write through a
   /// reader fails with an explicit error.
   ///
@@ -49,13 +58,14 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   ///   - readerConfiguration: The settings applied to every reader.
   ///   - writerConfiguration: The settings applied to every writer, including the journal mode
   ///     the database runs in.
-  ///   - readerCount: The number of read-only connections to open.
+  ///   - readerCount: The most read-only connections open at once. Each opens the first time a
+  ///     read needs it.
   ///   - writerCount: The number of writable connections to open.
   ///   - readerSetups: The driver's own setups for each reader.
   ///   - writerSetups: The driver's own setups for each writer.
   /// - Precondition: `readerCount` and `writerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-  ///   ``SQLiteError`` when a connection cannot be opened or configured.
+  ///   ``SQLiteError`` when a writer cannot be opened or configured.
   public init(
     path: OrbitDatabasePath,
     readerConfiguration: SQLiteConfiguration,
@@ -83,23 +93,29 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     }
     // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
     // through a reader an explicit error.
-    let readers = try (0..<readerCount)
-      .map { _ in
+    let allReaderSetups: [SQLiteSetup] = [.sql("PRAGMA query_only = 1")] + readerSetups
+    self.path = path
+    self.scheduler = SQLitePoolScheduler(
+      maximumReaders: readerCount,
+      openReader: {
         try SQLiteSerialConnection(
           path: path,
           configuration: readerConfiguration,
           flags: [.readOnly, .noMutex],
-          setups: [.sql("PRAGMA query_only = 1")] + readerSetups,
+          setups: allReaderSetups,
           suspension: nil
         )
-      }
-    self.path = path
-    self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)
+      },
+      writers: writers
+    )
     self.writerSuspensions = suspensions
     self.suspended = Lock(false)
   }
 
   /// Lends a reader, waiting behind earlier barrier writes.
+  ///
+  /// A read that finds no idle reader opens one when fewer than `readerCount` are open, and
+  /// throws the error that opening it threw, if any.
   public func withReadConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
@@ -122,6 +138,9 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   }
 
   /// Lends a reader, blocking the calling thread. Never call from a cooperative task.
+  ///
+  /// A read that finds no idle reader opens one on the calling thread when fewer than
+  /// `readerCount` are open, and throws the error that opening it threw, if any.
   public func withReadConnectionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
@@ -172,4 +191,37 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
       suspended = false
     }
   }
+}
+
+extension SQLiteConnectionPool: OrbitMemoryReleasing {
+  /// Closes the pool's readers and frees the memory its writers can rebuild on demand.
+  ///
+  /// Idle readers close right away. A reader lent out now, or being opened for a read already
+  /// granted one, closes when that read ends, and the call does not wait for it. Reads after the
+  /// call open readers again as they need them, up to `readerCount`.
+  ///
+  /// Each writer stays open and runs ``SQLiteSerialConnection/releaseMemory()``: it finalizes the
+  /// statements it keeps idle and frees the unused pages of its page cache. That runs between
+  /// the writer's accesses without waiting its turn in the pool, so it holds up no other access,
+  /// and the call returns once every writer has released, which for a writer in use is when its
+  /// current access ends. It is not an access, so it runs even while the pool is suspended.
+  ///
+  /// ```swift
+  /// await pool.releaseMemory()
+  /// let count = try await pool.withReadConnection { connection in
+  ///   // A reader opens again for this read.
+  ///   try connection.fetchOne("SELECT count(*) FROM reminders") { $0[0].integerValue }
+  /// }
+  /// ```
+  ///
+  /// It runs no SQL, so it never fails, and cancelling the waiting task does not stop it.
+  public func releaseMemory() async {
+    await scheduler.releaseMemory()
+  }
+
+  /// How many readers are open, counting those being opened, and how many of them are idle.
+  var readerCounts: (open: Int, idle: Int) { scheduler.readerCounts }
+
+  /// How many accesses are waiting for a connection.
+  var waitingAccessCount: Int { scheduler.waitingAccessCount }
 }

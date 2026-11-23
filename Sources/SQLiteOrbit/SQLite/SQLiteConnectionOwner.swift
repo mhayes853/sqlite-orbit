@@ -192,6 +192,27 @@ public struct SQLiteConnection: ~Copyable {
     try Self.executeScript(sql, on: pointer, library: library)
   }
 
+  /// Frees the memory this connection can rebuild on demand.
+  ///
+  /// This finalizes the prepared statements the connection keeps idle in its cache, and asks
+  /// SQLite to free what else it can, such as the unused pages of the connection's page cache,
+  /// through ``SQLiteLibrary/Connections/releaseMemory`` when the library has it. The connection
+  /// stays open and usable: what it needs again is compiled or read again when it is next used.
+  ///
+  /// ```swift
+  /// var owner = try SQLiteConnection(path: path, configuration: .default)
+  /// let titles = try owner.withReadConnection { connection in
+  ///   try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  /// }
+  /// owner.releaseMemory()
+  /// ```
+  ///
+  /// It runs no SQL, so it never fails. Call ``SQLiteReadConnection/releaseMemory()`` or
+  /// ``SQLiteWriteConnection/releaseMemory()`` to release memory from inside an access.
+  public borrowing func releaseMemory() {
+    statements.releaseMemory()
+  }
+
   /// Lends primitive access for connection-local setup, such as installing functions or collations.
   ///
   /// Registrations survive this scope. SQL executes without an explicit transaction; use

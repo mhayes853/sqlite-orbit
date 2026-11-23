@@ -103,6 +103,28 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
+  /// Frees the memory this connection can rebuild on demand.
+  ///
+  /// This finalizes the prepared statements the connection keeps idle in its cache, and asks
+  /// SQLite to free what else it can, such as the unused pages of the connection's page cache,
+  /// through ``SQLiteLibrary/Connections/releaseMemory`` when the library has it. What the
+  /// connection needs again is compiled or read again when it is next used.
+  ///
+  /// ```swift
+  /// let titles = try await database.readWithoutTransaction { connection in
+  ///   let titles = try connection.fetchAll("SELECT title FROM reminders") { $0[0].textValue }
+  ///   connection.releaseMemory()
+  ///   return titles
+  /// }
+  /// ```
+  ///
+  /// It runs no SQL, so it never fails, and it may be called inside or outside a transaction.
+  /// Cursors and prepared statements in use keep working: their statements are not idle, and go
+  /// back to the cache as usual once they are done.
+  public borrowing func releaseMemory() {
+    handle.pointee.releaseMemory()
+  }
+
   /// Creates a cursor over the rows SQL that only reads returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does. SQL that
@@ -343,6 +365,27 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///   library cannot install, or a ``SQLiteError`` when the policy cannot be applied.
   public borrowing func setBusyPolicy(_ policy: SQLiteBusyPolicy) throws {
     try handle.pointee.settings.pointee.setBusyPolicy(policy)
+  }
+
+  /// Frees the memory this connection can rebuild on demand.
+  ///
+  /// This finalizes the prepared statements the connection keeps idle in its cache, and asks
+  /// SQLite to free what else it can, such as the unused pages of the connection's page cache,
+  /// through ``SQLiteLibrary/Connections/releaseMemory`` when the library has it. What the
+  /// connection needs again is compiled or read again when it is next used.
+  ///
+  /// ```swift
+  /// try await database.writeWithoutTransaction { connection in
+  ///   try connection.execute("DELETE FROM reminders WHERE isCompleted")
+  ///   connection.releaseMemory()
+  /// }
+  /// ```
+  ///
+  /// It runs no SQL, so it never fails, and it may be called inside or outside a transaction.
+  /// Cursors and prepared statements in use keep working: their statements are not idle, and go
+  /// back to the cache as usual once they are done.
+  public borrowing func releaseMemory() {
+    handle.pointee.releaseMemory()
   }
 
   /// Whether this connection enforces foreign keys.

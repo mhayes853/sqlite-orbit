@@ -2,8 +2,8 @@
   /// An ``OrbitConcurrentDatabaseWriter`` that can run explicitly concurrent writes using Turso's
   /// MVCC mode.
   ///
-  /// Reads use a fixed set of read-only connections, while writes use a separate fixed set of
-  /// writable connections. ``concurrentWrite(_:)`` uses `BEGIN CONCURRENT`; reads and concurrent
+  /// Reads use read-only connections, opened as reads need them up to a fixed maximum, while
+  /// writes use a separate fixed set of writable connections. ``concurrentWrite(_:)`` uses `BEGIN CONCURRENT`; reads and concurrent
   /// writes may overlap, and writes that modify distinct rows may commit concurrently. Turso
   /// reports a conflict between overlapping writes as a ``SQLiteError``; the driver rolls the
   /// failed transaction back but does not replay its body. ``write(_:)`` is a barrier for every
@@ -34,12 +34,14 @@
     /// - Parameters:
     ///   - path: The database file. A database private to its connection cannot be pooled.
     ///   - configuration: Settings applied to every connection. Its library should be Turso.
-    ///   - readerCount: The number of read connections to open. Must be greater than zero.
+    ///   - readerCount: The most read connections open at once. Must be greater than zero. Each
+    ///     reader opens the first time a read needs it, and an error opening it is thrown by that
+    ///     read.
     ///   - writerCount: The number of concurrent write connections to open. Must be greater than
     ///     zero.
     /// - Precondition: `readerCount` and `writerCount` must be greater than zero.
     /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-    ///   ``SQLiteError`` when a connection cannot be opened or configured for MVCC.
+    ///   ``SQLiteError`` when a writer cannot be opened or configured for MVCC.
     public init(
       path: OrbitDatabasePath,
       configuration: SQLiteConfiguration = .turso,
@@ -208,5 +210,31 @@
     public func captureActiveWriters() -> (any OrbitDatabaseWriterBarrier)? {
       pool.captureActiveWriters()
     }
+  }
+
+  extension TursoPool: OrbitMemoryReleasing {
+    /// Closes the pool's readers and frees the memory its writers can rebuild on demand.
+    ///
+    /// Idle readers close right away, and a reader in use closes when its read ends, without the
+    /// call waiting for it. Reads after the call open readers again as they need them. Each writer
+    /// stays open and finalizes the statements it keeps idle, between its accesses, so the release
+    /// holds up no read or write. The call returns once every writer has released, which for a
+    /// writer in use is when its current access ends.
+    ///
+    /// ```swift
+    /// let driver = try TursoPool(path: .file(url))
+    /// // On a memory warning:
+    /// await driver.releaseMemory()
+    /// ```
+    ///
+    /// Turso has no entry point for freeing its page cache, so only the statements and the
+    /// readers are freed. It runs no SQL, so it never fails, and cancelling the waiting task does
+    /// not stop it.
+    public func releaseMemory() async {
+      await pool.releaseMemory()
+    }
+
+    /// How many readers are open, and how many of them are idle.
+    var readerCounts: (open: Int, idle: Int) { pool.readerCounts }
   }
 #endif

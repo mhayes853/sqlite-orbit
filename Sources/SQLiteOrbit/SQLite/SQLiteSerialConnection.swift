@@ -163,6 +163,23 @@ public final class SQLiteSerialConnection: Sendable {
   }
 }
 
+extension SQLiteSerialConnection: OrbitMemoryReleasing {
+  /// Frees the memory the connection can rebuild on demand, once every access that arrived before
+  /// this call is done.
+  ///
+  /// This runs ``SQLiteConnection/releaseMemory()`` on the connection's executor: it finalizes the
+  /// statements the connection keeps idle in its cache and frees the unused pages of its page
+  /// cache. It is not an access, so it runs no SQL and is never refused, even while writes are
+  /// suspended, and cancelling the waiting task does not stop it.
+  ///
+  /// ```swift
+  /// await connection.releaseMemory()
+  /// ```
+  public nonisolated(nonsending) func releaseMemory() async {
+    await connection.releaseMemory()
+  }
+}
+
 /// The actor a ``SQLiteSerialConnection`` runs its accesses on, isolated to the connection's own
 /// executor.
 actor SQLiteSerialConnectionActor {
@@ -265,6 +282,16 @@ actor SQLiteSerialConnectionActor {
         }
       }
     }
+  }
+
+  // Not an access: it runs no SQL, so it needs neither a cancellation token nor the suspension's
+  // tracking, and an access cannot be under way while this runs on the actor.
+  func releaseMemory() {
+    #if _runtime(_multithreaded)
+      handle.releaseMemory()
+    #else
+      withConnectionAccess { handle.releaseMemory() }
+    #endif
   }
 
   private nonisolated func performBlocking<Result: Sendable>(
