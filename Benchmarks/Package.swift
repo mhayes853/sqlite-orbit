@@ -61,6 +61,13 @@ let package = Package(
       path: "InsertBenchmarks",
       swiftSettings: benchmarkSwiftSettings,
       plugins: [.plugin(name: "BenchmarkPlugin", package: "package-benchmark")]
+    ),
+    .executableTarget(
+      name: "MemoryBenchmarks",
+      dependencies: benchmarkDependencies,
+      path: "MemoryBenchmarks",
+      swiftSettings: benchmarkSwiftSettings,
+      plugins: [.plugin(name: "BenchmarkPlugin", package: "package-benchmark")]
     )
   ],
   swiftLanguageModes: [.v6]

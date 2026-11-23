@@ -11,6 +11,7 @@ graph. Run it from this directory:
 ```sh
 swift package --allow-writing-to-package-directory benchmark --target FetchBenchmarks
 swift package --allow-writing-to-package-directory benchmark --target InsertBenchmarks
+swift package --allow-writing-to-package-directory benchmark --target MemoryBenchmarks
 
 # One group at a time
 swift package --allow-writing-to-package-directory benchmark --target InsertBenchmarks \
@@ -29,6 +30,7 @@ The first build compiles swift-syntax in release mode and takes several minutes.
 | --- | --- |
 | `FetchBenchmarks` | Reading 200,000 rows: by position, by name, into records, and dates; plus per-read access overhead and 100,000 one-row lookups by rowid. |
 | `InsertBenchmarks` | Writing 50,000 rows: by position, by name, from records; 1,000,000 bound strings; plus per-write access overhead. |
+| `MemoryBenchmarks` | The memory one open connection, queue, or pool retains: after a read, after five concurrent reads, with 64 or 500 cached statements, and after releasing memory. |
 | `BenchmarkSupport` | The fixture, the shared configuration, and a raw C connection. |
 | `CSQLiteBenchmark` | The SQLite C API, for the baseline every group is measured against. |
 
@@ -73,6 +75,25 @@ Every group runs 50 iterations, as GRDB's do, except `Arguments*`, which runs 10
   separate one-row accesses to measure what an access costs apart from its query, comparing like
   drivers: `DatabaseQueue` with `SQLiteQueue`, `DatabasePool` with `SQLitePool`. Writes run with
   `synchronous = OFF` everywhere, so disk syncs do not hide the libraries' own cost.
+
+## Memory
+
+`MemoryBenchmarks` has no GRDB counterpart. Each iteration opens an instance on a 1,000-row scratch
+database already in WAL mode, does some work with it, and keeps it open until the benchmark ends,
+so the footprint metric, `Malloc / free Δ (bytes)` (`memoryLeakedBytes`), is the net of the bytes
+malloc'd minus the bytes freed across the iteration: what one instance holds after that work. The
+groups run 7 iterations each.
+
+- `MemoryOpenRead`: a connection or queue after one read.
+- `MemoryPoolOneRead`: a pool after one read, so it has opened one reader.
+- `MemoryPoolFiveReads`: a pool after five reads held open at once, so it has opened all five of
+  its readers.
+- `MemoryPoolReleased`: the same, then `releaseMemory()`.
+- `MemoryStatements64`, `MemoryStatements500`: a connection or queue after 64 or 500 distinct
+  lookups through its statement cache. Orbit's cache keeps at most 64 idle statements by default
+  (`maximumCachedStatements`), and GRDB's keeps every one; the `SQLite` rows keep every statement
+  they prepare.
+- `MemoryStatementsReleased`: 500 statements, then `releaseMemory()`, which finalizes them.
 
 Results vary with load, so compare runs from the same machine. Malloc counts are the steadiest
 metric.
