@@ -216,19 +216,8 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
 }
 
 extension SQLiteQueue: OrbitMemoryReleasing {
-  /// Frees the memory the driver's one connection can rebuild on demand.
-  ///
-  /// The release runs on the connection once the accesses that arrived before it are done, and
-  /// this returns when it has. It finalizes the statements the connection keeps idle in its cache
-  /// and frees the unused pages of its page cache, through ``SQLiteConnection/releaseMemory()``.
-  /// The connection stays open, and the accesses after the release compile and read again what
-  /// they need.
-  ///
-  /// ```swift
-  /// await driver.releaseMemory()
-  /// ```
-  ///
-  /// It runs no SQL, so it never fails, and cancelling the waiting task does not stop it.
+  /// Releases the memory of the driver's connection once the accesses queued before the call are
+  /// done.
   public func releaseMemory() async {
     await connection.releaseMemory()
   }

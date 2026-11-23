@@ -453,18 +453,10 @@ final class SQLiteStatementCache {
     }
   }
 
-  // Frees what the connection can rebuild on demand: its idle statements, then whatever SQLite
-  // itself can let go of, such as the unused pages of its page cache. The control statements and
-  // the schema-version pragma stay compiled, since they are small and every access runs some of
-  // them.
-  //
-  // A statement lent out right now, to an open cursor or a prepared statement, is untouched. The
-  // generation is left as it is, so when the statement comes back it is checked in as usual
-  // rather than finalized: it is still valid, nothing about the schema changed, and bumping the
-  // generation would also make every open cursor refresh its metadata. With the cache emptied,
-  // the checks in `checkIn` hold as they are, since `idle` cannot hold a statement equal to it.
-  // That leaves at most one statement per open loan idle again afterwards, which costs less
-  // than compiling it again would.
+  // The control statements and the schema-version pragma stay compiled: they are small and every
+  // access runs some of them. The generation is left alone, so a statement on loan is checked in
+  // as usual when it comes back: it is still valid, and bumping the generation would make every
+  // open cursor refresh its metadata.
   func releaseMemory() {
     finalizeIdle()
     if let releaseMemory = library.pointee.connections.releaseMemory {

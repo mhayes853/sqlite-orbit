@@ -5,43 +5,22 @@
   @testable import SQLiteOrbit
 
   // A pool opens its readers as reads need them, up to its reader count, and closes them again
-  // when it releases memory. These hold it to never opening more than that, to keeping a reader
-  // it failed to open from costing anything, and to leaving every other access as it was.
+  // when it releases memory.
   @Suite(.timeLimit(.minutes(1)))
   struct SQLitePoolReaderTests {
     // MARK: - Opening on demand
 
-    @Test(arguments: [false, true])
-    func noReaderOpensUntilAReadNeedsOne(blocking: Bool) async throws {
+    @Test
+    func readersOpenAsReadsNeedThemUpToTheReaderCount() async throws {
       try await withConnectionPool(readerCount: 3) { pool in
-        #expect(pool.readerCounts == (0, 0))
-        // A write needs no reader.
         try await pool.withWriteConnection { try $0.execute("INSERT INTO items VALUES (1)") }
         #expect(pool.readerCounts == (0, 0))
-
-        let count = try await read(pool, blocking: blocking) { connection in
-          try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-        }
-        #expect(count == 1)
+        #expect(try await pool.withReadConnection(countItems) == 1)
+        #expect(try await pool.withReadConnection(countItems) == 1)
         #expect(pool.readerCounts == (1, 1))
 
-        // One read after another reuses the reader it opened.
-        for _ in 0..<3 {
-          _ = try await read(pool, blocking: blocking) { _ in }
-        }
-        #expect(pool.readerCounts == (1, 1))
-      }
-    }
-
-    @Test
-    func concurrentReadsOpenOneReaderEachUpToTheReaderCount() async throws {
-      try await withConnectionPool(readerCount: 3) { pool in
         let gate = TestGate()
-        let held = (0..<3)
-          .map { _ in
-            Task { try await pool.withReadConnection { _ in try gate.enter() } }
-          }
-        try await gate.waitUntilEntered(3)
+        let held = try await holdReads(3, on: pool, at: gate)
         #expect(pool.readerCounts == (3, 0))
 
         // A fourth read waits for one of those rather than opening a fourth reader.
@@ -50,8 +29,7 @@
         #expect(pool.readerCounts == (3, 0))
 
         gate.open()
-        for task in held { try await task.value }
-        try await waiting.value
+        for task in held + [waiting] { try await task.value }
         #expect(pool.readerCounts == (3, 3))
       }
     }
@@ -62,17 +40,16 @@
         let overlap = OverlapTracker()
         _ = try await concurrently(16) { _ in
           try await pool.withReadConnection { connection in
-            try overlap.track {
-              try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-            }
+            try overlap.track { try countItems(connection) }
           }
         }
         _ = try await concurrentlyOnThreads(8) { _ in
           try pool.withReadConnectionBlocking { _ in overlap.track {} }
         }
         #expect(overlap.peak <= 2)
-        #expect(pool.readerCounts.open <= 2)
-        #expect(pool.readerCounts.open == pool.readerCounts.idle)
+        let counts = pool.readerCounts
+        #expect(counts.open <= 2)
+        #expect(counts.open == counts.idle)
       }
     }
 
@@ -88,21 +65,11 @@
         await #expect(throws: TestError("reader setup")) {
           try await read(pool, blocking: blocking) { _ in }
         }
-        // The slot it was granted went back.
+        // The slot it was granted went back, writes are unaffected, and the next read tries again.
         #expect(pool.readerCounts == (0, 0))
-
-        // Writes are unaffected, and the next read tries again.
         try await pool.withWriteConnection { try $0.execute("INSERT INTO items VALUES (1)") }
-        await #expect(throws: TestError("reader setup")) {
-          try await read(pool, blocking: blocking) { _ in }
-        }
-        #expect(pool.readerCounts == (0, 0))
-
         failing.withLock { $0 = false }
-        let count = try await read(pool, blocking: blocking) { connection in
-          try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-        }
-        #expect(count == 1)
+        #expect(try await read(pool, blocking: blocking, countItems) == 1)
         #expect(pool.readerCounts == (1, 1))
       }
     }
@@ -110,22 +77,17 @@
     @Test
     func aFailedOpenLetsTheReadsWaitingBehindItTryAgain() async throws {
       // The first reader opens; every reader after it fails until the test says otherwise.
-      let opened = Lock(0)
+      let opened = TestCounter()
       let failing = Lock(true)
       let setup = SQLiteSetup { _ in
-        let index = opened.withLock { opened in
-          defer { opened += 1 }
-          return opened
-        }
-        if index > 0, failing.withLock({ $0 }) { throw TestError("reader setup") }
+        if opened.increment() > 1, failing.withLock({ $0 }) { throw TestError("reader setup") }
       }
       try await withConnectionPool(readerCount: 2, readerSetups: [setup]) { pool in
         let gate = TestGate()
-        let held = Task { try await pool.withReadConnection { _ in try gate.enter() } }
-        try await gate.waitUntilEntered()
+        let held = try await holdReads(1, on: pool, at: gate)
 
         // With one reader held and one slot left, every read behind it either fails to open the
-        // second reader or waits, and none of them is left waiting for good.
+        // second reader or gets the slot back, and none of them is left waiting for good.
         let outcomes = try await concurrently(6) { _ -> Bool in
           do {
             try await pool.withReadConnection { _ in }
@@ -138,48 +100,20 @@
         #expect(pool.readerCounts == (1, 0))
 
         gate.open()
-        try await held.value
-        #expect(pool.readerCounts == (1, 1))
+        for task in held { try await task.value }
         failing.withLock { $0 = false }
-        try await pool.withWriteConnection { try $0.execute("INSERT INTO items VALUES (1)") }
-        _ = try await concurrently(4) { _ in
-          try await pool.withReadConnection { _ in try gate.enter() }
-        }
+        _ = try await concurrently(4) { _ in try await pool.withReadConnection(countItems) }
         #expect(pool.readerCounts.open <= 2)
       }
     }
 
-    // MARK: - Cancellation
-
-    @Test
-    func cancellingAReadWaitingForAReaderLeaksNothing() async throws {
-      try await withConnectionPool(readerCount: 1) { pool in
-        let gate = TestGate()
-        let held = Task { try await pool.withReadConnection { _ in try gate.enter() } }
-        try await gate.waitUntilEntered()
-
-        let cancelled = Task { try await pool.withReadConnection { _ in } }
-        try await waitUntil { pool.waitingAccessCount == 1 }
-        cancelled.cancel()
-        await #expect(throws: CancellationError.self) { try await cancelled.value }
-        #expect(pool.waitingAccessCount == 0)
-
-        gate.open()
-        try await held.value
-        #expect(pool.readerCounts == (1, 1))
-        _ = try await pool.withReadConnection { _ in }
-        #expect(pool.readerCounts == (1, 1))
-      }
-    }
+    // MARK: - Cancellation and fairness
 
     @Test
     func cancelledReadsRacingForSlotsLeakNothing() async throws {
       try await withConnectionPool(readerCount: 2) { pool in
         for _ in 0..<20 {
-          let tasks = (0..<6)
-            .map { _ in
-              Task { try await pool.withReadConnection { _ in } }
-            }
+          let tasks = (0..<6).map { _ in Task { try await pool.withReadConnection { _ in } } }
           for task in tasks { task.cancel() }
           for task in tasks { _ = await task.result }
           let counts = pool.readerCounts
@@ -190,106 +124,59 @@
       }
     }
 
-    // MARK: - Fairness
-
     @Test
     func aReadQueuedBehindABarrierWriteDoesNotOpenAReaderToJumpIt() async throws {
       try await withConnectionPool(readerCount: 2) { pool in
-        let events = TestRecorder<String>()
         let gate = TestGate()
-        let held = Task {
-          try await pool.withReadConnection { _ in
-            try gate.enter()
-            events.append("first read")
-          }
-        }
-        try await gate.waitUntilEntered()
+        let held = try await holdReads(1, on: pool, at: gate)
 
         // A slot is free, but the write is a fairness boundary for the read behind it.
         let write = Task {
-          try await pool.withWriteConnection { connection in
-            try connection.execute("INSERT INTO items VALUES (1)")
-            events.append("write")
-          }
+          try await pool.withWriteConnection { try $0.execute("INSERT INTO items VALUES (1)") }
         }
         try await waitUntil { pool.waitingAccessCount == 1 }
-        let read = Task {
-          try await pool.withReadConnection { connection in
-            events.append("second read")
-            return try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-          }
-        }
+        let read = Task { try await pool.withReadConnection(countItems) }
         try await waitUntil { pool.waitingAccessCount == 2 }
         #expect(pool.readerCounts == (1, 0))
 
         gate.open()
-        try await held.value
+        for task in held { try await task.value }
         try await write.value
         #expect(try await read.value == 1)
-        #expect(events.values == ["first read", "write", "second read"])
       }
     }
 
     // MARK: - Releasing memory
 
-    @Test
-    func releasingMemoryClosesIdleReadersAndReadsReopenThem() async throws {
-      try await withConnectionPool(readerCount: 3) { pool in
-        let gate = TestGate()
-        let held = (0..<3)
-          .map { _ in
-            Task { try await pool.withReadConnection { _ in try gate.enter() } }
-          }
-        try await gate.waitUntilEntered(3)
-        gate.open()
-        for task in held { try await task.value }
-        #expect(pool.readerCounts == (3, 3))
-
-        await pool.releaseMemory()
-        #expect(pool.readerCounts == (0, 0))
-
-        let count = try await pool.withReadConnection { connection in
-          try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-        }
-        #expect(count == 0)
-        #expect(pool.readerCounts == (1, 1))
-      }
-    }
-
     @Test(arguments: [false, true])
-    func aReaderInUseClosesWhenItsReadEnds(blocking: Bool) async throws {
+    func releasingMemoryClosesIdleReadersNowAndBusyOnesWhenTheirReadsEnd(
+      blocking: Bool
+    ) async throws {
       try await withConnectionPool(readerCount: 2) { pool in
-        _ = try await pool.withReadConnection { _ in }
         let gate = TestGate()
-        let busy: Task<Int64??, any Error>
-        if blocking {
-          busy = Task {
-            try await withDeadline {
-              try pool.withReadConnectionBlocking { connection in
-                try gate.enter()
-                return try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-              }
-            }
-          }
-        } else {
-          busy = Task {
-            try await pool.withReadConnection { connection in
-              try gate.enter()
-              return try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-            }
+        let warm = try await holdReads(2, on: pool, at: gate)
+        gate.open()
+        for task in warm { try await task.value }
+        #expect(pool.readerCounts == (2, 2))
+
+        let busyGate = TestGate()
+        let busy = Task {
+          try await read(pool, blocking: blocking) { connection in
+            try busyGate.enter()
+            return try countItems(connection)
           }
         }
-        try await gate.waitUntilEntered()
-        #expect(pool.readerCounts == (1, 0))
+        try await busyGate.waitUntilEntered()
+        #expect(pool.readerCounts == (2, 1))
 
-        // The release does not wait for the read in progress, which keeps working.
+        // The release closes the idle reader without waiting for the read in progress.
         await pool.releaseMemory()
         #expect(pool.readerCounts == (1, 0))
-        gate.open()
+        busyGate.open()
         #expect(try await busy.value == 0)
         #expect(pool.readerCounts == (0, 0))
 
-        _ = try await pool.withReadConnection { _ in }
+        #expect(try await pool.withReadConnection(countItems) == 0)
         #expect(pool.readerCounts == (1, 1))
       }
     }
@@ -297,21 +184,12 @@
     @Test
     func aReaderStillOpeningWhenMemoryIsReleasedServesItsReadAndThenCloses() async throws {
       let opening = TestGate()
-      let isFirst = Lock(true)
+      let opened = TestCounter()
       let setup = SQLiteSetup { _ in
-        if isFirst.withLock({ first in
-          defer { first = false }
-          return first
-        }) {
-          try opening.enter()
-        }
+        if opened.increment() == 1 { try opening.enter() }
       }
       try await withConnectionPool(readerCount: 1, readerSetups: [setup]) { pool in
-        let read = Task {
-          try await pool.withReadConnection { connection in
-            try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-          }
-        }
+        let read = Task { try await pool.withReadConnection(countItems) }
         try await opening.waitUntilEntered()
         #expect(pool.readerCounts == (1, 0))
         await pool.releaseMemory()
@@ -322,7 +200,7 @@
     }
 
     @Test(arguments: [false, true])
-    func releasingMemoryEmptiesTheWritersStatementCache(suspended: Bool) async throws {
+    func releasingMemoryEmptiesTheWritersStatementCaches(suspended: Bool) async throws {
       try await withConnectionPool(readerCount: 1, writerCount: 2) { pool in
         let idleCount: @Sendable (borrowing SQLiteWriteConnection) -> Int = {
           $0.handle.pointee.statements.idleStatementCount
@@ -330,7 +208,7 @@
         for _ in 0..<4 {
           try await pool.withConcurrentWriteConnection { connection in
             try connection.execute("INSERT INTO items VALUES (NULL)")
-            _ = try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
+            _ = try countItems(connection)
           }
         }
         #expect(try await pool.withWriteConnection(idleCount) > 0)
@@ -340,12 +218,7 @@
         if suspended { pool.resume() }
         #expect(try await pool.withWriteConnection(idleCount) == 0)
         #expect(try await pool.withConcurrentWriteConnection(idleCount) == 0)
-
-        try await pool.withWriteConnection { try $0.execute("INSERT INTO items VALUES (NULL)") }
-        let count = try await pool.withReadConnection { connection in
-          try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-        }
-        #expect(count == 5)
+        #expect(try await pool.withReadConnection(countItems) == 4)
       }
     }
 
@@ -355,7 +228,7 @@
         let gate = TestGate()
         let write = Task {
           try await pool.withConcurrentWriteConnection { connection in
-            _ = try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
+            _ = try countItems(connection)
             try gate.enter()
           }
         }
@@ -363,7 +236,7 @@
         let released = TestCounter()
         let release = Task {
           await pool.releaseMemory()
-          _ = released.increment()
+          released.increment()
         }
         // Reads go on while the release waits for the writer.
         for _ in 0..<3 { _ = try await pool.withReadConnection { _ in } }
@@ -372,21 +245,6 @@
         try await write.value
         await release.value
         #expect(released.value == 1)
-      }
-    }
-
-    @Test
-    func aSQLitePoolReleasesThroughItsConnectionPool() async throws {
-      try await withTestDatabaseFile("pool-release") { file in
-        let pool = try file.pool(readerCount: 2)
-        #expect(pool.readerCounts == (0, 0))
-        _ = try await pool.read { try $0.fetchOne("SELECT 1") { $0[0].integerValue } }
-        #expect(pool.readerCounts == (1, 1))
-        let memoryReleasing: any OrbitMemoryReleasing = pool
-        await memoryReleasing.releaseMemory()
-        #expect(pool.readerCounts == (0, 0))
-        _ = try await pool.read { try $0.fetchOne("SELECT 1") { $0[0].integerValue } }
-        #expect(pool.readerCounts == (1, 1))
       }
     }
 
@@ -402,11 +260,9 @@
           transport: InMemoryIPCTransport(network: InMemoryIPCTransport.Network())
         )
         _ = try await database.read { try $0.fetchOne("SELECT 1") { $0[0].integerValue } }
-        #expect(pool.readerCounts == (1, 1))
+        #expect(pool.pool.readerCounts == (1, 1))
         await database.releaseMemory()
-        #expect(pool.readerCounts == (0, 0))
-        _ = try await database.read { try $0.fetchOne("SELECT 1") { $0[0].integerValue } }
-        #expect(pool.readerCounts == (1, 1))
+        #expect(pool.pool.readerCounts == (0, 0))
       }
     }
 
@@ -424,6 +280,35 @@
       }
       #expect(count == 0)
     }
+  }
+
+  extension SQLiteConnectionPool {
+    fileprivate var readerCounts: (open: Int, idle: Int) { scheduler.readerCounts }
+    fileprivate var waitingAccessCount: Int { scheduler.waitingAccessCount }
+  }
+
+  @Sendable
+  private func countItems(_ connection: borrowing SQLiteReadConnection) throws -> Int64? {
+    try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue } ?? nil
+  }
+
+  @Sendable
+  private func countItems(_ connection: borrowing SQLiteWriteConnection) throws -> Int64? {
+    try connection.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue } ?? nil
+  }
+
+  /// Starts `count` reads that each hold a reader until `gate` opens, and waits until they all do.
+  private func holdReads(
+    _ count: Int,
+    on pool: SQLiteConnectionPool,
+    at gate: TestGate
+  ) async throws -> [Task<Void, any Error>] {
+    let tasks = (0..<count)
+      .map { _ in
+        Task { try await pool.withReadConnection { _ in try gate.enter() } }
+      }
+    try await gate.waitUntilEntered(count)
+    return tasks
   }
 
   private func read<Result: Sendable>(

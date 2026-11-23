@@ -213,28 +213,12 @@
   }
 
   extension TursoPool: OrbitMemoryReleasing {
-    /// Closes the pool's readers and frees the memory its writers can rebuild on demand.
+    /// Closes the pool's readers and finalizes the idle statements of each writer.
     ///
-    /// Idle readers close right away, and a reader in use closes when its read ends, without the
-    /// call waiting for it. Reads after the call open readers again as they need them. Each writer
-    /// stays open and finalizes the statements it keeps idle, between its accesses, so the release
-    /// holds up no read or write. The call returns once every writer has released, which for a
-    /// writer in use is when its current access ends.
-    ///
-    /// ```swift
-    /// let driver = try TursoPool(path: .file(url))
-    /// // On a memory warning:
-    /// await driver.releaseMemory()
-    /// ```
-    ///
-    /// Turso has no entry point for freeing its page cache, so only the statements and the
-    /// readers are freed. It runs no SQL, so it never fails, and cancelling the waiting task does
-    /// not stop it.
+    /// Idle readers close at once, and readers in use when their reads end. The call returns once
+    /// every writer has released between its accesses. Turso cannot free its page cache.
     public func releaseMemory() async {
       await pool.releaseMemory()
     }
-
-    /// How many readers are open, and how many of them are idle.
-    var readerCounts: (open: Int, idle: Int) { pool.readerCounts }
   }
 #endif

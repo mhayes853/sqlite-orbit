@@ -455,22 +455,8 @@ extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
 }
 
 extension OrbitIPCDatabase: OrbitMemoryReleasing {
-  /// Frees the memory this process's writer can rebuild on demand, when that writer can.
-  ///
-  /// The database forwards the call to its writer when the writer conforms to
-  /// ``OrbitMemoryReleasing``, as the ``SQLitePool`` opened by the `init(path:)` convenience
-  /// does: its idle readers close, the rest close as their reads end, and its writer frees its
-  /// idle statements and unused cache pages. A writer that does not conform is left as it is, and
-  /// the call returns at once.
-  ///
-  /// Only this process frees anything. The call announces nothing, so other processes that have
-  /// the database open keep their connections and caches until they release their own.
-  ///
-  /// ```swift
-  /// let database = try OrbitIPCDatabase(path: OrbitDatabasePath("reminders.sqlite"))
-  /// // On a memory warning:
-  /// await database.releaseMemory()
-  /// ```
+  /// Forwards the call to the writer when it conforms to ``OrbitMemoryReleasing``, and otherwise
+  /// does nothing. Only this process frees memory; other processes are not told.
   public func releaseMemory() async {
     await (writer as? any OrbitMemoryReleasing)?.releaseMemory()
   }

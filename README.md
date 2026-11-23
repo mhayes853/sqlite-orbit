@@ -386,14 +386,10 @@ one writer.
 
 ### Releasing memory
 
-Every driver conforms to `OrbitMemoryReleasing`. `releaseMemory()` frees what a database can
-rebuild on demand: the prepared statements it keeps idle for reuse, the unused pages of SQLite's
-page caches, and, in a pool, its readers. Idle readers close right away and readers in use close
-when their read ends; later reads open readers again as they need them. A release never holds up
-other accesses, runs no SQL, and works while a database is suspended. `OrbitIPCDatabase` passes
-the call on to its pool and frees memory in this process only.
-
-Nothing calls it automatically. Call it when the system asks for memory back, for example:
+Every driver conforms to `OrbitMemoryReleasing`. `releaseMemory()` finalizes idle cached
+statements, frees unused page-cache pages, and closes a pool's readers, which later reads open
+again. It holds up no other access. `OrbitIPCDatabase` forwards it to its pool, in this process
+only. Nothing calls it automatically:
 
 ```swift
 NotificationCenter.default.addObserver(
@@ -405,9 +401,8 @@ NotificationCenter.default.addObserver(
 }
 ```
 
-A database held as `any OrbitDatabaseWriter` can be cast to `any OrbitMemoryReleasing`.
-`SQLiteReadConnection`, `SQLiteWriteConnection`, and `SQLiteConnection` also have a synchronous
-`releaseMemory()` that releases a single connection from inside an access.
+A database held as `any OrbitDatabaseWriter` can be cast to `any OrbitMemoryReleasing`. The
+connection types also have a synchronous `releaseMemory()` for use inside an access.
 
 ### Suspending a shared database
 

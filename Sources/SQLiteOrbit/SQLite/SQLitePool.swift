@@ -46,7 +46,7 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   /// The database this pool's connections are open on.
   public let path: OrbitDatabasePath
 
-  private let pool: SQLiteConnectionPool
+  let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
 
   /// Opens `path` as a WAL database with one writer and at most `readerCount` readers.
@@ -292,31 +292,13 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
 }
 
 extension SQLitePool: OrbitMemoryReleasing {
-  /// Closes the pool's readers and frees the memory its writer can rebuild on demand.
+  /// Closes the pool's readers and releases the writer's memory.
   ///
-  /// Idle readers close right away, and a reader in use closes when its read ends, without the
-  /// call waiting for it. Reads after the call open readers again as they need them. The writer
-  /// stays open: it finalizes the statements it keeps idle and frees the unused pages of its page
-  /// cache, between its accesses, so the release holds up no read or write. The call returns once
-  /// the writer has released, which, while a write is running, is when that write ends. It runs
-  /// even while the pool is suspended.
-  ///
-  /// ```swift
-  /// let driver = try SQLitePool(path: .file(url))
-  /// // On a memory warning:
-  /// await driver.releaseMemory()
-  /// ```
-  ///
-  /// It runs no SQL, so it never fails, and cancelling the waiting task does not stop it.
+  /// Idle readers close at once, and readers in use when their reads end. The call returns once
+  /// the writer has released between its accesses, even while the pool is suspended.
   public func releaseMemory() async {
     await pool.releaseMemory()
   }
-
-  /// How many readers are open, and how many of them are idle.
-  var readerCounts: (open: Int, idle: Int) { pool.readerCounts }
-
-  /// How many accesses are waiting for a connection.
-  var waitingAccessCount: Int { pool.waitingAccessCount }
 }
 
 #if BuiltInSQLite

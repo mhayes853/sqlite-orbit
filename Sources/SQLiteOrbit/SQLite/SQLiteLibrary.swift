@@ -333,14 +333,11 @@ extension SQLiteLibrary {
     /// before and after the run, which mistakes an insert for a skipped row in the rare case that
     /// the new row's rowid equals the one reported before it.
     public var setLastInsertedRowID: (@convention(c) (OpaquePointer?, Int64) -> Void)?
-    /// Frees as much of a connection's memory as it can rebuild on demand, such as the unused
-    /// pages of its page cache: `sqlite3_db_release_memory`, or `nil` for a build without it, such
-    /// as Turso.
+    /// Frees the unused pages of a connection's page cache: `sqlite3_db_release_memory`, or `nil`
+    /// for a build without it, such as Turso.
     ///
-    /// ``SQLiteReadConnection/releaseMemory()`` and the other `releaseMemory` methods call this
-    /// when it is present, and otherwise only finalize the connection's idle cached statements.
-    /// ``sqliteLibrary(module:apis:)`` leaves it `nil`, so a table built by the macro sets it
-    /// itself:
+    /// The `releaseMemory()` methods call it when present. ``sqliteLibrary(module:apis:)`` leaves
+    /// it `nil`, so a table built by the macro sets it itself:
     ///
     /// ```swift
     /// var library = #sqliteLibrary(module: "MySQLite")
