@@ -95,5 +95,7 @@ groups run 7 iterations each.
   they prepare.
 - `MemoryStatementsReleased`: 500 statements, then `releaseMemory()`, which finalizes them.
 
+Every suite also reports the bytes allocated (`Malloc (bytes total)`).
+
 Results vary with load, so compare runs from the same machine. Malloc counts are the steadiest
 metric.
