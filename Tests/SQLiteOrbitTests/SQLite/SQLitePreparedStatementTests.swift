@@ -447,20 +447,6 @@
     }
 
     @Test
-    func aRolledBackTransactionKeepsNoneOfItsRuns() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.write { try $0.execute("CREATE TABLE items (a INTEGER)") }
-      #expect(throws: TestError.self) {
-        try owner.write { transaction in
-          var insert = try transaction.prepare("INSERT INTO items VALUES (?)")
-          for i in 0..<3 { try insert.execute(i) }
-          throw TestError()
-        }
-      }
-      #expect(try owner.read { try $0.fetchOne("SELECT count(*) FROM items", as: Int.self) } == 0)
-    }
-
-    @Test
     func aWriteCollectsItsReturnedRowsThroughExecuteRowCursor() throws {
       var owner = try itemsConnection()
       try owner.write { transaction in

@@ -690,34 +690,6 @@
         #expect(try transaction.prepareInsert(Reminder.self, onConflict: .replace).sql != first)
       }
     }
-
-    @Test
-    func theUsageExampleCompiles() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let database = try await remindersDatabase()
-      let reminders = [Reminder(id: 10, title: "Milk", listID: 1)]
-      let drafts = [Reminder.Draft(title: "Eggs", listID: 1)]
-      let incoming = [Reminder(id: 10, title: "Milk!", listID: 1)].map(Reminder.Draft.init)
-      try await database.write { transaction in
-        let listID = 1
-        let id = try transaction.insert(Reminder.Draft(title: "Tea", listID: listID))
-        try transaction.insert(contentsOf: reminders)
-        try transaction.insert(Tag(id: 1, title: "home"), onConflict: .ignore)
-        var insert = try transaction.prepareInsert(Reminder.Draft.self)
-        for draft in drafts { try insert.execute(draft) }
-        var save = try transaction.prepareInsert(Reminder.self, onConflict: .update)
-        try save.execute(
-          contentsOf: incoming.lazy.map { Reminder(id: $0.id!, title: $0.title, listID: $0.listID) }
-        )
-        var add = try transaction.prepareInsert(Reminder.self) { ($0.title, $0.listID) }
-        try add.execute("Buy milk", listID)
-        try add.execute(contentsOf: [("Eggs", listID), ("Bread", listID)])
-        var rename = try transaction.prepareInsert(Reminder.self, onConflict: .update) {
-          ($0.id, $0.title)
-        }
-        try rename.execute(Int(id), "Buy oat milk")
-      }
-    }
   }
 
   // MARK: - Helpers

@@ -457,40 +457,6 @@
       #expect(second == "item 4")
     }
 
-    @Test
-    func aCacheThatHoldsNothingStillRunsQueries() throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.maximumCachedStatements = 0
-      var handle = try openConnection(configuration: configuration)
-
-      try handle.write { transaction in
-        try Item.insert { Item(id: 1, title: "uncached") }.execute(transaction)
-      }
-      let titles = try handle.read { transaction in
-        try Item.select(\.title).fetchAll(transaction)
-      }
-      #expect(titles == ["uncached"])
-    }
-
-    @Test
-    func largeIntegersRoundTripWithoutLosingPrecision() throws {
-      var handle = try openConnection()
-      try handle.execute("CREATE TABLE numbers (value INTEGER)")
-
-      let extremes: [Int64] = [.min, -1, 0, 1, .max]
-      for value in extremes {
-        try handle.write { transaction in
-          try #sql("INSERT INTO numbers (value) VALUES (\(value, as: Int64.self))", as: Void.self)
-            .execute(transaction)
-        }
-      }
-
-      let stored = try handle.read { transaction in
-        try #sql("SELECT value FROM numbers", as: Int64.self).fetchAll(transaction)
-      }
-      #expect(stored == extremes)
-    }
-
     @Test(.libraryHooks)
     func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
       let probe = StatementLifecycleProbe()

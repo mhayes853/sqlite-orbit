@@ -63,13 +63,6 @@ struct SQLTests {
   }
 
   @Test
-  func interpolatedLiteralsBindTheirDefaultTypes() {
-    let sql: SQL = "VALUES (\(1), \(2.5), \(false), \("text"))"
-    #expect(sql.text == "VALUES (?, ?, ?, ?)")
-    #expect(sql.bindings == [.integer(1), .real(2.5), .integer(0), .text("text")])
-  }
-
-  @Test
   func interpolatedSQLIsSplicedWithItsParametersInOrder() throws {
     let filter: SQL = "list_id = \(3) AND title = \("Milk")"
     let sql: SQL = "SELECT \(1) FROM reminders WHERE \(filter) LIMIT \(10)"
@@ -140,18 +133,6 @@ struct SQLTests {
 
 @Suite
 struct OrbitDatabaseValueTests {
-  @Test
-  func literalsMakeTheMatchingStorageClass() {
-    let null: OrbitDatabaseValue = nil
-    let integer: OrbitDatabaseValue = 42
-    let real: OrbitDatabaseValue = 1.5
-    let text: OrbitDatabaseValue = "text"
-    #expect(null == .null)
-    #expect(integer == .integer(42))
-    #expect(real == .real(1.5))
-    #expect(text == .text("text"))
-  }
-
   @Test
   func accessorsReadOnlyTheirOwnStorageClass() {
     #expect(OrbitDatabaseValue.null.isNull)

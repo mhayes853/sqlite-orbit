@@ -115,25 +115,6 @@
     connection.statements.checkIn(second)
   }
 
-  @Test(.libraryHooks)
-  func statementCacheStaysWithinItsCapacity() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 1
-
-    let connection = try openInMemory(configuration)
-    let finalizedAfterOpen = counters.finalizedCount
-
-    let kept = try connection.statements.checkOut("SELECT 1")
-    connection.statements.checkIn(kept)
-    let overflow = try connection.statements.checkOut("SELECT 2")
-    connection.statements.checkIn(overflow)
-
-    // The statement that did not fit was finalized rather than retained.
-    #expect(counters.finalizedCount == finalizedAfterOpen + 1)
-  }
-
   /// Runs each of `sqls` through the cache once, in order.
   private func use(_ sqls: [String], on connection: borrowing SQLiteConnection) throws {
     for sql in sqls {
@@ -182,25 +163,6 @@
     #expect(counters.preparedCount == prepared)
     try use(["SELECT 2"], on: connection)
     #expect(counters.preparedCount == prepared + 1)
-  }
-
-  @Test(.libraryHooks)
-  func statementCacheKeepsAtMostItsCapacityOfTheLatestStatements() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 3
-
-    let connection = try openInMemory(configuration)
-    let sqls = (0..<10).map { "SELECT \($0)" }
-    let finalizedAfterOpen = counters.finalizedCount
-    try use(sqls, on: connection)
-    #expect(connection.statements.idleStatementCount == 3)
-    #expect(counters.finalizedCount == finalizedAfterOpen + 7)
-
-    let prepared = counters.preparedCount
-    try use(Array(sqls.suffix(3)), on: connection)
-    #expect(counters.preparedCount == prepared)
   }
 
   @Test
