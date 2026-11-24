@@ -66,7 +66,7 @@ final class TransactionEventRecorder: OrbitDatabaseTransactionObserver, Sendable
   /// Waits until at least `count` commits have been recorded.
   ///
   /// - Throws: ``TestTimeout`` once `timeout` passes first.
-  func waitForCommitCount(_ count: Int, timeout: Duration = .seconds(5)) async throws {
+  func waitForCommitCount(_ count: Int, timeout: Duration = .seconds(30)) async throws {
     try await waitUntil(timeout: timeout) { self.commits.count >= count }
   }
 

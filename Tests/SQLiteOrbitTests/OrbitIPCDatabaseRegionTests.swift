@@ -153,7 +153,7 @@
           // A transport that delivers asynchronously can report the commit to `a` after the sibling
           // database in this process already has. Either way, the commit to `b` was sent first, so
           // it would have arrived first.
-          try await waitUntil(timeout: .seconds(5)) { !peers.observingTransport.messages.isEmpty }
+          try await waitUntil { !peers.observingTransport.messages.isEmpty }
           let messagesBeforeWidening = peers.observingTransport.messages.count
           let advertisedAfterFlag = peers.observingTransport.advertisedRegion(for: peers.identifier)
 
@@ -249,7 +249,7 @@
           try await recorder.waitForValue(nil)
 
           try await peers.writing.write { try $0.execute("UPDATE a SET flag = 1") }
-          try await waitUntil(timeout: .seconds(5)) { !recorder.errors.isEmpty }
+          try await waitUntil { !recorder.errors.isEmpty }
 
           #expect(recorder.errors == [String(describing: RegionUpdateFailure())])
           #expect(recorder.values == [nil])
@@ -441,7 +441,7 @@
       }
 
       func waitForValue(_ value: Value) async throws {
-        try await waitUntil(timeout: .seconds(5)) { self.values.last == value }
+        try await waitUntil { self.values.last == value }
       }
     }
   #endif

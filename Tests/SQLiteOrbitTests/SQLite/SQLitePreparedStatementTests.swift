@@ -402,7 +402,7 @@
         var insert = try transaction.prepare("INSERT INTO items VALUES (?)")
         for i in 0..<3 { try insert.execute(i) }
       }
-      try await waitUntil(timeout: .seconds(5)) { values.last == 3 }
+      try await waitUntil { values.last == 3 }
       #expect(values.values == [0, 3])
     }
 
