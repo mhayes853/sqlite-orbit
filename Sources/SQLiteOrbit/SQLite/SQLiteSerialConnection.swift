@@ -108,23 +108,21 @@ public final class SQLiteSerialConnection: Sendable {
   ///
   /// - Parameters:
   ///   - path: The database, which labels the executor.
-  ///   - idleTimeout: How long the executor's worker thread outlives its last job.
   ///   - open: Opens the connection on the executor it is given.
   /// - Throws: `CancellationError` when the task is cancelled before opening starts, or whatever
   ///   `open` throws.
   static func openOnOwnExecutor(
     path: OrbitDatabasePath,
-    idleTimeout: Duration? = nil,
     _ open: @escaping @Sendable (_ executor: Executor?) throws -> SQLiteSerialConnection
   ) async throws -> SQLiteSerialConnection {
     #if _runtime(_multithreaded)
-      let executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
+      let executor = SQLiteConnectionExecutor(path: path)
       return try await SQLiteConnectionOpener(executor).run {
         try Task.checkCancellation()
         return try open(executor)
       }
     #else
-      _ = (path, idleTimeout)
+      _ = path
       try Task.checkCancellation()
       return try open(nil)
     #endif
