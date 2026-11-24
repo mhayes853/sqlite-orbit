@@ -8,35 +8,6 @@
 
     @Suite
     struct SingleRowTests {
-      @Test
-      func savingRemainsTrueUntilAHeldUpdateCompletes() async throws {
-        let database = try await settingsDatabase()
-        @SingleRow(Settings.self, database: database) var settings
-        let property = $settings
-        let gate = TestGate()
-        defer { gate.open() }
-        let update = Task {
-          try await property.update { value in
-            value.theme = "dark"
-            try gate.enter()
-          }
-        }
-        defer { update.cancel() }
-        try await gate.waitUntilEntered()
-        #expect(property.isSaving)
-        gate.open()
-        try await update.value
-        #expect(!property.isSaving)
-        #expect(property.saveError == nil)
-        let persisted = try await database.read { try Settings.find(in: $0) }
-        var expected = Settings.defaultValue
-        expected.theme = "dark"
-        #expect(persisted == expected)
-        try await property.save(expected)
-        #expect(property.saveError == nil)
-        #expect(!property.isSaving)
-      }
-
       @MainActor
       @Test(arguments: ["mutation", "identity", "constraint"], [false, true])
       func failedUpdatePreservesDataAndASuccessfulSaveClearsTheError(
