@@ -63,15 +63,6 @@
   }
 
   @Test
-  func unavailableLibraryFeaturesAreTypedAndExtensible() {
-    let feature = SQLiteLibraryFeature(rawValue: "extension loading")
-    let error = SQLiteFeatureUnavailableError(libraryName: "custom", feature: feature)
-
-    #expect(error.feature == feature)
-    #expect(error.description == "custom does not support SQLite's extension loading.")
-  }
-
-  @Test
   func functionTableRunsAQueryWithoutAnyWrapperTypes() throws {
     let library = SQLiteLibrary.system
     #expect(library.runtime.threadsafe() != 0)

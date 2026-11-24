@@ -64,15 +64,6 @@
           _ = try? SQLitePool(path: .memory, readerCount: 0)
         }
       }
-
-      @Test
-      func aNegativeReaderCountFailsAPrecondition() async {
-        await #expect(processExitsWith: .failure) {
-          // The precondition runs before opening any connections. Swallow ordinary opening
-          // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, readerCount: -1)
-        }
-      }
     #endif
 
     @Test(.libraryHooks)

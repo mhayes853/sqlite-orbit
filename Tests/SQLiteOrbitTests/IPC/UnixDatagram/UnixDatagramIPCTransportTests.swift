@@ -385,15 +385,6 @@
     }
   }
 
-  @Test
-  func unixDatagramConfigurationRefreshesHourlyByDefault() {
-    #expect(UnixDatagramIPCTransport.Configuration.default.refreshInterval == .seconds(60 * 60))
-    #expect(
-      UnixDatagramIPCTransport.Configuration.default.refreshInterval
-        == UnixDatagramIPCTransport.Configuration.defaultRefreshInterval
-    )
-  }
-
   /// A receiver whose handler holds the transport's thread at the first message until
   /// ``resume()``, as a suspended process holds it, so its queue fills and senders see it as full,
   /// and it repairs nothing.

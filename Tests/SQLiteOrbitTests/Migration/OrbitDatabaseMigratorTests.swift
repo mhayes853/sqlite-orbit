@@ -110,6 +110,15 @@
           try await migrator.migrate(driver, upTo: "two")
           #expect(try await log(in: driver) == ["one", "two"])
 
+          let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
+            try await migrator.migrate(driver, upTo: "one")
+          }
+          #expect(
+            error
+              == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
+          )
+          #expect(try await log(in: driver) == ["one", "two"])
+
           try await migrator.migrate(driver)
           #expect(try await log(in: driver) == ["one", "two", "three"])
         }
@@ -163,22 +172,6 @@
         )
         #expect(error?.description.contains("\"missing\"") == true)
         #expect(try await driver.read { try migrator.appliedIdentifiers($0) }.isEmpty)
-      }
-
-      @Test
-      func targetBeforeAnAppliedMigrationThrows() async throws {
-        let driver = try SQLiteQueue(path: .memory)
-        let migrator = loggingMigrator(["one", "two", "three"])
-        try await migrator.migrate(driver, upTo: "two")
-
-        let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
-          try await migrator.migrate(driver, upTo: "one")
-        }
-
-        #expect(
-          error == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
-        )
-        #expect(try await log(in: driver) == ["one", "two"])
       }
 
       // MARK: - Foreign keys
