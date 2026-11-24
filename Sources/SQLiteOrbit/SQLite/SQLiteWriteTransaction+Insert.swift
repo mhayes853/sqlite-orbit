@@ -20,8 +20,7 @@
     /// - Throws: A ``SQLiteError`` when the insert fails.
     @discardableResult
     public borrowing func insert<Row: Table>(_ row: Row) throws -> Int64 {
-      let plan = try SQLiteInsertPlans.records(Row.self, code: 0, conflict: .none)
-      try runInsert(plan, row)
+      try runInsert(SQLiteInsertPlans.records(Row.self, onConflict: nil), row)
       return lastInsertedRowID
     }
 
@@ -41,12 +40,7 @@
       _ row: Row,
       onConflict conflict: SQLiteInsertConflict
     ) throws -> Int64 {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict.code,
-        conflict: conflict.conflict
-      )
-      try runInsert(plan, row)
+      try runInsert(SQLiteInsertPlans.records(Row.self, onConflict: conflict), row)
       return lastInsertedRowID
     }
 
@@ -67,11 +61,7 @@
       _ row: Row,
       onConflict conflict: SQLiteUpsertConflict<Row>
     ) throws -> Int64? {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict.code,
-        conflict: conflict.conflict
-      )
+      let plan = try SQLiteInsertPlans.records(Row.self, onConflict: conflict)
       return try sqliteInsertedRowID(on: base.connection, library: base.library) {
         try runInsert(plan, row)
       }
@@ -159,11 +149,7 @@
       onConflict conflict: SQLiteInsertConflict?,
       each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
     ) throws -> Int {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict?.code ?? 0,
-        conflict: conflict?.conflict ?? .none
-      )
+      let plan = try SQLiteInsertPlans.records(Row.self, onConflict: conflict)
       var statement = try preparedStatement(for: plan)
       return try statement.runInserts(plan, each: step)
     }
@@ -176,11 +162,7 @@
       onConflict conflict: SQLiteUpsertConflict<Row>,
       each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
     ) throws -> Int {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict.code,
-        conflict: conflict.conflict
-      )
+      let plan = try SQLiteInsertPlans.records(Row.self, onConflict: conflict)
       var statement = try preparedStatement(for: plan)
       return try statement.runInserts(plan, each: step)
     }
@@ -192,9 +174,10 @@
         SQLiteRowCursor(
           plan.query,
           binding: { statement, library in
-            var arguments = SQLiteInsertArguments(plan: plan, library: library)
-            arguments.begin(statement)
-            try withUnsafePointer(to: row) { try arguments.bind(row: $0) }
+            try withUnsafePointer(to: row) {
+              try SQLiteInsertArguments(plan: plan, library: library, statement: statement)
+                .bind(row: $0)
+            }
           },
           connection: base.connection,
           library: base.library,

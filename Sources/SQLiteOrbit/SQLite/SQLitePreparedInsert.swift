@@ -342,11 +342,7 @@
       _ table: Row.Type,
       onConflict conflict: SQLiteInsertConflict? = nil
     ) throws -> SQLitePreparedInsert<Row, Row> {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict?.code ?? 0,
-        conflict: conflict?.conflict ?? .none
-      )
+      let plan = try SQLiteInsertPlans.records(Row.self, onConflict: conflict)
       return SQLitePreparedInsert(statement: try preparedStatement(for: plan), plan: plan)
     }
 
@@ -370,11 +366,7 @@
       _ table: Row.Type,
       onConflict conflict: SQLiteUpsertConflict<Row>
     ) throws -> SQLitePreparedUpsert<Row, Row> {
-      let plan = try SQLiteInsertPlans.records(
-        Row.self,
-        code: conflict.code,
-        conflict: conflict.conflict
-      )
+      let plan = try SQLiteInsertPlans.records(Row.self, onConflict: conflict)
       return SQLitePreparedUpsert(statement: try preparedStatement(for: plan), plan: plan)
     }
 

@@ -171,16 +171,14 @@
 
     private let plan: SQLiteInsertPlan
     private let library: UnsafePointer<SQLiteLibrary>
-    private var statement: OpaquePointer?
 
-    init(plan: SQLiteInsertPlan, library: UnsafePointer<SQLiteLibrary>) {
+    // The statement a run binds, or `nil` when the SQL holds no statement, whose runs bind
+    // nothing.
+    private let statement: OpaquePointer?
+
+    init(plan: SQLiteInsertPlan, library: UnsafePointer<SQLiteLibrary>, statement: OpaquePointer?) {
       self.plan = plan
       self.library = library
-    }
-
-    // Readies the arguments for a run of `statement`, or for none when the SQL holds no
-    // statement, whose runs bind nothing.
-    mutating func begin(_ statement: OpaquePointer?) {
       self.statement = statement
     }
 
@@ -489,9 +487,23 @@
 
     private let plans = Lock([Key: SQLiteInsertPlan]())
 
+    static func records<Row: Table>(
+      _ table: Row.Type,
+      onConflict conflict: SQLiteInsertConflict?
+    ) throws -> SQLiteInsertPlan {
+      try records(Row.self, code: conflict?.code ?? 0, conflict: conflict?.conflict ?? .none)
+    }
+
+    static func records<Row: Table>(
+      _ table: Row.Type,
+      onConflict conflict: SQLiteUpsertConflict<Row>
+    ) throws -> SQLiteInsertPlan {
+      try records(Row.self, code: conflict.code, conflict: conflict.conflict)
+    }
+
     // `code` tells the conflict clauses apart, so that a clause is only worked out, which for an
     // update reads the table's primary key, when its plan is built.
-    static func records<Row: Table>(
+    private static func records<Row: Table>(
       _ table: Row.Type,
       code: UInt8,
       conflict: @autoclosure () -> SQLiteInsertPlan.Conflict
@@ -560,25 +572,16 @@
       library.pointee.connections.lastInsertedRowID(connection)
     }
 
-    // Runs the insert once, as `execute(binding:)` runs a statement, with the row at `row`: the
-    // record, or the tuple of a partial insert's arguments.
+    // Runs the insert once with the row at `row`: the record, or the tuple of a partial insert's
+    // arguments.
     mutating func runInsert(_ plan: SQLiteInsertPlan, row: UnsafeRawPointer) throws {
-      var arguments = SQLiteInsertArguments(plan: plan, library: library)
-      arguments.begin(beginRun())
-      try arguments.bind(row: row)
-      try runBound()
+      try SQLiteInsertArguments(plan: plan, library: library, statement: beginRun()).bind(row: row)
+      try runToCompletion()
     }
 
     mutating func runUpsert(_ plan: SQLiteInsertPlan, row: UnsafeRawPointer) throws -> Int64? {
       try sqliteInsertedRowID(on: connection, library: library) {
         try runInsert(plan, row: row)
-      }
-    }
-
-    // Steps a run whose values are bound to completion.
-    private mutating func runBound() throws {
-      try withOrbitCursor(runCursor()) { cursor in
-        while try cursor.next() != nil {}
       }
     }
 
@@ -602,26 +605,25 @@
       _ plan: SQLiteInsertPlan,
       each step: (SQLiteInsertArguments) throws -> SQLiteInsertArguments.Element
     ) throws -> Int {
-      var arguments = SQLiteInsertArguments(plan: plan, library: library)
-      arguments.begin(beginRun())
-      switch try step(arguments) {
+      switch try step(SQLiteInsertArguments(plan: plan, library: library, statement: beginRun())) {
       case .none:
         return 0
       case .last:
-        try runBound()
+        try runToCompletion()
         return changesCount
       case .more:
         break
       }
       try statements.execute(.beginBulkInsert)
       do {
-        try runBound()
+        try runToCompletion()
         var count = changesCount
         while true {
-          arguments.begin(beginRun())
-          let element = try step(arguments)
+          let element = try step(
+            SQLiteInsertArguments(plan: plan, library: library, statement: beginRun())
+          )
           if case .none = element { break }
-          try runBound()
+          try runToCompletion()
           count += changesCount
           if case .last = element { break }
         }

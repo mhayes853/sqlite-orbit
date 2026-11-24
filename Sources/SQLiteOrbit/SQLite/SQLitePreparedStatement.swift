@@ -180,15 +180,8 @@ public struct SQLitePreparedStatement: ~Copyable, ~Escapable {
     }
   }
 
-  // Runs the statement to completion with its parameters bound by `bind`, for a caller that binds
-  // straight from its own values rather than from an argument list. `bind` must bind every
-  // parameter, since a run does not clear the values the run before it bound.
-  mutating func execute(
-    binding bind: (OpaquePointer, UnsafePointer<SQLiteLibrary>) throws -> Void
-  ) throws {
-    if let statement = beginRun() {
-      try bind(statement, library)
-    }
+  // Steps a run whose arguments are bound to completion, discarding its rows.
+  mutating func runToCompletion() throws {
     try withOrbitCursor(runCursor()) { cursor in
       while try cursor.next() != nil {}
     }
@@ -741,9 +734,7 @@ extension SQLitePreparedStatement {
     _ arguments: repeat each Argument
   ) throws {
     try bindArguments(repeat each arguments)
-    try withOrbitCursor(runCursor()) { cursor in
-      while try cursor.next() != nil {}
-    }
+    try runToCompletion()
   }
 
   /// Runs the statement with values gathered at runtime to completion, discarding any rows it
@@ -758,8 +749,6 @@ extension SQLitePreparedStatement {
   ///   ``parameterCount``.
   public mutating func execute(bindings: [OrbitDatabaseValue]) throws {
     try bindArguments(bindings)
-    try withOrbitCursor(runCursor()) { cursor in
-      while try cursor.next() != nil {}
-    }
+    try runToCompletion()
   }
 }
