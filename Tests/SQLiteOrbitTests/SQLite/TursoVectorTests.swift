@@ -31,7 +31,8 @@
           )
         }
       }
-      #expect(setups.value == 8)
+      // Each pool opens both writers at once and one reader for its single read.
+      #expect(setups.value == 6)
     }
 
     @Test
