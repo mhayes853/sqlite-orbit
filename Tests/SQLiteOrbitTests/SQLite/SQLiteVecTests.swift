@@ -200,7 +200,7 @@
     #endif
   }
 
-  private func vecConfiguration() throws -> SQLiteConfiguration {
+  func vecConfiguration() throws -> SQLiteConfiguration {
     var configuration = SQLiteConfiguration.default
     try configuration.registerSQLiteVec()
     return configuration
