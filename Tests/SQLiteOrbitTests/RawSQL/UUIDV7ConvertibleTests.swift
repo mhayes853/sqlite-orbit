@@ -20,19 +20,15 @@
       try expectRoundTrip(OrbitUppercaseUUIDV7(id), .text(uppercase))
       try expectRoundTrip(UUIDV7?.none, .null)
       try expectRoundTrip(UUIDV7?.some(id), .text(lowercase))
+      // The binary form is the identifier's bytes in order, the same order swift-uuidv7's
+      // `BytesRepresentation` binds, so either can read the other.
+      #expect(bytes == withUnsafeBytes(of: id.uuid, [UInt8].init))
     }
 
     @Test
     func textInEitherCaseReadsAsEitherSpelling() throws {
       #expect(try UUIDV7(orbitDatabaseValue: .text(uppercase)) == id)
       #expect(try OrbitUppercaseUUIDV7(orbitDatabaseValue: .text(lowercase)).uuidV7 == id)
-    }
-
-    @Test
-    func theBinaryFormMatchesTheIdentifiersBytesInOrder() throws {
-      // The same order swift-uuidv7's `BytesRepresentation` binds, so either can read the other.
-      #expect(OrbitBinaryUUIDV7(id).orbitDatabaseValue() == .blob(bytes))
-      #expect(bytes == withUnsafeBytes(of: id.uuid, [UInt8].init))
     }
 
     @Test(arguments: [OrbitDatabaseValue.null, .integer(1), .real(1), .text("1"), .blob([1])])
