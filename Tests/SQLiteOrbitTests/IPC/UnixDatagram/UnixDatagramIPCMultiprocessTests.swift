@@ -245,7 +245,7 @@
       case "subscribe-and-send":
         try await peer.waitForStart()
         try await transport.send(commit(database))
-        try await received.waitForCount(expected, timeout: .seconds(10))
+        try await received.waitForCount(expected)
       case "idle":
         try await peer.waitForStop()
       case "listen-columns":
@@ -254,7 +254,7 @@
       case "listen-repaired":
         try await waitUntil { received.value >= expected && isNotified.withLock { $0 } }
       case "listen", "listen-region", "listen-table-a":
-        try await received.waitForCount(expected, timeout: .seconds(10))
+        try await received.waitForCount(expected)
       default:
         throw peer.unknownMode
       }

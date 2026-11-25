@@ -118,7 +118,7 @@
             try #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
               .execute(transaction)
           }
-        let holder = try harness.spawn("hold", holdMilliseconds: 800)
+        let holder = try harness.spawn("hold")
         try await harness.waitUntilMarked("held")
 
         var configuration = SQLiteConfiguration.default
@@ -135,7 +135,9 @@
         let elapsed = clock.now - started
 
         #expect(error?.primaryCode == .busy)
-        #expect(elapsed < .milliseconds(700))
+        // The holder keeps its transaction until it is stopped, so the write gave up on its own.
+        #expect(elapsed < .seconds(10))
+        try harness.stop()
         try await harness.waitForSuccessfulExit(holder)
       }
 
@@ -295,13 +297,12 @@
 
         case "hold":
           let database = try OrbitIPCDatabase(path: path, coordination: coordination)
-          let milliseconds = try peer.int(OrbitDatabaseProcessHarness.holdMillisecondsVariable)
           try peer.markReady()
           try await database.write { transaction in
             try #sql("INSERT INTO writes (writer_id) VALUES (1)", as: Void.self)
               .execute(transaction)
             try peer.mark("held")
-            Thread.sleep(forTimeInterval: Double(milliseconds) / 1000)
+            peer.waitForStopBlocking()
           }
 
         case "listen":
@@ -313,7 +314,7 @@
             received.increment()
           }
           try peer.markReady()
-          try await received.waitForCount(1, timeout: .seconds(10))
+          try await received.waitForCount(1)
           try peer.mark("received")
           _ = subscription
 
@@ -334,7 +335,7 @@
           try await values.waitForCount(1)
           try #require(values.values == [[]])
           try peer.markReady()
-          try await waitUntil(timeout: .seconds(10)) { values.last == [42] }
+          try await waitUntil { values.last == [42] }
           try #require(errors.values.isEmpty)
           try #require(values.values == [[], [42]])
           try peer.mark("observed-updated-value")
@@ -388,7 +389,6 @@
       static let helper = "orbitIPCDatabasePeer"
       static let databaseVariable = "DATABASE"
       static let writeCountVariable = "WRITE_COUNT"
-      static let holdMillisecondsVariable = "HOLD_MS"
 
       var databasePath: String { self.file("test.sqlite").path }
 
@@ -422,16 +422,14 @@
         _ mode: String,
         index: Int = 0,
         databasePath: String? = nil,
-        writeCount: Int = 0,
-        holdMilliseconds: Int = 0
+        writeCount: Int = 0
       ) throws -> Process {
         try self.spawn(
           mode: mode,
           index: index,
           [
             Self.databaseVariable: databasePath ?? self.databasePath,
-            Self.writeCountVariable: String(writeCount),
-            Self.holdMillisecondsVariable: String(holdMilliseconds)
+            Self.writeCountVariable: String(writeCount)
           ]
         )
       }

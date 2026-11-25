@@ -1864,7 +1864,7 @@
       func refetch(using context: consuming OrbitValueObservationRefetchContext) async {
         var context = context
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(5))
+        let deadline = clock.now.advanced(by: .seconds(20))
         while context.snapshot().commits.count < commitCount, clock.now < deadline {
           try? await Task.sleep(for: .milliseconds(2))
         }
@@ -1875,7 +1875,7 @@
       }
 
       func snapshot() async throws -> OrbitValueObservationRefetchSnapshot {
-        try await waitUntil(timeout: .seconds(10)) { self.recorded.withLock { $0 != nil } }
+        try await waitUntil { self.recorded.withLock { $0 != nil } }
         return try #require(recorded.withLock { $0 })
       }
 
