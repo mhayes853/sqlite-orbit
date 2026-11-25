@@ -143,7 +143,7 @@
     }
 
     @Test
-    func functionArgumentsDecodeEveryStorageClass() async throws {
+    func functionArgumentsDecodeEveryStorageClassAndEmptyBlobResultsStayBlobs() async throws {
       let database = try await seededNotes()
       let id = UUID()
       let date = Date(timeIntervalSince1970: 1_700_000_000.5)
@@ -162,6 +162,12 @@
           "-0.25 [] false 1700000000.5 \(id.uuidString) 7"
         ]
       )
+
+      // An empty blob result stays a blob.
+      let blob = try await database.read { transaction in
+        try Select($echoedBlob([])).fetchOne(transaction)
+      }
+      #expect(blob == [])
     }
 
     @Test(arguments: ["", "plain text", "日本語", "before\u{0}after"])
@@ -171,32 +177,6 @@
         try Select($repeated(text, 2)).fetchOne(transaction)
       }
       #expect(value == text + text)
-    }
-
-    @Test
-    func emptyBlobFunctionResultsStayBlobs() async throws {
-      let database = try await seededNotes()
-      let value = try await database.read { transaction in
-        try Select($echoedBlob([])).fetchOne(transaction)
-      }
-      #expect(value == [])
-    }
-
-    @Test
-    func aFunctionAskedForAnArgumentItWasNotGivenReportsIt() async throws {
-      let database = try await seededNotes()
-
-      let sum = try await database.read { transaction in
-        try #sql("SELECT variadicSum(2, 3)", as: Int.self).fetchOne(transaction)
-      }
-      #expect(sum == 5)
-
-      let error = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql("SELECT variadicSum(2)", as: Int.self).fetchOne(transaction)
-        }
-      }
-      #expect(error?.message?.contains("without an argument at index 1") == true)
     }
 
     @Test
@@ -234,6 +214,19 @@
           .fetchOne(transaction)
         }
       }
+
+      // A function asking for an argument it was not given reports it.
+      let sum = try await database.read { transaction in
+        try #sql("SELECT variadicSum(2, 3)", as: Int.self).fetchOne(transaction)
+      }
+      #expect(sum == 5)
+
+      let missingArgument = await #expect(throws: SQLiteError.self) {
+        try await database.read { transaction in
+          try #sql("SELECT variadicSum(2)", as: Int.self).fetchOne(transaction)
+        }
+      }
+      #expect(missingArgument?.message?.contains("without an argument at index 1") == true)
     }
 
     @Test

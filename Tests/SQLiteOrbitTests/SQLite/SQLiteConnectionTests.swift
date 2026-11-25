@@ -347,7 +347,7 @@
   }
 
   @Test
-  func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
+  func aMissingDatabaseAndAFailingStatementAreReported() throws {
     let path = temporaryDatabasePath("missing") + "/db.sqlite"
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteConnection.open(
@@ -356,10 +356,8 @@
         configuration: .default
       )
     }
-  }
 
-  @Test
-  func executeReportsTheFailingSQL() throws {
+    // A failing statement is reported along with its SQL.
     let connection = try openInMemory()
     let error = #expect(throws: SQLiteError.self) {
       try connection.execute("SELECT * FROM missing")
@@ -369,7 +367,7 @@
   }
 
   @Test
-  func setupsRunOnEveryConnectionAndCanFailTheOpen() throws {
+  func setupsRunOnEveryConnectionWithItsLibraryAndCanFailTheOpen() throws {
     let installs = TestCounter()
     var configuration = SQLiteConfiguration.default
     configuration.setups = [
@@ -393,28 +391,24 @@
     #expect(throws: TestError()) {
       _ = try openInMemory(throwing)
     }
-  }
 
-  @Test
-  func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
+    // A setup is handed the library its connection was opened through.
     let seenVersion = Lock<Int32?>(nil)
-    var configuration = SQLiteConfiguration.default
-    configuration.library.runtime.versionNumber = { 123_456 }
-    configuration.setups = [
+    var libraryConfiguration = SQLiteConfiguration.default
+    libraryConfiguration.library.runtime.versionNumber = { 123_456 }
+    libraryConfiguration.setups = [
       SQLiteSetup { connection in
         seenVersion.withLock { $0 = connection.sqlite.runtime.versionNumber() }
       }
     ]
 
-    _ = try openInMemory(configuration)
+    _ = try openInMemory(libraryConfiguration)
     #expect(seenVersion.withLock { $0 } == 123_456)
-  }
 
-  @Test
-  func connectionAccessExecutesSQLWithBindings() throws {
-    var configuration = SQLiteConfiguration.default
+    // Setups execute SQL, with bindings, on the connection they are handed.
+    var sqlConfiguration = SQLiteConfiguration.default
     let value = "bound during setup"
-    configuration.setups = [
+    sqlConfiguration.setups = [
       .script(
         "CREATE TABLE settings (value TEXT NOT NULL); INSERT INTO settings VALUES ('first');"
       ),
@@ -425,7 +419,7 @@
       .sql("DELETE FROM settings WHERE value = 'callback'")
     ]
 
-    let handle = try openInMemory(configuration)
+    let handle = try openInMemory(sqlConfiguration)
     #expect(try scalar(handle, "SELECT count(*) FROM settings") == 1)
     #expect(
       try scalar(handle, "SELECT count(*) FROM settings WHERE value = 'bound during setup'") == 1

@@ -250,7 +250,7 @@
     }
 
     @Test
-    func nestedStepInterceptorsComposeAndAreRemovedAfterThrowing() throws {
+    func stepInterceptorsNestComposeRefuseAndAreRemovedAfterThrowing() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       let calls = TestRecorder<String>()
       try owner.withWriteConnection { connection in
@@ -294,12 +294,10 @@
         try connection.fetchOne("SELECT 5") { $0[0].integerValue ?? 0 }
       }
       #expect(calls.values.isEmpty)
-    }
 
-    @Test
-    func aStepInterceptorCanRefuseAStatementWithoutSteppingIt() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
+      // An interceptor can refuse a statement without stepping it.
+      var refusingOwner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try refusingOwner.withWriteConnection { connection in
         try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
         let isReadOnly = connection.sqlite.statements.inspection.isReadOnly
         let error = #expect(throws: SQLiteError.self) {
@@ -416,7 +414,7 @@
     }
 
     @Test
-    func releasingTheOwnerFinalizesCachedStatementsBeforeClosingItsConfiguredLibrary() throws {
+    func releasingTheOwnerOrFailingItsSetupFinalizesStatementsBeforeClosingTheLibrary() throws {
       let counters = OwnerLibraryCounters()
       var configuration = SQLiteConfiguration.default
       configuration.library = ownerCountingLibrary(counters)
@@ -438,22 +436,20 @@
       #expect(counts.prepared == counts.finalized)
       #expect(counts.allStatementsFinalizedBeforeClose)
       #expect(counts.closeCodes == [SQLiteResultCode.ok.rawValue])
-    }
 
-    @Test
-    func failedSetupClosesAnOpenedHandle() {
-      let counters = OwnerLibraryCounters()
-      var configuration = SQLiteConfiguration.default
-      configuration.library = ownerCountingLibrary(counters)
-      configuration.setups = [SQLiteSetup { _ in throw OwnerTestFailure() }]
+      // A setup that fails closes the handle it was opened on just the same.
+      let failedCounters = OwnerLibraryCounters()
+      var failedConfiguration = SQLiteConfiguration.default
+      failedConfiguration.library = ownerCountingLibrary(failedCounters)
+      failedConfiguration.setups = [SQLiteSetup { _ in throw OwnerTestFailure() }]
       #expect(throws: OwnerTestFailure.self) {
-        _ = try SQLiteConnection(path: ":memory:", configuration: configuration)
+        _ = try SQLiteConnection(path: ":memory:", configuration: failedConfiguration)
       }
-      let counts = counters.snapshot
-      #expect(counts.opened == 1)
-      #expect(counts.closed == counts.opened)
-      #expect(counts.prepared == counts.finalized)
-      #expect(counts.allStatementsFinalizedBeforeClose)
+      let failedCounts = failedCounters.snapshot
+      #expect(failedCounts.opened == 1)
+      #expect(failedCounts.closed == failedCounts.opened)
+      #expect(failedCounts.prepared == failedCounts.finalized)
+      #expect(failedCounts.allStatementsFinalizedBeforeClose)
     }
 
     #if !Turso

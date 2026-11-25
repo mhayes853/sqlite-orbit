@@ -12,7 +12,7 @@
       // MARK: - Busy policy
 
       @Test(arguments: SQLiteTestDriver.allCases)
-      func busyPolicyChangedByAWriteConnectionIsRestoredWhenTheAccessEnds(
+      func busyPolicyChangedByAWriteOrReadConnectionIsRestoredWhenTheAccessEnds(
         _ kind: SQLiteTestDriver
       ) async throws {
         try await kind.withDatabase(readerCount: 1) { driver in
@@ -29,21 +29,15 @@
             return try busyTimeout.fetchOne(connection)
           }
           #expect(after == 5000)
-        }
-      }
 
-      @Test(arguments: SQLiteTestDriver.allCases)
-      func busyPolicyChangedByAReadConnectionIsRestoredWhenTheAccessEnds(
-        _ kind: SQLiteTestDriver
-      ) async throws {
-        // One reader, so that every read lands on the connection the first one changed.
-        try await kind.withDatabase(readerCount: 1) { driver in
-          let during = try await driver.readWithoutTransaction { connection in
+          // A read connection's change is put back too. There is one reader, so every read
+          // lands on the connection the first one changed.
+          let readDuring = try await driver.readWithoutTransaction { connection in
             try connection.setBusyPolicy(.waitIndefinitely)
             #expect(connection.busyPolicy.kind == .waitIndefinitely)
             return try busyTimeout.fetchOne(connection)
           }
-          #expect(during == Int(Int32.max))
+          #expect(readDuring == Int(Int32.max))
           #expect(try await driver.read { try busyTimeout.fetchOne($0) } == 5000)
 
           // A body that throws has its change put back all the same.
@@ -53,11 +47,11 @@
               throw TestError()
             }
           }
-          let after = try await driver.readWithoutTransaction { connection in
+          let readAfter = try await driver.readWithoutTransaction { connection in
             #expect(connection.busyPolicy.kind == .timeout(.seconds(5)))
             return try busyTimeout.fetchOne(connection)
           }
-          #expect(after == 5000)
+          #expect(readAfter == 5000)
         }
       }
 
@@ -199,7 +193,9 @@
       }
 
       @Test(arguments: SQLiteTestDriver.allCases)
-      func foreignKeysTurnedOffAreRestoredWhenTheAccessEnds(_ kind: SQLiteTestDriver) async throws {
+      func foreignKeysTurnedOffAreRestoredWhenTheAccessEndsOrThrows(
+        _ kind: SQLiteTestDriver
+      ) async throws {
         try await kind.withDatabase(schema: listsSchema) { driver in
           let during = try await driver.writeWithoutTransaction { connection in
             let wasEnabled = connection.isForeignKeysEnabled
@@ -219,6 +215,17 @@
           await #expect(throws: SQLiteError.self) {
             try await driver.write { try secondOrphan.execute($0) }
           }
+
+          // A body that throws has its change put back all the same.
+          await #expect(throws: TestError()) {
+            try await driver.writeWithoutTransaction { connection in
+              try connection.setForeignKeysEnabled(false)
+              _ = try foreignKeys.fetchOne(connection)
+              throw TestError()
+            }
+          }
+
+          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
 
@@ -322,21 +329,6 @@
             #expect(connection.isForeignKeysEnabled == false)
             #expect(try foreignKeys.fetchOne(connection) == 0)
           }
-          #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
-        }
-      }
-
-      @Test(arguments: SQLiteTestDriver.allCases)
-      func foreignKeysAreRestoredWhenTheBodyThrows(_ kind: SQLiteTestDriver) async throws {
-        try await kind.withDatabase(schema: listsSchema) { driver throws in
-          await #expect(throws: TestError()) {
-            try await driver.writeWithoutTransaction { connection in
-              try connection.setForeignKeysEnabled(false)
-              _ = try foreignKeys.fetchOne(connection)
-              throw TestError()
-            }
-          }
-
           #expect(try await driver.write { try foreignKeys.fetchOne($0) } == 1)
         }
       }
