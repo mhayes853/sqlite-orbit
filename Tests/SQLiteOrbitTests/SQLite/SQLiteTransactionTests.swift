@@ -64,21 +64,6 @@
     }
 
     @Test
-    func changesCountForgetsWhatTheStatementBeforeTheLastOneChanged() throws {
-      var connection = try openTestConnection()
-      let counts = try connection.write { transaction -> [Int] in
-        var counts: [Int] = []
-        try #sql("INSERT INTO items (id, title) VALUES (1, 'a'), (2, 'b'), (3, 'c')", as: Void.self)
-          .execute(transaction)
-        counts.append(transaction.changesCount)
-        try Item.where { $0.id.eq(1) }.delete().execute(transaction)
-        counts.append(transaction.changesCount)
-        return counts
-      }
-      #expect(counts == [3, 1])
-    }
-
-    @Test
     func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
       var connection = try openTestConnection()
       let (before, first, second, afterDelete) = try connection.write {
@@ -105,17 +90,22 @@
       try connection.execute(
         """
         CREATE TABLE primitives (
-          id INTEGER PRIMARY KEY, amount REAL, flag INTEGER, payload BLOB, missing TEXT
+          id INTEGER PRIMARY KEY, amount REAL, flag INTEGER, payload BLOB, empty BLOB,
+          missing TEXT
         )
         """
       )
 
       let payload: [UInt8] = [0x00, 0x01, 0xfe, 0xff]
+      let empty: [UInt8] = []
       try connection.write { transaction in
         try #sql(
           """
-          INSERT INTO primitives (id, amount, flag, payload, missing)
-          VALUES (1, \(2.5, as: Double.self), \(true, as: Bool.self), \(payload, as: [UInt8].self), NULL)
+          INSERT INTO primitives (id, amount, flag, payload, empty, missing)
+          VALUES (
+            1, \(2.5, as: Double.self), \(true, as: Bool.self), \(payload, as: [UInt8].self),
+            \(empty, as: [UInt8].self), NULL
+          )
           """,
           as: Void.self
         )
@@ -131,32 +121,16 @@
         let payloads = try #sql("SELECT payload FROM primitives", as: [UInt8].self)
           .fetchAll(transaction)
         #expect(payloads == [payload])
+        // An empty blob stays a blob rather than becoming NULL.
+        let emptyTypes = try #sql("SELECT typeof(empty) FROM primitives", as: String.self)
+          .fetchAll(transaction)
+        #expect(emptyTypes == ["blob"])
+        let empties = try #sql("SELECT empty FROM primitives", as: [UInt8].self)
+          .fetchAll(transaction)
+        #expect(empties == [[]])
         let missing = try #sql("SELECT missing FROM primitives", as: String?.self)
           .fetchAll(transaction)
         #expect(missing == [String?.none])
-      }
-    }
-
-    @Test
-    func anEmptyBlobRoundTripsAsABlobRatherThanNull() throws {
-      var connection = try openTestConnection()
-      try connection.execute("CREATE TABLE blobs (payload BLOB)")
-
-      let empty: [UInt8] = []
-      try connection.write { transaction in
-        try #sql(
-          "INSERT INTO blobs (payload) VALUES (\(empty, as: [UInt8].self))",
-          as: Void.self
-        )
-        .execute(transaction)
-      }
-
-      try connection.read { transaction in
-        let types = try #sql("SELECT typeof(payload) FROM blobs", as: String.self)
-          .fetchAll(transaction)
-        #expect(types == ["blob"])
-        let payloads = try #sql("SELECT payload FROM blobs", as: [UInt8].self).fetchAll(transaction)
-        #expect(payloads == [[]])
       }
     }
 

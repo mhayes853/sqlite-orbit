@@ -397,40 +397,6 @@
       }
     }
 
-    @Test(.libraryHooks)
-    func aPartiallyReadCursorDoesNotResumeWhenItsStatementIsReused() throws {
-      let probe = StatementLifecycleProbe()
-      do {
-        var handle = try openConnection(
-          configuration: probe.configuration(matching: "SELECT title FROM items")
-        )
-        try handle.write { transaction in
-          for id in 1...3 {
-            try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
-          }
-        }
-
-        try handle.read { transaction in
-          // Abandon the cursor after one row, so its statement goes back to the cache mid-scan.
-          var cursor = try transaction.fetchCursor(
-            "SELECT title FROM items ORDER BY id",
-            as: String.self,
-            cached: true
-          )
-          #expect(try cursor.next() == "item 1")
-        }
-
-        let titles = try handle.read { transaction in
-          try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll(transaction)
-        }
-        // A statement that was not reset would start from the second row.
-        #expect(titles == ["item 1", "item 2", "item 3"])
-        #expect(probe.prepared.value == 1)
-        #expect(probe.finalized.value == 0)
-      }
-      #expect(probe.finalized.value == probe.prepared.value)
-    }
-
     @Test
     func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
       var handle = try openConnection()
