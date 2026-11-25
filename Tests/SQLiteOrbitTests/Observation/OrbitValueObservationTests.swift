@@ -11,27 +11,6 @@
     @Suite
     struct OrbitValueObservationTests {
       @Test
-      func callbackSubscriptionEmitsInitialAndLocalChanges() async throws {
-        let driver = try await itemsDatabase()
-        let observation = itemCountObservation()
-        let recorder = ObservationRecorder<Int>()
-        let subscription = try observation.subscribe(
-          to: driver,
-          onError: recorder.record(error:),
-          onChange: recorder.record(change:)
-        )
-
-        try await recorder.waitForChangeCount(1)
-        try await insertItems(1, into: driver)
-        try await recorder.waitForChangeCount(2)
-
-        #expect(recorder.changes.map(\.value) == [0, 1])
-        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
-        #expect(recorder.errors.isEmpty)
-        _ = subscription
-      }
-
-      @Test
       func immediateSchedulerDeliversTheInitialValueAndCommitsBeforeTheCallsReturn() throws {
         let driver = try blockingItemsDatabase()
         let recorder = ObservationRecorder<Int>()
@@ -145,9 +124,21 @@
 
       @MainActor
       @Test
-      func mainActorSchedulerIsImmediateWhenStartedOnMainActor() async throws {
+      func mainActorSchedulerIsImmediateOnlyWhenStartedOnMainActor() async throws {
         let driver = try await itemsDatabase()
         let recorder = MainActorObservationRecorder<Int>()
+        let deferred = ObservationRecorder<Int>()
+        let deferredSubscription = try itemCountObservation()
+          .subscribe(
+            to: driver,
+            scheduling: .mainActor,
+            isolation: nil,
+            onError: deferred.record(error:),
+            onChange: deferred.record(change:)
+          )
+        #expect(deferred.changes.isEmpty)
+        try await deferred.waitForChangeCount(1)
+        #expect(deferred.changes.map(\.value) == [0])
 
         let subscription = try itemCountObservation()
           .subscribe(
@@ -168,31 +159,11 @@
 
         #expect(recorder.changes.map(\.value) == [0, 1])
         #expect(recorder.errors.isEmpty)
-        _ = subscription
+        _ = (subscription, deferredSubscription)
       }
 
       @Test
-      func mainActorSchedulerDefersWhenStartedOutsideMainActor() async throws {
-        let driver = try await itemsDatabase()
-        let recorder = ObservationRecorder<Int>()
-
-        let subscription = try itemCountObservation()
-          .subscribe(
-            to: driver,
-            scheduling: .mainActor,
-            isolation: nil,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-
-        #expect(recorder.changes.isEmpty)
-        try await recorder.waitForChangeCount(1)
-        #expect(recorder.changes.map(\.value) == [0])
-        _ = subscription
-      }
-
-      @Test
-      func rolledBackWriteDoesNotEmitItsStagedValue() async throws {
+      func callbacksDeliverInitialAndLocalChangesButNotARolledBackWrite() async throws {
         let driver = try await itemsDatabase()
         let recorder = ObservationRecorder<Int>()
         let subscription = try itemCountObservation()
@@ -213,6 +184,8 @@
         try await recorder.waitForChangeCount(2)
 
         #expect(recorder.changes.map(\.value) == [0, 1])
+        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
+        #expect(recorder.errors.isEmpty)
         _ = subscription
       }
 
@@ -252,25 +225,7 @@
       }
 
       @Test
-      func taskScopedSubscribeDeliversChanges() async throws {
-        let driver = try await itemsDatabase()
-        let recorder = ObservationRecorder<Int>()
-        let observing = Task {
-          try await itemCountObservation()
-            .subscribe(to: driver, scheduling: .async(), onChange: recorder.record(change:))
-        }
-        defer { observing.cancel() }
-        try await recorder.waitForChangeCount(1)
-
-        try await insertItems(1, into: driver)
-        try await recorder.waitForChangeCount(2)
-
-        #expect(recorder.changes.map(\.value) == [0, 1])
-        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
-      }
-
-      @Test
-      func taskScopedSubscribeReturnsAndStopsObservingWhenItsTaskIsCancelled() async throws {
+      func taskScopedSubscribeDeliversUntilItsTaskIsCancelled() async throws {
         let driver = try await itemsDatabase()
         let events = TestRecorder<String>()
         let recorder = ObservationRecorder<Int>()
@@ -281,31 +236,31 @@
             .subscribe(to: driver, scheduling: .async(), onChange: recorder.record(change:))
         }
         try await recorder.waitForChangeCount(1)
+        try await insertItems(1, into: driver)
+        try await recorder.waitForChangeCount(2)
+        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
 
         observing.cancel()
         // Cancellation is how it ends, so it returns rather than throwing.
         try await observing.value
         #expect(events.values == ["didCancel"])
 
-        try await insertItems(1, into: driver)
+        try await insertItems(2, into: driver)
         try await Task.sleep(for: .milliseconds(100))
-        #expect(recorder.changes.map(\.value) == [0])
+        #expect(recorder.changes.map(\.value) == [0, 1])
       }
 
       @Test
-      func taskScopedSubscribeReturnsAtOnceInAnAlreadyCancelledTask() async throws {
+      func taskScopedSubscribeReturnsWhenAlreadyCancelledAndThrowsTheErrorThatEndsIt()
+        async throws
+      {
         let driver = try await itemsDatabase()
-        let observing = Task {
+        let cancelled = Task {
           withUnsafeCurrentTask { $0?.cancel() }
           try await itemCountObservation().subscribe(to: driver, scheduling: .async()) { _ in }
         }
+        try await cancelled.value
 
-        try await observing.value
-      }
-
-      @Test
-      func taskScopedSubscribeThrowsTheErrorThatEndsTheObservation() async throws {
-        let driver = try await itemsDatabase()
         let observation = OrbitValueObservation<Int>.tracking { _ in throw TestError() }
 
         await #expect(throws: TestError.self) {
@@ -352,22 +307,6 @@
 
         #expect(recorder.changes.map(\.value) == [0, 1])
         _ = subscription
-      }
-
-      @Test
-      func changesSequencePreservesSourceMetadata() async throws {
-        let driver = try await itemsDatabase()
-        let changes = itemCountObservation().changes(in: driver)
-        var iterator = changes.makeAsyncIterator()
-
-        let initial = try #require(try await iterator.next())
-        #expect(initial.value == 0)
-        #expect(initial.source == .initial)
-
-        try await insertItems(1, into: driver)
-        let local = try #require(try await iterator.next())
-        #expect(local.value == 1)
-        #expect(local.source == .transaction(.local))
       }
 
       @Test
@@ -610,39 +549,6 @@
       }
 
       @Test
-      func subscribersShareOneRuntimeAndFetch() async throws {
-        let driver = try await itemsDatabase()
-        let fetchCount = TestCounter()
-        let observation = itemCountObservation(countingFetchesIn: fetchCount)
-        let first = ObservationRecorder<Int>()
-        let second = ObservationRecorder<Int>()
-        let subscriptions = try [
-          observation.subscribe(
-            to: driver,
-            onError: first.record(error:),
-            onChange: first.record(change:)
-          ),
-          observation.subscribe(
-            to: driver,
-            onError: second.record(error:),
-            onChange: second.record(change:)
-          )
-        ]
-        try await first.waitForChangeCount(1)
-        try await second.waitForChangeCount(1)
-        #expect(fetchCount.value == 1)
-
-        try await insertItems(1, into: driver)
-        try await first.waitForChangeCount(2)
-        try await second.waitForChangeCount(2)
-
-        #expect(first.changes.map(\.value) == [0, 1])
-        #expect(second.changes.map(\.value) == [0, 1])
-        #expect(fetchCount.value == 2)
-        _ = subscriptions
-      }
-
-      @Test
       func removeDuplicatesSuppressesEqualCommittedValues() async throws {
         let driver = try await itemsDatabase()
         let changes = itemCountObservation().removeDuplicates().changes(in: driver)
@@ -655,27 +561,6 @@
         try await insertItems(1, into: driver)
 
         #expect(try await iterator.next()?.value == 1)
-      }
-
-      @Test
-      func mapTransformsValuesAndPreservesTheirSources() throws {
-        let driver = try blockingItemsDatabase()
-        let recorder = ObservationRecorder<String>()
-        let subscription = try itemCountObservation()
-          .map { "count=\($0)" }
-          .subscribe(
-            to: driver,
-            scheduling: .immediate,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-
-        try insertItemsBlocking(1, into: driver)
-
-        #expect(recorder.changes.map(\.value) == ["count=0", "count=1"])
-        #expect(recorder.changes.map(\.source) == [.initial, .transaction(.local)])
-        #expect(recorder.errors.isEmpty)
-        _ = subscription
       }
 
       @Test
@@ -754,8 +639,17 @@
       }
 
       @Test
-      func compactMapSuppressesNilAndTransformsNonNilValues() throws {
+      func mapAndCompactMapTransformValuesAndPreserveTheirSources() throws {
         let driver = try blockingItemsDatabase()
+        let mapped = ObservationRecorder<String>()
+        let mappedSubscription = try itemCountObservation()
+          .map { "count=\($0)" }
+          .subscribe(
+            to: driver,
+            scheduling: .immediate,
+            onError: mapped.record(error:),
+            onChange: mapped.record(change:)
+          )
         let recorder = ObservationRecorder<String>()
         let subscription = try OrbitValueObservation<Int?>
           .tracking { transaction in
@@ -770,13 +664,17 @@
             onChange: recorder.record(change:)
           )
 
+        // `compactMap` suppresses `nil`.
         #expect(recorder.changes.isEmpty)
         try insertItemsBlocking(1, into: driver)
 
+        #expect(mapped.changes.map(\.value) == ["count=0", "count=1"])
+        #expect(mapped.changes.map(\.source) == [.initial, .transaction(.local)])
         #expect(recorder.changes.map(\.value) == ["count=1"])
         #expect(recorder.changes.map(\.source) == [.transaction(.local)])
+        #expect(mapped.errors.isEmpty)
         #expect(recorder.errors.isEmpty)
-        _ = subscription
+        _ = (subscription, mappedSubscription)
       }
 
       @Test
@@ -835,29 +733,38 @@
       }
 
       @Test
-      func theSequencesBufferEveryPendingChangeByDefault() async throws {
+      func theChangesSequenceKeepsSourcesAndBuffersEveryPendingChange() async throws {
         let driver = try await itemsDatabase()
         let changes = itemCountObservation().changes(in: driver)
         var iterator = changes.makeAsyncIterator()
-        #expect(try await iterator.next()?.value == 0)
+        let initial = try #require(try await iterator.next())
+        #expect(initial.value == 0)
+        #expect(initial.source == .initial)
 
         for id in 1...3 {
           try await insertItems(id, into: driver)
         }
 
-        #expect(try await iterator.next()?.value == 1)
+        let local = try #require(try await iterator.next())
+        #expect(local.value == 1)
+        #expect(local.source == .transaction(.local))
         #expect(try await iterator.next()?.value == 2)
         #expect(try await iterator.next()?.value == 3)
       }
 
       @Test
-      func bufferingNewestKeepsOnlyTheLatestPendingValue() async throws {
+      func bufferingNewestStartsOnIterationAndKeepsOnlyTheLatestValue() async throws {
         let driver = try await itemsDatabase()
-        let observation = itemCountObservation()
-        var iterator = observation
-          .values(in: driver, bufferingPolicy: .bufferingNewest(1))
-          .makeAsyncIterator()
+        let fetchCount = TestCounter()
+        let observation = itemCountObservation(countingFetchesIn: fetchCount)
+        let values = observation.values(in: driver, bufferingPolicy: .bufferingNewest(1))
+        // The sequence starts observing only once iteration begins.
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(fetchCount.value == 0)
+
+        var iterator = values.makeAsyncIterator()
         #expect(try await iterator.next() == 0)
+        #expect(fetchCount.value == 1)
 
         // A second subscriber shares the runtime, so once it has seen the last value the runtime
         // has published every one of them; the pause lets the sequence's own delivery catch up.
@@ -876,21 +783,6 @@
 
         #expect(try await iterator.next() == 3)
         _ = subscription
-      }
-
-      @Test
-      func theSequenceStartsObservingWhenIterationBegins() async throws {
-        let driver = try await itemsDatabase()
-        let fetchCount = TestCounter()
-        let values = itemCountObservation(countingFetchesIn: fetchCount)
-          .values(in: driver)
-
-        try await Task.sleep(for: .milliseconds(20))
-        #expect(fetchCount.value == 0)
-
-        var iterator = values.makeAsyncIterator()
-        #expect(try await iterator.next() == 0)
-        #expect(fetchCount.value == 1)
       }
 
       @Test(arguments: SupersededRefetch.allCases)
@@ -1113,7 +1005,7 @@
       func handleEventsReportsTheRuntimeLifecycle() async throws {
         let driver = try await itemsDatabase()
         let events = TestRecorder<String>()
-        let recorder = ObservationRecorder<Int>()
+        let recorder = ObservationRecorder<String>()
         let subscription = try itemCountObservation()
           .handleEvents(
             willStart: { events.append("willStart") },
@@ -1123,6 +1015,8 @@
             didFail: { _ in events.append("didFail") },
             didCancel: { events.append("didCancel") }
           )
+          // The operator sees the value at its own position in the chain, before `map` runs.
+          .map { "count=\($0)" }
           .subscribe(
             to: driver,
             onError: recorder.record(error:),
@@ -1131,6 +1025,7 @@
 
         try await recorder.waitForChangeCount(1)
         #expect(events.values == ["willStart", "willFetch", "didReceiveValue(0)"])
+        #expect(recorder.changes.map(\.value) == ["count=0"])
 
         try await insertItems(1, into: driver)
         try await recorder.waitForChangeCount(2)
@@ -1176,28 +1071,6 @@
       }
 
       @Test
-      func handleEventsSurvivesDownstreamOperators() async throws {
-        let driver = try await itemsDatabase()
-        let values = TestRecorder<Int>()
-        let recorder = ObservationRecorder<String>()
-        let subscription = try itemCountObservation()
-          .handleEvents(didReceiveValue: { value in values.append(value) })
-          .map { "count=\($0)" }
-          .subscribe(
-            to: driver,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-
-        try await recorder.waitForChangeCount(1)
-
-        // The operator sees the value at its own position in the chain, before `map` runs.
-        #expect(values.values == [0])
-        #expect(recorder.changes.map(\.value) == ["count=0"])
-        _ = subscription
-      }
-
-      @Test
       func aFetchErrorTerminatesTheSequenceAndIsReportedToHandleEvents() async throws {
         let driver = try SQLiteQueue(path: .memory)
         let failures = TestCounter()
@@ -1213,7 +1086,7 @@
       }
 
       @Test(arguments: [false, true])
-      func aRegionSkipsUnrelatedLocalWrites(isExplicit: Bool) throws {
+      func aRegionSkipsUnrelatedAndRolledBackLocalWrites(isExplicit: Bool) throws {
         let driver = try itemsAndNotesDatabase()
         let fetchCount = TestCounter()
         let recorder = ObservationRecorder<Int>()
@@ -1228,6 +1101,14 @@
           onChange: recorder.record(change:)
         )
 
+        // A rolled-back write clears the region it published, so the next commit carries only its
+        // own.
+        #expect(throws: TestError.self) {
+          try driver.writeBlocking { transaction in
+            try transaction.execute("INSERT INTO items VALUES (1)")
+            throw TestError()
+          }
+        }
         try driver.executeBlocking(sql: "INSERT INTO notes VALUES (1)")
         #expect(fetchCount.value == 1)
         #expect(recorder.changes.map(\.value) == [0])
@@ -1389,33 +1270,6 @@
       }
 
       @Test
-      func rollbackClearsItsPublishedRegion() throws {
-        let driver = try itemsAndNotesDatabase()
-        let fetchCount = TestCounter()
-        let subscription = try itemCountObservation(
-          region: itemsRegion,
-          countingFetchesIn: fetchCount
-        )
-        .subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: { _ in },
-          onChange: { _ in }
-        )
-
-        #expect(throws: TestError.self) {
-          try driver.writeBlocking { transaction in
-            try transaction.execute("INSERT INTO items VALUES (1)")
-            throw TestError()
-          }
-        }
-        try driver.executeBlocking(sql: "INSERT INTO notes VALUES (1)")
-
-        #expect(fetchCount.value == 1)
-        _ = subscription
-      }
-
-      @Test
       func trackingAllDerivesItsRegionFromTypedSQL() throws {
         let driver = try SQLiteQueue(path: .memory)
         try driver.executeBlocking(
@@ -1435,6 +1289,17 @@
           onError: recorder.record(error:),
           onChange: recorder.record(change:)
         )
+        // A query that reads no table has an empty region, and never fetches again.
+        let constant = ObservationRecorder<Int?>()
+        let constantSubscription =
+          try OrbitValueObservation
+          .trackingOne(#sql("SELECT 1", as: Int.self))
+          .subscribe(
+            to: driver,
+            scheduling: .immediate,
+            onError: constant.record(error:),
+            onChange: constant.record(change:)
+          )
 
         try driver.writeBlocking { transaction in
           try transaction.execute("UPDATE items SET ignored = 'Unobserved' WHERE id = 1")
@@ -1445,7 +1310,8 @@
         try driver.executeBlocking(sql: "UPDATE items SET title = 'After' WHERE id = 1")
         #expect(recorder.changes.map(\.value) == [["Before"], ["After"]])
         #expect(recorder.errors.isEmpty)
-        _ = subscription
+        #expect(constant.changes.map(\.value) == [1])
+        _ = (subscription, constantSubscription)
       }
 
       @Test
@@ -1598,25 +1464,6 @@
           #expect(fetchCount.value == 2)
           subscription.cancel()
         }
-      }
-
-      @Test
-      func emptyQueryRegionDoesNotRefetch() throws {
-        let driver = try blockingItemsDatabase()
-        let recorder = ObservationRecorder<Int?>()
-        let subscription =
-          try OrbitValueObservation
-          .trackingOne(#sql("SELECT 1", as: Int.self))
-          .subscribe(
-            to: driver,
-            scheduling: .immediate,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-
-        try driver.executeBlocking(sql: "INSERT INTO items VALUES (1)")
-        #expect(recorder.changes.map(\.value) == [1])
-        _ = subscription
       }
 
       @Test
