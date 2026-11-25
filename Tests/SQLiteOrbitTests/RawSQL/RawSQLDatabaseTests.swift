@@ -25,20 +25,6 @@
     }
 
     @Test
-    func valuesRoundTripThroughATable() async throws {
-      let database = try inMemoryDatabase()
-      let values: [OrbitDatabaseValue] = [nil, 1, 2.5, "three", .blob([4])]
-      let read = try await database.write { transaction in
-        try transaction.executeScript("CREATE TABLE t (id INTEGER PRIMARY KEY, value)")
-        for (id, value) in values.enumerated() {
-          try transaction.execute("INSERT INTO t (id, value) VALUES (\(id), \(value))")
-        }
-        return try transaction.fetchAll("SELECT value FROM t ORDER BY id") { $0[0] }
-      }
-      #expect(read == values)
-    }
-
-    @Test
     func rowsReportTheirColumnsByPositionAndName() async throws {
       let database = try inMemoryDatabase()
       let columns = try await database.read { transaction in

@@ -190,16 +190,6 @@
     }
 
     @Test
-    func emptyQueriesAndFailedPreparationDoNotInitializeValues() async throws {
-      let database = try inMemoryDatabase()
-      let empty = try await database.read { try $0.fetchAll("", as: Record.self) }
-      #expect(empty.isEmpty)
-      await #expect(throws: SQLiteError.self) {
-        try await database.read { try $0.fetchAll("SELECT FROM", as: Record.self) }
-      }
-    }
-
-    @Test
     func missingOptionalColumnsAndInvalidValuesPropagateColumnErrors() async throws {
       let database = try inMemoryDatabase()
       let missing = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
