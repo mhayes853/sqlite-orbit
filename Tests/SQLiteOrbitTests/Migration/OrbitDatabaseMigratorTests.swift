@@ -575,33 +575,42 @@
         }
       }
 
-      @Test
-      func migratingOnAConnectionPutsBackTheForeignKeysTheCallerSet() async throws {
+      @Test(arguments: [false, true], [false, true])
+      func migratingOnAConnectionPutsBackTheForeignKeysTheCallerSet(
+        succeeds: Bool,
+        callerValue: Bool
+      ) async throws {
+        // The configured value differs from the caller's, so restoring it would be caught.
         var configuration = SQLiteConfiguration.default
-        configuration.isForeignKeysEnabled = false
+        configuration.isForeignKeysEnabled = !callerValue
         let driver = try SQLiteQueue(path: .memory, configuration: configuration)
         let foreignKeys = TestRecorder<Int>()
         var migrator = makeMigrator()
         migrator.registerMigration("Create lists") { transaction in
           try createListsAndReminders(transaction)
           foreignKeys.append(try foreignKeysPragma(in: transaction))
+          if !succeeds { throw TestError() }
         }
 
         let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
-          try connection.setForeignKeysEnabled(true)
-          try migrator.migrate(connection)
+          try connection.setForeignKeysEnabled(callerValue)
+          if succeeds {
+            try migrator.migrate(connection)
+          } else {
+            #expect(throws: TestError.self) { try migrator.migrate(connection) }
+          }
           return (
             connection.isForeignKeysEnabled,
             try #sql("PRAGMA foreign_keys", as: Int.self).fetchOne(connection)
           )
         }
 
-        // Off while the migration ran, then back to what the caller set rather than the
-        // configured value, which the end of the access restores instead.
+        // Off while the migration ran, then back to what the caller set before their next
+        // statement, rather than the configured value, which the end of the access restores.
         #expect(foreignKeys.values == [0])
-        #expect(isEnabled)
-        #expect(pragma == 1)
-        try await expectWriterForeignKeys(false, on: driver)
+        #expect(isEnabled == callerValue)
+        #expect(pragma == (callerValue ? 1 : 0))
+        try await expectWriterForeignKeys(!callerValue, on: driver)
       }
 
       // MARK: - Restoring the connection
@@ -672,34 +681,6 @@
         try await expectWriterForeignKeys(true, on: driver)
         let applied = try await driver.read { try migrator.appliedMigrations($0) }
         #expect(applied == (bodyThrows ? [] : ["one"]))
-      }
-
-      @Test(arguments: [true, false])
-      func failedMigrationPutsBackTheCallersForeignKeys(_ callerValue: Bool) async throws {
-        let driver = try SQLiteQueue(path: .memory)
-        let during = Lock<Int?>(nil)
-        var migrator = makeMigrator()
-        migrator.registerMigration("one") { transaction in
-          let value = try foreignKeysPragma(in: transaction)
-          during.withLock { $0 = value }
-          throw TestError()
-        }
-
-        let (isEnabled, pragma) = try await driver.writeWithoutTransaction { connection in
-          try connection.setForeignKeysEnabled(callerValue)
-          #expect(throws: TestError.self) { try migrator.migrate(connection) }
-          return (
-            connection.isForeignKeysEnabled,
-            try #sql("PRAGMA foreign_keys", as: Int.self).fetchOne(connection)
-          )
-        }
-
-        // Off while the failed migration ran, then back to the caller's value before their next
-        // statement, rather than left off until the access ends.
-        #expect(during.withLock { $0 } == 0)
-        #expect(isEnabled == callerValue)
-        #expect(pragma == (callerValue ? 1 : 0))
-        try await expectWriterForeignKeys(true, on: driver)
       }
 
       @Test
