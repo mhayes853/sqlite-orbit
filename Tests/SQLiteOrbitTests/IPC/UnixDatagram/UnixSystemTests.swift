@@ -29,51 +29,38 @@
       #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
       #expect(socket.boundFile != nil)
       #expect(socket.boundFile == UnixPlatform.fileIdentity(atPath: path))
+
+      // Renaming a socket over a directory fails, and leaves nothing behind.
+      let blocked = directory.appending(path: "b.sock", directoryHint: .isDirectory)
+      try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: false)
+      #expect(throws: UnixDatagramIPCTransport.SystemError.self) {
+        _ = try Self.bind(blocked.path)
+      }
+      #expect(
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+          == ["a.sock", "b.sock"]
+      )
     }
 
     @Test
-    func bindReplacesWhateverIsAtThePath() throws {
+    func bindReplacesADeadSocketAndProbesTellLiveFromDead() throws {
       let path = directory.appending(path: "a.sock").path
       try Self.bindAndClose(path)
+      #expect(FileManager.default.fileExists(atPath: path))
       #expect(UnixDatagramSocket.probe(path) == .dead)
 
       let socket = try Self.bind(path)
       #expect(UnixDatagramSocket.probe(path) == .alive)
       #expect(socket.boundFile == UnixPlatform.fileIdentity(atPath: path))
-    }
-
-    @Test
-    func bindLeavesNothingBehindWhenItFails() throws {
-      // Renaming a socket over a directory fails.
-      let path = directory.appending(path: "a.sock", directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: path, withIntermediateDirectories: false)
-
-      #expect(throws: UnixDatagramIPCTransport.SystemError.self) {
-        _ = try Self.bind(path.path)
-      }
-      #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["a.sock"])
-    }
-
-    @Test
-    func probesWhetherASocketIsBoundAtAPath() throws {
-      let path = directory.appending(path: "a.sock").path
-
-      #expect(UnixDatagramSocket.probe(path) == .dead)
-
-      let socket = try Self.bind(path)
-      #expect(UnixDatagramSocket.probe(path) == .alive)
       // A probe sends nothing.
       var buffer = [UInt8](repeating: 0, count: 16)
       #expect(buffer.withUnsafeMutableBufferPointer { socket.receive(into: $0) } == nil)
 
-      let closedPath = directory.appending(path: "b.sock").path
-      try Self.bindAndClose(closedPath)
-      #expect(FileManager.default.fileExists(atPath: closedPath))
-      #expect(UnixDatagramSocket.probe(closedPath) == .dead)
+      #expect(UnixDatagramSocket.probe(directory.appending(path: "missing.sock").path) == .dead)
     }
 
     @Test
-    func touchingAFileMakesItsTimesNow() throws {
+    func touchingAFileMakesItsTimesNowAndAgesFollowThem() throws {
       let file = directory.appending(path: "file").path
       #expect(FileManager.default.createFile(atPath: file, contents: nil))
       let socketPath = directory.appending(path: "a.sock").path
@@ -91,6 +78,19 @@
       _ = socket.boundFile
 
       #expect(!FileSystem.touchFile(atPath: FilePath(directory.appending(path: "missing").path)))
+
+      // A file's age is measured from its modification time.
+      let aged = directory.appending(path: "aged").path
+      #expect(FileSystem.ageOfFile(atPath: FilePath(aged)) == nil)
+      #expect(FileManager.default.createFile(atPath: aged, contents: nil))
+      let age = try #require(FileSystem.ageOfFile(atPath: FilePath(aged)))
+      #expect(age >= .seconds(-1) && age < .seconds(60))
+      try FileManager.default.setAttributes(
+        [.modificationDate: Date.now.addingTimeInterval(-3_600)],
+        ofItemAtPath: aged
+      )
+      let older = try #require(FileSystem.ageOfFile(atPath: FilePath(aged)))
+      #expect(older >= .seconds(3_599) && older < .seconds(3_660))
     }
 
     @Test
@@ -208,23 +208,6 @@
           atPath: FilePath(directory.appending(path: "missing/file").path)
         )
       }
-    }
-
-    @Test
-    func agesAFileByItsModificationTime() throws {
-      let path = directory.appending(path: "file").path
-      #expect(FileSystem.ageOfFile(atPath: FilePath(path)) == nil)
-
-      #expect(FileManager.default.createFile(atPath: path, contents: nil))
-      let age = try #require(FileSystem.ageOfFile(atPath: FilePath(path)))
-      #expect(age >= .seconds(-1) && age < .seconds(60))
-
-      try FileManager.default.setAttributes(
-        [.modificationDate: Date.now.addingTimeInterval(-3_600)],
-        ofItemAtPath: path
-      )
-      let older = try #require(FileSystem.ageOfFile(atPath: FilePath(path)))
-      #expect(older >= .seconds(3_599) && older < .seconds(3_660))
     }
 
     @Test
