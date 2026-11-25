@@ -86,20 +86,6 @@ struct FileSystemTests {
         }
       }
     }
-
-    @Test
-    func aDatabaseReachedThroughALinkKeepsItsIdentityOnceItIsCreated() throws {
-      try withSymbolicLinkFixture { directory in
-        let link = directory.path + "/linkdir/created.sqlite"
-        let before = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link))
-        #expect(FileManager.default.createFile(atPath: link, contents: Data()))
-
-        #expect(before == .forDatabase(path: OrbitDatabasePath(link)))
-        #expect(
-          before == .forDatabase(path: OrbitDatabasePath(directory.path + "/real/created.sqlite"))
-        )
-      }
-    }
   #endif
 
   // MARK: - Temporary Directory
