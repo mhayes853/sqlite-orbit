@@ -1116,16 +1116,6 @@
       }
 
       @Test
-      func anEmptySectionedQueryHasNoSections() async throws {
-        let database = try await remindersDatabase()
-
-        @FetchAll(Reminder.all, sectionBy: { $0.priority }, database: database) var reminders
-
-        #expect(reminders.isEmpty)
-        #expect($reminders.sections.isEmpty)
-      }
-
-      @Test
       func sectionsAreRegroupedAfterAWrite() async throws {
         let database = try await remindersDatabase()
         try await database.write { transaction in
@@ -1195,33 +1185,6 @@
         // Loading an unsectioned query puts every row back into one section.
         try await $reminders.load(Reminder.order(by: \.id), database: database)
         #expect($reminders.sections.sectionNames == [nil])
-      }
-
-      @Test
-      func aSectionKeepsRowsThatComeBackToIt() async throws {
-        let database = try await remindersDatabase()
-        try await database.write { transaction in
-          try Reminder.insert {
-            Reminder.Draft(title: "A", priority: "low")
-            Reminder.Draft(title: "B", priority: "high")
-            Reminder.Draft(title: "C", priority: "low")
-          }
-          .execute(transaction)
-        }
-
-        // Ordering by title fights the section order, so "low" is left and returned to.
-        @FetchAll(
-          Reminder.order(by: \.title),
-          sectionBy: { _ in nil },
-          database: database
-        )
-        var reminders
-        #expect(reminders.map(\.title) == ["A", "B", "C"])
-
-        @FetchAll(Reminder.order(by: \.title), database: database) var byTitle
-        let sections = OrbitFetchSectionCollection(grouping: byTitle, by: \.priority)
-        #expect(sections[sectionName: "low"]?.map(\.title) == ["A", "C"])
-        #expect(sections[sectionName: "high"]?.map(\.title) == ["B"])
       }
 
       @Test

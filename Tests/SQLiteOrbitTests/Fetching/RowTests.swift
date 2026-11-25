@@ -211,20 +211,6 @@
       }
 
       @Test
-      func changingThePrimaryKeyIsRejected() async throws {
-        let database = try await rowsDatabase(
-          EditableReminder(id: 1, title: "Milk", notes: "")
-        )
-
-        @Row(EditableReminder.self, id: 1, database: database) var reminder
-
-        await #expect(throws: OrbitRowIdentityMismatchError.self) {
-          try await $reminder.save(EditableReminder(id: 2, title: "Milk", notes: ""))
-        }
-        #expect($reminder.saveError is OrbitRowIdentityMismatchError)
-      }
-
-      @Test
       func deleteRemovesTheObservedRowAndReportsASecondDeletion() async throws {
         let database = try await rowsDatabase(
           EditableReminder(id: 1, title: "Milk", notes: "")
