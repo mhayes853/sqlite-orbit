@@ -51,40 +51,54 @@
       }
 
       @Test
-      func bodyFailureReportsRollbackWithoutWillCommit() async throws {
-        let driver = try SQLiteQueue(path: .memory)
-        let observer = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
-        let subscription = try driver.subscribe(transactionObserver: observer)
-
+      func aFailingBodyOrARejectedCommitRollsTheWriteBackAndReportsIt() async throws {
+        // A failing body rolls back without asking observers to commit.
+        let empty = try SQLiteQueue(path: .memory)
+        let bodyObserver = TransactionEventRecorder(countOnWillCommit: itemCountSQL)
+        let bodySubscription = try empty.subscribe(transactionObserver: bodyObserver)
         await #expect(throws: TestError.self) {
-          try await driver.write { transaction in
+          try await empty.write { transaction in
             try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
             throw TestError()
           }
         }
+        #expect(bodyObserver.events == [.didChange(.fullDatabase), .didRollback])
+        bodySubscription.cancel()
 
-        #expect(observer.events == [.didChange(.fullDatabase), .didRollback])
-        _ = subscription
-      }
-
-      @Test
-      func willCommitFailureAbortsTheWriteAndReportsRollback() async throws {
+        // An observer that rejects the commit rolls it back for every observer.
         let driver = try await itemsDatabase()
         let observer = TransactionEventRecorder()
         let subscriptions = try [
           driver.subscribe(transactionObserver: observer),
           driver.subscribe(transactionObserver: TransactionEventRecorder(commitError: TestError()))
         ]
-
         await #expect(throws: TestError.self) {
           try await driver.write { transaction in
             try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(transaction)
           }
         }
-
-        #expect(observer.events == [.didChange(OrbitDatabaseRegion(table: "items")), .didRollback])
+        let items = OrbitDatabaseRegion(table: "items")
+        #expect(observer.events == [.didChange(items), .didRollback])
         #expect(try await driver.rowCount(of: "items") == 0)
-        _ = subscriptions
+        for subscription in subscriptions { subscription.cancel() }
+
+        // So does one observing an explicit commit on a native connection.
+        let rejecting = TransactionEventRecorder(
+          countOnWillCommit: itemCountSQL,
+          commitError: TestError()
+        )
+        #expect(throws: TestError()) {
+          try driver.writeWithoutTransactionBlocking { connection in
+            try connection.withObservation(rejecting) {
+              try connection.transaction { transaction in
+                try transaction.execute("INSERT INTO items VALUES (1)")
+              }
+            }
+          }
+        }
+        #expect(rejecting.events == [.didChange(items), .willCommit(1), .didRollback])
+        #expect(rejecting.commits.isEmpty)
+        #expect(try await driver.rowCount(of: "items") == 0)
       }
 
       @Test
@@ -503,34 +517,6 @@
           try transaction.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
         }
         #expect(count == 1)
-      }
-
-      @Test
-      func nativeConnectionObserverCanRejectAnExplicitCommit() throws {
-        let driver = try SQLiteQueue(path: .memory)
-        try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        let observer = TransactionEventRecorder(
-          countOnWillCommit: itemCountSQL,
-          commitError: TestError()
-        )
-
-        #expect(throws: TestError()) {
-          try driver.writeWithoutTransactionBlocking { connection in
-            try connection.withObservation(observer) {
-              try connection.transaction { transaction in
-                try transaction.execute("INSERT INTO items VALUES (1)")
-              }
-            }
-          }
-        }
-
-        let items = OrbitDatabaseRegion(table: "items")
-        #expect(observer.events == [.didChange(items), .willCommit(1), .didRollback])
-        #expect(observer.commits.isEmpty)
-        let count = try driver.readBlocking { transaction in
-          try transaction.fetchOne("SELECT count(*) FROM items") { $0[0].integerValue }
-        }
-        #expect(count == 0)
       }
 
       @Test
