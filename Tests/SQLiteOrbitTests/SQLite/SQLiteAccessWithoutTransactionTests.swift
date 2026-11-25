@@ -227,6 +227,21 @@
           }
           #expect(error?.primaryCode == .readOnly)
 
+          // A read transaction refuses a raw mutation passed to `execute` too, and a pool's
+          // readers are query-only besides.
+          let executeError = await #expect(throws: SQLiteError.self) {
+            try await driver.read { transaction in
+              try #sql("UPDATE items SET id = id + 1").execute(transaction)
+            }
+          }
+          #expect(executeError?.primaryCode == .readOnly)
+          if kind == .pool {
+            let queryOnly = try await driver.read { transaction in
+              try #sql("PRAGMA query_only", as: Bool.self).fetchOne(transaction)
+            }
+            #expect(queryOnly == true)
+          }
+
           try await driver.writeWithoutTransaction { connection in
             try #sql("INSERT INTO items (id) VALUES (2)", as: Void.self).execute(connection)
           }

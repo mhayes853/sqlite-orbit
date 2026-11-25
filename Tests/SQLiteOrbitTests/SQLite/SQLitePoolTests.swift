@@ -163,20 +163,6 @@
     }
 
     @Test
-    func poolReadersRefuseRawSQLWrites() async throws {
-      try await withPool { pool throws in
-        #expect(try await pool.pragma("query_only", as: Bool.self) == true)
-
-        await #expect(throws: SQLiteError.self) {
-          try await pool.read { transaction in
-            try #sql("INSERT INTO items (title) VALUES ('nope') RETURNING id", as: Int.self)
-              .fetchAll(transaction)
-          }
-        }
-      }
-    }
-
-    @Test
     func aFailedPooledReadStillGivesItsReaderBack() async throws {
       try await withPool(readerCount: 1) { pool throws in
         for _ in 0..<5 {
