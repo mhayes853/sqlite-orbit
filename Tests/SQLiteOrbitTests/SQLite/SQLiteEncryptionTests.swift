@@ -47,8 +47,15 @@
     #expect(events.withLock { $0.first } == "key")
   }
 
-  @Test(.libraryHooks)
-  func aPassphraseReachesTheBuildAsItsUTF8() throws {
+  @Test(
+    .libraryHooks,
+    arguments: [
+      (SQLiteKey.passphrase("öpen sesame"), Array("öpen sesame".utf8)),
+      // Interior zero bytes included, which a key read as a C string would have cut short.
+      (.raw([0x00, 0xFF, 0x10, 0x00, 0x7F]), [0x00, 0xFF, 0x10, 0x00, 0x7F])
+    ]
+  )
+  func aKeyReachesTheBuildAsItsBytes(key: SQLiteKey, bytes: [UInt8]) throws {
     let keys = Lock<[[UInt8]]>([])
     var configuration = SQLiteConfiguration(
       library: libraryWithFakeCodec { key in
@@ -56,26 +63,10 @@
         return SQLiteResultCode.ok.rawValue
       }
     )
-    configuration.key = SQLiteKey.passphrase("öpen sesame")
+    configuration.key = key
     _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
 
-    #expect(keys.withLock { $0 } == [Array("öpen sesame".utf8)])
-  }
-
-  @Test(.libraryHooks)
-  func aRawKeyReachesTheBuildUnchanged() throws {
-    let keys = Lock<[[UInt8]]>([])
-    var configuration = SQLiteConfiguration(
-      library: libraryWithFakeCodec { key in
-        keys.withLock { $0.append(key) }
-        return SQLiteResultCode.ok.rawValue
-      }
-    )
-    configuration.key = SQLiteKey.raw([0x00, 0xFF, 0x10, 0x00, 0x7F])
-    _ = try SQLiteQueue(path: ":memory:", configuration: configuration)
-
-    // Interior zero bytes included, which a key read as a C string would have cut short.
-    #expect(keys.withLock { $0 } == [[0x00, 0xFF, 0x10, 0x00, 0x7F]])
+    #expect(keys.withLock { $0 } == [bytes])
   }
 
   @Test(.libraryHooks)
