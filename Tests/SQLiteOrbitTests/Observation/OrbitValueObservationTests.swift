@@ -124,21 +124,9 @@
 
       @MainActor
       @Test
-      func mainActorSchedulerIsImmediateOnlyWhenStartedOnMainActor() async throws {
+      func mainActorSchedulerIsImmediateWhenStartedOnMainActor() async throws {
         let driver = try await itemsDatabase()
         let recorder = MainActorObservationRecorder<Int>()
-        let deferred = ObservationRecorder<Int>()
-        let deferredSubscription = try itemCountObservation()
-          .subscribe(
-            to: driver,
-            scheduling: .mainActor,
-            isolation: nil,
-            onError: deferred.record(error:),
-            onChange: deferred.record(change:)
-          )
-        #expect(deferred.changes.isEmpty)
-        try await deferred.waitForChangeCount(1)
-        #expect(deferred.changes.map(\.value) == [0])
 
         let subscription = try itemCountObservation()
           .subscribe(
@@ -159,7 +147,27 @@
 
         #expect(recorder.changes.map(\.value) == [0, 1])
         #expect(recorder.errors.isEmpty)
-        _ = (subscription, deferredSubscription)
+        _ = subscription
+      }
+
+      @Test
+      func mainActorSchedulerDefersWhenStartedOutsideMainActor() async throws {
+        let driver = try await itemsDatabase()
+        let recorder = ObservationRecorder<Int>()
+
+        let subscription = try itemCountObservation()
+          .subscribe(
+            to: driver,
+            scheduling: .mainActor,
+            isolation: nil,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+
+        #expect(recorder.changes.isEmpty)
+        try await recorder.waitForChangeCount(1)
+        #expect(recorder.changes.map(\.value) == [0])
+        _ = subscription
       }
 
       @Test
