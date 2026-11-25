@@ -129,12 +129,19 @@
       }
 
       @Test
-      func aMissingRowIsNilAndLaterInsertionIsObserved() async throws {
+      func aMissingRowIsNilCannotBeSavedAndLaterInsertionIsObserved() async throws {
         let database = try await rowsDatabase()
 
         @Row(EditableReminder.self, id: 1, database: database) var reminder
 
         #expect(reminder == nil)
+        // Saving does not recreate a missing row.
+        await #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
+          try await $reminder.save(EditableReminder(id: 1, title: "Milk", notes: ""))
+        }
+        #expect($reminder.saveError is OrbitDatabaseRecordNotFoundError)
+        #expect(reminder == nil)
+
         try await database.write { transaction in
           try EditableReminder.insert {
             EditableReminder(id: 1, title: "Milk", notes: "")
@@ -142,37 +149,6 @@
           .execute(transaction)
         }
         try await waitUntil { reminder?.title == "Milk" }
-      }
-
-      @Test
-      func saveReplacesAnExistingRow() async throws {
-        let database = try await rowsDatabase(
-          EditableReminder(id: 1, title: "Milk", notes: "cold")
-        )
-
-        @Row(EditableReminder.self, id: 1, database: database) var reminder
-        #expect(reminder?.title == "Milk")
-
-        try await $reminder.save(
-          EditableReminder(id: 1, title: "Oat milk", notes: "shelf stable")
-        )
-
-        try await waitUntil {
-          reminder == EditableReminder(id: 1, title: "Oat milk", notes: "shelf stable")
-        }
-      }
-
-      @Test
-      func saveDoesNotRecreateAMissingRow() async throws {
-        let database = try await rowsDatabase()
-
-        @Row(EditableReminder.self, id: 1, database: database) var reminder
-
-        await #expect(throws: OrbitDatabaseRecordNotFoundError.self) {
-          try await $reminder.save(EditableReminder(id: 1, title: "Milk", notes: ""))
-        }
-        #expect($reminder.saveError is OrbitDatabaseRecordNotFoundError)
-        #expect(reminder == nil)
       }
 
       @MainActor
@@ -211,13 +187,22 @@
       }
 
       @Test
-      func deleteRemovesTheObservedRowAndReportsASecondDeletion() async throws {
+      func saveReplacesTheObservedRowAndDeleteRemovesIt() async throws {
         let database = try await rowsDatabase(
-          EditableReminder(id: 1, title: "Milk", notes: "")
+          EditableReminder(id: 1, title: "Milk", notes: "cold")
         )
 
         @Row(EditableReminder.self, id: 1, database: database) var reminder
-        #expect(reminder != nil)
+        #expect(reminder?.title == "Milk")
+
+        try await $reminder.save(
+          EditableReminder(id: 1, title: "Oat milk", notes: "shelf stable")
+        )
+        try await waitUntil {
+          reminder == EditableReminder(id: 1, title: "Oat milk", notes: "shelf stable")
+        }
+
+        // Deleting removes it, and deleting it again reports the missing row.
 
         try await $reminder.delete()
         try await waitUntil { reminder == nil }
