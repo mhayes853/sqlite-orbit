@@ -99,19 +99,30 @@
 
       // MARK: - Targets
 
-      @Test(arguments: SQLiteTestDriver.allCases)
-      func migratingUpToATargetStopsAfterIt(_ kind: SQLiteTestDriver) async throws {
+      @Test(arguments: SQLiteTestDriver.allCases, [false, true])
+      func migratingUpToATargetStopsAfterIt(
+        _ kind: SQLiteTestDriver,
+        isBlocking: Bool
+      ) async throws {
         try await kind.withDatabase { driver in
           let migrator = loggingMigrator(["one", "two", "three"])
+          func migrate(upTo target: String? = nil) async throws {
+            switch (isBlocking, target) {
+            case (true, let target?): try migrator.migrateBlocking(driver, upTo: target)
+            case (true, nil): try migrator.migrateBlocking(driver)
+            case (false, let target?): try await migrator.migrate(driver, upTo: target)
+            case (false, nil): try await migrator.migrate(driver)
+            }
+          }
 
-          try await migrator.migrate(driver, upTo: "two")
+          try await migrate(upTo: "two")
           #expect(try await log(in: driver) == ["one", "two"])
 
-          try await migrator.migrate(driver, upTo: "two")
+          try await migrate(upTo: "two")
           #expect(try await log(in: driver) == ["one", "two"])
 
           let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
-            try await migrator.migrate(driver, upTo: "one")
+            try await migrate(upTo: "one")
           }
           #expect(
             error
@@ -119,42 +130,8 @@
           )
           #expect(try await log(in: driver) == ["one", "two"])
 
-          try await migrator.migrate(driver)
+          try await migrate()
           #expect(try await log(in: driver) == ["one", "two", "three"])
-        }
-      }
-
-      @Test(arguments: SQLiteTestDriver.allCases)
-      func blockingMigrationUpToATargetStopsAfterIt(_ kind: SQLiteTestDriver) throws {
-        try withTestDatabaseFile { file in
-          let driver = try file.open(kind)
-          let migrator = loggingMigrator(["one", "two", "three"])
-
-          try migrator.migrateBlocking(driver, upTo: "two")
-          let first = try driver.readBlocking { transaction in
-            try migrator.appliedMigrations(transaction)
-          }
-          #expect(first == ["one", "two"])
-
-          try migrator.migrateBlocking(driver, upTo: "two")
-          let repeated = try driver.readBlocking { transaction in
-            try migrator.appliedMigrations(transaction)
-          }
-          #expect(repeated == first)
-
-          let error = #expect(throws: OrbitDatabaseMigrationTargetError.self) {
-            try migrator.migrateBlocking(driver, upTo: "one")
-          }
-          #expect(
-            error
-              == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
-          )
-
-          try migrator.migrateBlocking(driver)
-          let completed = try driver.readBlocking { transaction in
-            try migrator.appliedMigrations(transaction)
-          }
-          #expect(completed == ["one", "two", "three"])
         }
       }
 
