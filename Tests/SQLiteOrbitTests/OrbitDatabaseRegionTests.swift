@@ -31,7 +31,7 @@
     }
 
     @Test
-    func columnsWithinATableNormalizeAndCombine() {
+    func tablesAndColumnsNormalizeAndCombine() {
       let title = OrbitDatabaseRegion(column: "title", in: "reminders")
       let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
       let both = OrbitDatabaseRegion(
@@ -48,6 +48,19 @@
       #expect(!title.overlaps(completed))
       #expect(Set([title, OrbitDatabaseRegion(column: "TITLE", in: "REMINDERS")]).count == 1)
       #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
+
+      // A table absorbs its columns, and distinct tables and schemas do not overlap.
+      let reminders = OrbitDatabaseRegion(table: "reminders")
+      let tags = OrbitDatabaseRegion(table: "tags")
+      let auxiliaryReminders = OrbitDatabaseRegion(table: "reminders", schema: "auxiliary")
+      #expect(reminders.union(title) == reminders)
+      #expect(reminders.intersection(title) == title)
+      #expect(reminders.contains(title))
+      #expect(!title.contains(reminders))
+      #expect(reminders.intersection(tags) == .empty)
+      #expect(reminders.intersection(auxiliaryReminders) == .empty)
+      #expect(!reminders.overlaps(tags))
+      #expect(!reminders.overlaps(auxiliaryReminders))
     }
 
     @Test
@@ -161,41 +174,13 @@
     }
 
     @Test
-    func aTableBasisAbsorbsItsColumnBases() {
+    func typedTablesAndColumnsProduceTheirRegions() {
       let reminders = OrbitDatabaseRegion(table: "reminders")
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-
-      #expect(reminders.union(title) == reminders)
-      #expect(reminders.intersection(title) == title)
-      #expect(reminders.contains(title))
-      #expect(!title.contains(reminders))
-    }
-
-    @Test
-    func distinctTablesAndSchemasDoNotOverlap() {
-      let reminders = OrbitDatabaseRegion(table: "reminders")
-      let tags = OrbitDatabaseRegion(table: "tags")
-      let auxiliaryReminders = OrbitDatabaseRegion(table: "reminders", schema: "auxiliary")
-
-      #expect(reminders.intersection(tags) == .empty)
-      #expect(reminders.intersection(auxiliaryReminders) == .empty)
-      #expect(!reminders.overlaps(tags))
-      #expect(!reminders.overlaps(auxiliaryReminders))
-    }
-
-    @Test
-    func typedTablesProduceTheirTableRegion() {
-      let expected = OrbitDatabaseRegion(table: "reminders")
-
-      #expect(OrbitDatabaseRegion(Reminder.self) == expected)
-      #expect(Reminder.databaseRegion == expected)
-    }
-
-    @Test
-    func typedColumnsProduceColumnRegions() {
       let title = OrbitDatabaseRegion(column: "title", in: "reminders")
       let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
 
+      #expect(OrbitDatabaseRegion(Reminder.self) == reminders)
+      #expect(Reminder.databaseRegion == reminders)
       #expect(OrbitDatabaseRegion(Reminder.title) == title)
       #expect(Reminder.title.databaseRegion == title)
       #expect(Reminder.databaseRegion(\.title) == title)
@@ -204,14 +189,11 @@
         Reminder.databaseRegion { ($0.title, $0.isCompleted) }
           == title.union(completed)
       )
-    }
 
-    @Test
-    func typedTablesPreserveTheirSchema() {
-      let expected = OrbitDatabaseRegion(table: "items", schema: "archive")
-
-      #expect(OrbitDatabaseRegion(ArchivedItem.self) == expected)
-      #expect(ArchivedItem.databaseRegion == expected)
+      // A table keeps its schema.
+      let archived = OrbitDatabaseRegion(table: "items", schema: "archive")
+      #expect(OrbitDatabaseRegion(ArchivedItem.self) == archived)
+      #expect(ArchivedItem.databaseRegion == archived)
       #expect(
         ArchivedItem.databaseRegion(\.name)
           == OrbitDatabaseRegion(column: "name", in: "items", schema: "archive")
