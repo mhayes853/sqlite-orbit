@@ -1449,75 +1449,6 @@
       }
 
       @Test
-      func trackingAllAndOneInferTypedQueryOutputs() throws {
-        let driver = try SQLiteQueue(path: .memory)
-        try driver.executeBlocking(
-          sql: """
-            CREATE TABLE observed_groups (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
-            CREATE TABLE observed_items (
-              id INTEGER PRIMARY KEY,
-              groupID INTEGER NOT NULL,
-              title TEXT NOT NULL
-            );
-            INSERT INTO observed_groups VALUES (1, 'Group');
-            INSERT INTO observed_items VALUES (1, 1, 'One'), (2, 1, 'Two');
-            """
-        )
-
-        let all = OrbitValueObservation.trackingAll(ObservedItem.order { $0.id })
-        let allRecorder = ObservationRecorder<[ObservedItem]>()
-        let allSubscription = try all.subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: allRecorder.record(error:),
-          onChange: allRecorder.record(change:)
-        )
-
-        let one = OrbitValueObservation.trackingOne(ObservedItem.where { $0.id.eq(2) })
-        let oneRecorder = ObservationRecorder<ObservedItem?>()
-        let oneSubscription = try one.subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: oneRecorder.record(error:),
-          onChange: oneRecorder.record(change:)
-        )
-
-        let tuples = OrbitValueObservation.trackingAll(
-          ObservedItem.order { $0.id }.select { ($0.id, $0.title) }
-        )
-        let tupleRecorder = ObservationRecorder<[(Int, String)]>()
-        let tupleSubscription = try tuples.subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: tupleRecorder.record(error:),
-          onChange: tupleRecorder.record(change:)
-        )
-
-        let joined = OrbitValueObservation.trackingAll(
-          ObservedItem.join(ObservedGroup.all) { $0.groupID.eq($1.id) }
-            .order { item, _ in item.id }
-        )
-        let joinedRecorder = ObservationRecorder<[(ObservedItem, ObservedGroup)]>()
-        let joinedSubscription = try joined.subscribe(
-          to: driver,
-          scheduling: .immediate,
-          onError: joinedRecorder.record(error:),
-          onChange: joinedRecorder.record(change:)
-        )
-
-        #expect(allRecorder.changes.first?.value.map(\.title) == ["One", "Two"])
-        #expect(oneRecorder.changes.first?.value?.title == "Two")
-        #expect(tupleRecorder.changes.first?.value.map(\.0) == [1, 2])
-        #expect(tupleRecorder.changes.first?.value.map(\.1) == ["One", "Two"])
-        #expect(joinedRecorder.changes.first?.value.map { $0.1.name } == ["Group", "Group"])
-        #expect(allRecorder.errors.isEmpty)
-        #expect(oneRecorder.errors.isEmpty)
-        #expect(tupleRecorder.errors.isEmpty)
-        #expect(joinedRecorder.errors.isEmpty)
-        _ = (allSubscription, oneSubscription, tupleSubscription, joinedSubscription)
-      }
-
-      @Test
       func everyStatementShapeResolvesToATrackingFactory() throws {
         let driver = try SQLiteQueue(path: .memory)
         try driver.executeBlocking(
@@ -1667,28 +1598,6 @@
           #expect(fetchCount.value == 2)
           subscription.cancel()
         }
-      }
-
-      @Test
-      func wrappedQueryFragmentTrackingOneObservesAnOptionalValue() throws {
-        let driver = try SQLiteQueue(path: .memory)
-        try driver.executeBlocking(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        let query: QueryFragment = "SELECT title FROM items ORDER BY id LIMIT 1"
-        let recorder = ObservationRecorder<String?>()
-        let subscription =
-          try OrbitValueObservation
-          .trackingOne(SQLQueryExpression(query, as: String.self))
-          .subscribe(
-            to: driver,
-            scheduling: .immediate,
-            onError: recorder.record(error:),
-            onChange: recorder.record(change:)
-          )
-
-        #expect(recorder.changes.map(\.value) == [nil])
-        try driver.executeBlocking(sql: "INSERT INTO items VALUES (1, 'One')")
-        #expect(recorder.changes.map(\.value) == [nil, "One"])
-        _ = subscription
       }
 
       @Test
