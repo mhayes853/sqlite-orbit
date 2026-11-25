@@ -149,31 +149,6 @@
     }
 
     @Test
-    func writeTransactionsReadWhatReturningReports() async throws {
-      let database = try inMemoryDatabase()
-      let (inserted, deleted, stopped) = try await database.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        var insertedCursor = try transaction.executeRowCursor(
-          "INSERT INTO items (title) VALUES ('a'), ('b'), ('c') RETURNING id"
-        )
-        let inserted = try insertedCursor.collect { $0[0].integerValue ?? 0 }
-        var deletedCursor = try transaction.executeRowCursor(
-          "DELETE FROM items WHERE id = \(2) RETURNING title"
-        )
-        let deleted = try deletedCursor.first { $0[0].textValue }
-        var stopped: [Int64] = []
-        try transaction.execute("UPDATE items SET title = upper(title) RETURNING id") { row in
-          stopped.append(row[0].integerValue ?? 0)
-          return .stop
-        }
-        return (inserted, deleted, stopped)
-      }
-      #expect(inserted == [1, 2, 3])
-      #expect(deleted == "b")
-      #expect(stopped.count == 1)
-    }
-
-    @Test
     func emptySQLSelectsNothingAndExecutesNothing() async throws {
       let database = try inMemoryDatabase()
       let (rows, changes) = try await database.write { transaction in
@@ -329,9 +304,19 @@
 
         // What may write is spelled `execute`.
         var cursor = try transaction.executeRowCursor(
-          "INSERT INTO items (id) VALUES (1), (2), (3) RETURNING id"
+          "INSERT INTO items (id) VALUES (1), (2), (3), (4) RETURNING id"
         )
-        #expect(try cursor.collect(as: Int.self) == [1, 2, 3])
+        #expect(try cursor.collect { $0[0].integerValue ?? 0 } == [1, 2, 3, 4])
+        var deletedOne = try transaction.executeRowCursor(
+          "DELETE FROM items WHERE id = \(4) RETURNING id"
+        )
+        #expect(try deletedOne.first { $0[0].integerValue } == 4)
+        var stopped: [Int64] = []
+        try transaction.execute("UPDATE items SET id = id RETURNING id") { row in
+          stopped.append(row[0].integerValue ?? 0)
+          return .stop
+        }
+        #expect(stopped.count == 1)
         var deleted = try transaction.executeRowCursor(
           "DELETE FROM items WHERE id > 1 RETURNING id",
           cached: true

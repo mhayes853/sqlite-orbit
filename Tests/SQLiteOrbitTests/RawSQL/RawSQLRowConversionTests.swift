@@ -228,35 +228,6 @@
     }
 
     @Test
-    func writerCursorsAndExecuteCursorDecodeReturningRows() async throws {
-      let database = try inMemoryDatabase()
-      let (inserted, updated, deleted) = try await database.write { transaction in
-        try transaction.execute(
-          "CREATE TABLE records (id INTEGER PRIMARY KEY, title TEXT, priority INTEGER)"
-        )
-        var insertedCursor = try transaction.executeRowCursor(
-          "INSERT INTO records VALUES (1, 'Milk', NULL), (2, 'Tea', 3) RETURNING *"
-        )
-        let inserted = try insertedCursor.collect(as: Record.self)
-        var updatedCursor = try transaction.executeRowCursor(
-          "UPDATE records SET title = 'Coffee' WHERE id = 2 RETURNING *"
-        )
-        let updated = try updatedCursor.first(as: Record.self)
-        let deleted =
-          try transaction.executeCursor("DELETE FROM records RETURNING *", as: Record.self)
-          .collect()
-        return (inserted, updated, deleted)
-      }
-      #expect(inserted.count == 2)
-      #expect(updated == .init(id: 2, title: "Coffee", priority: 3))
-      #expect(deleted.count == 2)
-      let count = try await database.read {
-        try $0.fetchOne("SELECT count(*) FROM records", as: Int.self)
-      }
-      #expect(count == 0)
-    }
-
-    @Test
     func valueTypesReadTheFirstColumnThroughEveryRowAPI() async throws {
       let database = try inMemoryDatabase()
       let sql: SQL = "SELECT 1 AS id, 'Milk' AS title UNION ALL SELECT NULL, 'Tea'"
@@ -285,43 +256,50 @@
     }
 
     @Test
-    func rowCursorTerminalsReadReturningRows() async throws {
+    func rowCursorTerminalsAndExecuteCursorsReadReturningRows() async throws {
       let database = try inMemoryDatabase()
-      let (ids, titles, firstID, visited, deleted) = try await database.write { transaction in
+      let (inserted, titles, firstID, visited, updated, deleted) = try await database.write {
+        transaction in
         try transaction.execute(
-          "CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT, isCompleted INTEGER)"
+          "CREATE TABLE records (id INTEGER PRIMARY KEY, title TEXT, priority INTEGER)"
         )
-        var inserted = try transaction.executeRowCursor(
+        var insertedCursor = try transaction.executeRowCursor(
           """
-          INSERT INTO reminders (title, isCompleted)
-          VALUES ('Milk', 1), ('Tea', 0), ('Coffee', 1)
-          RETURNING id
+          INSERT INTO records VALUES (1, 'Milk', NULL), (2, 'Tea', 3), (3, 'Coffee', 1)
+          RETURNING *
           """
         )
-        let ids = try inserted.collect(as: Int.self)
-        var selected = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        let inserted = try insertedCursor.collect(as: Record.self)
+        var selected = try transaction.rowCursor("SELECT title FROM records ORDER BY id")
         let titles = try selected.collect { row in row[0].textValue ?? "" }
-        var firstCursor = try transaction.rowCursor("SELECT id FROM reminders ORDER BY id DESC")
+        var firstCursor = try transaction.rowCursor("SELECT id FROM records ORDER BY id DESC")
         let firstID = try firstCursor.first { row in row[0].integerValue }
         var visited: [String] = []
-        var iterated = try transaction.rowCursor("SELECT title FROM reminders ORDER BY id")
+        var iterated = try transaction.rowCursor("SELECT title FROM records ORDER BY id")
         try iterated.forEach { row in
           visited.append(row[0].textValue ?? "")
           return visited.count == 2 ? .stop : .next
         }
-        var cursor = try transaction.executeRowCursor(
-          "DELETE FROM reminders WHERE isCompleted RETURNING id"
+        var updatedCursor = try transaction.executeRowCursor(
+          "UPDATE records SET title = 'Cocoa' WHERE id = 2 RETURNING *"
         )
-        let deleted = try cursor.collect(as: Int.self)
-        return (ids, titles, firstID, visited, deleted)
+        let updated = try updatedCursor.first(as: Record.self)
+        let deleted =
+          try transaction.executeCursor(
+            "DELETE FROM records WHERE priority IS NOT NULL RETURNING *",
+            as: Record.self
+          )
+          .collect()
+        return (inserted, titles, firstID, visited, updated, deleted)
       }
-      #expect(ids == [1, 2, 3])
+      #expect(inserted.map(\.id) == [1, 2, 3])
       #expect(titles == ["Milk", "Tea", "Coffee"])
       #expect(firstID == 3)
       #expect(visited == ["Milk", "Tea"])
-      #expect(deleted.sorted() == [1, 3])
+      #expect(updated == .init(id: 2, title: "Cocoa", priority: 3))
+      #expect(deleted.map(\.id).sorted() == [2, 3])
       #expect(
-        try await database.read { try $0.fetchAll("SELECT id FROM reminders", as: Int.self) } == [2]
+        try await database.read { try $0.fetchAll("SELECT id FROM records", as: Int.self) } == [1]
       )
     }
 
