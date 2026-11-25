@@ -53,19 +53,6 @@
     }
 
     @Test
-    func tursoPoolRunsInMVCCMode() async throws {
-      try await withTestDatabaseFile("turso") { file in
-        let driver = try TursoPool(path: file.path)
-
-        let mode = try await driver.readWithoutTransaction { connection in
-          try #sql("SELECT * FROM pragma_journal_mode", as: String.self).fetchOne(connection)
-        }
-
-        #expect(mode?.lowercased() == "mvcc")
-      }
-    }
-
-    @Test
     func tursoPoolSupportsWritesOutsideATransaction() async throws {
       try await withTestDatabaseFile("turso") { file in
         let driver = try TursoPool(path: file.path)

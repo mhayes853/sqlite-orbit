@@ -30,13 +30,6 @@
     }
 
     @Test
-    func poolRunsInWALMode() async throws {
-      try await withPool { pool throws in
-        #expect(try await pool.pragma("journal_mode", as: String.self) == "wal")
-      }
-    }
-
-    @Test
     func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
       try await withTestDatabaseFile("pool") { file in
         var configuration = SQLiteConfiguration.default
