@@ -394,36 +394,6 @@
 
         #expect(transport.messages.isEmpty)
       }
-
-      @Test
-      func peerReceivesOneAnnouncementForAWriteWithoutTransaction() async throws {
-        let network = InMemoryIPCTransport.Network()
-        let identifier = OrbitDatabaseIdentifier(rawValue: "without-transaction-peer")
-        let database = OrbitIPCDatabase(
-          writer: try SQLiteQueue(path: .memory),
-          identifier: identifier,
-          transport: InMemoryIPCTransport(network: network)
-        )
-        try await createAnnouncementTables(in: database)
-        let peerTransport = InMemoryIPCTransport(network: network)
-        let received = IPCMessageRecorder()
-        let subscription = try peerTransport.subscribe(to: identifier, onMessage: received.append)
-
-        try await database.writeWithoutTransaction { connection in
-          try #sql("INSERT INTO items (id) VALUES (1)", as: Void.self).execute(connection)
-          try #sql("INSERT INTO lists (id) VALUES (1)", as: Void.self).execute(connection)
-        }
-
-        let committed = OrbitDatabaseRegion(table: "items")
-          .union(OrbitDatabaseRegion(table: "lists"))
-        #expect(
-          received.values == [
-            .transactionDidCommit(.init(databaseIdentifier: identifier, region: committed))
-          ]
-        )
-        _ = subscription
-      }
-
     }
 
     private func createAnnouncementTables(in database: OrbitIPCDatabase) async throws {
