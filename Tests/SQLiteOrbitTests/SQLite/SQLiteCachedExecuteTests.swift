@@ -83,9 +83,13 @@
     }
 
     @Test
-    func cachedStatementsFollowSchemaChangesMadeThroughExecute() throws {
+    func cachedStatementsFollowSchemaChangesAndPragmasMadeThroughExecute() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in
+        for version in [3, 4, 3] {
+          try connection.execute("PRAGMA user_version = \(raw: String(version))")
+          #expect(try connection.fetchOne("PRAGMA user_version", as: Int.self) == version)
+        }
         try connection.transaction { transaction in
           for _ in 0..<2 {
             try transaction.execute("CREATE TABLE IF NOT EXISTS t (a INTEGER)")
@@ -107,19 +111,8 @@
           try transaction.execute("CREATE TABLE t (a TEXT)")
           try transaction.execute("INSERT INTO t (a) VALUES (\(1))")
           #expect(try transaction.fetchAll("SELECT typeof(a) FROM t", as: String.self) == ["text"])
-        }
-      }
-    }
 
-    @Test
-    func cachedPragmasAndViewsTakeEffectEachTime() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        for version in [3, 4, 3] {
-          try connection.execute("PRAGMA user_version = \(raw: String(version))")
-          #expect(try connection.fetchOne("PRAGMA user_version", as: Int.self) == version)
-        }
-        try connection.transaction { transaction in
+          // A view redefined under the same name is read through anew.
           try transaction.execute("CREATE TABLE a (x INTEGER)")
           try transaction.execute("CREATE TABLE b (x INTEGER)")
           try transaction.execute("INSERT INTO a VALUES (1)")
@@ -134,10 +127,12 @@
     }
 
     @Test
-    func aBindingFailureGivesTheCachedStatementBack() throws {
+    func aFailedBindingOrStepGivesTheCachedStatementBack() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in
-        try connection.executeScript("CREATE TABLE t (a INTEGER)")
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER PRIMARY KEY)"
+        )
         try connection.transaction { transaction in
           try transaction.execute("INSERT INTO t VALUES (\(UInt64(1)))")
           #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
@@ -145,24 +140,15 @@
           }
           try transaction.execute("INSERT INTO t VALUES (\(UInt64(2)))")
           #expect(transaction.base.statements.idleStatementCount == 1)
-        }
-        #expect(try connection.fetchAll("SELECT a FROM t ORDER BY a", as: Int.self) == [1, 2])
-      }
-    }
 
-    @Test
-    func aFailedStepLeavesTheStatementReusable() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript("CREATE TABLE t (a INTEGER PRIMARY KEY)")
-        try connection.transaction { transaction in
-          try transaction.execute("INSERT INTO t VALUES (\(1))")
+          try transaction.execute("INSERT INTO u VALUES (\(1))")
           #expect(throws: SQLiteError.self) {
-            try transaction.execute("INSERT INTO t VALUES (\(1))")
+            try transaction.execute("INSERT INTO u VALUES (\(1))")
           }
-          try transaction.execute("INSERT INTO t VALUES (\(2))")
+          try transaction.execute("INSERT INTO u VALUES (\(2))")
         }
         #expect(try connection.fetchAll("SELECT a FROM t ORDER BY a", as: Int.self) == [1, 2])
+        #expect(try connection.fetchAll("SELECT a FROM u ORDER BY a", as: Int.self) == [1, 2])
       }
     }
 

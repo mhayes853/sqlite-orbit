@@ -34,34 +34,7 @@
     }
 
     @Test
-    func nativeDriverExposesTransactionScopedCursors() async throws {
-      let database = try inMemoryDatabase()
-
-      let readValues = try await database.read { transaction in
-        var cursor = try #sql("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", as: Int.self)
-          .fetchCursor(transaction)
-        var values: [Int] = []
-        while let value = try cursor.next() {
-          values.append(value)
-        }
-        return values
-      }
-
-      let writeValues = try await database.write { transaction in
-        var cursor = try #sql("SELECT 4 UNION ALL SELECT 5", as: Int.self).fetchCursor(transaction)
-        var values: [Int] = []
-        while let value = try cursor.next() {
-          values.append(value)
-        }
-        return values
-      }
-
-      #expect(readValues == [1, 2, 3])
-      #expect(writeValues == [4, 5])
-    }
-
-    @Test
-    func nativeDriverRoundTripsDateAndUUIDBindings() async throws {
+    func nativeDriverRoundTripsAndDecodesDatesAndUUIDs() async throws {
       let database = try inMemoryDatabase()
       let value = SpecialValue(
         id: 1,
@@ -88,24 +61,19 @@
         try SpecialValue.all.fetchOne(transaction)
       }
       #expect(decoded == value)
-    }
 
-    @Test
-    func nativeDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
-      let database = try inMemoryDatabase()
+      // Dates without fractions and uppercase UUIDs decode too.
       let timestamp = "2024-01-02 03:04:05"
       let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
-
-      let decoded: (Date, UUID)? = try await database.read { transaction in
+      let other: (Date, UUID)? = try await database.read { transaction in
         try #sql(
           "SELECT \(timestamp, as: String.self), \(uuid, as: String.self)",
           as: (Date, UUID).self
         )
         .fetchOne(transaction)
       }
-
-      #expect(decoded?.0.timeIntervalSince1970 == 1_704_164_645)
-      #expect(decoded?.1 == UUID(uuidString: uuid))
+      #expect(other?.0.timeIntervalSince1970 == 1_704_164_645)
+      #expect(other?.1 == UUID(uuidString: uuid))
     }
 
     @Test

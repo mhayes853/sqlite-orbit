@@ -24,7 +24,7 @@
     }
 
     @Test
-    func cursorsAdvanceLazilyAndStopWhenExhausted() throws {
+    func readAndWriteCursorsAdvanceLazilyAndStopWhenExhausted() throws {
       var connection = try openTestConnection()
       try connection.write { transaction in
         for id in 1...3 {
@@ -42,25 +42,26 @@
         // A cursor that has reported the end keeps reporting it.
         #expect(try cursor.next() == nil)
       }
-    }
 
-    @Test
-    func writeCursorsReturnRowsFromReturningClauses() throws {
-      var connection = try openTestConnection()
-      try connection.write { transaction in
-        try Item.insert { Item(id: 1, title: "before") }.execute(transaction)
-      }
-
+      // A write transaction's cursor returns the rows of a RETURNING clause.
       let updated = try connection.write { transaction in
-        try #sql("UPDATE items SET title = 'after' RETURNING id", as: Int.self)
-          .fetchAll(transaction)
+        var cursor = try #sql(
+          "UPDATE items SET title = 'after' WHERE id < 3 RETURNING id",
+          as: Int.self
+        )
+        .fetchCursor(transaction)
+        var ids: [Int] = []
+        while let id = try cursor.next() {
+          ids.append(id)
+        }
+        return ids
       }
-      #expect(updated == [1])
+      #expect(updated.sorted() == [1, 2])
 
       let titles = try connection.read { transaction in
-        try Item.select(\.title).fetchAll(transaction)
+        try Item.order { $0.id }.select(\.title).fetchAll(transaction)
       }
-      #expect(titles == ["after"])
+      #expect(titles == ["after", "after", "item 3"])
     }
 
     @Test
@@ -176,64 +177,6 @@
       // Ten identical fetches, one parse: each cursor returned its statement when it went out of
       // scope, and the next fetch found it waiting.
       #expect(counters.value == 1)
-    }
-
-    @Test(.libraryHooks)
-    func schemaChangesInvalidateCachedStatements() throws {
-      let preparations = TestCounter()
-      let base = builtInTestLibrary
-      var configuration = SQLiteConfiguration.default
-      configuration.library = base
-      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
-        connection,
-        sql,
-        byteCount,
-        flags,
-        statement,
-        tail in
-        if let sql, String(cString: sql).hasPrefix("SELECT title FROM current_items") {
-          preparations.increment()
-        }
-        return base.statements.preparation.prepare(
-          connection,
-          sql,
-          byteCount,
-          flags,
-          statement,
-          tail
-        )
-      }
-
-      var connection = try openTestConnection(configuration: configuration)
-      try connection.write { transaction in
-        try transaction.execute("INSERT INTO items VALUES (1, 'Original')")
-        try transaction.executeScript(
-          """
-          CREATE TABLE alternate_items (title TEXT NOT NULL);
-          INSERT INTO alternate_items VALUES ('Alternate');
-          CREATE VIEW current_items AS SELECT title FROM items;
-          """
-        )
-      }
-
-      let original = try connection.read { transaction in
-        try #sql("SELECT title FROM current_items", as: String.self).fetchAll(transaction)
-      }
-      try connection.write { transaction in
-        try transaction.executeScript(
-          """
-          DROP VIEW current_items;
-          CREATE VIEW current_items AS SELECT title FROM alternate_items;
-          """
-        )
-      }
-      let alternate = try connection.read { transaction in
-        try #sql("SELECT title FROM current_items", as: String.self).fetchAll(transaction)
-      }
-
-      #expect(original == ["Original"])
-      #expect(alternate == ["Alternate"])
-      #expect(preparations.value == 2)
     }
 
     @Test

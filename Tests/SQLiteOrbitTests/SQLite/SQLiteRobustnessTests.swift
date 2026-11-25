@@ -341,35 +341,6 @@
       }
     #endif
 
-    @Test(.libraryHooks)
-    func aStatementIsReusableAfterTheQueryUsingItFails() throws {
-      let probe = StatementLifecycleProbe()
-      do {
-        var handle = try openConnection(
-          configuration: probe.configuration(matching: "SELECT title FROM items")
-        )
-        try handle.write { transaction in
-          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
-        }
-
-        // Decoding the title as an integer fails partway through the cursor's life.
-        try handle.read { transaction in
-          _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
-            _ = try #sql("SELECT title FROM items", as: Int.self).fetchAll(transaction)
-          }
-        }
-
-        // The statement went back to the cache in a usable state rather than mid-scan.
-        let titles = try handle.read { transaction in
-          try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-        }
-        #expect(titles == ["kept"])
-        #expect(probe.prepared.value == 1)
-        #expect(probe.finalized.value == 0)
-      }
-      #expect(probe.finalized.value == probe.prepared.value)
-    }
-
     @Test
     func statementsCompiledBeforeAReadLendsTheRawHandleStillRun() throws {
       var handle = try openConnection()
@@ -424,13 +395,29 @@
     }
 
     @Test(.libraryHooks)
-    func anUnsignedValueTooLargeForSQLiteIsReportedAndLeavesTheCacheUsable() throws {
+    func aStatementIsReusableAfterItsQueryFailsToBindOrDecode() throws {
       let probe = StatementLifecycleProbe()
       do {
         var handle = try openConnection(
-          configuration: probe.configuration(matching: "INSERT INTO numbers")
+          configuration: probe.configuration(matching: "SELECT title FROM items", "INSERT INTO numbers")
         )
         try handle.execute("CREATE TABLE numbers (value INTEGER)")
+        try handle.write { transaction in
+          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
+        }
+
+        // Decoding the title as an integer fails partway through the cursor's life.
+        try handle.read { transaction in
+          _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+            _ = try #sql("SELECT title FROM items", as: Int.self).fetchAll(transaction)
+          }
+        }
+
+        // The statement went back to the cache in a usable state rather than mid-scan.
+        let titles = try handle.read { transaction in
+          try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
+        }
+        #expect(titles == ["kept"])
 
         // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
         // rather than wrapped.
@@ -458,7 +445,7 @@
           try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction)
         }
         #expect(stored == [1])
-        #expect(probe.prepared.value == 1)
+        #expect(probe.prepared.value == 2)
         #expect(probe.finalized.value == 0)
       }
       #expect(probe.finalized.value == probe.prepared.value)
