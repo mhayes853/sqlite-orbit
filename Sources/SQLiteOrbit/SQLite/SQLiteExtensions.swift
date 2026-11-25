@@ -38,15 +38,17 @@ extension SQLiteLibrary {
   /// Native bindings for automatic extension registration in one SQLite runtime.
   public struct AutoExtensions: Sendable {
     /// Registers an initializer: `sqlite3_auto_extension`.
-    public var register: @Sendable (@convention(c) () -> Void) -> Int32
+    public var register: @convention(c) (@convention(c) () -> Void) -> Int32
 
     /// Cancels an initializer for future connections: `sqlite3_cancel_auto_extension`.
-    public var cancel: @Sendable (@convention(c) () -> Void) -> Int32
+    public var cancel: @convention(c) (@convention(c) () -> Void) -> Int32
 
     /// Creates bindings to the selected runtime's registration entry points.
+    ///
+    /// Each entry point is a C function pointer: a C function, or a closure that captures nothing.
     public init(
-      register: @escaping @Sendable (@convention(c) () -> Void) -> Int32,
-      cancel: @escaping @Sendable (@convention(c) () -> Void) -> Int32
+      register: @convention(c) (@convention(c) () -> Void) -> Int32,
+      cancel: @convention(c) (@convention(c) () -> Void) -> Int32
     ) {
       self.register = register
       self.cancel = cancel
@@ -57,6 +59,12 @@ extension SQLiteLibrary {
   ///
   /// Existing connections are unaffected. Registration is runtime-wide, including connections
   /// outside Orbit. Registering the same initializer again is a harmless no-op.
+  ///
+  /// A read refuses SQL that SQLite reports may write, but a function or virtual table that writes
+  /// through the raw handle while a read-only `SELECT` steps, as SQLite's `eval()` can, is not
+  /// refused on a connection that can write. Inside a read transaction its write is discarded when
+  /// the read rolls back, and outside one it commits. A connection opened read-only, such as a
+  /// pool's reader, refuses it.
   ///
   /// - Throws: ``SQLiteFeatureUnavailableError`` when automatic registration is unsupported, or
   ///   ``SQLiteError`` when registration fails.

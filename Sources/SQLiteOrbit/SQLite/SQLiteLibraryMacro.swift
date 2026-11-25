@@ -16,6 +16,10 @@
 /// Arguments must be literals. The macro supplies ``SQLiteLibrary/transientDestructor`` to the
 /// text and blob functions whose buffers must be copied.
 ///
+/// The library's entry points are C function pointers. Swift forms one only from an unqualified
+/// function name or a closure that captures nothing, so with a module name the macro calls each
+/// function from such a closure.
+///
 /// - Parameters:
 ///   - apis: Optional API groups to include in the generated library.
 @freestanding(expression)

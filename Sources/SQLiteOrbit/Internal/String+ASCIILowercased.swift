@@ -1,18 +1,20 @@
 extension String {
   var asciiLowercased: String {
-    guard utf8.contains(where: { $0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "Z") }) else {
-      return self
-    }
-    return String(
-      decoding: utf8.map { byte in
-        switch byte {
-        case UInt8(ascii: "A")...UInt8(ascii: "Z"):
-          byte + (UInt8(ascii: "a") - UInt8(ascii: "A"))
-        default:
-          byte
+    // The bytes are read in place rather than through the `utf8` view's iterator, which costs
+    // several times as much over names as short as most are. The lowercased name is written
+    // straight into the new string, so one short enough to be stored inline allocates nothing.
+    var string = self
+    return string.withUTF8 { bytes in
+      let uppercase = UInt8(ascii: "A")...UInt8(ascii: "Z")
+      guard bytes.contains(where: uppercase.contains) else { return self }
+      return String(unsafeUninitializedCapacity: bytes.count) { buffer in
+        for index in bytes.indices {
+          let byte = bytes[index]
+          buffer[index] =
+            uppercase.contains(byte) ? byte + (UInt8(ascii: "a") - UInt8(ascii: "A")) : byte
         }
-      },
-      as: UTF8.self
-    )
+        return bytes.count
+      }
+    }
   }
 }

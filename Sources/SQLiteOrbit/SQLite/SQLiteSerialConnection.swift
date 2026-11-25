@@ -77,7 +77,8 @@ public final class SQLiteSerialConnection: Sendable {
     flags: SQLiteOpenFlags = [.readWrite, .create, .noMutex],
     setups: [SQLiteSetup] = [],
     idleTimeout: Duration? = nil,
-    suspension: SQLiteWriteSuspension?
+    suspension: SQLiteWriteSuspension?,
+    executor: Executor? = nil
   ) throws {
     self.connection = try SQLiteSerialConnectionActor(
       path: path,
@@ -85,8 +86,46 @@ public final class SQLiteSerialConnection: Sendable {
       configuration: configuration,
       driverSetups: setups,
       idleTimeout: idleTimeout,
-      suspension: suspension
+      suspension: suspension,
+      executor: executor
     )
+  }
+
+  #if _runtime(_multithreaded)
+    /// The executor a connection serializes its accesses on.
+    typealias Executor = SQLiteConnectionExecutor
+  #else
+    /// A single-threaded runtime runs every connection on its one thread.
+    typealias Executor = Never
+  #endif
+
+  /// Opens a connection without blocking the calling task's thread.
+  ///
+  /// Opening runs every setup, which may take long, as SQLCipher's key derivation does. On a
+  /// threaded runtime it therefore runs on a new executor rather than on a cooperative thread, and
+  /// `open` hands that executor to the connection it opens, which keeps running there. A
+  /// single-threaded runtime has no other thread, and opens inline.
+  ///
+  /// - Parameters:
+  ///   - path: The database, which labels the executor.
+  ///   - open: Opens the connection on the executor it is given.
+  /// - Throws: `CancellationError` when the task is cancelled before opening starts, or whatever
+  ///   `open` throws.
+  static func openOnOwnExecutor(
+    path: OrbitDatabasePath,
+    _ open: @escaping @Sendable (_ executor: Executor?) throws -> SQLiteSerialConnection
+  ) async throws -> SQLiteSerialConnection {
+    #if _runtime(_multithreaded)
+      let executor = SQLiteConnectionExecutor(path: path)
+      return try await SQLiteConnectionOpener(executor).run {
+        try Task.checkCancellation()
+        return try open(executor)
+      }
+    #else
+      _ = path
+      try Task.checkCancellation()
+      return try open(nil)
+    #endif
   }
 
   /// Lends the connection for reading, once every access that arrived before this one is done.
@@ -97,8 +136,8 @@ public final class SQLiteSerialConnection: Sendable {
   /// }
   /// ```
   ///
-  /// A connection that can write enforces `PRAGMA query_only` for the duration, so a read that
-  /// attempts a write fails.
+  /// A read that attempts a write fails: SQL that SQLite reports may write is refused, and a
+  /// connection that can write enforces `PRAGMA query_only` once the read lends its raw handle.
   ///
   /// - Parameter body: Receives the connection. Each statement runs in its own implicit
   ///   transaction unless `body` opens one.
@@ -163,6 +202,15 @@ public final class SQLiteSerialConnection: Sendable {
   }
 }
 
+extension SQLiteSerialConnection: OrbitMemoryReleasing {
+  /// Runs ``SQLiteConnection/releaseMemory()`` on the connection's executor once the accesses
+  /// queued before the call are done. It is not an access, so it runs even while writes are
+  /// suspended.
+  public nonisolated(nonsending) func releaseMemory() async {
+    await connection.releaseMemory()
+  }
+}
+
 /// The actor a ``SQLiteSerialConnection`` runs its accesses on, isolated to the connection's own
 /// executor.
 actor SQLiteSerialConnectionActor {
@@ -190,7 +238,8 @@ actor SQLiteSerialConnectionActor {
     configuration: SQLiteConfiguration,
     driverSetups: [SQLiteSetup],
     idleTimeout: Duration?,
-    suspension: SQLiteWriteSuspension?
+    suspension: SQLiteWriteSuspension?,
+    executor: SQLiteSerialConnection.Executor?
   ) throws {
     var handle = try SQLiteConnection(path: path, configuration: configuration, flags: flags)
     // Role-specific setup is driver policy, performed through the same public lending API but
@@ -212,9 +261,11 @@ actor SQLiteSerialConnectionActor {
     }
     self.suspension = suspension
     #if _runtime(_multithreaded)
-      self.executor = SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
+      // An executor made beforehand is the one the connection was opened on, and keeps its own
+      // idle timeout.
+      self.executor = executor ?? SQLiteConnectionExecutor(path: path, idleTimeout: idleTimeout)
     #else
-      _ = idleTimeout
+      _ = (idleTimeout, executor)
     #endif
     self.handle = handle
   }
@@ -265,6 +316,12 @@ actor SQLiteSerialConnectionActor {
         }
       }
     }
+  }
+
+  // Not an access: it runs no SQL, so it needs neither a cancellation token nor the suspension's
+  // tracking. No blocking access can be under way while this runs on the actor.
+  func releaseMemory() {
+    handle.releaseMemory()
   }
 
   private nonisolated func performBlocking<Result: Sendable>(
@@ -323,6 +380,26 @@ actor SQLiteSerialConnectionActor {
     }
   }
 }
+
+#if _runtime(_multithreaded)
+  /// Runs work on an executor made for a connection before the connection itself exists, so that
+  /// opening it happens there rather than on the awaiting task's cooperative thread.
+  private actor SQLiteConnectionOpener {
+    private let executor: SQLiteConnectionExecutor
+
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+      executor.asUnownedSerialExecutor()
+    }
+
+    init(_ executor: SQLiteConnectionExecutor) {
+      self.executor = executor
+    }
+
+    func run<Result: Sendable>(_ work: @Sendable () throws -> Result) throws -> Result {
+      try work()
+    }
+  }
+#endif
 
 // Driver policy composes only public connection capabilities.
 extension SQLiteReadConnection {

@@ -71,6 +71,14 @@ final class SQLitePoolWriterBarrier: OrbitDatabaseWriterBarrier {
 }
 
 /// Lends reader and writer connections to asynchronous tasks and blocking threads from one queue.
+///
+/// Writers are open from the start. Readers open on demand, up to a maximum: a read that finds no
+/// idle reader while fewer are open is granted a slot and opens its reader outside the lock, so
+/// that opening one holds up no other access. An asynchronous read opens it on the reader's own
+/// executor, never on a cooperative thread; a blocking read opens it on its calling thread.
+///
+/// ``releaseMemory()`` starts a new reader generation. A reader of an older generation, lent out
+/// or still opening at the time, is closed rather than kept when its read ends.
 final class SQLitePoolScheduler: Sendable {
   private enum Kind: Equatable, Sendable {
     case read
@@ -81,17 +89,29 @@ final class SQLitePoolScheduler: Sendable {
   private struct Lease: Sendable {
     let id: Int
     let kind: Kind
+    // The reader generation a read was granted in. Placed next to `kind` to keep the lease small.
+    let readerGeneration: UInt32
     let connection: SQLiteSerialConnection
     let blockingHolder: ThreadID?
   }
 
+  private enum Grant: Sendable {
+    case lease(Lease)
+    /// Room for one more reader, which the read opens.
+    case readerSlot(id: Int, readerGeneration: UInt32, blockingHolder: ThreadID?)
+  }
+
   private struct State {
-    var idleReaders: [SQLiteSerialConnection]
+    let maximumReaders: Int
+    var idleReaders: [SQLiteSerialConnection] = []
+    // Every reader idle, lent out, or being opened, of any generation.
+    var readerCount = 0
+    var readerGeneration: UInt32 = 0
     var idleWriters: [SQLiteSerialConnection]
     var activeOrdinaryAccesses = 0
     var isBarrierWriteActive = false
     var waiting: [Waiter] = []
-    var settled: [Int: Result<Lease, any Error>] = [:]
+    var settled: [Int: Result<Grant, any Error>] = [:]
     var blockingHolders: [ThreadID] = []
     var activeWriterIDs: Set<Int> = []
     var writerBarriers: [Int: [SQLitePoolWriterBarrier]] = [:]
@@ -111,13 +131,13 @@ final class SQLitePoolScheduler: Sendable {
 
     enum Wake {
       case blocking(PoolSemaphore)
-      case asynchronous(CheckedContinuation<Lease, any Error>?)
+      case asynchronous(CheckedContinuation<Grant, any Error>?)
     }
   }
 
   private struct Wakeup {
     let wake: Waiter.Wake
-    let outcome: Result<Lease, any Error>
+    let outcome: Result<Grant, any Error>
 
     func deliver() {
       switch wake {
@@ -129,11 +149,39 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private let state: Lock<State>
+  private let openReader: @Sendable () throws -> SQLiteSerialConnection
+  private let openReaderAsynchronously: @Sendable () async throws -> SQLiteSerialConnection
+  /// Every writer, whether idle or lent out.
+  let writers: [SQLiteSerialConnection]
 
-  init(readers: [SQLiteSerialConnection], writers: [SQLiteSerialConnection]) {
-    precondition(!readers.isEmpty)
+  /// - Parameters:
+  ///   - maximumReaders: The most readers open at once.
+  ///   - openReader: Opens one reader for a blocking read, on the read's calling thread.
+  ///   - openReaderAsynchronously: Opens one reader for an asynchronous read, without blocking
+  ///     the read's cooperative thread.
+  ///   - writers: The writers, already open.
+  init(
+    maximumReaders: Int,
+    openReader: @escaping @Sendable () throws -> SQLiteSerialConnection,
+    openReaderAsynchronously: @escaping @Sendable () async throws -> SQLiteSerialConnection,
+    writers: [SQLiteSerialConnection]
+  ) {
+    precondition(maximumReaders > 0)
     precondition(!writers.isEmpty)
-    self.state = Lock(State(idleReaders: readers, idleWriters: writers))
+    self.state = Lock(State(maximumReaders: maximumReaders, idleWriters: writers))
+    self.openReader = openReader
+    self.openReaderAsynchronously = openReaderAsynchronously
+    self.writers = writers
+  }
+
+  /// How many readers are open, counting those being opened, and how many of them are idle.
+  var readerCounts: (open: Int, idle: Int) {
+    state.withLock { ($0.readerCount, $0.idleReaders.count) }
+  }
+
+  /// How many accesses are waiting for a connection.
+  var waitingAccessCount: Int {
+    state.withLock { $0.waiting.count }
   }
 
   // MARK: - Scoped access
@@ -158,7 +206,7 @@ final class SQLitePoolScheduler: Sendable {
   func readWithoutTransactionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
-    let lease = acquireBlocking(.read)
+    let lease = try acquireBlocking(.read)
     defer { release(lease) }
     return try lease.connection.withReadConnectionBlocking(body)
   }
@@ -167,7 +215,7 @@ final class SQLitePoolScheduler: Sendable {
     concurrent: Bool = false,
     _ body: sending (borrowing SQLiteWriteConnection) throws -> Result
   ) throws -> Result {
-    let lease = acquireBlocking(concurrent ? .concurrentWrite : .barrierWrite)
+    let lease = try acquireBlocking(concurrent ? .concurrentWrite : .barrierWrite)
     defer { release(lease) }
     return try lease.connection.withWriteConnectionBlocking(body)
   }
@@ -189,23 +237,82 @@ final class SQLitePoolScheduler: Sendable {
     try Task.checkCancellation()
     let request = join(kind, blockingHolder: nil)
     for wakeup in request.wakeups { wakeup.deliver() }
-    return try await withTaskCancellationHandler {
+    let grant = try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { install($0, for: request.id) }
     } onCancel: {
       cancel(request.id)
     }
+    switch grant {
+    case .lease(let lease):
+      return lease
+    case .readerSlot(let id, let readerGeneration, let blockingHolder):
+      return try await openReader(
+        id: id,
+        readerGeneration: readerGeneration,
+        blockingHolder: blockingHolder
+      )
+    }
   }
 
-  private func acquireBlocking(_ kind: Kind) -> Lease {
+  /// Opens the reader of an asynchronous read granted a slot, on the reader's own executor. A
+  /// reader that fails to open gives its slot back.
+  private func openReader(
+    id: Int,
+    readerGeneration: UInt32,
+    blockingHolder: ThreadID?
+  ) async throws -> Lease {
+    // The slot already counts against the maximum, so opening needs no lock.
+    do {
+      // A slot granted to a task cancelled since goes back rather than opening a reader for it.
+      // Opening checks again once it is on the executor.
+      try Task.checkCancellation()
+      return Lease(
+        id: id,
+        kind: .read,
+        readerGeneration: readerGeneration,
+        connection: try await openReaderAsynchronously(),
+        blockingHolder: blockingHolder
+      )
+    } catch {
+      giveBackReaderSlot(blockingHolder: blockingHolder)
+      throw error
+    }
+  }
+
+  private func acquireBlocking(_ kind: Kind) throws -> Lease {
     let semaphore = PoolSemaphore(value: 0)
     let request = join(kind, blockingHolder: .current, semaphore: semaphore)
     for wakeup in request.wakeups { wakeup.deliver() }
     semaphore.wait()
-    return state.withLock { state in
-      guard case .success(let lease) = state.settled.removeValue(forKey: request.id) else {
+    let grant = state.withLock { state in
+      guard case .success(let grant) = state.settled.removeValue(forKey: request.id) else {
         preconditionFailure("A blocking pool request was not settled by a grant.")
       }
+      return grant
+    }
+    return try lease(for: grant)
+  }
+
+  /// Returns the lease granted to a blocking access, opening the reader of a read granted a slot on
+  /// the calling thread. A reader that fails to open gives its slot back.
+  private func lease(for grant: Grant) throws -> Lease {
+    switch grant {
+    case .lease(let lease):
       return lease
+    case .readerSlot(let id, let readerGeneration, let blockingHolder):
+      // The slot already counts against the maximum, so opening needs no lock.
+      do {
+        return Lease(
+          id: id,
+          kind: .read,
+          readerGeneration: readerGeneration,
+          connection: try openReader(),
+          blockingHolder: blockingHolder
+        )
+      } catch {
+        giveBackReaderSlot(blockingHolder: blockingHolder)
+        throw error
+      }
     }
   }
 
@@ -238,13 +345,19 @@ final class SQLitePoolScheduler: Sendable {
 
   // MARK: - Releasing
 
+  // A reader of an older generation is not kept: the caller's lease drops the last reference to it
+  // after this returns, outside the lock.
   private func release(_ lease: Lease) {
     let released = state.withLock {
       state -> (wakeups: [Wakeup], barriers: [SQLitePoolWriterBarrier]) in
       var barriers: [SQLitePoolWriterBarrier] = []
       switch lease.kind {
       case .read:
-        state.idleReaders.append(lease.connection)
+        if lease.readerGeneration == state.readerGeneration {
+          state.idleReaders.append(lease.connection)
+        } else {
+          state.readerCount -= 1
+        }
         state.activeOrdinaryAccesses -= 1
       case .concurrentWrite:
         state.idleWriters.append(lease.connection)
@@ -267,6 +380,39 @@ final class SQLitePoolScheduler: Sendable {
     for wakeup in released.wakeups { wakeup.deliver() }
   }
 
+  /// Ends a read that never opened the reader it was granted a slot for.
+  private func giveBackReaderSlot(blockingHolder: ThreadID?) {
+    let wakeups = state.withLock { state -> [Wakeup] in
+      state.readerCount -= 1
+      state.activeOrdinaryAccesses -= 1
+      if let blockingHolder {
+        state.blockingHolders.removeAll { $0 == blockingHolder }
+      }
+      return Self.grant(&state)
+    }
+    for wakeup in wakeups { wakeup.deliver() }
+  }
+
+  // MARK: - Releasing memory
+
+  /// Closes the idle readers now and the others when their reads end, and releases the memory of
+  /// every writer once its current access, if any, ends.
+  func releaseMemory() async {
+    // The idle readers are returned so that they close outside the lock. A read that waits while
+    // readers are idle is queued behind a barrier write, so the freed slots grant nothing.
+    _ = state.withLock { state in
+      defer { state.idleReaders.removeAll() }
+      state.readerCount -= state.idleReaders.count
+      state.readerGeneration &+= 1
+      return state.idleReaders
+    }
+    await withTaskGroup(of: Void.self) { group in
+      for writer in writers {
+        group.addTask { await writer.releaseMemory() }
+      }
+    }
+  }
+
   // MARK: - Granting
 
   private static func grant(_ state: inout State) -> [Wakeup] {
@@ -281,7 +427,8 @@ final class SQLitePoolScheduler: Sendable {
       let grantable = state.waiting.indices.first { index in
         guard index < boundary else { return false }
         switch state.waiting[index].kind {
-        case .read: return !state.idleReaders.isEmpty
+        case .read:
+          return !state.idleReaders.isEmpty || state.readerCount < state.maximumReaders
         case .concurrentWrite: return !state.idleWriters.isEmpty
         case .barrierWrite: return false
         }
@@ -289,15 +436,21 @@ final class SQLitePoolScheduler: Sendable {
 
       if let index = grantable {
         let waiter = state.waiting.remove(at: index)
-        let connection =
-          waiter.kind == .read
-          ? state.idleReaders.removeLast()
-          : state.idleWriters.removeLast()
         state.activeOrdinaryAccesses += 1
         if waiter.kind == .concurrentWrite {
           state.activeWriterIDs.insert(waiter.id)
+          wakeups.append(lend(state.idleWriters.removeLast(), to: waiter, in: &state))
+        } else if let reader = state.idleReaders.popLast() {
+          wakeups.append(lend(reader, to: waiter, in: &state))
+        } else {
+          state.readerCount += 1
+          let slot = Grant.readerSlot(
+            id: waiter.id,
+            readerGeneration: state.readerGeneration,
+            blockingHolder: waiter.blockingHolder
+          )
+          wakeups.append(settle(&state, waiter, with: .success(slot)))
         }
-        wakeups.append(lend(connection, to: waiter, in: &state))
         continue
       }
 
@@ -325,16 +478,17 @@ final class SQLitePoolScheduler: Sendable {
     let lease = Lease(
       id: waiter.id,
       kind: waiter.kind,
+      readerGeneration: state.readerGeneration,
       connection: connection,
       blockingHolder: waiter.blockingHolder
     )
-    return settle(&state, waiter, with: .success(lease))
+    return settle(&state, waiter, with: .success(.lease(lease)))
   }
 
   private static func settle(
     _ state: inout State,
     _ waiter: Waiter,
-    with outcome: Result<Lease, any Error>
+    with outcome: Result<Grant, any Error>
   ) -> Wakeup {
     switch waiter.wake {
     case .asynchronous(.some): break
@@ -344,10 +498,10 @@ final class SQLitePoolScheduler: Sendable {
   }
 
   private func install(
-    _ continuation: CheckedContinuation<Lease, any Error>,
+    _ continuation: CheckedContinuation<Grant, any Error>,
     for id: Int
   ) {
-    let settled = state.withLock { state -> Result<Lease, any Error>? in
+    let settled = state.withLock { state -> Result<Grant, any Error>? in
       if let outcome = state.settled.removeValue(forKey: id) { return outcome }
       if let index = state.waiting.firstIndex(where: { $0.id == id }) {
         state.waiting[index].wake = .asynchronous(continuation)

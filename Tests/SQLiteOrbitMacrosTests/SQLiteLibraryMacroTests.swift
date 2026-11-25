@@ -2,7 +2,7 @@ import MacroTesting
 import SQLiteOrbitMacros
 import Testing
 
-@Suite(.macros(["sqliteLibrary": SQLiteLibraryMacro.self]))
+@Suite(.macros(["sqliteLibrary": SQLiteLibraryMacro.self], indentationWidth: .spaces(2)))
 struct SQLiteLibraryMacroTests {
   @Test(arguments: [
     "",
@@ -17,7 +17,7 @@ struct SQLiteLibraryMacroTests {
       let library = #sqliteLibrary(\(arguments))
       """
     } expansion: {
-      #"""
+      """
       let library = SQLiteLibrary(
         runtime: SQLiteLibrary.Runtime(
           threadsafe: sqlite3_threadsafe,
@@ -77,8 +77,12 @@ struct SQLiteLibraryMacroTests {
           byteCount: sqlite3_column_bytes,
           name: sqlite3_column_name
         ),
-        authorizer: SQLiteLibrary.Authorizer(install: sqlite3_set_authorizer),
-        busyHandler: SQLiteLibrary.BusyHandler(install: sqlite3_busy_handler),
+        authorizer: SQLiteLibrary.Authorizer(
+          install: sqlite3_set_authorizer
+        ),
+        busyHandler: SQLiteLibrary.BusyHandler(
+          install: sqlite3_busy_handler
+        ),
         trustedSchema: { connection, enabled in
           try connection.execute(
             enabled ? "PRAGMA trusted_schema = 1" : "PRAGMA trusted_schema = 0"
@@ -149,11 +153,13 @@ struct SQLiteLibraryMacroTests {
             )
           )
         ),
-        collations: SQLiteLibrary.Collations(create: sqlite3_create_collation_v2),
+        collations: SQLiteLibrary.Collations(
+          create: sqlite3_create_collation_v2
+        ),
         encryption: nil,
         extensions: nil
       )
-      """#
+      """
     }
   }
 
@@ -169,10 +175,10 @@ struct SQLiteLibraryMacroTests {
       SQLiteLibrary.Extensions(
           autoExtensions: SQLiteLibrary.AutoExtensions(
             register: {
-                SQLCipher.sqlite3_auto_extension($0)
+              SQLCipher.sqlite3_auto_extension($0)
             },
             cancel: {
-                SQLCipher.sqlite3_cancel_auto_extension($0)
+              SQLCipher.sqlite3_cancel_auto_extension($0)
             }
           )
         )
@@ -185,42 +191,90 @@ struct SQLiteLibraryMacroTests {
       #"""
       let library = SQLiteLibrary(
         runtime: SQLiteLibrary.Runtime(
-          threadsafe: SQLCipher.sqlite3_threadsafe,
-          versionNumber: SQLCipher.sqlite3_libversion_number
+          threadsafe: {
+            SQLCipher.sqlite3_threadsafe()
+          },
+          versionNumber: {
+            SQLCipher.sqlite3_libversion_number()
+          }
         ),
         connections: SQLiteLibrary.Connections(
-          open: SQLCipher.sqlite3_open_v2,
-          close: SQLCipher.sqlite3_close_v2,
-          errorMessage: SQLCipher.sqlite3_errmsg,
-          extendedErrorCode: SQLCipher.sqlite3_extended_errcode,
-          setExtendedResultCodes: SQLCipher.sqlite3_extended_result_codes,
-          setBusyTimeout: SQLCipher.sqlite3_busy_timeout,
-          interrupt: SQLCipher.sqlite3_interrupt,
-          changes: SQLCipher.sqlite3_changes64,
-          lastInsertedRowID: SQLCipher.sqlite3_last_insert_rowid,
-          isAutocommit: SQLCipher.sqlite3_get_autocommit,
-          walCheckpoint: SQLCipher.sqlite3_wal_checkpoint_v2
+          open: {
+            SQLCipher.sqlite3_open_v2($0, $1, $2, $3)
+          },
+          close: {
+            SQLCipher.sqlite3_close_v2($0)
+          },
+          errorMessage: {
+            SQLCipher.sqlite3_errmsg($0)
+          },
+          extendedErrorCode: {
+            SQLCipher.sqlite3_extended_errcode($0)
+          },
+          setExtendedResultCodes: {
+            SQLCipher.sqlite3_extended_result_codes($0, $1)
+          },
+          setBusyTimeout: {
+            SQLCipher.sqlite3_busy_timeout($0, $1)
+          },
+          interrupt: {
+            SQLCipher.sqlite3_interrupt($0)
+          },
+          changes: {
+            SQLCipher.sqlite3_changes64($0)
+          },
+          lastInsertedRowID: {
+            SQLCipher.sqlite3_last_insert_rowid($0)
+          },
+          isAutocommit: {
+            SQLCipher.sqlite3_get_autocommit($0)
+          },
+          walCheckpoint: {
+            SQLCipher.sqlite3_wal_checkpoint_v2($0, $1, $2, $3, $4)
+          }
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
-            prepare: SQLCipher.sqlite3_prepare_v3
+            prepare: {
+              SQLCipher.sqlite3_prepare_v3($0, $1, $2, $3, $4, $5)
+            }
           ),
           execution: SQLiteLibrary.StatementExecution(
-            step: SQLCipher.sqlite3_step,
-            reset: SQLCipher.sqlite3_reset,
-            finalize: SQLCipher.sqlite3_finalize,
-            clearBindings: SQLCipher.sqlite3_clear_bindings
+            step: {
+              SQLCipher.sqlite3_step($0)
+            },
+            reset: {
+              SQLCipher.sqlite3_reset($0)
+            },
+            finalize: {
+              SQLCipher.sqlite3_finalize($0)
+            },
+            clearBindings: {
+              SQLCipher.sqlite3_clear_bindings($0)
+            }
           ),
           inspection: SQLiteLibrary.StatementInspection(
-            isReadOnly: SQLCipher.sqlite3_stmt_readonly,
-            sql: SQLCipher.sqlite3_sql
+            isReadOnly: {
+              SQLCipher.sqlite3_stmt_readonly($0)
+            },
+            sql: {
+              SQLCipher.sqlite3_sql($0)
+            }
           )
         ),
         bindings: SQLiteLibrary.Bindings(
-          parameterCount: SQLCipher.sqlite3_bind_parameter_count,
-          null: SQLCipher.sqlite3_bind_null,
-          int64: SQLCipher.sqlite3_bind_int64,
-          double: SQLCipher.sqlite3_bind_double,
+          parameterCount: {
+            SQLCipher.sqlite3_bind_parameter_count($0)
+          },
+          null: {
+            SQLCipher.sqlite3_bind_null($0, $1)
+          },
+          int64: {
+            SQLCipher.sqlite3_bind_int64($0, $1, $2)
+          },
+          double: {
+            SQLCipher.sqlite3_bind_double($0, $1, $2)
+          },
           text: {
             SQLCipher.sqlite3_bind_text(
               $0, $1, $2, $3, SQLiteLibrary.transientDestructor
@@ -233,40 +287,86 @@ struct SQLiteLibraryMacroTests {
           }
         ),
         columns: SQLiteLibrary.Columns(
-          count: SQLCipher.sqlite3_column_count,
-          type: SQLCipher.sqlite3_column_type,
-          int64: SQLCipher.sqlite3_column_int64,
-          double: SQLCipher.sqlite3_column_double,
-          text: SQLCipher.sqlite3_column_text,
-          blob: SQLCipher.sqlite3_column_blob,
-          byteCount: SQLCipher.sqlite3_column_bytes,
-          name: SQLCipher.sqlite3_column_name
+          count: {
+            SQLCipher.sqlite3_column_count($0)
+          },
+          type: {
+            SQLCipher.sqlite3_column_type($0, $1)
+          },
+          int64: {
+            SQLCipher.sqlite3_column_int64($0, $1)
+          },
+          double: {
+            SQLCipher.sqlite3_column_double($0, $1)
+          },
+          text: {
+            SQLCipher.sqlite3_column_text($0, $1)
+          },
+          blob: {
+            SQLCipher.sqlite3_column_blob($0, $1)
+          },
+          byteCount: {
+            SQLCipher.sqlite3_column_bytes($0, $1)
+          },
+          name: {
+            SQLCipher.sqlite3_column_name($0, $1)
+          }
         ),
-        authorizer: SQLiteLibrary.Authorizer(install: SQLCipher.sqlite3_set_authorizer),
-        busyHandler: SQLiteLibrary.BusyHandler(install: SQLCipher.sqlite3_busy_handler),
+        authorizer: SQLiteLibrary.Authorizer(
+          install: {
+            SQLCipher.sqlite3_set_authorizer($0, $1, $2)
+          }
+        ),
+        busyHandler: SQLiteLibrary.BusyHandler(
+          install: {
+            SQLCipher.sqlite3_busy_handler($0, $1, $2)
+          }
+        ),
         trustedSchema: { connection, enabled in
           try connection.execute(
             enabled ? "PRAGMA trusted_schema = 1" : "PRAGMA trusted_schema = 0"
           )
         },
         scalarFunctions: SQLiteLibrary.ScalarFunctions(
-          register: SQLCipher.sqlite3_create_function_v2,
+          register: {
+            SQLCipher.sqlite3_create_function_v2($0, $1, $2, $3, $4, $5, $6, $7, $8)
+          },
           callbacks: SQLiteLibrary.FunctionCallbacks(
             context: SQLiteLibrary.FunctionCallbacks.Context(
-              userData: SQLCipher.sqlite3_user_data
+              userData: {
+                SQLCipher.sqlite3_user_data($0)
+              }
             ),
             argument: SQLiteLibrary.FunctionCallbacks.Argument(
-              type: SQLCipher.sqlite3_value_type,
-              int64: SQLCipher.sqlite3_value_int64,
-              double: SQLCipher.sqlite3_value_double,
-              text: SQLCipher.sqlite3_value_text,
-              blob: SQLCipher.sqlite3_value_blob,
-              byteCount: SQLCipher.sqlite3_value_bytes
+              type: {
+                SQLCipher.sqlite3_value_type($0)
+              },
+              int64: {
+                SQLCipher.sqlite3_value_int64($0)
+              },
+              double: {
+                SQLCipher.sqlite3_value_double($0)
+              },
+              text: {
+                SQLCipher.sqlite3_value_text($0)
+              },
+              blob: {
+                SQLCipher.sqlite3_value_blob($0)
+              },
+              byteCount: {
+                SQLCipher.sqlite3_value_bytes($0)
+              }
             ),
             result: SQLiteLibrary.FunctionCallbacks.Result(
-              null: SQLCipher.sqlite3_result_null,
-              int64: SQLCipher.sqlite3_result_int64,
-              double: SQLCipher.sqlite3_result_double,
+              null: {
+                SQLCipher.sqlite3_result_null($0)
+              },
+              int64: {
+                SQLCipher.sqlite3_result_int64($0, $1)
+              },
+              double: {
+                SQLCipher.sqlite3_result_double($0, $1)
+              },
               text: {
                 SQLCipher.sqlite3_result_text(
                   $0, $1, $2, SQLiteLibrary.transientDestructor
@@ -277,29 +377,55 @@ struct SQLiteLibraryMacroTests {
                   $0, $1, $2, SQLiteLibrary.transientDestructor
                 )
               },
-              error: SQLCipher.sqlite3_result_error
+              error: {
+                SQLCipher.sqlite3_result_error($0, $1, $2)
+              }
             )
           )
         ),
         aggregateFunctions: SQLiteLibrary.AggregateFunctions(
-          register: SQLCipher.sqlite3_create_function_v2,
-          context: SQLCipher.sqlite3_aggregate_context,
+          register: {
+            SQLCipher.sqlite3_create_function_v2($0, $1, $2, $3, $4, $5, $6, $7, $8)
+          },
+          context: {
+            SQLCipher.sqlite3_aggregate_context($0, $1)
+          },
           callbacks: SQLiteLibrary.FunctionCallbacks(
             context: SQLiteLibrary.FunctionCallbacks.Context(
-              userData: SQLCipher.sqlite3_user_data
+              userData: {
+                SQLCipher.sqlite3_user_data($0)
+              }
             ),
             argument: SQLiteLibrary.FunctionCallbacks.Argument(
-              type: SQLCipher.sqlite3_value_type,
-              int64: SQLCipher.sqlite3_value_int64,
-              double: SQLCipher.sqlite3_value_double,
-              text: SQLCipher.sqlite3_value_text,
-              blob: SQLCipher.sqlite3_value_blob,
-              byteCount: SQLCipher.sqlite3_value_bytes
+              type: {
+                SQLCipher.sqlite3_value_type($0)
+              },
+              int64: {
+                SQLCipher.sqlite3_value_int64($0)
+              },
+              double: {
+                SQLCipher.sqlite3_value_double($0)
+              },
+              text: {
+                SQLCipher.sqlite3_value_text($0)
+              },
+              blob: {
+                SQLCipher.sqlite3_value_blob($0)
+              },
+              byteCount: {
+                SQLCipher.sqlite3_value_bytes($0)
+              }
             ),
             result: SQLiteLibrary.FunctionCallbacks.Result(
-              null: SQLCipher.sqlite3_result_null,
-              int64: SQLCipher.sqlite3_result_int64,
-              double: SQLCipher.sqlite3_result_double,
+              null: {
+                SQLCipher.sqlite3_result_null($0)
+              },
+              int64: {
+                SQLCipher.sqlite3_result_int64($0, $1)
+              },
+              double: {
+                SQLCipher.sqlite3_result_double($0, $1)
+              },
               text: {
                 SQLCipher.sqlite3_result_text(
                   $0, $1, $2, SQLiteLibrary.transientDestructor
@@ -310,12 +436,25 @@ struct SQLiteLibraryMacroTests {
                   $0, $1, $2, SQLiteLibrary.transientDestructor
                 )
               },
-              error: SQLCipher.sqlite3_result_error
+              error: {
+                SQLCipher.sqlite3_result_error($0, $1, $2)
+              }
             )
           )
         ),
-        collations: SQLiteLibrary.Collations(create: SQLCipher.sqlite3_create_collation_v2),
-        encryption: SQLiteLibrary.Encryption(key: SQLCipher.sqlite3_key_v2, rekey: SQLCipher.sqlite3_rekey_v2),
+        collations: SQLiteLibrary.Collations(
+          create: {
+            SQLCipher.sqlite3_create_collation_v2($0, $1, $2, $3, $4, $5)
+          }
+        ),
+        encryption: SQLiteLibrary.Encryption(
+          key: {
+            SQLCipher.sqlite3_key_v2($0, $1, $2, $3)
+          },
+          rekey: {
+            SQLCipher.sqlite3_rekey_v2($0, $1, $2, $3)
+          }
+        ),
         extensions: \#(extensions)
       )
       """#
@@ -332,42 +471,90 @@ struct SQLiteLibraryMacroTests {
       """
       let library = SQLiteLibrary(
         runtime: SQLiteLibrary.Runtime(
-          threadsafe: TursoSQLite3.sqlite3_threadsafe,
-          versionNumber: TursoSQLite3.sqlite3_libversion_number
+          threadsafe: {
+            TursoSQLite3.sqlite3_threadsafe()
+          },
+          versionNumber: {
+            TursoSQLite3.sqlite3_libversion_number()
+          }
         ),
         connections: SQLiteLibrary.Connections(
-          open: TursoSQLite3.sqlite3_open_v2,
-          close: TursoSQLite3.sqlite3_close_v2,
-          errorMessage: TursoSQLite3.sqlite3_errmsg,
-          extendedErrorCode: TursoSQLite3.sqlite3_extended_errcode,
-          setExtendedResultCodes: TursoSQLite3.sqlite3_extended_result_codes,
-          setBusyTimeout: TursoSQLite3.sqlite3_busy_timeout,
-          interrupt: TursoSQLite3.sqlite3_interrupt,
-          changes: TursoSQLite3.sqlite3_changes64,
-          lastInsertedRowID: TursoSQLite3.sqlite3_last_insert_rowid,
-          isAutocommit: TursoSQLite3.sqlite3_get_autocommit,
-          walCheckpoint: TursoSQLite3.sqlite3_wal_checkpoint_v2
+          open: {
+            TursoSQLite3.sqlite3_open_v2($0, $1, $2, $3)
+          },
+          close: {
+            TursoSQLite3.sqlite3_close_v2($0)
+          },
+          errorMessage: {
+            TursoSQLite3.sqlite3_errmsg($0)
+          },
+          extendedErrorCode: {
+            TursoSQLite3.sqlite3_extended_errcode($0)
+          },
+          setExtendedResultCodes: {
+            TursoSQLite3.sqlite3_extended_result_codes($0, $1)
+          },
+          setBusyTimeout: {
+            TursoSQLite3.sqlite3_busy_timeout($0, $1)
+          },
+          interrupt: {
+            TursoSQLite3.sqlite3_interrupt($0)
+          },
+          changes: {
+            TursoSQLite3.sqlite3_changes64($0)
+          },
+          lastInsertedRowID: {
+            TursoSQLite3.sqlite3_last_insert_rowid($0)
+          },
+          isAutocommit: {
+            TursoSQLite3.sqlite3_get_autocommit($0)
+          },
+          walCheckpoint: {
+            TursoSQLite3.sqlite3_wal_checkpoint_v2($0, $1, $2, $3, $4)
+          }
         ),
         statements: SQLiteLibrary.Statements(
           preparation: SQLiteLibrary.StatementPreparation(
-            prepare: TursoSQLite3.sqlite3_prepare_v3
+            prepare: {
+              TursoSQLite3.sqlite3_prepare_v3($0, $1, $2, $3, $4, $5)
+            }
           ),
           execution: SQLiteLibrary.StatementExecution(
-            step: TursoSQLite3.sqlite3_step,
-            reset: TursoSQLite3.sqlite3_reset,
-            finalize: TursoSQLite3.sqlite3_finalize,
-            clearBindings: TursoSQLite3.sqlite3_clear_bindings
+            step: {
+              TursoSQLite3.sqlite3_step($0)
+            },
+            reset: {
+              TursoSQLite3.sqlite3_reset($0)
+            },
+            finalize: {
+              TursoSQLite3.sqlite3_finalize($0)
+            },
+            clearBindings: {
+              TursoSQLite3.sqlite3_clear_bindings($0)
+            }
           ),
           inspection: SQLiteLibrary.StatementInspection(
-            isReadOnly: TursoSQLite3.sqlite3_stmt_readonly,
-            sql: TursoSQLite3.sqlite3_sql
+            isReadOnly: {
+              TursoSQLite3.sqlite3_stmt_readonly($0)
+            },
+            sql: {
+              TursoSQLite3.sqlite3_sql($0)
+            }
           )
         ),
         bindings: SQLiteLibrary.Bindings(
-          parameterCount: TursoSQLite3.sqlite3_bind_parameter_count,
-          null: TursoSQLite3.sqlite3_bind_null,
-          int64: TursoSQLite3.sqlite3_bind_int64,
-          double: TursoSQLite3.sqlite3_bind_double,
+          parameterCount: {
+            TursoSQLite3.sqlite3_bind_parameter_count($0)
+          },
+          null: {
+            TursoSQLite3.sqlite3_bind_null($0, $1)
+          },
+          int64: {
+            TursoSQLite3.sqlite3_bind_int64($0, $1, $2)
+          },
+          double: {
+            TursoSQLite3.sqlite3_bind_double($0, $1, $2)
+          },
           text: {
             TursoSQLite3.sqlite3_bind_text(
               $0, $1, $2, $3, SQLiteLibrary.transientDestructor
@@ -380,14 +567,30 @@ struct SQLiteLibraryMacroTests {
           }
         ),
         columns: SQLiteLibrary.Columns(
-          count: TursoSQLite3.sqlite3_column_count,
-          type: TursoSQLite3.sqlite3_column_type,
-          int64: TursoSQLite3.sqlite3_column_int64,
-          double: TursoSQLite3.sqlite3_column_double,
-          text: TursoSQLite3.sqlite3_column_text,
-          blob: TursoSQLite3.sqlite3_column_blob,
-          byteCount: TursoSQLite3.sqlite3_column_bytes,
-          name: TursoSQLite3.sqlite3_column_name
+          count: {
+            TursoSQLite3.sqlite3_column_count($0)
+          },
+          type: {
+            TursoSQLite3.sqlite3_column_type($0, $1)
+          },
+          int64: {
+            TursoSQLite3.sqlite3_column_int64($0, $1)
+          },
+          double: {
+            TursoSQLite3.sqlite3_column_double($0, $1)
+          },
+          text: {
+            TursoSQLite3.sqlite3_column_text($0, $1)
+          },
+          blob: {
+            TursoSQLite3.sqlite3_column_blob($0, $1)
+          },
+          byteCount: {
+            TursoSQLite3.sqlite3_column_bytes($0, $1)
+          },
+          name: {
+            TursoSQLite3.sqlite3_column_name($0, $1)
+          }
         ),
         authorizer: nil,
         busyHandler: nil,

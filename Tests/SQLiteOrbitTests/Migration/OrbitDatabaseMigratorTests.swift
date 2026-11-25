@@ -7,7 +7,7 @@
 
     @testable import SQLiteOrbit
 
-    @Suite
+    @Suite(.libraryHooks)
     struct OrbitDatabaseMigratorTests {
       // MARK: - Order
 
@@ -110,6 +110,15 @@
           try await migrator.migrate(driver, upTo: "two")
           #expect(try await log(in: driver) == ["one", "two"])
 
+          let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
+            try await migrator.migrate(driver, upTo: "one")
+          }
+          #expect(
+            error
+              == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
+          )
+          #expect(try await log(in: driver) == ["one", "two"])
+
           try await migrator.migrate(driver)
           #expect(try await log(in: driver) == ["one", "two", "three"])
         }
@@ -163,22 +172,6 @@
         )
         #expect(error?.description.contains("\"missing\"") == true)
         #expect(try await driver.read { try migrator.appliedIdentifiers($0) }.isEmpty)
-      }
-
-      @Test
-      func targetBeforeAnAppliedMigrationThrows() async throws {
-        let driver = try SQLiteQueue(path: .memory)
-        let migrator = loggingMigrator(["one", "two", "three"])
-        try await migrator.migrate(driver, upTo: "two")
-
-        let error = await #expect(throws: OrbitDatabaseMigrationTargetError.self) {
-          try await migrator.migrate(driver, upTo: "one")
-        }
-
-        #expect(
-          error == OrbitDatabaseMigrationTargetError(target: "one", reason: .migratedBeyond("two"))
-        )
-        #expect(try await log(in: driver) == ["one", "two"])
       }
 
       // MARK: - Foreign keys
@@ -667,7 +660,7 @@
         let failRestore = Lock(false)
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if failRestore.withLock({ $0 }),
             let sql = base.statements.inspection.sql(statement),
             String(cString: sql) == "PRAGMA foreign_keys = 1"
@@ -738,7 +731,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if let sql = base.statements.inspection.sql(statement),
             String(cString: sql).contains("RECURSIVE counter")
           {
@@ -793,7 +786,7 @@
         let base = builtInTestLibrary
         var configuration = SQLiteConfiguration.default
         configuration.library = base
-        configuration.library.statements.execution.step = { statement in
+        configuration.library.statements.execution.step = LibraryHooks.step { statement in
           if isBusy.withLock({ $0 }), let sql = base.statements.inspection.sql(statement),
             String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
           {
@@ -828,7 +821,7 @@
           let base = builtInTestLibrary
           var configuration = SQLiteConfiguration.default
           configuration.library = base
-          configuration.library.statements.execution.step = { statement in
+          configuration.library.statements.execution.step = LibraryHooks.step { statement in
             if let sql = base.statements.inspection.sql(statement),
               String(cString: sql).hasPrefix("BEGIN IMMEDIATE")
             {
@@ -1054,21 +1047,32 @@
       func hasSchemaChangesIsTrueWhenAShippedMigrationsBodyChangesAndLeavesNoScratchFilesBehind(
         _ kind: SQLiteTestDriver
       ) async throws {
-        try await kind.withDatabase { driver in
+        // The scratch database opens through the database's own library, so its path is recorded
+        // here, apart from the scratch files of other tests running in parallel.
+        var configuration = SQLiteConfiguration.default
+        let base = configuration.library
+        let scratchPaths = Lock<[String]>([])
+        configuration.library.connections.open = LibraryHooks.open { path, connection, flags, vfs in
+          if let path, String(cString: path).contains("SQLiteOrbit-migrator-") {
+            scratchPaths.withLock { $0.append(String(cString: path)) }
+          }
+          return base.connections.open(path, connection, flags, vfs)
+        }
+        try await kind.withDatabase(configuration: configuration) { driver in
           let original = itemsMigrator()
           try await original.migrate(driver)
 
           // The identifier never changed, but what it creates now has an extra column.
           let changed = itemsMigrator(hasNote: true)
-
-          let before = try scratchDatabaseFileNames()
           #expect(try await driver.read { try changed.hasSchemaChanges($0) } == true)
 
-          // This call's own scratch file is gone by the time it returns. Anything left matching the
-          // pattern belongs to another test running in parallel, so wait for it to clean up its own
-          // rather than assume this call is the only one running.
-          try await waitUntil(timeout: .seconds(5)) {
-            (try? scratchDatabaseFileNames().subtracting(before))?.isEmpty ?? false
+          // The call's scratch files are gone by the time it returns.
+          let paths = scratchPaths.withLock { $0 }
+          #expect(paths.count == 1)
+          for path in paths {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+              #expect(!FileManager.default.fileExists(atPath: path + suffix))
+            }
           }
         }
       }
@@ -1384,7 +1388,7 @@
       private func libraryIgnoringDrops() -> SQLiteLibrary {
         let base = builtInTestLibrary
         var library = base
-        library.statements.preparation.prepare = {
+        library.statements.preparation.prepare = LibraryHooks.prepare {
           connection,
           sql,
           byteCount,
@@ -1830,13 +1834,6 @@
     /// Every file `hasSchemaChanges` leaves a scratch database under, currently on disk.
     ///
     /// - Parameter directory: Where to look; the system temporary directory by default.
-    private func scratchDatabaseFileNames(
-      in directory: URL = FileManager.default.temporaryDirectory
-    ) throws -> Set<String> {
-      let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
-      return Set(names.filter { $0.hasPrefix("SQLiteOrbit-migrator-") })
-    }
-
     #if !Turso
       // Custom collations and functions are unavailable on Turso, so these exist only for the test
       // that checks the scratch database `hasSchemaChanges` builds gets the same ones registered.

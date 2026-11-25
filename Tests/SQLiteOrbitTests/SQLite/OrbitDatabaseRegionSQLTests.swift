@@ -2,7 +2,7 @@
   @testable import SQLiteOrbit
   import Testing
 
-  @Suite
+  @Suite(.libraryHooks)
   struct OrbitDatabaseRegionSQLTests {
     @Test
     func discoversProjectionPredicateOrderingJoinAndCTEColumns() async throws {
@@ -142,7 +142,10 @@
       let installationCount = Lock(0)
       let base = builtInTestLibrary
       var library = base
-      library.authorizer!.install = { connection, callback, context in
+      library.authorizer!.install = LibraryHooks.installAuthorizer {
+        connection,
+        callback,
+        context in
         installationCount.withLock { $0 += 1 }
         return base.authorizer!.install(connection, callback, context)
       }

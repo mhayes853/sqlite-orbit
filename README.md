@@ -231,6 +231,73 @@ let deletedIDs = try await database.write { transaction in
 }
 ```
 
+`execute` and the fetches reuse a compiled statement from the connection's cache, but still build
+the SQL and look its statement up every time. A loop that runs one statement many times can prepare
+it once instead, and pass each run's values as arguments in place of the parameters written in its
+SQL:
+
+```swift
+try await database.write { transaction in
+  var insert = try transaction.prepare("INSERT INTO items (a, b, c) VALUES (?, ?, ?)")
+  for item in items {
+    try insert.execute(item.a, item.b, item.c)
+  }
+}
+
+try await database.read { transaction in
+  var byList = try transaction.prepare("SELECT * FROM reminders WHERE list_id = ? ORDER BY title")
+  for list in lists {
+    groups[list.id] = try byList.fetchAll(list.id, as: Reminder.self)
+  }
+}
+```
+
+A `SQLitePreparedStatement` runs with `execute`, `executeRowCursor`, `fetchAll`, `fetchOne`,
+`rowCursor`, and `fetchCursor`, or with a `bindings:` array of `OrbitDatabaseValue`s built at
+runtime. As with a transaction, only `execute` and `executeRowCursor` run a statement that may
+write; the reading runs refuse it with `.readOnly`. Arguments bind
+by position, and a run must pass exactly one for each of the statement's `parameterCount`
+parameters: since every run rebinds every parameter, a missing one would otherwise silently keep
+the previous run's value, so the run is refused with `.range` instead. For the same reason
+`prepare` refuses SQL with values interpolated into it. A read transaction refuses a statement that
+may write, as it does any other. The statement lasts until its transaction ends, and dropping it
+returns it to the connection's cache, so preparing the same SQL in a later transaction compiles
+nothing. Each run reports what it reads and changes to observers, exactly like running the SQL
+through the transaction.
+
+With the `StructuredQueries` trait, a write transaction also inserts `@Table` records without
+building the query builder's statement for every row. `prepareInsert` builds a table's `INSERT`
+once and binds each run's values straight from the row; `insert` and `insert(contentsOf:)` do the
+same with a plan kept for each table and a statement from the connection's cache. A prepared
+insert's type is generic over its values as a parameter pack, so `prepareInsert` needs iOS 17,
+macOS 14, tvOS 17 or watchOS 10; `insert` and `insert(contentsOf:)` run everywhere:
+
+```swift
+try await database.write { transaction in
+  let id = try transaction.insert(reminder)
+  try transaction.insert(contentsOf: reminders)
+  try transaction.insert(tag, onConflict: .ignore)
+
+  var insert = try transaction.prepareInsert(Reminder.Draft.self)
+  for draft in drafts { try insert.execute(draft) }
+
+  var add = try transaction.prepareInsert(Reminder.self) { ($0.title, $0.listID) }
+  try add.execute("Buy milk", listID)
+
+  var save = try transaction.prepareInsert(Reminder.self, onConflict: .update)
+  try save.execute(contentsOf: incoming)
+}
+```
+
+A run writes the same SQL and values `Table.insert` would, and returns the new row's rowid.
+`.replace` is `INSERT OR REPLACE`; `.ignore` is `ON CONFLICT DO NOTHING`, which skips a row that
+conflicts on a unique column but still fails one that breaks `NOT NULL` or `CHECK`; `.update`
+updates the conflicting row's written columns, matched on the primary key, and a partial insert
+that updates must list the key. A run that skips or updates a row returns `nil` and leaves
+`lastInsertedRowID` as it was. `execute(contentsOf:)` and `insert(contentsOf:)` insert all of their
+rows or none, in a savepoint that nests inside the caller's, and return how many rows they inserted
+or updated.
+
 `SQL` runs one statement. A script of several, such as a schema, runs with `executeScript`, which
 takes a plain `String` and binds nothing:
 
@@ -330,7 +397,8 @@ let titles = try await database.read { transaction in
 Two ordinary SQLite drivers provide process-local access, and the multiprocess-capable pool backs
 `OrbitIPCDatabase`:
 
-- `SQLitePool` runs the database in WAL mode with one writer and a fixed set of readers.
+- `SQLitePool` runs the database in WAL mode with one writer and up to a set number of readers,
+  each opened the first time a read needs it.
   Reads run alongside one another; a write waits for the reads in flight and holds off the reads
   queued behind it, so a read issued after a write observes it. Waiting suspends rather than
   blocking a thread.
@@ -342,8 +410,29 @@ Each connection runs on a serial executor of its own, a dispatch queue on Apple 
 Windows and a thread it starts on demand elsewhere, so a query never occupies a cooperative-pool thread.
 
 Connection settings belong to `SQLiteConfiguration`; pool sizes are initializer parameters.
-`SQLitePool(path: configuration: readerCount:)` defaults to five readers and always uses one writer.
+`SQLitePool(path: configuration: readerCount:)` defaults to at most five readers and always uses
+one writer.
 `TursoPool` accepts both `readerCount` and `writerCount`, defaulting to five readers and four writers.
+
+### Releasing memory
+
+Every driver conforms to `OrbitMemoryReleasing`. `releaseMemory()` finalizes idle cached
+statements, frees unused page-cache pages, and closes a pool's readers, which later reads open
+again. It holds up no other access. `OrbitIPCDatabase` forwards it to its pool, in this process
+only. Nothing calls it automatically:
+
+```swift
+NotificationCenter.default.addObserver(
+  forName: UIApplication.didReceiveMemoryWarningNotification,
+  object: nil,
+  queue: nil
+) { _ in
+  Task { await database.releaseMemory() }
+}
+```
+
+A database held as `any OrbitDatabaseWriter` can be cast to `any OrbitMemoryReleasing`. The
+connection types also have a synchronous `releaseMemory()` for use inside an access.
 
 ### Suspending a shared database
 
@@ -444,8 +533,9 @@ try owner.withWriteConnection { connection in
 ```
 
 The owner is noncopyable and does not conform to `Sendable`. Lending is synchronous and exclusive;
-a driver supplies serialization and chooses when to start a transaction. Read lending enforces
-query-only access, and both lenders restore scoped settings and clean up before returning.
+a driver supplies serialization and chooses when to start a transaction. Read lending refuses
+SQL that may write, and enforces `PRAGMA query_only` before lending the raw handle, and both lenders
+restore scoped settings and clean up before returning.
 Releasing the owner closes the connection.
 
 Observation uses one `OrbitDatabaseTransactionObserver` protocol for scoped access and database
@@ -535,6 +625,11 @@ let library = #sqliteLibrary(module: "MySQLite")
 var configuration = SQLiteConfiguration(library: library)
 let database = try OrbitIPCDatabase(path: databasePath, configuration: configuration)
 ```
+
+Every entry point in the table is a C function pointer, apart from trusted-schema control, so the
+package calls the build exactly as C would, without allocating or reference counting. An entry
+point you supply yourself is therefore a C function or a closure that captures nothing. A wrapper
+around another entry point reaches anything it needs through a global, as it would in C.
 
 The macro takes a static `SQLiteLibrary.APIs` option set describing the symbols that module
 exports. `.standard` is the default; add encryption for a module such as SQLCipher:
@@ -633,7 +728,7 @@ explicitly:
 
 - Missing authorizer callbacks broaden observed reads and writes to the whole database, and every
   write invalidates the statement cache. This loses precision, not correctness.
-- Read transactions use the numeric spelling of `PRAGMA query_only`, which both engines accept.
+- Reads use the numeric spelling of `PRAGMA query_only`, which both engines accept.
 - Trusted-schema hardening, custom scalar and aggregate functions, collations, and ordinary
   multiprocess file access throw `SQLiteFeatureUnavailableError` before SQLiteOrbit calls an
   unimplemented entry point. Use `TursoPool` directly for an observable MVCC database confined to

@@ -6,6 +6,9 @@
 /// `writerConfiguration`'s ``SQLiteConfiguration/journalMode``, which the writers apply before
 /// any reader opens. Readers are opened read-only and never apply a journal mode.
 ///
+/// The writers open with the pool. Readers open as reads need them, up to `readerCount` at once,
+/// and stay open until ``releaseMemory()`` closes them.
+///
 /// ```swift
 /// var writerConfiguration = SQLiteConfiguration.default
 /// writerConfiguration.journalMode = .wal
@@ -27,17 +30,20 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   /// The database this pool's connections are open on.
   public let path: OrbitDatabasePath
 
-  private let scheduler: SQLitePoolScheduler
+  let scheduler: SQLitePoolScheduler
   private let writerSuspensions: [SQLiteWriteSuspension]
   // Assigned after the last throwing call in `init`: Swift 6.3.3 crashes optimizing the destruction
   // of a partially initialized `Mutex` when a throw follows its default value.
   private let suspended: Lock<Bool>
 
-  /// Opens writable connections first, then the read-only connections for the same database.
+  /// Opens the writable connections, and prepares to open read-only connections for the same
+  /// database as reads need them.
   ///
-  /// Both connection counts must be positive. Readers are opened read-only, and the pool runs
-  /// `PRAGMA query_only = 1` on each of them itself, so raw SQL that attempts a write through a
-  /// reader fails with an explicit error.
+  /// Both connection counts must be positive. No reader opens here: a read that finds every open
+  /// reader busy opens another, until `readerCount` are open. An error opening a reader is thrown
+  /// by the read that needed it, and the next read tries again. Readers are opened read-only, and
+  /// the pool runs `PRAGMA query_only = 1` on each of them itself, so raw SQL that attempts a write
+  /// through a reader fails with an explicit error.
   ///
   /// Role-specific setup runs after each configuration's setup, with the driver's privilege rather
   /// than the configuration's authorization, and is not included in the configuration reported by
@@ -49,13 +55,14 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
   ///   - readerConfiguration: The settings applied to every reader.
   ///   - writerConfiguration: The settings applied to every writer, including the journal mode
   ///     the database runs in.
-  ///   - readerCount: The number of read-only connections to open.
+  ///   - readerCount: The most read-only connections open at once. Each opens the first time a
+  ///     read needs it.
   ///   - writerCount: The number of writable connections to open.
   ///   - readerSetups: The driver's own setups for each reader.
   ///   - writerSetups: The driver's own setups for each writer.
   /// - Precondition: `readerCount` and `writerCount` must be greater than zero.
   /// - Throws: ``SQLitePoolUnavailableError`` for a database private to its connection, or a
-  ///   ``SQLiteError`` when a connection cannot be opened or configured.
+  ///   ``SQLiteError`` when a writer cannot be opened or configured.
   public init(
     path: OrbitDatabasePath,
     readerConfiguration: SQLiteConfiguration,
@@ -83,23 +90,33 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     }
     // The read-only flag is the real protection. `query_only` also gives raw SQL attempted
     // through a reader an explicit error.
-    let readers = try (0..<readerCount)
-      .map { _ in
-        try SQLiteSerialConnection(
-          path: path,
-          configuration: readerConfiguration,
-          flags: [.readOnly, .noMutex],
-          setups: [.sql("PRAGMA query_only = 1")] + readerSetups,
-          suspension: nil
-        )
-      }
+    let allReaderSetups: [SQLiteSetup] = [.sql("PRAGMA query_only = 1")] + readerSetups
     self.path = path
-    self.scheduler = SQLitePoolScheduler(readers: readers, writers: writers)
+    let openReader: @Sendable (SQLiteSerialConnection.Executor?) throws -> SQLiteSerialConnection = {
+      executor in
+      try SQLiteSerialConnection(
+        path: path,
+        configuration: readerConfiguration,
+        flags: [.readOnly, .noMutex],
+        setups: allReaderSetups,
+        suspension: nil,
+        executor: executor
+      )
+    }
+    self.scheduler = SQLitePoolScheduler(
+      maximumReaders: readerCount,
+      openReader: { try openReader(nil) },
+      openReaderAsynchronously: {
+        try await SQLiteSerialConnection.openOnOwnExecutor(path: path, openReader)
+      },
+      writers: writers
+    )
     self.writerSuspensions = suspensions
     self.suspended = Lock(false)
   }
 
-  /// Lends a reader, waiting behind earlier barrier writes.
+  /// Lends a reader, waiting behind earlier barrier writes. May open a new reader, on that
+  /// reader's own executor rather than the calling task's thread.
   public func withReadConnection<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) async throws -> Result {
@@ -121,7 +138,8 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
     try await scheduler.writeWithoutTransaction(concurrent: true, body)
   }
 
-  /// Lends a reader, blocking the calling thread. Never call from a cooperative task.
+  /// Lends a reader, blocking the calling thread. Never call from a cooperative task. May open a
+  /// new reader on the calling thread.
   public func withReadConnectionBlocking<Result: Sendable>(
     _ body: sending (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
@@ -171,5 +189,16 @@ public final class SQLiteConnectionPool: OrbitSuspendable {
       for suspension in writerSuspensions { suspension.resume() }
       suspended = false
     }
+  }
+}
+
+extension SQLiteConnectionPool: OrbitMemoryReleasing {
+  /// Closes the pool's readers and releases the memory of each writer.
+  ///
+  /// Idle readers close at once, and readers in use when their reads end. Each writer runs
+  /// ``SQLiteSerialConnection/releaseMemory()`` between its accesses, even while the pool is
+  /// suspended, and the call returns once every writer has.
+  public func releaseMemory() async {
+    await scheduler.releaseMemory()
   }
 }

@@ -40,7 +40,8 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     self.base = SQLiteReadTransaction(
       handle: handle,
       observations: observations,
-      connectionState: state
+      connectionState: state,
+      queryOnlySettings: handle.queryOnlySettings
     )
     self.handle = address
     self.state = state
@@ -50,8 +51,13 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
   /// duration of the access that lent this connection and must not be used to mutate the database.
+  ///
+  /// A connection that can write is made query-only the first time a read lends this, so that SQL
+  /// run through it cannot write. That expires every statement the connection has compiled, and a
+  /// cursor partway through its rows may then fail with `SQLITE_ABORT_ROLLBACK`, so get this before
+  /// creating the cursors it is used beside.
   public var sqliteConnection: OpaquePointer {
-    base.connection
+    base.sqliteConnection
   }
 
   /// The SQLite build this connection runs against, so raw work uses the same one.
@@ -97,6 +103,15 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
+  /// Finalizes the statements the connection keeps idle in its cache, and calls
+  /// ``SQLiteLibrary/Connections/releaseMemory`` when the library has it.
+  ///
+  /// It runs no SQL, and may be called inside or outside a transaction. Cursors and prepared
+  /// statements in use keep working.
+  public borrowing func releaseMemory() {
+    handle.pointee.releaseMemory()
+  }
+
   /// Creates a cursor over the rows SQL that only reads returns.
   ///
   /// The statement runs in its own implicit transaction, which ends when the cursor does. SQL that
@@ -118,8 +133,8 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try base.cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
-  /// statement.
+  /// Creates a cursor over the rows SQL that only reads returns, through the connection's cache of
+  /// prepared statements.
   ///
   /// SQL that SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
   ///
@@ -135,7 +150,7 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try base.cursor(for: sql, cached: false, requiresReadOnly: true)
+    try base.cursor(for: sql, cached: true, requiresReadOnly: true)
   }
 
   /// Notifies transaction observers that this connection may have read a database region.
@@ -178,6 +193,10 @@ public struct SQLiteReadConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
   /// pointer is valid only for the access that lent this connection and must not escape it or be
   /// stepped concurrently.
+  ///
+  /// The library's step entry point is a C function pointer, so while `operation` runs it is one
+  /// that finds `intercept` on the calling thread. Step statements synchronously within
+  /// `operation`, on its thread. Up to eight interceptors can be nested on one thread.
   ///
   /// - Parameters:
   ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.
@@ -335,6 +354,15 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try handle.pointee.settings.pointee.setBusyPolicy(policy)
   }
 
+  /// Finalizes the statements the connection keeps idle in its cache, and calls
+  /// ``SQLiteLibrary/Connections/releaseMemory`` when the library has it.
+  ///
+  /// It runs no SQL, and may be called inside or outside a transaction. Cursors and prepared
+  /// statements in use keep working.
+  public borrowing func releaseMemory() {
+    handle.pointee.releaseMemory()
+  }
+
   /// Whether this connection enforces foreign keys.
   ///
   /// It starts at the configuration's ``SQLiteConfiguration/isForeignKeysEnabled``. A change lasts
@@ -479,8 +507,8 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     try base.base.cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
-  /// statement.
+  /// Creates a cursor over the rows SQL that only reads returns, through the connection's cache of
+  /// prepared statements.
   ///
   /// SQL that SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
   ///
@@ -496,7 +524,7 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try base.base.cursor(for: sql, cached: false, requiresReadOnly: true)
+    try base.base.cursor(for: sql, cached: true, requiresReadOnly: true)
   }
 
   /// Runs a statement to completion, committing it and discarding any rows it returns.
@@ -506,12 +534,14 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// let deleted = connection.changesCount
   /// ```
   ///
-  /// - Parameter sql: The statement to run. Any rows it returns are stepped past and discarded.
+  /// - Parameters:
+  ///   - sql: The statement to run. Any rows it returns are stepped past and discarded.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
   /// - Throws: A ``SQLiteError`` when the statement fails, in which case SQLite undoes whatever it
   ///   had changed.
-  public borrowing func execute(_ sql: SQL) throws {
+  public borrowing func execute(_ sql: SQL, cached: Bool = true) throws {
     defer { commitPendingChanges() }
-    try base.execute(sql)
+    try base.execute(sql, cached: cached)
   }
 
   /// Runs a script of one or more statements, such as a schema change or a pragma.
@@ -590,6 +620,10 @@ public struct SQLiteWriteConnection: SQLiteTransaction, ~Copyable, ~Escapable {
   /// reaches the outer one. Each is removed when its `operation` returns or throws. A statement
   /// pointer is valid only for the access that lent this connection and must not escape it or be
   /// stepped concurrently.
+  ///
+  /// The library's step entry point is a C function pointer, so while `operation` runs it is one
+  /// that finds `intercept` on the calling thread. Step statements synchronously within
+  /// `operation`, on its thread. Up to eight interceptors can be nested on one thread.
   ///
   /// - Parameters:
   ///   - intercept: Steps `statement`, by calling `next` or not, and returns the result code.

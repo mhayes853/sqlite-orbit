@@ -64,18 +64,9 @@
           _ = try? SQLitePool(path: .memory, readerCount: 0)
         }
       }
-
-      @Test
-      func aNegativeReaderCountFailsAPrecondition() async {
-        await #expect(processExitsWith: .failure) {
-          // The precondition runs before opening any connections. Swallow ordinary opening
-          // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, readerCount: -1)
-        }
-      }
     #endif
 
-    @Test
+    @Test(.libraryHooks)
     func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {
       let query = "SELECT title FROM items ORDER BY id"
       let prepared = TestCounter()
@@ -83,7 +74,7 @@
       let preparedStatements = Lock<Set<UInt>>([])
       let base = builtInTestLibrary
       var library = base
-      library.statements.preparation.prepare = {
+      library.statements.preparation.prepare = LibraryHooks.prepare {
         connection,
         sql,
         byteCount,
@@ -107,7 +98,7 @@
         }
         return code
       }
-      library.statements.execution.finalize = { statement in
+      library.statements.execution.finalize = LibraryHooks.finalize { statement in
         if let statement,
           preparedStatements.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
         {

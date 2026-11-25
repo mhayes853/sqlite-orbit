@@ -454,6 +454,14 @@ extension OrbitIPCDatabase: OrbitDatabaseWriter, OrbitObservableDatabase {
   }
 }
 
+extension OrbitIPCDatabase: OrbitMemoryReleasing {
+  /// Forwards the call to the writer when it conforms to ``OrbitMemoryReleasing``, and otherwise
+  /// does nothing. Only this process frees memory; other processes are not told.
+  public func releaseMemory() async {
+    await (writer as? any OrbitMemoryReleasing)?.releaseMemory()
+  }
+}
+
 private final class OrbitDatabaseObservationHub: Sendable {
   static let shared = OrbitDatabaseObservationHub()
 

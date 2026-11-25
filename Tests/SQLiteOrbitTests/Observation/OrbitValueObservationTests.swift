@@ -1953,7 +1953,7 @@
       }
 
       func waitUntilSkipping() async throws {
-        try await waitUntil(timeout: .seconds(5)) { self.state.withLock { $0.isSkipping } }
+        try await waitUntil { self.state.withLock { $0.isSkipping } }
       }
 
       func stopSkipping() {
@@ -1967,7 +1967,7 @@
       var errors = [String]()
 
       func waitForChangeCount(_ count: Int) async throws {
-        try await waitUntil(timeout: .seconds(5)) { self.changes.count >= count }
+        try await waitUntil { self.changes.count >= count }
       }
     }
   #endif

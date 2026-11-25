@@ -3,7 +3,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct RawSQLRowConversionTests {
     @Test
     func rawRequestsPreserveBindingsIdentityAndRowDecoding() async throws {
@@ -99,7 +99,7 @@
       let names = TestCounter()
       var configuration = SQLiteConfiguration.default
       let name = configuration.library.columns.name
-      configuration.library.columns.name = { statement, index in
+      configuration.library.columns.name = LibraryHooks.columnName { statement, index in
         names.increment()
         return name(statement, index)
       }
@@ -140,7 +140,9 @@
             row.columnIndex(named: "id"), row.columnIndex(named: "ID"),
             row.columnIndex(named: "é"), row.columnIndex(named: "e\u{301}"),
             try row[column: "id", as: Int.self],
-            try row[column: "e\u{301}", as: Int.self]
+            try row[column: "e\u{301}", as: Int.self],
+            // Right after the first `id`, the column next in order is the second `id`.
+            (row.columnIndex(named: "id"), row.columnIndex(named: "id"))
           )
         }
       }
@@ -151,6 +153,7 @@
       #expect(result.3 == 4)
       #expect(result.4 == 1)
       #expect(result.5 == 5)
+      #expect(result.6 == (0, 0))
     }
 
     @Test

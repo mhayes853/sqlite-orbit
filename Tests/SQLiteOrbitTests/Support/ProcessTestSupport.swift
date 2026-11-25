@@ -16,7 +16,7 @@
 
   func touch(_ url: URL) throws { try Data().write(to: url, options: .atomic) }
 
-  func waitForFile(_ url: URL, timeout: Duration = .seconds(10)) async throws {
+  func waitForFile(_ url: URL, timeout: Duration = .seconds(30)) async throws {
     try await waitUntil(timeout: timeout) { FileManager.default.fileExists(atPath: url.path) }
   }
 

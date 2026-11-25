@@ -55,25 +55,38 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
   let observations: SQLiteConnectionEvents
   let connectionState: SQLiteConnectionState?
 
+  // The settings of a connection that can write, lent for a read, which is made query-only before
+  // the raw handle is lent. `nil` for a connection opened read-only, and for the read transaction
+  // a write lends its observers, since turning it on there would refuse the write's own statements.
+  let queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>?
+
   @_lifetime(borrow handle)
   init(
     handle: borrowing SQLiteConnection,
     observations: SQLiteConnectionEvents,
-    connectionState: SQLiteConnectionState? = nil
+    connectionState: SQLiteConnectionState? = nil,
+    queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>? = nil
   ) {
     self.access = SQLiteConnectionAccess(handle: handle)
     self.statements = handle.statements
     self.authorizer = handle.authorizer
     self.observations = observations
     self.connectionState = connectionState
+    self.queryOnlySettings = queryOnlySettings
   }
 
   /// The underlying `sqlite3 *`.
   ///
   /// This is the escape hatch for work the package does not model. It is only valid for the
   /// duration of the access that lent this transaction and must not be used to mutate the database.
+  ///
+  /// A connection that can write is made query-only the first time a read lends this, so that SQL
+  /// run through it cannot write. That expires every statement the connection has compiled, and a
+  /// cursor partway through its rows may then fail with `SQLITE_ABORT_ROLLBACK`, so get this before
+  /// creating the cursors it is used beside.
   public var sqliteConnection: OpaquePointer {
-    access.sqliteConnection
+    queryOnlySettings?.pointee.ensureQueryOnlyForUncheckedAccess()
+    return access.sqliteConnection
   }
 
   /// The SQLite build this connection runs against, so raw work uses the same one.
@@ -113,8 +126,8 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
     try cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
-  /// statement.
+  /// Creates a cursor over the rows SQL that only reads returns, through the connection's cache of
+  /// prepared statements.
   ///
   /// The SQL is refused with ``SQLiteResultCode/readOnly`` when SQLite reports that it may write.
   ///
@@ -130,7 +143,7 @@ public struct SQLiteReadTransaction: SQLiteTransaction, ~Copyable, ~Escapable {
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try cursor(for: sql, cached: false, requiresReadOnly: true)
+    try cursor(for: sql, cached: true, requiresReadOnly: true)
   }
 
   /// Notifies transaction observers that this transaction may have read a database region.
@@ -248,8 +261,8 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
     try base.cursor(for: sql, cached: cached, requiresReadOnly: true)
   }
 
-  /// Creates a cursor over the rows SQL that only reads returns, without reusing a prepared
-  /// statement.
+  /// Creates a cursor over the rows SQL that only reads returns, through the connection's cache of
+  /// prepared statements.
   ///
   /// SQL that SQLite reports may write is refused with ``SQLiteResultCode/readOnly``.
   ///
@@ -265,7 +278,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
     // Spelled out on the concrete type, rather than left to the protocol extension, because
     // Swift 6.3 tears down a failed cursor as garbage when a caller binds one a generic function
     // returned.
-    try base.cursor(for: sql, cached: false, requiresReadOnly: true)
+    try base.cursor(for: sql, cached: true, requiresReadOnly: true)
   }
 
   /// Creates a cursor over the rows SQL that may write returns, such as from a `RETURNING`
@@ -292,7 +305,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   }
 
   /// Creates a cursor over the rows SQL that may write returns, such as from a `RETURNING`
-  /// clause, without reusing a prepared statement.
+  /// clause, through the connection's cache of prepared statements.
   ///
   /// ```swift
   /// var cursor = try transaction.executeRowCursor(
@@ -307,7 +320,7 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   @_lifetime(borrow self)
   public borrowing func executeRowCursor(_ sql: SQL) throws -> SQLiteRowCursor {
     // Spelled out on the concrete type for the same reason as `rowCursor(_:)`.
-    try base.cursor(for: sql, cached: false, requiresReadOnly: false)
+    try base.cursor(for: sql, cached: true, requiresReadOnly: false)
   }
 
   /// How many rows the most recent statement on this connection inserted, updated, or deleted.
@@ -337,11 +350,27 @@ public struct SQLiteWriteTransaction: OrbitDatabaseWriteTransaction, SQLiteTrans
   /// let updated = transaction.changesCount
   /// ```
   ///
+  /// - Parameters:
+  ///   - sql: The SQL to run. Any rows it returns are stepped past and discarded.
+  ///   - cached: Whether the connection may reuse a prepared statement for this SQL.
+  /// - Throws: A ``SQLiteError`` when the statement fails.
+  public borrowing func execute(_ sql: SQL, cached: Bool) throws {
+    var cursor = try base.cursor(for: sql, cached: cached, requiresReadOnly: false)
+    while try cursor.next() != nil {}
+  }
+
+  /// Runs SQL that may write to completion through the connection's cache of prepared statements,
+  /// discarding any rows it returns.
+  ///
+  /// ```swift
+  /// try transaction.execute("UPDATE reminders SET is_completed = \(true) WHERE id = \(id)")
+  /// let updated = transaction.changesCount
+  /// ```
+  ///
   /// - Parameter sql: The SQL to run. Any rows it returns are stepped past and discarded.
   /// - Throws: A ``SQLiteError`` when the statement fails.
   public borrowing func execute(_ sql: SQL) throws {
-    var cursor = try base.cursor(for: sql, cached: false, requiresReadOnly: false)
-    while try cursor.next() != nil {}
+    try execute(sql, cached: true)
   }
 
   /// Runs a script of one or more statements, such as a schema.

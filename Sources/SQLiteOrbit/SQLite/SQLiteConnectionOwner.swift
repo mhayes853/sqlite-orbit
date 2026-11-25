@@ -192,6 +192,15 @@ public struct SQLiteConnection: ~Copyable {
     try Self.executeScript(sql, on: pointer, library: library)
   }
 
+  /// Finalizes the statements the connection keeps idle in its cache, and calls
+  /// ``SQLiteLibrary/Connections/releaseMemory`` when the library has it.
+  ///
+  /// It runs no SQL. ``SQLiteReadConnection/releaseMemory()`` and
+  /// ``SQLiteWriteConnection/releaseMemory()`` do the same from inside an access.
+  public borrowing func releaseMemory() {
+    statements.releaseMemory()
+  }
+
   /// Lends primitive access for connection-local setup, such as installing functions or collations.
   ///
   /// Registrations survive this scope. SQL executes without an explicit transaction; use
@@ -207,15 +216,22 @@ public struct SQLiteConnection: ~Copyable {
     return try withWriteConnection(cancellation: cancellation) { try body($0.base.base.access) }
   }
 
-  /// Lends read access, temporarily enforcing query-only mode on writable connections.
-  /// Call the borrowed connection's `transaction` method when a stable snapshot is needed.
+  /// Lends read access. Call the borrowed connection's `transaction` method when a stable snapshot
+  /// is needed.
+  ///
+  /// Every statement the connection compiles for the read is refused when SQLite reports that it
+  /// may write. A connection that can write is also made query-only before the read lends its raw
+  /// `sqlite3 *`, so that raw SQL cannot write either. What SQLite reports as read-only but writes
+  /// on its own, such as a function or virtual table from a C extension that writes through the
+  /// raw handle while a `SELECT` steps, is not refused on a connection that can write: inside a
+  /// read transaction its write is discarded by the rollback that ends the read, and outside one it
+  /// commits. A connection opened read-only refuses it.
   public mutating func withReadConnection<Result: ~Copyable>(
     cancellation: SQLiteConnectionCancellation? = nil,
     _ body: (borrowing SQLiteReadConnection) throws -> Result
   ) throws -> Result {
     try withManagedAccess(cancellation: cancellation) { observations in
-      try beginQueryOnly()
-      return try withoutTransaction { address, state in
+      try withoutTransaction { address, state in
         try body(
           SQLiteReadConnection(
             handle: self,
@@ -228,17 +244,30 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func beginQueryOnly() throws {
-    // A connection opened read-only refuses writes already. One that can write must be told not
-    // to for the duration, so that a read attempting a mutation fails rather than having it
-    // quietly discarded by a read transaction's rollback, or kept by a statement that commits on
-    // its own. The access turns it back off with the rest of its settings.
-    guard !isReadOnly else { return }
-    try settings.pointee.setQueryOnly(true)
+  // The settings a read turns query-only before it lends the raw handle, or `nil` for a connection
+  // opened read-only, which refuses writes already. A read on one that can write must refuse a
+  // mutation rather than have it quietly discarded by a read transaction's rollback, or kept by a
+  // statement that commits on its own. The statements a read compiles itself are refused when
+  // SQLite reports that they may write, which needs no setting, so the connection is only made
+  // query-only for SQL Orbit never sees. Turning it on expires every statement the connection has
+  // compiled, and the write that follows has to turn it off again, expiring them all once more, so
+  // a read that never lends the raw handle leaves it as it is. Once on, it stays on until an access
+  // that may write begins, so that consecutive reads keep their statements.
+  var queryOnlySettings: UnsafeMutablePointer<SQLiteConnectionSettings>? {
+    isReadOnly ? nil : settings
+  }
+
+  private borrowing func beginWritable() throws {
+    // Every access that may write passes through here before running anything, since a read
+    // before it may have left the connection query-only. Turning that off is recovery from the
+    // read rather than the application's own statement, so its authorization does not apply, as
+    // it does not to restoring any other setting.
+    try authorizer.withoutUserAuthorization { try settings.pointee.ensureQueryOnly(false) }
   }
 
   // Every access runs its body through here, so that none begins under a setting an earlier one
-  // changed, and none ends without putting back what it changed.
+  // changed, and none ends without putting back what it changed. `query_only` is left to each
+  // access to set when it needs it.
   private borrowing func withRestoredSettings<Result: ~Copyable>(
     _ body: () throws -> Result
   ) throws -> Result {
@@ -267,17 +296,23 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteReadTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute("BEGIN DEFERRED TRANSACTION") }
+    try authorizer.requiringExecution { try statements.execute(.beginDeferred) }
     statements.invalidateIfSchemaChanged()
     let value: Result
     do {
-      value = try body(SQLiteReadTransaction(handle: self, observations: observations))
+      value = try body(
+        SQLiteReadTransaction(
+          handle: self,
+          observations: observations,
+          queryOnlySettings: queryOnlySettings
+        )
+      )
     } catch {
       // The body's failure is the one worth reporting, so a failing rollback does not mask it.
       rollbackIgnoringFailure()
       throw error
     }
-    try authorizer.withoutUserAuthorization { try endTransaction(with: "ROLLBACK") }
+    try authorizer.withoutUserAuthorization { try endTransaction(with: .rollback) }
     return value
   }
 
@@ -295,7 +330,8 @@ public struct SQLiteConnection: ~Copyable {
     }
     return try withManagedAccess(cancellation: cancellation, commitsPendingChanges: true) {
       observations in
-      try withoutTransaction { address, state in
+      try beginWritable()
+      return try withoutTransaction { address, state in
         try body(
           SQLiteWriteConnection(
             handle: self,
@@ -343,10 +379,13 @@ public struct SQLiteConnection: ~Copyable {
     // Each interceptor wraps whatever step was in effect when it was installed, so nested ones
     // compose, the innermost running first, and each is taken off again in reverse order.
     let previous = libraryStorage.pointee.statements.execution.step
-    libraryStorage.pointee.statements.execution.step = { statement in
+    libraryStorage.pointee.statements.execution.step = SQLiteStepInterception.push { statement in
       intercept(statement, previous)
     }
-    defer { libraryStorage.pointee.statements.execution.step = previous }
+    defer {
+      libraryStorage.pointee.statements.execution.step = previous
+      SQLiteStepInterception.pop()
+    }
     return try operation()
   }
 
@@ -389,12 +428,12 @@ public struct SQLiteConnection: ~Copyable {
     observations: SQLiteConnectionEvents,
     _ body: (borrowing SQLiteWriteTransaction) throws -> Result
   ) throws -> Result {
-    try authorizer.requiringExecution { try execute(mode.beginSQL) }
+    try authorizer.requiringExecution { try statements.execute(mode.beginStatement) }
     statements.invalidateIfSchemaChanged()
     do {
       let value = try body(SQLiteWriteTransaction(handle: self, observations: observations))
       try observations.willCommit(SQLiteReadTransaction(handle: self, observations: observations))
-      try endTransaction(with: "COMMIT")
+      try endTransaction(with: .commit)
       observations.didCommit()
       return value
     } catch {
@@ -404,19 +443,19 @@ public struct SQLiteConnection: ~Copyable {
     }
   }
 
-  private borrowing func endTransaction(with sql: String) throws {
+  private borrowing func endTransaction(with control: SQLiteControlStatement) throws {
     do {
-      try authorizer.requiringExecution { try execute(sql) }
+      try authorizer.requiringExecution { try statements.execute(control) }
     } catch {
       if libraryStorage.pointee.connections.isAutocommit(pointer) == 0 {
-        authorizer.withoutUserAuthorization { try? execute("ROLLBACK") }
+        authorizer.withoutUserAuthorization { try? statements.execute(.rollback) }
       }
       throw error
     }
   }
 
   private borrowing func rollbackIgnoringFailure() {
-    authorizer.withoutUserAuthorization { try? endTransaction(with: "ROLLBACK") }
+    authorizer.withoutUserAuthorization { try? endTransaction(with: .rollback) }
   }
 
   static func execute(
@@ -475,7 +514,11 @@ public struct SQLiteConnection: ~Copyable {
         // A trailing comment or whitespace prepares nothing; stop rather than spin on it.
         guard let statement else { return }
         next = tail ?? end
-        let isReadOnly = library.pointee.statements.inspection.isReadOnly(statement) != 0
+        let isReadOnly = sqliteIsReadOnly(
+          statement,
+          authorizations: authorizations,
+          library: library
+        )
 
         if let statements,
           sqliteInvalidatesStatementCache(after: authorizations, isReadOnly: isReadOnly)
@@ -484,7 +527,7 @@ public struct SQLiteConnection: ~Copyable {
         }
 
         if let observations {
-          let preparedStatement = SQLitePreparedStatement(
+          let compiledStatement = SQLiteCompiledStatement(
             pointer: statement,
             isReadOnly: isReadOnly,
             authorizations: authorizations,
@@ -493,8 +536,8 @@ public struct SQLiteConnection: ~Copyable {
             authorizer: authorizer,
             library: library
           )
-          observations.didRead(in: preparedStatement.readRegion)
-          observations.didChange(in: preparedStatement.changedRegion)
+          observations.didRead(in: compiledStatement.readRegion)
+          observations.didChange(in: compiledStatement.changedRegion)
         }
 
         try stepToCompletion(statement, on: connection, library: library, sql: sql)

@@ -160,7 +160,7 @@
       }
     }
 
-    @Test
+    @Test(.libraryHooks)
     func cursorsGiveTheirStatementBackToTheCache() throws {
       let counters = TestCounter()
       let base = builtInTestLibrary
@@ -168,7 +168,7 @@
       configuration.library = base
       // Only the fetches count. The transaction's own statements, such as its BEGIN and ROLLBACK and
       // the check that the schema is unchanged, are not the cache's.
-      configuration.library.statements.preparation.prepare = {
+      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
         connection,
         sql,
         byteCount,
@@ -204,13 +204,13 @@
       #expect(counters.value == 1)
     }
 
-    @Test
+    @Test(.libraryHooks)
     func schemaChangesInvalidateCachedStatements() throws {
       let preparations = TestCounter()
       let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
       configuration.library = base
-      configuration.library.statements.preparation.prepare = {
+      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
         connection,
         sql,
         byteCount,

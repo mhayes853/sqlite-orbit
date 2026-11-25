@@ -3,7 +3,7 @@
 
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteErrorTests {
     @Test(
       arguments: [
@@ -43,7 +43,7 @@
       let steps = Lock(0)
       let base = builtInTestLibrary
       var configuration = SQLiteConfiguration.default
-      configuration.library.statements.execution.step = { statement in
+      configuration.library.statements.execution.step = LibraryHooks.step { statement in
         if let sql = base.statements.inspection.sql(statement),
           String(cString: sql).contains("RECURSIVE counter"),
           steps.withLock({

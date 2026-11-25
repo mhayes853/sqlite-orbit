@@ -2,7 +2,7 @@
   import Testing
   @testable import SQLiteOrbit
 
-  @Suite
+  @Suite(.libraryHooks)
   struct SQLiteVecTests {
     @Test
     func vectorTableObservationSeesCommittedChangesAndIgnoresRollback() throws {
@@ -97,11 +97,19 @@
       try await withTestDatabaseFile { file in
         for _ in 0..<2 {
           let pool = try file.pool(configuration: configuration, readerCount: 3)
-          #expect(
-            try await pool.read {
-              try $0.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)
-            } == 3
-          )
+          // Readers open as reads need them, so three reads held at once open all three.
+          let gate = TestGate()
+          let reads = (0..<3).map { _ in
+            Task {
+              try await pool.read { transaction in
+                try gate.enter()
+                return try transaction.fetchOne("SELECT vec_length('[1,2,3]')", as: Int64.self)
+              }
+            }
+          }
+          try await gate.waitUntilEntered(3)
+          gate.open()
+          for read in reads { #expect(try await read.value == 3) }
         }
       }
       #expect(setups.value == 8)
@@ -113,7 +121,7 @@
       var configuration = SQLiteConfiguration.default
       configuration.library.name = "system SQLite"
       configuration.library.extensions = nil
-      configuration.library.connections.open = { _, _, _, _ in
+      configuration.library.connections.open = LibraryHooks.open { _, _, _, _ in
         opens.increment()
         return SQLiteResultCode.ok.rawValue
       }
@@ -132,14 +140,14 @@
       var configuration = SQLiteConfiguration.default
       configuration.library.extensions = SQLiteLibrary.Extensions(
         autoExtensions: SQLiteLibrary.AutoExtensions(
-          register: { _ in
+          register: LibraryHooks.registerAutoExtension { _ in
             registrations.increment()
             return SQLiteResultCode.busy.rawValue
           },
           cancel: { _ in 0 }
         )
       )
-      configuration.library.connections.open = { _, _, _, _ in
+      configuration.library.connections.open = LibraryHooks.open { _, _, _, _ in
         opens.increment()
         return SQLiteResultCode.ok.rawValue
       }

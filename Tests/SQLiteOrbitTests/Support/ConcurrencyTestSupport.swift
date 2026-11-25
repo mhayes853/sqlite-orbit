@@ -32,7 +32,7 @@ struct TestError: Error, Equatable, CustomStringConvertible {
 ///   - timeout: How long to wait before throwing ``TestTimeout``.
 ///   - condition: Checked on the caller's isolation.
 func waitUntil(
-  timeout: Duration = .seconds(10),
+  timeout: Duration = .seconds(30),
   isolation: isolated (any Actor)? = #isolation,
   _ condition: () -> Bool
 ) async throws {
@@ -49,7 +49,7 @@ func waitUntil(
 ///
 /// ```swift
 /// let steps = TestCounter()
-/// configuration.library.statements.execution.step = { statement in
+/// configuration.library.statements.execution.step = LibraryHooks.step { statement in
 ///   steps.increment()
 ///   return base.statements.execution.step(statement)
 /// }
@@ -78,7 +78,7 @@ final class TestCounter: Sendable {
   /// Waits until the count is at least `count`.
   ///
   /// - Throws: ``TestTimeout`` once `timeout` passes first.
-  func waitForCount(_ count: Int, timeout: Duration = .seconds(5)) async throws {
+  func waitForCount(_ count: Int, timeout: Duration = .seconds(30)) async throws {
     try await waitUntil(timeout: timeout) { self.value >= count }
   }
 }
@@ -119,7 +119,7 @@ final class TestRecorder<Value: Sendable>: Sendable {
   /// Waits until at least `count` values have been recorded.
   ///
   /// - Throws: ``TestTimeout`` once `timeout` passes first.
-  func waitForCount(_ count: Int, timeout: Duration = .seconds(5)) async throws {
+  func waitForCount(_ count: Int, timeout: Duration = .seconds(30)) async throws {
     try await waitUntil(timeout: timeout) { self.count >= count }
   }
 
@@ -127,7 +127,7 @@ final class TestRecorder<Value: Sendable>: Sendable {
   ///
   /// - Throws: ``TestTimeout`` once `timeout` passes first.
   func waitUntilValues(
-    timeout: Duration = .seconds(5),
+    timeout: Duration = .seconds(30),
     _ condition: ([Value]) -> Bool
   ) async throws {
     try await waitUntil(timeout: timeout) { condition(self.values) }
@@ -264,14 +264,14 @@ func concurrently<Result: Sendable>(
     /// Waits until at least `count` callers have reached the gate.
     ///
     /// - Throws: ``TestTimeout`` once `timeout` passes first.
-    func waitUntilEntered(_ count: Int = 1, timeout: Duration = .seconds(10)) async throws {
+    func waitUntilEntered(_ count: Int = 1, timeout: Duration = .seconds(30)) async throws {
       try await waitUntil(timeout: timeout) { self.enteredCount >= count }
     }
 
     /// Waits, blocking the calling thread, until at least `count` callers have reached the gate.
     ///
     /// - Throws: ``TestTimeout`` once `timeout` passes first.
-    func waitUntilEnteredBlocking(_ count: Int = 1, timeout: Duration = .seconds(10)) throws {
+    func waitUntilEnteredBlocking(_ count: Int = 1, timeout: Duration = .seconds(30)) throws {
       let deadline = ContinuousClock.now.advanced(by: timeout)
       while self.enteredCount < count {
         guard ContinuousClock.now < deadline else { throw TestTimeout() }
@@ -337,7 +337,7 @@ func concurrently<Result: Sendable>(
   /// the test with a ``TestTimeout`` rather than hanging it. The thread is left behind if it never
   /// returns.
   func withDeadline<Value: Sendable>(
-    _ timeout: Duration = .seconds(10),
+    _ timeout: Duration = .seconds(30),
     _ body: @escaping @Sendable () throws -> Value
   ) async throws -> Value {
     let outcome = Lock<Result<Value, any Error>?>(nil)

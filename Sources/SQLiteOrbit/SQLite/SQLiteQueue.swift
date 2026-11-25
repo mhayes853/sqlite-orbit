@@ -215,6 +215,14 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   }
 }
 
+extension SQLiteQueue: OrbitMemoryReleasing {
+  /// Releases the memory of the driver's connection once the accesses queued before the call are
+  /// done.
+  public func releaseMemory() async {
+    await connection.releaseMemory()
+  }
+}
+
 #if BuiltInSQLite
   extension SQLiteQueue {
     /// Opens a database using the SQLite this package was linked against.

@@ -49,6 +49,11 @@ public struct OrbitDatabaseColumnDecodingError: Error, CustomStringConvertible {
     self.underlyingError = underlyingError
   }
 
+  @usableFromInline
+  init(missingColumnNamed name: String) {
+    self.init(columnIndex: nil, columnName: name, reason: "to exist")
+  }
+
   /// The column, its name, what was expected of it, and the SQL that produced it when known.
   public var description: String {
     let column =

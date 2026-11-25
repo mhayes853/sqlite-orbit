@@ -46,6 +46,17 @@
   }
 
   @Test
+  func executeAsksForACachedStatementUnlessToldNotTo() throws {
+    let state = TestDatabaseState()
+    try withTestWrite(state) { transaction in
+      try transaction.execute("DELETE FROM reminders")
+      try transaction.execute("DELETE FROM reminders", cached: false)
+      try #sql("DELETE FROM reminders", as: Void.self).execute(transaction)
+    }
+    #expect(state.executedCachedFlags == [true, false, true])
+  }
+
+  @Test
   func structuredQueryFetchingDecodesRowsAndStopsAfterTheFirst() async throws {
     let state = TestDatabaseState(rows: [[.int(1)], [.int(2)], [.int(3)]])
 
@@ -545,7 +556,7 @@
     }
 
     borrowing func rowCursor(_ sql: SQL, cached: Bool) throws -> TestDatabaseRowCursor {
-      state.record(sql, through: .rowCursor)
+      state.record(sql, through: .rowCursor, cached: cached)
       return TestDatabaseRowCursor(state: state)
     }
   }
@@ -561,12 +572,12 @@
     }
 
     borrowing func rowCursor(_ sql: SQL, cached: Bool) throws -> TestDatabaseRowCursor {
-      state.record(sql, through: .rowCursor)
+      state.record(sql, through: .rowCursor, cached: cached)
       return TestDatabaseRowCursor(state: state)
     }
 
     borrowing func executeRowCursor(_ sql: SQL, cached: Bool) throws -> TestDatabaseRowCursor {
-      state.record(sql, through: .executeRowCursor)
+      state.record(sql, through: .executeRowCursor, cached: cached)
       return TestDatabaseRowCursor(state: state)
     }
 
@@ -574,8 +585,8 @@
 
     var lastInsertedRowID: Int64 { 1 }
 
-    borrowing func execute(_ sql: SQL) throws {
-      state.record(sql, through: .execute)
+    borrowing func execute(_ sql: SQL, cached: Bool) throws {
+      state.record(sql, through: .execute, cached: cached)
     }
   }
 
@@ -656,6 +667,7 @@
     private struct State {
       var executedQueries: [SQL] = []
       var entryPoints: [EntryPoint] = []
+      var executedCachedFlags: [Bool] = []
       var rows: [[QueryBinding]]
       var visitedRowCount = 0
     }
@@ -671,10 +683,15 @@
       state.withLock { $0.entryPoints }
     }
 
-    func record(_ sql: SQL, through entryPoint: EntryPoint) {
+    var executedCachedFlags: [Bool] {
+      state.withLock { $0.executedCachedFlags }
+    }
+
+    func record(_ sql: SQL, through entryPoint: EntryPoint, cached: Bool) {
       state.withLock {
         $0.executedQueries.append(sql)
         $0.entryPoints.append(entryPoint)
+        $0.executedCachedFlags.append(cached)
       }
     }
 

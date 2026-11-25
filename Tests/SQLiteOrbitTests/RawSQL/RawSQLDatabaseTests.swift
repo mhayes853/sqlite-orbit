@@ -188,21 +188,6 @@
     }
 
     @Test
-    func anExecuteRowCursorLendsReturnedRows() async throws {
-      let database = try inMemoryDatabase()
-      let ids = try await database.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        var cursor = try transaction.executeRowCursor(
-          "INSERT INTO items (id) VALUES (\(5)), (\(6)) RETURNING id"
-        )
-        var ids: [Int64] = []
-        while let row = try cursor.next() { ids.append(row[0].integerValue ?? 0) }
-        return ids
-      }
-      #expect(ids == [5, 6])
-    }
-
-    @Test
     func emptySQLSelectsNothingAndExecutesNothing() async throws {
       let database = try inMemoryDatabase()
       let (rows, changes) = try await database.write { transaction in

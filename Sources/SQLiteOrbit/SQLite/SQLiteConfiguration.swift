@@ -92,6 +92,15 @@ public struct SQLiteConfiguration: Sendable {
   public var isTrustedSchemaEnabled: Bool
 
   /// How many prepared statements a connection keeps for reuse.
+  ///
+  /// The default, `Int.max`, sets no limit: a connection keeps every distinct statement it has
+  /// run until it closes or ``SQLiteConnection/releaseMemory()`` finalizes them. A connection that
+  /// has run more distinct SQL than a smaller limit finalizes the statement it used least recently
+  /// to make room, and `0` turns the cache off, so every statement is prepared anew.
+  ///
+  /// Every statement is cached unless run with `cached: false`, so SQL whose text varies, such as
+  /// an `IN` list of varying length, adds a statement for each distinct text. Run such SQL
+  /// uncached, or set a limit.
   public var maximumCachedStatements: Int
 
   /// Setups run in order on every connection after its standard settings, ``journalMode``, and
@@ -108,7 +117,8 @@ public struct SQLiteConfiguration: Sendable {
   ///     leave it alone.
   ///   - isForeignKeysEnabled: Whether foreign key enforcement is turned on.
   ///   - isTrustedSchemaEnabled: Whether SQLite trusts schema-defined functions and virtual tables.
-  ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse.
+  ///   - maximumCachedStatements: How many prepared statements a connection keeps for reuse, the
+  ///     least recently used making way for new ones. The default sets no limit.
   ///   - setups: SQL and callbacks run in order on every configured connection.
   ///   - key: The key an encrypted database is unlocked with.
   ///   - authorization: The policy installed on each connection, or `nil` for no application
@@ -119,7 +129,7 @@ public struct SQLiteConfiguration: Sendable {
     journalMode: SQLiteJournalMode? = nil,
     isForeignKeysEnabled: Bool = true,
     isTrustedSchemaEnabled: Bool = false,
-    maximumCachedStatements: Int = 64,
+    maximumCachedStatements: Int = .max,
     setups: [SQLiteSetup] = [],
     key: SQLiteKey? = nil,
     authorization: SQLiteAuthorizationHandler? = nil

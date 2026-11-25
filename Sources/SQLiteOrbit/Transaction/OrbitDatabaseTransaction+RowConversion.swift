@@ -20,6 +20,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   /// - Throws: Whatever the type's initializer throws, such as
   ///   ``OrbitDatabaseColumnDecodingError``, or a ``SQLiteError`` when the statement fails or may
   ///   write.
+  @inlinable
   public borrowing func fetchAll<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type
@@ -73,7 +74,7 @@ extension OrbitDatabaseReadTransaction where Self: ~Copyable, Self: ~Escapable {
   public borrowing func fetchCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type,
-    cached: Bool = false
+    cached: Bool = true
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try rowCursor(sql, cached: cached))
   }
@@ -106,7 +107,7 @@ extension OrbitDatabaseWriteTransaction where Self: ~Copyable, Self: ~Escapable 
   public borrowing func executeCursor<Value: ConvertibleFromOrbitDatabaseRow>(
     _ sql: SQL,
     as type: Value.Type,
-    cached: Bool = false
+    cached: Bool = true
   ) throws -> OrbitDatabaseRowDecodingCursor<RowCursor, Value> {
     OrbitDatabaseRowDecodingCursor(base: try executeRowCursor(sql, cached: cached))
   }
