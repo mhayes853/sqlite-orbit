@@ -549,29 +549,15 @@
     }
   }
 
-  private struct Item: ConvertibleFromOrbitDatabaseRow, Equatable {
+  @OrbitRow
+  private struct Item: Equatable {
     let a: Int
     let label: String
-
-    init(a: Int, label: String) {
-      self.a = a
-      self.label = label
-    }
-
-    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(orbitDatabaseRow row: borrowing Row) throws
-    {
-      a = try row[0, as: Int.self]
-      label = try row[1, as: String.self]
-    }
   }
 
-  private struct Single: ConvertibleFromOrbitDatabaseRow {
+  @OrbitRow
+  private struct Single {
     let a: Int
-
-    init<Row: OrbitDatabaseRow & ~Copyable & ~Escapable>(orbitDatabaseRow row: borrowing Row) throws
-    {
-      a = try row[0, as: Int.self]
-    }
   }
 
   // Says which conversion made it.

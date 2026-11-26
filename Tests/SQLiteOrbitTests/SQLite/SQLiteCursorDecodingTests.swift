@@ -81,9 +81,7 @@
       let database = try inMemoryDatabase()
 
       let decoded: [(Int, String)] = try await database.read { transaction in
-        var cursor = try transaction.rowCursor(
-          SQL(fragment: #sql("SELECT 1, 'one' UNION ALL SELECT 2, 'two'", as: Void.self).query)
-        )
+        var cursor = try transaction.rowCursor("SELECT 1, 'one' UNION ALL SELECT 2, 'two'")
         var decoded: [(Int, String)] = []
         while var row = try cursor.next() {
           // Two separate decodes on one row must advance through its columns rather than
