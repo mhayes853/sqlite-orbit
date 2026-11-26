@@ -311,11 +311,25 @@
           try $0.fetchAll("CREATE TABLE forbidden (id INTEGER)", as: Record.self)
         }
       }
-      try await database.write {
-        try $0.execute(
-          "CREATE VIEW projection AS SELECT 1 AS id, 'Milk' AS title, NULL AS priority"
+      // A write that returns rows is rejected before it runs, so it changes nothing.
+      try await database.write { transaction in
+        try transaction.executeScript(
+          """
+          CREATE TABLE doomed (id INTEGER PRIMARY KEY);
+          INSERT INTO doomed VALUES (1);
+          CREATE VIEW projection AS SELECT 1 AS id, 'Milk' AS title, NULL AS priority;
+          """
         )
       }
+      await #expect(throws: SQLiteError.self) {
+        try await database.read {
+          try $0.fetchAll("DELETE FROM doomed RETURNING id", as: Int.self)
+        }
+      }
+      #expect(
+        try await database.read { try $0.fetchOne("SELECT count(*) FROM doomed", as: Int.self) }
+          == 1
+      )
       let before = try await database.read {
         try $0.fetchAll("SELECT * FROM projection", as: Record.self)
       }
