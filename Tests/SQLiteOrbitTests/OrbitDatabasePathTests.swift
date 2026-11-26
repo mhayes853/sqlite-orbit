@@ -108,7 +108,7 @@ struct OrbitDatabasePathTests {
     // leaves the symlink's target, as the filesystem resolves them.
     @Test(arguments: [
       (link: "linked/link.sqlite", destination: "../db.sqlite"),
-      (link: "link.sqlite", destination: "linked/../db.sqlite"),
+      (link: "link.sqlite", destination: "linked/../db.sqlite")
     ])
     func aRelativeDanglingSymlinkResolvesInFilesystemOrder(
       link: String,
