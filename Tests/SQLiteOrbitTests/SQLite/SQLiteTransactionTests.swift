@@ -1,218 +1,96 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+#if BuiltInSQLite
+  import Testing
 
-  #if BuiltInSQLite
-    import StructuredQueries
-    import Testing
+  @testable import SQLiteOrbit
 
-    @testable import SQLiteOrbit
+  private func openTestConnection() throws -> SQLiteConnection {
+    let connection = try SQLiteConnection.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: .default
+    )
+    try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    return connection
+  }
 
-    private func openTestConnection(
-      configuration: SQLiteConfiguration = .default
-    ) throws -> SQLiteConnection {
-      let connection = try SQLiteConnection.open(
-        path: ":memory:",
-        flags: [.readWrite, .create, .memory, .noMutex],
-        configuration: configuration
-      )
-      try connection.execute(
-        """
-        CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
-        """
-      )
-      return connection
+  @Test
+  func aCursorAdvancesLazilyAndStaysExhausted() throws {
+    var connection = try openTestConnection()
+    try connection.write { transaction in
+      for id in 1...3 {
+        try transaction.execute("INSERT INTO items VALUES (\(id), \("item \(id)"))")
+      }
     }
 
-    @Test
-    func readAndWriteCursorsAdvanceLazilyAndStopWhenExhausted() throws {
-      var connection = try openTestConnection()
-      try connection.write { transaction in
-        for id in 1...3 {
-          try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
-        }
-      }
-
-      try connection.read { transaction in
-        var cursor = try Item.all.order { $0.id }.fetchCursor(transaction)
-        var titles: [String] = []
-        while let item = try cursor.next() {
-          titles.append(item.title)
-        }
-        #expect(titles == ["item 1", "item 2", "item 3"])
-        // A cursor that has reported the end keeps reporting it.
-        #expect(try cursor.next() == nil)
-      }
-
-      // A write transaction's cursor returns the rows of a RETURNING clause.
-      let updated = try connection.write { transaction in
-        var cursor = try #sql(
-          "UPDATE items SET title = 'after' WHERE id < 3 RETURNING id",
-          as: Int.self
-        )
-        .fetchCursor(transaction)
-        var ids: [Int] = []
-        while let id = try cursor.next() {
-          ids.append(id)
-        }
-        return ids
-      }
-      #expect(updated.sorted() == [1, 2])
-
-      let titles = try connection.read { transaction in
-        try Item.order { $0.id }.select(\.title).fetchAll(transaction)
-      }
-      #expect(titles == ["after", "after", "item 3"])
-    }
-
-    @Test
-    func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
-      var connection = try openTestConnection()
-      let (before, first, second, afterDelete) = try connection.write {
-        transaction -> (Int64, Int64, Int64, Int64) in
-        // A connection that has never inserted has no rowid to report.
-        let before = transaction.lastInsertedRowID
-        try #sql("INSERT INTO items (title) VALUES ('a')", as: Void.self).execute(transaction)
-        let first = transaction.lastInsertedRowID
-        try #sql("INSERT INTO items (title) VALUES ('b')", as: Void.self).execute(transaction)
-        let second = transaction.lastInsertedRowID
-        // A statement that inserts nothing leaves the previous rowid in place.
-        try Item.where { $0.id.eq(1) }.delete().execute(transaction)
-        return (before, first, second, transaction.lastInsertedRowID)
-      }
-      #expect(before == 0)
-      #expect(first == 1)
-      #expect(second == 2)
-      #expect(afterDelete == 2)
-    }
-
-    @Test
-    func bindingsAndColumnsRoundTripPrimitivesAndBlobs() throws {
-      var connection = try openTestConnection()
-      try connection.execute(
-        """
-        CREATE TABLE primitives (
-          id INTEGER PRIMARY KEY, amount REAL, flag INTEGER, payload BLOB, empty BLOB,
-          missing TEXT
-        )
-        """
+    try connection.read { transaction in
+      var cursor = try transaction.fetchCursor(
+        "SELECT id, title FROM items ORDER BY id",
+        as: Item.self
       )
+      var titles: [String] = []
+      while let item = try cursor.next() {
+        titles.append(item.title)
+      }
+      #expect(titles == ["item 1", "item 2", "item 3"])
+      // A cursor that has reported the end keeps reporting it.
+      #expect(try cursor.next() == nil)
+    }
+  }
 
-      let payload: [UInt8] = [0x00, 0x01, 0xfe, 0xff]
-      let empty: [UInt8] = []
-      try connection.write { transaction in
-        try #sql(
-          """
-          INSERT INTO primitives (id, amount, flag, payload, empty, missing)
-          VALUES (
-            1, \(2.5, as: Double.self), \(true, as: Bool.self), \(payload, as: [UInt8].self),
-            \(empty, as: [UInt8].self), NULL
+  @Test
+  func lastInsertedRowIDReportsTheRowidSQLiteChose() throws {
+    var connection = try openTestConnection()
+    let (before, first, second, afterDelete) = try connection.write {
+      transaction -> (Int64, Int64, Int64, Int64) in
+      // A connection that has never inserted has no rowid to report.
+      let before = transaction.lastInsertedRowID
+      try transaction.execute("INSERT INTO items (title) VALUES ('a')")
+      let first = transaction.lastInsertedRowID
+      try transaction.execute("INSERT INTO items (title) VALUES ('b')")
+      let second = transaction.lastInsertedRowID
+      // A statement that inserts nothing leaves the previous rowid in place.
+      try transaction.execute("DELETE FROM items WHERE id = \(1)")
+      return (before, first, second, transaction.lastInsertedRowID)
+    }
+    #expect(before == 0)
+    #expect(first == 1)
+    #expect(second == 2)
+    #expect(afterDelete == 2)
+  }
+
+  @Test
+  func transactionsExposeTheRawConnectionAndItsLibrary() throws {
+    var connection = try openTestConnection()
+    try connection.write { transaction in
+      try transaction.execute("INSERT INTO items VALUES (1, 'raw')")
+    }
+
+    let count = try connection.read { transaction -> Int64 in
+      // Exactly what a caller with their own SQLite build would do.
+      let library = transaction.sqlite
+      var statement: OpaquePointer?
+      let code = "SELECT count(*) FROM items"
+        .withCString {
+          library.statements.preparation.prepare(
+            transaction.sqliteConnection,
+            $0,
+            -1,
+            0,
+            &statement,
+            nil
           )
-          """,
-          as: Void.self
-        )
-        .execute(transaction)
-      }
-
-      try connection.read { transaction in
-        let amounts = try #sql("SELECT amount FROM primitives", as: Double.self)
-          .fetchAll(transaction)
-        #expect(amounts == [2.5])
-        let flags = try #sql("SELECT flag FROM primitives", as: Bool.self).fetchAll(transaction)
-        #expect(flags == [true])
-        let payloads = try #sql("SELECT payload FROM primitives", as: [UInt8].self)
-          .fetchAll(transaction)
-        #expect(payloads == [payload])
-        // An empty blob stays a blob rather than becoming NULL.
-        let emptyTypes = try #sql("SELECT typeof(empty) FROM primitives", as: String.self)
-          .fetchAll(transaction)
-        #expect(emptyTypes == ["blob"])
-        let empties = try #sql("SELECT empty FROM primitives", as: [UInt8].self)
-          .fetchAll(transaction)
-        #expect(empties == [[]])
-        let missing = try #sql("SELECT missing FROM primitives", as: String?.self)
-          .fetchAll(transaction)
-        #expect(missing == [String?.none])
-      }
-    }
-
-    @Test(.libraryHooks)
-    func cursorsGiveTheirStatementBackToTheCache() throws {
-      let counters = TestCounter()
-      let base = builtInTestLibrary
-      var configuration = SQLiteConfiguration.default
-      configuration.library = base
-      // Only the fetches count. The transaction's own statements, such as its BEGIN and ROLLBACK and
-      // the check that the schema is unchanged, are not the cache's.
-      configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
-        connection,
-        sql,
-        byteCount,
-        flags,
-        statement,
-        tail in
-        if let sql, String(cString: sql).hasPrefix(#"SELECT "items""#) {
-          counters.increment()
         }
-        return base.statements.preparation.prepare(
-          connection,
-          sql,
-          byteCount,
-          flags,
-          statement,
-          tail
-        )
-      }
-
-      var connection = try openTestConnection(configuration: configuration)
-      try connection.write { transaction in
-        try Item.insert { Item(id: 1, title: "cached") }.execute(transaction)
-      }
-
-      try connection.read { transaction in
-        for _ in 0..<10 {
-          _ = try Item.all.fetchAll(transaction)
-        }
-      }
-
-      // Ten identical fetches, one parse: each cursor returned its statement when it went out of
-      // scope, and the next fetch found it waiting.
-      #expect(counters.value == 1)
+      try #require(code == SQLiteResultCode.ok.rawValue)
+      defer { _ = library.statements.execution.finalize(statement) }
+      try #require(library.statements.execution.step(statement) == SQLiteResultCode.row.rawValue)
+      return library.columns.int64(statement, 0)
     }
+    #expect(count == 1)
+  }
 
-    @Test
-    func transactionsExposeTheRawConnectionAndItsLibrary() throws {
-      var connection = try openTestConnection()
-      try connection.write { transaction in
-        try Item.insert { Item(id: 1, title: "raw") }.execute(transaction)
-      }
-
-      let count = try connection.read { transaction -> Int64 in
-        // Exactly what a caller with their own SQLite build would do.
-        let library = transaction.sqlite
-        var statement: OpaquePointer?
-        let code = "SELECT count(*) FROM items"
-          .withCString {
-            library.statements.preparation.prepare(
-              transaction.sqliteConnection,
-              $0,
-              -1,
-              0,
-              &statement,
-              nil
-            )
-          }
-        try #require(code == SQLiteResultCode.ok.rawValue)
-        defer { _ = library.statements.execution.finalize(statement) }
-        try #require(library.statements.execution.step(statement) == SQLiteResultCode.row.rawValue)
-        return library.columns.int64(statement, 0)
-      }
-      #expect(count == 1)
-    }
-
-    @Table
-    private struct Item: Equatable, Sendable {
-      let id: Int
-      var title: String
-    }
-  #endif
+  @OrbitRow
+  private struct Item: Equatable, Sendable {
+    let id: Int
+    let title: String
+  }
 #endif

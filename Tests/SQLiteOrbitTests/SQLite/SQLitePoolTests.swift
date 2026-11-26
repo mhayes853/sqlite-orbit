@@ -1,317 +1,312 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+#if BuiltInSQLite
+  import Foundation
+  import Testing
 
-  #if BuiltInSQLite
-    import Foundation
-    import StructuredQueries
-    import Testing
+  @testable import SQLiteOrbit
 
-    @testable import SQLiteOrbit
-
-    /// Runs `body` with a pool on a database file of its own, holding the table `items`.
-    private func withPool(
-      readerCount: Int = 5,
-      _ body: (SQLitePool) async throws -> Void
-    ) async throws {
-      try await withTestDatabaseFile("pool") { file in
-        let pool = try file.pool(readerCount: readerCount)
-        try await pool.execute(
-          sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
-        )
-        try await body(pool)
-      }
+  /// Runs `body` with a pool on a database file of its own, holding the table `items`.
+  private func withPool(
+    readerCount: Int = 5,
+    _ body: (SQLitePool) async throws -> Void
+  ) async throws {
+    try await withTestDatabaseFile("pool") { file in
+      let pool = try file.pool(readerCount: readerCount)
+      try await pool.execute(
+        sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
+      )
+      try await body(pool)
     }
+  }
 
-    @Test(arguments: [OrbitDatabasePath.memory, .temporary, ":memory:", ""])
-    func poolRejectsDatabasesItCannotPool(path: OrbitDatabasePath) {
-      #expect(throws: SQLitePoolUnavailableError.self) {
-        _ = try SQLitePool(path: path)
-      }
+  @Test(arguments: [OrbitDatabasePath.memory, .temporary, ":memory:", ""])
+  func poolRejectsDatabasesItCannotPool(path: OrbitDatabasePath) {
+    #expect(throws: SQLitePoolUnavailableError.self) {
+      _ = try SQLitePool(path: path)
     }
+  }
 
+  @Test
+  func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
+    try await withTestDatabaseFile("pool") { file in
+      var configuration = SQLiteConfiguration.default
+      configuration.setups = [.sql("PRAGMA cache_size = 100")]
+      let pool = try file.pool(configuration: configuration)
+
+      // The pool's own setup for each role stays out of what its transactions report.
+      let readerSetup = try await pool.read { $0.configuration.setups.count }
+      let writerSetup = try await pool.write { $0.configuration.setups.count }
+      let connectionSetup = try await pool.writeWithoutTransaction {
+        $0.configuration.setups.count
+      }
+      #expect(readerSetup == 1)
+      #expect(writerSetup == 1)
+      #expect(connectionSetup == 1)
+    }
+  }
+
+  #if os(macOS) || os(Linux) || os(Windows) || os(FreeBSD) || os(OpenBSD)
     @Test
-    func poolConnectionsReportTheConfigurationTheyWereGiven() async throws {
-      try await withTestDatabaseFile("pool") { file in
-        var configuration = SQLiteConfiguration.default
-        configuration.setups = [.sql("PRAGMA cache_size = 100")]
-        let pool = try file.pool(configuration: configuration)
-
-        // The pool's own setup for each role stays out of what its transactions report.
-        let readerSetup = try await pool.read { $0.configuration.setups.count }
-        let writerSetup = try await pool.write { $0.configuration.setups.count }
-        let connectionSetup = try await pool.writeWithoutTransaction {
-          $0.configuration.setups.count
-        }
-        #expect(readerSetup == 1)
-        #expect(writerSetup == 1)
-        #expect(connectionSetup == 1)
+    func aZeroReaderCountFailsAPrecondition() async {
+      await #expect(processExitsWith: .failure) {
+        // The precondition runs before opening any connections. Swallow ordinary opening
+        // errors so they cannot make this exit test pass in place of the precondition.
+        _ = try? SQLitePool(path: .memory, readerCount: 0)
       }
     }
+  #endif
 
-    #if os(macOS) || os(Linux) || os(Windows) || os(FreeBSD) || os(OpenBSD)
-      @Test
-      func aZeroReaderCountFailsAPrecondition() async {
-        await #expect(processExitsWith: .failure) {
-          // The precondition runs before opening any connections. Swallow ordinary opening
-          // errors so they cannot make this exit test pass in place of the precondition.
-          _ = try? SQLitePool(path: .memory, readerCount: 0)
-        }
-      }
-    #endif
-
-    @Test(.libraryHooks)
-    func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {
-      let query = "SELECT title FROM items ORDER BY id"
-      let prepared = TestCounter()
-      let finalized = TestCounter()
-      let preparedStatements = Lock<Set<UInt>>([])
-      let base = builtInTestLibrary
-      var library = base
-      library.statements.preparation.prepare = LibraryHooks.prepare {
+  @Test(.libraryHooks)
+  func aPoolWithStatementCachingDisabledFinalizesEachQuery() async throws {
+    let query = "SELECT title FROM items ORDER BY id"
+    let prepared = TestCounter()
+    let finalized = TestCounter()
+    let preparedStatements = Lock<Set<UInt>>([])
+    let base = builtInTestLibrary
+    var library = base
+    library.statements.preparation.prepare = LibraryHooks.prepare {
+      connection,
+      sql,
+      byteCount,
+      flags,
+      statement,
+      tail in
+      let code = base.statements.preparation.prepare(
         connection,
         sql,
         byteCount,
         flags,
         statement,
-        tail in
-        let code = base.statements.preparation.prepare(
-          connection,
-          sql,
-          byteCount,
-          flags,
-          statement,
-          tail
-        )
-        if code == SQLiteResultCode.ok.rawValue,
-          let sql, String(cString: sql) == query,
-          let pointer = statement?.pointee
-        {
-          _ = preparedStatements.withLock { $0.insert(UInt(bitPattern: pointer)) }
-          prepared.increment()
-        }
-        return code
+        tail
+      )
+      if code == SQLiteResultCode.ok.rawValue,
+        let sql, String(cString: sql) == query,
+        let pointer = statement?.pointee
+      {
+        _ = preparedStatements.withLock { $0.insert(UInt(bitPattern: pointer)) }
+        prepared.increment()
       }
-      library.statements.execution.finalize = LibraryHooks.finalize { statement in
-        if let statement,
-          preparedStatements.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
-        {
-          finalized.increment()
-        }
-        return base.statements.execution.finalize(statement)
+      return code
+    }
+    library.statements.execution.finalize = LibraryHooks.finalize { statement in
+      if let statement,
+        preparedStatements.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
+      {
+        finalized.increment()
       }
-
-      try await withTestDatabaseFile("pool") { file in
-        var configuration = SQLiteConfiguration.default
-        configuration.maximumCachedStatements = 0
-        configuration.library = library
-        let pool = try file.pool(configuration: configuration, readerCount: 1)
-        try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
-
-        for _ in 0..<2 {
-          #expect(
-            try await pool.read {
-              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
-            } == ["One"]
-          )
-          #expect(
-            try await pool.write {
-              try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll($0)
-            } == ["One"]
-          )
-        }
-        #expect(prepared.value == 4)
-        #expect(finalized.value == prepared.value)
-      }
+      return base.statements.execution.finalize(statement)
     }
 
-    @Test
-    func anObservationOnAPoolSeesConcurrentWrites() async throws {
-      try await withPool(readerCount: 2) { pool in
-        let observedCounts = TestRecorder<Int>()
-        let observedErrors = TestRecorder<String>()
-        let observation = OrbitValueObservation<Int>
-          .tracking { transaction in
-            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction) ?? 0
-          }
-        let subscription = try observation.subscribe(
-          to: pool,
-          scheduling: .immediate,
-          onError: { observedErrors.append(String(describing: $0)) },
-          onChange: { observedCounts.append($0.value) }
-        )
-        defer { subscription.cancel() }
-        #expect(observedCounts.values == [0])
+    try await withTestDatabaseFile("pool") { file in
+      var configuration = SQLiteConfiguration.default
+      configuration.maximumCachedStatements = 0
+      configuration.library = library
+      let pool = try file.pool(configuration: configuration, readerCount: 1)
+      try await pool.execute(sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
+      try await pool.execute(sql: "INSERT INTO items VALUES (1, 'One')")
 
-        try await withThrowingTaskGroup(of: Void.self) { group in
-          for id in 1...24 {
-            group.addTask {
-              try await pool.write { transaction in
-                try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
-              }
+      for _ in 0..<2 {
+        #expect(
+          try await pool.read {
+            try $0.fetchAll("SELECT title FROM items ORDER BY id", as: String.self)
+          } == ["One"]
+        )
+        #expect(
+          try await pool.write {
+            try $0.fetchAll("SELECT title FROM items ORDER BY id", as: String.self)
+          } == ["One"]
+        )
+      }
+      #expect(prepared.value == 4)
+      #expect(finalized.value == prepared.value)
+    }
+  }
+
+  @Test
+  func anObservationOnAPoolSeesConcurrentWrites() async throws {
+    try await withPool(readerCount: 2) { pool in
+      let observedCounts = TestRecorder<Int>()
+      let observedErrors = TestRecorder<String>()
+      let observation = OrbitValueObservation<Int>
+        .tracking { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self) ?? 0
+        }
+      let subscription = try observation.subscribe(
+        to: pool,
+        scheduling: .immediate,
+        onError: { observedErrors.append(String(describing: $0)) },
+        onChange: { observedCounts.append($0.value) }
+      )
+      defer { subscription.cancel() }
+      #expect(observedCounts.values == [0])
+
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        for id in 1...24 {
+          group.addTask {
+            try await pool.write { transaction in
+              try transaction.execute("INSERT INTO items VALUES (\(id), \("item \(id)"))")
             }
           }
-          try await group.waitForAll()
         }
-
-        // Refetches may combine several commits, but the last published value must be current.
-        try await waitUntil { observedCounts.last == 24 }
-        #expect(try await pool.rowCount(of: "items") == 24)
-        #expect(observedCounts.values.dropFirst().allSatisfy { $0 > 0 && $0 <= 24 })
-        #expect(observedErrors.values.isEmpty)
+        try await group.waitForAll()
       }
-    }
 
-    @Test
-    func aFailedPooledReadStillGivesItsReaderBack() async throws {
-      try await withPool(readerCount: 1) { pool throws in
-        for _ in 0..<5 {
-          await #expect(throws: TestError()) {
-            try await pool.read { _ in throw TestError() }
+      // Refetches may combine several commits, but the last published value must be current.
+      try await waitUntil { observedCounts.last == 24 }
+      #expect(try await pool.rowCount(of: "items") == 24)
+      #expect(observedCounts.values.dropFirst().allSatisfy { $0 > 0 && $0 <= 24 })
+      #expect(observedErrors.values.isEmpty)
+    }
+  }
+
+  @Test
+  func aFailedPooledReadStillGivesItsReaderBack() async throws {
+    try await withPool(readerCount: 1) { pool throws in
+      for _ in 0..<5 {
+        await #expect(throws: TestError()) {
+          try await pool.read { _ in throw TestError() }
+        }
+      }
+
+      // The one reader in the pool survived five failures.
+      #expect(try await pool.rowCount(of: "items") == 0)
+    }
+  }
+
+  @Test
+  func readsRunAlongsideOneAnother() async throws {
+    try await withPool(readerCount: 2) { pool in
+      let gate = TestGate()
+
+      let reads = (0..<2).map { _ in Task { try await pool.read { _ in try gate.enter() } } }
+      // Both reads are inside the database at once; a serialized pool would never get here.
+      try await gate.waitUntilEntered(2)
+      gate.open()
+      for read in reads { try await read.value }
+    }
+  }
+
+  @Test
+  func readsIssuedDuringAWriteWaitForItToCommit() async throws {
+    try await withPool { pool in
+      let gate = TestGate()
+
+      let write = Task {
+        try await pool.write { transaction in
+          try transaction.execute("INSERT INTO items VALUES (\(1), \("in flight"))")
+          try gate.enter()
+        }
+      }
+      try await gate.waitUntilEntered()
+
+      let read = Task {
+        try await pool.read { try $0.fetchOne("SELECT count(*) FROM items", as: Int.self) }
+      }
+      // The read is queued behind the write, so it cannot have run yet.
+      await Task.yield()
+      gate.open()
+      try await write.value
+
+      // And when it does run, it sees what the write committed.
+      #expect(try await read.value == 1)
+    }
+  }
+
+  @Test
+  func aWriteWaitsForTheReadsInFlight() async throws {
+    try await withPool { pool in
+      let gate = TestGate()
+      let wrote = Lock(false)
+
+      let read = Task { try await pool.read { _ in try gate.enter() } }
+      try await gate.waitUntilEntered()
+
+      let write = Task {
+        try await pool.write { transaction in
+          wrote.withLock { $0 = true }
+          try transaction.execute("INSERT INTO items VALUES (\(1), \("after read"))")
+        }
+      }
+      for _ in 0..<100 { await Task.yield() }
+      #expect(!wrote.withLock { $0 })
+
+      gate.open()
+      try await read.value
+      try await write.value
+      #expect(wrote.withLock { $0 })
+    }
+  }
+
+  @Test
+  func aQueuedWriterRunsBeforeLaterReadersUnderReadPressure() async throws {
+    try await withPool(readerCount: 2) { pool in
+      let gate = TestGate()
+
+      let blockingReads = (0..<2)
+        .map { _ in Task { try await pool.read { _ in try gate.enter() } } }
+      try await gate.waitUntilEntered(2)
+
+      let writerRequested = TestCounter()
+      let writer = Task {
+        writerRequested.increment()
+        try await pool.write { transaction in
+          try transaction.execute("INSERT INTO items VALUES (\(1), \("writer"))")
+        }
+      }
+      try await writerRequested.waitForCount(1)
+      for _ in 0..<100 { await Task.yield() }
+
+      // Keep read pressure behind the writer. Every one of these must observe its commit;
+      // granting any of them first would allow a steady read stream to starve the writer
+      // indefinitely.
+      let trailingRequested = TestCounter()
+      let trailingReads = (0..<32)
+        .map { _ in
+          Task {
+            trailingRequested.increment()
+            return try await pool.read {
+              try $0.fetchOne("SELECT count(*) FROM items", as: Int.self)
+            }
           }
         }
+      try await trailingRequested.waitForCount(trailingReads.count)
+      for _ in 0..<100 { await Task.yield() }
 
-        // The one reader in the pool survived five failures.
-        #expect(try await pool.rowCount(of: "items") == 0)
-      }
-    }
-
-    @Test
-    func readsRunAlongsideOneAnother() async throws {
-      try await withPool(readerCount: 2) { pool in
-        let gate = TestGate()
-
-        let reads = (0..<2).map { _ in Task { try await pool.read { _ in try gate.enter() } } }
-        // Both reads are inside the database at once; a serialized pool would never get here.
-        try await gate.waitUntilEntered(2)
-        gate.open()
-        for read in reads { try await read.value }
-      }
-    }
-
-    @Test
-    func readsIssuedDuringAWriteWaitForItToCommit() async throws {
-      try await withPool { pool in
-        let gate = TestGate()
-
-        let write = Task {
-          try await pool.write { transaction in
-            try Item.insert { Item(id: 1, title: "in flight") }.execute(transaction)
-            try gate.enter()
-          }
-        }
-        try await gate.waitUntilEntered()
-
-        let read = Task { try await pool.read { try Item.all.fetchAll($0).count } }
-        // The read is queued behind the write, so it cannot have run yet.
-        await Task.yield()
-        gate.open()
-        try await write.value
-
-        // And when it does run, it sees what the write committed.
+      gate.open()
+      for read in blockingReads { try await read.value }
+      _ = try await writer.value
+      for read in trailingReads {
         #expect(try await read.value == 1)
       }
     }
+  }
 
-    @Test
-    func aWriteWaitsForTheReadsInFlight() async throws {
-      try await withPool { pool in
-        let gate = TestGate()
-        let wrote = Lock(false)
+  @Test
+  func cancellingAQueuedWriteLetsTheRequestsBehindItRun() async throws {
+    try await withPool { pool in
+      let gate = TestGate()
 
-        let read = Task { try await pool.read { _ in try gate.enter() } }
-        try await gate.waitUntilEntered()
+      let read = Task { try await pool.read { _ in try gate.enter() } }
+      try await gate.waitUntilEntered()
 
-        let write = Task {
-          try await pool.write { transaction in
-            wrote.withLock { $0 = true }
-            try Item.insert { Item(id: 1, title: "after read") }.execute(transaction)
-          }
+      let write = Task {
+        try await pool.write { transaction in
+          try transaction.execute("INSERT INTO items VALUES (\(1), \("never"))")
         }
-        for _ in 0..<100 { await Task.yield() }
-        #expect(!wrote.withLock { $0 })
-
-        gate.open()
-        try await read.value
+      }
+      let trailingRead = Task {
+        try await pool.read { try $0.fetchOne("SELECT count(*) FROM items", as: Int.self) }
+      }
+      for _ in 0..<100 { await Task.yield() }
+      write.cancel()
+      await #expect(throws: CancellationError.self) {
         try await write.value
-        #expect(wrote.withLock { $0 })
       }
+
+      // The trailing read was queued behind the write and is released by its cancellation,
+      // rather than waiting on a write that will never run.
+      gate.open()
+      try await read.value
+      #expect(try await trailingRead.value == 0)
     }
-
-    @Test
-    func aQueuedWriterRunsBeforeLaterReadersUnderReadPressure() async throws {
-      try await withPool(readerCount: 2) { pool in
-        let gate = TestGate()
-
-        let blockingReads = (0..<2)
-          .map { _ in Task { try await pool.read { _ in try gate.enter() } } }
-        try await gate.waitUntilEntered(2)
-
-        let writerRequested = TestCounter()
-        let writer = Task {
-          writerRequested.increment()
-          try await pool.write { transaction in
-            try Item.insert { Item(id: 1, title: "writer") }.execute(transaction)
-          }
-        }
-        try await writerRequested.waitForCount(1)
-        for _ in 0..<100 { await Task.yield() }
-
-        // Keep read pressure behind the writer. Every one of these must observe its commit;
-        // granting any of them first would allow a steady read stream to starve the writer
-        // indefinitely.
-        let trailingRequested = TestCounter()
-        let trailingReads = (0..<32)
-          .map { _ in
-            Task {
-              trailingRequested.increment()
-              return try await pool.read { try Item.all.fetchAll($0).count }
-            }
-          }
-        try await trailingRequested.waitForCount(trailingReads.count)
-        for _ in 0..<100 { await Task.yield() }
-
-        gate.open()
-        for read in blockingReads { try await read.value }
-        _ = try await writer.value
-        for read in trailingReads {
-          #expect(try await read.value == 1)
-        }
-      }
-    }
-
-    @Test
-    func cancellingAQueuedWriteLetsTheRequestsBehindItRun() async throws {
-      try await withPool { pool in
-        let gate = TestGate()
-
-        let read = Task { try await pool.read { _ in try gate.enter() } }
-        try await gate.waitUntilEntered()
-
-        let write = Task {
-          try await pool.write { transaction in
-            try Item.insert { Item(id: 1, title: "never") }.execute(transaction)
-          }
-        }
-        let trailingRead = Task { try await pool.read { try Item.all.fetchAll($0).count } }
-        for _ in 0..<100 { await Task.yield() }
-        write.cancel()
-        await #expect(throws: CancellationError.self) {
-          try await write.value
-        }
-
-        // The trailing read was queued behind the write and is released by its cancellation,
-        // rather than waiting on a write that will never run.
-        gate.open()
-        try await read.value
-        #expect(try await trailingRead.value == 0)
-      }
-    }
-
-    @Table
-    private struct Item: Equatable, Sendable {
-      let id: Int
-      var title: String
-    }
-  #endif
+  }
 #endif
