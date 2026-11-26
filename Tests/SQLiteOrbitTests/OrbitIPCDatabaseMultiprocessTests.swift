@@ -1,438 +1,423 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+#if BuiltInSQLite && (canImport(Darwin) || os(Linux) || os(Android))
+  import Foundation
+  @testable import SQLiteOrbit
+  import Testing
 
-  #if BuiltInSQLite && (canImport(Darwin) || os(Linux) || os(Android))
-    import Foundation
-    @testable import SQLiteOrbit
-    import StructuredQueries
-    import Testing
+  @Suite(.serialized)
+  struct OrbitIPCDatabaseMultiprocessTests {
+    @Test
+    func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "open")
+      defer { harness.cleanup() }
+      let openerCount = 10
+      let openers = try (0..<openerCount).map { try harness.spawn("open", index: $0) }
+      try await harness.waitUntilReady(openerCount)
 
-    @Suite(.serialized)
-    struct OrbitIPCDatabaseMultiprocessTests {
-      @Test
-      func manyProcessesCanOpenTheSameNewDatabaseAtOnce() async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "open")
-        defer { harness.cleanup() }
-        let openerCount = 10
-        let openers = try (0..<openerCount).map { try harness.spawn("open", index: $0) }
-        try await harness.waitUntilReady(openerCount)
+      try harness.start()
 
-        try harness.start()
-
-        for (index, opener) in openers.enumerated() {
-          try await harness.waitForSuccessfulExit(opener)
-          #expect(harness.isMarked("opened", index: index))
-        }
-        #expect(FileManager.default.fileExists(atPath: harness.databasePath))
-        let database = try harness.database()
-        let tableCount = try await database.read { transaction in
-          try #sql("SELECT count(*) FROM sqlite_master", as: Int.self).fetchOne(transaction)
-        }
-        #expect(tableCount == 0)
-        // Moving a new database into WAL needs an exclusive lock of SQLite's own, so a race between
-        // openers would leave it in the default journal mode.
-        let journalMode = try await database.read { transaction in
-          try #sql("SELECT * FROM pragma_journal_mode", as: String.self).fetchAll(transaction)
-        }
-        #expect(journalMode == ["wal"])
-      }
-
-      @Test(arguments: [false, true])
-      func openingWaitsWhileAnotherProcessIsOpening(throughSymlink: Bool) async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "open-lock")
-        defer { harness.cleanup() }
-        let identifier = OrbitDatabaseIdentifier.forDatabase(
-          path: OrbitDatabasePath(harness.databasePath)
-        )
-        let directory = harness.coordination.directory
-        let isHeld = Lock(false)
-        let mayRelease = Lock(false)
-
-        Thread.detachNewThread {
-          try? OrbitDatabaseOpenLock.withLock(
-            databaseIdentifier: identifier,
-            directory: OrbitCoordinationDirectory(path: directory.path),
-            configuration: .default
-          ) {
-            isHeld.withLock { $0 = true }
-            while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
-          }
-        }
-        try await waitUntil { isHeld.withLock { $0 } }
-        defer { mayRelease.withLock { $0 = true } }
-        let opener = try harness.spawn(
-          "open",
-          databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
-        )
-        try await harness.waitUntilReady()
-        try harness.start()
-        try await Task.sleep(for: .milliseconds(100))
-
-        #expect(!harness.isMarked("opened"))
-
-        mayRelease.withLock { $0 = true }
+      for (index, opener) in openers.enumerated() {
         try await harness.waitForSuccessfulExit(opener)
-        #expect(harness.isMarked("opened"))
+        #expect(harness.isMarked("opened", index: index))
       }
-
-      @Test
-      func contentiousWritesFromManyProcessesAllCommit() async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "write")
-        defer { harness.cleanup() }
-        let database = try harness.database()
-        try await database.write { transaction in
-          try #sql(
-            """
-            CREATE TABLE writes (
-              writer_id INTEGER NOT NULL,
-              sequence INTEGER NOT NULL
-            )
-            """,
-            as: Void.self
-          )
-          .execute(transaction)
-        }
-        let writerCount = 8
-        let writesPerWriter = 20
-        let writers = try (0..<writerCount)
-          .map {
-            try harness.spawn("write", index: $0, writeCount: writesPerWriter)
-          }
-        try await harness.waitUntilReady(writerCount)
-
-        try harness.start()
-
-        for writer in writers { try await harness.waitForSuccessfulExit(writer) }
-        let count = try await database.read { transaction in
-          try #sql("SELECT count(*) FROM writes", as: Int.self).fetchOne(transaction)
-        }
-        #expect(count == writerCount * writesPerWriter)
+      #expect(FileManager.default.fileExists(atPath: harness.databasePath))
+      let database = try harness.database()
+      let tableCount = try await database.read { transaction in
+        try transaction.fetchOne("SELECT count(*) FROM sqlite_master", as: Int.self)
       }
-
-      @Test
-      func writeGivesUpWhileAnotherProcessHoldsTheWriteTransaction() async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "busy")
-        defer { harness.cleanup() }
-        try await harness.database()
-          .write { transaction in
-            try #sql("CREATE TABLE writes (writer_id INTEGER NOT NULL)", as: Void.self)
-              .execute(transaction)
-          }
-        let holder = try harness.spawn("hold")
-        try await harness.waitUntilMarked("held")
-
-        var configuration = SQLiteConfiguration.default
-        configuration.busyPolicy = .timeout(.milliseconds(100))
-        let database = try harness.database(configuration: configuration)
-        let clock = ContinuousClock()
-        let started = clock.now
-        let error = await #expect(throws: SQLiteError.self) {
-          try await database.write { transaction in
-            try #sql("INSERT INTO writes (writer_id) VALUES (9999)", as: Void.self)
-              .execute(transaction)
-          }
-        }
-        let elapsed = clock.now - started
-
-        #expect(error?.primaryCode == .busy)
-        // The holder keeps its transaction until it is stopped, so the write gave up on its own.
-        #expect(elapsed < .seconds(10))
-        try harness.stop()
-        try await harness.waitForSuccessfulExit(holder)
+      #expect(tableCount == 0)
+      // Moving a new database into WAL needs an exclusive lock of SQLite's own, so a race between
+      // openers would leave it in the default journal mode.
+      let journalMode = try await database.read { transaction in
+        try transaction.fetchAll("SELECT * FROM pragma_journal_mode", as: String.self)
       }
+      #expect(journalMode == ["wal"])
+    }
 
-      @Test(arguments: [false, true])
-      func writeIsDeliveredToARealSubscriberInAnotherProcess(throughSymlink: Bool) async throws {
-        // Check transport delivery independently of the value-observation integration below.
-        let harness = try OrbitDatabaseProcessHarness(name: "deliver")
-        defer { harness.cleanup() }
-        let listener = try harness.spawn(
-          "listen",
-          databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
-        )
-        try await harness.waitUntilReady()
+    @Test(arguments: [false, true])
+    func openingWaitsWhileAnotherProcessIsOpening(throughSymlink: Bool) async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "open-lock")
+      defer { harness.cleanup() }
+      let identifier = OrbitDatabaseIdentifier.forDatabase(
+        path: OrbitDatabasePath(harness.databasePath)
+      )
+      let directoryPath = harness.coordination.directoryPath
+      let isHeld = Lock(false)
+      let mayRelease = Lock(false)
 
-        try await harness.database()
-          .write { transaction in
-            try #sql("CREATE TABLE items (id INTEGER)", as: Void.self).execute(transaction)
-          }
-
-        try await harness.waitForSuccessfulExit(listener)
-        #expect(harness.isMarked("received"))
-      }
-
-      @Test
-      func aValueObservationRefetchesAfterAWriteInAnotherProcess() async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "observe-value")
-        defer { harness.cleanup() }
-        let database = try harness.database()
-        try await database.write { transaction in
-          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      Thread.detachNewThread {
+        try? OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: identifier,
+          directory: OrbitCoordinationDirectory(path: directoryPath),
+          configuration: .default
+        ) {
+          isHeld.withLock { $0 = true }
+          while !mayRelease.withLock({ $0 }) { Thread.sleep(forTimeInterval: 0.001) }
         }
-        let observer = try harness.spawn("observe-value")
-        // The child signals readiness only after receiving its initial observed value.
-        try await harness.waitUntilReady()
-
-        try await database.write { transaction in
-          try transaction.execute("INSERT INTO items VALUES (42)")
-        }
-
-        try await harness.waitForSuccessfulExit(observer)
-        #expect(harness.isMarked("observed-updated-value"))
       }
+      try await waitUntil { isHeld.withLock { $0 } }
+      defer { mayRelease.withLock { $0 = true } }
+      let opener = try harness.spawn(
+        "open",
+        databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
+      )
+      try await harness.waitUntilReady()
+      try harness.start()
+      try await Task.sleep(for: .milliseconds(100))
 
-      @Test
-      func schemaCookieRecompilesCachedUpdatesAcrossProcesses() async throws {
-        // SQLiteQueue has no IPC transport: SQLite's schema cookie is the only cross-process signal
-        // that can make the updater replace its cached statement metadata.
-        let harness = try OrbitDatabaseProcessHarness(name: "schema-cookie")
-        defer { harness.cleanup() }
-        let database = try SQLiteQueue(path: OrbitDatabasePath(harness.databasePath))
-        try await database.write { transaction in
-          try transaction.executeScript(
-            """
-            CREATE TABLE items (
-              id INTEGER PRIMARY KEY,
-              quantity INTEGER NOT NULL
-            );
-            INSERT INTO items VALUES (1, 1);
-            """
-          )
-        }
-        let updater = try harness.spawn("reuse-update")
-        try await harness.waitUntilReady()
+      #expect(!harness.isMarked("opened"))
 
-        try await database.write { transaction in
-          try transaction.execute(
-            """
-            ALTER TABLE items ADD COLUMN doubled INTEGER
-              GENERATED ALWAYS AS (quantity * 2)
-            """
-          )
-        }
-        try harness.start()
-
-        try await harness.waitForSuccessfulExit(updater)
-      }
-
-      @Test
-      func migratingFromManyProcessesAppliesEachMigrationOnce() async throws {
-        let harness = try OrbitDatabaseProcessHarness(name: "migrate")
-        defer { harness.cleanup() }
-        let migratorCount = 4
-        let migrators = try (0..<migratorCount).map { try harness.spawn("migrate", index: $0) }
-        try await harness.waitUntilReady(migratorCount)
-
-        try harness.start()
-
-        for migrator in migrators { try await harness.waitForSuccessfulExit(migrator) }
-        try await expectContendedMigrationsAppliedOnce(in: try harness.database())
-      }
-
-      @Test
-      func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
-        // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
-        // holder that crashes must not leave the lock stuck for whoever opens next.
-        let harness = try OrbitDatabaseProcessHarness(name: "open-lock-crash")
-        defer { harness.cleanup() }
-        let holder = try harness.spawn("hold-open-lock")
-        try await harness.waitUntilReady()
-
-        harness.kill(holder)
-        try await harness.waitForExit(holder)
-
-        let databasePath = harness.databasePath
-        let coordination = harness.coordination
-        _ = try await withDeadline(.seconds(5)) {
-          try OrbitIPCDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
-        }
-        #expect(FileManager.default.fileExists(atPath: harness.databasePath))
-      }
+      mayRelease.withLock { $0 = true }
+      try await harness.waitForSuccessfulExit(opener)
+      #expect(harness.isMarked("opened"))
     }
 
     @Test
-    func orbitIPCDatabasePeer() async {
-      await runProcessTestPeer(OrbitDatabaseProcessHarness.helper) { peer in
-        let coordination = UnixDatagramIPCTransport.Configuration(directory: peer.directory)
-        let path = OrbitDatabasePath(try peer.string(OrbitDatabaseProcessHarness.databaseVariable))
-
-        switch peer.mode {
-        case "open":
-          try peer.markReady()
-          try await peer.waitForStart()
-          // Waits for the test's hold on the open lock as long as it takes, not the default five
-          // seconds, which a loaded machine can spend before the test lets go.
-          var configuration = SQLiteConfiguration.default
-          configuration.busyPolicy = .waitIndefinitely
-          _ = try OrbitIPCDatabase(
-            path: path,
-            configuration: configuration,
-            coordination: coordination
+    func contentiousWritesFromManyProcessesAllCommit() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "write")
+      defer { harness.cleanup() }
+      let database = try harness.database()
+      try await database.write { transaction in
+        try transaction.execute(
+          """
+          CREATE TABLE writes (
+            writer_id INTEGER NOT NULL,
+            sequence INTEGER NOT NULL
           )
-          try peer.mark("opened")
+          """
+        )
+      }
+      let writerCount = 8
+      let writesPerWriter = 20
+      let writers = try (0..<writerCount)
+        .map {
+          try harness.spawn("write", index: $0, writeCount: writesPerWriter)
+        }
+      try await harness.waitUntilReady(writerCount)
 
-        case "write":
-          let database = try OrbitIPCDatabase(path: path, coordination: coordination)
-          let writeCount = try peer.int(OrbitDatabaseProcessHarness.writeCountVariable)
-          try peer.markReady()
-          try await peer.waitForStart()
-          for sequence in 0..<writeCount {
-            try await database.write { transaction in
-              try #sql(
-                """
-                INSERT INTO writes (writer_id, sequence)
-                VALUES (\(bind: peer.index), \(bind: sequence))
-                """,
-                as: Void.self
-              )
-              .execute(transaction)
-            }
-          }
+      try harness.start()
 
-        case "migrate":
-          let database = try OrbitIPCDatabase(path: path, coordination: coordination)
-          try peer.markReady()
-          try await peer.waitForStart()
-          try await makeContendedMigrator().migrate(database)
+      for writer in writers { try await harness.waitForSuccessfulExit(writer) }
+      let count = try await database.read { transaction in
+        try transaction.fetchOne("SELECT count(*) FROM writes", as: Int.self)
+      }
+      #expect(count == writerCount * writesPerWriter)
+    }
 
-        case "hold":
-          let database = try OrbitIPCDatabase(path: path, coordination: coordination)
-          try peer.markReady()
-          try await database.write { transaction in
-            try #sql("INSERT INTO writes (writer_id) VALUES (1)", as: Void.self)
-              .execute(transaction)
-            try peer.mark("held")
-            peer.waitForStopBlocking()
-          }
+    @Test
+    func writeGivesUpWhileAnotherProcessHoldsTheWriteTransaction() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "busy")
+      defer { harness.cleanup() }
+      try await harness.database()
+        .write { transaction in
+          try transaction.execute("CREATE TABLE writes (writer_id INTEGER NOT NULL)")
+        }
+      let holder = try harness.spawn("hold")
+      try await harness.waitUntilMarked("held")
 
-        case "listen":
-          // `shared` caches transports weakly, so the transport itself, not just the subscription,
-          // must be kept alive for as long as the subscription should stay registered.
-          let transport = try UnixDatagramIPCTransport.shared(configuration: coordination)
-          let received = TestCounter()
-          let subscription = try transport.subscribe(to: .forDatabase(path: path)) { _ in
-            received.increment()
-          }
-          try peer.markReady()
-          try await received.waitForCount(1)
-          try peer.mark("received")
-          _ = subscription
-
-        case "observe-value":
-          let database = try OrbitIPCDatabase(path: path, coordination: coordination)
-          let values = TestRecorder<[Int]>()
-          let errors = TestRecorder<String>()
-          let observation = OrbitValueObservation<[Int]>
-            .tracking { transaction in
-              try #sql("SELECT id FROM items ORDER BY id", as: Int.self).fetchAll(transaction)
-            }
-          let subscription = try observation.subscribe(
-            to: database,
-            onError: { errors.append(String(describing: $0)) },
-            onChange: { values.append($0.value) }
-          )
-          defer { subscription.cancel() }
-          try await values.waitForCount(1)
-          try #require(values.values == [[]])
-          try peer.markReady()
-          try await waitUntil { values.last == [42] }
-          try #require(errors.values.isEmpty)
-          try #require(values.values == [[], [42]])
-          try peer.mark("observed-updated-value")
-
-        case "reuse-update":
-          let driver = try SQLiteQueue(path: path)
-          let observer = TransactionEventRecorder()
-          let subscription = try driver.subscribe(transactionObserver: observer)
-          let update = SQL(
-            fragment: #sql("UPDATE items SET quantity = quantity + 1 WHERE id = 1", as: Void.self)
-              .query
-          )
-          try await driver.write { transaction in
-            var cursor = try transaction.executeRowCursor(update, cached: true)
-            while try cursor.next() != nil {}
-          }
-          try peer.markReady()
-          try await peer.waitForStart()
-          try await driver.write { transaction in
-            var cursor = try transaction.executeRowCursor(update, cached: true)
-            while try cursor.next() != nil {}
-          }
-
-          try #require(
-            observer.changedRegions == [
-              OrbitDatabaseRegion(column: "quantity", in: "items"),
-              OrbitDatabaseRegion(columns: ["quantity", "doubled"], in: "items")
-            ]
-          )
-          _ = subscription
-
-        case "hold-open-lock":
-          try OrbitDatabaseOpenLock.withLock(
-            databaseIdentifier: .forDatabase(path: path),
-            directory: OrbitCoordinationDirectory(path: coordination.directory.path),
-            configuration: .default
-          ) {
-            try peer.markReady()
-            Thread.sleep(forTimeInterval: 30)
-          }
-
-        default:
-          throw peer.unknownMode
+      var configuration = SQLiteConfiguration.default
+      configuration.busyPolicy = .timeout(.milliseconds(100))
+      let database = try harness.database(configuration: configuration)
+      let clock = ContinuousClock()
+      let started = clock.now
+      let error = await #expect(throws: SQLiteError.self) {
+        try await database.write { transaction in
+          try transaction.execute("INSERT INTO writes (writer_id) VALUES (9999)")
         }
       }
+      let elapsed = clock.now - started
+
+      #expect(error?.primaryCode == .busy)
+      // The holder keeps its transaction until it is stopped, so the write gave up on its own.
+      #expect(elapsed < .seconds(10))
+      try harness.stop()
+      try await harness.waitForSuccessfulExit(holder)
     }
 
-    /// A database, and the coordination directory the processes that open it share, which is the
-    /// harness's own.
-    private final class OrbitDatabaseProcessHarness: ProcessTestHarness {
-      static let helper = "orbitIPCDatabasePeer"
-      static let databaseVariable = "DATABASE"
-      static let writeCountVariable = "WRITE_COUNT"
+    @Test(arguments: [false, true])
+    func writeIsDeliveredToARealSubscriberInAnotherProcess(throughSymlink: Bool) async throws {
+      // Check transport delivery independently of the value-observation integration below.
+      let harness = try OrbitDatabaseProcessHarness(name: "deliver")
+      defer { harness.cleanup() }
+      let listener = try harness.spawn(
+        "listen",
+        databasePath: throughSymlink ? harness.symlinkedDatabasePath() : harness.databasePath
+      )
+      try await harness.waitUntilReady()
 
-      var databasePath: String { self.file("test.sqlite").path }
+      try await harness.database()
+        .write { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER)")
+        }
 
-      var coordination: UnixDatagramIPCTransport.Configuration {
-        UnixDatagramIPCTransport.Configuration(directory: self.directory)
+      try await harness.waitForSuccessfulExit(listener)
+      #expect(harness.isMarked("received"))
+    }
+
+    @Test
+    func aValueObservationRefetchesAfterAWriteInAnotherProcess() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "observe-value")
+      defer { harness.cleanup() }
+      let database = try harness.database()
+      try await database.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+      let observer = try harness.spawn("observe-value")
+      // The child signals readiness only after receiving its initial observed value.
+      try await harness.waitUntilReady()
+
+      try await database.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (42)")
       }
 
-      init(name: String) throws {
-        try super.init(helper: Self.helper, name: name)
-      }
+      try await harness.waitForSuccessfulExit(observer)
+      #expect(harness.isMarked("observed-updated-value"))
+    }
 
-      func database(
-        configuration: SQLiteConfiguration = .default
-      ) throws -> OrbitIPCDatabase {
-        try OrbitIPCDatabase(
-          path: OrbitDatabasePath(self.databasePath),
-          configuration: configuration,
-          coordination: self.coordination
+    @Test
+    func schemaCookieRecompilesCachedUpdatesAcrossProcesses() async throws {
+      // SQLiteQueue has no IPC transport: SQLite's schema cookie is the only cross-process signal
+      // that can make the updater replace its cached statement metadata.
+      let harness = try OrbitDatabaseProcessHarness(name: "schema-cookie")
+      defer { harness.cleanup() }
+      let database = try SQLiteQueue(path: OrbitDatabasePath(harness.databasePath))
+      try await database.write { transaction in
+        try transaction.executeScript(
+          """
+          CREATE TABLE items (
+            id INTEGER PRIMARY KEY,
+            quantity INTEGER NOT NULL
+          );
+          INSERT INTO items VALUES (1, 1);
+          """
         )
       }
+      let updater = try harness.spawn("reuse-update")
+      try await harness.waitUntilReady()
 
-      func symlinkedDatabasePath() throws -> String {
-        let alias = self.file("alias")
-        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: self.directory)
-        return alias.appending(path: "test.sqlite").path
+      try await database.write { transaction in
+        try transaction.execute(
+          """
+          ALTER TABLE items ADD COLUMN doubled INTEGER
+            GENERATED ALWAYS AS (quantity * 2)
+          """
+        )
       }
+      try harness.start()
 
-      /// Spawns the helper in `mode`, opening the database at `databasePath`, or else the harness's
-      /// own.
-      func spawn(
-        _ mode: String,
-        index: Int = 0,
-        databasePath: String? = nil,
-        writeCount: Int = 0
-      ) throws -> Process {
-        try self.spawn(
-          mode: mode,
-          index: index,
-          [
-            Self.databaseVariable: databasePath ?? self.databasePath,
-            Self.writeCountVariable: String(writeCount)
+      try await harness.waitForSuccessfulExit(updater)
+    }
+
+    @Test
+    func migratingFromManyProcessesAppliesEachMigrationOnce() async throws {
+      let harness = try OrbitDatabaseProcessHarness(name: "migrate")
+      defer { harness.cleanup() }
+      let migratorCount = 4
+      let migrators = try (0..<migratorCount).map { try harness.spawn("migrate", index: $0) }
+      try await harness.waitUntilReady(migratorCount)
+
+      try harness.start()
+
+      for migrator in migrators { try await harness.waitForSuccessfulExit(migrator) }
+      try await expectContendedMigrationsAppliedOnce(in: try harness.database())
+    }
+
+    @Test
+    func openLockReleasesWhenItsHolderProcessIsKilled() async throws {
+      // flock is tied to the file descriptor, which the kernel closes when a process dies, so a
+      // holder that crashes must not leave the lock stuck for whoever opens next.
+      let harness = try OrbitDatabaseProcessHarness(name: "open-lock-crash")
+      defer { harness.cleanup() }
+      let holder = try harness.spawn("hold-open-lock")
+      try await harness.waitUntilReady()
+
+      harness.kill(holder)
+      try await harness.waitForExit(holder)
+
+      let databasePath = harness.databasePath
+      let coordination = harness.coordination
+      _ = try await withDeadline(.seconds(5)) {
+        try OrbitIPCDatabase(path: OrbitDatabasePath(databasePath), coordination: coordination)
+      }
+      #expect(FileManager.default.fileExists(atPath: harness.databasePath))
+    }
+  }
+
+  @Test
+  func orbitIPCDatabasePeer() async {
+    await runProcessTestPeer(OrbitDatabaseProcessHarness.helper) { peer in
+      let coordination = UnixDatagramIPCTransport.Configuration(directoryPath: peer.directory.path)
+      let path = OrbitDatabasePath(try peer.string(OrbitDatabaseProcessHarness.databaseVariable))
+
+      switch peer.mode {
+      case "open":
+        try peer.markReady()
+        try await peer.waitForStart()
+        // Waits for the test's hold on the open lock as long as it takes, not the default five
+        // seconds, which a loaded machine can spend before the test lets go.
+        var configuration = SQLiteConfiguration.default
+        configuration.busyPolicy = .waitIndefinitely
+        _ = try OrbitIPCDatabase(
+          path: path,
+          configuration: configuration,
+          coordination: coordination
+        )
+        try peer.mark("opened")
+
+      case "write":
+        let database = try OrbitIPCDatabase(path: path, coordination: coordination)
+        let writeCount = try peer.int(OrbitDatabaseProcessHarness.writeCountVariable)
+        try peer.markReady()
+        try await peer.waitForStart()
+        for sequence in 0..<writeCount {
+          try await database.write { transaction in
+            try transaction.execute(
+              """
+              INSERT INTO writes (writer_id, sequence)
+              VALUES (\(peer.index), \(sequence))
+              """
+            )
+          }
+        }
+
+      case "migrate":
+        let database = try OrbitIPCDatabase(path: path, coordination: coordination)
+        try peer.markReady()
+        try await peer.waitForStart()
+        try await makeContendedMigrator().migrate(database)
+
+      case "hold":
+        let database = try OrbitIPCDatabase(path: path, coordination: coordination)
+        try peer.markReady()
+        try await database.write { transaction in
+          try transaction.execute("INSERT INTO writes (writer_id) VALUES (1)")
+          try peer.mark("held")
+          peer.waitForStopBlocking()
+        }
+
+      case "listen":
+        // `shared` caches transports weakly, so the transport itself, not just the subscription,
+        // must be kept alive for as long as the subscription should stay registered.
+        let transport = try UnixDatagramIPCTransport.shared(configuration: coordination)
+        let received = TestCounter()
+        let subscription = try transport.subscribe(to: .forDatabase(path: path)) { _ in
+          received.increment()
+        }
+        try peer.markReady()
+        try await received.waitForCount(1)
+        try peer.mark("received")
+        _ = subscription
+
+      case "observe-value":
+        let database = try OrbitIPCDatabase(path: path, coordination: coordination)
+        let values = TestRecorder<[Int]>()
+        let errors = TestRecorder<String>()
+        let observation = OrbitValueObservation<[Int]>
+          .tracking { transaction in
+            try transaction.fetchAll("SELECT id FROM items ORDER BY id", as: Int.self)
+          }
+        let subscription = try observation.subscribe(
+          to: database,
+          onError: { errors.append(String(describing: $0)) },
+          onChange: { values.append($0.value) }
+        )
+        defer { subscription.cancel() }
+        try await values.waitForCount(1)
+        try #require(values.values == [[]])
+        try peer.markReady()
+        try await waitUntil { values.last == [42] }
+        try #require(errors.values.isEmpty)
+        try #require(values.values == [[], [42]])
+        try peer.mark("observed-updated-value")
+
+      case "reuse-update":
+        let driver = try SQLiteQueue(path: path)
+        let observer = TransactionEventRecorder()
+        let subscription = try driver.subscribe(transactionObserver: observer)
+        let update: SQL = "UPDATE items SET quantity = quantity + 1 WHERE id = 1"
+        try await driver.write { transaction in
+          var cursor = try transaction.executeRowCursor(update, cached: true)
+          while try cursor.next() != nil {}
+        }
+        try peer.markReady()
+        try await peer.waitForStart()
+        try await driver.write { transaction in
+          var cursor = try transaction.executeRowCursor(update, cached: true)
+          while try cursor.next() != nil {}
+        }
+
+        try #require(
+          observer.changedRegions == [
+            OrbitDatabaseRegion(column: "quantity", in: "items"),
+            OrbitDatabaseRegion(columns: ["quantity", "doubled"], in: "items")
           ]
         )
+        _ = subscription
+
+      case "hold-open-lock":
+        try OrbitDatabaseOpenLock.withLock(
+          databaseIdentifier: .forDatabase(path: path),
+          directory: OrbitCoordinationDirectory(path: coordination.directoryPath),
+          configuration: .default
+        ) {
+          try peer.markReady()
+          Thread.sleep(forTimeInterval: 30)
+        }
+
+      default:
+        throw peer.unknownMode
       }
     }
-  #endif
+  }
+
+  /// A database, and the coordination directory the processes that open it share, which is the
+  /// harness's own.
+  private final class OrbitDatabaseProcessHarness: ProcessTestHarness {
+    static let helper = "orbitIPCDatabasePeer"
+    static let databaseVariable = "DATABASE"
+    static let writeCountVariable = "WRITE_COUNT"
+
+    var databasePath: String { self.file("test.sqlite").path }
+
+    var coordination: UnixDatagramIPCTransport.Configuration {
+      UnixDatagramIPCTransport.Configuration(directoryPath: self.directory.path)
+    }
+
+    init(name: String) throws {
+      try super.init(helper: Self.helper, name: name)
+    }
+
+    func database(
+      configuration: SQLiteConfiguration = .default
+    ) throws -> OrbitIPCDatabase {
+      try OrbitIPCDatabase(
+        path: OrbitDatabasePath(self.databasePath),
+        configuration: configuration,
+        coordination: self.coordination
+      )
+    }
+
+    func symlinkedDatabasePath() throws -> String {
+      let alias = self.file("alias")
+      try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: self.directory)
+      return alias.appending(path: "test.sqlite").path
+    }
+
+    /// Spawns the helper in `mode`, opening the database at `databasePath`, or else the harness's
+    /// own.
+    func spawn(
+      _ mode: String,
+      index: Int = 0,
+      databasePath: String? = nil,
+      writeCount: Int = 0
+    ) throws -> Process {
+      try self.spawn(
+        mode: mode,
+        index: index,
+        [
+          Self.databaseVariable: databasePath ?? self.databasePath,
+          Self.writeCountVariable: String(writeCount)
+        ]
+      )
+    }
+  }
 #endif
