@@ -1,748 +1,31 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+#if BuiltInSQLite
+  import Foundation
+  import Testing
 
-  #if BuiltInSQLite
-    import Foundation
-    import StructuredQueries
-    import Testing
+  @testable import SQLiteOrbit
 
-    @testable import SQLiteOrbit
+  private func openConnection(
+    configuration: SQLiteConfiguration = .default
+  ) throws -> SQLiteConnection {
+    let handle = try SQLiteConnection.open(
+      path: ":memory:",
+      flags: [.readWrite, .create, .memory, .noMutex],
+      configuration: configuration
+    )
+    try handle.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+    return handle
+  }
 
-    private func openConnection(
-      configuration: SQLiteConfiguration = .default
-    ) throws -> SQLiteConnection {
-      let handle = try SQLiteConnection.open(
-        path: ":memory:",
-        flags: [.readWrite, .create, .memory, .noMutex],
-        configuration: configuration
-      )
-      try handle.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
-      return handle
-    }
+  private final class StatementLifecycleProbe: Sendable {
+    let prepared = TestCounter()
+    let finalized = TestCounter()
+    private let cachedPointers = Lock<Set<UInt>>([])
 
-    private final class StatementLifecycleProbe: Sendable {
-      let prepared = TestCounter()
-      let finalized = TestCounter()
-      private let cachedPointers = Lock<Set<UInt>>([])
-
-      func configuration(matching sqlPrefixes: String...) -> SQLiteConfiguration {
-        let base = builtInTestLibrary
-        var configuration = SQLiteConfiguration.default
-        configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
-          [self]
-          connection,
-          sql,
-          count,
-          flags,
-          statement,
-          tail in
-          let code = base.statements.preparation.prepare(
-            connection,
-            sql,
-            count,
-            flags,
-            statement,
-            tail
-          )
-          // Metadata probes use flags=0; only track statements prepared for the cache.
-          if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee,
-            flags & SQLitePrepareFlags.persistent.rawValue != 0,
-            let sql, sqlPrefixes.contains(where: String(cString: sql).hasPrefix)
-          {
-            cachedPointers.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
-            prepared.increment()
-          }
-          return code
-        }
-        configuration.library.statements.execution.finalize = LibraryHooks.finalize {
-          [self] statement in
-          if let statement,
-            cachedPointers.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
-          {
-            finalized.increment()
-          }
-          return base.statements.execution.finalize(statement)
-        }
-        return configuration
-      }
-    }
-
-    @Test
-    func rawSQLStopsAtAnEmbeddedNulTheWaySQLiteDoes() throws {
-      var handle = try openConnection()
-      try handle.execute(
-        "INSERT INTO items (id, title) VALUES (1, 'a');\u{0}INSERT INTO items (id, title) VALUES (2, 'b')"
-      )
-      let count = try handle.read { transaction in
-        try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
-      }
-      // SQLite reads SQL text up to the first NUL whatever length it is given, so the second
-      // statement here is not run. Values are a different matter: those keep their NULs, which is
-      // what `textRoundTripsWhateverCharactersItHolds` pins down.
-      #expect(count == [1])
-    }
-
-    @Test
-    func aReadOnAWritableConnectionRefusesToMutateAndLeavesItWritable() throws {
-      var handle = try openConnection()
-
-      // The connection can write, but not while lending a read transaction: a mutation that was
-      // merely rolled back at the end of the read would look like it had worked. The read refuses
-      // it as it compiles, whether the statement comes from the cache, is compiled for its cursor
-      // alone, or is prepared to run again, and it never has to make the connection query-only.
-      let insert = "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id"
-      let refusals = [
-        #expect(throws: SQLiteError.self) {
-          try handle.read { transaction in
-            try transaction.fetchAll(SQL(text: insert), as: Int.self)
-          }
-        },
-        #expect(throws: SQLiteError.self) {
-          try handle.read { transaction in
-            _ = try transaction.rowCursor(SQL(text: insert), cached: false)
-          }
-        },
-        #expect(throws: SQLiteError.self) {
-          try handle.read { transaction in
-            _ = try transaction.prepare(SQL(text: insert), cached: false)
-          }
-        }
-      ]
-      for refusal in refusals {
-        #expect(refusal?.primaryCode == .readOnly)
-        #expect(refusal?.message?.contains("may write") == true)
-      }
-
-      // A read that threw turns `query_only` back off on its way out too.
-      #expect(throws: TestError()) {
-        try handle.read { _ in throw TestError() }
-      }
-
-      // And the connection is writable again afterwards.
-      try handle.write { transaction in
-        try Item.insert { Item(id: 1, title: "yes") }.execute(transaction)
-      }
-      let titles = try handle.read { transaction in
-        try Item.select(\.title).fetchAll(transaction)
-      }
-      #expect(titles == ["yes"])
-    }
-
-    @Test
-    func aReadAfterAWriteRefusesRawAndCachedMutations() throws {
-      var handle = try openConnection()
-      let insert = "INSERT INTO items (title) VALUES ('nope')"
-
-      // Compiled while the connection could write, and kept: the cache keeps the first, and the
-      // second is a raw statement this test holds across the accesses.
-      let held = try handle.withWriteConnection { connection in
-        try connection.execute(SQL(text: insert))
-        let library = connection.sqlite
-        let statement = try #require(
-          try library.prepare(
-            insert,
-            on: connection.sqliteConnection,
-            flags: SQLitePrepareFlags.persistent.rawValue
-          )
-        )
-        return UInt(bitPattern: statement)
-      }
-      let statement = try #require(OpaquePointer(bitPattern: held))
-      let library = handle.configuration.library
-      defer { _ = library.statements.execution.finalize(statement) }
-
-      try handle.withReadConnection { connection in
-        // The cached statement is held to the read when it is lent.
-        #expect(throws: SQLiteError.self) {
-          _ = try connection.rowCursor(SQL(text: insert), cached: true)
-        }
-        // Raw SQL, compiled anew or compiled before the read began, is refused by the library
-        // itself: SQLite refuses to step either, and Turso to compile the new one and, with a
-        // generic error, to step the old one.
-        #if Turso
-          #expect(throws: SQLiteError.self) {
-            try library.prepare(insert, on: connection.sqliteConnection)
-          }
-          let refusal = SQLiteResultCode.error.rawValue
-        #else
-          let raw = try #require(try library.prepare(insert, on: connection.sqliteConnection))
-          defer { _ = library.statements.execution.finalize(raw) }
-          let refusal = SQLiteResultCode.readOnly.rawValue
-          #expect(library.statements.execution.step(raw) & 0xff == refusal)
-        #endif
-        #expect(library.statements.execution.step(statement) & 0xff == refusal)
-        _ = library.statements.execution.reset(statement)
-      }
-
-      // The next write can write again, through either statement.
-      try handle.withWriteConnection { connection in
-        #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
-        _ = library.statements.execution.reset(statement)
-        try connection.execute(SQL(text: insert))
-      }
-      let count = try handle.read { transaction in
-        try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
-      }
-      #expect(count == 3)
-    }
-
-    @Test(.libraryHooks)
-    func consecutiveReadsOnAWritableConnectionReuseTheirStatements() throws {
-      let probe = StatementLifecycleProbe()
-      do {
-        var handle = try openConnection(
-          configuration: probe.configuration(matching: "SELECT title FROM items")
-        )
-        try handle.write { transaction in
-          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
-        }
-        for _ in 0..<5 {
-          let titles = try handle.read { transaction in
-            try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-          }
-          #expect(titles == ["kept"])
-        }
-        // Compiled once and never dropped: nothing between the reads expired it, so its first
-        // step never found it recompiled and emptied the cache.
-        #expect(probe.prepared.value == 1)
-        #expect(probe.finalized.value == 0)
-
-        // A write between reads still leaves the statement where the next read finds it.
-        try handle.write { transaction in
-          try Item.insert { Item(id: 2, title: "also") }.execute(transaction)
-        }
-        let titles = try handle.read { transaction in
-          try #sql("SELECT title FROM items ORDER BY id", as: String.self).fetchAll(transaction)
-        }
-        #expect(titles == ["kept", "also"])
-      }
-    }
-
-    // The first two rely on an authorizer, which Turso lacks: without one every write empties the
-    // cache, and nothing tells `PRAGMA optimize` apart from what reads.
-    #if !Turso
-      @Test(.libraryHooks)
-      func alternatingReadsAndWritesKeepTheirStatements() throws {
-        let probe = StatementLifecycleProbe()
-        do {
-          var handle = try openConnection(
-            configuration: probe.configuration(
-              matching: "SELECT title FROM items",
-              "INSERT INTO items"
-            )
-          )
-          for id in 1...5 {
-            try handle.write { transaction in
-              try transaction.execute("INSERT INTO items (id, title) VALUES (\(id), 'kept')")
-            }
-            let titles = try handle.read { transaction in
-              try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-            }
-            #expect(titles.count == id)
-          }
-          // Each compiled once and never dropped: a read that only runs statements it can check
-          // never makes the connection query-only, so switching between reads and writes expired
-          // neither, and no first step found one recompiled and emptied the cache.
-          #expect(probe.prepared.value == 2)
-          #expect(probe.finalized.value == 0)
-
-          // Asked last, since SQLite compiles a pragma that reports a flag again every time it runs.
-          let isQueryOnly = try handle.read { transaction in
-            try transaction.fetchOne("PRAGMA query_only", as: Int.self)
-          }
-          #expect(isQueryOnly == 0)
-        }
-        #expect(probe.finalized.value == 2)
-      }
-
-      @Test(
-        arguments: [
-          "PRAGMA optimize", "pragma Main.OPTIMIZE(0x10002)", "SELECT * FROM pragma_optimize"
-        ]
-      )
-      func aReadRefusesTheOptimizeThatSQLiteReportsAsReadOnly(sql: String) throws {
-        var handle = try openConnection()
-        try handle.execute("CREATE INDEX items_title ON items (title)")
-        try handle.write { transaction in
-          for id in 1...100 {
-            try Item.insert { Item(id: id, title: "\(id % 7)") }.execute(transaction)
-          }
-        }
-        let statistics = "SELECT count(*) FROM sqlite_schema WHERE name = 'sqlite_stat1'"
-
-        // SQLite reports the pragma read-only, yet stepping it runs ANALYZE, which writes the
-        // statistics. Outside a transaction that write would commit, so the read refuses it as it
-        // compiles, as it does any statement that may write, cached or not.
-        try handle.withReadConnection { connection in
-          _ = try connection.fetchAll("SELECT title FROM items WHERE title = '3'") { $0[0] }
-          for cached in [true, false] {
-            let error = #expect(throws: SQLiteError.self) {
-              _ = try connection.rowCursor(SQL(text: sql), cached: cached)
-            }
-            #expect(error?.primaryCode == .readOnly)
-          }
-          let error = #expect(throws: SQLiteError.self) {
-            try connection.transaction { _ = try $0.prepare(SQL(text: sql)) }
-          }
-          #expect(error?.primaryCode == .readOnly)
-          #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 0)
-        }
-
-        // A write runs it.
-        try handle.withWriteConnection { connection in
-          try connection.execute(SQL(text: sql))
-          #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 1)
-        }
-      }
-
-      @Test
-      func aWritableConnectionClosedAfterAReadStillRemovesItsLog() throws {
-        try withTestDatabaseFile("wal") { file in
-          let log = file.url.path + "-wal"
-          do {
-            var configuration = SQLiteConfiguration.default
-            configuration.journalMode = .wal
-            var handle = try SQLiteConnection(path: file.path, configuration: configuration)
-            try handle.write { transaction in
-              try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-              try transaction.execute("INSERT INTO items (id) VALUES (1)")
-            }
-            #expect(FileManager.default.fileExists(atPath: log))
-            // Closed while query-only, which a read that lends the raw handle leaves it.
-            let count = try handle.read { transaction in
-              _ = transaction.sqliteConnection
-              return try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
-            }
-            #expect(count == 1)
-          }
-          // The last connection to close checkpoints the log into the database, so the database
-          // file alone holds the rows: a copy of it without the log reads them. SQLite then
-          // removes the log, except where it keeps it after a checkpoint, as Apple's own build
-          // does with persistent WAL on by default.
-          #if !canImport(Darwin)
-            #expect(!FileManager.default.fileExists(atPath: log))
-          #endif
-          let copy = file.directory.appending(component: "copy.sqlite")
-          try FileManager.default.copyItem(at: file.url, to: copy)
-          var copyHandle = try SQLiteConnection(
-            path: OrbitDatabasePath(copy.path),
-            configuration: .default
-          )
-          let copiedCount = try copyHandle.read { transaction in
-            try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
-          }
-          #expect(copiedCount == 1)
-          var handle = try SQLiteConnection(path: file.path, configuration: .default)
-          let count = try handle.read { transaction in
-            try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
-          }
-          #expect(count == 1)
-        }
-      }
-    #endif
-
-    @Test
-    func statementsCompiledBeforeAReadLendsTheRawHandleStillRun() throws {
-      var handle = try openConnection()
-      try handle.write { transaction in
-        try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
-      }
-      let titles = try handle.read { transaction in
-        var byID = try transaction.prepare("SELECT title FROM items WHERE id = ?")
-        let before = try byID.fetchAll(1) { $0[0].textValue }
-        let cached = try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-
-        // Lending the raw handle makes the connection query-only, which expires every statement
-        // compiled so far, including the one this read is still holding. Each compiles again on
-        // its next step rather than fail.
-        _ = transaction.sqliteConnection
-        let after = try byID.fetchAll(1) { $0[0].textValue }
-        let recached = try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-        return [before, cached, after, recached]
-      }
-      #expect(titles == [["kept"], ["kept"], ["kept"], ["kept"]])
-
-      // And the write after it makes the connection writable again.
-      try handle.write { transaction in
-        try Item.insert { Item(id: 2, title: "also") }.execute(transaction)
-      }
-    }
-
-    @Test
-    func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
-      var handle = try openConnection()
-      try handle.write { transaction in
-        for id in 1...4 {
-          try Item.insert { Item(id: id, title: "item \(id)") }.execute(transaction)
-        }
-      }
-
-      // `fetchOne` caches its statement and abandons the cursor after a single row, so the very same
-      // statement comes back for the next call, which binds a different value to it.
-      let first = try handle.read { transaction in
-        try #sql("SELECT title FROM items WHERE id > \(bind: 1) ORDER BY id", as: String.self)
-          .fetchOne(transaction)
-      }
-      let second = try handle.read { transaction in
-        try #sql("SELECT title FROM items WHERE id > \(bind: 3) ORDER BY id", as: String.self)
-          .fetchOne(transaction)
-      }
-
-      #expect(first == "item 2")
-      // A statement still carrying the first call's binding, or still standing on its second row,
-      // would answer with something else.
-      #expect(second == "item 4")
-    }
-
-    @Test(.libraryHooks)
-    func aStatementIsReusableAfterItsQueryFailsToBindOrDecode() throws {
-      let probe = StatementLifecycleProbe()
-      do {
-        var handle = try openConnection(
-          configuration: probe.configuration(matching: "SELECT title FROM items", "INSERT INTO numbers")
-        )
-        try handle.execute("CREATE TABLE numbers (value INTEGER)")
-        try handle.write { transaction in
-          try Item.insert { Item(id: 1, title: "kept") }.execute(transaction)
-        }
-
-        // Decoding the title as an integer fails partway through the cursor's life.
-        try handle.read { transaction in
-          _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
-            _ = try #sql("SELECT title FROM items", as: Int.self).fetchAll(transaction)
-          }
-        }
-
-        // The statement went back to the cache in a usable state rather than mid-scan.
-        let titles = try handle.read { transaction in
-          try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-        }
-        #expect(titles == ["kept"])
-
-        // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
-        // rather than wrapped.
-        for _ in 0..<3 {
-          #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
-            try handle.write { transaction in
-              _ = try #sql(
-                "INSERT INTO numbers (value) VALUES (\(UInt64.max)) RETURNING value",
-                as: UInt64.self
-              )
-              .fetchAll(transaction)
-            }
-          }
-        }
-
-        // The statement that failed to bind was given back, so the cache did not leak it.
-        try handle.write { transaction in
-          _ = try #sql(
-            "INSERT INTO numbers (value) VALUES (\(UInt64(1))) RETURNING value",
-            as: UInt64.self
-          )
-          .fetchAll(transaction)
-        }
-        let stored = try handle.read { transaction in
-          try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction)
-        }
-        #expect(stored == [1])
-        #expect(probe.prepared.value == 2)
-        #expect(probe.finalized.value == 0)
-      }
-      #expect(probe.finalized.value == probe.prepared.value)
-    }
-
-    @Test
-    func textRoundTripsWhateverCharactersItHolds() throws {
-      var handle = try openConnection()
-      // Binding with a byte count of -1 would ask SQLite to stop at the first NUL, which would
-      // silently truncate the last of these to "before".
-      let titles = ["Blob’s reminder", "日本語", "🧑‍🚀 emoji", "", "before\u{0}after"]
-
-      try handle.write { transaction in
-        for (id, title) in titles.enumerated() {
-          try Item.insert { Item(id: id + 1, title: title) }.execute(transaction)
-        }
-      }
-      let stored = try handle.read { transaction in
-        try Item.all.order { $0.id }.fetchAll(transaction).map(\.title)
-      }
-      #expect(stored == titles)
-    }
-
-    private final class ConnectionCounter: Sendable {
-      private let state = Lock((opened: 0, closed: 0))
-
-      var opened: Int { state.withLock { $0.opened } }
-      var closed: Int { state.withLock { $0.closed } }
-
-      var library: SQLiteLibrary {
-        let base = builtInTestLibrary
-        var library = base
-        library.connections.open = LibraryHooks.open { path, connection, flags, vfs in
-          let code = base.connections.open(path, connection, flags, vfs)
-          if code == SQLiteResultCode.ok.rawValue {
-            self.state.withLock { $0.opened += 1 }
-          }
-          return code
-        }
-        library.connections.close = LibraryHooks.close { connection in
-          self.state.withLock { $0.closed += 1 }
-          return base.connections.close(connection)
-        }
-        return library
-      }
-    }
-
-    @Test(.libraryHooks)
-    func releasingAPoolClosesEveryConnectionItOpened() async throws {
-      let counter = ConnectionCounter()
-      var configuration = SQLiteConfiguration.default
-      configuration.library = counter.library
-
-      try await withTestDatabaseFile { file in
-        do {
-          let driver = try SQLitePool(path: file.path, configuration: configuration, readerCount: 3)
-          try await driver.write { transaction in
-            try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-          }
-          // Only the writer opens with the pool; three reads held at once open the readers.
-          #expect(counter.opened == 1)
-          let gate = TestGate()
-          let reads = (0..<3).map { _ in Task { try await driver.read { _ in try gate.enter() } } }
-          try await gate.waitUntilEntered(3)
-          gate.open()
-          for read in reads { try await read.value }
-          #expect(counter.opened == 4)
-          #expect(counter.closed == 0)
-
-          // Releasing memory closes the readers, and reads open them again.
-          await driver.releaseMemory()
-          #expect(counter.closed == 3)
-          _ = try await driver.read { _ in }
-          #expect(counter.opened == 5)
-        }
-
-        // Nothing else holds these connections, so every one of them must have been closed. A driver
-        // that leaked them would exhaust file descriptors in any process that opens databases often.
-        try await waitUntil { counter.closed >= counter.opened }
-        #expect(counter.closed == counter.opened)
-      }
-    }
-
-    @Test
-    func aPoolSurvivesAStormOfCancellations() async throws {
-      try await withTestDatabaseFile { file in
-        let driver = try SQLitePool(path: file.path, readerCount: 2)
-        try await driver.write { transaction in
-          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        }
-
-        // A third of these are cancelled immediately, often while still queued for a reader or the
-        // writer. Whatever they were holding has to come back either way.
-        await withTaskGroup(of: Void.self) { group in
-          for index in 0..<200 {
-            group.addTask {
-              let task = Task {
-                if index.isMultiple(of: 2) {
-                  _ = try await driver.read { transaction in
-                    try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
-                  }
-                } else {
-                  try await driver.write { transaction in
-                    try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
-                  }
-                }
-              }
-              if index.isMultiple(of: 3) {
-                task.cancel()
-              }
-              do {
-                try await task.value
-              } catch is CancellationError {
-                #expect(index.isMultiple(of: 3), "Uncancelled access \(index) failed")
-              } catch {
-                Issue.record(error, "Unexpected failure for access \(index)")
-              }
-            }
-          }
-          await group.waitForAll()
-        }
-
-        // Every reader and the writer came back, so the pool still works.
-        let count = try await driver.read { transaction in
-          try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
-        }
-        #expect(count.count == 1)
-        try await driver.write { transaction in
-          try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
-        }
-      }
-    }
-
-    @Test
-    func cancelledWritesNeverCommitWithoutReturningSuccess() async throws {
-      try await withTestDatabaseFile { file in
-        let driver = try SQLitePool(path: file.path)
-        try await driver.write { transaction in
-          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        }
-
-        let writes = (1...300)
-          .map { id in
-            Task {
-              try await driver.write { transaction in
-                try transaction.executeScript("INSERT INTO items (id) VALUES (\(id))")
-                return id
-              }
-            }
-          }
-        for (offset, write) in writes.enumerated() where offset.isMultiple(of: 2) {
-          write.cancel()
-        }
-
-        var successfulIDs: [Int] = []
-        for (offset, write) in writes.enumerated() {
-          do {
-            successfulIDs.append(try await write.value)
-          } catch is CancellationError {
-            #expect(offset.isMultiple(of: 2), "Uncancelled write \(offset + 1) failed")
-          } catch {
-            Issue.record(error, "Unexpected failure for write \(offset + 1)")
-          }
-        }
-        #expect(Set(successfulIDs).isSuperset(of: stride(from: 2, through: 300, by: 2)))
-        let storedIDs = try await driver.read { transaction in
-          try #sql("SELECT id FROM items ORDER BY id", as: Int.self).fetchAll(transaction)
-        }
-
-        // Cancellation may win or lose a race with a fast write, but a committed transaction must
-        // always be reported as successful and a failed one must leave no row behind.
-        #expect(storedIDs == successfulIDs.sorted())
-      }
-    }
-
-    @Test
-    func aReaderSeesWhatAnotherConnectionCommitted() async throws {
-      try await withTestDatabaseFile { file in
-        // Two drivers on one file stand in for two processes sharing a database.
-        let writer = try SQLitePool(path: file.path)
-        let reader = try SQLitePool(path: file.path)
-        try await writer.write { transaction in
-          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        }
-
-        for id in 1...5 {
-          try await writer.write { transaction in
-            try transaction.executeScript("INSERT INTO items (id) VALUES (\(id))")
-          }
-          // Each read takes a fresh snapshot, so it must see everything committed before it.
-          let count = try await reader.read { transaction in
-            try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
-          }
-          #expect(count == [id])
-        }
-      }
-    }
-
-    @Test
-    func writesFromTwoConnectionsQueueRatherThanFail() async throws {
-      try await withTestDatabaseFile { file in
-        let first = try SQLitePool(path: file.path)
-        let second = try SQLitePool(path: file.path)
-        try await first.write { transaction in
-          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-        }
-
-        // Each driver serializes its own writes, but nothing coordinates the two: they overlap in
-        // SQLite itself, and only the busy timeout keeps one from failing outright.
-        try await withThrowingTaskGroup(of: Void.self) { group in
-          for index in 0..<60 {
-            let driver = index.isMultiple(of: 2) ? first : second
-            group.addTask {
-              try await driver.write { transaction in
-                try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
-              }
-            }
-          }
-          try await group.waitForAll()
-        }
-
-        let count = try await first.read { transaction in
-          try #sql("SELECT count(*) FROM items", as: Int.self).fetchAll(transaction)
-        }
-        #expect(count == [60])
-      }
-    }
-
-    @Test
-    func decodingNullIntoANonOptionalIsReportedRatherThanCrashing() throws {
-      var handle = try openConnection()
-      try handle.execute("CREATE TABLE numbers (value INTEGER)")
-      try handle.write { transaction in
-        try transaction.execute("INSERT INTO numbers (value) VALUES (NULL)")
-      }
-
-      #expect(throws: (any Error).self) {
-        try handle.read { transaction in
-          _ = try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction)
-        }
-      }
-
-      // The failed decode did not leave the connection unusable.
-      let values = try handle.read { transaction in
-        try #sql("SELECT value FROM numbers", as: Int?.self).fetchAll(transaction)
-      }
-      #expect(values == [Int?.none])
-    }
-
-    @Table
-    private struct Item: Equatable, Sendable {
-      let id: Int
-      var title: String
-    }
-
-    @Test(.libraryHooks)
-    func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
+    func configuration(matching sqlPrefixes: String...) -> SQLiteConfiguration {
       let base = builtInTestLibrary
-      let isArmed = Lock(true)
-      var configuration = SQLiteConfiguration.default
-      configuration.library.statements.execution.step = LibraryHooks.step { statement in
-        let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
-        guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else {
-          return base.statements.execution.step(statement)
-        }
-        isArmed.withLock { $0 = false }
-        return SQLiteResultCode.interrupt.rawValue
-      }
-      var handle = try openConnection(configuration: configuration)
-
-      // The read's own rollback is interrupted, and that failure is reported...
-      #expect(throws: SQLiteError.self) {
-        try handle.read { _ in }
-      }
-
-      // ...but it left no transaction behind for the next access to trip over.
-      #expect(isArmed.withLock { !$0 })
-      try handle.write { transaction in
-        try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'after')")
-      }
-      let titles = try handle.read { transaction in
-        try #sql("SELECT title FROM items", as: String.self).fetchAll(transaction)
-      }
-      #expect(titles == ["after"])
-    }
-
-    @Test(.libraryHooks)
-    func controlStatementsAreCompiledOnceAndOutliveTheirFailures() throws {
-      let base = builtInTestLibrary
-      let control: Set<String> = [
-        "BEGIN DEFERRED TRANSACTION", "BEGIN IMMEDIATE TRANSACTION", "COMMIT", "ROLLBACK"
-      ]
-      let prepared = Lock([String: Int]())
-      let live = Lock(Set<UInt>())
-      let failsNextCommit = Lock(false)
       var configuration = SQLiteConfiguration.default
       configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
+        [self]
         connection,
         sql,
         count,
@@ -757,90 +40,757 @@
           statement,
           tail
         )
-        if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee, let sql,
-          control.contains(String(cString: sql))
+        // Metadata probes use flags=0; only track statements prepared for the cache.
+        if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee,
+          flags & SQLitePrepareFlags.persistent.rawValue != 0,
+          let sql, sqlPrefixes.contains(where: String(cString: sql).hasPrefix)
         {
-          prepared.withLock { $0[String(cString: sql), default: 0] += 1 }
-          live.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+          cachedPointers.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+          prepared.increment()
         }
         return code
       }
-      configuration.library.statements.execution.finalize = LibraryHooks.finalize { statement in
-        if let statement { live.withLock { _ = $0.remove(UInt(bitPattern: statement)) } }
+      configuration.library.statements.execution.finalize = LibraryHooks.finalize {
+        [self] statement in
+        if let statement,
+          cachedPointers.withLock({ $0.remove(UInt(bitPattern: statement)) != nil })
+        {
+          finalized.increment()
+        }
         return base.statements.execution.finalize(statement)
       }
-      configuration.library.statements.execution.step = LibraryHooks.step { statement in
-        let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
-        let fails = failsNextCommit.withLock { fails in
-          defer { if sql == "COMMIT" { fails = false } }
-          return sql == "COMMIT" && fails
+      return configuration
+    }
+  }
+
+  @Test
+  func rawSQLStopsAtAnEmbeddedNulTheWaySQLiteDoes() throws {
+    var handle = try openConnection()
+    try handle.execute(
+      "INSERT INTO items (id, title) VALUES (1, 'a');\u{0}INSERT INTO items (id, title) VALUES (2, 'b')"
+    )
+    let count = try handle.read { transaction in
+      try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
+    }
+    // SQLite reads SQL text up to the first NUL whatever length it is given, so the second
+    // statement here is not run. Values are a different matter: those keep their NULs, which is
+    // what `RawSQLDatabaseTests.valuesRoundTripThroughABoundParameter` pins down.
+    #expect(count == [1])
+  }
+
+  @Test
+  func aReadOnAWritableConnectionRefusesToMutateAndLeavesItWritable() throws {
+    var handle = try openConnection()
+
+    // The connection can write, but not while lending a read transaction: a mutation that was
+    // merely rolled back at the end of the read would look like it had worked. The read refuses
+    // it as it compiles, whether the statement comes from the cache, is compiled for its cursor
+    // alone, or is prepared to run again, and it never has to make the connection query-only.
+    let insert = "INSERT INTO items (id, title) VALUES (1, 'nope') RETURNING id"
+    let refusals = [
+      #expect(throws: SQLiteError.self) {
+        try handle.read { transaction in
+          try transaction.fetchAll(SQL(text: insert), as: Int.self)
         }
-        return fails ? SQLiteResultCode.busy.rawValue : base.statements.execution.step(statement)
+      },
+      #expect(throws: SQLiteError.self) {
+        try handle.read { transaction in
+          _ = try transaction.rowCursor(SQL(text: insert), cached: false)
+        }
+      },
+      #expect(throws: SQLiteError.self) {
+        try handle.read { transaction in
+          _ = try transaction.prepare(SQL(text: insert), cached: false)
+        }
       }
+    ]
+    for refusal in refusals {
+      #expect(refusal?.primaryCode == .readOnly)
+      #expect(refusal?.message?.contains("may write") == true)
+    }
 
-      do {
-        var handle = try openConnection(configuration: configuration)
-        for id in 1...3 {
-          try handle.write { transaction in
-            try Item.insert { Item(id: id, title: "row") }.execute(transaction)
-          }
-          _ = try handle.read { transaction in
-            try #sql("SELECT count(*) FROM items", as: Int.self).fetchOne(transaction)
-          }
-        }
+    // A read that threw turns `query_only` back off on its way out too.
+    #expect(throws: TestError()) {
+      try handle.read { _ in throw TestError() }
+    }
 
-        // A commit that fails is reported as it is, and its transaction rolled back...
-        failsNextCommit.withLock { $0 = true }
-        let error = #expect(throws: SQLiteError.self) {
-          try handle.write { transaction in
-            try Item.insert { Item(id: 4, title: "lost") }.execute(transaction)
-          }
-        }
-        #expect(error?.primaryCode == .busy)
-        #expect(error?.sql == "COMMIT")
+    // And the connection is writable again afterwards.
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO items VALUES (\(1), \("yes"))")
+    }
+    let titles = try handle.read { transaction in
+      try transaction.fetchAll("SELECT title FROM items", as: String.self)
+    }
+    #expect(titles == ["yes"])
+  }
 
-        // ...and the statement that failed runs the next commit.
-        try handle.write { transaction in
-          try Item.insert { Item(id: 4, title: "kept") }.execute(transaction)
+  @Test
+  func aReadAfterAWriteRefusesRawAndCachedMutations() throws {
+    var handle = try openConnection()
+    let insert = "INSERT INTO items (title) VALUES ('nope')"
+
+    // Compiled while the connection could write, and kept: the cache keeps the first, and the
+    // second is a raw statement this test holds across the accesses.
+    let held = try handle.withWriteConnection { connection in
+      try connection.execute(SQL(text: insert))
+      let library = connection.sqlite
+      let statement = try #require(
+        try library.prepare(
+          insert,
+          on: connection.sqliteConnection,
+          flags: SQLitePrepareFlags.persistent.rawValue
+        )
+      )
+      return UInt(bitPattern: statement)
+    }
+    let statement = try #require(OpaquePointer(bitPattern: held))
+    let library = handle.configuration.library
+    defer { _ = library.statements.execution.finalize(statement) }
+
+    try handle.withReadConnection { connection in
+      // The cached statement is held to the read when it is lent.
+      #expect(throws: SQLiteError.self) {
+        _ = try connection.rowCursor(SQL(text: insert), cached: true)
+      }
+      // Raw SQL, compiled anew or compiled before the read began, is refused by the library
+      // itself: SQLite refuses to step either, and Turso to compile the new one and, with a
+      // generic error, to step the old one.
+      #if Turso
+        #expect(throws: SQLiteError.self) {
+          try library.prepare(insert, on: connection.sqliteConnection)
         }
+        let refusal = SQLiteResultCode.error.rawValue
+      #else
+        let raw = try #require(try library.prepare(insert, on: connection.sqliteConnection))
+        defer { _ = library.statements.execution.finalize(raw) }
+        let refusal = SQLiteResultCode.readOnly.rawValue
+        #expect(library.statements.execution.step(raw) & 0xff == refusal)
+      #endif
+      #expect(library.statements.execution.step(statement) & 0xff == refusal)
+      _ = library.statements.execution.reset(statement)
+    }
+
+    // The next write can write again, through either statement.
+    try handle.withWriteConnection { connection in
+      #expect(library.statements.execution.step(statement) == SQLiteResultCode.done.rawValue)
+      _ = library.statements.execution.reset(statement)
+      try connection.execute(SQL(text: insert))
+    }
+    let count = try handle.read { transaction in
+      try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+    }
+    #expect(count == 3)
+  }
+
+  @Test(.libraryHooks)
+  func consecutiveReadsOnAWritableConnectionReuseTheirStatements() throws {
+    let probe = StatementLifecycleProbe()
+    do {
+      var handle = try openConnection(
+        configuration: probe.configuration(matching: "SELECT title FROM items")
+      )
+      try handle.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (\(1), \("kept"))")
+      }
+      for _ in 0..<5 {
         let titles = try handle.read { transaction in
-          try #sql("SELECT title FROM items WHERE id = 4", as: String.self).fetchAll(transaction)
+          try transaction.fetchAll("SELECT title FROM items", as: String.self)
         }
         #expect(titles == ["kept"])
-        #expect(
-          prepared.withLock { $0 } == [
-            "BEGIN DEFERRED TRANSACTION": 1, "BEGIN IMMEDIATE TRANSACTION": 1, "COMMIT": 1,
-            "ROLLBACK": 1
-          ]
-        )
-        #expect(live.withLock { $0.count } == 4)
       }
-      // Closing the connection finalizes them.
-      #expect(live.withLock { $0.isEmpty })
+      // Compiled once and never dropped: nothing between the reads expired it, so its first
+      // step never found it recompiled and emptied the cache.
+      #expect(probe.prepared.value == 1)
+      #expect(probe.finalized.value == 0)
+
+      // A write between reads still leaves the statement where the next read finds it.
+      try handle.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (\(2), \("also"))")
+      }
+      let titles = try handle.read { transaction in
+        try transaction.fetchAll("SELECT title FROM items ORDER BY id", as: String.self)
+      }
+      #expect(titles == ["kept", "also"])
+    }
+  }
+
+  // The first two rely on an authorizer, which Turso lacks: without one every write empties the
+  // cache, and nothing tells `PRAGMA optimize` apart from what reads.
+  #if !Turso
+    @Test(.libraryHooks)
+    func alternatingReadsAndWritesKeepTheirStatements() throws {
+      let probe = StatementLifecycleProbe()
+      do {
+        var handle = try openConnection(
+          configuration: probe.configuration(
+            matching: "SELECT title FROM items",
+            "INSERT INTO items"
+          )
+        )
+        for id in 1...5 {
+          try handle.write { transaction in
+            try transaction.execute("INSERT INTO items (id, title) VALUES (\(id), 'kept')")
+          }
+          let titles = try handle.read { transaction in
+            try transaction.fetchAll("SELECT title FROM items", as: String.self)
+          }
+          #expect(titles.count == id)
+        }
+        // Each compiled once and never dropped: a read that only runs statements it can check
+        // never makes the connection query-only, so switching between reads and writes expired
+        // neither, and no first step found one recompiled and emptied the cache.
+        #expect(probe.prepared.value == 2)
+        #expect(probe.finalized.value == 0)
+
+        // Asked last, since SQLite compiles a pragma that reports a flag again every time it runs.
+        let isQueryOnly = try handle.read { transaction in
+          try transaction.fetchOne("PRAGMA query_only", as: Int.self)
+        }
+        #expect(isQueryOnly == 0)
+      }
+      #expect(probe.finalized.value == 2)
+    }
+
+    @Test(
+      arguments: [
+        "PRAGMA optimize", "pragma Main.OPTIMIZE(0x10002)", "SELECT * FROM pragma_optimize"
+      ]
+    )
+    func aReadRefusesTheOptimizeThatSQLiteReportsAsReadOnly(sql: String) throws {
+      var handle = try openConnection()
+      try handle.execute("CREATE INDEX items_title ON items (title)")
+      try handle.write { transaction in
+        for id in 1...100 {
+          try transaction.execute("INSERT INTO items VALUES (\(id), \("\(id % 7)"))")
+        }
+      }
+      let statistics = "SELECT count(*) FROM sqlite_schema WHERE name = 'sqlite_stat1'"
+
+      // SQLite reports the pragma read-only, yet stepping it runs ANALYZE, which writes the
+      // statistics. Outside a transaction that write would commit, so the read refuses it as it
+      // compiles, as it does any statement that may write, cached or not.
+      try handle.withReadConnection { connection in
+        _ = try connection.fetchAll("SELECT title FROM items WHERE title = '3'") { $0[0] }
+        for cached in [true, false] {
+          let error = #expect(throws: SQLiteError.self) {
+            _ = try connection.rowCursor(SQL(text: sql), cached: cached)
+          }
+          #expect(error?.primaryCode == .readOnly)
+        }
+        let error = #expect(throws: SQLiteError.self) {
+          try connection.transaction { _ = try $0.prepare(SQL(text: sql)) }
+        }
+        #expect(error?.primaryCode == .readOnly)
+        #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 0)
+      }
+
+      // A write runs it.
+      try handle.withWriteConnection { connection in
+        try connection.execute(SQL(text: sql))
+        #expect(try connection.fetchOne(SQL(text: statistics)) { $0[0].integerValue } == 1)
+      }
     }
 
     @Test
-    func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
-      var handle = try openConnection()
-      try handle.execute("CREATE TABLE numbers (value INTEGER)")
-      try handle.write { transaction in
-        try #sql("INSERT INTO numbers (value) VALUES (\(Int64.max, as: Int64.self))", as: Void.self)
-          .execute(transaction)
-      }
-
-      let asInt64 = try handle.read { transaction in
-        try #sql("SELECT value FROM numbers", as: Int64.self).fetchAll(transaction)
-      }
-      #expect(asInt64 == [Int64.max])
-
-      let asInt = try handle.read { transaction in
-        Result { try #sql("SELECT value FROM numbers", as: Int.self).fetchAll(transaction) }
-      }
-      if Int.bitWidth == 64 {
-        #expect(try asInt.get() == [Int(Int64.max)])
-      } else {
-        #expect(throws: OrbitDatabaseIntegerOverflowError<Int64>.self) { try asInt.get() }
+    func aWritableConnectionClosedAfterAReadStillRemovesItsLog() throws {
+      try withTestDatabaseFile("wal") { file in
+        let log = file.url.path + "-wal"
+        do {
+          var configuration = SQLiteConfiguration.default
+          configuration.journalMode = .wal
+          var handle = try SQLiteConnection(path: file.path, configuration: configuration)
+          try handle.write { transaction in
+            try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+            try transaction.execute("INSERT INTO items (id) VALUES (1)")
+          }
+          #expect(FileManager.default.fileExists(atPath: log))
+          // Closed while query-only, which a read that lends the raw handle leaves it.
+          let count = try handle.read { transaction in
+            _ = transaction.sqliteConnection
+            return try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+          }
+          #expect(count == 1)
+        }
+        // The last connection to close checkpoints the log into the database, so the database
+        // file alone holds the rows: a copy of it without the log reads them. SQLite then
+        // removes the log, except where it keeps it after a checkpoint, as Apple's own build
+        // does with persistent WAL on by default.
+        #if !canImport(Darwin)
+          #expect(!FileManager.default.fileExists(atPath: log))
+        #endif
+        let copy = file.directory.appending(component: "copy.sqlite")
+        try FileManager.default.copyItem(at: file.url, to: copy)
+        var copyHandle = try SQLiteConnection(
+          path: OrbitDatabasePath(copy.path),
+          configuration: .default
+        )
+        let copiedCount = try copyHandle.read { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+        }
+        #expect(copiedCount == 1)
+        var handle = try SQLiteConnection(path: file.path, configuration: .default)
+        let count = try handle.read { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+        }
+        #expect(count == 1)
       }
     }
   #endif
+
+  @Test
+  func statementsCompiledBeforeAReadLendsTheRawHandleStillRun() throws {
+    var handle = try openConnection()
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO items VALUES (\(1), \("kept"))")
+    }
+    let titles = try handle.read { transaction in
+      var byID = try transaction.prepare("SELECT title FROM items WHERE id = ?")
+      let before = try byID.fetchAll(1) { $0[0].textValue }
+      let cached = try transaction.fetchAll("SELECT title FROM items", as: String.self)
+
+      // Lending the raw handle makes the connection query-only, which expires every statement
+      // compiled so far, including the one this read is still holding. Each compiles again on
+      // its next step rather than fail.
+      _ = transaction.sqliteConnection
+      let after = try byID.fetchAll(1) { $0[0].textValue }
+      let recached = try transaction.fetchAll("SELECT title FROM items", as: String.self)
+      return [before, cached, after, recached]
+    }
+    #expect(titles == [["kept"], ["kept"], ["kept"], ["kept"]])
+
+    // And the write after it makes the connection writable again.
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO items VALUES (\(2), \("also"))")
+    }
+  }
+
+  @Test
+  func aCachedStatementAbandonedAfterOneRowTakesItsNextBindings() throws {
+    var handle = try openConnection()
+    try handle.write { transaction in
+      for id in 1...4 {
+        try transaction.execute("INSERT INTO items VALUES (\(id), \("item \(id)"))")
+      }
+    }
+
+    // `fetchOne` caches its statement and abandons the cursor after a single row, so the very same
+    // statement comes back for the next call, which binds a different value to it.
+    let first = try handle.read { transaction in
+      try transaction.fetchOne(
+        "SELECT title FROM items WHERE id > \(1) ORDER BY id",
+        as: String.self
+      )
+    }
+    let second = try handle.read { transaction in
+      try transaction.fetchOne(
+        "SELECT title FROM items WHERE id > \(3) ORDER BY id",
+        as: String.self
+      )
+    }
+
+    #expect(first == "item 2")
+    // A statement still carrying the first call's binding, or still standing on its second row,
+    // would answer with something else.
+    #expect(second == "item 4")
+  }
+
+  @Test(.libraryHooks)
+  func aStatementIsReusableAfterItsQueryFailsToBindOrDecode() throws {
+    let probe = StatementLifecycleProbe()
+    do {
+      var handle = try openConnection(
+        configuration: probe.configuration(
+          matching: "SELECT title FROM items",
+          "INSERT INTO numbers"
+        )
+      )
+      try handle.execute("CREATE TABLE numbers (value INTEGER)")
+      try handle.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (\(1), \("kept"))")
+      }
+
+      // Decoding the title as an integer fails partway through the cursor's life.
+      try handle.read { transaction in
+        _ = #expect(throws: OrbitDatabaseColumnDecodingError.self) {
+          _ = try transaction.fetchAll("SELECT title FROM items", as: Int.self)
+        }
+      }
+
+      // The statement went back to the cache in a usable state rather than mid-scan.
+      let titles = try handle.read { transaction in
+        try transaction.fetchAll("SELECT title FROM items", as: String.self)
+      }
+      #expect(titles == ["kept"])
+
+      // SQLite stores signed 64-bit integers, so this cannot be represented, and is reported
+      // rather than wrapped.
+      for _ in 0..<3 {
+        #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
+          try handle.write { transaction in
+            try transaction.execute(
+              "INSERT INTO numbers (value) VALUES (\(UInt64.max)) RETURNING value"
+            )
+          }
+        }
+      }
+
+      // The statement that failed to bind was given back, so the cache did not leak it.
+      try handle.write { transaction in
+        try transaction.execute("INSERT INTO numbers (value) VALUES (\(UInt64(1))) RETURNING value")
+      }
+      let stored = try handle.read { transaction in
+        try transaction.fetchAll("SELECT value FROM numbers", as: Int.self)
+      }
+      #expect(stored == [1])
+      #expect(probe.prepared.value == 2)
+      #expect(probe.finalized.value == 0)
+    }
+    #expect(probe.finalized.value == probe.prepared.value)
+  }
+
+  private final class ConnectionCounter: Sendable {
+    private let state = Lock((opened: 0, closed: 0))
+
+    var opened: Int { state.withLock { $0.opened } }
+    var closed: Int { state.withLock { $0.closed } }
+
+    var library: SQLiteLibrary {
+      let base = builtInTestLibrary
+      var library = base
+      library.connections.open = LibraryHooks.open { path, connection, flags, vfs in
+        let code = base.connections.open(path, connection, flags, vfs)
+        if code == SQLiteResultCode.ok.rawValue {
+          self.state.withLock { $0.opened += 1 }
+        }
+        return code
+      }
+      library.connections.close = LibraryHooks.close { connection in
+        self.state.withLock { $0.closed += 1 }
+        return base.connections.close(connection)
+      }
+      return library
+    }
+  }
+
+  @Test(.libraryHooks)
+  func releasingAPoolClosesEveryConnectionItOpened() async throws {
+    let counter = ConnectionCounter()
+    var configuration = SQLiteConfiguration.default
+    configuration.library = counter.library
+
+    try await withTestDatabaseFile { file in
+      do {
+        let driver = try SQLitePool(path: file.path, configuration: configuration, readerCount: 3)
+        try await driver.write { transaction in
+          try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+        }
+        // Only the writer opens with the pool; three reads held at once open the readers.
+        #expect(counter.opened == 1)
+        let gate = TestGate()
+        let reads = (0..<3).map { _ in Task { try await driver.read { _ in try gate.enter() } } }
+        try await gate.waitUntilEntered(3)
+        gate.open()
+        for read in reads { try await read.value }
+        #expect(counter.opened == 4)
+        #expect(counter.closed == 0)
+
+        // Releasing memory closes the readers, and reads open them again.
+        await driver.releaseMemory()
+        #expect(counter.closed == 3)
+        _ = try await driver.read { _ in }
+        #expect(counter.opened == 5)
+      }
+
+      // Nothing else holds these connections, so every one of them must have been closed. A driver
+      // that leaked them would exhaust file descriptors in any process that opens databases often.
+      try await waitUntil { counter.closed >= counter.opened }
+      #expect(counter.closed == counter.opened)
+    }
+  }
+
+  @Test
+  func aPoolSurvivesAStormOfCancellations() async throws {
+    try await withTestDatabaseFile { file in
+      let driver = try SQLitePool(path: file.path, readerCount: 2)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+
+      // A third of these are cancelled immediately, often while still queued for a reader or the
+      // writer. Whatever they were holding has to come back either way.
+      await withTaskGroup(of: Void.self) { group in
+        for index in 0..<200 {
+          group.addTask {
+            let task = Task {
+              if index.isMultiple(of: 2) {
+                _ = try await driver.read { transaction in
+                  try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
+                }
+              } else {
+                try await driver.write { transaction in
+                  try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+                }
+              }
+            }
+            if index.isMultiple(of: 3) {
+              task.cancel()
+            }
+            do {
+              try await task.value
+            } catch is CancellationError {
+              #expect(index.isMultiple(of: 3), "Uncancelled access \(index) failed")
+            } catch {
+              Issue.record(error, "Unexpected failure for access \(index)")
+            }
+          }
+        }
+        await group.waitForAll()
+      }
+
+      // Every reader and the writer came back, so the pool still works.
+      let count = try await driver.read { transaction in
+        try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
+      }
+      #expect(count.count == 1)
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+      }
+    }
+  }
+
+  @Test
+  func cancelledWritesNeverCommitWithoutReturningSuccess() async throws {
+    try await withTestDatabaseFile { file in
+      let driver = try SQLitePool(path: file.path)
+      try await driver.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+
+      let writes = (1...300)
+        .map { id in
+          Task {
+            try await driver.write { transaction in
+              try transaction.executeScript("INSERT INTO items (id) VALUES (\(id))")
+              return id
+            }
+          }
+        }
+      for (offset, write) in writes.enumerated() where offset.isMultiple(of: 2) {
+        write.cancel()
+      }
+
+      var successfulIDs: [Int] = []
+      for (offset, write) in writes.enumerated() {
+        do {
+          successfulIDs.append(try await write.value)
+        } catch is CancellationError {
+          #expect(offset.isMultiple(of: 2), "Uncancelled write \(offset + 1) failed")
+        } catch {
+          Issue.record(error, "Unexpected failure for write \(offset + 1)")
+        }
+      }
+      #expect(Set(successfulIDs).isSuperset(of: stride(from: 2, through: 300, by: 2)))
+      let storedIDs = try await driver.read { transaction in
+        try transaction.fetchAll("SELECT id FROM items ORDER BY id", as: Int.self)
+      }
+
+      // Cancellation may win or lose a race with a fast write, but a committed transaction must
+      // always be reported as successful and a failed one must leave no row behind.
+      #expect(storedIDs == successfulIDs.sorted())
+    }
+  }
+
+  @Test
+  func aReaderSeesWhatAnotherConnectionCommitted() async throws {
+    try await withTestDatabaseFile { file in
+      // Two drivers on one file stand in for two processes sharing a database.
+      let writer = try SQLitePool(path: file.path)
+      let reader = try SQLitePool(path: file.path)
+      try await writer.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+
+      for id in 1...5 {
+        try await writer.write { transaction in
+          try transaction.executeScript("INSERT INTO items (id) VALUES (\(id))")
+        }
+        // Each read takes a fresh snapshot, so it must see everything committed before it.
+        let count = try await reader.read { transaction in
+          try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
+        }
+        #expect(count == [id])
+      }
+    }
+  }
+
+  @Test
+  func writesFromTwoConnectionsQueueRatherThanFail() async throws {
+    try await withTestDatabaseFile { file in
+      let first = try SQLitePool(path: file.path)
+      let second = try SQLitePool(path: file.path)
+      try await first.write { transaction in
+        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
+      }
+
+      // Each driver serializes its own writes, but nothing coordinates the two: they overlap in
+      // SQLite itself, and only the busy timeout keeps one from failing outright.
+      try await withThrowingTaskGroup(of: Void.self) { group in
+        for index in 0..<60 {
+          let driver = index.isMultiple(of: 2) ? first : second
+          group.addTask {
+            try await driver.write { transaction in
+              try transaction.execute("INSERT INTO items (id) VALUES (NULL)")
+            }
+          }
+        }
+        try await group.waitForAll()
+      }
+
+      let count = try await first.read { transaction in
+        try transaction.fetchAll("SELECT count(*) FROM items", as: Int.self)
+      }
+      #expect(count == [60])
+    }
+  }
+
+  @Test(.libraryHooks)
+  func aTransactionInterruptedWhileItEndsIsNotLeftOpen() throws {
+    let base = builtInTestLibrary
+    let isArmed = Lock(true)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.statements.execution.step = LibraryHooks.step { statement in
+      let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
+      guard sql == "ROLLBACK", isArmed.withLock({ $0 }) else {
+        return base.statements.execution.step(statement)
+      }
+      isArmed.withLock { $0 = false }
+      return SQLiteResultCode.interrupt.rawValue
+    }
+    var handle = try openConnection(configuration: configuration)
+
+    // The read's own rollback is interrupted, and that failure is reported...
+    #expect(throws: SQLiteError.self) {
+      try handle.read { _ in }
+    }
+
+    // ...but it left no transaction behind for the next access to trip over.
+    #expect(isArmed.withLock { !$0 })
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO items (id, title) VALUES (1, 'after')")
+    }
+    let titles = try handle.read { transaction in
+      try transaction.fetchAll("SELECT title FROM items", as: String.self)
+    }
+    #expect(titles == ["after"])
+  }
+
+  @Test(.libraryHooks)
+  func controlStatementsAreCompiledOnceAndOutliveTheirFailures() throws {
+    let base = builtInTestLibrary
+    let control: Set<String> = [
+      "BEGIN DEFERRED TRANSACTION", "BEGIN IMMEDIATE TRANSACTION", "COMMIT", "ROLLBACK"
+    ]
+    let prepared = Lock([String: Int]())
+    let live = Lock(Set<UInt>())
+    let failsNextCommit = Lock(false)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.statements.preparation.prepare = LibraryHooks.prepare {
+      connection,
+      sql,
+      count,
+      flags,
+      statement,
+      tail in
+      let code = base.statements.preparation.prepare(
+        connection,
+        sql,
+        count,
+        flags,
+        statement,
+        tail
+      )
+      if code == SQLiteResultCode.ok.rawValue, let pointer = statement?.pointee, let sql,
+        control.contains(String(cString: sql))
+      {
+        prepared.withLock { $0[String(cString: sql), default: 0] += 1 }
+        live.withLock { _ = $0.insert(UInt(bitPattern: pointer)) }
+      }
+      return code
+    }
+    configuration.library.statements.execution.finalize = LibraryHooks.finalize { statement in
+      if let statement { live.withLock { _ = $0.remove(UInt(bitPattern: statement)) } }
+      return base.statements.execution.finalize(statement)
+    }
+    configuration.library.statements.execution.step = LibraryHooks.step { statement in
+      let sql = base.statements.inspection.sql(statement).map { String(cString: $0) }
+      let fails = failsNextCommit.withLock { fails in
+        defer { if sql == "COMMIT" { fails = false } }
+        return sql == "COMMIT" && fails
+      }
+      return fails ? SQLiteResultCode.busy.rawValue : base.statements.execution.step(statement)
+    }
+
+    do {
+      var handle = try openConnection(configuration: configuration)
+      for id in 1...3 {
+        try handle.write { transaction in
+          try transaction.execute("INSERT INTO items VALUES (\(id), \("row"))")
+        }
+        _ = try handle.read { transaction in
+          try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self)
+        }
+      }
+
+      // A commit that fails is reported as it is, and its transaction rolled back...
+      failsNextCommit.withLock { $0 = true }
+      let error = #expect(throws: SQLiteError.self) {
+        try handle.write { transaction in
+          try transaction.execute("INSERT INTO items VALUES (\(4), \("lost"))")
+        }
+      }
+      #expect(error?.primaryCode == .busy)
+      #expect(error?.sql == "COMMIT")
+
+      // ...and the statement that failed runs the next commit.
+      try handle.write { transaction in
+        try transaction.execute("INSERT INTO items VALUES (\(4), \("kept"))")
+      }
+      let titles = try handle.read { transaction in
+        try transaction.fetchAll("SELECT title FROM items WHERE id = 4", as: String.self)
+      }
+      #expect(titles == ["kept"])
+      #expect(
+        prepared.withLock { $0 } == [
+          "BEGIN DEFERRED TRANSACTION": 1, "BEGIN IMMEDIATE TRANSACTION": 1, "COMMIT": 1,
+          "ROLLBACK": 1
+        ]
+      )
+      #expect(live.withLock { $0.count } == 4)
+    }
+    // Closing the connection finalizes them.
+    #expect(live.withLock { $0.isEmpty })
+  }
+
+  @Test
+  func aValueTooLargeForA32BitIntIsReportedRatherThanTrapping() throws {
+    var handle = try openConnection()
+    try handle.execute("CREATE TABLE numbers (value INTEGER)")
+    try handle.write { transaction in
+      try transaction.execute("INSERT INTO numbers (value) VALUES (\(Int64.max))")
+    }
+
+    let asInt64 = try handle.read { transaction in
+      try transaction.fetchAll("SELECT value FROM numbers", as: Int64.self)
+    }
+    #expect(asInt64 == [Int64.max])
+
+    let asInt = try handle.read { transaction in
+      Result { try transaction.fetchAll("SELECT value FROM numbers", as: Int.self) }
+    }
+    if Int.bitWidth == 64 {
+      #expect(try asInt.get() == [Int(Int64.max)])
+    } else {
+      #expect(throws: OrbitDatabaseIntegerOverflowError<Int64>.self) { try asInt.get() }
+    }
+  }
 #endif

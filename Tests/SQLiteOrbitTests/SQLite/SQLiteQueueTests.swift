@@ -2,10 +2,6 @@
   import Foundation
   import Testing
 
-  #if StructuredQueries
-    import StructuredQueriesSQLite
-  #endif
-
   @testable import SQLiteOrbit
 
   @Test
@@ -25,33 +21,23 @@
     #expect(value == 42)
   }
 
-  #if StructuredQueries
-    @Test
-    func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
-      let driver = try SQLiteQueue(path: .temporary)
-      try await driver.execute(
-        sql: "CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL)"
-      )
-      try await driver.write { transaction in
-        try Item.insert { Item(id: 1, title: "scratch") }.execute(transaction)
-      }
-      let items = try await driver.read { transaction in
-        try Item.all.fetchAll(transaction)
-      }
-      #expect(items == [Item(id: 1, title: "scratch")])
+  @Test
+  func aTemporaryDatabaseIsUsableAndPrivateToItsConnection() async throws {
+    let driver = try SQLiteQueue(path: .temporary)
+    try await driver.execute(
+      sql: """
+        CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT NOT NULL);
+        INSERT INTO items VALUES (1, 'scratch');
+        """
+    )
+    let titles = try await driver.fetchAll(sql: "SELECT title FROM items", as: String.self)
+    #expect(titles == ["scratch"])
 
-      // No file names it, so a second driver opens a different, empty database of its own.
-      #expect(OrbitDatabasePath.temporary.fileURL == nil)
-      let other = try SQLiteQueue(path: .temporary)
-      await #expect(throws: SQLiteError.self) {
-        try await other.read { try Item.all.fetchCount($0) }
-      }
+    // No file names it, so a second driver opens a different, empty database of its own.
+    #expect(OrbitDatabasePath.temporary.filePath == nil)
+    let other = try SQLiteQueue(path: .temporary)
+    await #expect(throws: SQLiteError.self) {
+      try await other.rowCount(of: "items")
     }
-
-    @Table
-    private struct Item: Equatable, Sendable {
-      let id: Int
-      var title: String
-    }
-  #endif
+  }
 #endif
