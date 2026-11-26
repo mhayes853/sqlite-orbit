@@ -1,178 +1,180 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+import SQLiteOrbit
+import Testing
 
-  import SQLiteOrbit
-  import Testing
+@Suite
+struct OrbitDatabaseRegionTests {
+  @Test
+  func schemaNamesAreExplicitAndCaseInsensitive() {
+    #expect(SQLiteSchemaName.main == SQLiteSchemaName("MAIN"))
+    #expect(SQLiteSchemaName("Archive") == "archive")
+    #expect(
+      OrbitDatabaseRegion(table: "reminders")
+        == OrbitDatabaseRegion(table: "reminders", schema: .main)
+    )
+  }
 
-  @Suite
-  struct OrbitDatabaseRegionTests {
-    @Test
-    func schemaNamesAreExplicitAndCaseInsensitive() {
-      #expect(SQLiteSchemaName.main == SQLiteSchemaName("MAIN"))
-      #expect(SQLiteSchemaName("Archive") == "archive")
-      #expect(
-        OrbitDatabaseRegion(table: "reminders")
-          == OrbitDatabaseRegion(table: "reminders", schema: .main)
-      )
-    }
+  @Test
+  func emptyAndFullDatabaseAreAlgebraicBounds() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
 
-    @Test
-    func emptyAndFullDatabaseAreAlgebraicBounds() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    #expect(OrbitDatabaseRegion.empty.isEmpty)
+    #expect(!OrbitDatabaseRegion.empty.isFullDatabase)
+    #expect(!OrbitDatabaseRegion.fullDatabase.isEmpty)
+    #expect(OrbitDatabaseRegion.fullDatabase.isFullDatabase)
+    #expect(title.union(.empty) == title)
+    #expect(title.union(.fullDatabase) == .fullDatabase)
+    #expect(title.intersection(.empty) == .empty)
+    #expect(title.intersection(.fullDatabase) == title)
+  }
 
-      #expect(OrbitDatabaseRegion.empty.isEmpty)
-      #expect(!OrbitDatabaseRegion.empty.isFullDatabase)
-      #expect(!OrbitDatabaseRegion.fullDatabase.isEmpty)
-      #expect(OrbitDatabaseRegion.fullDatabase.isFullDatabase)
-      #expect(title.union(.empty) == title)
-      #expect(title.union(.fullDatabase) == .fullDatabase)
-      #expect(title.intersection(.empty) == .empty)
-      #expect(title.intersection(.fullDatabase) == title)
-    }
+  @Test
+  func tablesAndColumnsNormalizeAndCombine() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let both = OrbitDatabaseRegion(
+      columns: ["title", "isCompleted", "TITLE"],
+      in: "REMINDERS"
+    )
 
-    @Test
-    func tablesAndColumnsNormalizeAndCombine() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-      let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-      let both = OrbitDatabaseRegion(
-        columns: ["title", "isCompleted", "TITLE"],
-        in: "REMINDERS"
-      )
+    #expect(title.union(completed) == both)
+    #expect(both.intersection(title) == title)
+    #expect(title.intersection(completed) == .empty)
+    #expect(both.contains(title))
+    #expect(!title.contains(both))
+    #expect(title.overlaps(both))
+    #expect(!title.overlaps(completed))
+    #expect(Set([title, OrbitDatabaseRegion(column: "TITLE", in: "REMINDERS")]).count == 1)
+    #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
 
-      #expect(title.union(completed) == both)
-      #expect(both.intersection(title) == title)
-      #expect(title.intersection(completed) == .empty)
-      #expect(both.contains(title))
-      #expect(!title.contains(both))
-      #expect(title.overlaps(both))
-      #expect(!title.overlaps(completed))
-      #expect(Set([title, OrbitDatabaseRegion(column: "TITLE", in: "REMINDERS")]).count == 1)
-      #expect(OrbitDatabaseRegion(columns: [String](), in: "reminders") == .empty)
+    // A table absorbs its columns, and distinct tables and schemas do not overlap.
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let tags = OrbitDatabaseRegion(table: "tags")
+    let auxiliaryReminders = OrbitDatabaseRegion(table: "reminders", schema: "auxiliary")
+    #expect(reminders.union(title) == reminders)
+    #expect(reminders.intersection(title) == title)
+    #expect(reminders.contains(title))
+    #expect(!title.contains(reminders))
+    #expect(reminders.intersection(tags) == .empty)
+    #expect(reminders.intersection(auxiliaryReminders) == .empty)
+    #expect(!reminders.overlaps(tags))
+    #expect(!reminders.overlaps(auxiliaryReminders))
+  }
 
-      // A table absorbs its columns, and distinct tables and schemas do not overlap.
-      let reminders = OrbitDatabaseRegion(table: "reminders")
-      let tags = OrbitDatabaseRegion(table: "tags")
-      let auxiliaryReminders = OrbitDatabaseRegion(table: "reminders", schema: "auxiliary")
-      #expect(reminders.union(title) == reminders)
-      #expect(reminders.intersection(title) == title)
-      #expect(reminders.contains(title))
-      #expect(!title.contains(reminders))
-      #expect(reminders.intersection(tags) == .empty)
-      #expect(reminders.intersection(auxiliaryReminders) == .empty)
-      #expect(!reminders.overlaps(tags))
-      #expect(!reminders.overlaps(auxiliaryReminders))
-    }
+  @Test
+  func setOperationsObeyTheirAlgebraicLaws() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let tags = OrbitDatabaseRegion(table: "tags")
+    let regions = [
+      OrbitDatabaseRegion.empty,
+      title,
+      completed,
+      title.union(completed),
+      reminders,
+      reminders.subtracting(title),
+      tags,
+      OrbitDatabaseRegion.fullDatabase.subtracting(reminders),
+      OrbitDatabaseRegion.fullDatabase
+    ]
 
-    @Test
-    func setOperationsObeyTheirAlgebraicLaws() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-      let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-      let reminders = OrbitDatabaseRegion(table: "reminders")
-      let tags = OrbitDatabaseRegion(table: "tags")
-      let regions = [
-        OrbitDatabaseRegion.empty,
-        title,
-        completed,
-        title.union(completed),
-        reminders,
-        reminders.subtracting(title),
-        tags,
-        OrbitDatabaseRegion.fullDatabase.subtracting(reminders),
-        OrbitDatabaseRegion.fullDatabase
-      ]
-
-      for lhs in regions {
-        #expect(lhs.union(lhs) == lhs)
-        #expect(lhs.intersection(lhs) == lhs)
-        #expect(lhs.symmetricDifference(lhs) == .empty)
-        #expect(lhs.subtracting(lhs) == .empty)
-        for rhs in regions {
-          #expect(lhs.union(rhs) == rhs.union(lhs))
-          #expect(lhs.intersection(rhs) == rhs.intersection(lhs))
-          #expect(lhs.symmetricDifference(rhs) == rhs.symmetricDifference(lhs))
-          #expect(lhs.subtracting(rhs).intersection(rhs) == .empty)
-          #expect(lhs.subtracting(rhs).union(lhs.intersection(rhs)) == lhs)
-          for third in regions {
-            #expect(lhs.union(rhs.union(third)) == lhs.union(rhs).union(third))
-            #expect(
-              lhs.intersection(rhs.intersection(third)) == lhs.intersection(rhs).intersection(third)
-            )
-            #expect(
-              lhs.intersection(rhs.union(third))
-                == lhs.intersection(rhs).union(lhs.intersection(third))
-            )
-          }
+    for lhs in regions {
+      #expect(lhs.union(lhs) == lhs)
+      #expect(lhs.intersection(lhs) == lhs)
+      #expect(lhs.symmetricDifference(lhs) == .empty)
+      #expect(lhs.subtracting(lhs) == .empty)
+      for rhs in regions {
+        #expect(lhs.union(rhs) == rhs.union(lhs))
+        #expect(lhs.intersection(rhs) == rhs.intersection(lhs))
+        #expect(lhs.symmetricDifference(rhs) == rhs.symmetricDifference(lhs))
+        #expect(lhs.subtracting(rhs).intersection(rhs) == .empty)
+        #expect(lhs.subtracting(rhs).union(lhs.intersection(rhs)) == lhs)
+        for third in regions {
+          #expect(lhs.union(rhs.union(third)) == lhs.union(rhs).union(third))
+          #expect(
+            lhs.intersection(rhs.intersection(third)) == lhs.intersection(rhs).intersection(third)
+          )
+          #expect(
+            lhs.intersection(rhs.union(third))
+              == lhs.intersection(rhs).union(lhs.intersection(third))
+          )
         }
       }
     }
+  }
 
-    @Test
-    func setAlgebraRepresentsFiniteExclusions() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-      let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-      let reminders = OrbitDatabaseRegion(table: "reminders")
-      let tags = OrbitDatabaseRegion(table: "tags")
+  @Test
+  func setAlgebraRepresentsFiniteExclusions() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let tags = OrbitDatabaseRegion(table: "tags")
 
-      let remindersExceptTitle = reminders.subtracting(title)
-      #expect(!remindersExceptTitle.overlaps(title))
-      #expect(remindersExceptTitle.contains(completed))
-      #expect(remindersExceptTitle.union(title) == reminders)
-      #expect(reminders.symmetricDifference(title) == remindersExceptTitle)
+    let remindersExceptTitle = reminders.subtracting(title)
+    #expect(!remindersExceptTitle.overlaps(title))
+    #expect(remindersExceptTitle.contains(completed))
+    #expect(remindersExceptTitle.union(title) == reminders)
+    #expect(reminders.symmetricDifference(title) == remindersExceptTitle)
 
-      let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
-      #expect(!databaseExceptReminders.overlaps(reminders))
-      #expect(databaseExceptReminders.contains(tags))
-      #expect(databaseExceptReminders.union(reminders) == .fullDatabase)
-      #expect(
-        OrbitDatabaseRegion.fullDatabase.symmetricDifference(reminders)
-          == databaseExceptReminders
-      )
-    }
+    let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
+    #expect(!databaseExceptReminders.overlaps(reminders))
+    #expect(databaseExceptReminders.contains(tags))
+    #expect(databaseExceptReminders.union(reminders) == .fullDatabase)
+    #expect(
+      OrbitDatabaseRegion.fullDatabase.symmetricDifference(reminders)
+        == databaseExceptReminders
+    )
+  }
 
-    @Test
-    func supportsTheSetAlgebraProtocolSurface() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-      let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-      let both = title.union(completed)
+  @Test
+  func supportsTheSetAlgebraProtocolSurface() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let both = title.union(completed)
 
-      let literal: OrbitDatabaseRegion = [title, completed]
-      #expect(literal == both)
+    let literal: OrbitDatabaseRegion = [title, completed]
+    #expect(literal == both)
 
-      var region = OrbitDatabaseRegion.empty
-      let insertion = region.insert(title)
-      #expect(insertion.inserted)
-      #expect(insertion.memberAfterInsert == title)
-      #expect(region == title)
-      #expect(!region.insert(title).inserted)
+    var region = OrbitDatabaseRegion.empty
+    let insertion = region.insert(title)
+    #expect(insertion.inserted)
+    #expect(insertion.memberAfterInsert == title)
+    #expect(region == title)
+    #expect(!region.insert(title).inserted)
 
-      #expect(region.update(with: both) == title)
-      #expect(region == both)
-      #expect(region.remove(title) == title)
-      #expect(region == completed)
-      #expect(region.remove(title) == nil)
-    }
+    #expect(region.update(with: both) == title)
+    #expect(region == both)
+    #expect(region.remove(title) == title)
+    #expect(region == completed)
+    #expect(region.remove(title) == nil)
+  }
 
-    @Test
-    func subsetRelationshipsIncludeFiniteExclusions() {
-      let title = OrbitDatabaseRegion(column: "title", in: "reminders")
-      let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
-      let both = title.union(completed)
-      let reminders = OrbitDatabaseRegion(table: "reminders")
-      let remindersExceptTitle = reminders.subtracting(title)
-      let tags = OrbitDatabaseRegion(table: "tags")
-      let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
-      #expect(OrbitDatabaseRegion.empty.isSubset(of: title))
-      #expect(title.isSubset(of: both))
-      #expect(title.isStrictSubset(of: reminders))
-      #expect(!title.isStrictSubset(of: title))
-      #expect(completed.isSubset(of: remindersExceptTitle))
-      #expect(!title.isSubset(of: remindersExceptTitle))
-      #expect(remindersExceptTitle.isStrictSubset(of: reminders))
-      #expect(tags.isSubset(of: databaseExceptReminders))
-      #expect(databaseExceptReminders.isStrictSubset(of: .fullDatabase))
-      #expect(!reminders.isSubset(of: databaseExceptReminders))
-    }
+  @Test
+  func subsetRelationshipsIncludeFiniteExclusions() {
+    let title = OrbitDatabaseRegion(column: "title", in: "reminders")
+    let completed = OrbitDatabaseRegion(column: "isCompleted", in: "reminders")
+    let both = title.union(completed)
+    let reminders = OrbitDatabaseRegion(table: "reminders")
+    let remindersExceptTitle = reminders.subtracting(title)
+    let tags = OrbitDatabaseRegion(table: "tags")
+    let databaseExceptReminders = OrbitDatabaseRegion.fullDatabase.subtracting(reminders)
+    #expect(OrbitDatabaseRegion.empty.isSubset(of: title))
+    #expect(title.isSubset(of: both))
+    #expect(title.isStrictSubset(of: reminders))
+    #expect(!title.isStrictSubset(of: title))
+    #expect(completed.isSubset(of: remindersExceptTitle))
+    #expect(!title.isSubset(of: remindersExceptTitle))
+    #expect(remindersExceptTitle.isStrictSubset(of: reminders))
+    #expect(tags.isSubset(of: databaseExceptReminders))
+    #expect(databaseExceptReminders.isStrictSubset(of: .fullDatabase))
+    #expect(!reminders.isSubset(of: databaseExceptReminders))
+  }
+}
 
+#if StructuredQueries
+  import StructuredQueriesSQLite
+
+  extension OrbitDatabaseRegionTests {
     @Test
     func typedTablesAndColumnsProduceTheirRegions() {
       let reminders = OrbitDatabaseRegion(table: "reminders")
