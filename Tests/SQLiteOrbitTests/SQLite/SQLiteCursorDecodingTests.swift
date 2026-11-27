@@ -98,6 +98,19 @@
       #expect(decoded[0].1 == "one")
       #expect(decoded[1].0 == 2)
       #expect(decoded[1].1 == "two")
+
+      // Reals, blobs and unsigned integers each decode through their own entry point.
+      let others = try await database.read { transaction in
+        try #sql("SELECT 2.5, x'0102', 7", as: (Double, [UInt8], UInt64).self).fetchOne(transaction)
+      }
+      #expect(others?.0 == 2.5)
+      #expect(others?.1 == [1, 2])
+      #expect(others?.2 == 7)
+      await #expect(throws: (any Error).self) {
+        try await database.read { transaction in
+          try #sql("SELECT -1", as: UInt64.self).fetchOne(transaction)
+        }
+      }
     }
 
     @Table
