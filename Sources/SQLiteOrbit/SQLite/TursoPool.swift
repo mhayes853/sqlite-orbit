@@ -222,6 +222,8 @@
     }
   }
 
+  extension TursoPool: SQLiteDatabaseMetadataProviding {}
+
   extension TursoPool: OrbitMemoryReleasing {
     /// Closes the pool's readers and finalizes the idle statements of each writer.
     ///

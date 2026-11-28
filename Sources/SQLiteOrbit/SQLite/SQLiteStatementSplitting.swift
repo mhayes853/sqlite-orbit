@@ -1,3 +1,19 @@
+/// The first statement SQLite would run in some SQL, split off the SQL that follows it.
+///
+/// ``SQLiteTransaction/firstStatement(in:)`` and ``SQLiteConnectionAccess/firstStatement(in:)``
+/// return one. Joining ``statement`` and ``remainder`` gives back the SQL that was split.
+public struct SQLiteStatementSplit<Remainder: StringProtocol> {
+  /// The text of the first statement, with the empty statements and comments before it.
+  public let statement: String
+
+  /// The SQL after the first statement, as a slice of the SQL that was split.
+  public let remainder: Remainder
+}
+
+extension SQLiteStatementSplit: Equatable {}
+extension SQLiteStatementSplit: Hashable {}
+extension SQLiteStatementSplit: Sendable where Remainder: Sendable {}
+
 extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
   /// Splits the first statement SQLite would run off the front of `sql`, without running it.
   ///
@@ -12,20 +28,20 @@ extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
   /// ```swift
   /// try await database.write { transaction in
   ///   var remaining = script[...]
-  ///   while let (statement, remainder) = try transaction.firstStatement(in: remaining) {
-  ///     try transaction.execute(SQL(text: statement))
-  ///     remaining = remainder
+  ///   while let split = try transaction.firstStatement(in: remaining) {
+  ///     try transaction.execute(SQL(text: split.statement))
+  ///     remaining = split.remainder
   ///   }
   /// }
   /// ```
   ///
   /// - Parameter sql: The SQL to split.
-  /// - Returns: The text of the first statement and what follows it, or `nil` when `sql` holds
+  /// - Returns: The first statement and the SQL that follows it, or `nil` when `sql` holds
   ///   only whitespace, comments and empty statements.
   /// - Throws: A ``SQLiteError`` when SQLite cannot compile the first statement.
   public borrowing func firstStatement<Text: StringProtocol>(
     in sql: Text
-  ) throws -> (statement: String, remainder: Text.SubSequence)? {
+  ) throws -> SQLiteStatementSplit<Text.SubSequence>? {
     try sqliteFirstStatement(in: sql, on: sqliteConnection, library: sqlite)
   }
 }
@@ -41,16 +57,18 @@ extension SQLiteConnectionAccess {
   /// naming a table that does not exist yet fails to split.
   ///
   /// ```swift
-  /// let (first, rest) = try connection.firstStatement(in: script) ?? ("", "")
+  /// if let split = try connection.firstStatement(in: script) {
+  ///   print(split.statement, split.remainder)
+  /// }
   /// ```
   ///
   /// - Parameter sql: The SQL to split.
-  /// - Returns: The text of the first statement and what follows it, or `nil` when `sql` holds
+  /// - Returns: The first statement and the SQL that follows it, or `nil` when `sql` holds
   ///   only whitespace, comments and empty statements.
   /// - Throws: A ``SQLiteError`` when SQLite cannot compile the first statement.
   public borrowing func firstStatement<Text: StringProtocol>(
     in sql: Text
-  ) throws -> (statement: String, remainder: Text.SubSequence)? {
+  ) throws -> SQLiteStatementSplit<Text.SubSequence>? {
     try sqliteFirstStatement(in: sql, on: sqliteConnection, library: sqlite)
   }
 }
@@ -59,7 +77,7 @@ func sqliteFirstStatement<Text: StringProtocol>(
   in sql: Text,
   on connection: OpaquePointer,
   library: SQLiteLibrary
-) throws -> (statement: String, remainder: Text.SubSequence)? {
+) throws -> SQLiteStatementSplit<Text.SubSequence>? {
   let utf8 = sql.utf8
   // Native strings lend their bytes in place, so splitting a long script one statement at a time
   // does not copy what is left of it on every call.
@@ -70,7 +88,7 @@ func sqliteFirstStatement<Text: StringProtocol>(
     try utf8.withContiguousStorageIfAvailable(split) ?? Array(utf8).withUnsafeBufferPointer(split)
   guard let length else { return nil }
   let end = utf8.index(utf8.startIndex, offsetBy: length)
-  return (String(sql[..<end]), sql[end...])
+  return SQLiteStatementSplit(statement: String(sql[..<end]), remainder: sql[end...])
 }
 
 // How many bytes the first statement in `bytes` takes up, counting the empty statements and

@@ -33,3 +33,21 @@ public struct SQLiteDatabaseMetadata: Sendable {
     self.readerCount = readerCount
   }
 }
+
+/// A database that can report the settings its native SQLite driver was opened with.
+///
+/// ``SQLiteQueue``, ``SQLitePool`` and `TursoPool` conform. ``OrbitIPCDatabase`` reports the
+/// metadata of a writer that conforms, so a custom writer that wraps one of these drivers can
+/// conform by forwarding its driver's metadata:
+///
+/// ```swift
+/// extension LoggingDatabase: SQLiteDatabaseMetadataProviding {
+///   var metadata: SQLiteDatabaseMetadata { base.metadata }
+/// }
+/// ```
+public protocol SQLiteDatabaseMetadataProviding: Sendable {
+  /// The settings the database's driver was opened with.
+  ///
+  /// Reading it needs no connection, so it never waits for an access in flight.
+  var metadata: SQLiteDatabaseMetadata { get }
+}

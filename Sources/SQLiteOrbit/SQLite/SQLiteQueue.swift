@@ -223,6 +223,8 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   }
 }
 
+extension SQLiteQueue: SQLiteDatabaseMetadataProviding {}
+
 extension SQLiteQueue: OrbitMemoryReleasing {
   /// Releases the memory of the driver's connection once the accesses queued before the call are
   /// done.

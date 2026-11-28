@@ -300,6 +300,8 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
   }
 }
 
+extension SQLitePool: SQLiteDatabaseMetadataProviding {}
+
 extension SQLitePool: OrbitMemoryReleasing {
   /// Closes the pool's readers and releases the writer's memory.
   ///

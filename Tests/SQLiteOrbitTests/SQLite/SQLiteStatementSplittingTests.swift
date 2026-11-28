@@ -22,10 +22,10 @@
       let statements = try owner.write { transaction in
         var statements = [String]()
         var remaining = script[...]
-        while let (statement, remainder) = try transaction.firstStatement(in: remaining) {
-          try transaction.execute(SQL(text: statement))
-          statements.append(statement)
-          remaining = remainder
+        while let split = try transaction.firstStatement(in: remaining) {
+          try transaction.execute(SQL(text: split.statement))
+          statements.append(split.statement)
+          remaining = split.remainder
         }
         #expect(remaining == "\n-- nothing after this")
         return statements
