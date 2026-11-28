@@ -44,7 +44,12 @@ public struct SQLitePoolUnavailableError: Error, CustomStringConvertible {
 /// processes and announces each commit to the others.
 public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableDatabase {
   /// The database this pool's connections are open on.
-  public let path: OrbitDatabasePath
+  public var path: OrbitDatabasePath { metadata.path }
+
+  /// The settings this pool was opened with.
+  ///
+  /// Its configuration is the one passed when opening, before the pool switches its writer to WAL.
+  public let metadata: SQLiteDatabaseMetadata
 
   let pool: SQLiteConnectionPool
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
@@ -90,7 +95,11 @@ public final class SQLitePool: OrbitMultiprocessDatabaseWriter, OrbitObservableD
       // new database at all, so the writer reads once to leave them in place for the readers.
       writerSetups: [.sql("SELECT count(*) FROM sqlite_schema")]
     )
-    self.path = path
+    self.metadata = SQLiteDatabaseMetadata(
+      path: path,
+      configuration: configuration,
+      readerCount: readerCount
+    )
   }
 
   /// Runs `body` in a read transaction on one of the pool's readers.

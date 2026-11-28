@@ -79,6 +79,21 @@ public final class OrbitIPCDatabase:
     set { delegateStorage.withLock { $0.value = newValue } }
   }
 
+  /// The settings the underlying driver was opened with, or `nil` when it is not one of this
+  /// package's drivers.
+  ///
+  /// Reading it needs no connection and does not involve the database's peers.
+  public var metadata: SQLiteDatabaseMetadata? {
+    switch writer {
+    case let pool as SQLitePool: pool.metadata
+    case let queue as SQLiteQueue: queue.metadata
+    #if Turso
+      case let pool as TursoPool: pool.metadata
+    #endif
+    default: nil
+    }
+  }
+
   /// Whether writes to this database are currently suspended.
   public var isSuspended: Bool { writer.isSuspended }
 
