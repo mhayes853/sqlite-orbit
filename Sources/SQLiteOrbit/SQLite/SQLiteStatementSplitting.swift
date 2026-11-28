@@ -1,10 +1,13 @@
 /// The first statement SQLite would run in some SQL, split off the SQL that follows it.
 ///
 /// ``SQLiteTransaction/firstStatement(in:)`` and ``SQLiteConnectionAccess/firstStatement(in:)``
-/// return one. Joining ``statement`` and ``remainder`` gives back the SQL that was split.
+/// return one. Joining the text of ``statement`` and ``remainder`` gives back the SQL that was
+/// split.
 public struct SQLiteStatementSplit<Remainder: StringProtocol> {
-  /// The text of the first statement, with the empty statements and comments before it.
-  public let statement: String
+  /// The first statement, with the empty statements and comments before it, ready to run.
+  ///
+  /// It has no bindings, so any parameters in its text are bound to `NULL` when it runs.
+  public let statement: SQL
 
   /// The SQL after the first statement, as a slice of the SQL that was split.
   public let remainder: Remainder
@@ -29,7 +32,7 @@ extension SQLiteTransaction where Self: ~Copyable, Self: ~Escapable {
   /// try await database.write { transaction in
   ///   var remaining = script[...]
   ///   while let split = try transaction.firstStatement(in: remaining) {
-  ///     try transaction.execute(SQL(text: split.statement))
+  ///     try transaction.execute(split.statement)
   ///     remaining = split.remainder
   ///   }
   /// }
@@ -58,7 +61,7 @@ extension SQLiteConnectionAccess {
   ///
   /// ```swift
   /// if let split = try connection.firstStatement(in: script) {
-  ///   print(split.statement, split.remainder)
+  ///   print(split.statement.text, split.remainder)
   /// }
   /// ```
   ///
@@ -88,7 +91,7 @@ func sqliteFirstStatement<Text: StringProtocol>(
     try utf8.withContiguousStorageIfAvailable(split) ?? Array(utf8).withUnsafeBufferPointer(split)
   guard let length else { return nil }
   let end = utf8.index(utf8.startIndex, offsetBy: length)
-  return SQLiteStatementSplit(statement: String(sql[..<end]), remainder: sql[end...])
+  return SQLiteStatementSplit(statement: SQL(text: String(sql[..<end])), remainder: sql[end...])
 }
 
 // How many bytes the first statement in `bytes` takes up, counting the empty statements and

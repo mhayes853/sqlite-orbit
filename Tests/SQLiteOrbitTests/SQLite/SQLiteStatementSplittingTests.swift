@@ -23,8 +23,8 @@
         var statements = [String]()
         var remaining = script[...]
         while let split = try transaction.firstStatement(in: remaining) {
-          try transaction.execute(SQL(text: split.statement))
-          statements.append(split.statement)
+          try transaction.execute(split.statement)
+          statements.append(split.statement.text)
           remaining = split.remainder
         }
         #expect(remaining == "\n-- nothing after this")
@@ -65,7 +65,7 @@
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.read { transaction in
         let split = try #require(try transaction.firstStatement(in: " ; -- c\nSELECT 1; SELECT 2"))
-        #expect(split.statement == " ; -- c\nSELECT 1;")
+        #expect(split.statement.text == " ; -- c\nSELECT 1;")
         #expect(split.remainder == " SELECT 2")
       }
     }
@@ -76,7 +76,7 @@
       try owner.write { try $0.execute("CREATE TABLE items (a INTEGER)") }
       try owner.read { transaction in
         let split = try transaction.firstStatement(in: "INSERT INTO items VALUES (1); SELECT 1")
-        #expect(split?.statement == "INSERT INTO items VALUES (1);")
+        #expect(split?.statement.text == "INSERT INTO items VALUES (1);")
         #expect(try transaction.fetchOne("SELECT count(*) FROM items", as: Int.self) == 0)
       }
     }
@@ -99,15 +99,15 @@
       let fromAccess = try owner.withConnectionAccess { connection in
         try connection.firstStatement(in: "SELECT 1; SELECT 2")
       }
-      #expect(fromAccess?.statement == "SELECT 1;")
+      #expect(fromAccess?.statement.text == "SELECT 1;")
       #expect(fromAccess?.remainder == " SELECT 2")
 
       let queue = try SQLiteQueue(path: .memory)
       let fromReader = try queue.readWithoutTransactionBlocking { connection in
-        try connection.firstStatement(in: "SELECT 1; SELECT 2")?.statement
+        try connection.firstStatement(in: "SELECT 1; SELECT 2")?.statement.text
       }
       let fromWriter = try queue.writeWithoutTransactionBlocking { connection in
-        try connection.firstStatement(in: "SELECT 1; SELECT 2")?.statement
+        try connection.firstStatement(in: "SELECT 1; SELECT 2")?.statement.text
       }
       #expect(fromReader == "SELECT 1;")
       #expect(fromWriter == "SELECT 1;")
